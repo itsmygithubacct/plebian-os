@@ -1,0 +1,28 @@
+# plebian-os-firstboot.service — provision Plebian-OS on the first boot after a
+# regular Debian install: pull deps + the pleb/kilix repos from GitHub and bring
+# up the Pleb session. Installed + enabled by the preseed's late_command (or by
+# bootstrap.sh). Runs once, then disables itself.
+[Unit]
+Description=Plebian-OS first-boot provisioning (pull kilix + pleb, set up the Pleb session)
+Documentation=https://github.com/itsmygithubacct/plebian-os
+# Needs the network (clones from GitHub) and a settled base system.
+After=network-online.target systemd-user-sessions.service
+Wants=network-online.target
+# Don't run if provisioning already completed.
+ConditionPathExists=!/var/lib/plebian-os/provisioned
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# --kiosk is appended here by the preseed when autologin was requested.
+ExecStart=/usr/local/sbin/plebian-os-provision
+# Mark done and stop pulling on every boot (success only).
+ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned
+ExecStartPost=/bin/systemctl disable plebian-os-firstboot.service
+# Provisioning can take a while on a slow link (apt + two clones + engine).
+TimeoutStartSec=1800
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target
