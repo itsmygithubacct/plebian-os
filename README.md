@@ -64,6 +64,20 @@ Install it like normal Debian; the first boot pulls everything and comes up as
 Pleb. Edit `preseed/preseed.cfg` first — the account/password there are
 unattended-test defaults.
 
+**Build a bootable USB install stick** (builds the ISO, then flashes it — the
+Debian installer ISO is isohybrid, so the USB image *is* that ISO):
+
+```sh
+build/make-usb.sh --list                                   # find your USB device
+build/make-usb.sh --netinst debian-13.x-amd64-netinst.iso --device /dev/sdX
+build/make-usb.sh --netinst debian-...-netinst.iso --iso out.iso   # build only, no flash
+build/make-usb.sh --netinst ... --device /dev/sdX --dry-run        # preview, write nothing
+```
+
+It refuses non-removable / system disks, shows what it will erase, and makes you
+retype the device path to confirm (skip with `--yes`; override the removable
+check with `--force`).
+
 ## Layout
 
 | Path | What |
@@ -72,6 +86,7 @@ unattended-test defaults.
 | `provision/plebian-os-firstboot.service` | systemd oneshot that runs it once on first boot |
 | `preseed/preseed.cfg` | a regular Debian install, no desktop task, wires in the provisioner |
 | `build/remaster-iso.sh` | inject the preseed + provisioner into a trixie netinst ISO |
+| `build/make-usb.sh` | build the ISO and flash it to a USB stick (with safety guards) |
 | `bootstrap.sh` | run the provisioner on an already-installed Debian |
 
 ## Plebian-OS vs. Plebian
