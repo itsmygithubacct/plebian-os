@@ -32,8 +32,13 @@ APT_DEPS=(
     xserver-xorg xinit lightdm             # X + a display manager (pleb uses LightDM)
     x11-xserver-utils x11-utils xterm      # xset/xsetroot/xrandr/xprop + fallback term
     git curl tar ca-certificates           # to clone the repos + fetch the engine
-    libgl1 libegl1 libxkbcommon0           # kitty/kilix GL + input
+    libgl1 libegl1                         # kitty/kilix GL
+    libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1  # keyboard: kitty's glfw-x11 backend
+                                           # dlopens libxkbcommon-x11 -> libxcb-xkb at
+                                           # runtime; absent on a no-desktop base, so
+                                           # kilix crashes on launch without them.
     fonts-jetbrains-mono fonts-noto-color-emoji  # a good mono + emoji for kilix
+    python3-pil                            # kilix's "95" desktop (`kilix desktop`) renders via Pillow
 )
 
 usage() {
