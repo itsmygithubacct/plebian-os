@@ -23,6 +23,7 @@ KILIX_REPO="${KILIX_REPO:-https://github.com/itsmygithubacct/kilix.git}"
 PLEB_BRANCH="${PLEB_BRANCH:-}"                 # empty = repo default
 KILIX_BRANCH="${KILIX_BRANCH:-}"
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
+DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into the kilix "95" desktop
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
 
@@ -45,9 +46,10 @@ usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
     cat <<EOF
 
-Usage: $0 [--user NAME] [--kiosk] [--branch REF] [--dry-run]
+Usage: $0 [--user NAME] [--kiosk] [--no-desktop] [--branch REF] [--dry-run]
   --user NAME    provision for this user (default: first uid>=1000 account)
   --kiosk        enable autologin straight into Pleb (no greeter)
+  --no-desktop   boot into a plain fullscreen kilix shell, not the "95" desktop
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
 EOF
@@ -63,6 +65,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --user)   TARGET_USER="${2:?}"; shift 2 ;;
         --kiosk)  KIOSK=1; shift ;;
+        --no-desktop) DESKTOP=0; shift ;;
         --branch) PLEB_BRANCH="${2:?}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -88,6 +91,7 @@ log "target user : $TARGET_USER ($USER_HOME)"
 log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
 log "kilix repo  : $KILIX_REPO (cloned by pleb)"
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
+log "session     : $([ "$DESKTOP" = 1 ] && echo 'kilix "95" desktop' || echo 'plain kilix shell')"
 
 # ── 1. dependencies ──────────────────────────────────────────────────────────
 log "installing runtime dependencies (apt)"
@@ -149,6 +153,26 @@ user-session=pleb
 EOF
 fi
 
+# ── 5. session mode: boot into the kilix "95" desktop (disablable) ──────────
+# pleb-session reads /etc/pleb/session.env on every login; PLEB_DESKTOP=1 brings
+# the Pleb session up as the kilix desktop instead of a bare shell. This is a
+# plain config file the user owns: flip it to 0, or delete it, for a plain
+# fullscreen kilix — no reprovision needed.
+PLEB_ENV=/etc/pleb/session.env
+log "writing session config -> $PLEB_ENV (PLEB_DESKTOP=$DESKTOP)"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + write $PLEB_ENV (PLEB_DESKTOP=$DESKTOP)"
+else
+    mkdir -p "$(dirname "$PLEB_ENV")"
+    cat > "$PLEB_ENV" <<EOF
+# Managed by plebian-os-provision — Plebian-OS Pleb session config.
+# PLEB_DESKTOP=1 boots straight into the kilix "95" desktop; set it to 0 (or
+# delete this file) for a plain fullscreen kilix shell. pleb-session documents
+# the other knobs (PLEB_RESPAWN, PLEB_WM, PLEB_BG, …).
+PLEB_DESKTOP=$DESKTOP
+EOF
+fi
+
 if [ "$KIOSK" = 1 ]; then
     log "enabling autologin into Pleb (kiosk)"
     as_user "$PLEB_DIR/bin/pleb" autologin on "$TARGET_USER" \
@@ -158,6 +182,6 @@ fi
 cleanup; trap - EXIT
 
 log "done. Plebian-OS is provisioned."
-log "  reboot → LightDM → Pleb → fullscreen kilix desktop."
+log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo 'kilix "95" desktop' || echo 'fullscreen kilix')."
 [ "$KIOSK" = 1 ] && log "  (kiosk: boots straight in; rescue console on Ctrl+Alt+F2)"
 exit 0
