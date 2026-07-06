@@ -54,29 +54,32 @@ sudo ~/plebian-os/bootstrap.sh --kiosk    # …and boot straight into it
 
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 
-**Build an installer ISO:**
+**Build an installer ISO** (the Debian netinst is downloaded + checksum-verified
+for you; needs `xorriso`):
 
 ```sh
-build/remaster-iso.sh  debian-13.x-amd64-netinst.iso  plebian-os-netinst.iso
+build/remaster-iso.sh                          # auto-download the netinst, build the ISO
+build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netinst
 ```
 
 Install it like normal Debian; the first boot pulls everything and comes up as
 Pleb. Edit `preseed/preseed.cfg` first — the account/password there are
 unattended-test defaults.
 
-**Build a bootable USB install stick** (builds the ISO, then flashes it — the
-Debian installer ISO is isohybrid, so the USB image *is* that ISO):
+**Build a bootable USB install stick** — one command downloads the netinst,
+builds the (isohybrid) ISO, and flashes it to the stick:
 
 ```sh
-build/make-usb.sh --list                                   # find your USB device
-build/make-usb.sh --netinst debian-13.x-amd64-netinst.iso --device /dev/sdX
-build/make-usb.sh --netinst debian-...-netinst.iso --iso out.iso   # build only, no flash
-build/make-usb.sh --netinst ... --device /dev/sdX --dry-run        # preview, write nothing
+build/make-usb.sh --list                       # find your USB device
+build/make-usb.sh --device /dev/sdX            # download → build → flash
+build/make-usb.sh --device /dev/sdX --dry-run  # preview, write nothing
+build/make-usb.sh                              # just build the ISO (no --device)
+build/make-usb.sh --netinst local.iso --device /dev/sdX   # use a local netinst
 ```
 
-It refuses non-removable / system disks, shows what it will erase, and makes you
-retype the device path to confirm (skip with `--yes`; override the removable
-check with `--force`).
+It refuses without `xorriso`, refuses non-removable / system disks, shows what it
+will erase, and makes you retype the device path to confirm (skip with `--yes`;
+override the removable check with `--force`).
 
 ## Layout
 
