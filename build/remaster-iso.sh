@@ -59,9 +59,14 @@ echo "==> repacking -> $OUT_ISO"
 # Reuse the source ISO's own boot layout so BIOS + UEFI both keep working.
 xorriso -indev "$SRC_ISO" -report_el_torito as_mkisofs 2>/dev/null > "$WORK/mkisofs.args" || true
 if [ -s "$WORK/mkisofs.args" ]; then
-    # shellcheck disable=SC2046
-    xorriso -as mkisofs $(sed 's#-outdev.*##' "$WORK/mkisofs.args") \
-        -o "$OUT_ISO" "$EXTRACT"
+    # The report emits one option per line and shell-quotes any value with
+    # spaces — notably the volume id, e.g.  -V 'Debian 13.5.0 amd64 1'. A bare
+    # $(...) expansion word-splits on those spaces and strips the quotes, so
+    # "13.5.0" gets passed as a stray source path (xorriso then dies with
+    # "Cannot determine attributes of source file .../13.5.0"). Flatten to one
+    # line and eval so the shell honours the quoting.
+    mkisofs_args="$(sed 's#-outdev.*##' "$WORK/mkisofs.args" | tr '\n' ' ')"
+    eval "xorriso -as mkisofs $mkisofs_args -o \"\$OUT_ISO\" \"\$EXTRACT\""
 else
     echo "!! could not read the source ISO's El Torito layout; falling back to a" >&2
     echo "   basic build (verify BIOS/UEFI boot before trusting it)." >&2
