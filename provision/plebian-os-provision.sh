@@ -39,7 +39,12 @@ APT_DEPS=(
                                            # runtime; absent on a no-desktop base, so
                                            # kilix crashes on launch without them.
     fonts-jetbrains-mono fonts-noto-color-emoji  # a good mono + emoji for kilix
-    python3-pil                            # kilix's "95" desktop (`kilix desktop`) renders via Pillow
+    # kilix "95" desktop — everything its apps need to actually work:
+    python3-pil                            # the desktop renders via Pillow
+    python3-xlib python3-websockets        # xpane (X inject) + serve/attach (remote)
+    pulseaudio pulseaudio-utils alsa-utils # audio: system sounds / amp / soundcp (pactl/paplay/aplay)
+    ffmpeg xauth                           # media playback + screen capture; nested-X auth
+    build-essential zlib1g-dev             # a toolchain so programs (games, tools) build + run in the desktop
 )
 
 usage() {
