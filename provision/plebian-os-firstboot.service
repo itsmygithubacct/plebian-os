@@ -8,6 +8,14 @@ Documentation=https://github.com/itsmygithubacct/plebian-os
 # Needs the network (clones from GitHub) and a settled base system.
 After=network-online.target systemd-user-sessions.service
 Wants=network-online.target
+# Hold the login greeter until provisioning finishes, so the very first boot
+# never flashes a bare "Default Xsession" (Pleb isn't installed yet) at the
+# user — they'd log into that, hit the fallback, and think it's broken. This is
+# ORDERING ONLY (not Requires): if provisioning fails or times out, the greeter
+# still comes up rather than the boot deadlocking. On every later boot the
+# Condition below skips this unit (and it has disabled itself), so the ordering
+# is a no-op and normal boots are never delayed.
+Before=display-manager.service
 # Don't run if provisioning already completed.
 ConditionPathExists=!/var/lib/plebian-os/provisioned
 
