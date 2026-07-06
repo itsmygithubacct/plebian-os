@@ -5,19 +5,27 @@
 # installer, stock repos, we only ADD files — so Secure Boot's signed
 # shim/GRUB stay untouched.
 #
-#   build/remaster-iso.sh path/to/debian-13.x-amd64-netinst.iso [out.iso]
+#   build/remaster-iso.sh [debian-13.x-amd64-netinst.iso] [out.iso]
 #
-# Needs: xorriso (and optionally isolinux/ bios boot bits already in the ISO).
-# The result installs like a regular Debian system and, on first boot, pulls
-# pleb + kilix from GitHub and comes up as the Pleb session (see preseed.cfg).
+# The source netinst is optional: with no argument it is downloaded (and
+# checksum-verified) from the Debian mirror automatically and cached. Refuses
+# to run without xorriso. The result installs like a regular Debian system and,
+# on first boot, pulls pleb + kilix from GitHub and comes up as the Pleb
+# session (see preseed.cfg).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC_ISO="${1:?usage: remaster-iso.sh <debian-netinst.iso> [out.iso]}"
-OUT_ISO="${2:-plebian-os-netinst-amd64.iso}"
+. "$HERE/build/lib.sh"
 
-command -v xorriso >/dev/null || { echo "need xorriso (apt install xorriso)" >&2; exit 1; }
-[ -f "$SRC_ISO" ] || { echo "no such ISO: $SRC_ISO" >&2; exit 1; }
+require_xorriso                          # refuse to run without the ISO packer
+
+SRC_ISO="${1:-}"
+OUT_ISO="${2:-plebian-os-netinst-amd64.iso}"
+if [ -z "$SRC_ISO" ]; then
+    SRC_ISO="$(fetch_netinst)"           # auto-pull the Debian netinst
+else
+    [ -f "$SRC_ISO" ] || { echo "no such ISO: $SRC_ISO" >&2; exit 1; }
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

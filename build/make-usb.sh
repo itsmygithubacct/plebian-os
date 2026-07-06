@@ -7,20 +7,27 @@
 # *safely*: it refuses system/non-removable disks, shows you what it's about to
 # erase, and makes you confirm.
 #
-#   # build the ISO from a Debian netinst, then flash it:
+#   # build a USB stick end-to-end (downloads the Debian netinst for you):
+#   build/make-usb.sh --device /dev/sdX
+#
+#   # use a local netinst instead of downloading it:
 #   build/make-usb.sh --netinst debian-13.x-amd64-netinst.iso --device /dev/sdX
 #
-#   # flash an already-built Plebian-OS ISO:
+#   # flash an already-built Plebian-OS ISO (no build, no xorriso needed):
 #   build/make-usb.sh --iso plebian-os-netinst-amd64.iso --device /dev/sdX
 #
 #   # just build the ISO (it *is* the USB image — dd it yourself later):
-#   build/make-usb.sh --netinst debian-...-netinst.iso --iso out.iso   # no --device
+#   build/make-usb.sh                       # no --device
 #
 #   build/make-usb.sh --list        # show candidate removable devices
 #   build/make-usb.sh ... --dry-run # print the plan; write nothing
+#
+# The Debian netinst is downloaded + checksum-verified automatically when no
+# --netinst is given. Refuses to run without xorriso (the ISO packer).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/lib.sh"
 NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
@@ -60,22 +67,46 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ -n "$NETINST" ] || [ -n "$ISO" ] || die "need --netinst <debian.iso> and/or --iso <path> (see --help)"
-
-# ── 1. get the Plebian-OS ISO (build it from the netinst if needed) ──────────
+# ── 1. get the Plebian-OS ISO (build it, pulling the netinst, unless one exists)
 : "${ISO:=plebian-os-netinst-amd64.iso}"
-if [ -n "$NETINST" ]; then
-    [ -f "$NETINST" ] || [ "$DRY_RUN" = 1 ] || die "no such netinst ISO: $NETINST"
-    if [ -f "$ISO" ] && [ -f "$NETINST" ] && [ "$ISO" -nt "$NETINST" ]; then
-        log "using existing $ISO (newer than the netinst; pass a fresh --iso name to rebuild)"
+# Build when the user passed a --netinst, or when the target ISO doesn't exist
+# yet. A pure flash of an existing --iso (no --netinst) needs no build — and no
+# xorriso, no download.
+need_build=0
+[ -n "$NETINST" ] && need_build=1
+[ -f "$ISO" ] || need_build=1
+
+if [ "$need_build" = 1 ]; then
+    # refuse to run without xorriso (a dry-run only warns, so it can still preview)
+    if [ "$DRY_RUN" = 1 ]; then
+        command -v xorriso >/dev/null 2>&1 \
+            || warn "(dry-run) xorriso not installed — a real run would refuse here"
     else
-        log "building Plebian-OS ISO from $NETINST -> $ISO"
+        require_xorriso
+    fi
+    # pull the Debian netinst automatically when none was supplied
+    if [ -z "$NETINST" ]; then
         if [ "$DRY_RUN" = 1 ]; then
-            echo "    + $HERE/remaster-iso.sh $NETINST $ISO"
+            log "(dry-run) would download + checksum-verify the Debian netinst ISO"
+            NETINST="<auto-downloaded Debian netinst>"
+        else
+            NETINST="$(fetch_netinst)"
+        fi
+    elif [ ! -f "$NETINST" ] && [ "$DRY_RUN" != 1 ]; then
+        die "no such netinst ISO: $NETINST"
+    fi
+    if [ -f "$ISO" ] && [ -f "$NETINST" ] && [ "$ISO" -nt "$NETINST" ]; then
+        log "using existing $ISO (newer than the netinst; delete it to rebuild)"
+    else
+        log "building Plebian-OS ISO from $(basename "$NETINST") -> $ISO"
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + $HERE/remaster-iso.sh \"$NETINST\" \"$ISO\""
         else
             "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
         fi
     fi
+else
+    log "flashing existing $ISO (no build; pass --netinst to rebuild)"
 fi
 [ "$DRY_RUN" = 1 ] || [ -f "$ISO" ] || die "ISO not found: $ISO"
 
