@@ -44,6 +44,10 @@ APT_DEPS=(
     python3-xlib python3-websockets        # xpane inject + clipboard bridge + serve/attach
     pulseaudio pulseaudio-utils alsa-utils # audio: system sounds / amp / soundcp (pactl/paplay/aplay)
     ffmpeg xauth                           # media playback + screen capture; nested-X auth
+    # desktop notifications (Plebian-OS ships no DE, so nothing provides them):
+    # a freedesktop notification daemon + a session bus to activate it, so
+    # notify-send / libnotify / kitty's OSC 9/99 notifications pop up in Pleb.
+    dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin
     firefox-esr chromium                   # web browsers: firefox is the desktop's default GUI browser
                                            # (its GUI runs under software rendering, e.g. VMs, where
                                            # chromium's GUI crashes); chromium stays for headless / kilix browse.
