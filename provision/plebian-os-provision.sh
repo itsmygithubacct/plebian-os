@@ -51,7 +51,8 @@ APT_DEPS=(
     # X server and stream them into a kilix pane / to remote viewers. Without
     # Xvfb, `kilix run` dies with "Xvfb not found" — so games launch + crash.
     xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base
-    build-essential zlib1g-dev             # a toolchain so programs (games, tools) build + run in the desktop
+    build-essential pkg-config zlib1g-dev  # a toolchain so programs (games, tools) build + run in the desktop
+    libsdl2-dev libsdl2-image-dev libsndfile1-dev  # kilix-amp (the Media Player) builds against SDL2 + libsndfile
     # general command-line utilities Plebian-OS ships with (uv is not in apt —
     # installed separately below)
     ncdu rsync ufw jq glances
