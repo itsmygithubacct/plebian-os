@@ -32,7 +32,7 @@ DEP_GROUPS=(
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
     "kilix 95 desktop (python)|python3-pil python3-xlib python3-websockets"
     "audio|pulseaudio pulseaudio-utils alsa-utils"
-    "media + nested-X auth|ffmpeg xauth"
+    "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
     "web browsers|firefox-esr chromium"
     "desktop notifications|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
