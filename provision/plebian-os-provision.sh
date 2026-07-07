@@ -52,6 +52,9 @@ APT_DEPS=(
     # Xvfb, `kilix run` dies with "Xvfb not found" — so games launch + crash.
     xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base
     build-essential zlib1g-dev             # a toolchain so programs (games, tools) build + run in the desktop
+    # general command-line utilities Plebian-OS ships with (uv is not in apt —
+    # installed separately below)
+    ncdu rsync ufw jq glances
 )
 
 usage() {
@@ -113,6 +116,19 @@ else
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get install -y --no-install-recommends "${APT_DEPS[@]}"
+fi
+
+# ── 1b. uv — not packaged in Debian; install the standalone binary ───────────
+# uv's official one-liner installer, pinned to a system prefix so it lands on
+# PATH for everyone and doesn't rewrite shell profiles. Non-fatal: a slow/no
+# link shouldn't fail provisioning over an optional tool.
+log "installing uv (astral standalone installer -> /usr/local/bin)"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh"
+else
+    curl -LsSf https://astral.sh/uv/install.sh \
+        | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
+        || warn "uv install failed (continuing without it)"
 fi
 
 # ── 2. clone pleb into the user's home (as the user, correct ownership) ──────
