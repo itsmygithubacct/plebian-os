@@ -120,12 +120,16 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
 
 - `PLEB_DESKTOP=1` → boots the kilix "95" desktop; `0` → a plain fullscreen
   kilix shell (or delete the file).
+- `KILIX95_DIR`, `KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF` select the
+  external Kilix 95 checkout used by desktop sessions.
 - Autologin: `~/pleb/bin/pleb autologin on|off`.
 - Passwordless sudo: remove or edit `/etc/sudoers.d/plebian-os-nopasswd`.
 
 At build time these come from `--session` / `--kiosk` /
 `--sudo-nopasswd` (or `PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK` /
-`PLEBIAN_OS_NOPASSWD_SUDO`).
+`PLEBIAN_OS_NOPASSWD_SUDO`). Repo/source overrides such as `PLEB_REPO`,
+`KILIX_REPO`, `KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF` are also
+copied into the first-boot environment when present.
 
 ## How it works
 

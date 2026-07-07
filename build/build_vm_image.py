@@ -249,13 +249,27 @@ def generate_preseed(cfg: Config) -> Path:
 
     # Inject the build-time provisioning options the first-boot unit reads via
     # EnvironmentFile=-/etc/default/plebian-os, right before the unit is enabled.
+    user_home = f"/home/{cfg.username}"
+    env_vars = [
+        ("PLEBIAN_OS_DESKTOP", "1" if cfg.desktop else "0"),
+        ("PLEBIAN_OS_KIOSK", "1" if cfg.kiosk else "0"),
+        ("PLEBIAN_OS_USER", cfg.username),
+        ("PLEBIAN_OS_NOPASSWD_SUDO", "1" if cfg.nopasswd_sudo else "0"),
+        ("PLEB_REPO", os.environ.get("PLEB_REPO", "https://github.com/itsmygithubacct/pleb.git")),
+        ("KILIX_REPO", os.environ.get("KILIX_REPO", "https://github.com/itsmygithubacct/kilix.git")),
+        ("KILIX95_REPO", os.environ.get("KILIX95_REPO", "https://github.com/itsmygithubacct/kilix-95.git")),
+        ("PLEB_BRANCH", os.environ.get("PLEB_BRANCH", "")),
+        ("KILIX_BRANCH", os.environ.get("KILIX_BRANCH", "")),
+        ("KILIX95_BRANCH", os.environ.get("KILIX95_BRANCH", "")),
+        ("KILIX95_REF", os.environ.get("KILIX95_REF", "")),
+        ("KILIX_DIR", os.environ.get("KILIX_DIR", f"{user_home}/kilix")),
+        ("KILIX95_DIR", os.environ.get("KILIX95_DIR", f"{user_home}/kilix-95")),
+    ]
+    env_fmt = "".join(f"{k}=%s\\n" for k, _ in env_vars)
+    env_args = " ".join(shlex.quote(v) for _, v in env_vars)
     env_line = (
         "    mkdir -p /target/etc/default; "
-        "printf 'PLEBIAN_OS_DESKTOP=%s\\nPLEBIAN_OS_KIOSK=%s\\nPLEBIAN_OS_USER=%s"
-        "\\nPLEBIAN_OS_NOPASSWD_SUDO=%s\\n' "
-        f"{1 if cfg.desktop else 0} {1 if cfg.kiosk else 0} {shlex.quote(cfg.username)} "
-        f"{1 if cfg.nopasswd_sudo else 0} "
-        "> /target/etc/default/plebian-os; \\\n"
+        f"printf '{env_fmt}' {env_args} > /target/etc/default/plebian-os; \\\n"
     )
     anchor = "    in-target systemctl enable plebian-os-firstboot.service; \\\n"
     if anchor in text:

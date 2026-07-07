@@ -8,8 +8,10 @@
 #   1. apt-installs the runtime deps (Xorg, LightDM, git/curl/tar, GL, fonts)
 #   2. clones  github.com/itsmygithubacct/pleb  into the target user's ~/pleb
 #   3. runs    pleb install  — which itself clones github.com/itsmygithubacct/kilix
-#      into ~/kilix, fetches a prebuilt kitty engine, and registers "Pleb" as a
-#      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb on PATH
+#      into ~/kilix, optionally clones github.com/itsmygithubacct/kilix-95 into
+#      ~/kilix-95, fetches a prebuilt kitty engine, and registers "Pleb" as a
+#      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb
+#      on PATH
 #   4. (optional) enables Pleb autologin — a hard kiosk that boots straight in
 #   5. (optional) grants the target user passwordless sudo (--nopasswd-sudo)
 #
@@ -21,8 +23,13 @@ set -euo pipefail
 # ── config (env-overridable) ─────────────────────────────────────────────────
 PLEB_REPO="${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
 KILIX_REPO="${KILIX_REPO:-https://github.com/itsmygithubacct/kilix.git}"
+KILIX95_REPO="${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
 PLEB_BRANCH="${PLEB_BRANCH:-}"                 # empty = repo default
 KILIX_BRANCH="${KILIX_BRANCH:-}"
+KILIX95_BRANCH="${KILIX95_BRANCH:-}"
+KILIX95_REF="${KILIX95_REF:-}"
+KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
+KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into the kilix "95" desktop
@@ -81,10 +88,15 @@ pick_user() {
 id "$TARGET_USER" >/dev/null 2>&1 || die "no such user: $TARGET_USER"
 USER_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [ -d "$USER_HOME" ] || die "home for $TARGET_USER not found: $USER_HOME"
+KILIX_DIR="${KILIX_DIR:-$USER_HOME/kilix}"
+KILIX95_DIR="${KILIX95_DIR:-$USER_HOME/kilix-95}"
 
 log "target user : $TARGET_USER ($USER_HOME)"
 log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
-log "kilix repo  : $KILIX_REPO (cloned by pleb)"
+log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (cloned by pleb)"
+if [ "$DESKTOP" = 1 ]; then
+    log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
+fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
 log "session     : $([ "$DESKTOP" = 1 ] && echo 'kilix "95" desktop' || echo 'plain kilix shell')"
 
@@ -158,8 +170,12 @@ else
     chmod 0440 "$SUDOERS"
 fi
 
-log "running 'pleb install' (clones kilix + engine, adds the Pleb session)"
-as_user env KILIX_REPO="$KILIX_REPO" ${KILIX_BRANCH:+KILIX_BRANCH="$KILIX_BRANCH"} \
+log "running 'pleb install' (clones kilix + optional kilix 95, adds the Pleb session)"
+as_user env KILIX_DIR="$KILIX_DIR" KILIX_REPO="$KILIX_REPO" \
+    ${KILIX_BRANCH:+KILIX_BRANCH="$KILIX_BRANCH"} \
+    PLEB_DESKTOP="$DESKTOP" KILIX95_DIR="$KILIX95_DIR" \
+    KILIX95_REPO="$KILIX95_REPO" ${KILIX95_BRANCH:+KILIX95_BRANCH="$KILIX95_BRANCH"} \
+    ${KILIX95_REF:+KILIX95_REF="$KILIX95_REF"} \
     "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 
@@ -196,7 +212,15 @@ else
 # PLEB_DESKTOP=1 boots straight into the kilix "95" desktop; set it to 0 (or
 # delete this file) for a plain fullscreen kilix shell. pleb-session documents
 # the other knobs (PLEB_RESPAWN, PLEB_WM, PLEB_BG, …).
+KILIX_DIR=$KILIX_DIR
+KILIX=$KILIX_DIR/kilix
 PLEB_DESKTOP=$DESKTOP
+KILIX_DESKTOP_PROVIDER=external
+KILIX95_AUTO_INSTALL=1
+KILIX95_DIR=$KILIX95_DIR
+KILIX95_REPO=$KILIX95_REPO
+KILIX95_BRANCH=$KILIX95_BRANCH
+KILIX95_REF=$KILIX95_REF
 EOF
 fi
 
