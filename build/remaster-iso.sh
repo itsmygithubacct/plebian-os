@@ -50,6 +50,8 @@ cp "$PRESEED" "$EXTRACT/preseed.cfg"
 mkdir -p "$EXTRACT/plebian-os"
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
+cp "$HERE/provision/install-deps.sh"             "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 
 # Point the installer at the preseed and run it unattended. The language,
 # country and keyboard questions are asked by localechooser BEFORE the preseed

@@ -27,40 +27,11 @@ DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into the kilix "
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
 
-# runtime dependencies. No desktop-environment task: just the graphical base a
-# bare Pleb session needs, plus what `pleb doctor` checks and kilix links against.
-APT_DEPS=(
-    xserver-xorg xinit lightdm             # X + a display manager (pleb uses LightDM)
-    x11-xserver-utils x11-utils xterm      # xset/xsetroot/xrandr/xprop + fallback term
-    git curl tar ca-certificates           # to clone the repos + fetch the engine
-    libgl1 libegl1                         # kitty/kilix GL
-    libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1  # keyboard: kitty's glfw-x11 backend
-                                           # dlopens libxkbcommon-x11 -> libxcb-xkb at
-                                           # runtime; absent on a no-desktop base, so
-                                           # kilix crashes on launch without them.
-    fonts-jetbrains-mono fonts-noto-color-emoji  # a good mono + emoji for kilix
-    # kilix "95" desktop — everything its apps need to actually work:
-    python3-pil                            # the desktop renders via Pillow
-    python3-xlib python3-websockets        # xpane inject + clipboard bridge + serve/attach
-    pulseaudio pulseaudio-utils alsa-utils # audio: system sounds / amp / soundcp (pactl/paplay/aplay)
-    ffmpeg xauth                           # media playback + screen capture; nested-X auth
-    # desktop notifications (Plebian-OS ships no DE, so nothing provides them):
-    # a freedesktop notification daemon + a session bus to activate it, so
-    # notify-send / libnotify / kitty's OSC 9/99 notifications pop up in Pleb.
-    dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin
-    firefox-esr chromium                   # web browsers: firefox is the desktop's default GUI browser
-                                           # (its GUI runs under software rendering, e.g. VMs, where
-                                           # chromium's GUI crashes); chromium stays for headless / kilix browse.
-    # `kilix run` / `kilix serve`: run X apps (e.g. DOSBox/Doom) on a private
-    # X server and stream them into a kilix pane / to remote viewers. Without
-    # Xvfb, `kilix run` dies with "Xvfb not found" — so games launch + crash.
-    xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base
-    build-essential pkg-config zlib1g-dev  # a toolchain so programs (games, tools) build + run in the desktop
-    libsdl2-dev libsdl2-image-dev libsndfile1-dev  # kilix-amp (the Media Player) builds against SDL2 + libsndfile
-    # general command-line utilities Plebian-OS ships with (uv is not in apt —
-    # installed separately below)
-    ncdu rsync ufw jq glances
-)
+# Where this script lives (deployed as /usr/local/sbin/plebian-os-provision, or
+# run in-repo from provision/). The runtime dependency set now lives beside us
+# in install-deps.sh (deployed as plebian-os-install-deps) — the single source
+# of truth — which step 1 below calls.
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
@@ -114,26 +85,23 @@ log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (gre
 log "session     : $([ "$DESKTOP" = 1 ] && echo 'kilix "95" desktop' || echo 'plain kilix shell')"
 
 # ── 1. dependencies ──────────────────────────────────────────────────────────
-log "installing runtime dependencies (apt)"
+# Delegated to the standalone installer (install-deps.sh, deployed alongside us
+# as plebian-os-install-deps) — the single source of truth for the dep set, and
+# runnable on its own to debug a bad dependency. Look for it next to this script
+# under either its deployed name or its in-repo name.
+DEPS_SCRIPT=""
+for cand in \
+    "$SELF_DIR/plebian-os-install-deps" \
+    "$SELF_DIR/install-deps.sh" \
+    /usr/local/sbin/plebian-os-install-deps; do
+    [ -r "$cand" ] && DEPS_SCRIPT="$cand" && break
+done
+[ -n "$DEPS_SCRIPT" ] || die "dependency installer not found (plebian-os-install-deps / install-deps.sh)"
+log "installing runtime dependencies via $DEPS_SCRIPT"
 if [ "$DRY_RUN" = 1 ]; then
-    echo "    + apt-get install -y ${APT_DEPS[*]}"
+    bash "$DEPS_SCRIPT" --dry-run
 else
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y --no-install-recommends "${APT_DEPS[@]}"
-fi
-
-# ── 1b. uv — not packaged in Debian; install the standalone binary ───────────
-# uv's official one-liner installer, pinned to a system prefix so it lands on
-# PATH for everyone and doesn't rewrite shell profiles. Non-fatal: a slow/no
-# link shouldn't fail provisioning over an optional tool.
-log "installing uv (astral standalone installer -> /usr/local/bin)"
-if [ "$DRY_RUN" = 1 ]; then
-    echo "    + curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh"
-else
-    curl -LsSf https://astral.sh/uv/install.sh \
-        | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh \
-        || warn "uv install failed (continuing without it)"
+    bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
 
 # ── 2. clone pleb into the user's home (as the user, correct ownership) ──────
