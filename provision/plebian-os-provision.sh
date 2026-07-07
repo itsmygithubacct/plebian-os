@@ -9,7 +9,7 @@
 #   2. clones  github.com/itsmygithubacct/pleb  into the target user's ~/pleb
 #   3. runs    pleb install  — which itself clones github.com/itsmygithubacct/kilix
 #      into ~/kilix, fetches a prebuilt kitty engine, and registers "Pleb" as a
-#      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix on PATH
+#      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb on PATH
 #   4. (optional) enables Pleb autologin — a hard kiosk that boots straight in
 #
 # It is idempotent: re-running updates the checkouts and re-asserts the session.
