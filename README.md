@@ -35,6 +35,13 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
+**Updating later** — refresh kilix/pleb with **`pleb update`** (there is no
+`kilix update`). It pulls the latest checkout and re-asserts the session. It
+rebuilds the clickable-chrome kitty fork *only if a Go toolchain is present*
+(`~/pleb/scripts/install-go.sh` installs one) plus kitty's build deps; otherwise
+it keeps the prebuilt kitty engine that runs the desktop — so an update never
+needs a compiler to succeed.
+
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
 thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
 Nothing here forks or vendors kilix/pleb — they come straight from GitHub, so the
