@@ -27,6 +27,7 @@ warn() { printf '\033[1;33m[deps]\033[0m %s\n' "$*" >&2; }
 # dependency manifest.
 DEP_GROUPS=(
     "X + display manager|xserver-xorg xinit lightdm x11-xserver-utils x11-utils xterm"
+    "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar ca-certificates"
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
