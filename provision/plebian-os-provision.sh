@@ -41,7 +41,7 @@ APT_DEPS=(
     fonts-jetbrains-mono fonts-noto-color-emoji  # a good mono + emoji for kilix
     # kilix "95" desktop — everything its apps need to actually work:
     python3-pil                            # the desktop renders via Pillow
-    python3-xlib python3-websockets        # xpane (X inject) + serve/attach (remote)
+    python3-xlib python3-websockets        # xpane inject + clipboard bridge + serve/attach
     pulseaudio pulseaudio-utils alsa-utils # audio: system sounds / amp / soundcp (pactl/paplay/aplay)
     ffmpeg xauth                           # media playback + screen capture; nested-X auth
     firefox-esr chromium                   # web browsers: firefox is the desktop's default GUI browser
