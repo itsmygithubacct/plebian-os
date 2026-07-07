@@ -11,6 +11,7 @@
 #      into ~/kilix, fetches a prebuilt kitty engine, and registers "Pleb" as a
 #      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb on PATH
 #   4. (optional) enables Pleb autologin — a hard kiosk that boots straight in
+#   5. (optional) grants the target user passwordless sudo (--nopasswd-sudo)
 #
 # It is idempotent: re-running updates the checkouts and re-asserts the session.
 # Run as root (the firstboot service does) or via sudo. --dry-run prints the
@@ -23,6 +24,7 @@ KILIX_REPO="${KILIX_REPO:-https://github.com/itsmygithubacct/kilix.git}"
 PLEB_BRANCH="${PLEB_BRANCH:-}"                 # empty = repo default
 KILIX_BRANCH="${KILIX_BRANCH:-}"
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
+NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into the kilix "95" desktop
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
@@ -37,9 +39,10 @@ usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
     cat <<EOF
 
-Usage: $0 [--user NAME] [--kiosk] [--no-desktop] [--branch REF] [--dry-run]
+Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--no-desktop] [--branch REF] [--dry-run]
   --user NAME    provision for this user (default: first uid>=1000 account)
   --kiosk        enable autologin straight into Pleb (no greeter)
+  --nopasswd-sudo grant the target user passwordless sudo
   --no-desktop   boot into a plain fullscreen kilix shell, not the "95" desktop
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
@@ -56,6 +59,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --user)   TARGET_USER="${2:?}"; shift 2 ;;
         --kiosk)  KIOSK=1; shift ;;
+        --nopasswd-sudo) NOPASSWD_SUDO=1; shift ;;
         --no-desktop) DESKTOP=0; shift ;;
         --branch) PLEB_BRANCH="${2:?}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
@@ -180,9 +184,28 @@ if [ "$KIOSK" = 1 ]; then
         || warn "pleb autologin failed; the greeter will still offer Pleb"
 fi
 
+# Passwordless sudo for the owner. Plebian-OS is a single-user appliance and the
+# VM builder turns this on by default, so `pleb install`, the Start-menu update
+# actions and Shut Down (systemctl poweroff) never stop for a password. This is
+# a PERMANENT file — the grant used during provisioning above is temporary and
+# removed by cleanup.
+if [ "$NOPASSWD_SUDO" = 1 ]; then
+    log "granting $TARGET_USER passwordless sudo"
+    NOPASSWD_FILE=/etc/sudoers.d/plebian-os-nopasswd
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + echo '$TARGET_USER ALL=(ALL) NOPASSWD:ALL' > $NOPASSWD_FILE (0440, visudo-checked)"
+    else
+        printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET_USER" > "$NOPASSWD_FILE"
+        chmod 0440 "$NOPASSWD_FILE"
+        visudo -cf "$NOPASSWD_FILE" >/dev/null 2>&1 \
+            || { warn "sudoers validation failed — removing $NOPASSWD_FILE"; rm -f "$NOPASSWD_FILE"; }
+    fi
+fi
+
 cleanup; trap - EXIT
 
 log "done. Plebian-OS is provisioned."
 log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo 'kilix "95" desktop' || echo 'fullscreen kilix')."
 [ "$KIOSK" = 1 ] && log "  (kiosk: boots straight in; rescue console on Ctrl+Alt+F2)"
+[ "$NOPASSWD_SUDO" = 1 ] && log "  ($TARGET_USER has passwordless sudo)"
 exit 0

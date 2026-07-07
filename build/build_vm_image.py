@@ -96,6 +96,7 @@ class Config:
     disk_gb: int
     desktop: bool          # PLEB_DESKTOP: boot into the kilix "95" desktop
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
+    nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
     ssh_port: int
     gui: bool              # start with a window vs headless
     wait: bool             # block until provisioning finishes
@@ -175,13 +176,15 @@ def gather_config(args) -> Config:
     else:
         desktop = p.ask_bool('boot into the kilix "95" desktop (vs plain shell)', True)
     kiosk    = args.kiosk if args.kiosk is not None \
-                          else p.ask_bool("autologin (kiosk) instead of a login screen", False)
+                          else p.ask_bool("autologin (kiosk) instead of a login screen", True)
+    nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
+                          else p.ask_bool(f"passwordless sudo for {username}", True)
     ssh_port = args.port     or p.ask("SSH host port (forwarded to guest 22)", free_port(),
                                       cast=int, validate=lambda v: 1 <= v <= 65535)
 
     return Config(name=name, username=username, fullname=fullname, password=password,
                   hostname=hostname, ram_mb=ram_mb, cpus=cpus, disk_gb=disk_gb,
-                  desktop=desktop, kiosk=kiosk, ssh_port=ssh_port,
+                  desktop=desktop, kiosk=kiosk, nopasswd_sudo=nopasswd, ssh_port=ssh_port,
                   gui=args.gui, wait=not args.no_wait)
 
 
@@ -193,6 +196,7 @@ def confirm_summary(cfg: Config, assume_yes: bool) -> None:
         ("disk", f"{cfg.disk_gb} GB (sparse)"),
         ("session", 'kilix "95" desktop' if cfg.desktop else "plain kilix shell"),
         ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
+        ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
         ("SSH", f"ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1"),
         ("display", "GUI window" if cfg.gui else "headless"),
     ]
@@ -247,8 +251,10 @@ def generate_preseed(cfg: Config) -> Path:
     # EnvironmentFile=-/etc/default/plebian-os, right before the unit is enabled.
     env_line = (
         "    mkdir -p /target/etc/default; "
-        "printf 'PLEBIAN_OS_DESKTOP=%s\\nPLEBIAN_OS_KIOSK=%s\\nPLEBIAN_OS_USER=%s\\n' "
+        "printf 'PLEBIAN_OS_DESKTOP=%s\\nPLEBIAN_OS_KIOSK=%s\\nPLEBIAN_OS_USER=%s"
+        "\\nPLEBIAN_OS_NOPASSWD_SUDO=%s\\n' "
         f"{1 if cfg.desktop else 0} {1 if cfg.kiosk else 0} {shlex.quote(cfg.username)} "
+        f"{1 if cfg.nopasswd_sudo else 0} "
         "> /target/etc/default/plebian-os; \\\n"
     )
     anchor = "    in-target systemctl enable plebian-os-firstboot.service; \\\n"
@@ -425,8 +431,14 @@ def main() -> None:
     ap.add_argument("--ram", type=int, help="MB"); ap.add_argument("--cpus", type=int)
     ap.add_argument("--disk", type=int, help="GB")
     ap.add_argument("--session", choices=["desktop", "shell"])
-    ap.add_argument("--kiosk", dest="kiosk", action="store_true", default=None)
-    ap.add_argument("--no-kiosk", dest="kiosk", action="store_false")
+    ap.add_argument("--kiosk", dest="kiosk", action="store_true", default=None,
+                    help="autologin straight into Pleb (default)")
+    ap.add_argument("--no-kiosk", dest="kiosk", action="store_false",
+                    help="show the login greeter instead of autologin")
+    ap.add_argument("--sudo-nopasswd", dest="nopasswd_sudo", action="store_true",
+                    default=None, help="passwordless sudo for the user (default)")
+    ap.add_argument("--no-sudo-nopasswd", dest="nopasswd_sudo", action="store_false",
+                    help="require a password for sudo")
     ap.add_argument("--port", type=int, help="SSH host port -> guest 22")
     ap.add_argument("--iso", type=Path, help="use this prebuilt ISO (skip building)")
     ap.add_argument("--out", type=Path, default=None,
