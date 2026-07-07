@@ -44,7 +44,9 @@ APT_DEPS=(
     python3-xlib python3-websockets        # xpane (X inject) + serve/attach (remote)
     pulseaudio pulseaudio-utils alsa-utils # audio: system sounds / amp / soundcp (pactl/paplay/aplay)
     ffmpeg xauth                           # media playback + screen capture; nested-X auth
-    chromium                               # the desktop's web browser (`kilix browse` drives headless chromium)
+    firefox-esr chromium                   # web browsers: firefox is the desktop's default GUI browser
+                                           # (its GUI runs under software rendering, e.g. VMs, where
+                                           # chromium's GUI crashes); chromium stays for headless / kilix browse.
     # `kilix run` / `kilix serve`: run X apps (e.g. DOSBox/Doom) on a private
     # X server and stream them into a kilix pane / to remote viewers. Without
     # Xvfb, `kilix run` dies with "Xvfb not found" — so games launch + crash.
