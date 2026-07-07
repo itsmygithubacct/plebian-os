@@ -44,6 +44,10 @@ APT_DEPS=(
     python3-xlib python3-websockets        # xpane (X inject) + serve/attach (remote)
     pulseaudio pulseaudio-utils alsa-utils # audio: system sounds / amp / soundcp (pactl/paplay/aplay)
     ffmpeg xauth                           # media playback + screen capture; nested-X auth
+    # `kilix run` / `kilix serve`: run X apps (e.g. DOSBox/Doom) on a private
+    # X server and stream them into a kilix pane / to remote viewers. Without
+    # Xvfb, `kilix run` dies with "Xvfb not found" — so games launch + crash.
+    xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base
     build-essential zlib1g-dev             # a toolchain so programs (games, tools) build + run in the desktop
 )
 
