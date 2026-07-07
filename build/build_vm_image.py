@@ -317,6 +317,9 @@ def vbox_create(cfg: Config, iso: Path, assume_yes: bool = False) -> None:
          "--vram", 128, "--graphicscontroller", "vmsvga", "--firmware", "bios",
          "--rtcuseutc", "on", "--nic1", "nat",
          "--natpf1", f"ssh,tcp,127.0.0.1,{cfg.ssh_port},,22",
+         # audio out is OFF on a fresh VM — enable it so the desktop's system
+         # sounds / media actually reach the host speakers.
+         "--audio-driver", "default", "--audio-enabled", "on", "--audio-out", "on",
          "--boot1", "disk", "--boot2", "dvd", "--boot3", "none", "--boot4", "none"])
 
     vmdir = Path(vbox_info(cfg.name)["CfgFile"]).parent
