@@ -6,3 +6,7 @@ build/work/
 # editor/OS cruft
 *~
 .DS_Store
+
+# python (build_vm_image.py)
+__pycache__/
+*.pyc

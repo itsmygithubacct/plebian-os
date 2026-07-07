@@ -22,7 +22,11 @@ ConditionPathExists=!/var/lib/plebian-os/provisioned
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-# --kiosk is appended here by the preseed when autologin was requested.
+# Optional build-time provisioning options. The provisioner honours
+# PLEBIAN_OS_DESKTOP / PLEBIAN_OS_KIOSK / PLEBIAN_OS_USER; a preseed (e.g. the
+# one build_vm_image.py generates) can drop this file to pick the session mode
+# without editing the unit. The leading '-' makes it optional.
+EnvironmentFile=-/etc/default/plebian-os
 ExecStart=/usr/local/sbin/plebian-os-provision
 # Mark done and stop pulling on every boot (success only).
 ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned
