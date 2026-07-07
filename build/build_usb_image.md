@@ -53,6 +53,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | hostname | *image name* | |
 | session | **desktop** | the kilix "95" desktop, or a plain fullscreen kilix shell |
 | autologin (kiosk) | **no** | boot straight into Pleb, or show a login greeter |
+| passwordless sudo | **no** | optional single-user appliance convenience |
 
 ## Options
 
@@ -62,6 +63,7 @@ Every prompt has a matching flag, so the whole thing can run non-interactively.
 --name NAME            --username NAME       --fullname "Full Name"
 --hostname NAME        --password PASS
 --session desktop|shell --kiosk / --no-kiosk
+--sudo-nopasswd / --no-sudo-nopasswd
 
 --device /dev/sdX      target USB stick (omit → build the ISO only, then print how to flash)
 --iso PATH             flash a prebuilt ISO, skip building (see note below)

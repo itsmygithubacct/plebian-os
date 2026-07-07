@@ -35,6 +35,32 @@ log()  { printf '\033[1;36m[make-usb]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[make-usb]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[make-usb] %s\033[0m\n' "$*" >&2; exit 1; }
 
+is_partition_name() {
+    local base="$1"
+    if [[ "$base" =~ ^(nvme[0-9]+n[0-9]+|mmcblk[0-9]+)$ ]]; then
+        return 1
+    fi
+    if [[ "$base" =~ ^(nvme[0-9]+n[0-9]+p[0-9]+|mmcblk[0-9]+p[0-9]+)$ ]]; then
+        return 0
+    fi
+    [[ "$base" =~ [0-9]$ ]]
+}
+
+root_device_names() {
+    local src real pk
+    src="$(findmnt -no SOURCE / 2>/dev/null || true)"
+    [ -n "$src" ] || return 0
+    basename "$src"
+    real="$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")"
+    [ "$real" = "$src" ] || basename "$real"
+    pk="$(lsblk -no pkname "$src" 2>/dev/null | head -1 || true)"
+    [ -n "$pk" ] && echo "$pk"
+    if [ "$real" != "$src" ]; then
+        pk="$(lsblk -no pkname "$real" 2>/dev/null | head -1 || true)"
+        [ -n "$pk" ] && echo "$pk"
+    fi
+}
+
 # ── list removable block devices (candidates for a USB stick) ────────────────
 list_devices() {
     log "removable block devices:"
@@ -135,15 +161,18 @@ if [ "$DRY_RUN" = 1 ] && [ ! -b "$DEVICE" ]; then
     exit 0
 fi
 [ -b "$DEVICE" ] || die "$DEVICE is not a block device"
-# refuse a partition (want the whole disk, e.g. /dev/sdb not /dev/sdb1)
-case "$DEVICE" in *[0-9]) warn "$DEVICE looks like a partition; you almost certainly want the whole disk" ;; esac
-
 base="$(basename "$DEVICE")"
+# refuse a partition (want the whole disk, e.g. /dev/sdb not /dev/sdb1)
+if is_partition_name "$base"; then
+    die "$DEVICE looks like a partition; you want the whole disk"
+fi
+
 removable="$(cat "/sys/block/$base/removable" 2>/dev/null || echo 0)"
 # find the disk backing '/' so we never offer to flash the system drive
-rootsrc="$(findmnt -no SOURCE / 2>/dev/null || true)"
-rootdisk="$(lsblk -no pkname "$rootsrc" 2>/dev/null | head -1 || true)"
-[ "$base" = "${rootdisk:-__none__}" ] && die "$DEVICE backs the running root filesystem — refusing"
+while read -r rootdev; do
+    [ -n "$rootdev" ] || continue
+    [ "$base" = "$rootdev" ] && die "$DEVICE backs the running root filesystem — refusing"
+done < <(root_device_names | sort -u)
 
 if [ "$removable" != 1 ] && [ "$FORCE" != 1 ]; then
     die "$DEVICE is not marked removable — refusing (pass --force if you are certain)"

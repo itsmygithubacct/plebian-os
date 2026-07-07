@@ -55,6 +55,7 @@ class Config:
     hostname: str
     desktop: bool          # PLEBIAN_OS_DESKTOP: boot into the kilix "95" desktop
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
+    nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
 
 # ── prompting (reuse the VM builder's Prompter) ──────────────────────────────
 def gather_config(args) -> Config:
@@ -74,9 +75,12 @@ def gather_config(args) -> Config:
         desktop = p.ask_bool('boot into the kilix "95" desktop (vs plain shell)', True)
     kiosk = args.kiosk if args.kiosk is not None \
                        else p.ask_bool("autologin (kiosk) instead of a login screen", False)
+    nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
+                       else p.ask_bool(f"passwordless sudo for {username}", False)
 
     return Config(name=name, username=username, fullname=fullname, password=password,
-                  hostname=hostname, desktop=desktop, kiosk=kiosk)
+                  hostname=hostname, desktop=desktop, kiosk=kiosk,
+                  nopasswd_sudo=nopasswd)
 
 def confirm_summary(cfg: Config, out_iso: Path, device: str | None,
                     autoboot: bool, assume_yes: bool) -> None:
@@ -85,6 +89,7 @@ def confirm_summary(cfg: Config, out_iso: Path, device: str | None,
         ("image name", cfg.name), ("username", cfg.username), ("hostname", cfg.hostname),
         ("session", 'kilix "95" desktop' if cfg.desktop else "plain kilix shell"),
         ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
+        ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
         ("ISO out", out_iso),
         ("boot menu", "auto-selects install (--autoboot)" if autoboot
                       else "menu pause — pick the install entry"),
@@ -271,6 +276,7 @@ def final_summary(cfg: Config, iso: Path, device: str, autoboot: bool,
         print(f"  login     : {cfg.username} / (the password you set)")
         print(f"  session   : {'kilix 95 desktop' if cfg.desktop else 'kilix shell'}"
               f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
+        print(f"  sudo      : {'passwordless' if cfg.nopasswd_sudo else 'password required'}")
     print(f"  ISO       : {iso}")
     if autoboot:
         print(vm.c("1;31",
@@ -290,6 +296,10 @@ def main() -> None:
     ap.add_argument("--kiosk", dest="kiosk", action="store_true", default=None,
                     help="autologin straight into Pleb")
     ap.add_argument("--no-kiosk", dest="kiosk", action="store_false")
+    ap.add_argument("--sudo-nopasswd", dest="nopasswd_sudo", action="store_true",
+                    default=None, help="grant the user passwordless sudo")
+    ap.add_argument("--no-sudo-nopasswd", dest="nopasswd_sudo", action="store_false",
+                    help="require a password for sudo")
     ap.add_argument("--device", help="target USB device, e.g. /dev/sdX "
                     "(omit to build the ISO only)")
     ap.add_argument("--iso", type=Path, help="flash this prebuilt ISO, skip building")
@@ -320,7 +330,8 @@ def main() -> None:
         cfg = Config(name=args.name or "plebian", username=args.username or "pleb",
                      fullname=args.fullname or "Plebian User",
                      password=args.password or "", hostname=args.hostname or "",
-                     desktop=args.session != "shell", kiosk=bool(args.kiosk))
+                     desktop=args.session != "shell", kiosk=bool(args.kiosk),
+                     nopasswd_sudo=bool(args.nopasswd_sudo))
         warn("using a prebuilt ISO: custom username/password/session are NOT applied "
              "(they live in the ISO's preseed).")
     else:

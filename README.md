@@ -35,12 +35,11 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
-**Updating later** — refresh kilix/pleb with **`pleb update`** (there is no
-`kilix update`). It pulls the latest checkout and re-asserts the session. It
-rebuilds the clickable-chrome kitty fork *only if a Go toolchain is present*
-(`~/pleb/scripts/install-go.sh` installs one) plus kitty's build deps; otherwise
-it keeps the prebuilt kitty engine that runs the desktop — so an update never
-needs a compiler to succeed.
+**Updating later** — refresh the whole stack with **`plebian-os-update`**. It
+pulls both `~/pleb` and `~/kilix`, then re-runs `pleb install` so the session,
+launchers, and command links are re-asserted. `pleb update` is narrower: it
+updates kilix from the pleb side, but it does not update the `~/pleb` checkout
+itself.
 
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
 thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
@@ -84,9 +83,9 @@ build/make-usb.sh                              # just build the ISO (no --device
 build/make-usb.sh --netinst local.iso --device /dev/sdX   # use a local netinst
 ```
 
-It refuses without `xorriso`, refuses non-removable / system disks, shows what it
-will erase, and makes you retype the device path to confirm (skip with `--yes`;
-override the removable check with `--force`).
+It refuses without `xorriso`, refuses partitions, refuses non-removable / system
+disks, shows what it will erase, and makes you retype the device path to confirm
+(skip with `--yes`; override the removable check with `--force`).
 
 ## Layout
 

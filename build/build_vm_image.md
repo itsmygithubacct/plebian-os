@@ -57,7 +57,8 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | vCPUs | **½ of host cores** | min 1 |
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |
 | session | **desktop** | the kilix "95" desktop, or a plain fullscreen kilix shell |
-| autologin (kiosk) | **no** | boot straight into Pleb, or show a login greeter |
+| autologin (kiosk) | **yes** | boot straight into Pleb, or show a login greeter |
+| passwordless sudo | **yes** | useful for update/restart actions inside the desktop |
 | SSH host port | first free from **2222** | forwarded to the guest's port 22 |
 
 ## Options
@@ -69,6 +70,7 @@ Every prompt has a matching flag, so the whole thing can run non-interactively.
 --hostname NAME        --password PASS        --ram MB
 --cpus N               --disk GB              --port HOSTPORT
 --session desktop|shell --kiosk / --no-kiosk
+--sudo-nopasswd / --no-sudo-nopasswd
 
 --target virtualbox    only virtualbox today (qemu/docker planned)
 --iso PATH             use a prebuilt ISO, skip building (see note below)
@@ -96,6 +98,8 @@ A registered VirtualBox VM configured with:
   the install, and every boot after that comes up from disk.
 - **Session**: boots into the Pleb session — the kilix "95" desktop (or a plain
   kilix shell), with a greeter or straight-in autologin per your answers.
+- **sudo**: passwordless by default for the generated user, unless you pass
+  `--no-sudo-nopasswd`.
 
 On success the tool detaches the install ISO and prints how to start and reach
 the VM:
@@ -104,7 +108,7 @@ the VM:
 ✓ Plebian-OS VirtualBox image is ready.
   VM        : plebian
   login     : pleb / (the password you set)
-  session   : kilix 95 desktop (greeter)
+  session   : kilix 95 desktop (autologin)
   start GUI : VBoxManage startvm plebian --type gui
   ssh in    : ssh -p 2222 pleb@127.0.0.1
 ```
@@ -117,17 +121,20 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
 - `PLEB_DESKTOP=1` → boots the kilix "95" desktop; `0` → a plain fullscreen
   kilix shell (or delete the file).
 - Autologin: `~/pleb/bin/pleb autologin on|off`.
+- Passwordless sudo: remove or edit `/etc/sudoers.d/plebian-os-nopasswd`.
 
-At build time these come from `--session` / `--kiosk` (or
-`PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK`).
+At build time these come from `--session` / `--kiosk` /
+`--sudo-nopasswd` (or `PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK` /
+`PLEBIAN_OS_NOPASSWD_SUDO`).
 
 ## How it works
 
 1. **Customized preseed.** It starts from `preseed/preseed.cfg`, substitutes the
    username / full name / hostname, replaces the password with an
    `openssl passwd -6` hash, and injects the first-boot options
-   (`/etc/default/plebian-os` → `PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK`, which
-   the provisioner reads via the unit's `EnvironmentFile`).
+   (`/etc/default/plebian-os` → `PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK` /
+   `PLEBIAN_OS_NOPASSWD_SUDO`, which the provisioner reads via the unit's
+   `EnvironmentFile`).
 2. **ISO build.** It calls **`build/remaster-iso.sh`** with
    `PLEBIAN_OS_PRESEED=<generated>` and `PLEBIAN_OS_AUTOBOOT=1`. The latter makes
    the installer's boot menu auto-select the (preseeded) install after a short

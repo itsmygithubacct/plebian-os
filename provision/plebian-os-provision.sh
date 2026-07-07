@@ -108,6 +108,28 @@ else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
 
+# The ISO path stages plebian-os-update via preseed late_command. The bootstrap
+# path runs this provisioner directly from the checkout, so install the same
+# helper here when the source file is available.
+UPDATE_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-update.sh" \
+    "$SELF_DIR/plebian-os-update"; do
+    [ -r "$cand" ] && UPDATE_SRC="$cand" && break
+done
+if [ -n "$UPDATE_SRC" ]; then
+    log "installing update helper -> /usr/local/bin/plebian-os-update"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -m 0755 $UPDATE_SRC /usr/local/bin/plebian-os-update"
+    else
+        install -m 0755 "$UPDATE_SRC" /usr/local/bin/plebian-os-update
+    fi
+elif [ -x /usr/local/bin/plebian-os-update ]; then
+    log "update helper already present at /usr/local/bin/plebian-os-update"
+else
+    warn "update helper not found; continuing without plebian-os-update"
+fi
+
 # ── 2. clone pleb into the user's home (as the user, correct ownership) ──────
 PLEB_DIR="$USER_HOME/pleb"
 as_user() {
