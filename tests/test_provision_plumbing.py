@@ -124,6 +124,14 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("blacklist snd_pcsp", text)
         self.assertIn("modprobe -r snd_pcsp pcspkr", text)
 
+    def test_netinst_fetch_retries_with_debian_cd_signing_key(self):
+        text = (ROOT / "build" / "lib.sh").read_text()
+        self.assertIn("PLEBIAN_OS_DEBIAN_CD_KEY_URL", text)
+        self.assertIn("key-DA87E80D6294BE9B.txt", text)
+        self.assertIn("debian-cd-signing-key.gpg", text)
+        self.assertIn("_fetch_debian_cd_keyring", text)
+        self.assertIn("_download_sums_pair refresh", text)
+
     def test_make_usb_rebuilds_stale_iso_when_baked_inputs_change(self):
         text = (ROOT / "build" / "make-usb.sh").read_text()
         self.assertIn("iso_is_fresh", text)

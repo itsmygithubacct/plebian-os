@@ -9,6 +9,7 @@
 # SHA256SUMS rather than hardcoding a version.
 : "${PLEBIAN_OS_CDIMAGE:=https://cdimage.debian.org/debian-cd/current/amd64/iso-cd}"
 : "${PLEBIAN_OS_CACHE:=${XDG_CACHE_HOME:-$HOME/.cache}/plebian-os}"
+: "${PLEBIAN_OS_DEBIAN_CD_KEY_URL:=https://www.debian.org/CD/key-DA87E80D6294BE9B.txt}"
 
 _lib_log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*" >&2; }
 _lib_die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
@@ -32,23 +33,66 @@ fetch_netinst() {
     command -v sha256sum >/dev/null 2>&1 || _lib_die "sha256sum is required to verify the download"
     mkdir -p "$PLEBIAN_OS_CACHE"
 
-    _lib_log "fetching Debian netinst checksums ($PLEBIAN_OS_CDIMAGE/SHA256SUMS)"
     local sums="$PLEBIAN_OS_CACHE/SHA256SUMS"
     local sig="$PLEBIAN_OS_CACHE/SHA256SUMS.sign"
-    curl -fsSL "$PLEBIAN_OS_CDIMAGE/SHA256SUMS" -o "$sums" \
-        || _lib_die "could not fetch SHA256SUMS (no network? mirror down?)"
-    curl -fsSL "$PLEBIAN_OS_CDIMAGE/SHA256SUMS.sign" -o "$sig" \
-        || _lib_die "could not fetch SHA256SUMS.sign (no network? mirror down?)"
 
-    local keyring=""
-    for kr in /usr/share/keyrings/debian-archive-keyring.gpg \
-              /usr/share/keyrings/debian-role-keys.gpg; do
-        [ -r "$kr" ] && keyring="$kr" && break
-    done
-    if command -v gpgv >/dev/null 2>&1 && [ -n "$keyring" ]; then
-        gpgv --keyring "$keyring" "$sig" "$sums" >/dev/null 2>&1 \
-            || _lib_die "Debian SHA256SUMS signature verification failed"
-        _lib_log "verified Debian SHA256SUMS signature"
+    _download_sums_pair() {
+        local mode="${1:-normal}"
+        local -a curl_args=(-fsSL)
+        if [ "$mode" = refresh ]; then
+            curl_args+=(-H "Cache-Control: no-cache" -H "Pragma: no-cache")
+        fi
+        _lib_log "fetching Debian netinst checksums ($PLEBIAN_OS_CDIMAGE/SHA256SUMS)"
+        curl "${curl_args[@]}" "$PLEBIAN_OS_CDIMAGE/SHA256SUMS" -o "$sums.tmp" \
+            || _lib_die "could not fetch SHA256SUMS (no network? mirror down?)"
+        curl "${curl_args[@]}" "$PLEBIAN_OS_CDIMAGE/SHA256SUMS.sign" -o "$sig.tmp" \
+            || _lib_die "could not fetch SHA256SUMS.sign (no network? mirror down?)"
+        mv "$sums.tmp" "$sums"
+        mv "$sig.tmp" "$sig"
+    }
+
+    _fetch_debian_cd_keyring() {
+        local key_txt="$PLEBIAN_OS_CACHE/key-DA87E80D6294BE9B.txt"
+        local keyring="$PLEBIAN_OS_CACHE/debian-cd-signing-key.gpg"
+        command -v gpg >/dev/null 2>&1 || return 1
+        _lib_log "fetching Debian CD signing key ($PLEBIAN_OS_DEBIAN_CD_KEY_URL)"
+        curl -fsSL "$PLEBIAN_OS_DEBIAN_CD_KEY_URL" -o "$key_txt.tmp" \
+            || return 1
+        rm -f "$keyring.tmp"
+        gpg --batch --yes --dearmor -o "$keyring.tmp" "$key_txt.tmp" >/dev/null 2>&1 \
+            || { rm -f "$key_txt.tmp" "$keyring.tmp"; return 1; }
+        mv "$key_txt.tmp" "$key_txt"
+        mv "$keyring.tmp" "$keyring"
+        return 0
+    }
+
+    _verify_sums_signature() {
+        local kr keyrings=(
+            /usr/share/keyrings/debian-archive-keyring.gpg
+            /usr/share/keyrings/debian-role-keys.gpg
+            /usr/share/keyrings/debian-role-keys.pgp
+            "$PLEBIAN_OS_CACHE/debian-cd-signing-key.gpg"
+        )
+        command -v gpgv >/dev/null 2>&1 || return 2
+        for kr in "${keyrings[@]}"; do
+            [ -r "$kr" ] || continue
+            if gpgv --keyring "$kr" "$sig" "$sums" >/dev/null 2>&1; then
+                _lib_log "verified Debian SHA256SUMS signature with $(basename "$kr")"
+                return 0
+            fi
+        done
+        return 1
+    }
+
+    _download_sums_pair
+    if command -v gpgv >/dev/null 2>&1; then
+        if ! _verify_sums_signature; then
+            _lib_log "Debian SHA256SUMS signature did not verify with installed keyrings; refreshing signing key and checksums"
+            _fetch_debian_cd_keyring || true
+            _download_sums_pair refresh
+            _verify_sums_signature \
+                || _lib_die "Debian SHA256SUMS signature verification failed"
+        fi
     elif [ "${PLEBIAN_OS_ALLOW_UNSIGNED_SUMS:-0}" = 1 ]; then
         _lib_log "WARNING: skipping Debian SHA256SUMS signature verification by request"
     else
