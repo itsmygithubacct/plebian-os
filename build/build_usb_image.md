@@ -59,6 +59,8 @@ Each prompt shows a `[default]`; press Enter to accept it.
 ## Options
 
 Every prompt has a matching flag, so the whole thing can run non-interactively.
+With `--yes`, omitting `--password` generates a random password and prints it
+once instead of using the interactive `plebian` default.
 
 ```
 --name NAME            --username NAME       --fullname "Full Name"

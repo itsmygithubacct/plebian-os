@@ -28,8 +28,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/lib.sh"
-NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0 UNATTENDED_DISK=0
+NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0 UNATTENDED_DISK=0 ISO_EXPLICIT=0
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 log()  { printf '\033[1;36m[make-usb]\033[0m %s\n' "$*"; }
@@ -78,6 +79,50 @@ mounted_targets_for_device() {
     done < <(lsblk -rno NAME "$1" 2>/dev/null || true)
 }
 
+iso_is_fresh() {
+    [ -f "$ISO" ] && [ -f "$NETINST" ] && [ "$ISO" -nt "$NETINST" ] || return 1
+    [ "$UNATTENDED_DISK" = 0 ] || return 1
+    baked_env_overrides_present && return 1
+    local preseed="${PLEBIAN_OS_PRESEED:-$ROOT/preseed/preseed.cfg}"
+    local inputs=(
+        "$HERE/remaster-iso.sh"
+        "$HERE/lib.sh"
+        "$preseed"
+        "$ROOT/provision/plebian-os-provision.sh"
+        "$ROOT/provision/plebian-os-firstboot.service"
+        "$ROOT/provision/install-deps.sh"
+        "$ROOT/provision/plebian-os-update.sh"
+    )
+    local input
+    for input in "${inputs[@]}"; do
+        [ -f "$input" ] || return 1
+        [ "$ISO" -nt "$input" ] || return 1
+    done
+}
+
+baked_env_overrides_present() {
+    local key
+    for key in \
+        PLEBIAN_OS_PRESEED \
+        PLEBIAN_OS_AUTOBOOT \
+        PLEBIAN_OS_UNATTENDED_DISK \
+        PLEBIAN_OS_DESKTOP \
+        PLEBIAN_OS_KIOSK \
+        PLEBIAN_OS_USER \
+        PLEBIAN_OS_NOPASSWD_SUDO \
+        PLEBIAN_OS_INSTALL_UV \
+        PLEBIAN_OS_RELEASE_MODE \
+        PLEBIAN_OS_NETINST_SHA256 \
+        PLEB_REPO PLEB_BRANCH PLEB_REF \
+        KILIX_REPO KILIX_BRANCH KILIX_REF \
+        KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
+        KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_COMMAND KILIX_DESKTOP_NAME \
+        KILIX95_REPO KILIX95_BRANCH KILIX95_REF KILIX95_AUTO_INSTALL; do
+        [ -n "${!key:-}" ] && return 0
+    done
+    return 1
+}
+
 # ── list removable block devices (candidates for a USB stick) ────────────────
 list_devices() {
     log "removable block devices:"
@@ -99,7 +144,7 @@ list_devices() {
 while [ $# -gt 0 ]; do
     case "$1" in
         --netinst) NETINST="${2:?}"; shift 2 ;;
-        --iso)     ISO="${2:?}"; shift 2 ;;
+        --iso)     ISO="${2:?}"; ISO_EXPLICIT=1; shift 2 ;;
         --device)  DEVICE="${2:?}"; shift 2 ;;
         --list)    list_devices; exit 0 ;;
         --yes|-y)  ASSUME_YES=1; shift ;;
@@ -116,9 +161,10 @@ done
 # Build when the user passed a --netinst, or when the target ISO doesn't exist
 # yet. A pure flash of an existing --iso (no --netinst) needs no build — and no
 # xorriso, no download.
-need_build=0
-[ -n "$NETINST" ] && need_build=1
-[ -f "$ISO" ] || need_build=1
+need_build=1
+if [ "$ISO_EXPLICIT" = 1 ] && [ -z "$NETINST" ] && [ -f "$ISO" ]; then
+    need_build=0
+fi
 
 if [ "$need_build" = 1 ]; then
     # refuse to run without xorriso (a dry-run only warns, so it can still preview)
@@ -139,8 +185,8 @@ if [ "$need_build" = 1 ]; then
     elif [ ! -f "$NETINST" ] && [ "$DRY_RUN" != 1 ]; then
         die "no such netinst ISO: $NETINST"
     fi
-    if [ -f "$ISO" ] && [ -f "$NETINST" ] && [ "$ISO" -nt "$NETINST" ]; then
-        log "using existing $ISO (newer than the netinst; delete it to rebuild)"
+    if iso_is_fresh; then
+        log "using existing $ISO (newer than netinst and baked-in source files)"
     else
         log "building Plebian-OS ISO from $(basename "$NETINST") -> $ISO"
         if [ "$DRY_RUN" = 1 ]; then

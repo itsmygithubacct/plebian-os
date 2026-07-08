@@ -54,6 +54,38 @@ class UsbBuilderTests(unittest.TestCase):
         parents = {"dm-0": "sda2", "sda2": "sda"}
         self.assertEqual(usb._ancestors("dm-0", parents), {"dm-0", "sda2", "sda"})
 
+    def test_yes_mode_generates_password_when_omitted(self):
+        args = mock.Mock(
+            yes=True,
+            name=None,
+            username=None,
+            fullname=None,
+            password=None,
+            hostname=None,
+            session=None,
+            kiosk=None,
+            nopasswd_sudo=None,
+        )
+        with mock.patch.object(usb.vm, "generated_password", return_value="random-pass"):
+            cfg = usb.gather_config(args)
+        self.assertEqual(cfg.password, "random-pass")
+
+    def test_yes_mode_honors_explicit_password(self):
+        args = mock.Mock(
+            yes=True,
+            name=None,
+            username=None,
+            fullname=None,
+            password="explicit",
+            hostname=None,
+            session=None,
+            kiosk=None,
+            nopasswd_sudo=None,
+        )
+        with mock.patch.object(usb.vm, "generated_password", return_value="random-pass"):
+            cfg = usb.gather_config(args)
+        self.assertEqual(cfg.password, "explicit")
+
 
 if __name__ == "__main__":
     unittest.main()

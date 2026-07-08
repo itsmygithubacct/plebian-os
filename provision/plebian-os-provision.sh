@@ -74,6 +74,25 @@ write_session_default() {
     printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
 }
 
+install_no_beep_defaults() {
+    local conf=/etc/modprobe.d/plebian-os-no-beep.conf
+    log "disabling kernel speaker beeps -> $conf"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $conf (blacklist pcspkr snd_pcsp)"
+        echo "    + modprobe -r snd_pcsp pcspkr"
+        return
+    fi
+    mkdir -p "$(dirname "$conf")"
+    cat > "$conf" <<'EOF'
+# Managed by plebian-os-provision. Keep kernel console/system beeps silent.
+blacklist pcspkr
+blacklist snd_pcsp
+install pcspkr /bin/false
+install snd_pcsp /bin/false
+EOF
+    modprobe -r snd_pcsp pcspkr 2>/dev/null || true
+}
+
 desktop_provider_needs_kilix95() {
     case "$KILIX_DESKTOP_PROVIDER" in
         external) return 0 ;;
@@ -183,6 +202,7 @@ if [ "$DRY_RUN" = 1 ]; then
 else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
+install_no_beep_defaults
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same

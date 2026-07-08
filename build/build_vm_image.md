@@ -57,6 +57,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | hostname | *VM name* | |
 | RAM (MB) | **¼ of host RAM** | rounded to 256 MB, min 1024 |
 | vCPUs | **½ of host cores** | min 1 |
+| VRAM (MB) | **128** | capped to VirtualBox's 256 MB limit on this host |
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |
 | session | **desktop** | the configured `kilix desktop` provider, or a plain fullscreen kilix shell |
 | autologin (kiosk) | **yes** | boot straight into Pleb, or show a login greeter |
@@ -66,11 +67,14 @@ Each prompt shows a `[default]`; press Enter to accept it.
 ## Options
 
 Every prompt has a matching flag, so the whole thing can run non-interactively.
+With `--yes`, omitting `--password` generates a random password and prints it
+once instead of using the interactive `plebian` default.
 
 ```
 --name NAME            --username NAME       --fullname "Full Name"
 --hostname NAME        --password PASS        --ram MB
---cpus N               --disk GB              --port HOSTPORT
+--cpus N               --vram MB              --accelerate-3d
+--disk GB              --port HOSTPORT
 --session desktop|shell --kiosk / --no-kiosk
 --sudo-nopasswd / --no-sudo-nopasswd
 
@@ -94,6 +98,8 @@ A registered VirtualBox VM configured with:
 
 - **Disk**: a sparse (`--variant Standard`) VDI of the chosen size — it only
   consumes real space as the guest writes.
+- **Graphics**: VMSVGA, configurable VRAM, and optional VirtualBox 3D
+  acceleration.
 - **Network**: NAT, with a host→guest port-forward so `ssh -p <port>
   <user>@127.0.0.1` reaches the guest.
 - **Boot**: disk first, DVD second — the empty disk falls through to the ISO for

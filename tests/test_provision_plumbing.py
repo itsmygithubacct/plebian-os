@@ -79,17 +79,66 @@ class ProvisionPlumbingTests(unittest.TestCase):
         text = (ROOT / "preseed" / "preseed.cfg").read_text()
         self.assertIn("/target/etc/plebian-os", text)
         self.assertIn("build-info.env", text)
+        self.assertIn("firstboot.env", text)
+        self.assertIn("/target/etc/default/plebian-os", text)
 
-    def test_remaster_writes_build_manifest(self):
+    def test_remaster_writes_build_manifest_and_firstboot_env(self):
         text = (ROOT / "build" / "remaster-iso.sh").read_text()
         for key in [
             "PLEBIAN_OS_SOURCE_ISO_SHA256",
+            "PLEBIAN_OS_NETINST_SHA256",
+            "PLEBIAN_OS_RELEASE_MODE",
             "PLEB_REF",
             "KILIX_REF",
             "KILIX_PREBUILT_SHA256",
             "KILIX95_REF",
         ]:
             self.assertIn(key, text)
+        self.assertIn("write_firstboot_env", text)
+        self.assertIn("firstboot.env", text)
+        self.assertIn("release_mode_check", text)
+
+    def test_release_mode_requires_all_pins(self):
+        text = (ROOT / "build" / "remaster-iso.sh").read_text()
+        self.assertIn("PLEBIAN_OS_RELEASE_MODE", text)
+        self.assertIn("PLEBIAN_OS_NETINST_SHA256", text)
+        for key in [
+            "PLEB_REF",
+            "KILIX_REF",
+            "KILIX95_REF",
+            "KILIX_PREBUILT_VERSION",
+            "KILIX_PREBUILT_SHA256",
+        ]:
+            self.assertIn(key, text)
+
+    def test_firstboot_retries_transient_failures(self):
+        text = (ROOT / "provision" / "plebian-os-firstboot.service").read_text()
+        self.assertIn("Restart=on-failure", text)
+        self.assertIn("RestartSec=90s", text)
+        self.assertIn("StartLimitBurst=5", text)
+
+    def test_provision_disables_kernel_speaker_beeps(self):
+        text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertIn("plebian-os-no-beep.conf", text)
+        self.assertIn("blacklist pcspkr", text)
+        self.assertIn("blacklist snd_pcsp", text)
+        self.assertIn("modprobe -r snd_pcsp pcspkr", text)
+
+    def test_make_usb_rebuilds_stale_iso_when_baked_inputs_change(self):
+        text = (ROOT / "build" / "make-usb.sh").read_text()
+        self.assertIn("iso_is_fresh", text)
+        self.assertIn("baked_env_overrides_present", text)
+        self.assertIn("ISO_EXPLICIT", text)
+        self.assertIn("PLEBIAN_OS_INSTALL_UV", text)
+        self.assertIn("UNATTENDED_DISK", text)
+        for path in [
+            "remaster-iso.sh",
+            "preseed/preseed.cfg",
+            "plebian-os-provision.sh",
+            "plebian-os-firstboot.service",
+            "plebian-os-update.sh",
+        ]:
+            self.assertIn(path, text)
 
 
 if __name__ == "__main__":

@@ -104,11 +104,15 @@ with `--force`).
 | `preseed/preseed.cfg` | a regular Debian install, no desktop task, wires in the provisioner |
 | `build/remaster-iso.sh` | inject the preseed + provisioner into a trixie netinst ISO |
 | `build/make-usb.sh` | build the ISO and flash it to a USB stick (with safety guards) |
+| `build/acceptance-vm.sh` | operator-run VirtualBox acceptance: build ISO, install, wait for firstboot |
+| `build/install-vm-from-usb-iso.sh` | build a USB-style ISO, then install it in a 4 GB / 4-core VirtualBox VM |
 | `bootstrap.sh` | run the provisioner on an already-installed Debian |
 
-Every remastered ISO also stages `/etc/plebian-os/build-info.env` into the
-installed system. It records the Plebian-OS commit/dirty state, source Debian ISO
-checksum, and the repo/ref/provider knobs used for that image.
+Every remastered ISO also stages `/etc/plebian-os/build-info.env` and
+`/etc/default/plebian-os` into the installed system. The manifest records the
+Plebian-OS commit/dirty state, source Debian ISO checksum, and the
+repo/ref/provider knobs used for that image; the firstboot env is what
+`plebian-os-firstboot.service` reads when it provisions the installed system.
 
 ## Plebian-OS vs. Plebian
 
@@ -135,7 +139,8 @@ environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
 fullscreen kilix shell. With desktop mode on, `KILIX_DESKTOP_PROVIDER` can be
 `auto`, `builtin`, `external`, `command`, or `none`; `command` uses
 `KILIX_DESKTOP_COMMAND`, and `none` behaves like a plain shell session. External
-Kilix 95 still uses `KILIX95_*`. Release-style images can also set `PLEB_REF`,
+Kilix 95 still uses `KILIX95_*`. Release-style images can set
+`PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_SHA256`, `PLEB_REF`,
 `KILIX_REF`, `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, and
-`KILIX_PREBUILT_SHA256` before building so first boot uses pinned sources and a
-checksum-verified fallback engine.
+`KILIX_PREBUILT_SHA256` before building; the builder refuses release mode unless
+all of those pins are present.

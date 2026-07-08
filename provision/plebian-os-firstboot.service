@@ -18,6 +18,11 @@ Wants=network-online.target
 Before=display-manager.service
 # Don't run if provisioning already completed.
 ConditionPathExists=!/var/lib/plebian-os/provisioned
+# First boot depends on network, mirrors, and GitHub. Retry transient failures,
+# but leave the unit failed after a bounded number of attempts so the journal is
+# readable and the greeter is not held forever.
+StartLimitIntervalSec=30min
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
@@ -31,6 +36,8 @@ ExecStart=/usr/local/sbin/plebian-os-provision
 # Mark done and stop pulling on every boot (success only).
 ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned
 ExecStartPost=/bin/systemctl disable plebian-os-firstboot.service
+Restart=on-failure
+RestartSec=90s
 # Provisioning can take a while on a slow link (apt + two clones + engine).
 TimeoutStartSec=1800
 StandardOutput=journal+console

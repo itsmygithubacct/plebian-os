@@ -25,6 +25,8 @@ class VmBuilderEnvTests(unittest.TestCase):
             hostname="plebian",
             ram_mb=1024,
             cpus=1,
+            vram_mb=128,
+            accelerate_3d=False,
             disk_gb=8,
             desktop=True,
             kiosk=True,
@@ -38,6 +40,7 @@ class VmBuilderEnvTests(unittest.TestCase):
             "KILIX_REF": "kilix-v1",
             "KILIX_PREBUILT_VERSION": "0.47.0",
             "KILIX_PREBUILT_SHA256": "abc123",
+            "PLEBIAN_OS_INSTALL_UV": "1",
             "KILIX_DESKTOP_PROVIDER": "command",
             "KILIX_DESKTOP_COMMAND": "printf 'custom desktop'",
             "KILIX_DESKTOP_NAME": "custom desk",
@@ -52,6 +55,78 @@ class VmBuilderEnvTests(unittest.TestCase):
             self.assertIn(f"{key}=%s", text)
         self.assertIn(shlex.quote(envfile_quote(env["KILIX_DESKTOP_COMMAND"])), text)
         self.assertIn(shlex.quote(envfile_quote(env["KILIX_DESKTOP_NAME"])), text)
+
+    def test_yes_mode_generates_password_when_omitted(self):
+        args = mock.Mock(
+            yes=True,
+            name=None,
+            username=None,
+            fullname=None,
+            password=None,
+            hostname=None,
+            ram=None,
+            cpus=None,
+            vram=None,
+            accelerate_3d=False,
+            disk=None,
+            session=None,
+            kiosk=None,
+            nopasswd_sudo=None,
+            port=None,
+            gui=False,
+            no_wait=True,
+        )
+        with mock.patch.object(vm, "generated_password", return_value="random-pass"):
+            cfg = vm.gather_config(args)
+        self.assertEqual(cfg.password, "random-pass")
+
+    def test_yes_mode_honors_explicit_password(self):
+        args = mock.Mock(
+            yes=True,
+            name=None,
+            username=None,
+            fullname=None,
+            password="explicit",
+            hostname=None,
+            ram=None,
+            cpus=None,
+            vram=None,
+            accelerate_3d=False,
+            disk=None,
+            session=None,
+            kiosk=None,
+            nopasswd_sudo=None,
+            port=None,
+            gui=False,
+            no_wait=True,
+        )
+        with mock.patch.object(vm, "generated_password", return_value="random-pass"):
+            cfg = vm.gather_config(args)
+        self.assertEqual(cfg.password, "explicit")
+
+    def test_vram_is_capped_to_virtualbox_limit(self):
+        args = mock.Mock(
+            yes=True,
+            name=None,
+            username=None,
+            fullname=None,
+            password="explicit",
+            hostname=None,
+            ram=None,
+            cpus=None,
+            vram=512,
+            accelerate_3d=True,
+            disk=None,
+            session=None,
+            kiosk=None,
+            nopasswd_sudo=None,
+            port=None,
+            gui=False,
+            no_wait=True,
+        )
+        cfg = vm.gather_config(args)
+        self.assertEqual(cfg.vram_mb, 256)
+        self.assertTrue(cfg.accelerate_3d)
 
 
 if __name__ == "__main__":

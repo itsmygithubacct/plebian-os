@@ -19,6 +19,7 @@ import argparse
 import atexit
 import os
 import re
+import secrets
 import shlex
 import shutil
 import socket
@@ -83,6 +84,9 @@ def free_port(start: int = 2222) -> int:
                 return p
     return start
 
+def generated_password() -> str:
+    return secrets.token_urlsafe(18)
+
 # ── config ───────────────────────────────────────────────────────────────────
 @dataclass
 class Config:
@@ -93,6 +97,8 @@ class Config:
     hostname: str
     ram_mb: int
     cpus: int
+    vram_mb: int
+    accelerate_3d: bool
     disk_gb: int
     desktop: bool          # PLEB_DESKTOP: boot into `kilix desktop`
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
@@ -163,12 +169,22 @@ def gather_config(args) -> Config:
     name     = args.name     or p.ask("VM name", "plebian")
     username = args.username or p.ask("username", "pleb")
     fullname = args.fullname or p.ask("full name", "Plebian User")
-    password = args.password or p.ask_password("plebian")
+    if args.password is not None:
+        password = args.password
+    elif args.yes:
+        password = generated_password()
+        warn(f"--yes without --password: generated password for {username}: {password}")
+    else:
+        password = p.ask_password("plebian")
     hostname = args.hostname or p.ask("hostname", name)
     ram_mb   = args.ram      or p.ask("RAM (MB)", default_ram_mb(),
                                       cast=int, validate=lambda v: v >= 512)
     cpus     = args.cpus     or p.ask("vCPUs", default_cpus(),
                                       cast=int, validate=lambda v: v >= 1)
+    vram_mb  = args.vram if args.vram is not None else 128
+    if vram_mb > 256:
+        warn(f"VirtualBox rejects VRAM above 256 MB on this host; requested {vram_mb}, using 256")
+        vram_mb = 256
     disk_gb  = args.disk     or p.ask("disk (GB, sparse)", 200,
                                       cast=int, validate=lambda v: v >= 8)
     if args.session:
@@ -183,7 +199,9 @@ def gather_config(args) -> Config:
                                       cast=int, validate=lambda v: 1 <= v <= 65535)
 
     return Config(name=name, username=username, fullname=fullname, password=password,
-                  hostname=hostname, ram_mb=ram_mb, cpus=cpus, disk_gb=disk_gb,
+                  hostname=hostname, ram_mb=ram_mb, cpus=cpus,
+                  vram_mb=vram_mb, accelerate_3d=args.accelerate_3d,
+                  disk_gb=disk_gb,
                   desktop=desktop, kiosk=kiosk, nopasswd_sudo=nopasswd, ssh_port=ssh_port,
                   gui=args.gui, wait=not args.no_wait)
 
@@ -193,6 +211,8 @@ def confirm_summary(cfg: Config, assume_yes: bool) -> None:
     rows = [
         ("VM name", cfg.name), ("username", cfg.username), ("hostname", cfg.hostname),
         ("RAM", f"{cfg.ram_mb} MB"), ("vCPUs", cfg.cpus),
+        ("VRAM", f"{cfg.vram_mb} MB"),
+        ("3D accel", "on" if cfg.accelerate_3d else "off"),
         ("disk", f"{cfg.disk_gb} GB (sparse)"),
         ("session", "kilix desktop" if cfg.desktop else "plain kilix shell"),
         ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
@@ -258,6 +278,7 @@ def generate_preseed(cfg: Config) -> Path:
         ("PLEBIAN_OS_KIOSK", "1" if cfg.kiosk else "0"),
         ("PLEBIAN_OS_USER", cfg.username),
         ("PLEBIAN_OS_NOPASSWD_SUDO", "1" if cfg.nopasswd_sudo else "0"),
+        ("PLEBIAN_OS_INSTALL_UV", os.environ.get("PLEBIAN_OS_INSTALL_UV", "0")),
         ("PLEB_REPO", os.environ.get("PLEB_REPO", "https://github.com/itsmygithubacct/pleb.git")),
         ("KILIX_REPO", os.environ.get("KILIX_REPO", "https://github.com/itsmygithubacct/kilix.git")),
         ("KILIX95_REPO", os.environ.get("KILIX95_REPO", "https://github.com/itsmygithubacct/kilix-95.git")),
@@ -348,7 +369,9 @@ def vbox_create(cfg: Config, iso: Path, assume_yes: bool = False) -> None:
     run(["VBoxManage", "createvm", "--name", cfg.name, "--ostype", "Debian_64", "--register"])
     run(["VBoxManage", "modifyvm", cfg.name,
          "--memory", cfg.ram_mb, "--cpus", cfg.cpus, "--ioapic", "on",
-         "--vram", 128, "--graphicscontroller", "vmsvga", "--firmware", "bios",
+         "--vram", cfg.vram_mb, "--graphicscontroller", "vmsvga",
+         "--accelerate-3d", "on" if cfg.accelerate_3d else "off",
+         "--firmware", "bios",
          "--rtcuseutc", "on", "--nic1", "nat",
          "--natpf1", f"ssh,tcp,127.0.0.1,{cfg.ssh_port},,22",
          # audio out is OFF on a fresh VM — enable it so the desktop's system
@@ -457,6 +480,10 @@ def main() -> None:
     ap.add_argument("--name"); ap.add_argument("--username"); ap.add_argument("--fullname")
     ap.add_argument("--hostname"); ap.add_argument("--password")
     ap.add_argument("--ram", type=int, help="MB"); ap.add_argument("--cpus", type=int)
+    ap.add_argument("--vram", type=int, default=None,
+                    help="video RAM in MB (VirtualBox caps this at 256 on this host)")
+    ap.add_argument("--accelerate-3d", action="store_true",
+                    help="enable VirtualBox 3D acceleration")
     ap.add_argument("--disk", type=int, help="GB")
     ap.add_argument("--session", choices=["desktop", "shell"])
     ap.add_argument("--kiosk", dest="kiosk", action="store_true", default=None,

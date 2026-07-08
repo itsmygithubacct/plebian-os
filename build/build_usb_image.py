@@ -70,7 +70,13 @@ def gather_config(args) -> Config:
     name     = args.name     or p.ask("image name", "plebian")
     username = args.username or p.ask("username", "pleb")
     fullname = args.fullname or p.ask("full name", "Plebian User")
-    password = args.password or p.ask_password("plebian")
+    if args.password is not None:
+        password = args.password
+    elif args.yes:
+        password = vm.generated_password()
+        warn(f"--yes without --password: generated password for {username}: {password}")
+    else:
+        password = p.ask_password("plebian")
     hostname = args.hostname or p.ask("hostname", name)
     if args.session:
         desktop = args.session == "desktop"
