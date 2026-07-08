@@ -28,11 +28,14 @@ PLEB_BRANCH="${PLEB_BRANCH:-}"                 # empty = repo default
 PLEB_REF="${PLEB_REF:-}"                       # optional exact commit/tag
 KILIX_BRANCH="${KILIX_BRANCH:-}"
 KILIX_REF="${KILIX_REF:-}"
+KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-}" # optional exact kitty fallback version
+KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-}"   # optional checksum for the fallback bundle
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-external}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
+KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
 KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
@@ -55,7 +58,7 @@ Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--no-desktop] [--branch REF
   --user NAME    provision for this user (default: first uid>=1000 account)
   --kiosk        enable autologin straight into Pleb (no greeter)
   --nopasswd-sudo grant the target user passwordless sudo
-  --no-desktop   boot into a plain fullscreen kilix shell, not the "95" desktop
+  --no-desktop   boot into a plain fullscreen kilix shell, not a desktop provider
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
 EOF
@@ -71,6 +74,14 @@ write_session_default() {
     printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
 }
 
+desktop_provider_needs_kilix95() {
+    case "$KILIX_DESKTOP_PROVIDER" in
+        external) return 0 ;;
+        auto) [ ! -f "$KILIX_DIR/desktop/main.py" ] ;;
+        *) return 1 ;;
+    esac
+}
+
 validate_checkout() {
     local dir="$1" repo="$2" name="$3" remote
     [ -d "$dir/.git" ] || return 0
@@ -79,6 +90,36 @@ validate_checkout() {
         && [ "${PLEBIAN_OS_TRUST_EXISTING_CHECKOUT:-0}" != 1 ]; then
         die "$name checkout at $dir has origin '$remote', expected '$repo' (set PLEBIAN_OS_TRUST_EXISTING_CHECKOUT=1 to override)"
     fi
+}
+
+update_pleb_checkout() {
+    validate_checkout "$PLEB_DIR" "$PLEB_REPO" "pleb"
+    if [ -n "$PLEB_REF" ]; then
+        as_user git -C "$PLEB_DIR" fetch --tags origin || die "pleb fetch failed"
+        as_user git -C "$PLEB_DIR" checkout --detach "$PLEB_REF" \
+            || die "could not check out PLEB_REF=$PLEB_REF"
+        return
+    fi
+
+    if [ -n "$PLEB_BRANCH" ]; then
+        as_user git -C "$PLEB_DIR" fetch --prune origin "$PLEB_BRANCH" \
+            || die "pleb fetch failed"
+        current="$(git -C "$PLEB_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+        if [ "$current" != "$PLEB_BRANCH" ]; then
+            if git -C "$PLEB_DIR" show-ref --verify --quiet "refs/heads/$PLEB_BRANCH"; then
+                as_user git -C "$PLEB_DIR" checkout "$PLEB_BRANCH" \
+                    || die "could not check out PLEB_BRANCH=$PLEB_BRANCH"
+            else
+                as_user git -C "$PLEB_DIR" checkout --track -b "$PLEB_BRANCH" "origin/$PLEB_BRANCH" \
+                    || die "could not track PLEB_BRANCH=$PLEB_BRANCH"
+            fi
+        fi
+        as_user git -C "$PLEB_DIR" merge --ff-only "origin/$PLEB_BRANCH" \
+            || die "pleb branch $PLEB_BRANCH cannot fast-forward"
+        return
+    fi
+
+    as_user git -C "$PLEB_DIR" pull --ff-only || die "pleb pull failed"
 }
 
 # ── args ─────────────────────────────────────────────────────────────────────
@@ -116,7 +157,7 @@ log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
 log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (cloned by pleb)"
 if [ "$DESKTOP" = 1 ]; then
     log "desktop    : provider=$KILIX_DESKTOP_PROVIDER name=$KILIX_DESKTOP_NAME"
-    if [ "$KILIX_DESKTOP_PROVIDER" = external ] || { [ "$KILIX_DESKTOP_PROVIDER" = auto ] && [ ! -f "$KILIX_DIR/desktop/main.py" ]; }; then
+    if desktop_provider_needs_kilix95; then
         log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
     fi
 fi
@@ -172,18 +213,13 @@ as_user() {
     runuser -u "$TARGET_USER" -- "$@"
 }
 if [ -d "$PLEB_DIR/.git" ]; then
-    validate_checkout "$PLEB_DIR" "$PLEB_REPO" "pleb"
     log "pleb present at $PLEB_DIR — updating"
-    if [ -n "$PLEB_REF" ]; then
-        as_user git -C "$PLEB_DIR" fetch --tags origin || die "pleb fetch failed"
-        as_user git -C "$PLEB_DIR" checkout --detach "$PLEB_REF" \
-            || die "could not check out PLEB_REF=$PLEB_REF"
-    else
-        as_user git -C "$PLEB_DIR" pull --ff-only || die "pleb pull failed"
-    fi
+    update_pleb_checkout
 else
     log "cloning pleb -> $PLEB_DIR"
-    as_user git clone ${PLEB_BRANCH:+--branch "$PLEB_BRANCH"} "$PLEB_REPO" "$PLEB_DIR" \
+    clone_args=()
+    [ -n "$PLEB_BRANCH" ] && clone_args=(--branch "$PLEB_BRANCH")
+    as_user git clone "${clone_args[@]}" "$PLEB_REPO" "$PLEB_DIR" \
         || die "git clone of pleb failed ($PLEB_REPO)"
     if [ -n "$PLEB_REF" ]; then
         as_user git -C "$PLEB_DIR" fetch --tags origin || die "pleb fetch failed"
@@ -207,17 +243,25 @@ else
         || { rm -f "$SUDOERS"; die "temporary sudoers validation failed"; }
 fi
 
-log "running 'pleb install' (clones kilix + optional kilix 95, adds the Pleb session)"
-as_user env KILIX_DIR="$KILIX_DIR" KILIX_REPO="$KILIX_REPO" \
-    ${KILIX_BRANCH:+KILIX_BRANCH="$KILIX_BRANCH"} \
-    ${KILIX_REF:+KILIX_REF="$KILIX_REF"} \
-    KILIX_DESKTOP_PROVIDER="$KILIX_DESKTOP_PROVIDER" \
-    KILIX_DESKTOP_COMMAND="$KILIX_DESKTOP_COMMAND" \
-    KILIX_DESKTOP_NAME="$KILIX_DESKTOP_NAME" \
-    PLEB_DESKTOP="$DESKTOP" KILIX95_DIR="$KILIX95_DIR" \
-    KILIX95_REPO="$KILIX95_REPO" ${KILIX95_BRANCH:+KILIX95_BRANCH="$KILIX95_BRANCH"} \
-    ${KILIX95_REF:+KILIX95_REF="$KILIX95_REF"} \
-    "$PLEB_DIR/bin/pleb" install \
+log "running 'pleb install' (clones kilix + optional desktop provider, adds the Pleb session)"
+install_env=(
+    "KILIX_DIR=$KILIX_DIR"
+    "KILIX_REPO=$KILIX_REPO"
+    "KILIX_BRANCH=$KILIX_BRANCH"
+    "KILIX_REF=$KILIX_REF"
+    "KILIX_PREBUILT_VERSION=$KILIX_PREBUILT_VERSION"
+    "KILIX_PREBUILT_SHA256=$KILIX_PREBUILT_SHA256"
+    "KILIX_DESKTOP_PROVIDER=$KILIX_DESKTOP_PROVIDER"
+    "KILIX_DESKTOP_COMMAND=$KILIX_DESKTOP_COMMAND"
+    "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
+    "PLEB_DESKTOP=$DESKTOP"
+    "KILIX95_AUTO_INSTALL=$KILIX95_AUTO_INSTALL"
+    "KILIX95_DIR=$KILIX95_DIR"
+    "KILIX95_REPO=$KILIX95_REPO"
+    "KILIX95_BRANCH=$KILIX95_BRANCH"
+    "KILIX95_REF=$KILIX95_REF"
+)
+as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
@@ -255,14 +299,22 @@ else
 # kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, command,
 # or none. pleb-session documents the other knobs.
 EOF
+    write_session_default PLEB_DIR "$PLEB_DIR"
+    write_session_default PLEB_REPO "$PLEB_REPO"
+    write_session_default PLEB_BRANCH "$PLEB_BRANCH"
+    write_session_default PLEB_REF "$PLEB_REF"
     write_session_default KILIX_DIR "$KILIX_DIR"
     write_session_default KILIX "$KILIX_DIR/kilix"
+    write_session_default KILIX_REPO "$KILIX_REPO"
+    write_session_default KILIX_BRANCH "$KILIX_BRANCH"
     write_session_default KILIX_REF "$KILIX_REF"
+    write_session_default KILIX_PREBUILT_VERSION "$KILIX_PREBUILT_VERSION"
+    write_session_default KILIX_PREBUILT_SHA256 "$KILIX_PREBUILT_SHA256"
     write_session_default PLEB_DESKTOP "$DESKTOP"
     write_session_default KILIX_DESKTOP_PROVIDER "$KILIX_DESKTOP_PROVIDER"
     write_session_default KILIX_DESKTOP_COMMAND "$KILIX_DESKTOP_COMMAND"
     write_session_default KILIX_DESKTOP_NAME "$KILIX_DESKTOP_NAME"
-    write_session_default KILIX95_AUTO_INSTALL "1"
+    write_session_default KILIX95_AUTO_INSTALL "$KILIX95_AUTO_INSTALL"
     write_session_default KILIX95_DIR "$KILIX95_DIR"
     write_session_default KILIX95_REPO "$KILIX95_REPO"
     write_session_default KILIX95_BRANCH "$KILIX95_BRANCH"

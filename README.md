@@ -26,7 +26,7 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 2. **First boot** — `plebian-os-firstboot.service` runs
    [`provision/plebian-os-provision.sh`](provision/plebian-os-provision.sh) once,
    after the network is up. It:
-   - apt-installs the runtime deps (Xorg, LightDM, GL, fonts);
+   - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux);
    - clones `pleb` into the user's `~/pleb`;
    - runs `pleb install`, which clones `kilix` into `~/kilix`, optionally sets up
      the selected `kilix desktop` provider, fetches a prebuilt kitty engine, and
@@ -39,6 +39,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
 pulls `~/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
 engine, and optional desktop-provider update to `pleb update --no-restart`.
+If `/etc/pleb/session.env` pins `PLEB_REF`, `KILIX_REF`, or `KILIX95_REF`, the
+update helper keeps using those exact refs instead of drifting to branch heads.
 
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
 thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
@@ -104,6 +106,10 @@ with `--force`).
 | `build/make-usb.sh` | build the ISO and flash it to a USB stick (with safety guards) |
 | `bootstrap.sh` | run the provisioner on an already-installed Debian |
 
+Every remastered ISO also stages `/etc/plebian-os/build-info.env` into the
+installed system. It records the Plebian-OS commit/dirty state, source Debian ISO
+checksum, and the repo/ref/provider knobs used for that image.
+
 ## Plebian-OS vs. Plebian
 
 The sibling **plebian** project is the *console-only* take: no X, no display
@@ -128,4 +134,8 @@ Desktop selection is controlled by `/etc/pleb/session.env` after install, or by
 environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
 fullscreen kilix shell. With desktop mode on, `KILIX_DESKTOP_PROVIDER` can be
 `auto`, `builtin`, `external`, `command`, or `none`; `command` uses
-`KILIX_DESKTOP_COMMAND`, and external Kilix 95 still uses `KILIX95_*`.
+`KILIX_DESKTOP_COMMAND`, and `none` behaves like a plain shell session. External
+Kilix 95 still uses `KILIX95_*`. Release-style images can also set `PLEB_REF`,
+`KILIX_REF`, `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, and
+`KILIX_PREBUILT_SHA256` before building so first boot uses pinned sources and a
+checksum-verified fallback engine.

@@ -36,9 +36,12 @@ class VmBuilderEnvTests(unittest.TestCase):
         env = {
             "PLEB_REF": "pleb-v1",
             "KILIX_REF": "kilix-v1",
+            "KILIX_PREBUILT_VERSION": "0.47.0",
+            "KILIX_PREBUILT_SHA256": "abc123",
             "KILIX_DESKTOP_PROVIDER": "command",
             "KILIX_DESKTOP_COMMAND": "printf 'custom desktop'",
             "KILIX_DESKTOP_NAME": "custom desk",
+            "KILIX95_AUTO_INSTALL": "0",
         }
         with mock.patch.dict(os.environ, env, clear=False), \
                 mock.patch.object(vm, "crypt_password", return_value=("$6$hash", True)):

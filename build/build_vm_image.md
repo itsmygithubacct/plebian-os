@@ -126,18 +126,20 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
   `kilix desktop` runs. `command` uses `KILIX_DESKTOP_COMMAND`; `none` disables
   the facade. For a Plebian-OS shell session, prefer `PLEB_DESKTOP=0`.
 - `PLEB_REF`, `KILIX_REF`, and `KILIX95_REF` can pin exact refs for release
-  images. `KILIX95_DIR`, `KILIX95_REPO`, and `KILIX95_BRANCH` still select the
-  external Kilix 95 checkout.
+  images. `KILIX_PREBUILT_VERSION` plus `KILIX_PREBUILT_SHA256` can also pin and
+  verify the downloaded fallback kitty bundle. `KILIX95_DIR`, `KILIX95_REPO`,
+  and `KILIX95_BRANCH` still select the external Kilix 95 checkout.
 - Autologin: `~/pleb/bin/pleb autologin on|off`.
 - Passwordless sudo: remove or edit `/etc/sudoers.d/plebian-os-nopasswd`.
 
 At build time these come from `--session` / `--kiosk` /
 `--sudo-nopasswd` (or `PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK` /
 `PLEBIAN_OS_NOPASSWD_SUDO`). Repo/source overrides such as `PLEB_REPO`,
-`PLEB_REF`, `KILIX_REPO`, `KILIX_REF`, `KILIX_DESKTOP_PROVIDER`,
-`KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_NAME`, `KILIX95_REPO`,
-`KILIX95_BRANCH`, and `KILIX95_REF` are also copied into the first-boot
-environment when present.
+`PLEB_BRANCH`, `PLEB_REF`, `KILIX_REPO`, `KILIX_BRANCH`, `KILIX_REF`,
+`KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`,
+`KILIX_DESKTOP_PROVIDER`, `KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_NAME`,
+`KILIX95_AUTO_INSTALL`, `KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF`
+are also copied into the first-boot environment when present.
 
 ## How it works
 

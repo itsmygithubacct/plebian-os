@@ -32,13 +32,13 @@ DEP_GROUPS=(
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
     "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
-    "audio|pulseaudio pulseaudio-utils alsa-utils"
+    "audio|pulseaudio pulseaudio-utils alsa-utils fluidsynth fluid-soundfont-gm"
     "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
     "web browsers|firefox-esr chromium"
     "desktop notifications|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
-    "build toolchain|build-essential pkg-config zlib1g-dev libsdl2-dev libsdl2-image-dev libsndfile1-dev"
-    "cli utilities|ncdu rsync ufw jq glances"
+    "build toolchain|build-essential pkg-config zlib1g-dev libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
+    "cli utilities|tmux ncdu rsync ufw jq glances"
 )
 
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
