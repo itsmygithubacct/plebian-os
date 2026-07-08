@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # lib.sh — shared helpers for the Plebian-OS build scripts.
 #   require_xorriso   refuse to run unless xorriso is installed
-#   fetch_netinst     download + checksum-verify the current Debian netinst ISO,
-#                     echo its path (cached; logs go to stderr)
+#   fetch_netinst     download + signature/hash-verify the current Debian
+#                     netinst ISO, echo its path (cached; logs go to stderr)
 
 # Current Debian stable netinst (amd64). "current" tracks the latest point
-# release, so we read the exact filename + checksum from the mirror's
+# release, so we read the exact filename + checksum from the mirror's signed
 # SHA256SUMS rather than hardcoding a version.
 : "${PLEBIAN_OS_CDIMAGE:=https://cdimage.debian.org/debian-cd/current/amd64/iso-cd}"
 : "${PLEBIAN_OS_CACHE:=${XDG_CACHE_HOME:-$HOME/.cache}/plebian-os}"
@@ -34,8 +34,26 @@ fetch_netinst() {
 
     _lib_log "fetching Debian netinst checksums ($PLEBIAN_OS_CDIMAGE/SHA256SUMS)"
     local sums="$PLEBIAN_OS_CACHE/SHA256SUMS"
+    local sig="$PLEBIAN_OS_CACHE/SHA256SUMS.sign"
     curl -fsSL "$PLEBIAN_OS_CDIMAGE/SHA256SUMS" -o "$sums" \
         || _lib_die "could not fetch SHA256SUMS (no network? mirror down?)"
+    curl -fsSL "$PLEBIAN_OS_CDIMAGE/SHA256SUMS.sign" -o "$sig" \
+        || _lib_die "could not fetch SHA256SUMS.sign (no network? mirror down?)"
+
+    local keyring=""
+    for kr in /usr/share/keyrings/debian-archive-keyring.gpg \
+              /usr/share/keyrings/debian-role-keys.gpg; do
+        [ -r "$kr" ] && keyring="$kr" && break
+    done
+    if command -v gpgv >/dev/null 2>&1 && [ -n "$keyring" ]; then
+        gpgv --keyring "$keyring" "$sig" "$sums" >/dev/null 2>&1 \
+            || _lib_die "Debian SHA256SUMS signature verification failed"
+        _lib_log "verified Debian SHA256SUMS signature"
+    elif [ "${PLEBIAN_OS_ALLOW_UNSIGNED_SUMS:-0}" = 1 ]; then
+        _lib_log "WARNING: skipping Debian SHA256SUMS signature verification by request"
+    else
+        _lib_die "cannot verify Debian SHA256SUMS signature; install gpgv and debian-archive-keyring, or set PLEBIAN_OS_ALLOW_UNSIGNED_SUMS=1"
+    fi
 
     # the plain amd64 netinst — not debian-edu / debian-mac
     local sum name

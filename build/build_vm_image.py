@@ -94,7 +94,7 @@ class Config:
     ram_mb: int
     cpus: int
     disk_gb: int
-    desktop: bool          # PLEB_DESKTOP: boot into the kilix "95" desktop
+    desktop: bool          # PLEB_DESKTOP: boot into `kilix desktop`
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
     nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
     ssh_port: int
@@ -174,7 +174,7 @@ def gather_config(args) -> Config:
     if args.session:
         desktop = args.session == "desktop"
     else:
-        desktop = p.ask_bool('boot into the kilix "95" desktop (vs plain shell)', True)
+        desktop = p.ask_bool("boot into the configured kilix desktop (vs plain shell)", True)
     kiosk    = args.kiosk if args.kiosk is not None \
                           else p.ask_bool("autologin (kiosk) instead of a login screen", True)
     nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
@@ -194,7 +194,7 @@ def confirm_summary(cfg: Config, assume_yes: bool) -> None:
         ("VM name", cfg.name), ("username", cfg.username), ("hostname", cfg.hostname),
         ("RAM", f"{cfg.ram_mb} MB"), ("vCPUs", cfg.cpus),
         ("disk", f"{cfg.disk_gb} GB (sparse)"),
-        ("session", 'kilix "95" desktop' if cfg.desktop else "plain kilix shell"),
+        ("session", "kilix desktop" if cfg.desktop else "plain kilix shell"),
         ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
         ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
         ("SSH", f"ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1"),
@@ -233,6 +233,9 @@ def generate_preseed(cfg: Config) -> Path:
             warn(f"preseed: pattern not found, skipped: {pattern!r}")
         text = new
 
+    def envfile_quote(value: str) -> str:
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
     sub(r"^(d-i passwd/username string ).*$",      r"\g<1>" + cfg.username)
     sub(r"^(d-i passwd/user-fullname string ).*$", r"\g<1>" + cfg.fullname)
     sub(r"^(d-i netcfg/get_hostname string ).*$",  r"\g<1>" + cfg.hostname)
@@ -259,14 +262,19 @@ def generate_preseed(cfg: Config) -> Path:
         ("KILIX_REPO", os.environ.get("KILIX_REPO", "https://github.com/itsmygithubacct/kilix.git")),
         ("KILIX95_REPO", os.environ.get("KILIX95_REPO", "https://github.com/itsmygithubacct/kilix-95.git")),
         ("PLEB_BRANCH", os.environ.get("PLEB_BRANCH", "")),
+        ("PLEB_REF", os.environ.get("PLEB_REF", "")),
         ("KILIX_BRANCH", os.environ.get("KILIX_BRANCH", "")),
+        ("KILIX_REF", os.environ.get("KILIX_REF", "")),
+        ("KILIX_DESKTOP_PROVIDER", os.environ.get("KILIX_DESKTOP_PROVIDER", "external")),
+        ("KILIX_DESKTOP_COMMAND", os.environ.get("KILIX_DESKTOP_COMMAND", "")),
+        ("KILIX_DESKTOP_NAME", os.environ.get("KILIX_DESKTOP_NAME", "desktop")),
         ("KILIX95_BRANCH", os.environ.get("KILIX95_BRANCH", "")),
         ("KILIX95_REF", os.environ.get("KILIX95_REF", "")),
         ("KILIX_DIR", os.environ.get("KILIX_DIR", f"{user_home}/kilix")),
         ("KILIX95_DIR", os.environ.get("KILIX95_DIR", f"{user_home}/kilix-95")),
     ]
     env_fmt = "".join(f"{k}=%s\\n" for k, _ in env_vars)
-    env_args = " ".join(shlex.quote(v) for _, v in env_vars)
+    env_args = " ".join(shlex.quote(envfile_quote(v)) for _, v in env_vars)
     env_line = (
         "    mkdir -p /target/etc/default; "
         f"printf '{env_fmt}' {env_args} > /target/etc/default/plebian-os; \\\n"
@@ -283,16 +291,19 @@ def generate_preseed(cfg: Config) -> Path:
     return tmp
 
 # ── ISO build (target-agnostic; reuses the repo's remaster script) ───────────
-def build_iso(cfg: Config, preseed: Path, out_iso: Path, dry_run: bool) -> Path:
+def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool) -> Path:
     info(f"building installer ISO via {REMASTER.name} (custom preseed baked in)")
     # AUTOBOOT makes the ISO's boot menu auto-select the install entry — a VM
     # build has no one to press a key at the menu.
-    env = {**os.environ, "PLEBIAN_OS_PRESEED": str(preseed), "PLEBIAN_OS_AUTOBOOT": "1"}
     # remaster-iso.sh SRC OUT — an empty SRC makes it use the cached/downloaded
     # Debian netinst (honours PLEBIAN_OS_NETINST too).
     if dry_run:
-        info(f"+ PLEBIAN_OS_PRESEED={preseed} {REMASTER} '' {out_iso}")
+        seed = preseed if preseed is not None else "<generated preseed>"
+        info(f"+ PLEBIAN_OS_AUTOBOOT=1 PLEBIAN_OS_UNATTENDED_DISK=1 "
+             f"PLEBIAN_OS_PRESEED={seed} {REMASTER} '' {out_iso}")
         return out_iso
+    env = {**os.environ, "PLEBIAN_OS_PRESEED": str(preseed),
+           "PLEBIAN_OS_AUTOBOOT": "1", "PLEBIAN_OS_UNATTENDED_DISK": "1"}
     run([REMASTER, "", str(out_iso)], env=env)
     if not out_iso.exists():
         die(f"ISO build did not produce {out_iso}")
@@ -428,7 +439,7 @@ def final_summary(cfg: Config, iso: Path) -> None:
     print(c("1;32", "\n✓ Plebian-OS VirtualBox image is ready.\n"))
     print(f"  VM        : {cfg.name}")
     print(f"  login     : {cfg.username} / (the password you set)")
-    print(f"  session   : {'kilix 95 desktop' if cfg.desktop else 'kilix shell'}"
+    print(f"  session   : {'kilix desktop' if cfg.desktop else 'kilix shell'}"
           f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
     print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
     print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")
@@ -476,6 +487,10 @@ def main() -> None:
     if not PRESEED_TEMPLATE.exists() or not REMASTER.exists():
         die("run this from a Plebian-OS checkout (preseed/ + build/ not found).")
 
+    if args.iso:
+        warn("using a prebuilt ISO: custom username/password/session are NOT applied "
+             "(they live in the ISO's preseed). SSH waiting assumes the credentials "
+             "entered here match that ISO.")
     cfg = gather_config(args)
     confirm_summary(cfg, args.yes)
 
@@ -483,11 +498,9 @@ def main() -> None:
         iso = args.iso.resolve()
         if not iso.exists() and not args.dry_run:
             die(f"--iso not found: {iso}")
-        warn("using a prebuilt ISO: custom username/password/session are NOT applied "
-             "(they live in the ISO's preseed).")
     else:
         out = (args.out or (REPO / f"plebian-os-{cfg.name}.iso")).resolve()
-        preseed = generate_preseed(cfg)
+        preseed = None if args.dry_run else generate_preseed(cfg)
         iso = build_iso(cfg, preseed, out, args.dry_run)
 
     if args.dry_run:

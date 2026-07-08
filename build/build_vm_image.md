@@ -4,14 +4,14 @@
 machine** end to end. It asks a few questions (username, password, RAM, disk,
 …), builds a customized installer ISO with the repo's own tooling, creates a
 VirtualBox VM, runs the install **completely unattended**, and waits for
-first-boot provisioning (pleb + kilix) to finish. When it returns, you have a VM
+first-boot provisioning (pleb + kilix + the selected desktop provider) to finish. When it returns, you have a VM
 that boots into the Pleb session.
 
 ```
 answers ─▶ custom preseed ─▶ ISO (remaster-iso.sh) ─▶ VBox VM ─▶ unattended
                                                                  install
                                                                     │
-   ready-to-run VM ◀── first-boot provisioning (pleb + kilix) ◀─────┘
+   ready-to-run VM ◀── first-boot provisioning (pleb + kilix + desktop) ◀──┘
 ```
 
 > Only **VirtualBox** is implemented today. `qemu` and `docker` targets are
@@ -21,22 +21,24 @@ answers ─▶ custom preseed ─▶ ISO (remaster-iso.sh) ─▶ VBox VM ─▶
 ## Requirements
 
 - **VirtualBox** (`VBoxManage` on `PATH`)
-- **xorriso** — builds the ISO (also needs `curl` + `sha256sum` the first time,
-  to download + verify the Debian netinst; it's then cached)
+- **xorriso** — builds the ISO. The first download also needs `curl`,
+  `sha256sum`, `gpgv`, and `debian-archive-keyring` to verify Debian's signed
+  checksums; the verified ISO is then cached.
 - **openssl** — hashes the password so the plaintext never lands on the ISO
   (falls back to a plaintext preseed line, with a warning, if absent)
 - **ssh** — used to detect when the install + provisioning have finished
 - Run it from inside a Plebian-OS checkout (it uses `preseed/` and `build/`).
 
 Internet access is required: the installer pulls packages from the Debian
-mirror, and first boot clones pleb + kilix from GitHub.
+mirror, and first boot clones pleb + kilix plus any selected external desktop
+provider from GitHub.
 
 ## Quick start
 
 ```sh
 build/build_vm_image.py            # interactive — answer the prompts
 build/build_vm_image.py --yes      # accept every default, no prompts
-build/build_vm_image.py --dry-run  # print the plan and the generated preseed path; build nothing
+build/build_vm_image.py --dry-run  # print the plan; build nothing and write no preseed
 ```
 
 A full run takes roughly **20–40 minutes** (unattended Debian install + apt +
@@ -56,7 +58,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | RAM (MB) | **¼ of host RAM** | rounded to 256 MB, min 1024 |
 | vCPUs | **½ of host cores** | min 1 |
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |
-| session | **desktop** | the kilix "95" desktop, or a plain fullscreen kilix shell |
+| session | **desktop** | the configured `kilix desktop` provider, or a plain fullscreen kilix shell |
 | autologin (kiosk) | **yes** | boot straight into Pleb, or show a login greeter |
 | passwordless sudo | **yes** | useful for update/restart actions inside the desktop |
 | SSH host port | first free from **2222** | forwarded to the guest's port 22 |
@@ -96,7 +98,7 @@ A registered VirtualBox VM configured with:
   <user>@127.0.0.1` reaches the guest.
 - **Boot**: disk first, DVD second — the empty disk falls through to the ISO for
   the install, and every boot after that comes up from disk.
-- **Session**: boots into the Pleb session — the kilix "95" desktop (or a plain
+- **Session**: boots into the Pleb session — the configured kilix desktop (or a plain
   kilix shell), with a greeter or straight-in autologin per your answers.
 - **sudo**: passwordless by default for the generated user, unless you pass
   `--no-sudo-nopasswd`.
@@ -108,7 +110,7 @@ the VM:
 ✓ Plebian-OS VirtualBox image is ready.
   VM        : plebian
   login     : pleb / (the password you set)
-  session   : kilix 95 desktop (autologin)
+  session   : kilix desktop (autologin)
   start GUI : VBoxManage startvm plebian --type gui
   ssh in    : ssh -p 2222 pleb@127.0.0.1
 ```
@@ -118,18 +120,24 @@ the VM:
 The session mode is a plain config file the image owns — no rebuild needed.
 Inside the VM, edit **`/etc/pleb/session.env`**:
 
-- `PLEB_DESKTOP=1` → boots the kilix "95" desktop; `0` → a plain fullscreen
+- `PLEB_DESKTOP=1` → runs `kilix desktop`; `0` → a plain fullscreen
   kilix shell (or delete the file).
-- `KILIX95_DIR`, `KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF` select the
-  external Kilix 95 checkout used by desktop sessions.
+- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|command|none` selects what
+  `kilix desktop` runs. `command` uses `KILIX_DESKTOP_COMMAND`; `none` disables
+  the facade. For a Plebian-OS shell session, prefer `PLEB_DESKTOP=0`.
+- `PLEB_REF`, `KILIX_REF`, and `KILIX95_REF` can pin exact refs for release
+  images. `KILIX95_DIR`, `KILIX95_REPO`, and `KILIX95_BRANCH` still select the
+  external Kilix 95 checkout.
 - Autologin: `~/pleb/bin/pleb autologin on|off`.
 - Passwordless sudo: remove or edit `/etc/sudoers.d/plebian-os-nopasswd`.
 
 At build time these come from `--session` / `--kiosk` /
 `--sudo-nopasswd` (or `PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK` /
 `PLEBIAN_OS_NOPASSWD_SUDO`). Repo/source overrides such as `PLEB_REPO`,
-`KILIX_REPO`, `KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF` are also
-copied into the first-boot environment when present.
+`PLEB_REF`, `KILIX_REPO`, `KILIX_REF`, `KILIX_DESKTOP_PROVIDER`,
+`KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_NAME`, `KILIX95_REPO`,
+`KILIX95_BRANCH`, and `KILIX95_REF` are also copied into the first-boot
+environment when present.
 
 ## How it works
 

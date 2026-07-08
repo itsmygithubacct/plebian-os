@@ -21,44 +21,61 @@
 #
 #   build/make-usb.sh --list        # show candidate removable devices
 #   build/make-usb.sh ... --dry-run # print the plan; write nothing
+#   build/make-usb.sh ... --unattended-disk # installer erases after boot-menu selection
 #
-# The Debian netinst is downloaded + checksum-verified automatically when no
-# --netinst is given. Refuses to run without xorriso (the ISO packer).
+# The Debian netinst is downloaded + signature/hash-verified automatically when
+# no --netinst is given. Refuses to run without xorriso (the ISO packer).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
-NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0
+NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0 UNATTENDED_DISK=0
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 log()  { printf '\033[1;36m[make-usb]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[make-usb]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[make-usb] %s\033[0m\n' "$*" >&2; exit 1; }
 
-is_partition_name() {
-    local base="$1"
-    if [[ "$base" =~ ^(nvme[0-9]+n[0-9]+|mmcblk[0-9]+)$ ]]; then
-        return 1
-    fi
-    if [[ "$base" =~ ^(nvme[0-9]+n[0-9]+p[0-9]+|mmcblk[0-9]+p[0-9]+)$ ]]; then
-        return 0
-    fi
-    [[ "$base" =~ [0-9]$ ]]
+block_kname() {
+    local majmin sys
+    [ -b "$1" ] || return 1
+    majmin="$(lsblk -dnro MAJ:MIN "$1" 2>/dev/null | head -1 || true)"
+    [ -n "$majmin" ] || return 1
+    sys="$(readlink -f "/sys/dev/block/$majmin" 2>/dev/null || true)"
+    [ -n "$sys" ] || return 1
+    basename "$sys"
 }
 
-root_device_names() {
-    local src real pk
-    src="$(findmnt -no SOURCE / 2>/dev/null || true)"
-    [ -n "$src" ] || return 0
-    basename "$src"
-    real="$(readlink -f "$src" 2>/dev/null || printf '%s' "$src")"
-    [ "$real" = "$src" ] || basename "$real"
-    pk="$(lsblk -no pkname "$src" 2>/dev/null | head -1 || true)"
-    [ -n "$pk" ] && echo "$pk"
-    if [ "$real" != "$src" ]; then
-        pk="$(lsblk -no pkname "$real" 2>/dev/null | head -1 || true)"
-        [ -n "$pk" ] && echo "$pk"
-    fi
+ancestor_names() {
+    local cur="$1" pk
+    [ -n "$cur" ] || return 0
+    echo "$cur"
+    while :; do
+        pk="$(lsblk -no PKNAME "/dev/$cur" 2>/dev/null | head -1 || true)"
+        [ -n "$pk" ] || break
+        echo "$pk"
+        cur="$pk"
+    done
+}
+
+protected_device_names() {
+    local target src kname
+    for target in / /boot /home /var; do
+        src="$(findmnt -no SOURCE --target "$target" 2>/dev/null || true)"
+        case "$src" in /dev/*) ;; *) continue ;; esac
+        kname="$(block_kname "$src" 2>/dev/null || true)"
+        [ -n "$kname" ] && ancestor_names "$kname"
+    done
+}
+
+mounted_targets_for_device() {
+    local name mp
+    while read -r name; do
+        [ -n "$name" ] || continue
+        while IFS= read -r mp; do
+            [ -n "$mp" ] && printf '%s\n' "$mp"
+        done < <(findmnt -rn -S "/dev/$name" -o TARGET 2>/dev/null || true)
+    done < <(lsblk -rno NAME "$1" 2>/dev/null || true)
 }
 
 # ── list removable block devices (candidates for a USB stick) ────────────────
@@ -87,6 +104,7 @@ while [ $# -gt 0 ]; do
         --list)    list_devices; exit 0 ;;
         --yes|-y)  ASSUME_YES=1; shift ;;
         --force)   FORCE=1; shift ;;
+        --unattended-disk) UNATTENDED_DISK=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
@@ -113,7 +131,7 @@ if [ "$need_build" = 1 ]; then
     # pull the Debian netinst automatically when none was supplied
     if [ -z "$NETINST" ]; then
         if [ "$DRY_RUN" = 1 ]; then
-            log "(dry-run) would download + checksum-verify the Debian netinst ISO"
+            log "(dry-run) would download + signature/hash-verify the Debian netinst ISO"
             NETINST="<auto-downloaded Debian netinst>"
         else
             NETINST="$(fetch_netinst)"
@@ -126,9 +144,15 @@ if [ "$need_build" = 1 ]; then
     else
         log "building Plebian-OS ISO from $(basename "$NETINST") -> $ISO"
         if [ "$DRY_RUN" = 1 ]; then
-            echo "    + $HERE/remaster-iso.sh \"$NETINST\" \"$ISO\""
+            prefix=""
+            [ "$UNATTENDED_DISK" = 1 ] && prefix="PLEBIAN_OS_UNATTENDED_DISK=1 "
+            echo "    + ${prefix}$HERE/remaster-iso.sh \"$NETINST\" \"$ISO\""
         else
-            "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
+            if [ "$UNATTENDED_DISK" = 1 ]; then
+                PLEBIAN_OS_UNATTENDED_DISK=1 "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
+            else
+                "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
+            fi
         fi
     fi
 else
@@ -157,13 +181,14 @@ fi
 # the safety gating below only makes sense against a real block device.
 if [ "$DRY_RUN" = 1 ] && [ ! -b "$DEVICE" ]; then
     log "(dry-run) would validate $DEVICE is a removable non-system disk, confirm, then:"
-    echo "    + umount ${DEVICE}* ; dd if=$ISO of=$DEVICE bs=4M status=progress oflag=sync conv=fsync ; sync"
+    echo "    + umount <all mountpoints on $DEVICE> ; dd if=$ISO of=$DEVICE bs=4M status=progress oflag=sync conv=fsync ; sync"
     exit 0
 fi
 [ -b "$DEVICE" ] || die "$DEVICE is not a block device"
-base="$(basename "$DEVICE")"
-# refuse a partition (want the whole disk, e.g. /dev/sdb not /dev/sdb1)
-if is_partition_name "$base"; then
+base="$(block_kname "$DEVICE" || true)"
+[ -n "$base" ] || die "could not resolve kernel block-device name for $DEVICE"
+dev_type="$(lsblk -dnro TYPE "$DEVICE" 2>/dev/null | head -1 || true)"
+if [ "$dev_type" != disk ]; then
     die "$DEVICE looks like a partition; you want the whole disk"
 fi
 
@@ -172,7 +197,7 @@ removable="$(cat "/sys/block/$base/removable" 2>/dev/null || echo 0)"
 while read -r rootdev; do
     [ -n "$rootdev" ] || continue
     [ "$base" = "$rootdev" ] && die "$DEVICE backs the running root filesystem — refusing"
-done < <(root_device_names | sort -u)
+done < <(protected_device_names | sort -u)
 
 if [ "$removable" != 1 ] && [ "$FORCE" != 1 ]; then
     die "$DEVICE is not marked removable — refusing (pass --force if you are certain)"
@@ -197,12 +222,12 @@ if [ "$(id -u)" != 0 ]; then
     SUDO=sudo
 fi
 if [ "$DRY_RUN" = 1 ]; then
-    echo "    + $SUDO umount ${DEVICE}* (any mounted partitions)"
+    echo "    + $SUDO umount <all mountpoints on $DEVICE and its partitions>"
     echo "    + $SUDO dd if=$ISO of=$DEVICE bs=4M status=progress oflag=sync conv=fsync"
 else
-    # unmount anything mounted off the device first
-    for part in $(lsblk -lno NAME "$DEVICE" 2>/dev/null | tail -n +2); do
-        $SUDO umount "/dev/$part" 2>/dev/null || true
+    mapfile -t mountpoints < <(mounted_targets_for_device "$DEVICE" | sort -u | sort -r)
+    for mp in "${mountpoints[@]}"; do
+        $SUDO umount "$mp" || die "failed to unmount $mp; refusing to overwrite a mounted filesystem"
     done
     log "writing $ISO -> $DEVICE (this can take a few minutes)"
     $SUDO dd if="$ISO" of="$DEVICE" bs=4M status=progress oflag=sync conv=fsync

@@ -25,14 +25,19 @@ PLEB_REPO="${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
 KILIX_REPO="${KILIX_REPO:-https://github.com/itsmygithubacct/kilix.git}"
 KILIX95_REPO="${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
 PLEB_BRANCH="${PLEB_BRANCH:-}"                 # empty = repo default
+PLEB_REF="${PLEB_REF:-}"                       # optional exact commit/tag
 KILIX_BRANCH="${KILIX_BRANCH:-}"
+KILIX_REF="${KILIX_REF:-}"
+KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-external}"
+KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
+KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
-DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into the kilix "95" desktop
+DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into `kilix desktop`
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
 
@@ -60,6 +65,21 @@ log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
+
+write_session_default() {
+    local name="$1" value="$2"
+    printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
+}
+
+validate_checkout() {
+    local dir="$1" repo="$2" name="$3" remote
+    [ -d "$dir/.git" ] || return 0
+    remote="$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)"
+    if [ -n "$remote" ] && [ "$remote" != "$repo" ] \
+        && [ "${PLEBIAN_OS_TRUST_EXISTING_CHECKOUT:-0}" != 1 ]; then
+        die "$name checkout at $dir has origin '$remote', expected '$repo' (set PLEBIAN_OS_TRUST_EXISTING_CHECKOUT=1 to override)"
+    fi
+}
 
 # ── args ─────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
@@ -95,10 +115,13 @@ log "target user : $TARGET_USER ($USER_HOME)"
 log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
 log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (cloned by pleb)"
 if [ "$DESKTOP" = 1 ]; then
-    log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
+    log "desktop    : provider=$KILIX_DESKTOP_PROVIDER name=$KILIX_DESKTOP_NAME"
+    if [ "$KILIX_DESKTOP_PROVIDER" = external ] || { [ "$KILIX_DESKTOP_PROVIDER" = auto ] && [ ! -f "$KILIX_DIR/desktop/main.py" ]; }; then
+        log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
+    fi
 fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
-log "session     : $([ "$DESKTOP" = 1 ] && echo 'kilix "95" desktop' || echo 'plain kilix shell')"
+log "session     : $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'plain kilix shell')"
 
 # ── 1. dependencies ──────────────────────────────────────────────────────────
 # Delegated to the standalone installer (install-deps.sh, deployed alongside us
@@ -149,12 +172,24 @@ as_user() {
     runuser -u "$TARGET_USER" -- "$@"
 }
 if [ -d "$PLEB_DIR/.git" ]; then
+    validate_checkout "$PLEB_DIR" "$PLEB_REPO" "pleb"
     log "pleb present at $PLEB_DIR — updating"
-    as_user git -C "$PLEB_DIR" pull --ff-only || warn "pleb pull failed; using existing checkout"
+    if [ -n "$PLEB_REF" ]; then
+        as_user git -C "$PLEB_DIR" fetch --tags origin || die "pleb fetch failed"
+        as_user git -C "$PLEB_DIR" checkout --detach "$PLEB_REF" \
+            || die "could not check out PLEB_REF=$PLEB_REF"
+    else
+        as_user git -C "$PLEB_DIR" pull --ff-only || die "pleb pull failed"
+    fi
 else
     log "cloning pleb -> $PLEB_DIR"
     as_user git clone ${PLEB_BRANCH:+--branch "$PLEB_BRANCH"} "$PLEB_REPO" "$PLEB_DIR" \
         || die "git clone of pleb failed ($PLEB_REPO)"
+    if [ -n "$PLEB_REF" ]; then
+        as_user git -C "$PLEB_DIR" fetch --tags origin || die "pleb fetch failed"
+        as_user git -C "$PLEB_DIR" checkout --detach "$PLEB_REF" \
+            || die "could not check out PLEB_REF=$PLEB_REF"
+    fi
 fi
 
 # ── 3. run `pleb install` (clones kilix + engine, registers the Pleb session) ─
@@ -168,11 +203,17 @@ if [ "$DRY_RUN" = 1 ]; then
 else
     printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET_USER" > "$SUDOERS"
     chmod 0440 "$SUDOERS"
+    visudo -cf "$SUDOERS" >/dev/null 2>&1 \
+        || { rm -f "$SUDOERS"; die "temporary sudoers validation failed"; }
 fi
 
 log "running 'pleb install' (clones kilix + optional kilix 95, adds the Pleb session)"
 as_user env KILIX_DIR="$KILIX_DIR" KILIX_REPO="$KILIX_REPO" \
     ${KILIX_BRANCH:+KILIX_BRANCH="$KILIX_BRANCH"} \
+    ${KILIX_REF:+KILIX_REF="$KILIX_REF"} \
+    KILIX_DESKTOP_PROVIDER="$KILIX_DESKTOP_PROVIDER" \
+    KILIX_DESKTOP_COMMAND="$KILIX_DESKTOP_COMMAND" \
+    KILIX_DESKTOP_NAME="$KILIX_DESKTOP_NAME" \
     PLEB_DESKTOP="$DESKTOP" KILIX95_DIR="$KILIX95_DIR" \
     KILIX95_REPO="$KILIX95_REPO" ${KILIX95_BRANCH:+KILIX95_BRANCH="$KILIX95_BRANCH"} \
     ${KILIX95_REF:+KILIX95_REF="$KILIX95_REF"} \
@@ -196,7 +237,7 @@ user-session=pleb
 EOF
 fi
 
-# ── 5. session mode: boot into the kilix "95" desktop (disablable) ──────────
+# ── 5. session mode: boot into `kilix desktop` (disablable) ─────────────────
 # pleb-session reads /etc/pleb/session.env on every login; PLEB_DESKTOP=1 brings
 # the Pleb session up as the kilix desktop instead of a bare shell. This is a
 # plain config file the user owns: flip it to 0, or delete it, for a plain
@@ -207,21 +248,26 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "    + write $PLEB_ENV (PLEB_DESKTOP=$DESKTOP)"
 else
     mkdir -p "$(dirname "$PLEB_ENV")"
-    cat > "$PLEB_ENV" <<EOF
+    {
+    cat <<'EOF'
 # Managed by plebian-os-provision — Plebian-OS Pleb session config.
-# PLEB_DESKTOP=1 boots straight into the kilix "95" desktop; set it to 0 (or
-# delete this file) for a plain fullscreen kilix shell. pleb-session documents
-# the other knobs (PLEB_RESPAWN, PLEB_WM, PLEB_BG, …).
-KILIX_DIR=$KILIX_DIR
-KILIX=$KILIX_DIR/kilix
-PLEB_DESKTOP=$DESKTOP
-KILIX_DESKTOP_PROVIDER=external
-KILIX95_AUTO_INSTALL=1
-KILIX95_DIR=$KILIX95_DIR
-KILIX95_REPO=$KILIX95_REPO
-KILIX95_BRANCH=$KILIX95_BRANCH
-KILIX95_REF=$KILIX95_REF
+# PLEB_DESKTOP=1 starts `kilix desktop`; set it to 0 for a plain fullscreen
+# kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, command,
+# or none. pleb-session documents the other knobs.
 EOF
+    write_session_default KILIX_DIR "$KILIX_DIR"
+    write_session_default KILIX "$KILIX_DIR/kilix"
+    write_session_default KILIX_REF "$KILIX_REF"
+    write_session_default PLEB_DESKTOP "$DESKTOP"
+    write_session_default KILIX_DESKTOP_PROVIDER "$KILIX_DESKTOP_PROVIDER"
+    write_session_default KILIX_DESKTOP_COMMAND "$KILIX_DESKTOP_COMMAND"
+    write_session_default KILIX_DESKTOP_NAME "$KILIX_DESKTOP_NAME"
+    write_session_default KILIX95_AUTO_INSTALL "1"
+    write_session_default KILIX95_DIR "$KILIX95_DIR"
+    write_session_default KILIX95_REPO "$KILIX95_REPO"
+    write_session_default KILIX95_BRANCH "$KILIX95_BRANCH"
+    write_session_default KILIX95_REF "$KILIX95_REF"
+    } > "$PLEB_ENV"
 fi
 
 if [ "$KIOSK" = 1 ]; then
@@ -251,7 +297,7 @@ fi
 cleanup; trap - EXIT
 
 log "done. Plebian-OS is provisioned."
-log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo 'kilix "95" desktop' || echo 'fullscreen kilix')."
+log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'fullscreen kilix')."
 [ "$KIOSK" = 1 ] && log "  (kiosk: boots straight in; rescue console on Ctrl+Alt+F2)"
 [ "$NOPASSWD_SUDO" = 1 ] && log "  ($TARGET_USER has passwordless sudo)"
 exit 0

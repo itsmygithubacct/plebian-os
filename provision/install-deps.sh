@@ -31,7 +31,7 @@ DEP_GROUPS=(
     "repo clone + engine fetch|git curl tar ca-certificates"
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
-    "kilix 95 desktop (python)|python3-pil python3-xlib python3-websockets"
+    "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
     "audio|pulseaudio pulseaudio-utils alsa-utils"
     "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
     "web browsers|firefox-esr chromium"
@@ -68,14 +68,18 @@ for entry in "${DEP_GROUPS[@]}"; do
     fi
 done
 
-# uv — not packaged in Debian; install the standalone binary to a system prefix
-# so it lands on PATH for everyone without rewriting shell profiles. Optional.
-log "installing uv (astral standalone installer -> /usr/local/bin)"
-if [ "$DRY_RUN" = 1 ]; then
-    echo "    + curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh"
-elif ! curl -LsSf https://astral.sh/uv/install.sh \
-        | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh; then
-    warn "uv install failed (optional tool — continuing)"
+# uv is useful but not core to booting Plebian-OS. Do not execute mutable remote
+# installer code as root by default; make the tradeoff explicit for local images.
+if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
+    log "installing uv (operator-requested Astral standalone installer -> /usr/local/bin)"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh"
+    elif ! curl -LsSf https://astral.sh/uv/install.sh \
+            | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh; then
+        warn "uv install failed (optional tool — continuing)"
+    fi
+else
+    log "skipping uv installer (set PLEBIAN_OS_INSTALL_UV=1 to opt in)"
 fi
 
 if [ "${#failed[@]}" -gt 0 ]; then

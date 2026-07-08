@@ -8,10 +8,10 @@
 #   build/remaster-iso.sh [debian-13.x-amd64-netinst.iso] [out.iso]
 #
 # The source netinst is optional: with no argument it is downloaded (and
-# checksum-verified) from the Debian mirror automatically and cached. Refuses
-# to run without xorriso. The result installs like a regular Debian system and,
-# on first boot, pulls pleb + kilix from GitHub and comes up as the Pleb
-# session (see preseed.cfg).
+# signature/hash-verified) from the Debian mirror automatically and cached.
+# Refuses to run without xorriso. The result installs like a regular Debian
+# system and, on first boot, pulls pleb + kilix from GitHub and comes up as the
+# Pleb session (see preseed.cfg).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,11 +32,37 @@ fi
 # username/password/hostname and first-boot options per image.
 PRESEED="${PLEBIAN_OS_PRESEED:-$HERE/preseed/preseed.cfg}"
 [ -f "$PRESEED" ] || { echo "no such preseed: $PRESEED" >&2; exit 1; }
+if [ "${PLEBIAN_OS_ALLOW_TEST_PRESEED:-0}" != 1 ] \
+    && grep -q '^d-i passwd/user-password password plebian$' "$PRESEED" \
+    && grep -q '^tasksel tasksel/first multiselect .*ssh-server' "$PRESEED"; then
+    cat >&2 <<EOF
+refusing to build an SSH-enabled image with the repository's test credentials
+(user 'pleb', password 'plebian'). Use build_vm_image.py/build_usb_image.py so
+a custom preseed is generated, edit the preseed, or set
+PLEBIAN_OS_ALLOW_TEST_PRESEED=1 for an isolated throwaway test image.
+EOF
+    exit 1
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 EXTRACT="$WORK/iso"
 mkdir -p "$EXTRACT"
+
+BUILD_PRESEED="$WORK/preseed.cfg"
+cp "$PRESEED" "$BUILD_PRESEED"
+if [ "${PLEBIAN_OS_UNATTENDED_DISK:-0}" = 1 ]; then
+    echo "    disk setup: unattended partitioning enabled"
+else
+    echo "    disk setup: installer will ask for target disk/confirmation"
+    sed -i \
+        -e '/^d-i partman-auto\//d' \
+        -e '/^d-i partman-partitioning\//d' \
+        -e '/^d-i partman\/choose_partition /d' \
+        -e '/^d-i partman\/confirm/d' \
+        "$BUILD_PRESEED"
+fi
+PRESEED="$BUILD_PRESEED"
 
 echo "==> extracting $SRC_ISO"
 xorriso -osirrox on -indev "$SRC_ISO" -extract / "$EXTRACT" >/dev/null 2>&1
@@ -102,14 +128,20 @@ echo "==> repacking -> $OUT_ISO"
 # Reuse the source ISO's own boot layout so BIOS + UEFI both keep working.
 xorriso -indev "$SRC_ISO" -report_el_torito as_mkisofs 2>/dev/null > "$WORK/mkisofs.args" || true
 if [ -s "$WORK/mkisofs.args" ]; then
-    # The report emits one option per line and shell-quotes any value with
-    # spaces — notably the volume id, e.g.  -V 'Debian 13.5.0 amd64 1'. A bare
-    # $(...) expansion word-splits on those spaces and strips the quotes, so
-    # "13.5.0" gets passed as a stray source path (xorriso then dies with
-    # "Cannot determine attributes of source file .../13.5.0"). Flatten to one
-    # line and eval so the shell honours the quoting.
-    mkisofs_args="$(sed 's#-outdev.*##' "$WORK/mkisofs.args" | tr '\n' ' ')"
-    eval "xorriso -as mkisofs $mkisofs_args -o \"\$OUT_ISO\" \"\$EXTRACT\""
+    mapfile -t mkisofs_argv < <(python3 - "$WORK/mkisofs.args" <<'PY'
+import shlex
+import sys
+
+text = []
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    if line.lstrip().startswith("-outdev"):
+        continue
+    text.append(line)
+for token in shlex.split("".join(text)):
+    print(token)
+PY
+)
+    xorriso -as mkisofs "${mkisofs_argv[@]}" -o "$OUT_ISO" "$EXTRACT"
 else
     echo "!! could not read the source ISO's El Torito layout; falling back to a" >&2
     echo "   basic build (verify BIOS/UEFI boot before trusting it)." >&2
