@@ -97,6 +97,21 @@ EOF
     modprobe -r snd_pcsp pcspkr 2>/dev/null || true
 }
 
+install_quiet_console_defaults() {
+    local conf=/etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
+    log "disabling systemd console status spam -> $conf"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $conf (ShowStatus=no)"
+        return
+    fi
+    mkdir -p "$(dirname "$conf")"
+    cat > "$conf" <<'EOF'
+# Managed by plebian-os-provision. Keep boot/login scope status lines off tty1.
+[Manager]
+ShowStatus=no
+EOF
+}
+
 desktop_provider_needs_kilix95() {
     case "$KILIX_DESKTOP_PROVIDER" in
         external) return 0 ;;
@@ -293,6 +308,7 @@ else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
 install_no_beep_defaults
+install_quiet_console_defaults
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same

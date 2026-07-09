@@ -145,6 +145,19 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("--reset-env", text)
         self.assertNotIn("runuser -u", text)
 
+    def test_console_status_spam_is_disabled(self):
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        firstboot = (ROOT / "provision" / "plebian-os-firstboot.service").read_text()
+
+        self.assertIn("50-plebian-os-quiet-console.conf", provision)
+        self.assertIn("ShowStatus=no", provision)
+        self.assertIn("50-plebian-os-quiet-console.conf", preseed)
+        self.assertIn("ShowStatus=no", preseed)
+        self.assertIn("StandardOutput=journal", firstboot)
+        self.assertIn("StandardError=journal", firstboot)
+        self.assertNotIn("journal+console", firstboot)
+
     def test_netinst_fetch_retries_with_debian_cd_signing_key(self):
         text = (ROOT / "build" / "lib.sh").read_text()
         self.assertIn("PLEBIAN_OS_DEBIAN_CD_KEY_URL", text)

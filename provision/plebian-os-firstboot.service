@@ -42,8 +42,8 @@ RestartSec=90s
 # clickable-chrome fork is built during first boot instead of accepting the
 # prebuilt fallback engine as final.
 TimeoutStartSec=7200
-StandardOutput=journal+console
-StandardError=journal+console
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
