@@ -293,6 +293,7 @@ def generate_preseed(cfg: Config) -> Path:
         ("KILIX_DESKTOP_PROVIDER", os.environ.get("KILIX_DESKTOP_PROVIDER", "external")),
         ("KILIX_DESKTOP_COMMAND", os.environ.get("KILIX_DESKTOP_COMMAND", "")),
         ("KILIX_DESKTOP_NAME", os.environ.get("KILIX_DESKTOP_NAME", "desktop")),
+        ("KILIX_DESKTOP_FLAVOR", os.environ.get("KILIX_DESKTOP_FLAVOR", "")),
         ("KILIX95_AUTO_INSTALL", os.environ.get("KILIX95_AUTO_INSTALL", "1")),
         ("KILIX95_BRANCH", os.environ.get("KILIX95_BRANCH", "")),
         ("KILIX95_REF", os.environ.get("KILIX95_REF", "")),

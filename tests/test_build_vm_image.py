@@ -46,6 +46,7 @@ class VmBuilderEnvTests(unittest.TestCase):
             "KILIX_DESKTOP_PROVIDER": "command",
             "KILIX_DESKTOP_COMMAND": "printf 'custom desktop'",
             "KILIX_DESKTOP_NAME": "custom desk",
+            "KILIX_DESKTOP_FLAVOR": "xp",
             "KILIX95_AUTO_INSTALL": "0",
         }
         with mock.patch.dict(os.environ, env, clear=False), \

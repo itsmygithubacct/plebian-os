@@ -36,7 +36,7 @@ DEP_GROUPS=(
     "audio|pulseaudio pulseaudio-utils alsa-utils fluidsynth fluid-soundfont-gm"
     "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
     "web browsers|firefox-esr chromium"
-    "desktop notifications|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin"
+    "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     "build toolchain|build-essential pkg-config golang-go python3-dev zlib1g-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
     "cli utilities|tmux ncdu rsync ufw jq glances"

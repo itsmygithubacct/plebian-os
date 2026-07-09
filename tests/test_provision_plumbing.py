@@ -29,6 +29,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "KILIX_DESKTOP_PROVIDER",
             "KILIX_DESKTOP_COMMAND",
             "KILIX_DESKTOP_NAME",
+            "KILIX_DESKTOP_FLAVOR",
             "KILIX95_AUTO_INSTALL",
             "KILIX95_REF",
         ]
