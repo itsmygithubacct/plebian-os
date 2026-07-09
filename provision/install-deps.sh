@@ -29,6 +29,7 @@ DEP_GROUPS=(
     "X + display manager|xserver-xorg xinit lightdm x11-xserver-utils x11-utils xterm"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar ca-certificates"
+    "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
     "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"

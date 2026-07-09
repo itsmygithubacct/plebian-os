@@ -4,6 +4,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+SHELL_LESSON_PREREQ_PACKAGES = {
+    "bash",
+    "coreutils",
+    "diffutils",
+    "findutils",
+    "gawk",
+    "grep",
+    "procps",
+    "python3",
+    "sed",
+    "util-linux",
+}
+
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
@@ -31,6 +44,9 @@ def install_deps_packages():
 class DependencyManifestTests(unittest.TestCase):
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
+
+    def test_shell_lesson_prerequisites_are_installed(self):
+        self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
 
 
 if __name__ == "__main__":
