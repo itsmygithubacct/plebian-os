@@ -4,14 +4,15 @@
 machine** end to end. It asks a few questions (username, password, RAM, disk,
 …), builds a customized installer ISO with the repo's own tooling, creates a
 VirtualBox VM, runs the install **completely unattended**, and waits for
-first-boot provisioning (pleb + kilix + the selected desktop provider) to finish. When it returns, you have a VM
-that boots into the Pleb session.
+first-boot provisioning (pleb + kilix + the selected desktop provider + the
+Kilix fork build) to finish. When it returns, you have a VM that boots into the
+Pleb session.
 
 ```
 answers ─▶ custom preseed ─▶ ISO (remaster-iso.sh) ─▶ VBox VM ─▶ unattended
                                                                  install
                                                                     │
-   ready-to-run VM ◀── first-boot provisioning (pleb + kilix + desktop) ◀──┘
+   ready-to-run VM ◀── first-boot provisioning (pleb + kilix fork + desktop) ◀──┘
 ```
 
 > Only **VirtualBox** is implemented today. `qemu` and `docker` targets are
@@ -41,8 +42,8 @@ build/build_vm_image.py --yes      # accept every default, no prompts
 build/build_vm_image.py --dry-run  # print the plan; build nothing and write no preseed
 ```
 
-A full run takes roughly **20–40 minutes** (unattended Debian install + apt +
-the GitHub clones + the kilix engine). It streams progress the whole time.
+A full run takes roughly **30–60 minutes** (unattended Debian install + apt +
+the GitHub clones + the Kilix fork build). It streams progress the whole time.
 
 ## What it asks
 
@@ -83,7 +84,7 @@ once instead of using the interactive `plebian` default.
 --out PATH             ISO output path (default: plebian-os-<name>.iso)
 --gui                  start the VM with a window instead of headless
 --no-wait              create + start the VM, but don't block on provisioning
---timeout MIN          how long to wait for provisioning (default 60)
+--timeout MIN          how long to wait for provisioning (default 90)
 -y, --yes              accept defaults / skip confirmations
 --dry-run              show the plan; build nothing
 -h, --help             usage
@@ -135,6 +136,8 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
   images. `KILIX_PREBUILT_VERSION` plus `KILIX_PREBUILT_SHA256` can also pin and
   verify the downloaded fallback kitty bundle. `KILIX95_DIR`, `KILIX95_REPO`,
   and `KILIX95_BRANCH` still select the external Kilix 95 checkout.
+- `PLEBIAN_OS_BUILD_KILIX_FORK=0` allows the prebuilt fallback engine. The
+  default is `1`, which builds and verifies `~/kilix/src/kitty/launcher/kitty`.
 - Autologin: `~/pleb/bin/pleb autologin on|off`.
 - Passwordless sudo: remove or edit `/etc/sudoers.d/plebian-os-nopasswd`.
 
@@ -143,6 +146,7 @@ At build time these come from `--session` / `--kiosk` /
 `PLEBIAN_OS_NOPASSWD_SUDO`). Repo/source overrides such as `PLEB_REPO`,
 `PLEB_BRANCH`, `PLEB_REF`, `KILIX_REPO`, `KILIX_BRANCH`, `KILIX_REF`,
 `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`,
+`PLEBIAN_OS_BUILD_KILIX_FORK`, `PLEBIAN_OS_KILIX_GO_MIN_VERSION`,
 `KILIX_DESKTOP_PROVIDER`, `KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_NAME`,
 `KILIX95_AUTO_INSTALL`, `KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF`
 are also copied into the first-boot environment when present.

@@ -11,7 +11,8 @@
 #      into ~/kilix, optionally clones github.com/itsmygithubacct/kilix-95 into
 #      ~/kilix-95, fetches a prebuilt kitty engine, and registers "Pleb" as a
 #      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb
-#      on PATH
+#      on PATH. This provisioner then builds and verifies the kilix fork so the
+#      first boot uses the clickable-chrome engine instead of the fallback.
 #   4. (optional) enables Pleb autologin — a hard kiosk that boots straight in
 #   5. (optional) grants the target user passwordless sudo (--nopasswd-sudo)
 #
@@ -33,6 +34,8 @@ KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-}"   # optional checksum for the
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-external}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
+BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
+KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
@@ -139,6 +142,90 @@ update_pleb_checkout() {
     fi
 
     as_user git -C "$PLEB_DIR" pull --ff-only || die "pleb pull failed"
+}
+
+kilix_go_ok_script() {
+    cat <<'EOF'
+command -v go >/dev/null 2>&1 || exit 1
+min="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
+ver="$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')"
+[ -n "$ver" ] || exit 1
+awk -v have="$ver" -v min="$min" '
+function splitver(v, out) {
+    gsub(/[^0-9.].*$/, "", v)
+    n = split(v, parts, ".")
+    out[1] = (n >= 1 && parts[1] != "") ? parts[1] + 0 : 0
+    out[2] = (n >= 2 && parts[2] != "") ? parts[2] + 0 : 0
+    out[3] = (n >= 3 && parts[3] != "") ? parts[3] + 0 : 0
+}
+BEGIN {
+    splitver(have, h)
+    splitver(min, m)
+    for (i = 1; i <= 3; i++) {
+        if (h[i] > m[i]) exit 0
+        if (h[i] < m[i]) exit 1
+    }
+    exit 0
+}'
+EOF
+}
+
+ensure_go_for_kilix_build() {
+    log "checking Go toolchain for kilix fork build (>= $KILIX_GO_MIN_VERSION)"
+    if as_user env "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION" \
+        bash -lc "$(kilix_go_ok_script)"; then
+        log "Go is ready: $(as_user bash -lc 'go version' 2>/dev/null || true)"
+        return 0
+    fi
+
+    [ -x "$PLEB_DIR/scripts/install-go.sh" ] \
+        || die "Go >= $KILIX_GO_MIN_VERSION is required, and $PLEB_DIR/scripts/install-go.sh is missing"
+    log "installing/upgrading Go via pleb helper"
+    as_user "$PLEB_DIR/scripts/install-go.sh" all \
+        || die "Go toolchain install failed"
+    as_user env "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION" \
+        bash -lc "$(kilix_go_ok_script)" \
+        || die "Go toolchain is still below $KILIX_GO_MIN_VERSION after install"
+    log "Go is ready: $(as_user bash -lc 'go version' 2>/dev/null || true)"
+}
+
+build_kilix_fork() {
+    case "$BUILD_KILIX_FORK" in
+        1|yes|true|on) ;;
+        0|no|false|off)
+            warn "PLEBIAN_OS_BUILD_KILIX_FORK=$BUILD_KILIX_FORK; keeping kilix fallback engine if no fork is present"
+            return 0 ;;
+        *) die "invalid PLEBIAN_OS_BUILD_KILIX_FORK=$BUILD_KILIX_FORK (expected 0/1)" ;;
+    esac
+
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) git -C $KILIX_DIR submodule update --init --recursive"
+        echo "    + ensure Go >= $KILIX_GO_MIN_VERSION using $PLEB_DIR/scripts/install-go.sh if needed"
+        echo "    + (as $TARGET_USER) $KILIX_DIR/kilix --build"
+        echo "    + verify $KILIX_DIR/kilix --which uses $KILIX_DIR/src/kitty/launcher/kitty"
+        return 0
+    fi
+
+    [ -d "$KILIX_DIR/.git" ] || die "kilix checkout missing at $KILIX_DIR after pleb install"
+    [ -x "$KILIX_DIR/kilix" ] || die "kilix launcher missing at $KILIX_DIR/kilix"
+
+    log "initializing kilix source submodules"
+    as_user git -C "$KILIX_DIR" submodule update --init --recursive \
+        || die "kilix submodule initialization failed"
+
+    ensure_go_for_kilix_build
+
+    log "building kilix clickable-chrome fork"
+    as_user "$KILIX_DIR/kilix" --build \
+        || die "kilix fork build failed"
+
+    local fork engine
+    fork="$KILIX_DIR/src/kitty/launcher/kitty"
+    [ -x "$fork" ] || die "kilix fork build did not produce $fork"
+    engine="$(as_user "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
+    [ "$engine" = "$fork" ] \
+        || die "kilix is not using the fork engine after build (got: ${engine:-<empty>})"
+    log "kilix engine verified: $engine"
 }
 
 # ── args ─────────────────────────────────────────────────────────────────────
@@ -283,6 +370,7 @@ install_env=(
 )
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
+build_kilix_fork
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
 # With no other desktop task installed, Pleb is the only /usr/share/xsessions
@@ -330,6 +418,8 @@ EOF
     write_session_default KILIX_REF "$KILIX_REF"
     write_session_default KILIX_PREBUILT_VERSION "$KILIX_PREBUILT_VERSION"
     write_session_default KILIX_PREBUILT_SHA256 "$KILIX_PREBUILT_SHA256"
+    write_session_default PLEBIAN_OS_BUILD_KILIX_FORK "$BUILD_KILIX_FORK"
+    write_session_default PLEBIAN_OS_KILIX_GO_MIN_VERSION "$KILIX_GO_MIN_VERSION"
     write_session_default PLEB_DESKTOP "$DESKTOP"
     write_session_default KILIX_DESKTOP_PROVIDER "$KILIX_DESKTOP_PROVIDER"
     write_session_default KILIX_DESKTOP_COMMAND "$KILIX_DESKTOP_COMMAND"

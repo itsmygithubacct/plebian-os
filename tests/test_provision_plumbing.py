@@ -24,6 +24,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "KILIX_REF",
             "KILIX_PREBUILT_VERSION",
             "KILIX_PREBUILT_SHA256",
+            "PLEBIAN_OS_BUILD_KILIX_FORK",
+            "PLEBIAN_OS_KILIX_GO_MIN_VERSION",
             "KILIX_DESKTOP_PROVIDER",
             "KILIX_DESKTOP_COMMAND",
             "KILIX_DESKTOP_NAME",
@@ -91,6 +93,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "PLEB_REF",
             "KILIX_REF",
             "KILIX_PREBUILT_SHA256",
+            "PLEBIAN_OS_BUILD_KILIX_FORK",
+            "PLEBIAN_OS_KILIX_GO_MIN_VERSION",
             "KILIX95_REF",
         ]:
             self.assertIn(key, text)
@@ -116,6 +120,16 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("Restart=on-failure", text)
         self.assertIn("RestartSec=90s", text)
         self.assertIn("StartLimitBurst=5", text)
+        self.assertIn("TimeoutStartSec=7200", text)
+
+    def test_firstboot_builds_and_verifies_kilix_fork(self):
+        text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertIn("build_kilix_fork", text)
+        self.assertIn("submodule update --init --recursive", text)
+        self.assertIn("scripts/install-go.sh", text)
+        self.assertIn('"$KILIX_DIR/kilix" --build', text)
+        self.assertIn("src/kitty/launcher/kitty", text)
+        self.assertIn('"$KILIX_DIR/kilix" --which', text)
 
     def test_provision_disables_kernel_speaker_beeps(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
@@ -138,6 +152,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("baked_env_overrides_present", text)
         self.assertIn("ISO_EXPLICIT", text)
         self.assertIn("PLEBIAN_OS_INSTALL_UV", text)
+        self.assertIn("PLEBIAN_OS_BUILD_KILIX_FORK", text)
+        self.assertIn("PLEBIAN_OS_KILIX_GO_MIN_VERSION", text)
         self.assertIn("UNATTENDED_DISK", text)
         for path in [
             "remaster-iso.sh",

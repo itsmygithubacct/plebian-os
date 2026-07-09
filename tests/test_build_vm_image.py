@@ -41,6 +41,8 @@ class VmBuilderEnvTests(unittest.TestCase):
             "KILIX_PREBUILT_VERSION": "0.47.0",
             "KILIX_PREBUILT_SHA256": "abc123",
             "PLEBIAN_OS_INSTALL_UV": "1",
+            "PLEBIAN_OS_BUILD_KILIX_FORK": "1",
+            "PLEBIAN_OS_KILIX_GO_MIN_VERSION": "1.26",
             "KILIX_DESKTOP_PROVIDER": "command",
             "KILIX_DESKTOP_COMMAND": "printf 'custom desktop'",
             "KILIX_DESKTOP_NAME": "custom desk",

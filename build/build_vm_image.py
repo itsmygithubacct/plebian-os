@@ -288,6 +288,8 @@ def generate_preseed(cfg: Config) -> Path:
         ("KILIX_REF", os.environ.get("KILIX_REF", "")),
         ("KILIX_PREBUILT_VERSION", os.environ.get("KILIX_PREBUILT_VERSION", "")),
         ("KILIX_PREBUILT_SHA256", os.environ.get("KILIX_PREBUILT_SHA256", "")),
+        ("PLEBIAN_OS_BUILD_KILIX_FORK", os.environ.get("PLEBIAN_OS_BUILD_KILIX_FORK", "1")),
+        ("PLEBIAN_OS_KILIX_GO_MIN_VERSION", os.environ.get("PLEBIAN_OS_KILIX_GO_MIN_VERSION", "1.26")),
         ("KILIX_DESKTOP_PROVIDER", os.environ.get("KILIX_DESKTOP_PROVIDER", "external")),
         ("KILIX_DESKTOP_COMMAND", os.environ.get("KILIX_DESKTOP_COMMAND", "")),
         ("KILIX_DESKTOP_NAME", os.environ.get("KILIX_DESKTOP_NAME", "desktop")),
@@ -500,7 +502,7 @@ def main() -> None:
                     help="ISO output path when building (default: plebian-os-<name>.iso)")
     ap.add_argument("--gui", action="store_true", help="start the VM with a window")
     ap.add_argument("--no-wait", action="store_true", help="don't block on provisioning")
-    ap.add_argument("--timeout", type=int, default=60, help="minutes to wait for provisioning")
+    ap.add_argument("--timeout", type=int, default=90, help="minutes to wait for provisioning")
     ap.add_argument("-y", "--yes", action="store_true", help="accept defaults, no prompts")
     ap.add_argument("--dry-run", action="store_true", help="show the plan; build nothing")
     args = ap.parse_args()

@@ -38,8 +38,10 @@ ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned
 ExecStartPost=/bin/systemctl disable plebian-os-firstboot.service
 Restart=on-failure
 RestartSec=90s
-# Provisioning can take a while on a slow link (apt + two clones + engine).
-TimeoutStartSec=1800
+# Provisioning can take a while on a slow link, especially now that the kilix
+# clickable-chrome fork is built during first boot instead of accepting the
+# prebuilt fallback engine as final.
+TimeoutStartSec=7200
 StandardOutput=journal+console
 StandardError=journal+console
 

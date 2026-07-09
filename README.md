@@ -31,6 +31,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    - runs `pleb install`, which clones `kilix` into `~/kilix`, optionally sets up
      the selected `kilix desktop` provider, fetches a prebuilt kitty engine, and
      registers **Pleb** as a LightDM session;
+   - initializes the Kilix source submodule, installs/upgrades Go when needed,
+     builds the clickable-chrome fork, and verifies Kilix uses that fork engine;
    - pins Pleb as the default session (and, with `--kiosk`, enables autologin);
    - marks itself done and disables the service.
 3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
@@ -131,16 +133,17 @@ Plebian-OS for a desktop-shaped one.
   fallback (kilix is a GPU terminal). No graphics at all → the greeter still
   works; the Pleb session falls back to a screen-filled kilix or a plain xterm.
 - Network on first boot (it clones from GitHub).
-- amd64 (the kilix prebuilt engine pleb fetches is x86_64; the fork builds
-  elsewhere with Go ≥ 1.26).
+- Go ≥ 1.26 for the Kilix fork build. Firstboot installs or upgrades Go through
+  pleb's helper when the target does not already have a new enough toolchain.
 
 Desktop selection is controlled by `/etc/pleb/session.env` after install, or by
 environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
 fullscreen kilix shell. With desktop mode on, `KILIX_DESKTOP_PROVIDER` can be
 `auto`, `builtin`, `external`, `command`, or `none`; `command` uses
 `KILIX_DESKTOP_COMMAND`, and `none` behaves like a plain shell session. External
-Kilix 95 still uses `KILIX95_*`. Release-style images can set
-`PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_SHA256`, `PLEB_REF`,
-`KILIX_REF`, `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, and
+Kilix 95 still uses `KILIX95_*`. Set `PLEBIAN_OS_BUILD_KILIX_FORK=0` only when
+you deliberately want to allow the prebuilt fallback engine. Release-style
+images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_SHA256`,
+`PLEB_REF`, `KILIX_REF`, `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, and
 `KILIX_PREBUILT_SHA256` before building; the builder refuses release mode unless
 all of those pins are present.
