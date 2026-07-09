@@ -256,6 +256,8 @@ pick_user() {
 id "$TARGET_USER" >/dev/null 2>&1 || die "no such user: $TARGET_USER"
 USER_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [ -d "$USER_HOME" ] || die "home for $TARGET_USER not found: $USER_HOME"
+TARGET_UID="$(id -u "$TARGET_USER")"
+TARGET_GID="$(id -g "$TARGET_USER")"
 KILIX_DIR="${KILIX_DIR:-$USER_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$USER_HOME/kilix-95}"
 
@@ -318,7 +320,10 @@ fi
 PLEB_DIR="$USER_HOME/pleb"
 as_user() {
     if [ "$DRY_RUN" = 1 ]; then echo "    + (as $TARGET_USER) $*"; return 0; fi
-    runuser -u "$TARGET_USER" -- "$@"
+    command -v setpriv >/dev/null 2>&1 \
+        || die "setpriv is required to run provisioning commands as $TARGET_USER"
+    setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
+        --reset-env -- "$@"
 }
 if [ -d "$PLEB_DIR/.git" ]; then
     log "pleb present at $PLEB_DIR — updating"

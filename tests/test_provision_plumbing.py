@@ -139,6 +139,12 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("blacklist snd_pcsp", text)
         self.assertIn("modprobe -r snd_pcsp pcspkr", text)
 
+    def test_provision_as_user_does_not_open_logind_sessions(self):
+        text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertIn("setpriv --reuid", text)
+        self.assertIn("--reset-env", text)
+        self.assertNotIn("runuser -u", text)
+
     def test_netinst_fetch_retries_with_debian_cd_signing_key(self):
         text = (ROOT / "build" / "lib.sh").read_text()
         self.assertIn("PLEBIAN_OS_DEBIAN_CD_KEY_URL", text)
