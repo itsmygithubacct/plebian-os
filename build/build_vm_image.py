@@ -34,6 +34,43 @@ REPO = Path(__file__).resolve().parent.parent
 PRESEED_TEMPLATE = REPO / "preseed" / "preseed.cfg"
 REMASTER = REPO / "build" / "remaster-iso.sh"
 
+
+def repo_version() -> str:
+    """The shared release version (env override, else the repo VERSION file)."""
+    v = os.environ.get("PLEBIAN_OS_VERSION")
+    if v:
+        return v
+    try:
+        return (REPO / "VERSION").read_text().strip()
+    except OSError:
+        return ""
+
+
+def apply_release_manifest(release: str | None = None) -> None:
+    """If PLEBIAN_OS_RELEASE is set, load releases/<ver>.env into os.environ
+    (apply-if-unset, so an explicit env override still wins), mirroring
+    remaster-iso.sh — so the Python-injected /etc/default/plebian-os carries the
+    same pins the remaster bakes. Aborts on a still-placeholder value."""
+    release = release or os.environ.get("PLEBIAN_OS_RELEASE")
+    if not release:
+        return
+    manifest = REPO / "releases" / f"{release}.env"
+    if not manifest.exists():
+        die(f"no release manifest: releases/{release}.env")
+    for raw in manifest.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key, val = key.strip(), val.strip().strip('"')
+        if not key or os.environ.get(key):
+            continue
+        if val == "REPLACE_ME":
+            die(f"release {release}: {key} is still REPLACE_ME in "
+                f"releases/{release}.env — fill it before building (see RELEASING.md)")
+        os.environ[key] = val
+    info(f"release {release}: applied pins from releases/{release}.env")
+
 # ── little terminal helpers ──────────────────────────────────────────────────
 def c(code: str, s: str) -> str:
     return s if not sys.stdout.isatty() else f"\033[{code}m{s}\033[0m"
@@ -243,7 +280,7 @@ def crypt_password(pw: str) -> tuple[str, bool]:
     return pw, False
 
 # ── preseed generation ───────────────────────────────────────────────────────
-def generate_preseed(cfg: Config) -> Path:
+def generate_preseed(cfg: Config, enable_ssh: bool = False) -> Path:
     text = PRESEED_TEMPLATE.read_text()
 
     def sub(pattern, repl):
@@ -260,15 +297,23 @@ def generate_preseed(cfg: Config) -> Path:
     sub(r"^(d-i passwd/user-fullname string ).*$", r"\g<1>" + cfg.fullname)
     sub(r"^(d-i netcfg/get_hostname string ).*$",  r"\g<1>" + cfg.hostname)
 
+    # The committed template ships NO password — replace the sentinel line with
+    # the real one (hashed when possible). A lambda repl keeps regex-special
+    # characters in the crypt hash literal.
     secret, crypted = crypt_password(cfg.password)
     if crypted:
-        # replace the two plaintext lines with a single crypted line
-        sub(r"^d-i passwd/user-password password .*$",
-            "d-i passwd/user-password-crypted password " + secret)
-        sub(r"^d-i passwd/user-password-again password .*\n", "")
+        pw_block = "d-i passwd/user-password-crypted password " + secret
     else:
-        sub(r"^(d-i passwd/user-password password ).*$",       r"\g<1>" + secret)
-        sub(r"^(d-i passwd/user-password-again password ).*$", r"\g<1>" + secret)
+        pw_block = ("d-i passwd/user-password password " + secret + "\n"
+                    "d-i passwd/user-password-again password " + secret + "\n"
+                    "d-i user-setup/allow-password-weak boolean true")
+    sub(r"^# @PLEBIAN_OS_PASSWORD@.*$", lambda _m: pw_block)
+
+    # The VM builder watches provisioning over SSH, so its image needs sshd; the
+    # USB / raw paths do not and ship without an open sshd.
+    if enable_ssh:
+        sub(r"^(tasksel tasksel/first multiselect standard)$",
+            lambda m: m.group(1) + ", ssh-server")
 
     # Inject the build-time provisioning options the first-boot unit reads via
     # EnvironmentFile=-/etc/default/plebian-os, right before the unit is enabled.
@@ -299,6 +344,11 @@ def generate_preseed(cfg: Config) -> Path:
         ("KILIX95_REF", os.environ.get("KILIX95_REF", "")),
         ("KILIX_DIR", os.environ.get("KILIX_DIR", f"{user_home}/kilix")),
         ("KILIX95_DIR", os.environ.get("KILIX95_DIR", f"{user_home}/kilix-95")),
+        ("PLEBIAN_OS_VERSION", repo_version()),
+        ("PLEBIAN_OS_APT_SNAPSHOT", os.environ.get("PLEBIAN_OS_APT_SNAPSHOT", "")),
+        ("PLEBIAN_OS_REPO", os.environ.get("PLEBIAN_OS_REPO", "https://github.com/itsmygithubacct/plebian-os.git")),
+        ("PLEBIAN_OS_BRANCH", os.environ.get("PLEBIAN_OS_BRANCH", "")),
+        ("PLEBIAN_OS_REF", os.environ.get("PLEBIAN_OS_REF", "")),
     ]
     env_fmt = "".join(f"{k}=%s\\n" for k, _ in env_vars)
     env_args = " ".join(shlex.quote(envfile_quote(v)) for _, v in env_vars)
@@ -463,6 +513,40 @@ def wait_for_provisioning(cfg: Config, timeout_s: int) -> None:
     die(f"timed out after {timeout_s//60} min waiting for provisioning "
         f"(the VM is still running; check it with `VBoxManage startvm {cfg.name} --type gui`).")
 
+# ── acceptance verification (post-provision, over SSH) ───────────────────────
+def verify_provisioning(cfg: Config, askpass: str) -> None:
+    """Prove the real installer→firstboot→session boundary: check the markers a
+    correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
+    info("verifying the provisioned system (acceptance checks) …")
+    # Resolve KILIX_DIR from the target's own session.env so an overridden
+    # checkout location is honored (default $HOME/kilix).
+    kdir = '. /etc/pleb/session.env 2>/dev/null; d="${KILIX_DIR:-$HOME/kilix}";'
+    checks = [
+        ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
+        ("pleb xsession",        "test -f /usr/share/xsessions/pleb.desktop"),
+        ("pleb-session binary",  "test -x /usr/local/bin/pleb-session"),
+        ("session.env",          "test -f /etc/pleb/session.env"),
+        ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
+        ("update helper",        "test -x /usr/local/bin/plebian-os-update"),
+    ]
+    # The clickable fork engine only exists when fork-building is on (the default);
+    # with it off, provisioning ships the prebuilt engine, so check that instead.
+    fork_on = os.environ.get("PLEBIAN_OS_BUILD_KILIX_FORK", "1") not in ("0", "no", "false", "off")
+    if fork_on:
+        checks.append(("kilix fork engine", kdir + ' test -x "$d/src/kitty/launcher/kitty"'))
+    else:
+        checks.append(("kilix engine", kdir + ' test -x "$d/kilix"'))
+    failed = []
+    for name, cmd in checks:
+        r = ssh(cfg, cmd + " && echo OK || echo NO", askpass)
+        ok = r is not None and r.returncode == 0 and "OK" in (r.stdout or "")
+        info(f"  [{'ok' if ok else '!!'}] {name}")
+        if not ok:
+            failed.append(name)
+    if failed:
+        die("acceptance verification FAILED: " + ", ".join(failed))
+    info(c("1;32", "acceptance verification passed."))
+
 # ── summary ──────────────────────────────────────────────────────────────────
 def final_summary(cfg: Config, iso: Path) -> None:
     print(c("1;32", "\n✓ Plebian-OS VirtualBox image is ready.\n"))
@@ -503,6 +587,8 @@ def main() -> None:
                     help="ISO output path when building (default: plebian-os-<name>.iso)")
     ap.add_argument("--gui", action="store_true", help="start the VM with a window")
     ap.add_argument("--no-wait", action="store_true", help="don't block on provisioning")
+    ap.add_argument("--no-verify", action="store_true",
+                    help="skip the post-provision acceptance checks")
     ap.add_argument("--timeout", type=int, default=90, help="minutes to wait for provisioning")
     ap.add_argument("-y", "--yes", action="store_true", help="accept defaults, no prompts")
     ap.add_argument("--dry-run", action="store_true", help="show the plan; build nothing")
@@ -520,6 +606,9 @@ def main() -> None:
     if not PRESEED_TEMPLATE.exists() or not REMASTER.exists():
         die("run this from a Plebian-OS checkout (preseed/ + build/ not found).")
 
+    # PLEBIAN_OS_RELEASE=<ver> pins every moving component from releases/<ver>.env.
+    apply_release_manifest()
+
     if args.iso:
         warn("using a prebuilt ISO: custom username/password/session are NOT applied "
              "(they live in the ISO's preseed). SSH waiting assumes the credentials "
@@ -533,7 +622,7 @@ def main() -> None:
             die(f"--iso not found: {iso}")
     else:
         out = (args.out or (REPO / f"plebian-os-{cfg.name}.iso")).resolve()
-        preseed = None if args.dry_run else generate_preseed(cfg)
+        preseed = None if args.dry_run else generate_preseed(cfg, enable_ssh=True)
         iso = build_iso(cfg, preseed, out, args.dry_run)
 
     if args.dry_run:
@@ -550,6 +639,8 @@ def main() -> None:
 
     wait_for_provisioning(cfg, args.timeout * 60)
     vbox_detach_iso(cfg)
+    if not args.no_verify:
+        verify_provisioning(cfg, _askpass_for(cfg.password))
     final_summary(cfg, iso)
 
 

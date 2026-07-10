@@ -151,10 +151,10 @@ def make_usb_preseed(cfg: Config, unattended_disk: bool) -> Path:
     if unattended_disk:
         return preseed
     text = preseed.read_text()
-    text = re.sub(r"^d-i partman-auto/.*\n", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^d-i partman-partitioning/.*\n", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^d-i partman/choose_partition .*\n", "", text, flags=re.MULTILINE)
-    text = re.sub(r"^d-i partman/confirm.*\n", "", text, flags=re.MULTILINE)
+    # Strip ALL partman preseeding (any partman* namespace) so the installer
+    # prompts for the target disk, regardless of which partman keys the preseed
+    # carries — not just the handful this used to enumerate.
+    text = re.sub(r"^d-i\s+partman.*\n", "", text, flags=re.MULTILINE)
     preseed.write_text(text)
     return preseed
 
@@ -217,6 +217,10 @@ def _root_disks() -> set[str]:
     for target in ("/", "/boot", "/home", "/var"):
         src = subprocess.run(["findmnt", "-no", "SOURCE", "--target", target],
                              capture_output=True, text=True).stdout.strip()
+        # btrfs reports SOURCE as /dev/xxx[/subvol]; drop the subvolume suffix so
+        # the root disk still resolves to a real block device (else it silently
+        # falls out of the protected set on btrfs/subvolume layouts).
+        src = src.split("[", 1)[0]
         if not src or not src.startswith("/dev/"):
             continue
         kname = _block_kname(src)
@@ -259,8 +263,8 @@ def list_devices() -> None:
     if not any_found:
         print("    (none found — plug in a USB stick, or pass --force for a fixed disk)")
 
-def validate_device(device: str, force: bool) -> tuple[str, str]:
-    """Refuse anything unsafe; return (size, model) for a valid target."""
+def validate_device(device: str, force: bool) -> tuple[str, str, bool]:
+    """Refuse anything unsafe; return (size, model, removable) for a valid target."""
     if not Path(device).is_block_device():
         die(f"{device} is not a block device")
     base = _block_kname(device) or Path(os.path.realpath(device)).name
@@ -282,7 +286,7 @@ def validate_device(device: str, force: bool) -> tuple[str, str]:
     except OSError:
         model = "?"
     size = _lsblk(["-dno", "SIZE", device]) or "?"
-    return size, model
+    return size, model, removable == "1"
 
 def _mounted_targets(device: str) -> list[str]:
     r = subprocess.run(["lsblk", "-J", "-o", "NAME,MOUNTPOINTS", device],
@@ -412,6 +416,9 @@ def main() -> None:
     if not PRESEED_TEMPLATE.exists() or not REMASTER.exists():
         die("run this from a Plebian-OS checkout (preseed/ + build/ not found).")
 
+    # PLEBIAN_OS_RELEASE=<ver> pins every moving component from releases/<ver>.env.
+    vm.apply_release_manifest()
+
     if args.iso:
         cfg = Config(name=args.name or "plebian", username=args.username or "pleb",
                      fullname=args.fullname or "Plebian User",
@@ -459,14 +466,19 @@ def main() -> None:
              "status=progress oflag=sync conv=fsync ; sync")
         return
 
-    size, model = validate_device(args.device, args.force)
+    size, model, removable = validate_device(args.device, args.force)
     if args.dry_run:
         info(f"(dry-run) would ERASE {args.device} ({size}, {model}) and write {iso}")
         info(f"    + umount <all mountpoints on {args.device}> ; dd if={iso} of={args.device} bs=4M "
              "status=progress oflag=sync conv=fsync ; sync")
         return
 
-    confirm_device(args.device, iso, size, model, args.yes)
+    # A forced (non-removable) fixed disk always requires the typed confirmation,
+    # even with --yes; only a genuinely removable stick may be flashed unattended.
+    if args.yes and not removable:
+        warn(f"{args.device} is a non-removable disk (--force); requiring typed "
+             "confirmation despite --yes")
+    confirm_device(args.device, iso, size, model, args.yes and removable)
     flash(args.device, iso)
     final_summary(cfg, iso, args.device, args.autoboot, from_iso=args.iso is not None)
 

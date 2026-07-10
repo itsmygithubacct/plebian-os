@@ -41,8 +41,12 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
 pulls `~/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
 engine, and optional desktop-provider update to `pleb update --no-restart`.
-If `/etc/pleb/session.env` pins `PLEB_REF`, `KILIX_REF`, or `KILIX95_REF`, the
-update helper keeps using those exact refs instead of drifting to branch heads.
+It **also refreshes the Plebian-OS layer itself** (the provisioner, dependency
+installer, and this helper) from a `plebian-os` checkout, so OS-layer fixes reach
+installed systems too — pinned by `PLEBIAN_OS_REF` and disablable with
+`PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
+`KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, the update helper keeps using
+those exact refs instead of drifting to branch heads.
 
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
 thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
@@ -109,6 +113,8 @@ with `--force`).
 | `build/acceptance-vm.sh` | operator-run VirtualBox acceptance: build ISO, install, wait for firstboot |
 | `build/install-vm-from-usb-iso.sh` | build a USB-style ISO, then install it in a 4 GB / 4-core VirtualBox VM |
 | `bootstrap.sh` | run the provisioner on an already-installed Debian |
+| `VERSION` / `releases/*.env` | shared release version + coordinated pin manifests |
+| `RELEASING.md` | how to cut a coordinated pleb/kilix/kilix-95/plebian-os release |
 
 Every remastered ISO also stages `/etc/plebian-os/build-info.env` and
 `/etc/default/plebian-os` into the installed system. The manifest records the
@@ -147,4 +153,9 @@ you deliberately want to allow the prebuilt fallback engine. Release-style
 images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_SHA256`,
 `PLEB_REF`, `KILIX_REF`, `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, and
 `KILIX_PREBUILT_SHA256` before building; the builder refuses release mode unless
-all of those pins are present.
+all of those pins are present. Simpler: set `PLEBIAN_OS_RELEASE=0.1.0` to load
+the coordinated pin manifest from [`releases/0.1.0.env`](releases/0.1.0.env) (see
+[RELEASING.md](RELEASING.md)) — every moving component is pinned to its `v0.1.0`
+tag. `PLEBIAN_OS_APT_SNAPSHOT=<timestamp>` additionally pins the first-boot apt
+closure to [snapshot.debian.org](https://snapshot.debian.org) for a fully
+reproducible package set.

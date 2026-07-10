@@ -72,12 +72,31 @@ done
 # uv is useful but not core to booting Plebian-OS. Do not execute mutable remote
 # installer code as root by default; make the tradeoff explicit for local images.
 if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
-    log "installing uv (operator-requested Astral standalone installer -> /usr/local/bin)"
+    # Pin the uv version via the versioned installer URL, download to a file (not
+    # a pipe), and verify its sha256 before executing it as root. Set
+    # PLEBIAN_OS_UV_VERSION (e.g. 0.5.11) and PLEBIAN_OS_UV_INSTALLER_SHA256 to
+    # pin + verify; without the sha it runs unverified with a loud warning.
+    uv_ver="${PLEBIAN_OS_UV_VERSION:-}"
+    uv_sha="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
+    uv_url="https://astral.sh/uv/${uv_ver:+$uv_ver/}install.sh"
+    log "installing uv (operator-requested; $uv_url -> /usr/local/bin)"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh"
-    elif ! curl -LsSf https://astral.sh/uv/install.sh \
-            | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh; then
-        warn "uv install failed (optional tool — continuing)"
+        echo "    + curl -LsSf $uv_url -o <tmp>"
+        if [ -n "$uv_sha" ]; then echo "    + verify sha256=$uv_sha"
+        else echo "    + (WARNING: PLEBIAN_OS_UV_INSTALLER_SHA256 unset — installer unverified)"; fi
+        echo "    + UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh <tmp>"
+    else
+        uv_tmp="$(mktemp)"
+        if ! curl -LsSf "$uv_url" -o "$uv_tmp"; then
+            warn "uv installer download failed (optional tool — continuing)"; rm -f "$uv_tmp"
+        elif [ -n "$uv_sha" ] && ! printf '%s  %s\n' "$uv_sha" "$uv_tmp" | sha256sum -c --status; then
+            warn "uv installer sha256 mismatch — refusing to run it (expected $uv_sha)"; rm -f "$uv_tmp"
+        else
+            [ -n "$uv_sha" ] || warn "uv installer NOT pinned — set PLEBIAN_OS_UV_INSTALLER_SHA256 to verify it"
+            env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh "$uv_tmp" \
+                || warn "uv install failed (optional tool — continuing)"
+            rm -f "$uv_tmp"
+        fi
     fi
 else
     log "skipping uv installer (set PLEBIAN_OS_INSTALL_UV=1 to opt in)"

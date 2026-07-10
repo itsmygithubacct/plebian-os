@@ -48,6 +48,22 @@ class DependencyManifestTests(unittest.TestCase):
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
 
+    def test_recommends_policy_matches_across_paths(self):
+        # Both provisioning paths must resolve the same closure: install-deps.sh
+        # uses --no-install-recommends, so the preseed must disable recommends too
+        # (otherwise the two "in sync" paths install materially different systems).
+        install = (ROOT / "provision" / "install-deps.sh").read_text()
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        self.assertIn("--no-install-recommends", install)
+        self.assertIn("pkgsel/install-recommends boolean false", preseed)
+
+    def test_recommends_line_not_parsed_as_a_package(self):
+        # The recommends directive must sit OUTSIDE the pkgsel/include block, so
+        # the drift parser never mistakes it for a package name.
+        pkgs = preseed_packages()
+        self.assertNotIn("boolean", pkgs)
+        self.assertNotIn("pkgsel/install-recommends", pkgs)
+
 
 if __name__ == "__main__":
     unittest.main()

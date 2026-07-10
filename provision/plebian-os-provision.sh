@@ -40,6 +40,13 @@ KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
+# Plebian-OS layer itself: where the provisioner/update-helper/deps script come
+# from, so `plebian-os-update` can refresh the OS layer (not just pleb/kilix).
+PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
+PLEBIAN_OS_BRANCH="${PLEBIAN_OS_BRANCH:-}"     # empty = repo default
+PLEBIAN_OS_REF="${PLEBIAN_OS_REF:-}"           # optional exact commit/tag
+PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file below if empty
+PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}" # snapshot.debian.org ts = reproducible apt
 KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
@@ -54,6 +61,15 @@ DRY_RUN=0
 # of truth — which step 1 below calls.
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Release version: prefer an explicit env (the builders bake it into
+# /etc/default/plebian-os); otherwise read the VERSION file shipped beside us.
+if [ -z "$PLEBIAN_OS_VERSION" ]; then
+    for _vf in "$SELF_DIR/../VERSION" "$SELF_DIR/VERSION" /usr/local/share/plebian-os/VERSION; do
+        [ -r "$_vf" ] && { PLEBIAN_OS_VERSION="$(cat "$_vf" 2>/dev/null)"; break; }
+    done
+fi
+: "${PLEBIAN_OS_VERSION:=unknown}"
+
 usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
     cat <<EOF
@@ -65,6 +81,7 @@ Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--no-desktop] [--branch REF
   --no-desktop   boot into a plain fullscreen kilix shell, not a desktop provider
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
+  --version      print the Plebian-OS version and exit
 EOF
 }
 
@@ -110,6 +127,83 @@ install_quiet_console_defaults() {
 [Manager]
 ShowStatus=no
 EOF
+}
+
+# Pin apt to a snapshot.debian.org timestamp so the first-boot package closure is
+# reproducible. Opt-in via PLEBIAN_OS_APT_SNAPSHOT; a no-op when unset (default),
+# so ordinary installs track the live mirror exactly as before.
+configure_apt_snapshot() {
+    [ -n "$PLEBIAN_OS_APT_SNAPSHOT" ] || return 0
+    local ts="$PLEBIAN_OS_APT_SNAPSHOT"
+    local src=/etc/apt/sources.list.d/plebian-os-snapshot.sources
+    local cfg=/etc/apt/apt.conf.d/99plebian-os-snapshot
+    log "pinning apt to snapshot.debian.org/$ts (reproducible package closure)"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + disable stock apt sources (sources.list, sources.list.d/debian.sources)"
+        echo "    + write $src (deb822 snapshot sources for $ts) + $cfg (Check-Valid-Until false)"
+        echo "    + apt-get update"
+        return 0
+    fi
+    mkdir -p /etc/apt/sources.list.d /etc/apt/apt.conf.d /etc/plebian-os
+    # Move the stock trixie sources aside so only the snapshot is consulted.
+    local d
+    for d in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do
+        [ -f "$d" ] && [ ! -e "$d.plebian-os-disabled" ] \
+            && mv "$d" "$d.plebian-os-disabled"
+    done
+    cat > "$src" <<EOF
+# Managed by plebian-os-provision. Reproducible apt via snapshot.debian.org.
+Types: deb
+URIs: https://snapshot.debian.org/archive/debian/$ts
+Suites: trixie trixie-updates
+Components: main contrib non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://snapshot.debian.org/archive/debian-security/$ts
+Suites: trixie-security
+Components: main contrib non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+    # snapshot archives carry an old Valid-Until, which apt would otherwise reject.
+    printf '%s\n' 'Acquire::Check-Valid-Until "false";' > "$cfg"
+    printf '%s\n' "$ts" > /etc/plebian-os/apt-snapshot
+    apt-get update -y || warn "apt-get update against snapshot $ts failed (continuing)"
+}
+
+# Record the exact installed package set for build provenance / reproducibility
+# auditing (what a given image actually resolved to at first boot).
+write_package_manifest() {
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + record installed packages -> /var/lib/plebian-os/packages.list"
+        return 0
+    fi
+    command -v dpkg-query >/dev/null 2>&1 || return 0
+    mkdir -p /var/lib/plebian-os
+    dpkg-query -W -f='${Package}=${Version}\n' 2>/dev/null \
+        | sort > /var/lib/plebian-os/packages.list || true
+}
+
+# Kiosk appliance: pin the target user's remembered LightDM session to Pleb so a
+# stale ~/.dmrc / AccountsService entry can't override the seat's user-session
+# default. Only done in kiosk mode (a dedicated appliance); a bootstrap install
+# alongside another desktop leaves the user's session choice alone.
+pin_remembered_session() {
+    local dmrc="$USER_HOME/.dmrc"
+    local asvc="/var/lib/AccountsService/users/$TARGET_USER"
+    log "pinning $TARGET_USER's remembered session to Pleb (kiosk)"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $dmrc ([Desktop] Session=pleb)"
+        echo "    + create $asvc with Session=pleb (if absent)"
+        return 0
+    fi
+    printf '%s\n' '[Desktop]' 'Session=pleb' > "$dmrc"
+    chown "$TARGET_UID:$TARGET_GID" "$dmrc" 2>/dev/null || true
+    # Best-effort AccountsService (LightDM prefers it when present). Only create
+    # it when absent, so we never clobber an existing profile's other keys.
+    if [ ! -e "$asvc" ] && mkdir -p /var/lib/AccountsService/users 2>/dev/null; then
+        printf '%s\n' '[User]' 'Session=pleb' 'XSession=pleb' 'SystemAccount=false' > "$asvc"
+    fi
 }
 
 desktop_provider_needs_kilix95() {
@@ -253,6 +347,7 @@ while [ $# -gt 0 ]; do
         --no-desktop) DESKTOP=0; shift ;;
         --branch) PLEB_BRANCH="${2:?}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --version) echo "plebian-os-provision $PLEBIAN_OS_VERSION"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
@@ -276,6 +371,7 @@ TARGET_GID="$(id -g "$TARGET_USER")"
 KILIX_DIR="${KILIX_DIR:-$USER_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$USER_HOME/kilix-95}"
 
+log "plebian-os  : version $PLEBIAN_OS_VERSION"
 log "target user : $TARGET_USER ($USER_HOME)"
 log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
 log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (cloned by pleb)"
@@ -301,12 +397,14 @@ for cand in \
     [ -r "$cand" ] && DEPS_SCRIPT="$cand" && break
 done
 [ -n "$DEPS_SCRIPT" ] || die "dependency installer not found (plebian-os-install-deps / install-deps.sh)"
+configure_apt_snapshot
 log "installing runtime dependencies via $DEPS_SCRIPT"
 if [ "$DRY_RUN" = 1 ]; then
     bash "$DEPS_SCRIPT" --dry-run
 else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
+write_package_manifest
 install_no_beep_defaults
 install_quiet_console_defaults
 
@@ -362,7 +460,12 @@ fi
 # the duration of provisioning, then revoke it (leaves the system as it found it).
 SUDOERS=/etc/sudoers.d/plebian-os-provision
 cleanup() { [ "$DRY_RUN" = 1 ] || rm -f "$SUDOERS"; }
+# Remove the temporary grant on normal exit AND on signals: a SIGTERM window
+# (e.g. the firstboot TimeoutStartSec) must never leave passwordless sudo behind.
+# SIGKILL can't be trapped, so the firstboot unit's ExecStartPre also clears any
+# stale file before each attempt.
 trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
 if [ "$DRY_RUN" = 1 ]; then
     echo "    + echo '$TARGET_USER ALL=(ALL) NOPASSWD:ALL' > $SUDOERS  (temporary)"
 else
@@ -453,6 +556,12 @@ EOF
     write_session_default KILIX95_REPO "$KILIX95_REPO"
     write_session_default KILIX95_BRANCH "$KILIX95_BRANCH"
     write_session_default KILIX95_REF "$KILIX95_REF"
+    write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
+    write_session_default PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
+    write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
+    write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
+    write_session_default PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
+    [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'
     } > "$PLEB_ENV"
 fi
 
@@ -460,6 +569,7 @@ if [ "$KIOSK" = 1 ]; then
     log "enabling autologin into Pleb (kiosk)"
     as_user "$PLEB_DIR/bin/pleb" autologin on "$TARGET_USER" \
         || warn "pleb autologin failed; the greeter will still offer Pleb"
+    pin_remembered_session
 fi
 
 # Passwordless sudo for the owner. Plebian-OS is a single-user appliance and the
@@ -484,6 +594,6 @@ cleanup; trap - EXIT
 
 log "done. Plebian-OS is provisioned."
 log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'fullscreen kilix')."
-[ "$KIOSK" = 1 ] && log "  (kiosk: boots straight in; rescue console on Ctrl+Alt+F2)"
+[ "$KIOSK" = 1 ] && log "  (kiosk: autologin + kilix respawn on exit; rescue console on Ctrl+Alt+F2)"
 [ "$NOPASSWD_SUDO" = 1 ] && log "  ($TARGET_USER has passwordless sudo)"
 exit 0

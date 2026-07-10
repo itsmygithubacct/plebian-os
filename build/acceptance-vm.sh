@@ -3,7 +3,10 @@
 #
 # This is intentionally an operator-run script, not a unit test: it creates a
 # VirtualBox VM, builds a fresh ISO, boots the unattended installer, waits for
-# firstboot provisioning, and exits nonzero if provisioning fails.
+# firstboot provisioning, then verifies the provisioned system (provisioned
+# marker, pleb xsession, session.env, kilix fork engine, update helper) and
+# exits nonzero if provisioning or any acceptance check fails. Pass --no-verify
+# to skip the post-provision checks.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

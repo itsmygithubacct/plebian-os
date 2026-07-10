@@ -32,6 +32,9 @@ RemainAfterExit=yes
 # one build_vm_image.py generates) can drop this file to pick the session mode
 # without editing the unit. The leading '-' makes it optional.
 EnvironmentFile=-/etc/default/plebian-os
+# Clear any temporary sudoers grant a previously killed attempt may have left
+# behind (SIGKILL can't run the provisioner's own cleanup trap).
+ExecStartPre=-/bin/rm -f /etc/sudoers.d/plebian-os-provision
 ExecStart=/usr/local/sbin/plebian-os-provision
 # Mark done and stop pulling on every boot (success only).
 ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned

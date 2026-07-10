@@ -63,6 +63,11 @@ protected_device_names() {
     local target src kname
     for target in / /boot /home /var; do
         src="$(findmnt -no SOURCE --target "$target" 2>/dev/null || true)"
+        # btrfs reports SOURCE as /dev/xxx[/subvol]; strip the subvolume suffix so
+        # the disk still resolves to a real block device. Without this, the root
+        # disk silently drops out of the protected set on btrfs/subvolume layouts
+        # and the root-disk refusal never fires.
+        src="${src%%[*}"
         case "$src" in /dev/*) ;; *) continue ;; esac
         kname="$(block_kname "$src" 2>/dev/null || true)"
         [ -n "$kname" ] && ancestor_names "$kname"
@@ -256,7 +261,13 @@ size="$(lsblk -dno SIZE "$DEVICE" 2>/dev/null || echo '?')"
 warn "about to ERASE $DEVICE  ($size, $model) and write $ISO"
 lsblk "$DEVICE" 2>/dev/null | sed 's/^/    /' || true
 
-if [ "$ASSUME_YES" != 1 ] && [ "$DRY_RUN" != 1 ]; then
+# A forced (non-removable) target is a fixed disk — never let --yes skip the
+# typed confirmation for one. Only a genuinely removable stick may be flashed
+# unattended; forcing a fixed disk always requires you to retype its path.
+if [ "$DRY_RUN" != 1 ] && { [ "$ASSUME_YES" != 1 ] || [ "$removable" != 1 ]; }; then
+    if [ "$ASSUME_YES" = 1 ] && [ "$removable" != 1 ]; then
+        warn "$DEVICE is a non-removable disk (--force); requiring typed confirmation despite --yes"
+    fi
     printf '\033[1;31mType the device path to confirm (%s): \033[0m' "$DEVICE"
     read -r confirm
     [ "$confirm" = "$DEVICE" ] || die "confirmation did not match — aborted"
