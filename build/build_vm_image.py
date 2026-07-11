@@ -209,8 +209,11 @@ def gather_config(args) -> Config:
     if args.password is not None:
         password = args.password
     elif args.yes:
-        password = generated_password()
-        warn(f"--yes without --password: generated password for {username}: {password}")
+        password = "plebian"
+        warn(f"--yes without --password: using the default password 'plebian' for "
+             f"{username}. This VM runs sshd (forwarded on host loopback), so keep "
+             f"the forward local or set --password; the kilix desktop nags to change "
+             f"it on first boot, but a plain-shell session does not.")
     else:
         password = p.ask_password("plebian")
     hostname = args.hostname or p.ask("hostname", name)
@@ -297,17 +300,22 @@ def generate_preseed(cfg: Config, enable_ssh: bool = False) -> Path:
     sub(r"^(d-i passwd/user-fullname string ).*$", r"\g<1>" + cfg.fullname)
     sub(r"^(d-i netcfg/get_hostname string ).*$",  r"\g<1>" + cfg.hostname)
 
-    # The committed template ships NO password — replace the sentinel line with
-    # the real one (hashed when possible). A lambda repl keeps regex-special
-    # characters in the crypt hash literal.
+    # Replace the template's default 'plebian' password with the chosen one,
+    # hashed when openssl is available (keeps the plaintext off the ISO). A
+    # lambda repl keeps regex-special characters in the crypt hash literal.
+    # The default password IS 'plebian' (the desktop nags to change it), so a
+    # build with no --password simply re-hashes plebian — still detected as
+    # the default by the desktop's shadow check.
     secret, crypted = crypt_password(cfg.password)
     if crypted:
-        pw_block = "d-i passwd/user-password-crypted password " + secret
+        sub(r"^d-i passwd/user-password password .*$",
+            lambda _m: "d-i passwd/user-password-crypted password " + secret)
+        sub(r"^d-i passwd/user-password-again password .*\n", "")
     else:
-        pw_block = ("d-i passwd/user-password password " + secret + "\n"
-                    "d-i passwd/user-password-again password " + secret + "\n"
-                    "d-i user-setup/allow-password-weak boolean true")
-    sub(r"^# @PLEBIAN_OS_PASSWORD@.*$", lambda _m: pw_block)
+        sub(r"^(d-i passwd/user-password password ).*$",
+            lambda m: m.group(1) + secret)
+        sub(r"^(d-i passwd/user-password-again password ).*$",
+            lambda m: m.group(1) + secret)
 
     # The VM builder watches provisioning over SSH, so its image needs sshd; the
     # USB / raw paths do not and ship without an open sshd.

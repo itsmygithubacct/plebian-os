@@ -206,6 +206,37 @@ pin_remembered_session() {
     fi
 }
 
+# Install the narrow password check/change helper (plebian-os-passwd) and a
+# SCOPED NOPASSWD sudoers rule for the target user, so the Kilix 95 desktop —
+# running unprivileged — can detect the default password ('plebian') and let
+# the owner change it, WITHOUT granting general passwordless sudo. The helper
+# only ever acts on the invoking user's own account.
+install_passwd_nag() {
+    local dst=/usr/local/sbin/plebian-os-passwd
+    local rule=/etc/sudoers.d/plebian-os-passwd
+    local src=""
+    for cand in "$SELF_DIR/plebian-os-passwd" "$dst"; do
+        [ -r "$cand" ] && src="$cand" && break
+    done
+    log "installing password-change helper + scoped sudoers for $TARGET_USER"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -m 0755 ${src:-<staged>} $dst"
+        echo "    + write $rule ($TARGET_USER NOPASSWD: $dst)"
+        return 0
+    fi
+    if [ -n "$src" ] && [ "$src" != "$dst" ]; then
+        install -m 0755 "$src" "$dst" || warn "could not install $dst"
+    fi
+    if [ ! -x "$dst" ]; then
+        warn "plebian-os-passwd helper missing; skipping default-password nag setup"
+        return 0
+    fi
+    printf '%s ALL=(root) NOPASSWD: %s\n' "$TARGET_USER" "$dst" > "$rule"
+    chmod 0440 "$rule"
+    visudo -cf "$rule" >/dev/null 2>&1 \
+        || { warn "passwd-helper sudoers invalid — removing $rule"; rm -f "$rule"; }
+}
+
 desktop_provider_needs_kilix95() {
     case "$KILIX_DESKTOP_PROVIDER" in
         external) return 0 ;;
@@ -429,6 +460,9 @@ elif [ -x /usr/local/bin/plebian-os-update ]; then
 else
     warn "update helper not found; continuing without plebian-os-update"
 fi
+
+# Password-change helper + scoped sudoers (the default-password desktop nag).
+install_passwd_nag
 
 # ── 2. clone pleb into the user's home (as the user, correct ownership) ──────
 PLEB_DIR="$USER_HOME/pleb"

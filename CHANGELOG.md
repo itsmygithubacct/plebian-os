@@ -31,10 +31,20 @@ First coordinated, versioned release of the Plebian-OS stack.
   `curl | sh`.
 
 ### Security / defaults
-- The committed preseed **no longer ships an account password or ssh-server**: the
-  builders inject a hashed password (the VM builder also re-adds ssh-server for its
-  provisioning watch), and a plain installer prompts interactively — so the raw
-  template is safe by default.
+- Default credentials are **user `pleb` / password `plebian`** (overridable with
+  the builders' `--password` or a custom preseed) so a fresh install is usable out
+  of the box. The **ISO/USB install ships no ssh-server** (nothing network-reachable
+  with the weak password) and the **Kilix 95 desktop shows a persistent tray
+  notification** prompting the user to change it on first run, until the password is
+  no longer `plebian`. This is backed by a narrow root helper (`plebian-os-passwd`)
+  + a scoped NOPASSWD sudoers rule — the desktop can verify and change the password
+  without any general passwordless sudo.
+- The **VM builder** additionally installs `ssh-server` (for its loopback
+  provisioning watch and `ssh -p … 127.0.0.1` access) and, under `--yes`, ships the
+  default `plebian` password — so a `--yes` VM runs sshd with weak credentials on a
+  host-loopback forward. Keep the forward local, pass `--password`, or boot the
+  desktop (which nags); a `--session shell` VM has no desktop nag. `remaster-iso.sh`
+  only warns on the default password, never refuses.
 - `--kiosk` now enables pleb's **hard respawn** (`PLEB_RESPAWN`) and pins the
   user's remembered LightDM session to Pleb (`~/.dmrc` + AccountsService), so a
   stale remembered session can't override the seat default on the appliance.

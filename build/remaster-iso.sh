@@ -84,22 +84,20 @@ verify_source_iso_pin
 # username/password/hostname and first-boot options per image.
 PRESEED="${PLEBIAN_OS_PRESEED:-$HERE/preseed/preseed.cfg}"
 [ -f "$PRESEED" ] || { echo "no such preseed: $PRESEED" >&2; exit 1; }
-# Refuse to ship the repository's known test password. This fires on the weak
-# credential ALONE (independent of ssh-server): dropping the ssh task no longer
-# evades it. The Python builders replace this line with a hashed password, so a
-# real build is unaffected; only a raw build of the committed template is gated.
-if [ "${PLEBIAN_OS_ALLOW_TEST_PRESEED:-0}" != 1 ] \
-    && grep -q '^d-i passwd/user-password password plebian$' "$PRESEED"; then
-    ssh_note=""
-    grep -q '^tasksel tasksel/first multiselect .*ssh-server' "$PRESEED" \
-        && ssh_note=$'\n(and it enables ssh-server, so the box would be network-reachable with them)'
-    cat >&2 <<EOF
-refusing to build an image with the repository's test credentials (user 'pleb',
-password 'plebian')$ssh_note. Use build_vm_image.py/build_usb_image.py so a
-custom preseed with a hashed password is generated, edit the preseed, or set
-PLEBIAN_OS_ALLOW_TEST_PRESEED=1 for an isolated throwaway test image.
-EOF
-    exit 1
+# The default password 'plebian' is a supported, deliberate default (the Kilix
+# 95 desktop prompts to change it on first run). Just note it — do NOT refuse,
+# even in release mode. If ssh-server is ALSO enabled the box would be
+# network-reachable with a weak password, so that combination warns louder.
+if grep -q '^d-i passwd/user-password password plebian$' "$PRESEED"; then
+    if grep -q '^tasksel tasksel/first multiselect .*ssh-server' "$PRESEED"; then
+        echo "WARNING: image uses the default password 'plebian' AND enables" >&2
+        echo "  ssh-server — it is network-reachable with a weak credential." >&2
+        echo "  Set a real password (builders' --password) for anything exposed." >&2
+    else
+        echo "note: image uses the default password 'plebian' (user 'pleb'); no" >&2
+        echo "  ssh-server, and the Kilix 95 desktop prompts to change it on first" >&2
+        echo "  run. Pass a real --password to the builders to override." >&2
+    fi
 fi
 
 manifest_kv() {
@@ -249,6 +247,7 @@ cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/install-deps.sh"             "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-passwd"           "$EXTRACT/plebian-os/"
 write_build_info "$EXTRACT/plebian-os/build-info.env"
 write_firstboot_env "$EXTRACT/plebian-os/firstboot.env"
 

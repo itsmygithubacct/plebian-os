@@ -165,6 +165,10 @@ self_update_os_layer() {
         || warn "failed to update /usr/local/sbin/plebian-os-provision"
     $SUDO install -m 0755 "$prov/install-deps.sh" /usr/local/sbin/plebian-os-install-deps \
         || warn "failed to update /usr/local/sbin/plebian-os-install-deps"
+    if [ -f "$prov/plebian-os-passwd" ]; then
+        $SUDO install -m 0755 "$prov/plebian-os-passwd" /usr/local/sbin/plebian-os-passwd \
+            || warn "failed to update /usr/local/sbin/plebian-os-passwd (nag helper)"
+    fi
     if [ -f "$prov/plebian-os-firstboot.service" ]; then
         $SUDO install -m 0644 "$prov/plebian-os-firstboot.service" \
             /etc/systemd/system/plebian-os-firstboot.service \

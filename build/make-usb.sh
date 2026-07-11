@@ -96,6 +96,7 @@ iso_is_fresh() {
         "$ROOT/provision/plebian-os-provision.sh"
         "$ROOT/provision/plebian-os-firstboot.service"
         "$ROOT/provision/install-deps.sh"
+        "$ROOT/provision/plebian-os-passwd"
         "$ROOT/provision/plebian-os-update.sh"
     )
     local input

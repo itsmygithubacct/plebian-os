@@ -38,11 +38,15 @@ class DiskSafetyTests(unittest.TestCase):
         self.assertNotIn("partman/choose_partition ", remaster)
         self.assertNotIn("partman-partitioning/.*", usb)
 
-    def test_test_credential_gate_independent_of_ssh(self):
-        # The weak-password grep must end the gate condition (";  then"), i.e. it
-        # is no longer ANDed with an ssh-server grep that could be dropped to evade.
+    def test_default_password_warns_but_does_not_refuse(self):
+        # 'plebian' is a supported default (the desktop nags to change it), so
+        # the remaster only WARNS on it — it must not `exit 1` on that path.
         r = _read("build", "remaster-iso.sh")
-        self.assertIn('password plebian$\' "$PRESEED"; then', r)
+        self.assertIn("password plebian$", r)          # still detected
+        # the warning block must not abort the build
+        gate = r.split("password plebian$", 1)[1].split("\nfi", 1)[0]
+        self.assertNotIn("exit 1", gate)
+        self.assertIn("default password 'plebian'", r)
 
     def test_temp_sudoers_cleaned_on_signals_and_before_retry(self):
         p = _read("provision", "plebian-os-provision.sh")
@@ -52,9 +56,12 @@ class DiskSafetyTests(unittest.TestCase):
         self.assertIn(
             "ExecStartPre=-/bin/rm -f /etc/sudoers.d/plebian-os-provision", svc)
 
-    def test_preseed_header_warns_against_raw_use(self):
+    def test_preseed_documents_default_credentials(self):
         p = _read("preseed", "preseed.cfg")
-        self.assertIn("Do NOT feed this file straight to debian-installer", p)
+        self.assertIn("DEFAULT CREDENTIALS", p)
+        # the header explains the safety story (no sshd + desktop nag)
+        self.assertIn("ssh-server is installed", p)
+        self.assertIn("change it on first run", p)
 
 
 if __name__ == "__main__":

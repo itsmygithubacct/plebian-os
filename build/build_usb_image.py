@@ -73,8 +73,9 @@ def gather_config(args) -> Config:
     if args.password is not None:
         password = args.password
     elif args.yes:
-        password = vm.generated_password()
-        warn(f"--yes without --password: generated password for {username}: {password}")
+        password = "plebian"
+        warn(f"--yes without --password: using the default password 'plebian' for "
+             f"{username} (the desktop prompts to change it on first run)")
     else:
         password = p.ask_password("plebian")
     hostname = args.hostname or p.ask("hostname", name)

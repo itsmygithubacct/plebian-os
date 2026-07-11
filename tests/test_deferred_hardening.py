@@ -19,18 +19,20 @@ def _cfg():
 
 
 class DeferredHardeningTests(unittest.TestCase):
-    def test_committed_preseed_has_no_password_or_ssh(self):
+    def test_committed_preseed_default_creds_no_ssh(self):
         p = _read("preseed", "preseed.cfg")
-        # no committed account password (builders inject a hashed one)
-        self.assertNotIn("user-password password ", p)
-        self.assertIn("@PLEBIAN_OS_PASSWORD@", p)       # sentinel the builders replace
-        # tasksel ships STANDARD only — no ssh-server by default
+        # default password is 'plebian' (weak allowed so it takes); the desktop
+        # nags to change it. No ssh-server by default, so it isn't network-reachable.
+        self.assertIn("d-i passwd/user-password password plebian", p)
+        self.assertIn("d-i user-setup/allow-password-weak boolean true", p)
         tasksel = [l for l in p.splitlines() if l.startswith("tasksel tasksel/first")]
         self.assertEqual(tasksel, ["tasksel tasksel/first multiselect standard"])
 
-    def test_vm_builder_injects_password_and_ssh(self):
+    def test_vm_builder_overrides_password_and_adds_ssh(self):
         vm = _read("build", "build_vm_image.py")
-        self.assertIn("@PLEBIAN_OS_PASSWORD@", vm)       # replaces the sentinel
+        # a chosen password replaces the default lines (hashed when possible);
+        # the VM builder adds ssh-server for its loopback provisioning watch
+        self.assertIn("user-password-crypted password", vm)
         self.assertIn("enable_ssh", vm)
         self.assertIn(", ssh-server", vm)
         self.assertIn("generate_preseed(cfg, enable_ssh=True)", vm)
@@ -64,25 +66,59 @@ class DeferredHardeningTests(unittest.TestCase):
         self.assertIn("KILIX_DIR", src)
 
     def test_generate_preseed_actually_injects_password_and_ssh(self):
-        # Behavioral (not string-only): render the preseed and prove the sentinel
-        # is replaced by a real password line, and ssh-server is VM-only.
+        # Behavioral (not string-only): render the preseed and prove the CHOSEN
+        # password ('s3cret-pw') actually replaces the template default 'plebian'
+        # — the committed template already carries a 'plebian' password line, so a
+        # mere "a password line exists" check would pass even if the override were
+        # a no-op. ssh-server must be VM-only.
+        import re as _re
+
         def tasksel(text):
             return [l for l in text.splitlines() if l.startswith("tasksel tasksel/first")][0]
 
-        def has_password(text):
-            return any(l.startswith("d-i passwd/user-password") for l in text.splitlines())
+        def password_line(text):
+            return [l for l in text.splitlines()
+                    if l.startswith("d-i passwd/user-password ")
+                    or l.startswith("d-i passwd/user-password-crypted ")][0]
 
-        cfg = _cfg()
+        def assert_is_chosen_password(text, plaintext):
+            # the default value must be gone, and the line must encode `plaintext`
+            self.assertNotIn("password plebian", text)           # default replaced
+            line = password_line(text)
+            m = _re.search(r"\$6\$[^$]+\$[^\s]+$", line)
+            if m:                                                # hashed (openssl path)
+                self.assertTrue(self._openssl_check(m.group(0), plaintext),
+                                "crypted line is not the hash of the chosen password")
+            else:                                                # plaintext fallback
+                self.assertTrue(line.endswith(" " + plaintext), line)
+
+        cfg = _cfg()                                             # password="s3cret-pw"
         vm_ps = vm.generate_preseed(cfg, enable_ssh=True).read_text()
-        self.assertNotIn("@PLEBIAN_OS_PASSWORD@", vm_ps)          # sentinel replaced
-        self.assertTrue(has_password(vm_ps))                     # real password line landed
-        self.assertIn("standard, ssh-server", tasksel(vm_ps))    # VM path gets sshd
+        self.assertNotIn("@PLEBIAN_OS_PASSWORD@", vm_ps)         # sentinel replaced
+        assert_is_chosen_password(vm_ps, "s3cret-pw")           # the chosen pw landed
+        self.assertIn("standard, ssh-server", tasksel(vm_ps))   # VM path gets sshd
+        # a crypted preseed must not leave a dangling -again line
+        if "user-password-crypted" in vm_ps:
+            self.assertNotIn("user-password-again", vm_ps)
 
         usb_ps = vm.generate_preseed(cfg, enable_ssh=False).read_text()
         self.assertNotIn("@PLEBIAN_OS_PASSWORD@", usb_ps)
-        self.assertTrue(has_password(usb_ps))
-        self.assertEqual(tasksel(usb_ps),                        # USB/raw path: no sshd
+        assert_is_chosen_password(usb_ps, "s3cret-pw")
+        self.assertEqual(tasksel(usb_ps),                       # USB/raw path: no sshd
                          "tasksel tasksel/first multiselect standard")
+
+    @staticmethod
+    def _openssl_check(hashed, plaintext):
+        # re-hash `plaintext` with the salt embedded in `hashed`; equal iff it is
+        # genuinely the crypt of `plaintext` (real end-to-end verification).
+        import shutil
+        import subprocess
+        if not shutil.which("openssl"):
+            return True                                          # can't verify; don't fail
+        salt = hashed.split("$")[2]
+        r = subprocess.run(["openssl", "passwd", "-6", "-salt", salt, "-stdin"],
+                           input=plaintext, text=True, capture_output=True)
+        return r.returncode == 0 and r.stdout.strip() == hashed
 
 
 if __name__ == "__main__":

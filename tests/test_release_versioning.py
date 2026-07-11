@@ -20,14 +20,16 @@ class ReleaseVersioningTests(unittest.TestCase):
                     "KILIX_REF=v0.1.0", "KILIX95_REF=v0.1.0"):
             self.assertIn(ref, m)
 
-    def test_release_manifest_checksums_are_placeholders(self):
-        # Until a real release fills them, the checksum/netinst pins must be
-        # explicit REPLACE_ME so a half-filled manifest aborts the build.
+    def test_release_manifest_checksums_are_filled(self):
+        # The 0.1.0 release manifest is pinned: real kitty version + sha256 and
+        # the Debian netinst sha256 (no leftover REPLACE_ME placeholders).
         m = _read("releases", "0.1.0.env")
-        for key in ("KILIX_PREBUILT_VERSION", "KILIX_PREBUILT_SHA256",
-                    "PLEBIAN_OS_NETINST_SHA256"):
-            self.assertTrue(re.search(rf"^{key}=REPLACE_ME$", m, re.M),
-                            f"{key} should be a REPLACE_ME placeholder")
+        # no pin VALUE is still a placeholder (comments may mention REPLACE_ME)
+        self.assertFalse(re.search(r"^\w+=REPLACE_ME$", m, re.M))
+        self.assertTrue(re.search(r"^KILIX_PREBUILT_VERSION=\d+\.\d+", m, re.M))
+        for key in ("KILIX_PREBUILT_SHA256", "PLEBIAN_OS_NETINST_SHA256"):
+            self.assertTrue(re.search(rf"^{key}=[0-9a-f]{{64}}$", m, re.M),
+                            f"{key} should be a real sha256")
 
     def test_remaster_loads_release_manifest(self):
         r = _read("build", "remaster-iso.sh")
@@ -69,6 +71,8 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("PLEBIAN_OS_SELF_UPDATE", u)
         self.assertIn("install -m 0755", u)
         self.assertIn("/usr/local/sbin/plebian-os-provision", u)
+        # the password-nag helper is an OS-layer script too — it must redeploy
+        self.assertIn("/usr/local/sbin/plebian-os-passwd", u)
         # keeps honoring an exact pinned ref, like the pleb path
         self.assertIn('checkout --detach "$PLEBIAN_OS_REF"', u)
 

@@ -59,7 +59,7 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn(shlex.quote(envfile_quote(env["KILIX_DESKTOP_COMMAND"])), text)
         self.assertIn(shlex.quote(envfile_quote(env["KILIX_DESKTOP_NAME"])), text)
 
-    def test_yes_mode_generates_password_when_omitted(self):
+    def test_yes_mode_defaults_to_plebian_password(self):
         args = mock.Mock(
             yes=True,
             name=None,
@@ -79,9 +79,8 @@ class VmBuilderEnvTests(unittest.TestCase):
             gui=False,
             no_wait=True,
         )
-        with mock.patch.object(vm, "generated_password", return_value="random-pass"):
-            cfg = vm.gather_config(args)
-        self.assertEqual(cfg.password, "random-pass")
+        cfg = vm.gather_config(args)
+        self.assertEqual(cfg.password, "plebian")   # default; desktop nags to change
 
     def test_yes_mode_honors_explicit_password(self):
         args = mock.Mock(

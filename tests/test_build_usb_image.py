@@ -54,7 +54,7 @@ class UsbBuilderTests(unittest.TestCase):
         parents = {"dm-0": "sda2", "sda2": "sda"}
         self.assertEqual(usb._ancestors("dm-0", parents), {"dm-0", "sda2", "sda"})
 
-    def test_yes_mode_generates_password_when_omitted(self):
+    def test_yes_mode_defaults_to_plebian_password(self):
         args = mock.Mock(
             yes=True,
             name=None,
@@ -66,9 +66,8 @@ class UsbBuilderTests(unittest.TestCase):
             kiosk=None,
             nopasswd_sudo=None,
         )
-        with mock.patch.object(usb.vm, "generated_password", return_value="random-pass"):
-            cfg = usb.gather_config(args)
-        self.assertEqual(cfg.password, "random-pass")
+        cfg = usb.gather_config(args)
+        self.assertEqual(cfg.password, "plebian")   # default; desktop nags to change
 
     def test_yes_mode_honors_explicit_password(self):
         args = mock.Mock(

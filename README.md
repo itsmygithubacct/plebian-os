@@ -76,10 +76,11 @@ build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netin
 ```
 
 Install it like normal Debian; the first boot pulls everything and comes up as
-Pleb. Edit `preseed/preseed.cfg` first. The repository preseed's test
-credentials are refused by default when SSH is enabled; use the Python builders
-for generated credentials, or set `PLEBIAN_OS_ALLOW_TEST_PRESEED=1` only for an
-isolated throwaway image.
+Pleb. The default login is **`pleb` / `plebian`** so the install is usable out of
+the box — the ISO/USB image ships no ssh-server, and the Kilix 95 desktop shows a
+persistent tray notification prompting you to change the password on first run
+(until it is no longer `plebian`). Pass `--password` to the Python builders (or
+edit `preseed/preseed.cfg`) to bake in your own password instead.
 
 **Build a bootable USB install stick** — one command downloads the netinst,
 builds the (isohybrid) ISO, and flashes it to the stick:
@@ -87,7 +88,7 @@ builds the (isohybrid) ISO, and flashes it to the stick:
 ```sh
 build/make-usb.sh --list                       # find your USB device
 build/build_usb_image.py --device /dev/sdX     # safest physical USB flow
-build/make-usb.sh --device /dev/sdX            # shell flow; requires edited/allowed preseed
+build/make-usb.sh --device /dev/sdX            # shell flow; ships default pleb/plebian creds
 build/make-usb.sh --device /dev/sdX --dry-run  # preview, write nothing
 build/make-usb.sh                              # just build the ISO (no --device)
 build/make-usb.sh --netinst local.iso --device /dev/sdX   # use a local netinst
