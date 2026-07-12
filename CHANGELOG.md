@@ -4,7 +4,7 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.1.1] — unreleased
+## [0.1.1] — 2026-07-12
 
 This is the first publishable coordinated release. It supersedes the incomplete
 `v0.1.0` candidate without moving or reusing that tag.
