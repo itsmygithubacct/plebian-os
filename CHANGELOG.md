@@ -45,6 +45,11 @@ This is the first publishable coordinated release. It supersedes the incomplete
 
 - Removed the duplicate Python preseed environment writer; remastering now
   produces one authoritative firstboot configuration and matching build-info.
+- Made the release acceptance image inherit every immutable manifest pin while
+  remaining clearly non-publishable, raised the release-tested build baseline
+  to 4 GiB, and detect exhausted inactive firstboot attempts immediately.
+- Bounded Kilix Go package compilation by default after real 2 GiB acceptance
+  testing exposed repeatable compiler OOM kills in a generated dependency.
 - Made shell USB builds fresh by default; reusing an ISO is now an explicit
   `--iso`/`--reuse-iso` decision. Fixed the USB-to-VM acceptance wrapper to
   include SSH intentionally and use matching secure credentials.

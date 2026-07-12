@@ -164,6 +164,14 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertTrue((ROOT / "RELEASING.md").exists())
         self.assertTrue((ROOT / "CHANGELOG.md").exists())
 
+    def test_acceptance_uses_exact_release_pins_without_release_only_gates(self):
+        source = (ROOT / "build" / "acceptance-vm.sh").read_text()
+        self.assertIn('PLEBIAN_OS_ACCEPTANCE_RAM:-4096', source)
+        self.assertIn('releases/$PLEBIAN_OS_ACCEPTANCE_RELEASE.env', source)
+        self.assertIn('PLEBIAN_OS_REF="$(git -C "$ROOT" rev-parse HEAD)"', source)
+        self.assertIn('PLEBIAN_OS_RELEASE_MODE=0', source)
+        self.assertIn('PLEBIAN_OS_RELEASE=', source)
+
 
 if __name__ == "__main__":
     unittest.main()

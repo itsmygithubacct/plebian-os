@@ -79,6 +79,18 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(built.vram_mb, 256)
         self.assertTrue(built.accelerate_3d)
 
+    def test_default_ram_uses_release_tested_floor(self):
+        with mock.patch.object(vm, "host_ram_mb", return_value=8192):
+            self.assertEqual(vm.default_ram_mb(), 4096)
+        with mock.patch.object(vm, "host_ram_mb", return_value=32768):
+            self.assertEqual(vm.default_ram_mb(), 8192)
+
+    def test_explicit_low_ram_is_honored_with_warning(self):
+        with mock.patch.object(vm, "warn") as warn:
+            built = vm.gather_config(args(ram=2048))
+        self.assertEqual(built.ram_mb, 2048)
+        self.assertIn("below the 4096 MB release-tested", warn.call_args.args[0])
+
     def test_identity_values_are_rejected_before_preseed_or_vbox(self):
         bad = (
             dict(name="../escape"),

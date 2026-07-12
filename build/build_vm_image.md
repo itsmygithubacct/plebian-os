@@ -56,7 +56,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | full name | `Plebian User` | GECOS field |
 | password | *(required)* | hidden entry; stored **hashed** in the preseed; the VM enables SSH and refuses `plebian` |
 | hostname | *VM name* | |
-| RAM (MB) | **¼ of host RAM** | rounded to 256 MB, min 1024 |
+| RAM (MB) | **¼ of host RAM** | rounded to 256 MB, min 4096; lower explicit values are allowed with a warning |
 | vCPUs | **½ of host cores** | min 1 |
 | VRAM (MB) | **128** | capped to VirtualBox's 256 MB limit on this host |
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |

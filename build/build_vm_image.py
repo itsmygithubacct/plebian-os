@@ -125,9 +125,11 @@ def host_ram_mb() -> int:
     return 8192
 
 def default_ram_mb() -> int:
-    # a quarter of system RAM, rounded to 256 MB, never below 1 GB
+    # A quarter of system RAM, rounded to 256 MB. The release acceptance build
+    # uses 4 GiB because the pinned fork's generated Go packages can exceed
+    # 2 GiB RSS even with serial package compilation.
     q = host_ram_mb() // 4
-    return max(1024, (q // 256) * 256)
+    return max(4096, (q // 256) * 256)
 
 def default_cpus() -> int:
     return max(1, (os.cpu_count() or 2) // 2)
@@ -288,6 +290,9 @@ def gather_config(args) -> Config:
                       password=password, hostname=hostname)
     if ram_mb < 512 or cpus < 1 or vram_mb < 1 or disk_gb < 8:
         die("resources must be RAM >= 512 MB, CPUs >= 1, VRAM >= 1 MB, disk >= 8 GB")
+    if ram_mb < 4096:
+        warn(f"RAM {ram_mb} MB is below the 4096 MB release-tested build baseline; "
+             "firstboot fork compilation may exhaust memory")
     if not 1 <= ssh_port <= 65535:
         die("SSH host port must be between 1 and 65535")
     return Config(name=name, username=username, fullname=fullname, password=password,
@@ -511,7 +516,10 @@ def wait_for_provisioning(cfg: Config, timeout_s: int) -> None:
     status_cmd = (
         "s=$(systemctl is-active plebian-os-firstboot.service 2>/dev/null); "
         "if [ -f /var/lib/plebian-os/provisioned ]; then echo DONE; "
-        "elif [ \"$s\" = failed ]; then echo FAILED; else echo RUNNING; fi")
+        "elif [ \"$s\" = failed ]; then echo FAILED; "
+        "elif [ \"$s\" = inactive ] && "
+        "[ -s /var/lib/plebian-os/firstboot-attempts ]; then echo FAILED; "
+        "else echo RUNNING; fi")
     start = time.time()
     phase = "install"
     while time.time() - start < timeout_s:

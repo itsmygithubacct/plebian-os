@@ -239,6 +239,11 @@ class FirstbootBoundTests(unittest.TestCase):
             subprocess.run(["sh", str(ATTEMPT), "success"], env=env, check=True)
             subprocess.run(["sh", str(ATTEMPT), "check"], env=env, check=True)
 
+    def test_vm_waiter_reports_exhausted_inactive_attempts(self):
+        source = (ROOT / "build" / "build_vm_image.py").read_text()
+        self.assertIn('[ -s /var/lib/plebian-os/firstboot-attempts ]', source)
+        self.assertIn('[ \\"$s\\" = inactive ]', source)
+
 
 class ProvisioningLifecycleTests(unittest.TestCase):
     def test_snapshot_can_restore_live_sources(self):

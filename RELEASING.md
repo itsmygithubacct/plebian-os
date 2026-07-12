@@ -44,10 +44,14 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
 2. Run each repository's complete test/lint suite and integration contract
    tests. Confirm all four worktrees are clean, review their exact commits, and
    commit the coordinated changes.
-3. Create **local, annotated** `v<x.y.z>` candidate tags on those reviewed
-   commits. Do not push yet. This lets `PLEBIAN_OS_REF=v<x.y.z>` resolve while
-   the release-mode checkout guard is active.
-4. Build the pinned artifact from the tagged Plebian-OS checkout:
+3. Push the reviewed commits **without tags**. Firstboot fetches the exact
+   component SHAs from GitHub, so the pinned acceptance guest cannot test an
+   unpublished object. A failed acceptance is fixed with new commits; no
+   immutable release ref has been published at this point.
+4. Create **local, annotated** `v<x.y.z>` candidate tags on the reviewed
+   commits. Do not push the tags yet. This lets `PLEBIAN_OS_REF=v<x.y.z>` resolve
+   while the strict release-image checkout guard is active.
+5. Build the pinned artifact from the tagged Plebian-OS checkout:
 
    ```sh
    PLEBIAN_OS_RELEASE=<x.y.z> build/remaster-iso.sh '' \
@@ -55,13 +59,15 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    sha256sum "plebian-os-<x.y.z>-amd64.iso"
    ```
 
-5. Run the operator acceptance install (`build/acceptance-vm.sh --replace`) and
-   verify the real installer, firstboot, provider, update/status, provenance,
-   kiosk-off/on, and restart paths. Also boot the release artifact on both BIOS
-   and UEFI firmware before publication.
-6. Re-check that every local tag resolves to the reviewed commit and that all
-   worktrees remain clean. Only then push the four commits and tags and publish
-   the artifact plus its checksum.
+6. Run the operator acceptance install (`build/acceptance-vm.sh --replace`). It
+   creates a clearly non-publishable SSH/autoboot derivative while loading the
+   exact release-manifest source, media, snapshot, toolchain, and provider pins.
+   Verify firstboot, provider, update/status, provenance, kiosk-off/on, and
+   restart paths. Also boot the strict release artifact on both BIOS and UEFI
+   firmware before publication.
+7. Re-check that every local tag resolves to the reviewed commit and that all
+   worktrees remain clean. Only then push the four tags and publish the strict
+   release artifact plus its checksum.
 
 If validation fails before publication, fix the problem in new commits and
 delete/recreate only the **unpublished local candidate tags**. Once any tag is
