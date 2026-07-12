@@ -387,6 +387,7 @@ apply_installer_snapshot() {
 d-i mirror/suite string trixie
 d-i apt-setup/services-select multiselect
 d-i preseed/early_command string set -e; \\
+    mkdir -p /usr/lib/apt-setup/generators; \\
     install -m 0755 /cdrom/plebian-os/plebian-os-apt-snapshot-generator /usr/lib/apt-setup/generators/02plebian-snapshot; \\
     mkdir -p /etc/apt/apt.conf.d; \\
     printf '%s\\n' 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99plebian-os-snapshot
