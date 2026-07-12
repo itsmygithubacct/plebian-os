@@ -167,6 +167,9 @@ Plebian-OS for a desktop-shaped one.
   and integrity-checked. Exact installs must also carry Pleb's root-owned
   `.pleb-source` archive stamp; a same-version binary without the matching stamp
   is reinstalled. The pins persist into `/etc/pleb/session.env`.
+- 4 GiB RAM is the release-tested installation baseline because the fork build
+  compiles large generated Go packages during firstboot. Lower-memory runtime
+  use remains possible after installation, but builders warn below 4 GiB.
 
 Desktop selection is controlled by `/etc/pleb/session.env` after install, or by
 environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
