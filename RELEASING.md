@@ -2,46 +2,75 @@
 
 Plebian-OS, [pleb](https://github.com/itsmygithubacct/pleb),
 [kilix](https://github.com/itsmygithubacct/kilix), and
-[kilix-95](https://github.com/itsmygithubacct/kilix-95) ship as **one
-coordinated release sharing a single version number**. This is how a release is
-cut.
+[kilix-95](https://github.com/itsmygithubacct/kilix-95) are one coordinated
+stack. A release uses one version across all four repositories and pins every
+network-fetched build input.
 
-## Version scheme
+The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
+an incomplete candidate and must never be moved or used for a published image.
 
-All four repos carry a `VERSION` file holding the same `MAJOR.MINOR.PATCH`. The
-current series is **0.1.0**. Plebian-OS records the version it was built with
-into every image — `/etc/plebian-os/build-info.env` and `/etc/pleb/session.env`
-both carry `PLEBIAN_OS_VERSION` — and each component reports it:
+## Version commands
 
 | Component | Command |
 |---|---|
 | Plebian-OS | `plebian-os-update --version`, `plebian-os-provision --version` |
 | pleb | `pleb --version` |
-| kilix | `kilix --kilix-version` (the plain `kilix --version` reports the *engine*) |
+| kilix | `kilix --kilix-version` (`kilix --version` reports its engine) |
 | kilix-95 | `python3 main.py --version` |
+
+## Release closure
+
+`releases/<x.y.z>.env` must include:
+
+- the coordinated source refs for all four repositories;
+- a stable Debian archive URL and SHA-256 for the source netinst;
+- a `snapshot.debian.org` timestamp covering installer and firstboot packages;
+- the fallback kitty bundle version and SHA-256;
+- the exact Go version and SHA-256 for every supported build architecture;
+- pinned installer versions/checksums for any optional network installers that
+  are enabled (currently `uv`).
+
+Release mode fails closed when a required value is empty, still a placeholder,
+malformed, dirty, or does not resolve to the checked-out Plebian-OS commit. The
+image records the transformed preseed, source ISO, refs, runtime configuration,
+and tool pins in `/etc/plebian-os/build-info.env`; final package and resolved
+source/tool manifests are written under `/var/lib/plebian-os/`.
 
 ## Cutting `<x.y.z>`
 
-1. Bump `VERSION` to `<x.y.z>` in **all four** repos and update `CHANGELOG.md`.
-2. Tag each repo `v<x.y.z>` on the reviewed commit and push the tags.
-3. Pick the exact Debian netinst to pin and record its checksum:
-   `sha256sum <debian-…-netinst.iso>`.
-4. Pick the prebuilt kitty engine version + its `.txz` sha256 (the fork-build
-   fallback).
-5. Copy `releases/0.1.0.env` to `releases/<x.y.z>.env` and fill every
-   `REPLACE_ME`: `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`, and
-   `PLEBIAN_OS_NETINST_SHA256`. Optionally pin `PLEBIAN_OS_APT_SNAPSHOT` to a
-   [snapshot.debian.org](https://snapshot.debian.org) timestamp for a fully
-   reproducible apt closure at first boot.
-6. Build the release image:
-   ```sh
-   PLEBIAN_OS_RELEASE=<x.y.z> build/remaster-iso.sh
-   ```
-   Release mode refuses to build until every pin is present and non-placeholder,
-   and fails closed if any checksum does not match.
-7. Verify the image end-to-end (`build/acceptance-vm.sh`) and publish.
+1. Update `VERSION` and `CHANGELOG.md` in all four repositories. Create and
+   review `releases/<x.y.z>.env`; verify every URL and checksum from its official
+   upstream source.
+2. Run each repository's complete test/lint suite and integration contract
+   tests. Confirm all four worktrees are clean, review their exact commits, and
+   commit the coordinated changes.
+3. Create **local, annotated** `v<x.y.z>` candidate tags on those reviewed
+   commits. Do not push yet. This lets `PLEBIAN_OS_REF=v<x.y.z>` resolve while
+   the release-mode checkout guard is active.
+4. Build the pinned artifact from the tagged Plebian-OS checkout:
 
-The `v<x.y.z>` tags are what `releases/<x.y.z>.env` pins `PLEB_REF` /
-`KILIX_REF` / `KILIX95_REF` / `PLEBIAN_OS_REF` to, so a release image tracks the
-exact tagged commit of every component — and `plebian-os-update` on that image
-keeps using those pins instead of drifting to branch heads.
+   ```sh
+   PLEBIAN_OS_RELEASE=<x.y.z> build/remaster-iso.sh '' \
+       "plebian-os-<x.y.z>-amd64.iso"
+   sha256sum "plebian-os-<x.y.z>-amd64.iso"
+   ```
+
+5. Run the operator acceptance install (`build/acceptance-vm.sh --replace`) and
+   verify the real installer, firstboot, provider, update/status, provenance,
+   kiosk-off/on, and restart paths. Also boot the release artifact on both BIOS
+   and UEFI firmware before publication.
+6. Re-check that every local tag resolves to the reviewed commit and that all
+   worktrees remain clean. Only then push the four commits and tags and publish
+   the artifact plus its checksum.
+
+If validation fails before publication, fix the problem in new commits and
+delete/recreate only the **unpublished local candidate tags**. Once any tag is
+published, never move or reuse it; increment the patch version instead.
+
+## Installed version and update semantics
+
+Release images keep exact refs in `/etc/pleb/session.env`. Consequently
+`plebian-os-update` verifies and rechecks those same commits; it does not drift
+to branch heads. To intentionally move an installed machine to another release,
+update all coordinated refs and version together, then run
+`plebian-os-update --restart`.

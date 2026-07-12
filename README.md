@@ -41,12 +41,26 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
 pulls `~/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
 engine, and optional desktop-provider update to `pleb update --no-restart`.
-It **also refreshes the Plebian-OS layer itself** (the provisioner, dependency
-installer, and this helper) from a `plebian-os` checkout, so OS-layer fixes reach
-installed systems too — pinned by `PLEBIAN_OS_REF` and disablable with
+It **also refreshes the Plebian-OS layer itself** as one validated, rollback-safe
+transaction (provisioner, dependency installer, unit, helpers, and version) from
+a `plebian-os` checkout, so OS-layer fixes reach installed systems too — pinned
+by `PLEBIAN_OS_REF` and disablable with
 `PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
 `KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, the update helper keeps using
-those exact refs instead of drifting to branch heads.
+those exact refs instead of drifting to branch heads. Updates are serialized;
+participating checkouts with local changes are refused. Before the first change,
+the updater snapshots the deployed OS/Pleb files, checkout positions, and engine
+artifacts. A failure after the OS refresh, Pleb refresh, install, or component
+update restores that previous coherent stack. The OS-layer stage is also bound
+to pre-sudo SHA-256 values and revalidated as root before any destination is
+replaced; success is reported only after the entire outer transaction commits.
+Pass `--restart` to restart the graphical session after a successful update.
+Firstboot and manual reprovisioning hold the same target-user Pleb state lock,
+so their checkout, engine, and provider mutations cannot race a direct update.
+Downloaded git objects, package-manager additions, and a newly installed Go
+toolchain are intentionally not removed during rollback; they are additive and
+not selected by the restored runtime. A checkout created during a failed update
+is moved into the reported recovery directory instead of being deleted.
 
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
 thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
@@ -76,11 +90,11 @@ build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netin
 ```
 
 Install it like normal Debian; the first boot pulls everything and comes up as
-Pleb. The default login is **`pleb` / `plebian`** so the install is usable out of
-the box — the ISO/USB image ships no ssh-server, and the Kilix 95 desktop shows a
-persistent tray notification prompting you to change the password on first run
-(until it is no longer `plebian`). Pass `--password` to the Python builders (or
-edit `preseed/preseed.cfg`) to bake in your own password instead.
+Pleb. The raw template's offline login is **`pleb` / `plebian`** so the install
+is usable out of the box; it ships no ssh-server, and the desktop persistently
+prompts for the one-time transition to a new password. Python `--yes` builds
+instead generate and print a random password. Any builder path that enables SSH
+refuses the shipped password. Pass `--password` to choose your own secret.
 
 **Build a bootable USB install stick** — one command downloads the netinst,
 builds the (isohybrid) ISO, and flashes it to the stick:
@@ -97,10 +111,12 @@ build/make-usb.sh --netinst local.iso --device /dev/sdX   # use a local netinst
 The Python builder asks for credentials and, by default, leaves target-disk
 selection to the Debian installer on physical USB boots. The shell/remaster path
 does the same unless `--unattended-disk` or `PLEBIAN_OS_UNATTENDED_DISK=1` is
-set. Both flashers refuse
-partitions and system disks, show what they will erase, and make you retype the
-device path to confirm (skip with `--yes`; override only the removable check
-with `--force`).
+set. Both flashers refuse partitions and every disk beneath critical filesystems
+or active swap (including multi-disk RAID/device-mapper stacks), show what they
+will erase, and make you retype the device path. `--yes` skips that gate only for
+a genuinely removable device; `--force` overrides only the removable flag. The
+shell builder makes a fresh ISO by default; `--iso` or `--reuse-iso` is required
+to trust an existing artifact.
 
 ## Layout
 
@@ -122,6 +138,9 @@ Every remastered ISO also stages `/etc/plebian-os/build-info.env` and
 Plebian-OS commit/dirty state, source Debian ISO checksum, and the
 repo/ref/provider knobs used for that image; the firstboot env is what
 `plebian-os-firstboot.service` reads when it provisions the installed system.
+After provisioning finishes, `/var/lib/plebian-os/packages.list`,
+`versions.env`, and `apt-sources.list` record the final installed packages,
+resolved source commits, tool/engine versions, and apt indexes actually used.
 
 ## Plebian-OS vs. Plebian
 
@@ -140,8 +159,14 @@ Plebian-OS for a desktop-shaped one.
   fallback (kilix is a GPU terminal). No graphics at all → the greeter still
   works; the Pleb session falls back to a screen-filled kilix or a plain xterm.
 - Network on first boot (it clones from GitHub).
-- Go ≥ 1.26 for the Kilix fork build. Firstboot installs or upgrades Go through
-  pleb's helper when the target does not already have a new enough toolchain.
+- Go ≥ 1.26 for the Kilix fork build. Firstboot installs or upgrades the exact
+  pinned Go archive through pleb's checksum-verifying, rollback-safe helper when
+  the target does not already have a suitable toolchain.
+  `PLEBIAN_OS_KILIX_GO_VERSION` plus the architecture-specific
+  `PLEBIAN_OS_KILIX_GO_SHA256_AMD64` / `_ARM64` pins make that toolchain exact
+  and integrity-checked. Exact installs must also carry Pleb's root-owned
+  `.pleb-source` archive stamp; a same-version binary without the matching stamp
+  is reinstalled. The pins persist into `/etc/pleb/session.env`.
 
 Desktop selection is controlled by `/etc/pleb/session.env` after install, or by
 environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
@@ -151,12 +176,15 @@ fullscreen kilix shell. With desktop mode on, `KILIX_DESKTOP_PROVIDER` can be
 desktop flavor, and `none` behaves like a plain shell session. External
 Kilix 95 still uses `KILIX95_*`. Set `PLEBIAN_OS_BUILD_KILIX_FORK=0` only when
 you deliberately want to allow the prebuilt fallback engine. Release-style
-images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_SHA256`,
-`PLEB_REF`, `KILIX_REF`, `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, and
-`KILIX_PREBUILT_SHA256` before building; the builder refuses release mode unless
-all of those pins are present. Simpler: set `PLEBIAN_OS_RELEASE=0.1.0` to load
-the coordinated pin manifest from [`releases/0.1.0.env`](releases/0.1.0.env) (see
-[RELEASING.md](RELEASING.md)) — every moving component is pinned to its `v0.1.0`
-tag. `PLEBIAN_OS_APT_SNAPSHOT=<timestamp>` additionally pins the first-boot apt
-closure to [snapshot.debian.org](https://snapshot.debian.org) for a fully
-reproducible package set.
+images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,
+`PLEBIAN_OS_NETINST_SHA256`, `PLEBIAN_OS_APT_SNAPSHOT`, `PLEB_REF`, `KILIX_REF`,
+`KILIX95_REF`, `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`, and the exact
+Go version/architecture checksums before building. Simpler: set
+`PLEBIAN_OS_RELEASE=0.1.1` to load the coordinated pin manifest from
+[`releases/0.1.1.env`](releases/0.1.1.env) (see
+[RELEASING.md](RELEASING.md)). The snapshot pin covers Debian Installer and
+firstboot resolution. Snapshot switching inventories and transactionally
+restores only the sources Plebian-OS disabled, preserving operator-owned files.
+Enabled release-mode `uv` installs require exact version/checksum pins and are
+verified after installation. Installed package/source/tool manifests make the
+resolved result auditable.

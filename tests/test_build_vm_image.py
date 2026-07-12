@@ -1,8 +1,9 @@
 import os
-import shlex
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,124 +12,113 @@ sys.path.insert(0, str(ROOT / "build"))
 import build_vm_image as vm
 
 
-def envfile_quote(value):
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+def args(**overrides):
+    values = dict(
+        yes=True, name=None, username=None, fullname=None, password="explicit",
+        hostname=None, ram=None, cpus=None, vram=None, accelerate_3d=False,
+        disk=None, session=None, kiosk=None, nopasswd_sudo=None, port=None,
+        gui=False, no_wait=True,
+    )
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def cfg(**overrides):
+    values = dict(
+        name="test", username="pleb", fullname="Plebian User",
+        password="strong-secret", hostname="plebian", ram_mb=1024, cpus=1,
+        vram_mb=128, accelerate_3d=False, disk_gb=8, desktop=True,
+        kiosk=True, nopasswd_sudo=False, ssh_port=2222, gui=False, wait=False,
+    )
+    values.update(overrides)
+    return vm.Config(**values)
 
 
 class VmBuilderEnvTests(unittest.TestCase):
-    def test_generate_preseed_injects_ref_and_desktop_provider_knobs(self):
-        cfg = vm.Config(
-            name="test",
-            username="pleb",
-            fullname="Plebian User",
-            password="plebian",
-            hostname="plebian",
-            ram_mb=1024,
-            cpus=1,
-            vram_mb=128,
-            accelerate_3d=False,
-            disk_gb=8,
-            desktop=True,
-            kiosk=True,
-            nopasswd_sudo=True,
-            ssh_port=2222,
-            gui=False,
-            wait=False,
-        )
-        env = {
-            "PLEB_REF": "pleb-v1",
-            "KILIX_REF": "kilix-v1",
-            "KILIX_PREBUILT_VERSION": "0.47.0",
-            "KILIX_PREBUILT_SHA256": "abc123",
-            "PLEBIAN_OS_INSTALL_UV": "1",
-            "PLEBIAN_OS_BUILD_KILIX_FORK": "1",
-            "PLEBIAN_OS_KILIX_GO_MIN_VERSION": "1.26",
-            "KILIX_DESKTOP_PROVIDER": "command",
-            "KILIX_DESKTOP_COMMAND": "printf 'custom desktop'",
-            "KILIX_DESKTOP_NAME": "custom desk",
-            "KILIX_DESKTOP_FLAVOR": "xp",
-            "KILIX95_AUTO_INSTALL": "0",
-        }
-        with mock.patch.dict(os.environ, env, clear=False), \
-                mock.patch.object(vm, "crypt_password", return_value=("$6$hash", True)):
-            preseed = vm.generate_preseed(cfg)
-            text = preseed.read_text()
+    def test_preseed_has_identity_but_no_second_runtime_env_writer(self):
+        with mock.patch.object(vm, "crypt_password", return_value=("$6$hash", True)):
+            text = vm.generate_preseed(cfg()).read_text()
+        self.assertIn("d-i passwd/username string pleb", text)
+        self.assertIn("d-i passwd/user-password-crypted password $6$hash", text)
+        self.assertNotIn("PLEB_REF=%s", text)
+        self.assertNotIn("env_fmt", text)
 
-        for key in env:
-            self.assertIn(f"{key}=%s", text)
-        self.assertIn(shlex.quote(envfile_quote(env["KILIX_DESKTOP_COMMAND"])), text)
-        self.assertIn(shlex.quote(envfile_quote(env["KILIX_DESKTOP_NAME"])), text)
+    def test_build_iso_forwards_authoritative_runtime_config(self):
+        seen = {}
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "out.iso"
+            seed = Path(td) / "preseed.cfg"
+            seed.write_text("seed\n")
 
-    def test_yes_mode_defaults_to_plebian_password(self):
-        args = mock.Mock(
-            yes=True,
-            name=None,
-            username=None,
-            fullname=None,
-            password=None,
-            hostname=None,
-            ram=None,
-            cpus=None,
-            vram=None,
-            accelerate_3d=False,
-            disk=None,
-            session=None,
-            kiosk=None,
-            nopasswd_sudo=None,
-            port=None,
-            gui=False,
-            no_wait=True,
-        )
-        cfg = vm.gather_config(args)
-        self.assertEqual(cfg.password, "plebian")   # default; desktop nags to change
+            def fake_run(_argv, **kwargs):
+                seen.update(kwargs["env"])
+                out.write_bytes(b"iso")
+
+            with mock.patch.object(vm, "run", side_effect=fake_run):
+                vm.build_iso(cfg(), seed, out, False)
+
+        expected = vm.runtime_build_env(cfg())
+        for key, value in expected.items():
+            self.assertEqual(seen[key], value)
+        self.assertEqual(seen["PLEBIAN_OS_SSH_ENABLED"], "1")
+        self.assertEqual(seen["PLEBIAN_OS_AUTOBOOT"], "1")
+        self.assertEqual(seen["PLEBIAN_OS_UNATTENDED_DISK"], "1")
+
+    def test_yes_mode_generates_password(self):
+        with mock.patch.object(vm, "generated_password", return_value="random-pass"):
+            built = vm.gather_config(args(password=None))
+        self.assertEqual(built.password, "random-pass")
 
     def test_yes_mode_honors_explicit_password(self):
-        args = mock.Mock(
-            yes=True,
-            name=None,
-            username=None,
-            fullname=None,
-            password="explicit",
-            hostname=None,
-            ram=None,
-            cpus=None,
-            vram=None,
-            accelerate_3d=False,
-            disk=None,
-            session=None,
-            kiosk=None,
-            nopasswd_sudo=None,
-            port=None,
-            gui=False,
-            no_wait=True,
-        )
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):
-            cfg = vm.gather_config(args)
-        self.assertEqual(cfg.password, "explicit")
+            built = vm.gather_config(args(password="explicit"))
+        self.assertEqual(built.password, "explicit")
 
     def test_vram_is_capped_to_virtualbox_limit(self):
-        args = mock.Mock(
-            yes=True,
-            name=None,
-            username=None,
-            fullname=None,
-            password="explicit",
-            hostname=None,
-            ram=None,
-            cpus=None,
-            vram=512,
-            accelerate_3d=True,
-            disk=None,
-            session=None,
-            kiosk=None,
-            nopasswd_sudo=None,
-            port=None,
-            gui=False,
-            no_wait=True,
+        built = vm.gather_config(args(vram=512, accelerate_3d=True))
+        self.assertEqual(built.vram_mb, 256)
+        self.assertTrue(built.accelerate_3d)
+
+    def test_identity_values_are_rejected_before_preseed_or_vbox(self):
+        bad = (
+            dict(name="../escape"),
+            dict(username="root;touch-x"),
+            dict(username="root"),
+            dict(username="_service"),
+            dict(fullname="Name:newline"),
+            dict(hostname="bad host"),
+            dict(password="bad\nsecret"),
         )
-        cfg = vm.gather_config(args)
-        self.assertEqual(cfg.vram_mb, 256)
-        self.assertTrue(cfg.accelerate_3d)
+        for values in bad:
+            with self.subTest(values=values), self.assertRaises(SystemExit):
+                vm.validate_identity(**{
+                    "name": "test", "username": "pleb", "fullname": "Plebian User",
+                    "password": "secret", "hostname": "test", **values,
+                })
+
+    def test_existing_vm_needs_explicit_replace(self):
+        with mock.patch.object(vm, "vbox_exists", return_value=True), \
+                mock.patch.object(vm, "run") as run:
+            with self.assertRaises(SystemExit):
+                vm.vbox_create(cfg(), Path("image.iso"), assume_yes=True)
+        run.assert_not_called()
+
+    def test_replace_and_yes_is_the_explicit_delete_gate(self):
+        calls = []
+        with mock.patch.object(vm, "vbox_exists", return_value=True), \
+                mock.patch.object(vm, "run", side_effect=lambda argv, **_kw: calls.append(argv)), \
+                mock.patch.object(vm, "vbox_info", return_value={"CfgFile": "/tmp/test/test.vbox"}), \
+                mock.patch.object(vm.subprocess, "run"), \
+                mock.patch.object(vm.time, "sleep"):
+            vm.vbox_create(cfg(), Path("image.iso"), replace=True, assume_yes=True)
+        self.assertIn(["VBoxManage", "unregistervm", "test", "--delete"], calls)
+
+    def test_openssl_failure_never_falls_back_to_plaintext(self):
+        result = SimpleNamespace(returncode=1, stdout="", stderr="failed")
+        with mock.patch.object(vm, "have", return_value=True), \
+                mock.patch.object(vm.subprocess, "run", return_value=result), \
+                self.assertRaises(SystemExit):
+            vm.crypt_password("secret")
 
 
 if __name__ == "__main__":

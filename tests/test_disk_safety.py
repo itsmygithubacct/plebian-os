@@ -38,15 +38,36 @@ class DiskSafetyTests(unittest.TestCase):
         self.assertNotIn("partman/choose_partition ", remaster)
         self.assertNotIn("partman-partitioning/.*", usb)
 
-    def test_default_password_warns_but_does_not_refuse(self):
-        # 'plebian' is a supported default (the desktop nags to change it), so
-        # the remaster only WARNS on it — it must not `exit 1` on that path.
+    def test_offline_template_default_warns_but_does_not_refuse(self):
+        # 'plebian' remains a supported offline ISO default. Python builders use
+        # generated/operator passwords, and their opt-in SSH path rejects it.
         r = _read("build", "remaster-iso.sh")
         self.assertIn("password plebian$", r)          # still detected
         # the warning block must not abort the build
         gate = r.split("password plebian$", 1)[1].split("\nfi", 1)[0]
         self.assertNotIn("exit 1", gate)
         self.assertIn("default password 'plebian'", r)
+
+    def test_flashers_protect_critical_mounts_swap_and_stacked_parents(self):
+        shell = _read("build", "make-usb.sh")
+        py = _read("build", "build_usb_image.py")
+        for target in ("/boot/efi", "/usr", "/srv"):
+            self.assertIn(target, shell)
+            self.assertIn(f'"{target}"', py)
+        self.assertIn("swapon --noheadings --raw --show=NAME", shell)
+        self.assertIn('"swapon", "--noheadings", "--raw", "--show=NAME"', py)
+        self.assertIn("/sys/class/block/$cur/slaves/", shell)
+        self.assertIn('node / "slaves"', py)
+
+    def test_shell_flash_revalidates_after_unmount_and_immediately_before_dd(self):
+        shell = _read("build", "make-usb.sh")
+        unmount = shell.rindex('$SUDO umount "$mp"')
+        final_identity = shell.index('current_identity="$(lsblk -dnro MAJ:MIN', unmount)
+        final_mount = shell.index('was mounted again before writing', final_identity)
+        dd = shell.index('$SUDO dd if="$ISO"', final_mount)
+        between = shell[final_mount:dd]
+        self.assertIn("refusing", between)
+        self.assertNotIn("sleep", between)
 
     def test_temp_sudoers_cleaned_on_signals_and_before_retry(self):
         p = _read("provision", "plebian-os-provision.sh")

@@ -64,7 +64,10 @@ class ProvisionPlumbingTests(unittest.TestCase):
     def test_update_honors_pinned_pleb_ref(self):
         text = (ROOT / "provision" / "plebian-os-update.sh").read_text()
         self.assertIn("PLEB_REF", text)
-        self.assertIn("checkout --detach \"$PLEB_REF\"", text)
+        self.assertIn('checkout_pinned_ref "$PLEB_DIR" "$PLEB_REF" "pleb"', text)
+        self.assertIn("FETCH_HEAD^{commit}", text)
+        self.assertIn("require_clean_pinned_checkout", text)
+        self.assertIn('[ "$actual" = "$resolved" ]', text)
         self.assertIn("validate_checkout_origin \"$PLEB_DIR\" \"$PLEB_REPO\"", text)
 
     def test_existing_pleb_checkout_honors_explicit_branch(self):
@@ -119,9 +122,10 @@ class ProvisionPlumbingTests(unittest.TestCase):
     def test_firstboot_retries_transient_failures(self):
         text = (ROOT / "provision" / "plebian-os-firstboot.service").read_text()
         self.assertIn("Restart=on-failure", text)
-        self.assertIn("RestartSec=90s", text)
-        self.assertIn("StartLimitBurst=5", text)
-        self.assertIn("TimeoutStartSec=7200", text)
+        self.assertIn("RestartSec=60s", text)
+        self.assertIn("StartLimitIntervalSec=4h", text)
+        self.assertIn("StartLimitBurst=3", text)
+        self.assertIn("TimeoutStartSec=3600", text)
 
     def test_firstboot_builds_and_verifies_kilix_fork(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
@@ -166,23 +170,14 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("_fetch_debian_cd_keyring", text)
         self.assertIn("_download_sums_pair refresh", text)
 
-    def test_make_usb_rebuilds_stale_iso_when_baked_inputs_change(self):
+    def test_make_usb_rebuilds_unless_reuse_is_explicit(self):
         text = (ROOT / "build" / "make-usb.sh").read_text()
-        self.assertIn("iso_is_fresh", text)
-        self.assertIn("baked_env_overrides_present", text)
+        self.assertNotIn("iso_is_fresh", text)
+        self.assertNotIn("baked_env_overrides_present", text)
         self.assertIn("ISO_EXPLICIT", text)
-        self.assertIn("PLEBIAN_OS_INSTALL_UV", text)
-        self.assertIn("PLEBIAN_OS_BUILD_KILIX_FORK", text)
-        self.assertIn("PLEBIAN_OS_KILIX_GO_MIN_VERSION", text)
-        self.assertIn("UNATTENDED_DISK", text)
-        for path in [
-            "remaster-iso.sh",
-            "preseed/preseed.cfg",
-            "plebian-os-provision.sh",
-            "plebian-os-firstboot.service",
-            "plebian-os-update.sh",
-        ]:
-            self.assertIn(path, text)
+        self.assertIn("REUSE_ISO", text)
+        self.assertIn("--reuse-iso", text)
+        self.assertIn("Default to a fresh build", text)
 
 
 if __name__ == "__main__":
