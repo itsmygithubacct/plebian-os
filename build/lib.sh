@@ -109,8 +109,27 @@ fetch_netinst() {
         _lib_log "using cached, verified $name"
     else
         _lib_log "downloading $name (~800 MB; cached in $PLEBIAN_OS_CACHE)"
-        curl -fL --progress-bar "$PLEBIAN_OS_CDIMAGE/$name" -o "$iso.part" \
-            || _lib_die "download failed"
+        # Resume across transient drops: -C - continues the .part file, so a
+        # mid-transfer close (curl error 18) is picked up where it stopped
+        # instead of restarting from zero. --retry handles transient errors
+        # within one attempt; the outer loop re-resumes on anything it doesn't
+        # cover. A fully-downloaded .part makes -C - report 416 ("range not
+        # satisfiable") — accept it when the checksum already matches.
+        local attempts="${PLEBIAN_OS_DOWNLOAD_RETRIES:-5}" n=1
+        while :; do
+            curl -fL --progress-bar --retry 3 --retry-delay 2 \
+                --retry-connrefused -C - "$PLEBIAN_OS_CDIMAGE/$name" \
+                -o "$iso.part" && break
+            printf '%s  %s\n' "$sum" "$iso.part" | sha256sum -c --status 2>/dev/null \
+                && break                      # .part is actually complete
+            if [ "$n" -ge "$attempts" ]; then
+                rm -f "$iso.part"
+                _lib_die "download failed after $attempts attempts"
+            fi
+            _lib_log "download interrupted (attempt $n/$attempts) — resuming in 3s…"
+            n=$((n + 1))
+            sleep 3
+        done
         printf '%s  %s\n' "$sum" "$iso.part" | sha256sum -c --status 2>/dev/null \
             || { rm -f "$iso.part"; _lib_die "checksum mismatch — refusing (corrupt/tampered download)"; }
         mv "$iso.part" "$iso"
