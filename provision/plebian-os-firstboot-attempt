@@ -1,0 +1,51 @@
+#!/bin/sh
+# Persistently bound firstboot provisioning attempts across service restarts and
+# reboots. Used by ExecCondition/ExecStartPre/ExecStartPost in the firstboot unit.
+set -eu
+
+state_dir="${PLEBIAN_OS_STATE_DIR:-/var/lib/plebian-os}"
+attempt_file="$state_dir/firstboot-attempts"
+max="${PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS:-3}"
+
+case "$max" in ''|*[!0-9]*|0) echo "invalid firstboot attempt limit: $max" >&2; exit 2 ;; esac
+
+read_attempts() {
+    n=0
+    if [ -e "$attempt_file" ]; then
+        n="$(cat "$attempt_file" 2>/dev/null || true)"
+        case "$n" in
+            ''|*[!0-9]*) echo "corrupt firstboot attempt state: $attempt_file" >&2; return 1 ;;
+        esac
+    fi
+    return 0
+}
+
+case "${1:-}" in
+    check)
+        read_attempts || exit 1
+        if [ "$n" -ge "$max" ]; then
+            echo "firstboot provisioning exhausted $n/$max attempts; remove $attempt_file after fixing the cause" >&2
+            exit 1
+        fi
+        ;;
+    begin)
+        mkdir -p "$state_dir"
+        read_attempts || exit 1
+        [ "$n" -lt "$max" ] || exit 1
+        tmp="$(mktemp "$state_dir/.firstboot-attempts.XXXXXX")"
+        trap 'rm -f "$tmp"' EXIT HUP INT TERM
+        n=$((n + 1))
+        printf '%s\n' "$n" > "$tmp"
+        chmod 0644 "$tmp"
+        mv -f "$tmp" "$attempt_file"
+        trap - EXIT HUP INT TERM
+        echo "firstboot provisioning attempt $n/$max" >&2
+        ;;
+    success)
+        rm -f "$attempt_file"
+        ;;
+    *)
+        echo "usage: $0 check|begin|success" >&2
+        exit 2
+        ;;
+esac

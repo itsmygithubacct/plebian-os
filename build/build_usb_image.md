@@ -23,8 +23,8 @@ injection), so that intricate logic lives in **one** place and stays in sync wit
 - **xorriso** — builds the ISO. The first download also needs `curl`,
   `sha256sum`, `gpgv`, and `debian-archive-keyring` to verify Debian's signed
   checksums. Not needed with `--iso`.
-- **openssl** — hashes the password so the plaintext never lands on the ISO (falls
-  back to a plaintext preseed line, with a warning, if absent).
+- **openssl** — hashes the password so the plaintext never lands on the ISO; the
+  builder refuses a plaintext-password fallback.
 - **lsblk / findmnt** (util-linux) — device inspection + safety checks.
 - **sudo** (or run as root) — writing a block device needs root.
 - Run it from inside a Plebian-OS checkout (it uses `preseed/` and `build/`).
@@ -73,6 +73,7 @@ once instead of using the interactive `plebian` default.
 --out PATH             ISO output path (default: plebian-os-<name>.iso in the repo)
 --autoboot             build a hands-off stick that auto-selects the install (see warning)
 --unattended-disk      preseed partitioning too; choosing install erases without another prompt
+--with-ssh             install ssh-server (off by default; refuses password `plebian`)
 --list                 list removable devices and exit
 --force                allow a non-removable disk (never the system/root disk)
 -y, --yes              accept defaults / skip the typed confirmation
@@ -112,10 +113,13 @@ Writing to the wrong device destroys data, so the flasher refuses anything unsaf
   Whole-disk NVMe/eMMC names that end in a digit (`/dev/nvme0n1`, `/dev/mmcblk0`)
   are recognized as disks, not partitions.
 - **Never a non-removable disk** unless you pass `--force`.
-- **Never the disk backing `/`** (the running system) — this refusal is **not**
-  bypassed by `--force`.
+- **Never a disk backing a critical live filesystem or active swap** — `/`,
+  `/boot`, EFI, `/home`, `/var`, `/usr`, and `/srv` are protected. Every
+  physical member below LVM, encryption, RAID, or device-mapper is included;
+  this refusal is **not** bypassed by `--force`.
 - It shows the device size + model + `lsblk` tree and makes you **type the device
-  path** to confirm (skipped only with `--yes`).
+  path** to confirm. `--yes` skips that only for a genuinely removable device;
+  a fixed disk admitted by `--force` still requires typed confirmation.
 - It **unmounts** every mounted filesystem on the device before writing and aborts
   if any unmount fails, then
   `dd … oflag=sync conv=fsync` and `sync`.

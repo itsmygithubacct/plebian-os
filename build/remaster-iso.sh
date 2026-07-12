@@ -18,49 +18,136 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$HERE/build/lib.sh"
 
 require_xorriso                          # refuse to run without the ISO packer
+command -v python3 >/dev/null 2>&1 || {
+    echo "python3 is required to preserve and validate the source ISO boot layout" >&2
+    exit 1
+}
 
 # ── release manifest + version ───────────────────────────────────────────────
 # PLEBIAN_OS_RELEASE=<x.y.z> loads releases/<x.y.z>.env — the coordinated pin
-# manifest — applying each pin ONLY when not already set in the environment (so
-# an explicit CLI override still wins). Loaded BEFORE the version fallback below
-# so the manifest can also pin PLEBIAN_OS_VERSION. A still-placeholder aborts.
+# manifest. A named release is an immutable contract: manifest values replace
+# ambient values so `PLEBIAN_OS_RELEASE_MODE=0` or a substituted ref cannot keep
+# a release label while bypassing its gates. Loaded before the version fallback.
 load_release_manifest() {
     local rel="$1"
     local manifest="$HERE/releases/$rel.env"
+    [[ "$rel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || { echo "invalid release identifier: $rel" >&2; exit 1; }
     [ -f "$manifest" ] || { echo "no release manifest: releases/$rel.env" >&2; exit 1; }
     echo "==> release $rel: applying pins from releases/$rel.env"
     local line key val
+    declare -A seen=()
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in ''|\#*) continue ;; esac
-        case "$line" in *=*) ;; *) continue ;; esac
+        case "$line" in *=*) ;; *) echo "invalid release manifest line: $line" >&2; exit 1 ;; esac
         key="${line%%=*}"; val="${line#*=}"
         val="${val%\"}"; val="${val#\"}"          # tolerate optional quotes
-        # Only apply well-formed KEY=VALUE lines (KEY a shell identifier); skip
-        # anything else — an indented comment, stray spaces — rather than abort
-        # the build with a raw "invalid variable name" from ${!key}/export.
-        case "$key" in ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;; esac
-        if [ -z "${!key:-}" ]; then               # env override wins
-            if [ "$val" = "REPLACE_ME" ]; then
-                echo "release $rel: $key is still REPLACE_ME in releases/$rel.env — fill it before building (see RELEASING.md)" >&2
-                exit 1
-            fi
-            export "$key=$val"
+        case "$key" in
+            ''|[0-9]*|*[!A-Za-z0-9_]*) echo "invalid release manifest key: $key" >&2; exit 1 ;;
+        esac
+        [ -z "${seen[$key]:-}" ] \
+            || { echo "duplicate release manifest key: $key" >&2; exit 1; }
+        seen[$key]=1
+        if [ "$val" = "REPLACE_ME" ]; then
+            echo "release $rel: $key is still REPLACE_ME in releases/$rel.env — fill it before building (see RELEASING.md)" >&2
+            exit 1
         fi
+        export "$key=$val"
     done < "$manifest"
+    [ "${PLEBIAN_OS_RELEASE_MODE:-}" = 1 ] \
+        || { echo "release $rel manifest must set PLEBIAN_OS_RELEASE_MODE=1" >&2; exit 1; }
+    [ "${PLEBIAN_OS_VERSION:-}" = "$rel" ] \
+        || { echo "release $rel manifest version mismatch: ${PLEBIAN_OS_VERSION:-unset}" >&2; exit 1; }
+    [ "$(cat "$HERE/VERSION" 2>/dev/null)" = "$rel" ] \
+        || { echo "release $rel does not match the checkout VERSION" >&2; exit 1; }
 }
 [ -n "${PLEBIAN_OS_RELEASE:-}" ] && load_release_manifest "$PLEBIAN_OS_RELEASE"
 
 # The version baked into the image (recorded in build-info + firstboot env).
-# Precedence: explicit env > release manifest (above) > repo VERSION file.
+# A named release manifest is authoritative; without one, an explicit value
+# takes precedence over the repo VERSION file.
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-$(cat "$HERE/VERSION" 2>/dev/null || echo 0.0.0-dev)}"
+# Plebian-OS builds amd64 images, so even non-release installs use a known-good
+# verified fallback engine instead of silently consenting to an unpinned asset.
+: "${KILIX_PREBUILT_VERSION:=0.47.4}"
+: "${KILIX_PREBUILT_SHA256:=bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
+
+is_hex_len() {
+    local value="$1" length="$2"
+    [[ "$value" =~ ^[0-9a-fA-F]+$ ]] && [ "${#value}" -eq "$length" ]
+}
+
+# Run before fetch_netinst or mkdir: a release build must verify its immutable
+# closure and checkout before it causes any cache/output filesystem changes.
+release_preflight() {
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
+    local key missing=() actual_commit expected_commit
+    for key in \
+        PLEBIAN_OS_REF PLEBIAN_OS_NETINST_URL PLEBIAN_OS_NETINST_SHA256 \
+        PLEBIAN_OS_APT_SNAPSHOT PLEB_REF KILIX_REF KILIX95_REF \
+        KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
+        PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
+        PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        [ -n "${!key:-}" ] || missing+=("$key")
+    done
+    if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
+        for key in PLEBIAN_OS_UV_VERSION PLEBIAN_OS_UV_INSTALLER_SHA256; do
+            [ -n "${!key:-}" ] || missing+=("$key")
+        done
+    fi
+    [ "${#missing[@]}" -eq 0 ] || {
+        printf 'PLEBIAN_OS_RELEASE_MODE=1 requires pinned values for: %s\n' "${missing[*]}" >&2
+        exit 1
+    }
+    for key in PLEBIAN_OS_SSH_ENABLED PLEBIAN_OS_AUTOBOOT PLEBIAN_OS_UNATTENDED_DISK; do
+        [ "${!key:-0}" != 1 ] || {
+            echo "release artifacts refuse $key=1 (network/default-credential or unattended-erase risk)" >&2
+            exit 1
+        }
+    done
+    for key in PLEB_REF KILIX_REF KILIX95_REF; do
+        is_hex_len "${!key}" 40 || {
+            echo "release mode requires $key to be a full 40-character commit SHA" >&2
+            exit 1
+        }
+    done
+    for key in PLEBIAN_OS_NETINST_SHA256 KILIX_PREBUILT_SHA256 \
+        PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        is_hex_len "${!key}" 64 || { echo "release mode requires a 64-character $key" >&2; exit 1; }
+    done
+    case "$PLEBIAN_OS_APT_SNAPSHOT" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+        *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT" >&2; exit 1 ;;
+    esac
+    actual_commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
+    expected_commit="$(git -C "$HERE" rev-parse "${PLEBIAN_OS_REF}^{commit}" 2>/dev/null || true)"
+    [ -n "$expected_commit" ] && [ "$actual_commit" = "$expected_commit" ] || {
+        echo "release checkout mismatch: HEAD=$actual_commit; PLEBIAN_OS_REF=$PLEBIAN_OS_REF must resolve to it" >&2
+        exit 1
+    }
+    [ -z "$(git -C "$HERE" status --porcelain --untracked-files=normal 2>/dev/null)" ] \
+        || { echo "release mode refuses a dirty Plebian-OS checkout" >&2; exit 1; }
+}
+release_preflight
 
 SRC_ISO="${1:-}"
 OUT_ISO="${2:-plebian-os-netinst-amd64.iso}"
+OUT_REAL="$(readlink -m "$OUT_ISO")"
+[ ! -b "$OUT_REAL" ] || { echo "refusing to use a block device as ISO output: $OUT_REAL" >&2; exit 1; }
+[ ! -d "$OUT_REAL" ] || { echo "ISO output is a directory: $OUT_REAL" >&2; exit 1; }
 if [ -z "$SRC_ISO" ]; then
     SRC_ISO="$(fetch_netinst)"           # auto-pull the Debian netinst
 else
     [ -f "$SRC_ISO" ] || { echo "no such ISO: $SRC_ISO" >&2; exit 1; }
 fi
+
+SRC_REAL="$(readlink -f "$SRC_ISO")"
+[ "$SRC_REAL" != "$OUT_REAL" ] || {
+    echo "refusing to overwrite the source ISO: $SRC_REAL" >&2
+    exit 1
+}
+OUT_ISO="$OUT_REAL"
 
 verify_source_iso_pin() {
     local actual
@@ -78,6 +165,7 @@ verify_source_iso_pin() {
     fi
 }
 verify_source_iso_pin
+mkdir -p "$(dirname "$OUT_REAL")"
 
 # The preseed to bake in. Defaults to the repo's; a builder (e.g.
 # build_vm_image.py) can point PLEBIAN_OS_PRESEED at a customized one to set the
@@ -113,30 +201,57 @@ env_kv() {
 release_mode_check() {
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
     local missing=()
-    for key in PLEB_REF KILIX_REF KILIX95_REF KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256; do
+    for key in \
+        PLEBIAN_OS_REF PLEBIAN_OS_NETINST_URL PLEBIAN_OS_NETINST_SHA256 \
+        PLEBIAN_OS_APT_SNAPSHOT \
+        PLEB_REF KILIX_REF KILIX95_REF \
+        KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
+        PLEBIAN_OS_KILIX_GO_VERSION \
+        PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
+        PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
         [ -n "${!key:-}" ] || missing+=("$key")
     done
+    if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
+        for key in PLEBIAN_OS_UV_VERSION PLEBIAN_OS_UV_INSTALLER_SHA256; do
+            [ -n "${!key:-}" ] || missing+=("$key")
+        done
+    fi
     if [ "${#missing[@]}" -gt 0 ]; then
         printf 'PLEBIAN_OS_RELEASE_MODE=1 requires pinned values for: %s\n' "${missing[*]}" >&2
         exit 1
     fi
-    if [ -z "${PLEBIAN_OS_APT_SNAPSHOT:-}" ]; then
-        echo "release mode: PLEBIAN_OS_APT_SNAPSHOT is unset — Debian package versions will" >&2
-        echo "  float to first-boot mirror state (not fully reproducible). Pin a" >&2
-        echo "  snapshot.debian.org timestamp for a reproducible apt closure." >&2
-    fi
+    case "$PLEBIAN_OS_APT_SNAPSHOT" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+        *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT" >&2; exit 1 ;;
+    esac
+    local actual_commit expected_commit
+    actual_commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
+    expected_commit="$(git -C "$HERE" rev-parse "${PLEBIAN_OS_REF}^{commit}" 2>/dev/null || true)"
+    [ -n "$expected_commit" ] || {
+        echo "release ref PLEBIAN_OS_REF=$PLEBIAN_OS_REF does not resolve locally; finalize and tag before building" >&2
+        exit 1
+    }
+    [ "$actual_commit" = "$expected_commit" ] || {
+        echo "release checkout mismatch: HEAD=$actual_commit but PLEBIAN_OS_REF=$PLEBIAN_OS_REF resolves to $expected_commit" >&2
+        exit 1
+    }
+    [ -z "$(git -C "$HERE" status --porcelain --untracked-files=normal 2>/dev/null)" ] || {
+            echo "release mode refuses a dirty Plebian-OS checkout" >&2
+            exit 1
+        }
 }
 
 write_build_info() {
-    local out="$1" commit dirty iso_sha
+    local out="$1" commit dirty iso_sha preseed_sha
     commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
-    if git -C "$HERE" diff --quiet --ignore-submodules -- 2>/dev/null \
-        && git -C "$HERE" diff --cached --quiet --ignore-submodules -- 2>/dev/null; then
+    if [ -z "$(git -C "$HERE" status --porcelain --untracked-files=normal 2>/dev/null)" ]; then
         dirty=0
     else
         dirty=1
     fi
     iso_sha="$(sha256sum "$SRC_ISO" 2>/dev/null | awk '{print $1}')"
+    preseed_sha="$(sha256sum "$PRESEED" 2>/dev/null | awk '{print $1}')"
     {
         echo "# Generated by build/remaster-iso.sh. Sourced as shell by tools."
         manifest_kv PLEBIAN_OS_BUILD_TIME_UTC "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -146,6 +261,8 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_DIRTY "$dirty"
         manifest_kv PLEBIAN_OS_SOURCE_ISO "$(basename "$SRC_ISO")"
         manifest_kv PLEBIAN_OS_SOURCE_ISO_SHA256 "$iso_sha"
+        manifest_kv PLEBIAN_OS_PRESEED_SHA256 "$preseed_sha"
+        manifest_kv PLEBIAN_OS_NETINST_URL "$PLEBIAN_OS_NETINST_URL"
         manifest_kv PLEBIAN_OS_NETINST_SHA256 "${PLEBIAN_OS_NETINST_SHA256:-}"
         manifest_kv PLEBIAN_OS_RELEASE_MODE "${PLEBIAN_OS_RELEASE_MODE:-0}"
         manifest_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
@@ -154,6 +271,11 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_USER "${PLEBIAN_OS_USER:-}"
         manifest_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
+        manifest_kv PLEBIAN_OS_SSH_ENABLED "${PLEBIAN_OS_SSH_ENABLED:-0}"
+        manifest_kv PLEBIAN_OS_AUTOBOOT "${PLEBIAN_OS_AUTOBOOT:-0}"
+        manifest_kv PLEBIAN_OS_UNATTENDED_DISK "${PLEBIAN_OS_UNATTENDED_DISK:-0}"
+        manifest_kv PLEBIAN_OS_UV_VERSION "${PLEBIAN_OS_UV_VERSION:-}"
+        manifest_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
         manifest_kv PLEBIAN_OS_REPO "${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
         manifest_kv PLEBIAN_OS_BRANCH "${PLEBIAN_OS_BRANCH:-}"
         manifest_kv PLEBIAN_OS_REF "${PLEBIAN_OS_REF:-}"
@@ -168,7 +290,10 @@ write_build_info() {
         manifest_kv KILIX_PREBUILT_SHA256 "${KILIX_PREBUILT_SHA256:-}"
         manifest_kv PLEBIAN_OS_BUILD_KILIX_FORK "${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
         manifest_kv PLEBIAN_OS_KILIX_GO_MIN_VERSION "${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
-        manifest_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-external}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_VERSION "${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
+        manifest_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-auto}"
         manifest_kv KILIX_DESKTOP_COMMAND "${KILIX_DESKTOP_COMMAND:-}"
         manifest_kv KILIX_DESKTOP_NAME "${KILIX_DESKTOP_NAME:-desktop}"
         manifest_kv KILIX_DESKTOP_FLAVOR "${KILIX_DESKTOP_FLAVOR:-}"
@@ -176,10 +301,17 @@ write_build_info() {
         manifest_kv KILIX95_BRANCH "${KILIX95_BRANCH:-}"
         manifest_kv KILIX95_REF "${KILIX95_REF:-}"
         manifest_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
+        manifest_kv KILIX_DIR "${KILIX_DIR:-}"
+        manifest_kv KILIX95_DIR "${KILIX95_DIR:-}"
     } > "$out"
 }
 
 write_firstboot_env() {
+    local runtime_os_ref="${PLEBIAN_OS_REF:-}"
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        runtime_os_ref="$(git -C "$HERE" rev-parse HEAD 2>/dev/null)" \
+            || { echo "could not resolve release checkout commit" >&2; exit 1; }
+    fi
     {
         echo "# Generated by build/remaster-iso.sh. Read by plebian-os-firstboot.service."
         env_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
@@ -187,11 +319,18 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_USER "${PLEBIAN_OS_USER:-}"
         env_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
         env_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
+        env_kv PLEBIAN_OS_SSH_ENABLED "${PLEBIAN_OS_SSH_ENABLED:-0}"
+        env_kv PLEBIAN_OS_UV_VERSION "${PLEBIAN_OS_UV_VERSION:-}"
+        env_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
         env_kv PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
+        env_kv PLEBIAN_OS_RELEASE "${PLEBIAN_OS_RELEASE:-}"
+        env_kv PLEBIAN_OS_RELEASE_MODE "${PLEBIAN_OS_RELEASE_MODE:-0}"
         env_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         env_kv PLEBIAN_OS_REPO "${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
         env_kv PLEBIAN_OS_BRANCH "${PLEBIAN_OS_BRANCH:-}"
-        env_kv PLEBIAN_OS_REF "${PLEBIAN_OS_REF:-}"
+        # Installed release updates pin the resolved build commit. Build-info
+        # separately retains the human release tag as artifact metadata.
+        env_kv PLEBIAN_OS_REF "$runtime_os_ref"
         env_kv PLEB_REPO "${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
         env_kv PLEB_BRANCH "${PLEB_BRANCH:-}"
         env_kv PLEB_REF "${PLEB_REF:-}"
@@ -202,7 +341,10 @@ write_firstboot_env() {
         env_kv KILIX_PREBUILT_SHA256 "${KILIX_PREBUILT_SHA256:-}"
         env_kv PLEBIAN_OS_BUILD_KILIX_FORK "${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
         env_kv PLEBIAN_OS_KILIX_GO_MIN_VERSION "${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
-        env_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-external}"
+        env_kv PLEBIAN_OS_KILIX_GO_VERSION "${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
+        env_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-auto}"
         env_kv KILIX_DESKTOP_COMMAND "${KILIX_DESKTOP_COMMAND:-}"
         env_kv KILIX_DESKTOP_NAME "${KILIX_DESKTOP_NAME:-desktop}"
         env_kv KILIX_DESKTOP_FLAVOR "${KILIX_DESKTOP_FLAVOR:-}"
@@ -210,18 +352,48 @@ write_firstboot_env() {
         env_kv KILIX95_BRANCH "${KILIX95_BRANCH:-}"
         env_kv KILIX95_REF "${KILIX95_REF:-}"
         env_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
+        env_kv KILIX_DIR "${KILIX_DIR:-}"
+        env_kv KILIX95_DIR "${KILIX95_DIR:-}"
     } > "$1"
 }
 
 release_mode_check
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+OUT_STAGE="$(mktemp -d --tmpdir="$(dirname "$OUT_ISO")" .plebian-os-iso.XXXXXX)"
+trap 'rm -rf "$WORK" "$OUT_STAGE"' EXIT
 EXTRACT="$WORK/iso"
 mkdir -p "$EXTRACT"
 
 BUILD_PRESEED="$WORK/preseed.cfg"
 cp "$PRESEED" "$BUILD_PRESEED"
+
+apply_installer_snapshot() {
+    local seed="$1" ts="${PLEBIAN_OS_APT_SNAPSHOT:-}"
+    [ -n "$ts" ] || return 0
+    case "$ts" in
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
+        [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+        *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$ts" >&2; exit 1 ;;
+    esac
+    echo "    apt snapshot: pinning Debian Installer and first boot to $ts"
+    sed -i -E \
+        -e 's#^d-i mirror/http/hostname string .*#d-i mirror/http/hostname string snapshot.debian.org#' \
+        -e "s#^d-i mirror/http/directory string .*#d-i mirror/http/directory string /archive/debian/$ts#" \
+        "$seed"
+    cat >> "$seed" <<EOF
+
+### Plebian-OS release snapshot (generated by remaster-iso.sh)
+d-i mirror/suite string trixie
+d-i apt-setup/services-select multiselect
+d-i preseed/early_command string set -e; \\
+    install -m 0755 /cdrom/plebian-os/plebian-os-apt-snapshot-generator /usr/lib/apt-setup/generators/02plebian-snapshot; \\
+    mkdir -p /etc/apt/apt.conf.d; \\
+    printf '%s\\n' 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99plebian-os-snapshot
+EOF
+}
+
+apply_installer_snapshot "$BUILD_PRESEED"
 if [ "${PLEBIAN_OS_UNATTENDED_DISK:-0}" = 1 ]; then
     echo "    disk setup: unattended partitioning enabled"
 else
@@ -232,6 +404,22 @@ else
     sed -i -E '/^d-i[[:space:]]+partman/d' "$BUILD_PRESEED"
 fi
 PRESEED="$BUILD_PRESEED"
+
+# Derive network exposure from the effective transformed preseed rather than a
+# caller-controlled metadata flag. Comments are ignored; any active ssh-server
+# task/package/late-command token counts as SSH enabled.
+if sed '/^[[:space:]]*#/d' "$PRESEED" \
+    | grep -Eq '(^|[[:space:],])(ssh-server|openssh-server)([[:space:],\\]|$)'; then
+    PLEBIAN_OS_SSH_ENABLED=1
+else
+    PLEBIAN_OS_SSH_ENABLED=0
+fi
+export PLEBIAN_OS_SSH_ENABLED
+if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
+    && [ "$PLEBIAN_OS_SSH_ENABLED" = 1 ]; then
+    echo "release artifacts refuse an effective preseed that installs SSH" >&2
+    exit 1
+fi
 
 echo "==> extracting $SRC_ISO"
 xorriso -osirrox on -indev "$SRC_ISO" -extract / "$EXTRACT" >/dev/null 2>&1
@@ -245,9 +433,11 @@ cp "$PRESEED" "$EXTRACT/preseed.cfg"
 mkdir -p "$EXTRACT/plebian-os"
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/install-deps.sh"             "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-passwd"           "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-apt-snapshot-generator" "$EXTRACT/plebian-os/"
 write_build_info "$EXTRACT/plebian-os/build-info.env"
 write_firstboot_env "$EXTRACT/plebian-os/firstboot.env"
 
@@ -297,10 +487,12 @@ if [ "${PLEBIAN_OS_AUTOBOOT:-0}" = 1 ]; then
 fi
 
 echo "==> repacking -> $OUT_ISO"
+OUT_TMP="$OUT_STAGE/output.iso"
 # Reuse the source ISO's own boot layout so BIOS + UEFI both keep working.
-xorriso -indev "$SRC_ISO" -report_el_torito as_mkisofs 2>/dev/null > "$WORK/mkisofs.args" || true
-if [ -s "$WORK/mkisofs.args" ]; then
-    mapfile -t mkisofs_argv < <(python3 - "$WORK/mkisofs.args" <<'PY'
+xorriso -indev "$SRC_ISO" -report_el_torito as_mkisofs 2>/dev/null > "$WORK/mkisofs.args" \
+    || { echo "could not read the source ISO boot layout" >&2; exit 1; }
+[ -s "$WORK/mkisofs.args" ] || { echo "source ISO reported an empty boot layout" >&2; exit 1; }
+mapfile -t mkisofs_argv < <(python3 - "$WORK/mkisofs.args" <<'PY'
 import shlex
 import sys
 
@@ -313,13 +505,23 @@ for token in shlex.split("".join(text)):
     print(token)
 PY
 )
-    xorriso -as mkisofs "${mkisofs_argv[@]}" -o "$OUT_ISO" "$EXTRACT"
-else
-    echo "!! could not read the source ISO's El Torito layout; falling back to a" >&2
-    echo "   basic build (verify BIOS/UEFI boot before trusting it)." >&2
-    xorriso -as mkisofs -r -J -joliet-long -V PLEBIAN_OS \
-        -o "$OUT_ISO" "$EXTRACT"
-fi
+[ "${#mkisofs_argv[@]}" -gt 0 ] || {
+    echo "source ISO boot layout parsed to an empty argument list" >&2
+    exit 1
+}
+xorriso -as mkisofs "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"
+
+# Refuse to replace a known-good output with a nominally successful but
+# non-bootable image. Debian amd64 netinst media should retain both an MBR boot
+# signature and at least one El Torito boot entry.
+sig="$(dd if="$OUT_TMP" bs=1 skip=510 count=2 2>/dev/null | od -An -tx1 | tr -d ' ')"
+[ "$sig" = 55aa ] || { echo "rebuilt ISO lacks an isohybrid MBR signature" >&2; exit 1; }
+xorriso -indev "$OUT_TMP" -report_el_torito plain 2>/dev/null > "$WORK/boot-report"
+grep -q 'El Torito boot img.*BIOS' "$WORK/boot-report" \
+    || { echo "rebuilt ISO has no BIOS El Torito boot image" >&2; exit 1; }
+grep -q 'El Torito boot img.*UEFI' "$WORK/boot-report" \
+    || { echo "rebuilt ISO has no UEFI El Torito boot image" >&2; exit 1; }
+mv -f "$OUT_TMP" "$OUT_ISO"
 
 echo "==> done: $OUT_ISO"
 echo "    install it like normal Debian; first boot pulls pleb + kilix and"

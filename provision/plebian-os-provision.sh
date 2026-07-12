@@ -16,7 +16,8 @@
 #   4. (optional) enables Pleb autologin — a hard kiosk that boots straight in
 #   5. (optional) grants the target user passwordless sudo (--nopasswd-sudo)
 #
-# It is idempotent: re-running updates the checkouts and re-asserts the session.
+# It is idempotent: re-running updates the checkouts, reconciles snapshot/live
+# apt and kiosk/sudo state, re-asserts the session, and rewrites final provenance.
 # Run as root (the firstboot service does) or via sudo. --dry-run prints the
 # plan without touching anything.
 set -euo pipefail
@@ -29,14 +30,17 @@ PLEB_BRANCH="${PLEB_BRANCH:-}"                 # empty = repo default
 PLEB_REF="${PLEB_REF:-}"                       # optional exact commit/tag
 KILIX_BRANCH="${KILIX_BRANCH:-}"
 KILIX_REF="${KILIX_REF:-}"
-KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-}" # optional exact kitty fallback version
-KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-}"   # optional checksum for the fallback bundle
-KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-external}"
+KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-0.47.4}" # verified amd64 fallback
+KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
+KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
 KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-}"
 BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
 KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
+KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+KILIX_GO_SHA256_AMD64="${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
+KILIX_GO_SHA256_ARM64="${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
@@ -46,7 +50,15 @@ PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-o
 PLEBIAN_OS_BRANCH="${PLEBIAN_OS_BRANCH:-}"     # empty = repo default
 PLEBIAN_OS_REF="${PLEBIAN_OS_REF:-}"           # optional exact commit/tag
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file below if empty
+PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
+PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
 PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}" # snapshot.debian.org ts = reproducible apt
+INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
+UV_VERSION_PIN="${PLEBIAN_OS_UV_VERSION:-}"
+UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
+# The apt root is overridable only to exercise snapshot transactions in an
+# isolated test tree. Production and firstboot leave it at /etc.
+APT_ETC_ROOT="${PLEBIAN_OS_APT_ETC_ROOT:-/etc}"
 KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
@@ -90,6 +102,118 @@ warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
 
+validate_release_inputs() {
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    local key
+    for key in PLEB_REF KILIX_REF KILIX95_REF; do
+        [[ "${!key}" =~ ^[0-9a-fA-F]{40}$ ]] \
+            || die "release mode requires $key to be a full 40-character commit SHA"
+    done
+    for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
+        [[ "${!key}" =~ ^[0-9a-fA-F]{64}$ ]] \
+            || die "release mode requires a 64-character $key"
+    done
+    [[ "$KILIX_GO_VERSION" =~ ^(go)?[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || die "release mode requires an exact PLEBIAN_OS_KILIX_GO_VERSION"
+    if [ "$INSTALL_UV" = 1 ]; then
+        [[ "$UV_VERSION_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || die "release mode requires an exact PLEBIAN_OS_UV_VERSION when uv is enabled"
+        [[ "$UV_INSTALLER_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+            || die "release mode requires a 64-character PLEBIAN_OS_UV_INSTALLER_SHA256 when uv is enabled"
+    fi
+}
+
+as_user() {
+    if [ "$DRY_RUN" = 1 ]; then echo "    + (as $TARGET_USER) $*"; return 0; fi
+    command -v setpriv >/dev/null 2>&1 \
+        || die "setpriv is required to run provisioning commands as $TARGET_USER"
+    setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
+        --reset-env -- "$@"
+}
+
+validate_target_user() {
+    local entry shell home_uid
+    entry="$(getent passwd "$TARGET_USER" 2>/dev/null)" \
+        || die "no such user: $TARGET_USER"
+    IFS=: read -r _ _ TARGET_UID TARGET_GID _ USER_HOME shell <<<"$entry"
+    case "$TARGET_UID" in ''|*[!0-9]*) die "invalid uid for $TARGET_USER" ;; esac
+    if [ "$TARGET_UID" -lt 1000 ] || [ "$TARGET_UID" -ge 65534 ]; then
+        die "target user $TARGET_USER must be a regular non-root account (uid 1000-65533)"
+    fi
+    case "$USER_HOME" in
+        /*) ;;
+        *) die "target user $TARGET_USER has a non-absolute home: $USER_HOME" ;;
+    esac
+    if [ "$USER_HOME" = / ] || [ "$USER_HOME" = /root ]; then
+        die "target user $TARGET_USER has a system home: $USER_HOME"
+    fi
+    if [ ! -d "$USER_HOME" ] || [ -L "$USER_HOME" ]; then
+        die "home for $TARGET_USER must be an existing non-symlink directory: $USER_HOME"
+    fi
+    home_uid="$(stat -c '%u' "$USER_HOME" 2>/dev/null)" \
+        || die "could not inspect home for $TARGET_USER: $USER_HOME"
+    [ "$home_uid" = "$TARGET_UID" ] \
+        || die "home for $TARGET_USER is not owned by that user: $USER_HOME"
+    case "$shell" in ''|*/false|*/nologin) die "target user $TARGET_USER has a non-login shell: ${shell:-<empty>}" ;; esac
+    [ -x "$shell" ] || die "target user $TARGET_USER has an unusable login shell: $shell"
+}
+
+PROVISION_LOCK_FD=""
+SUDOERS=/etc/sudoers.d/plebian-os-provision
+
+cleanup() {
+    if [ "$DRY_RUN" != 1 ]; then
+        rm -f "$SUDOERS"
+        if [ -n "${PROVISION_LOCK_FD:-}" ]; then
+            flock -u "$PROVISION_LOCK_FD" 2>/dev/null || true
+            exec {PROVISION_LOCK_FD}>&-
+        fi
+    fi
+}
+
+restore_provision_signal_traps() {
+    if [ -n "${PROVISION_LOCK_FD:-}" ]; then
+        trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
+    else
+        trap - INT TERM HUP
+    fi
+}
+
+acquire_provision_lock() {
+    local lock owner
+    lock="$PLEB_STATE_HOME/update.lock"
+    log "serializing provisioning with Pleb updates -> $lock"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) create $lock (0600), then acquire a nonblocking flock"
+        return 0
+    fi
+    command -v flock >/dev/null 2>&1 \
+        || die "flock is required to serialize provisioning with Pleb updates"
+    as_user mkdir -p "$PLEB_STATE_HOME" \
+        || die "could not create Pleb state directory as $TARGET_USER: $PLEB_STATE_HOME"
+    if [ ! -d "$PLEB_STATE_HOME" ] || [ -L "$PLEB_STATE_HOME" ]; then
+        die "Pleb state path is not a safe directory: $PLEB_STATE_HOME"
+    fi
+    owner="$(stat -c '%u' "$PLEB_STATE_HOME" 2>/dev/null)" \
+        || die "could not inspect Pleb state directory: $PLEB_STATE_HOME"
+    [ "$owner" = "$TARGET_UID" ] \
+        || die "Pleb state directory is not owned by $TARGET_USER: $PLEB_STATE_HOME"
+    as_user touch "$lock" || die "could not create Pleb update lock as $TARGET_USER: $lock"
+    if [ ! -f "$lock" ] || [ -L "$lock" ]; then
+        die "Pleb update lock is not a safe regular file: $lock"
+    fi
+    owner="$(stat -c '%u' "$lock" 2>/dev/null)" \
+        || die "could not inspect Pleb update lock: $lock"
+    [ "$owner" = "$TARGET_UID" ] \
+        || die "Pleb update lock is not owned by $TARGET_USER: $lock"
+    as_user chmod 0600 "$lock" || die "could not secure Pleb update lock: $lock"
+    exec {PROVISION_LOCK_FD}>>"$lock"
+    flock -n "$PROVISION_LOCK_FD" \
+        || die "another Pleb update or provisioning run is active (lock: $lock)"
+    trap cleanup EXIT
+    trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
+}
+
 write_session_default() {
     local name="$1" value="$2"
     printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
@@ -129,14 +253,205 @@ ShowStatus=no
 EOF
 }
 
+_apt_source_path_allowed() {
+    case "$1" in
+        "$APT_ETC_ROOT/apt/sources.list"|\
+        "$APT_ETC_ROOT/apt/sources.list.d/"*.list|\
+        "$APT_ETC_ROOT/apt/sources.list.d/"*.sources) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+_load_apt_snapshot_inventory() {
+    local inventory="$1" out_name="$2" path
+    local -A seen=()
+    # shellcheck disable=SC2178  # nameref intentionally targets an array
+    local -n out="$out_name"
+    out=()
+    [ -f "$inventory" ] || return 0
+    while IFS= read -r path || [ -n "$path" ]; do
+        [ -n "$path" ] || die "corrupt empty path in apt snapshot inventory: $inventory"
+        _apt_source_path_allowed "$path" \
+            || die "unsafe path in apt snapshot inventory: $path"
+        case "$path" in *$'\n'*|*$'\r'*) die "invalid newline in apt snapshot inventory path" ;; esac
+        if [ -n "${seen[$path]+x}" ]; then
+            die "duplicate path in apt snapshot inventory: $path"
+        fi
+        seen["$path"]=1
+        out+=("$path")
+    done < "$inventory"
+}
+
+_discover_legacy_apt_snapshot_inventory() {
+    local out_name="$1" backup live
+    # shellcheck disable=SC2178  # nameref intentionally targets an array
+    local -n out="$out_name"
+    local -a backups
+    shopt -s nullglob
+    backups=(
+        "$APT_ETC_ROOT/apt/sources.list.plebian-os-disabled"
+        "$APT_ETC_ROOT/apt/sources.list.d/"*.plebian-os-disabled
+    )
+    shopt -u nullglob
+    for backup in "${backups[@]}"; do
+        [ -e "$backup" ] || [ -L "$backup" ] || continue
+        live="${backup%.plebian-os-disabled}"
+        case "$live" in *$'\n'*|*$'\r'*) die "invalid newline in legacy apt source path" ;; esac
+        _apt_source_path_allowed "$live" \
+            || die "unsafe legacy apt snapshot backup path: $backup"
+        out+=("$live")
+    done
+}
+
+_active_apt_source_paths() {
+    local managed="$1" out_name="$2" path
+    # shellcheck disable=SC2178  # nameref intentionally targets an array
+    local -n out="$out_name"
+    local -a candidates
+    out=()
+    shopt -s nullglob
+    candidates=(
+        "$APT_ETC_ROOT/apt/sources.list"
+        "$APT_ETC_ROOT/apt/sources.list.d/"*.list
+        "$APT_ETC_ROOT/apt/sources.list.d/"*.sources
+    )
+    shopt -u nullglob
+    for path in "${candidates[@]}"; do
+        [ "$path" = "$managed" ] && continue
+        [ -f "$path" ] || [ -L "$path" ] || continue
+        case "$path" in *$'\n'*|*$'\r'*) die "invalid newline in apt source path" ;; esac
+        out+=("$path")
+    done
+}
+
+_restore_managed_apt_file() {
+    local path="$1" backup="$2" existed="$3"
+    rm -f "$path" 2>/dev/null || true
+    if [ "$existed" = 1 ]; then
+        cp -a "$backup" "$path" 2>/dev/null || return 1
+    fi
+}
+
+restore_live_apt_sources() {
+    local apt_dir="$APT_ETC_ROOT/apt" state_dir="$APT_ETC_ROOT/plebian-os"
+    local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
+    local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
+    local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
+    local live backup txn codename live_tmp failed=0 rollback_ok=1 signal_rc=0
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0
+    local -a managed=() restored=() active=()
+    log "apt snapshot disabled; restoring the exact sources disabled by Plebian-OS"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + preflight $inventory and every managed backup before changing apt"
+        echo "    + restore exactly the inventoried *.plebian-os-disabled sources, then remove only Plebian-OS snapshot files"
+        return 0
+    fi
+    case "$APT_ETC_ROOT" in /*) ;; *) die "PLEBIAN_OS_APT_ETC_ROOT must be absolute" ;; esac
+    mkdir -p "$apt_dir/sources.list.d" "$apt_dir/apt.conf.d" "$state_dir"
+    _load_apt_snapshot_inventory "$inventory" managed
+    if [ "${#managed[@]}" -eq 0 ] && [ ! -f "$inventory" ]; then
+        # Migrate machines configured by the pre-inventory implementation. The
+        # suffix was private to this provisioner, so these are its backups.
+        _discover_legacy_apt_snapshot_inventory managed
+    fi
+
+    # Complete conflict validation happens before the first rename. Never guess
+    # whether a newly recreated live file or a backup should win.
+    for live in "${managed[@]}"; do
+        backup="$live.plebian-os-disabled"
+        { [ -e "$backup" ] || [ -L "$backup" ]; } \
+            || die "apt snapshot inventory names a missing backup: $backup"
+        if [ -e "$live" ] || [ -L "$live" ]; then
+            die "cannot restore apt sources safely: both $live and $backup exist"
+        fi
+    done
+
+    txn="$(mktemp -d "$state_dir/.apt-restore.XXXXXX")" \
+        || die "could not create apt restore transaction directory"
+    if [ -e "$src" ] || [ -L "$src" ]; then cp -a "$src" "$txn/src"; src_old=1; fi
+    if [ -e "$cfg" ] || [ -L "$cfg" ]; then cp -a "$cfg" "$txn/cfg"; cfg_old=1; fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then cp -a "$marker" "$txn/marker"; marker_old=1; fi
+    if [ -e "$inventory" ] || [ -L "$inventory" ]; then cp -a "$inventory" "$txn/inventory"; inventory_old=1; fi
+
+    # Defer termination only across the mutation window so every signal takes
+    # the same rollback path as an ordinary command failure.
+    trap 'signal_rc=143' INT TERM HUP
+    for live in "${managed[@]}"; do
+        if [ "$failed" != 0 ] || [ "$signal_rc" != 0 ]; then failed=1; break; fi
+        backup="$live.plebian-os-disabled"
+        if mv -T "$backup" "$live"; then
+            restored+=("$live")
+        else
+            failed=1
+            break
+        fi
+    done
+    if [ "$failed" = 0 ]; then
+        rm -f "$src" "$cfg" "$marker" "$inventory" || failed=1
+    fi
+    [ "$signal_rc" = 0 ] || failed=1
+    if [ "$failed" != 0 ]; then
+        for ((i=${#restored[@]}-1; i>=0; i--)); do
+            live="${restored[$i]}"
+            mv -T "$live" "$live.plebian-os-disabled" 2>/dev/null || rollback_ok=0
+        done
+        _restore_managed_apt_file "$src" "$txn/src" "$src_old" || rollback_ok=0
+        _restore_managed_apt_file "$cfg" "$txn/cfg" "$cfg_old" || rollback_ok=0
+        _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
+        _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
+        if [ "$rollback_ok" = 1 ]; then
+            rm -rf "$txn"
+            restore_provision_signal_traps
+            [ "$signal_rc" = 0 ] || exit "$signal_rc"
+            die "apt source restoration failed; the previous snapshot configuration was restored"
+        fi
+        restore_provision_signal_traps
+        die "apt source restoration and rollback were incomplete; recovery files remain at $txn"
+    fi
+    rm -rf "$txn"
+    restore_provision_signal_traps
+    [ "$signal_rc" = 0 ] || exit "$signal_rc"
+
+    _active_apt_source_paths "$src" active
+    if [ "${#active[@]}" -eq 0 ]; then
+        codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
+        live_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-live.XXXXXX")"
+        cat > "$live_tmp" <<EOF
+# Managed by plebian-os-provision after leaving snapshot mode with no saved source.
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: $codename ${codename}-updates
+Components: main contrib non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://security.debian.org/debian-security
+Suites: ${codename}-security
+Components: main contrib non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+        chmod 0644 "$live_tmp"
+        mv -fT "$live_tmp" "$apt_dir/sources.list.d/debian.sources"
+    fi
+}
+
 # Pin apt to a snapshot.debian.org timestamp so the first-boot package closure is
-# reproducible. Opt-in via PLEBIAN_OS_APT_SNAPSHOT; a no-op when unset (default),
-# so ordinary installs track the live mirror exactly as before.
+# reproducible. Turning the knob back off actively restores the stock/live
+# sources instead of leaving a machine permanently stranded on the snapshot.
 configure_apt_snapshot() {
-    [ -n "$PLEBIAN_OS_APT_SNAPSHOT" ] || return 0
+    if [ -z "$PLEBIAN_OS_APT_SNAPSHOT" ]; then
+        [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] \
+            && die "release mode requires PLEBIAN_OS_APT_SNAPSHOT; refusing live package drift"
+        restore_live_apt_sources
+        return 0
+    fi
     local ts="$PLEBIAN_OS_APT_SNAPSHOT"
-    local src=/etc/apt/sources.list.d/plebian-os-snapshot.sources
-    local cfg=/etc/apt/apt.conf.d/99plebian-os-snapshot
+    local apt_dir="$APT_ETC_ROOT/apt" state_dir="$APT_ETC_ROOT/plebian-os"
+    local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
+    local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
+    local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
+    [[ "$ts" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] \
+        || die "invalid PLEBIAN_OS_APT_SNAPSHOT=$ts (expected YYYYMMDD or YYYYMMDDTHHMMSSZ)"
     log "pinning apt to snapshot.debian.org/$ts (reproducible package closure)"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + disable stock apt sources (sources.list, sources.list.d/debian.sources)"
@@ -144,14 +459,39 @@ configure_apt_snapshot() {
         echo "    + apt-get update"
         return 0
     fi
-    mkdir -p /etc/apt/sources.list.d /etc/apt/apt.conf.d /etc/plebian-os
-    # Move the stock trixie sources aside so only the snapshot is consulted.
-    local d
-    for d in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources; do
-        [ -f "$d" ] && [ ! -e "$d.plebian-os-disabled" ] \
-            && mv "$d" "$d.plebian-os-disabled"
+    case "$APT_ETC_ROOT" in /*) ;; *) die "PLEBIAN_OS_APT_ETC_ROOT must be absolute" ;; esac
+    mkdir -p "$apt_dir/sources.list.d" "$apt_dir/apt.conf.d" "$state_dir"
+    # Inventory every source this provisioner disables. Existing inventories are
+    # extended when an operator adds a source while snapshot mode is active.
+    local d backup txn src_tmp cfg_tmp marker_tmp inventory_tmp failed=0 rollback_ok=1 signal_rc=0
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0
+    local -a managed=() active=() moved=() combined=()
+    _load_apt_snapshot_inventory "$inventory" managed
+    if [ "${#managed[@]}" -eq 0 ] && [ ! -f "$inventory" ]; then
+        _discover_legacy_apt_snapshot_inventory managed
+    fi
+    for d in "${managed[@]}"; do
+        backup="$d.plebian-os-disabled"
+        { [ -e "$backup" ] || [ -L "$backup" ]; } \
+            || die "apt snapshot inventory names a missing backup: $backup"
+        if [ -e "$d" ] || [ -L "$d" ]; then
+            die "cannot snapshot apt safely: both $d and its Plebian-OS backup exist"
+        fi
+        combined+=("$d")
     done
-    cat > "$src" <<EOF
+    _active_apt_source_paths "$src" active
+    for d in "${active[@]}"; do
+        backup="$d.plebian-os-disabled"
+        if [ -e "$backup" ] || [ -L "$backup" ]; then
+            die "cannot snapshot apt safely: both $d and its Plebian-OS backup exist"
+        fi
+        combined+=("$d")
+    done
+
+    txn="$(mktemp -d "$state_dir/.apt-enable.XXXXXX")" \
+        || die "could not create apt snapshot transaction directory"
+    src_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-snapshot.XXXXXX")"
+    cat > "$src_tmp" <<EOF
 # Managed by plebian-os-provision. Reproducible apt via snapshot.debian.org.
 Types: deb
 URIs: https://snapshot.debian.org/archive/debian/$ts
@@ -166,22 +506,183 @@ Components: main contrib non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
     # snapshot archives carry an old Valid-Until, which apt would otherwise reject.
-    printf '%s\n' 'Acquire::Check-Valid-Until "false";' > "$cfg"
-    printf '%s\n' "$ts" > /etc/plebian-os/apt-snapshot
-    apt-get update -y || warn "apt-get update against snapshot $ts failed (continuing)"
+    cfg_tmp="$(mktemp "$apt_dir/apt.conf.d/.plebian-os-snapshot.XXXXXX")"
+    marker_tmp="$(mktemp "$state_dir/.apt-snapshot.XXXXXX")"
+    inventory_tmp="$(mktemp "$state_dir/.apt-snapshot-sources.XXXXXX")"
+    printf '%s\n' 'Acquire::Check-Valid-Until "false";' > "$cfg_tmp"
+    printf '%s\n' "$ts" > "$marker_tmp"
+    : > "$inventory_tmp"
+    if [ "${#combined[@]}" -gt 0 ]; then
+        printf '%s\n' "${combined[@]}" > "$inventory_tmp"
+    fi
+    chmod 0644 "$src_tmp" "$cfg_tmp" "$marker_tmp"
+    chmod 0600 "$inventory_tmp"
+    if [ -e "$src" ] || [ -L "$src" ]; then cp -a "$src" "$txn/src"; src_old=1; fi
+    if [ -e "$cfg" ] || [ -L "$cfg" ]; then cp -a "$cfg" "$txn/cfg"; cfg_old=1; fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then cp -a "$marker" "$txn/marker"; marker_old=1; fi
+    if [ -e "$inventory" ] || [ -L "$inventory" ]; then cp -a "$inventory" "$txn/inventory"; inventory_old=1; fi
+
+    # Once source renames begin, defer signals into the explicit rollback path.
+    trap 'signal_rc=143' INT TERM HUP
+    for d in "${active[@]}"; do
+        if [ "$signal_rc" != 0 ]; then failed=1; break; fi
+        if mv -T "$d" "$d.plebian-os-disabled"; then
+            moved+=("$d")
+        else
+            failed=1
+            break
+        fi
+    done
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$src_tmp" "$src" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$cfg_tmp" "$cfg" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$marker_tmp" "$marker" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$inventory_tmp" "$inventory" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ] && ! apt-get update -y; then failed=1; fi
+    [ "$signal_rc" = 0 ] || failed=1
+    if [ "$failed" != 0 ]; then
+        _restore_managed_apt_file "$src" "$txn/src" "$src_old" || rollback_ok=0
+        _restore_managed_apt_file "$cfg" "$txn/cfg" "$cfg_old" || rollback_ok=0
+        _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
+        _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
+        for ((i=${#moved[@]}-1; i>=0; i--)); do
+            d="${moved[$i]}"
+            mv -T "$d.plebian-os-disabled" "$d" 2>/dev/null || rollback_ok=0
+        done
+        rm -f "$src_tmp" "$cfg_tmp" "$marker_tmp" "$inventory_tmp"
+        if [ "$rollback_ok" = 1 ]; then
+            rm -rf "$txn"
+            restore_provision_signal_traps
+            [ "$signal_rc" = 0 ] || exit "$signal_rc"
+            die "apt-get update against snapshot $ts failed; restored the previous apt configuration; refusing an unpinned/stale package closure"
+        fi
+        restore_provision_signal_traps
+        die "apt snapshot activation and rollback were incomplete; recovery files remain at $txn"
+    fi
+    rm -rf "$txn"
+    restore_provision_signal_traps
+    [ "$signal_rc" = 0 ] || exit "$signal_rc"
 }
 
-# Record the exact installed package set for build provenance / reproducibility
-# auditing (what a given image actually resolved to at first boot).
+# Record the exact final installed package set for provenance. This is called
+# only after pleb, Go, Kilix, and all system configuration steps have completed.
 write_package_manifest() {
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + record installed packages -> /var/lib/plebian-os/packages.list"
         return 0
     fi
-    command -v dpkg-query >/dev/null 2>&1 || return 0
+    command -v dpkg-query >/dev/null 2>&1 \
+        || die "dpkg-query is unavailable; cannot record final package provenance"
     mkdir -p /var/lib/plebian-os
-    dpkg-query -W -f='${Package}=${Version}\n' 2>/dev/null \
-        | sort > /var/lib/plebian-os/packages.list || true
+    local tmp
+    tmp="$(mktemp /var/lib/plebian-os/.packages.list.XXXXXX)"
+    dpkg-query -W -f='${Package}=${Version}\n' 2>/dev/null | sort > "$tmp" \
+        || { rm -f "$tmp"; die "could not record final installed package set"; }
+    chmod 0644 "$tmp"
+    mv -fT "$tmp" /var/lib/plebian-os/packages.list
+}
+
+provenance_kv() {
+    printf '%s=%q\n' "$1" "$2"
+}
+
+validate_component_versions() {
+    local pleb_version="$1" kilix_version="$2" kilix95_version="$3"
+    [ "$pleb_version" = "pleb $PLEBIAN_OS_VERSION" ] \
+        || die "pleb reports '$pleb_version', expected exactly 'pleb $PLEBIAN_OS_VERSION'"
+    [ "$kilix_version" = "$PLEBIAN_OS_VERSION" ] \
+        || die "kilix reports '$kilix_version', expected exactly '$PLEBIAN_OS_VERSION'"
+    [ "$kilix95_version" = "kilix-95 $PLEBIAN_OS_VERSION" ] \
+        || die "kilix 95 reports '$kilix95_version', expected exactly 'kilix-95 $PLEBIAN_OS_VERSION'"
+}
+
+write_source_tool_manifest() {
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + record resolved source commits, apt indexes, and tool versions -> /var/lib/plebian-os/{versions.env,apt-sources.list}"
+        return 0
+    fi
+    local state=/var/lib/plebian-os versions_tmp sources_tmp
+    local pleb_commit kilix_commit kilix_source_commit kilix95_commit
+    local pleb_version kilix_version kilix95_version go_version engine engine_version uv_version
+    mkdir -p "$state"
+    versions_tmp="$(mktemp "$state/.versions.env.XXXXXX")"
+    sources_tmp="$(mktemp "$state/.apt-sources.list.XXXXXX")"
+
+    pleb_commit="$(as_user git -C "$PLEB_DIR" rev-parse HEAD 2>/dev/null || true)"
+    kilix_commit="$(as_user git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
+    kilix_source_commit="$(as_user git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
+    kilix95_commit="$(as_user git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
+    pleb_version="$(as_user "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
+    kilix_version="$(as_user "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
+    if [ -f "$KILIX95_DIR/main.py" ]; then
+        kilix95_version="$(as_user python3 "$KILIX95_DIR/main.py" --version 2>/dev/null || true)"
+    else
+        kilix95_version=""
+    fi
+    go_version="$(as_user bash -lc 'go version' 2>/dev/null || true)"
+    uv_version="$(/usr/local/bin/uv --version 2>/dev/null || true)"
+    engine="$(as_user "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
+    if [ -n "$engine" ] && [ -x "$engine" ]; then
+        engine_version="$(as_user "$engine" --version 2>/dev/null | head -1 || true)"
+    else
+        engine_version=""
+    fi
+
+    {
+        echo "# Final resolved Plebian-OS source/tool provenance."
+        provenance_kv PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
+        provenance_kv PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
+        provenance_kv PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
+        provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
+        provenance_kv PLEB_REF "$PLEB_REF"
+        provenance_kv PLEB_COMMIT "$pleb_commit"
+        provenance_kv PLEB_VERSION "$pleb_version"
+        provenance_kv KILIX_REF "$KILIX_REF"
+        provenance_kv KILIX_COMMIT "$kilix_commit"
+        provenance_kv KILIX_SOURCE_COMMIT "$kilix_source_commit"
+        provenance_kv KILIX_VERSION "$kilix_version"
+        provenance_kv KILIX_ENGINE "$engine"
+        provenance_kv KILIX_ENGINE_VERSION "$engine_version"
+        provenance_kv KILIX95_REF "$KILIX95_REF"
+        provenance_kv KILIX95_COMMIT "$kilix95_commit"
+        provenance_kv KILIX95_VERSION "$kilix95_version"
+        provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
+        provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
+        provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
+        provenance_kv GO_VERSION "$go_version"
+        provenance_kv PLEBIAN_OS_INSTALL_UV "$INSTALL_UV"
+        provenance_kv PLEBIAN_OS_UV_VERSION "$UV_VERSION_PIN"
+        provenance_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "$UV_INSTALLER_SHA256"
+        provenance_kv UV_VERSION "$uv_version"
+        provenance_kv GIT_VERSION "$(git --version 2>/dev/null || true)"
+        provenance_kv PYTHON3_VERSION "$(python3 --version 2>&1 || true)"
+        provenance_kv KERNEL_VERSION "$(uname -srmo 2>/dev/null || true)"
+    } > "$versions_tmp"
+
+    apt-get indextargets \
+        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
+        | sed '/^[[:space:]]*$/d' | sort -u > "$sources_tmp" \
+        || { rm -f "$versions_tmp" "$sources_tmp"; die "could not record final apt source indexes"; }
+    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
+        [ -s "$sources_tmp" ] || die "release apt index provenance is empty"
+        if grep -v 'snapshot\.debian\.org' "$sources_tmp" | grep -q .; then
+            rm -f "$versions_tmp" "$sources_tmp"
+            die "release apt provenance contains a non-snapshot index"
+        fi
+        [ "$pleb_commit" = "${PLEB_REF,,}" ] \
+            || die "resolved pleb commit $pleb_commit does not match PLEB_REF=$PLEB_REF"
+        [ "$kilix_commit" = "${KILIX_REF,,}" ] \
+            || die "resolved kilix commit $kilix_commit does not match KILIX_REF=$KILIX_REF"
+        [ "$kilix95_commit" = "${KILIX95_REF,,}" ] \
+            || die "resolved kilix 95 commit $kilix95_commit does not match KILIX95_REF=$KILIX95_REF"
+        validate_component_versions "$pleb_version" "$kilix_version" "$kilix95_version"
+        if [ "$INSTALL_UV" = 1 ]; then
+            [ "$uv_version" = "uv $UV_VERSION_PIN" ] \
+                || die "release uv provenance mismatch: expected 'uv $UV_VERSION_PIN', got '${uv_version:-<missing>}'"
+        fi
+    fi
+    chmod 0644 "$versions_tmp" "$sources_tmp"
+    mv -fT "$versions_tmp" "$state/versions.env"
+    mv -fT "$sources_tmp" "$state/apt-sources.list"
 }
 
 # Kiosk appliance: pin the target user's remembered LightDM session to Pleb so a
@@ -193,12 +694,26 @@ pin_remembered_session() {
     local asvc="/var/lib/AccountsService/users/$TARGET_USER"
     log "pinning $TARGET_USER's remembered session to Pleb (kiosk)"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + write $dmrc ([Desktop] Session=pleb)"
+        echo "    + (as $TARGET_USER) atomically replace $dmrc ([Desktop] Session=pleb; do not follow symlinks)"
         echo "    + create $asvc with Session=pleb (if absent)"
         return 0
     fi
-    printf '%s\n' '[Desktop]' 'Session=pleb' > "$dmrc"
-    chown "$TARGET_UID:$TARGET_GID" "$dmrc" 2>/dev/null || true
+    # $USER_HOME is controlled by the target user. Never redirect or chown this
+    # path as root: a pre-created ~/.dmrc symlink could otherwise truncate and
+    # hand ownership of an arbitrary root file to the user. Create the file as
+    # the user and atomically replace the directory entry with `mv -T`, which
+    # replaces a symlink itself instead of following it (including dir symlinks).
+    as_user bash -c '
+set -euo pipefail
+dmrc="$1"
+tmp="$(mktemp "${dmrc}.tmp.XXXXXX")"
+trap '\''rm -f "$tmp"'\'' EXIT
+printf '\''%s\n'\'' '\''[Desktop]'\'' '\''Session=pleb'\'' > "$tmp"
+chmod 0600 "$tmp"
+mv -fT -- "$tmp" "$dmrc"
+trap - EXIT
+' plebian-os-dmrc-writer "$dmrc" \
+        || die "could not safely write $dmrc as $TARGET_USER"
     # Best-effort AccountsService (LightDM prefers it when present). Only create
     # it when absent, so we never clobber an existing profile's other keys.
     if [ ! -e "$asvc" ] && mkdir -p /var/lib/AccountsService/users 2>/dev/null; then
@@ -221,14 +736,37 @@ install_passwd_nag() {
     log "installing password-change helper + scoped sudoers for $TARGET_USER"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + install -m 0755 ${src:-<staged>} $dst"
-        echo "    + write $rule ($TARGET_USER NOPASSWD: $dst)"
+        echo "    + if $TARGET_USER still uses the shipped password: write $rule (NOPASSWD: $dst)"
+        echo "    + otherwise: remove $rule (the one-time transition is no longer needed)"
         return 0
     fi
     if [ -n "$src" ] && [ "$src" != "$dst" ]; then
-        install -m 0755 "$src" "$dst" || warn "could not install $dst"
+        install -m 0755 "$src" "$dst" || die "could not install $dst"
     fi
     if [ ! -x "$dst" ]; then
-        warn "plebian-os-passwd helper missing; skipping default-password nag setup"
+        rm -f "$rule"
+        die "plebian-os-passwd helper missing; refusing to leave the shipped password without its transition helper"
+    fi
+    # The NOPASSWD helper is only safe while it is a one-time transition away
+    # from the shipped password. A reprovision after the owner changes the
+    # password must remove, not recreate, the grant. Fail closed if the helper
+    # cannot determine the shadow state.
+    local password_state
+    if SUDO_USER="$TARGET_USER" "$dst" check; then
+        password_state=default
+    else
+        case "$?" in
+            1) password_state=changed ;;
+            *) password_state=unknown ;;
+        esac
+    fi
+    if [ "$password_state" != default ]; then
+        rm -f "$rule"
+        if [ "$password_state" = changed ]; then
+            log "$TARGET_USER no longer uses the shipped password; scoped password-change grant retired"
+        else
+            warn "could not verify $TARGET_USER's password state; refusing to install $rule"
+        fi
         return 0
     fi
     printf '%s ALL=(root) NOPASSWD: %s\n' "$TARGET_USER" "$dst" > "$rule"
@@ -255,12 +793,45 @@ validate_checkout() {
     fi
 }
 
+require_clean_pinned_checkout() {
+    local dir="$1" name="$2" dirty
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + verify pinned $name checkout has no tracked/index changes: $dir"
+        return 0
+    fi
+    dirty="$(as_user git -C "$dir" status --porcelain --untracked-files=normal 2>/dev/null)" \
+        || die "could not inspect pinned $name checkout at $dir"
+    [ -z "$dirty" ] \
+        || die "pinned $name checkout at $dir has local changes; refusing to overwrite or execute it"
+}
+
+checkout_pinned_ref() {
+    local dir="$1" ref="$2" name="$3" resolved actual
+    require_clean_pinned_checkout "$dir" "$name"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + fetch and verify pinned $name ref $ref from origin"
+        return 0
+    fi
+    # Resolve the ref from this fetch's FETCH_HEAD, not a potentially stale or
+    # attacker-created local tag. Then verify checkout HEAD is exactly that commit.
+    as_user git -C "$dir" fetch --force origin "$ref" \
+        || die "$name fetch of pinned ref $ref failed"
+    resolved="$(as_user git -C "$dir" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
+        || die "pinned $name ref $ref did not resolve to a commit"
+    as_user git -C "$dir" checkout --detach "$resolved" \
+        || die "could not check out pinned $name ref $ref ($resolved)"
+    actual="$(as_user git -C "$dir" rev-parse --verify HEAD 2>/dev/null)" \
+        || die "could not verify pinned $name checkout HEAD"
+    [ "$actual" = "$resolved" ] \
+        || die "pinned $name checkout resolved to $resolved but HEAD is $actual"
+    require_clean_pinned_checkout "$dir" "$name"
+    log "$name pinned ref $ref verified at $actual"
+}
+
 update_pleb_checkout() {
     validate_checkout "$PLEB_DIR" "$PLEB_REPO" "pleb"
     if [ -n "$PLEB_REF" ]; then
-        as_user git -C "$PLEB_DIR" fetch --tags origin || die "pleb fetch failed"
-        as_user git -C "$PLEB_DIR" checkout --detach "$PLEB_REF" \
-            || die "could not check out PLEB_REF=$PLEB_REF"
+        checkout_pinned_ref "$PLEB_DIR" "$PLEB_REF" "pleb"
         return
     fi
 
@@ -289,8 +860,13 @@ kilix_go_ok_script() {
     cat <<'EOF'
 command -v go >/dev/null 2>&1 || exit 1
 min="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
+exact="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
 ver="$(go version 2>/dev/null | awk '{print $3}' | sed 's/^go//')"
 [ -n "$ver" ] || exit 1
+if [ -n "$exact" ]; then
+    exact="${exact#go}"
+    [ "$ver" = "$exact" ] || exit 1
+fi
 awk -v have="$ver" -v min="$min" '
 function splitver(v, out) {
     gsub(/[^0-9.].*$/, "", v)
@@ -311,22 +887,84 @@ BEGIN {
 EOF
 }
 
+pinned_go_provenance_ok() {
+    local arch="$1" sha="${2,,}" root=/usr/local/go stamp version path owner mode
+    local -a provenance=()
+    stamp="$root/.pleb-source"
+    [ -d "$root" ] && [ ! -L "$root" ] \
+        && [ -f "$stamp" ] && [ ! -L "$stamp" ] \
+        && [ -x "$root/bin/go" ] && [ ! -L "$root/bin/go" ] \
+        || return 1
+    for path in "$root" "$stamp" "$root/bin/go"; do
+        owner="$(stat -c '%u' "$path" 2>/dev/null)" || return 1
+        mode="$(stat -c '%a' "$path" 2>/dev/null)" || return 1
+        [ "$owner" = 0 ] || return 1
+        (( (8#$mode & 8#22) == 0 )) || return 1
+    done
+    mapfile -t provenance < "$stamp" || return 1
+    [ "${#provenance[@]}" -eq 3 ] \
+        && [ "${provenance[0]}" = "go${KILIX_GO_VERSION#go}" ] \
+        && [ "${provenance[1]}" = "$arch" ] \
+        && [ "${provenance[2],,}" = "$sha" ] \
+        || return 1
+    version="$($root/bin/go version 2>/dev/null)" || return 1
+    [ "$version" = "go version go${KILIX_GO_VERSION#go} linux/$arch" ] || return 1
+    path="$(as_user bash -lc 'command -v go' 2>/dev/null)" || return 1
+    [ "$(readlink -f "$path" 2>/dev/null)" = "$root/bin/go" ] || return 1
+}
+
 ensure_go_for_kilix_build() {
-    log "checking Go toolchain for kilix fork build (>= $KILIX_GO_MIN_VERSION)"
-    if as_user env "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION" \
+    local arch sha="" version_ok=0
+    case "$(uname -m)" in
+        x86_64|amd64) arch=amd64; sha="$KILIX_GO_SHA256_AMD64" ;;
+        aarch64|arm64) arch=arm64; sha="$KILIX_GO_SHA256_ARM64" ;;
+        *) die "unsupported architecture for Go toolchain: $(uname -m)" ;;
+    esac
+    if [ -n "$KILIX_GO_VERSION" ]; then
+        [ -n "$sha" ] \
+            || die "PLEBIAN_OS_KILIX_GO_VERSION=$KILIX_GO_VERSION requires PLEBIAN_OS_KILIX_GO_SHA256_${arch^^}"
+        [[ "$sha" =~ ^[0-9a-fA-F]{64}$ ]] \
+            || die "invalid PLEBIAN_OS_KILIX_GO_SHA256_${arch^^} (expected 64 hex characters)"
+    elif [ -n "$KILIX_GO_SHA256_AMD64$KILIX_GO_SHA256_ARM64" ]; then
+        die "a pinned Go checksum requires PLEBIAN_OS_KILIX_GO_VERSION"
+    fi
+
+    log "checking Go toolchain for kilix fork build (>= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+, exactly $KILIX_GO_VERSION with verified archive provenance})"
+    if as_user env \
+        "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION" \
+        "PLEBIAN_OS_KILIX_GO_VERSION=$KILIX_GO_VERSION" \
         bash -lc "$(kilix_go_ok_script)"; then
+        version_ok=1
+    fi
+    if [ "$version_ok" = 1 ] && [ -z "$KILIX_GO_VERSION" ]; then
         log "Go is ready: $(as_user bash -lc 'go version' 2>/dev/null || true)"
         return 0
+    fi
+    if [ "$version_ok" = 1 ] && pinned_go_provenance_ok "$arch" "$sha"; then
+        log "Go is ready with matching root-owned archive provenance: $(as_user bash -lc 'go version' 2>/dev/null || true)"
+        return 0
+    fi
+    if [ "$version_ok" = 1 ]; then
+        warn "Go reports the requested version but its root-owned .pleb-source archive stamp is absent or mismatched; reinstalling"
     fi
 
     [ -x "$PLEB_DIR/scripts/install-go.sh" ] \
         || die "Go >= $KILIX_GO_MIN_VERSION is required, and $PLEB_DIR/scripts/install-go.sh is missing"
-    log "installing/upgrading Go via pleb helper"
-    as_user "$PLEB_DIR/scripts/install-go.sh" all \
+    log "installing/upgrading Go via pleb helper${KILIX_GO_VERSION:+ (pinned $KILIX_GO_VERSION/$arch)}"
+    as_user env \
+        "GO_VERSION=$KILIX_GO_VERSION" \
+        "GO_SHA256=$sha" \
+        "$PLEB_DIR/scripts/install-go.sh" all "$KILIX_GO_VERSION" \
         || die "Go toolchain install failed"
-    as_user env "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION" \
+    as_user env \
+        "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION" \
+        "PLEBIAN_OS_KILIX_GO_VERSION=$KILIX_GO_VERSION" \
         bash -lc "$(kilix_go_ok_script)" \
-        || die "Go toolchain is still below $KILIX_GO_MIN_VERSION after install"
+        || die "Go toolchain does not satisfy the requested min/exact version after install"
+    if [ -n "$KILIX_GO_VERSION" ]; then
+        pinned_go_provenance_ok "$arch" "$sha" \
+            || die "Go toolchain has missing or mismatched root-owned archive provenance after install"
+    fi
     log "Go is ready: $(as_user bash -lc 'go version' 2>/dev/null || true)"
 }
 
@@ -341,7 +979,7 @@ build_kilix_fork() {
 
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + (as $TARGET_USER) git -C $KILIX_DIR submodule update --init --recursive"
-        echo "    + ensure Go >= $KILIX_GO_MIN_VERSION using $PLEB_DIR/scripts/install-go.sh if needed"
+        echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
         echo "    + (as $TARGET_USER) $KILIX_DIR/kilix --build"
         echo "    + verify $KILIX_DIR/kilix --which uses $KILIX_DIR/src/kitty/launcher/kitty"
         return 0
@@ -369,6 +1007,13 @@ build_kilix_fork() {
     log "kilix engine verified: $engine"
 }
 
+# Tests source the path-agnostic transaction/version helpers without running the
+# root provisioning workflow. Normal execution never sets this internal flag.
+if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then
+    # shellcheck disable=SC2317  # exit is the direct-execution fallback
+    return 0 2>/dev/null || exit 0
+fi
+
 # ── args ─────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -384,6 +1029,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+validate_release_inputs
+
 [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "must run as root (try: sudo $0)"
 
 # ── pick the target user ─────────────────────────────────────────────────────
@@ -394,13 +1041,10 @@ pick_user() {
 }
 [ -n "$TARGET_USER" ] || TARGET_USER="$(pick_user)"
 [ -n "$TARGET_USER" ] || die "no regular user found — create one, or pass --user"
-id "$TARGET_USER" >/dev/null 2>&1 || die "no such user: $TARGET_USER"
-USER_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
-[ -d "$USER_HOME" ] || die "home for $TARGET_USER not found: $USER_HOME"
-TARGET_UID="$(id -u "$TARGET_USER")"
-TARGET_GID="$(id -g "$TARGET_USER")"
+validate_target_user
 KILIX_DIR="${KILIX_DIR:-$USER_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$USER_HOME/kilix-95}"
+PLEB_STATE_HOME="${PLEB_STATE_HOME:-$USER_HOME/.local/state/pleb}"
 
 log "plebian-os  : version $PLEBIAN_OS_VERSION"
 log "target user : $TARGET_USER ($USER_HOME)"
@@ -414,6 +1058,10 @@ if [ "$DESKTOP" = 1 ]; then
 fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
 log "session     : $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'plain kilix shell')"
+
+# Hold the same target-user lock used by direct `pleb update` before the first
+# provisioning mutation and through final provenance/session reconciliation.
+acquire_provision_lock
 
 # ── 1. dependencies ──────────────────────────────────────────────────────────
 # Delegated to the standalone installer (install-deps.sh, deployed alongside us
@@ -435,7 +1083,6 @@ if [ "$DRY_RUN" = 1 ]; then
 else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
-write_package_manifest
 install_no_beep_defaults
 install_quiet_console_defaults
 
@@ -466,13 +1113,6 @@ install_passwd_nag
 
 # ── 2. clone pleb into the user's home (as the user, correct ownership) ──────
 PLEB_DIR="$USER_HOME/pleb"
-as_user() {
-    if [ "$DRY_RUN" = 1 ]; then echo "    + (as $TARGET_USER) $*"; return 0; fi
-    command -v setpriv >/dev/null 2>&1 \
-        || die "setpriv is required to run provisioning commands as $TARGET_USER"
-    setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
-        --reset-env -- "$@"
-}
 if [ -d "$PLEB_DIR/.git" ]; then
     log "pleb present at $PLEB_DIR — updating"
     update_pleb_checkout
@@ -483,23 +1123,17 @@ else
     as_user git clone "${clone_args[@]}" "$PLEB_REPO" "$PLEB_DIR" \
         || die "git clone of pleb failed ($PLEB_REPO)"
     if [ -n "$PLEB_REF" ]; then
-        as_user git -C "$PLEB_DIR" fetch --tags origin || die "pleb fetch failed"
-        as_user git -C "$PLEB_DIR" checkout --detach "$PLEB_REF" \
-            || die "could not check out PLEB_REF=$PLEB_REF"
+        checkout_pinned_ref "$PLEB_DIR" "$PLEB_REF" "pleb"
     fi
 fi
 
 # ── 3. run `pleb install` (clones kilix + engine, registers the Pleb session) ─
 # pleb does its system writes through sudo; grant the user passwordless sudo for
 # the duration of provisioning, then revoke it (leaves the system as it found it).
-SUDOERS=/etc/sudoers.d/plebian-os-provision
-cleanup() { [ "$DRY_RUN" = 1 ] || rm -f "$SUDOERS"; }
 # Remove the temporary grant on normal exit AND on signals: a SIGTERM window
 # (e.g. the firstboot TimeoutStartSec) must never leave passwordless sudo behind.
 # SIGKILL can't be trapped, so the firstboot unit's ExecStartPre also clears any
 # stale file before each attempt.
-trap cleanup EXIT
-trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
 if [ "$DRY_RUN" = 1 ]; then
     echo "    + echo '$TARGET_USER ALL=(ALL) NOPASSWD:ALL' > $SUDOERS  (temporary)"
 else
@@ -511,12 +1145,18 @@ fi
 
 log "running 'pleb install' (clones kilix + optional desktop provider, adds the Pleb session)"
 install_env=(
+    "PLEB_STATE_HOME=$PLEB_STATE_HOME"
     "KILIX_DIR=$KILIX_DIR"
     "KILIX_REPO=$KILIX_REPO"
     "KILIX_BRANCH=$KILIX_BRANCH"
     "KILIX_REF=$KILIX_REF"
     "KILIX_PREBUILT_VERSION=$KILIX_PREBUILT_VERSION"
     "KILIX_PREBUILT_SHA256=$KILIX_PREBUILT_SHA256"
+    "PLEBIAN_OS_BUILD_KILIX_FORK=$BUILD_KILIX_FORK"
+    "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION"
+    "PLEBIAN_OS_KILIX_GO_VERSION=$KILIX_GO_VERSION"
+    "PLEBIAN_OS_KILIX_GO_SHA256_AMD64=$KILIX_GO_SHA256_AMD64"
+    "PLEBIAN_OS_KILIX_GO_SHA256_ARM64=$KILIX_GO_SHA256_ARM64"
     "KILIX_DESKTOP_PROVIDER=$KILIX_DESKTOP_PROVIDER"
     "KILIX_DESKTOP_COMMAND=$KILIX_DESKTOP_COMMAND"
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
@@ -528,6 +1168,8 @@ install_env=(
     "KILIX95_BRANCH=$KILIX95_BRANCH"
     "KILIX95_REF=$KILIX95_REF"
 )
+[ -n "${PROVISION_LOCK_FD:-}" ] \
+    && install_env+=("PLEB_UPDATE_LOCK_FD=$PROVISION_LOCK_FD")
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 build_kilix_fork
@@ -552,14 +1194,15 @@ fi
 # ── 5. session mode: boot into `kilix desktop` (disablable) ─────────────────
 # pleb-session reads /etc/pleb/session.env on every login; PLEB_DESKTOP=1 brings
 # the Pleb session up as the kilix desktop instead of a bare shell. This is a
-# plain config file the user owns: flip it to 0, or delete it, for a plain
-# fullscreen kilix — no reprovision needed.
+# plain root-managed config file: edit it with sudo to flip to 0 (or remove it)
+# for a plain fullscreen kilix — no reprovision needed.
 PLEB_ENV=/etc/pleb/session.env
 log "writing session config -> $PLEB_ENV (PLEB_DESKTOP=$DESKTOP)"
 if [ "$DRY_RUN" = 1 ]; then
     echo "    + write $PLEB_ENV (PLEB_DESKTOP=$DESKTOP)"
 else
     mkdir -p "$(dirname "$PLEB_ENV")"
+    PLEB_ENV_TMP="$(mktemp /etc/pleb/.session.env.XXXXXX)"
     {
     cat <<'EOF'
 # Managed by plebian-os-provision — Plebian-OS Pleb session config.
@@ -568,6 +1211,7 @@ else
 # or none. pleb-session documents the other knobs.
 EOF
     write_session_default PLEB_DIR "$PLEB_DIR"
+    write_session_default PLEB_STATE_HOME "$PLEB_STATE_HOME"
     write_session_default PLEB_REPO "$PLEB_REPO"
     write_session_default PLEB_BRANCH "$PLEB_BRANCH"
     write_session_default PLEB_REF "$PLEB_REF"
@@ -580,6 +1224,9 @@ EOF
     write_session_default KILIX_PREBUILT_SHA256 "$KILIX_PREBUILT_SHA256"
     write_session_default PLEBIAN_OS_BUILD_KILIX_FORK "$BUILD_KILIX_FORK"
     write_session_default PLEBIAN_OS_KILIX_GO_MIN_VERSION "$KILIX_GO_MIN_VERSION"
+    write_session_default PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
+    write_session_default PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
+    write_session_default PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
     write_session_default PLEB_DESKTOP "$DESKTOP"
     write_session_default KILIX_DESKTOP_PROVIDER "$KILIX_DESKTOP_PROVIDER"
     write_session_default KILIX_DESKTOP_COMMAND "$KILIX_DESKTOP_COMMAND"
@@ -591,19 +1238,27 @@ EOF
     write_session_default KILIX95_BRANCH "$KILIX95_BRANCH"
     write_session_default KILIX95_REF "$KILIX95_REF"
     write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
+    write_session_default PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
+    write_session_default PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
     write_session_default PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
     write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
     write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
     write_session_default PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'
-    } > "$PLEB_ENV"
+    } > "$PLEB_ENV_TMP"
+    chmod 0644 "$PLEB_ENV_TMP"
+    mv -fT "$PLEB_ENV_TMP" "$PLEB_ENV"
 fi
 
 if [ "$KIOSK" = 1 ]; then
     log "enabling autologin into Pleb (kiosk)"
     as_user "$PLEB_DIR/bin/pleb" autologin on "$TARGET_USER" \
-        || warn "pleb autologin failed; the greeter will still offer Pleb"
+        || die "pleb autologin failed; requested kiosk state was not applied"
     pin_remembered_session
+else
+    log "ensuring Pleb autologin is disabled (non-kiosk mode)"
+    as_user "$PLEB_DIR/bin/pleb" autologin off \
+        || die "could not disable Pleb autologin; refusing to report reconciled state"
 fi
 
 # Passwordless sudo for the owner. Plebian-OS is a single-user appliance and the
@@ -611,18 +1266,30 @@ fi
 # actions and Shut Down (systemctl poweroff) never stop for a password. This is
 # a PERMANENT file — the grant used during provisioning above is temporary and
 # removed by cleanup.
+NOPASSWD_FILE=/etc/sudoers.d/plebian-os-nopasswd
 if [ "$NOPASSWD_SUDO" = 1 ]; then
     log "granting $TARGET_USER passwordless sudo"
-    NOPASSWD_FILE=/etc/sudoers.d/plebian-os-nopasswd
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + echo '$TARGET_USER ALL=(ALL) NOPASSWD:ALL' > $NOPASSWD_FILE (0440, visudo-checked)"
     else
         printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET_USER" > "$NOPASSWD_FILE"
         chmod 0440 "$NOPASSWD_FILE"
         visudo -cf "$NOPASSWD_FILE" >/dev/null 2>&1 \
-            || { warn "sudoers validation failed — removing $NOPASSWD_FILE"; rm -f "$NOPASSWD_FILE"; }
+            || { rm -f "$NOPASSWD_FILE"; die "sudoers validation failed; requested passwordless-sudo state was not applied"; }
+    fi
+else
+    log "ensuring sudo for $TARGET_USER requires a password"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + rm -f $NOPASSWD_FILE"
+    else
+        rm -f "$NOPASSWD_FILE"
     fi
 fi
+
+# Capture the final state only now: dependency installation, pleb install, Go
+# setup, Kilix fork compilation, and all optional providers have completed.
+write_package_manifest
+write_source_tool_manifest
 
 cleanup; trap - EXIT
 

@@ -15,6 +15,8 @@
 #
 #   # flash an already-built Plebian-OS ISO (no build, no xorriso needed):
 #   build/make-usb.sh --iso plebian-os-netinst-amd64.iso --device /dev/sdX
+#   # explicitly trust/reuse the default output path (never inferred by mtime):
+#   build/make-usb.sh --reuse-iso --device /dev/sdX
 #
 #   # just build the ISO (it *is* the USB image — dd it yourself later):
 #   build/make-usb.sh                       # no --device
@@ -28,9 +30,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/lib.sh"
-NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0 UNATTENDED_DISK=0 ISO_EXPLICIT=0
+NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0 UNATTENDED_DISK=0 ISO_EXPLICIT=0 REUSE_ISO=0
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 log()  { printf '\033[1;36m[make-usb]\033[0m %s\n' "$*"; }
@@ -48,20 +49,24 @@ block_kname() {
 }
 
 ancestor_names() {
-    local cur="$1" pk
+    local cur="$1" seen="${2:-}" pk slave
     [ -n "$cur" ] || return 0
+    case " $seen " in *" $cur "*) return 0 ;; esac
     echo "$cur"
-    while :; do
-        pk="$(lsblk -no PKNAME "/dev/$cur" 2>/dev/null | head -1 || true)"
-        [ -n "$pk" ] || break
-        echo "$pk"
-        cur="$pk"
-    done
+    seen="$seen $cur"
+    while IFS= read -r pk; do
+        [ -n "$pk" ] && ancestor_names "$pk" "$seen"
+    done < <(
+        lsblk -rno PKNAME "/dev/$cur" 2>/dev/null || true
+        for slave in "/sys/class/block/$cur/slaves/"*; do
+            [ -e "$slave" ] && basename "$slave"
+        done
+    )
 }
 
 protected_device_names() {
     local target src kname
-    for target in / /boot /home /var; do
+    for target in / /boot /boot/efi /home /var /usr /srv; do
         src="$(findmnt -no SOURCE --target "$target" 2>/dev/null || true)"
         # btrfs reports SOURCE as /dev/xxx[/subvol]; strip the subvolume suffix so
         # the disk still resolves to a real block device. Without this, the root
@@ -72,6 +77,17 @@ protected_device_names() {
         kname="$(block_kname "$src" 2>/dev/null || true)"
         [ -n "$kname" ] && ancestor_names "$kname"
     done
+    if command -v swapon >/dev/null 2>&1; then
+        while IFS= read -r src; do
+            case "$src" in
+                /dev/*) ;;
+                *) src="$(findmnt -no SOURCE --target "$src" 2>/dev/null || true)"; src="${src%%[*}" ;;
+            esac
+            case "$src" in /dev/*) ;; *) continue ;; esac
+            kname="$(block_kname "$src" 2>/dev/null || true)"
+            [ -n "$kname" ] && ancestor_names "$kname"
+        done < <(swapon --noheadings --raw --show=NAME 2>/dev/null || true)
+    fi
 }
 
 mounted_targets_for_device() {
@@ -82,53 +98,6 @@ mounted_targets_for_device() {
             [ -n "$mp" ] && printf '%s\n' "$mp"
         done < <(findmnt -rn -S "/dev/$name" -o TARGET 2>/dev/null || true)
     done < <(lsblk -rno NAME "$1" 2>/dev/null || true)
-}
-
-iso_is_fresh() {
-    [ -f "$ISO" ] && [ -f "$NETINST" ] && [ "$ISO" -nt "$NETINST" ] || return 1
-    [ "$UNATTENDED_DISK" = 0 ] || return 1
-    baked_env_overrides_present && return 1
-    local preseed="${PLEBIAN_OS_PRESEED:-$ROOT/preseed/preseed.cfg}"
-    local inputs=(
-        "$HERE/remaster-iso.sh"
-        "$HERE/lib.sh"
-        "$preseed"
-        "$ROOT/provision/plebian-os-provision.sh"
-        "$ROOT/provision/plebian-os-firstboot.service"
-        "$ROOT/provision/install-deps.sh"
-        "$ROOT/provision/plebian-os-passwd"
-        "$ROOT/provision/plebian-os-update.sh"
-    )
-    local input
-    for input in "${inputs[@]}"; do
-        [ -f "$input" ] || return 1
-        [ "$ISO" -nt "$input" ] || return 1
-    done
-}
-
-baked_env_overrides_present() {
-    local key
-    for key in \
-        PLEBIAN_OS_PRESEED \
-        PLEBIAN_OS_AUTOBOOT \
-        PLEBIAN_OS_UNATTENDED_DISK \
-        PLEBIAN_OS_DESKTOP \
-        PLEBIAN_OS_KIOSK \
-        PLEBIAN_OS_USER \
-        PLEBIAN_OS_NOPASSWD_SUDO \
-        PLEBIAN_OS_INSTALL_UV \
-        PLEBIAN_OS_BUILD_KILIX_FORK \
-        PLEBIAN_OS_KILIX_GO_MIN_VERSION \
-        PLEBIAN_OS_RELEASE_MODE \
-        PLEBIAN_OS_NETINST_SHA256 \
-        PLEB_REPO PLEB_BRANCH PLEB_REF \
-        KILIX_REPO KILIX_BRANCH KILIX_REF \
-        KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
-        KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_COMMAND KILIX_DESKTOP_NAME KILIX_DESKTOP_FLAVOR \
-        KILIX95_REPO KILIX95_BRANCH KILIX95_REF KILIX95_AUTO_INSTALL; do
-        [ -n "${!key:-}" ] && return 0
-    done
-    return 1
 }
 
 # ── list removable block devices (candidates for a USB stick) ────────────────
@@ -153,6 +122,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --netinst) NETINST="${2:?}"; shift 2 ;;
         --iso)     ISO="${2:?}"; ISO_EXPLICIT=1; shift 2 ;;
+        --reuse-iso) REUSE_ISO=1; shift ;;
         --device)  DEVICE="${2:?}"; shift 2 ;;
         --list)    list_devices; exit 0 ;;
         --yes|-y)  ASSUME_YES=1; shift ;;
@@ -166,11 +136,17 @@ done
 
 # ── 1. get the Plebian-OS ISO (build it, pulling the netinst, unless one exists)
 : "${ISO:=plebian-os-netinst-amd64.iso}"
-# Build when the user passed a --netinst, or when the target ISO doesn't exist
-# yet. A pure flash of an existing --iso (no --netinst) needs no build — and no
-# xorriso, no download.
+# Default to a fresh build. Reuse is only allowed through the explicit --iso or
+# --reuse-iso gates; mtimes cannot represent all baked environment/release inputs.
 need_build=1
-if [ "$ISO_EXPLICIT" = 1 ] && [ -z "$NETINST" ] && [ -f "$ISO" ]; then
+if [ "$ISO_EXPLICIT" = 1 ]; then
+    [ -z "$NETINST" ] || die "--iso and --netinst are mutually exclusive"
+    [ -f "$ISO" ] || die "--iso not found: $ISO"
+    need_build=0
+elif [ "$REUSE_ISO" = 1 ]; then
+    [ -z "$NETINST" ] || die "--reuse-iso and --netinst are mutually exclusive"
+    [ -f "$ISO" ] || die "--reuse-iso requested but ISO not found: $ISO"
+    warn "explicitly reusing $ISO without checking its baked inputs"
     need_build=0
 fi
 
@@ -182,35 +158,30 @@ if [ "$need_build" = 1 ]; then
     else
         require_xorriso
     fi
-    # pull the Debian netinst automatically when none was supplied
+    # Let remaster-iso.sh fetch the netinst when none was supplied. It loads a
+    # release manifest first, so archival URL/checksum pins apply to the fetch.
     if [ -z "$NETINST" ]; then
         if [ "$DRY_RUN" = 1 ]; then
             log "(dry-run) would download + signature/hash-verify the Debian netinst ISO"
-            NETINST="<auto-downloaded Debian netinst>"
-        else
-            NETINST="$(fetch_netinst)"
         fi
     elif [ ! -f "$NETINST" ] && [ "$DRY_RUN" != 1 ]; then
         die "no such netinst ISO: $NETINST"
     fi
-    if iso_is_fresh; then
-        log "using existing $ISO (newer than netinst and baked-in source files)"
+    source_desc="${NETINST:-auto-downloaded Debian netinst}"
+    log "building Plebian-OS ISO from $(basename "$source_desc") -> $ISO"
+    if [ "$DRY_RUN" = 1 ]; then
+        prefix=""
+        [ "$UNATTENDED_DISK" = 1 ] && prefix="PLEBIAN_OS_UNATTENDED_DISK=1 "
+        echo "    + ${prefix}$HERE/remaster-iso.sh \"$NETINST\" \"$ISO\""
     else
-        log "building Plebian-OS ISO from $(basename "$NETINST") -> $ISO"
-        if [ "$DRY_RUN" = 1 ]; then
-            prefix=""
-            [ "$UNATTENDED_DISK" = 1 ] && prefix="PLEBIAN_OS_UNATTENDED_DISK=1 "
-            echo "    + ${prefix}$HERE/remaster-iso.sh \"$NETINST\" \"$ISO\""
+        if [ "$UNATTENDED_DISK" = 1 ]; then
+            PLEBIAN_OS_UNATTENDED_DISK=1 "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
         else
-            if [ "$UNATTENDED_DISK" = 1 ]; then
-                PLEBIAN_OS_UNATTENDED_DISK=1 "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
-            else
-                "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
-            fi
+            "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
         fi
     fi
 else
-    log "flashing existing $ISO (no build; pass --netinst to rebuild)"
+    log "flashing existing $ISO (explicit reuse; omit --iso/--reuse-iso to rebuild)"
 fi
 [ "$DRY_RUN" = 1 ] || [ -f "$ISO" ] || die "ISO not found: $ISO"
 
@@ -245,6 +216,10 @@ dev_type="$(lsblk -dnro TYPE "$DEVICE" 2>/dev/null | head -1 || true)"
 if [ "$dev_type" != disk ]; then
     die "$DEVICE looks like a partition; you want the whole disk"
 fi
+readonly="$(lsblk -dnro RO "$DEVICE" 2>/dev/null | head -1 || true)"
+[ "$readonly" != 1 ] || die "$DEVICE is read-only; refusing a partial/failed flash"
+device_identity="$(lsblk -dnro MAJ:MIN "$DEVICE" 2>/dev/null | head -1 || true)"
+[ -n "$device_identity" ] || die "could not capture a stable identity for $DEVICE"
 
 removable="$(cat "/sys/block/$base/removable" 2>/dev/null || echo 0)"
 # find the disk backing '/' so we never offer to flash the system drive
@@ -259,6 +234,13 @@ fi
 
 model="$(cat "/sys/block/$base/device/model" 2>/dev/null | tr -s ' ' || echo '?')"
 size="$(lsblk -dno SIZE "$DEVICE" 2>/dev/null || echo '?')"
+iso_bytes="$(stat -c '%s' "$ISO" 2>/dev/null || true)"
+device_sectors="$(cat "/sys/class/block/$base/size" 2>/dev/null || true)"
+case "$device_sectors" in ''|*[!0-9]*) device_bytes="" ;; *) device_bytes=$((device_sectors * 512)) ;; esac
+[ -n "$iso_bytes" ] && [ -n "$device_bytes" ] \
+    || die "could not compare ISO and target sizes safely"
+[ "$iso_bytes" -le "$device_bytes" ] \
+    || die "ISO is $iso_bytes bytes but $DEVICE holds only $device_bytes bytes"
 warn "about to ERASE $DEVICE  ($size, $model) and write $ISO"
 lsblk "$DEVICE" 2>/dev/null | sed 's/^/    /' || true
 
@@ -285,11 +267,39 @@ if [ "$DRY_RUN" = 1 ]; then
     echo "    + $SUDO umount <all mountpoints on $DEVICE and its partitions>"
     echo "    + $SUDO dd if=$ISO of=$DEVICE bs=4M status=progress oflag=sync conv=fsync"
 else
+    current_identity="$(lsblk -dnro MAJ:MIN "$DEVICE" 2>/dev/null | head -1 || true)"
+    [ "$current_identity" = "$device_identity" ] \
+        || die "$DEVICE changed after validation; refusing to write"
+    current_base="$(block_kname "$DEVICE" || true)"
+    [ -n "$current_base" ] || die "could not re-resolve $DEVICE before writing"
+    while read -r protected; do
+        [ "$current_base" != "$protected" ] \
+            || die "$DEVICE now backs a protected live filesystem/swap; refusing"
+    done < <(protected_device_names | sort -u)
     mapfile -t mountpoints < <(mounted_targets_for_device "$DEVICE" | sort -u | sort -r)
     for mp in "${mountpoints[@]}"; do
         $SUDO umount "$mp" || die "failed to unmount $mp; refusing to overwrite a mounted filesystem"
     done
     log "writing $ISO -> $DEVICE (this can take a few minutes)"
+    # Final destructive-write gate: repeat every mutable property after
+    # unmounting, with no intervening operation before dd.
+    current_identity="$(lsblk -dnro MAJ:MIN "$DEVICE" 2>/dev/null | head -1 || true)"
+    [ "$current_identity" = "$device_identity" ] \
+        || die "$DEVICE changed during unmount; refusing to write"
+    current_base="$(block_kname "$DEVICE" || true)"
+    [ -n "$current_base" ] || die "could not re-resolve $DEVICE immediately before writing"
+    while read -r protected; do
+        [ "$current_base" != "$protected" ] \
+            || die "$DEVICE now backs a protected live filesystem/swap; refusing"
+    done < <(protected_device_names | sort -u)
+    readonly="$(lsblk -dnro RO "$DEVICE" 2>/dev/null | head -1 || true)"
+    [ "$readonly" = 0 ] || die "could not verify $DEVICE is writable immediately before writing"
+    device_sectors="$(cat "/sys/class/block/$current_base/size" 2>/dev/null || true)"
+    case "$device_sectors" in ''|*[!0-9]*) device_bytes="" ;; *) device_bytes=$((device_sectors * 512)) ;; esac
+    [ -n "$device_bytes" ] && [ "$iso_bytes" -le "$device_bytes" ] \
+        || die "target capacity changed or cannot be verified immediately before writing"
+    [ -z "$(mounted_targets_for_device "$DEVICE")" ] \
+        || die "$DEVICE was mounted again before writing; refusing"
     $SUDO dd if="$ISO" of="$DEVICE" bs=4M status=progress oflag=sync conv=fsync
     $SUDO sync
     log "done. $DEVICE is a Plebian-OS install stick — boot a machine from it."

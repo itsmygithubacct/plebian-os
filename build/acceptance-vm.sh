@@ -25,6 +25,7 @@ command -v VBoxManage >/dev/null 2>&1 || {
 
 exec "$HERE/build_vm_image.py" \
     --yes \
+    --replace \
     --name "$NAME" \
     --ram "$RAM" \
     --cpus "$CPUS" \

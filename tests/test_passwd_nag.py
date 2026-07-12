@@ -93,6 +93,50 @@ class PasswdHelperSetValidationTests(unittest.TestCase):
         self.assertEqual(e.exception.code, 2)
 
 
+class HardenedPasswordResetRegressionTests(unittest.TestCase):
+    """The NOPASSWD helper is only a transition away from the shipped secret.
+
+    Once the shadow hash changes, an unprivileged process must not be able to
+    choose another password and then use it to authenticate to ordinary sudo.
+    """
+
+    def test_changed_password_cannot_be_reset(self):
+        import io
+        import sys
+
+        fd, path = tempfile.mkstemp(prefix="plebshadow-hardened-")
+        called = False
+        old_env = os.environ.get("PLEBIAN_OS_SHADOW")
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(f"pleb:{_crypt('owner-secret', None)}:20000:0:99999:7:::\n")
+            os.environ["PLEBIAN_OS_SHADOW"] = path
+            mod = _load_helper()
+
+            def forbidden_run(*_args, **_kwargs):
+                nonlocal called
+                called = True
+                raise AssertionError("chpasswd must not run for a hardened account")
+
+            old_run, old_stdin = mod.subprocess.run, sys.stdin
+            mod.subprocess.run = forbidden_run
+            sys.stdin = io.StringIO("attacker-chosen\n")
+            try:
+                with self.assertRaises(SystemExit) as e:
+                    mod.cmd_set("pleb")
+                self.assertEqual(e.exception.code, 2)
+            finally:
+                mod.subprocess.run = old_run
+                sys.stdin = old_stdin
+        finally:
+            if old_env is None:
+                os.environ.pop("PLEBIAN_OS_SHADOW", None)
+            else:
+                os.environ["PLEBIAN_OS_SHADOW"] = old_env
+            os.unlink(path)
+        self.assertFalse(called)
+
+
 class TargetUserTests(unittest.TestCase):
     """target_user() is the whole safety property of the NOPASSWD grant: the
     helper only ever acts on $SUDO_USER, never root and never an empty caller."""
@@ -148,12 +192,18 @@ class PasswdHelperSetSuccessTests(unittest.TestCase):
 
         old_run, old_stdin = mod.subprocess.run, sys.stdin
         mod.subprocess.run = fake_run
+        mod.cmd_check = lambda _user: 0
         sys.stdin = io.StringIO("new-secret\n")
-        try:
-            rc = mod.cmd_set("pleb")
-        finally:
-            mod.subprocess.run = old_run
-            sys.stdin = old_stdin
+        with tempfile.TemporaryDirectory() as td:
+            rule = Path(td) / "plebian-os-passwd"
+            rule.write_text("one-time grant\n")
+            mod.SUDOERS_RULE = str(rule)
+            try:
+                rc = mod.cmd_set("pleb")
+            finally:
+                mod.subprocess.run = old_run
+                sys.stdin = old_stdin
+            self.assertFalse(rule.exists(), "successful transition must retire sudoers grant")
         self.assertEqual(rc, 0)
         self.assertEqual(captured["input"], "pleb:new-secret\n")
         # invoked as an argv list (no shell), by absolute path when present
@@ -170,6 +220,16 @@ class ProvisioningPlumbingTests(unittest.TestCase):
         # scoped to exactly the one command, not general passwordless sudo
         self.assertIn("NOPASSWD: %s", p)
         self.assertIn("visudo -cf", p)
+
+    def test_reprovision_does_not_recreate_grant_after_password_change(self):
+        p = _read("provision", "plebian-os-provision.sh")
+        check = 'SUDO_USER="$TARGET_USER" "$dst" check'
+        write = "NOPASSWD: %s"
+        self.assertIn(check, p)
+        self.assertIn('password_state" != default', p)
+        self.assertIn('rm -f "$rule"', p)
+        self.assertLess(p.index(check), p.index(write),
+                        "shadow state must be checked before writing the grant")
 
     def test_helper_staged_by_remaster_and_preseed(self):
         self.assertIn("plebian-os-passwd", _read("build", "remaster-iso.sh"))

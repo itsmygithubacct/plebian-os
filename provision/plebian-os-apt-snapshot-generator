@@ -1,0 +1,16 @@
+#!/bin/sh
+# Debian-Installer apt-setup generator installed by a snapshot-pinned image.
+# apt-setup exports ROOT (empty for the installer, /target for the installed
+# system) and builds apt.conf.new before validating mirror entries.
+set -eu
+
+root="${ROOT:-}"
+conf="$root/etc/apt/apt.conf.new"
+mkdir -p "$(dirname "$conf")"
+if ! grep -q 'Acquire::Check-Valid-Until' "$conf" 2>/dev/null; then
+    printf '%s\n' 'Acquire::Check-Valid-Until "false";' >> "$conf"
+fi
+
+# Every apt-setup generator receives a temporary sources fragment to populate.
+# A comment keeps verification harmless while making this generator observable.
+printf '%s\n' '# Plebian-OS snapshot validity policy' > "${1:?missing apt-setup output path}"

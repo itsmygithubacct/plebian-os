@@ -11,22 +11,27 @@ without granting general passwordless sudo:
     sudo plebian-os-passwd check   exit 0 if the user's password IS 'plebian',
                                    1 if it is something else / locked,
                                    2 on error (can't tell)
-    sudo plebian-os-passwd set     read ONE line (the new password) from stdin
-                                   and set it via chpasswd; refuses empty and
-                                   refuses 'plebian'. exit 0 on success.
+    sudo plebian-os-passwd set     while the password is still 'plebian', read
+                                   ONE line (the new password) from stdin and set
+                                   it via chpasswd; then retire the sudoers grant.
+                                   Refuses later password resets.
 
 It only ever operates on the account that invoked sudo ($SUDO_USER) — never
-root, never another user — so the narrow grant cannot be turned into a
-privilege escalation. The new password is read from stdin, never argv, so it
+root, never another user — and `set` is a one-time transition away from the
+shipped credential. The new password is read from stdin, never argv, so it
 never appears in `ps`.
 """
 import ctypes
 import ctypes.util
+import fcntl
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 
 DEFAULT_PASSWORD = "plebian"
+SUDOERS_RULE = "/etc/sudoers.d/plebian-os-passwd"
+LOCK_PATH = "/run/plebian-os-passwd.lock"
 # Production ALWAYS reads /etc/shadow. PLEBIAN_OS_SHADOW is honored ONLY when the
 # helper is unprivileged (euid != 0) — i.e. the test suite calling cmd_check
 # directly against a fixture; the real (root, via sudo) path ignores it entirely,
@@ -86,18 +91,61 @@ def cmd_check(user):
     return 0 if got == stored else 1
 
 
+@contextmanager
+def password_change_lock():
+    """Serialize privileged helper transitions from the shipped password.
+
+    Unit tests call cmd_set without privilege, so only the real root helper uses
+    the system lock. This closes the useful race between two concurrent helper
+    invocations both observing the default password before either changes it.
+    """
+    if os.geteuid() != 0:
+        yield
+        return
+    try:
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(LOCK_PATH, flags, 0o600)
+    except OSError as e:
+        die(f"cannot create password-change lock: {e}")
+    with os.fdopen(fd, "r+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def revoke_sudoers_grant():
+    """Retire the one-time NOPASSWD grant after the default is changed."""
+    try:
+        os.unlink(SUDOERS_RULE)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        # The transition is still safe: future `set` calls fail the default-hash
+        # check below. Report cleanup trouble without claiming chpasswd failed.
+        print(f"plebian-os-passwd: warning: could not remove {SUDOERS_RULE}: {e}",
+              file=sys.stderr)
+
+
 def cmd_set(user):
     new = sys.stdin.readline().rstrip("\n")
     if not new:
         die("empty password refused")
     if new == DEFAULT_PASSWORD:
         die("refusing to set the default password 'plebian'")
-    # absolute path so the root helper never depends on PATH resolution
-    chpasswd = "/usr/sbin/chpasswd" if os.path.exists("/usr/sbin/chpasswd") else "chpasswd"
-    p = subprocess.run([chpasswd], input=f"{user}:{new}\n", text=True,
-                       capture_output=True)
-    if p.returncode != 0:
-        die(f"chpasswd failed: {(p.stderr or p.stdout).strip()}")
+    with password_change_lock():
+        # This helper is a one-time bridge away from the shipped credential, not
+        # a permanent password-reset API. Once the owner has hardened the account,
+        # even a process running as that user must not be able to reset it through
+        # the NOPASSWD rule and then use the new password for ordinary sudo.
+        if cmd_check(user) != 0:
+            die("password is no longer the shipped default; reset refused")
+        # absolute path so the root helper never depends on PATH resolution
+        chpasswd = ("/usr/sbin/chpasswd"
+                    if os.path.exists("/usr/sbin/chpasswd") else "chpasswd")
+        p = subprocess.run([chpasswd], input=f"{user}:{new}\n", text=True,
+                           capture_output=True)
+        if p.returncode != 0:
+            die(f"chpasswd failed: {(p.stderr or p.stdout).strip()}")
+        revoke_sudoers_grant()
     return 0
 
 

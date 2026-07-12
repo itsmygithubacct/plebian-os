@@ -1,0 +1,27 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install shell linter
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Python tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Parse and lint scripts
+        run: |
+          bash -n bootstrap.sh build/*.sh provision/*.sh \
+            provision/plebian-os-firstboot-attempt \
+            provision/plebian-os-apt-snapshot-generator
+          python3 -m py_compile build/*.py provision/plebian-os-passwd tests/*.py
+          shellcheck -S warning bootstrap.sh build/*.sh provision/*.sh \
+            provision/plebian-os-firstboot-attempt \
+            provision/plebian-os-apt-snapshot-generator

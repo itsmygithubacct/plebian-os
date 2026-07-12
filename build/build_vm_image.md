@@ -25,8 +25,8 @@ answers ─▶ custom preseed ─▶ ISO (remaster-iso.sh) ─▶ VBox VM ─▶
 - **xorriso** — builds the ISO. The first download also needs `curl`,
   `sha256sum`, `gpgv`, and `debian-archive-keyring` to verify Debian's signed
   checksums; the verified ISO is then cached.
-- **openssl** — hashes the password so the plaintext never lands on the ISO
-  (falls back to a plaintext preseed line, with a warning, if absent)
+- **openssl** — hashes the password so the plaintext never lands on the ISO;
+  the builder refuses to create a plaintext-password preseed if it is absent.
 - **ssh** — used to detect when the install + provisioning have finished
 - Run it from inside a Plebian-OS checkout (it uses `preseed/` and `build/`).
 
@@ -54,7 +54,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | VM name | `plebian` | VirtualBox VM name (and default hostname) |
 | username | `pleb` | the uid-1000 account Pleb runs as |
 | full name | `Plebian User` | GECOS field |
-| password | `plebian` | hidden entry; stored **hashed** in the preseed |
+| password | *(required)* | hidden entry; stored **hashed** in the preseed; the VM enables SSH and refuses `plebian` |
 | hostname | *VM name* | |
 | RAM (MB) | **¼ of host RAM** | rounded to 256 MB, min 1024 |
 | vCPUs | **½ of host cores** | min 1 |
@@ -82,6 +82,7 @@ once instead of using the interactive `plebian` default.
 --target virtualbox    only virtualbox today (qemu/docker planned)
 --iso PATH             use a prebuilt ISO, skip building (see note below)
 --out PATH             ISO output path (default: plebian-os-<name>.iso)
+--replace              explicitly allow deleting an existing same-name VM
 --gui                  start the VM with a window instead of headless
 --no-wait              create + start the VM, but don't block on provisioning
 --timeout MIN          how long to wait for provisioning (default 90)
@@ -92,6 +93,8 @@ once instead of using the interactive `plebian` default.
 
 > `--iso` reuses an already-built image as-is, so the username / password /
 > session choices are **not** applied (those live in that ISO's own preseed).
+> Supply matching `--username` and `--password` for the SSH waiter, or use
+> `--no-wait`. This path needs neither xorriso nor openssl.
 
 ## What you get
 
@@ -156,10 +159,9 @@ are also copied into the first-boot environment when present.
 
 1. **Customized preseed.** It starts from `preseed/preseed.cfg`, substitutes the
    username / full name / hostname, replaces the password with an
-   `openssl passwd -6` hash, and injects the first-boot options
-   (`/etc/default/plebian-os` → `PLEBIAN_OS_DESKTOP` / `PLEBIAN_OS_KIOSK` /
-   `PLEBIAN_OS_NOPASSWD_SUDO`, which the provisioner reads via the unit's
-   `EnvironmentFile`).
+   `openssl passwd -6` hash, and adds `ssh-server` for the loopback waiter.
+   User/session choices are passed once to `remaster-iso.sh`, which writes the
+   authoritative `/etc/default/plebian-os` and matching `build-info.env`.
 2. **ISO build.** It calls **`build/remaster-iso.sh`** with
    `PLEBIAN_OS_PRESEED=<generated>` and `PLEBIAN_OS_AUTOBOOT=1`. The latter makes
    the installer's boot menu auto-select the (preseeded) install after a short
@@ -178,8 +180,10 @@ are also copied into the first-boot environment when present.
 
 ## Rebuilding / cleanup
 
-Re-running with the same `--name` offers to delete and recreate the VM (auto
-under `--yes`). To remove one by hand:
+Re-running with the same `--name` refuses to touch the existing VM unless
+`--replace` is present. Interactive replacement requires typing the exact VM
+name; automation requires the explicit pair `--replace --yes`. To remove one by
+hand:
 
 ```sh
 VBoxManage controlvm <name> poweroff

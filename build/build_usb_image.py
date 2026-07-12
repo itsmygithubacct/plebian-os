@@ -73,9 +73,9 @@ def gather_config(args) -> Config:
     if args.password is not None:
         password = args.password
     elif args.yes:
-        password = "plebian"
-        warn(f"--yes without --password: using the default password 'plebian' for "
-             f"{username} (the desktop prompts to change it on first run)")
+        password = vm.generated_password()
+        warn(f"--yes without --password: generated one-time password for {username}: "
+             f"{password}")
     else:
         password = p.ask_password("plebian")
     hostname = args.hostname or p.ask("hostname", name)
@@ -88,6 +88,8 @@ def gather_config(args) -> Config:
     nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
                        else p.ask_bool(f"passwordless sudo for {username}", False)
 
+    vm.validate_identity(name=name, username=username, fullname=fullname,
+                         password=password, hostname=hostname)
     return Config(name=name, username=username, fullname=fullname, password=password,
                   hostname=hostname, desktop=desktop, kiosk=kiosk,
                   nopasswd_sudo=nopasswd)
@@ -120,10 +122,13 @@ def confirm_summary(cfg: Config, out_iso: Path, device: str | None,
         pass
 
 # ── ISO build (reuse remaster-iso.sh; autoboot only when asked) ──────────────
-def build_iso(preseed: Path | None, out_iso: Path, autoboot: bool,
-              unattended_disk: bool, dry_run: bool) -> Path:
+def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, autoboot: bool,
+              unattended_disk: bool, dry_run: bool,
+              ssh_enabled: bool = False) -> Path:
     info(f"building installer ISO via {REMASTER.name} (custom preseed baked in)")
-    env = {**os.environ, "PLEBIAN_OS_PRESEED": str(preseed)}
+    env = {**os.environ, **vm.runtime_build_env(cfg),
+           "PLEBIAN_OS_PRESEED": str(preseed),
+           "PLEBIAN_OS_SSH_ENABLED": "1" if ssh_enabled else "0"}
     # Default: NO autoboot — the stick pauses at the installer menu on purpose.
     # --autoboot makes it auto-select the (unattended) install for a kiosk stick.
     # Clear any inherited value so a pre-exported PLEBIAN_OS_AUTOBOOT can't
@@ -147,8 +152,9 @@ def build_iso(preseed: Path | None, out_iso: Path, autoboot: bool,
         die(f"ISO build did not produce {out_iso}")
     return out_iso
 
-def make_usb_preseed(cfg: Config, unattended_disk: bool) -> Path:
-    preseed = vm.generate_preseed(cfg)
+def make_usb_preseed(cfg: Config, unattended_disk: bool,
+                     enable_ssh: bool = False) -> Path:
+    preseed = vm.generate_preseed(cfg, enable_ssh=enable_ssh)
     if unattended_disk:
         return preseed
     text = preseed.read_text()
@@ -189,21 +195,41 @@ def _block_kname(device: str) -> str | None:
     except OSError:
         return Path(os.path.realpath(device)).name
 
-def _parent_map() -> dict[str, str]:
-    parents: dict[str, str] = {}
+def _parent_map() -> dict[str, set[str]]:
+    """Return every lower block device for each node, including stacked RAID.
+
+    A single PKNAME chain loses parents for mdraid/multipath layouts. Combine all
+    lsblk rows with sysfs `slaves` edges so protecting `/` protects every
+    physical member disk underneath it.
+    """
+    parents: dict[str, set[str]] = {}
     for line in _lsblk(["-rno", "NAME,PKNAME"]).splitlines():
         parts = line.split()
         if len(parts) >= 2 and parts[1]:
-            parents[parts[0]] = parts[1]
+            parents.setdefault(parts[0], set()).add(parts[1])
+    for node in Path("/sys/class/block").glob("*"):
+        try:
+            slaves = list((node / "slaves").iterdir())
+        except OSError:
+            continue
+        for slave in slaves:
+            parents.setdefault(node.name, set()).add(slave.name)
     return parents
 
-def _ancestors(kname: str, parents: dict[str, str] | None = None) -> set[str]:
+def _ancestors(kname: str,
+               parents: dict[str, str | set[str]] | None = None) -> set[str]:
     parents = parents or _parent_map()
-    out = {kname}
-    cur = kname
-    while parents.get(cur) and parents[cur] not in out:
-        cur = parents[cur]
+    out: set[str] = set()
+    todo = [kname]
+    while todo:
+        cur = todo.pop()
+        if cur in out:
+            continue
         out.add(cur)
+        lower = parents.get(cur, set())
+        if isinstance(lower, str):
+            lower = {lower}
+        todo.extend(lower - out)
     return out
 
 def _root_disks() -> set[str]:
@@ -215,15 +241,31 @@ def _root_disks() -> set[str]:
     """
     parents = _parent_map()
     names: set[str] = set()
-    for target in ("/", "/boot", "/home", "/var"):
+    sources: list[str] = []
+    for target in ("/", "/boot", "/boot/efi", "/home", "/var", "/usr", "/srv"):
         src = subprocess.run(["findmnt", "-no", "SOURCE", "--target", target],
                              capture_output=True, text=True).stdout.strip()
         # btrfs reports SOURCE as /dev/xxx[/subvol]; drop the subvolume suffix so
         # the root disk still resolves to a real block device (else it silently
         # falls out of the protected set on btrfs/subvolume layouts).
         src = src.split("[", 1)[0]
-        if not src or not src.startswith("/dev/"):
-            continue
+        if src.startswith("/dev/"):
+            sources.append(src)
+    swap = subprocess.run(["swapon", "--noheadings", "--raw", "--show=NAME"],
+                          capture_output=True, text=True)
+    if swap.returncode == 0:
+        for line in swap.stdout.splitlines():
+            swap_source = line.strip()
+            if swap_source.startswith("/dev/"):
+                sources.append(swap_source)
+            elif swap_source:
+                backing = subprocess.run(
+                    ["findmnt", "-no", "SOURCE", "--target", swap_source],
+                    capture_output=True, text=True,
+                ).stdout.strip().split("[", 1)[0]
+                if backing.startswith("/dev/"):
+                    sources.append(backing)
+    for src in sources:
         kname = _block_kname(src)
         if kname:
             names.update(_ancestors(kname, parents))
@@ -264,14 +306,26 @@ def list_devices() -> None:
     if not any_found:
         print("    (none found — plug in a USB stick, or pass --force for a fixed disk)")
 
-def validate_device(device: str, force: bool) -> tuple[str, str, bool]:
-    """Refuse anything unsafe; return (size, model, removable) for a valid target."""
+def _device_identity(device: str) -> tuple[int, int] | None:
+    try:
+        st = os.stat(device)
+    except OSError:
+        return None
+    if not stat.S_ISBLK(st.st_mode):
+        return None
+    return os.major(st.st_rdev), os.minor(st.st_rdev)
+
+
+def validate_device(device: str, force: bool) -> tuple[str, str, bool, tuple[int, int]]:
+    """Refuse anything unsafe; return display data and stable device identity."""
     if not Path(device).is_block_device():
         die(f"{device} is not a block device")
     base = _block_kname(device) or Path(os.path.realpath(device)).name
     dev_type = _lsblk(["-dnro", "TYPE", device])
     if dev_type != "disk":
         die(f"{device} looks like a partition; you want the whole disk")
+    if _lsblk(["-dnro", "RO", device]) == "1":
+        die(f"{device} is read-only; refusing a partial/failed flash")
     # never the disk backing '/' (this refusal is NOT bypassed by --force)
     if base and base in _root_disks():
         die(f"{device} backs the running root filesystem — refusing")
@@ -287,7 +341,22 @@ def validate_device(device: str, force: bool) -> tuple[str, str, bool]:
     except OSError:
         model = "?"
     size = _lsblk(["-dno", "SIZE", device]) or "?"
-    return size, model, removable == "1"
+    identity = _device_identity(device)
+    if identity is None:
+        die(f"could not capture a stable device identity for {device}")
+    return size, model, removable == "1", identity
+
+
+def validate_image_fits(device: str, iso: Path, base: str | None = None) -> None:
+    base = base or _block_kname(device)
+    try:
+        sectors = int(Path(f"/sys/class/block/{base}/size").read_text().strip())
+        capacity = sectors * 512
+        image_size = iso.stat().st_size
+    except (OSError, TypeError, ValueError) as e:
+        die(f"could not compare ISO and target sizes safely: {e}")
+    if image_size > capacity:
+        die(f"ISO is {image_size} bytes but {device} holds only {capacity} bytes")
 
 def _mounted_targets(device: str) -> list[str]:
     r = subprocess.run(["lsblk", "-J", "-o", "NAME,MOUNTPOINTS", device],
@@ -326,7 +395,7 @@ def confirm_device(device: str, iso: Path, size: str, model: str, assume_yes: bo
     if typed != device:
         die("confirmation did not match — aborted")
 
-def flash(device: str, iso: Path) -> None:
+def flash(device: str, iso: Path, expected_identity: tuple[int, int]) -> None:
     # A block device needs root; use sudo per-command so the typed confirmation
     # stays in the user's own shell (no re-exec).
     sudo: list[str] = []
@@ -334,6 +403,14 @@ def flash(device: str, iso: Path) -> None:
         if not vm.have("sudo"):
             die(f"need root to write {device} (run with sudo)")
         sudo = ["sudo"]
+    # The operator may spend time reading/confirming. Re-resolve immediately
+    # before unmount/dd so an unplugged/reused /dev path cannot change targets.
+    if _device_identity(device) != expected_identity:
+        die(f"{device} changed after validation; refusing to write")
+    base = _block_kname(device)
+    if not base or base in _root_disks():
+        die(f"{device} now backs a protected live filesystem/swap; refusing")
+    validate_image_fits(device, iso, base)
     for mp in _mounted_targets(device):
         r = subprocess.run([*sudo, "umount", mp], capture_output=True, text=True)
         if r.returncode != 0:
@@ -341,6 +418,18 @@ def flash(device: str, iso: Path) -> None:
             die(f"failed to unmount {mp!r}; refusing to overwrite a mounted filesystem"
                 + (f": {detail}" if detail else ""))
     info(f"writing {iso} -> {device} (this can take a few minutes)")
+    # Recheck after unmounting, immediately before the destructive write. A
+    # device path can be unplugged/reused or newly mounted during that gap.
+    if _device_identity(device) != expected_identity:
+        die(f"{device} changed during unmount; refusing to write")
+    base = _block_kname(device)
+    if not base or base in _root_disks():
+        die(f"{device} now backs a protected live filesystem/swap; refusing")
+    if _lsblk(["-dnro", "RO", device]) != "0":
+        die(f"could not verify {device} is writable immediately before writing")
+    validate_image_fits(device, iso, base)
+    if _mounted_targets(device):
+        die(f"{device} was mounted again before writing; refusing")
     vm.run([*sudo, "dd", f"if={iso}", f"of={device}", "bs=4M",
             "status=progress", "oflag=sync", "conv=fsync"])
     vm.run([*sudo, "sync"])
@@ -399,6 +488,8 @@ def main() -> None:
     ap.add_argument("--unattended-disk", action="store_true",
                     help="preseed partitioning too, so choosing install erases the "
                          "target disk without another installer prompt")
+    ap.add_argument("--with-ssh", action="store_true",
+                    help="install ssh-server (off by default; protect the chosen password)")
     ap.add_argument("--list", action="store_true", help="list removable devices and exit")
     ap.add_argument("--force", action="store_true",
                     help="allow a non-removable disk (never the system/root disk)")
@@ -412,8 +503,10 @@ def main() -> None:
 
     building = args.iso is None
     # preflight
-    if building and not args.dry_run and not vm.have("xorriso"):
-        die("xorriso is required to build the ISO but is not installed.")
+    if building and not args.dry_run:
+        for tool in ("xorriso", "openssl"):
+            if not vm.have(tool):
+                die(f"{tool} is required to build the ISO but is not installed.")
     if not PRESEED_TEMPLATE.exists() or not REMASTER.exists():
         die("run this from a Plebian-OS checkout (preseed/ + build/ not found).")
 
@@ -430,6 +523,8 @@ def main() -> None:
              "(they live in the ISO's preseed).")
     else:
         cfg = gather_config(args)
+        if args.with_ssh and cfg.password == "plebian":
+            die("--with-ssh refuses the shipped 'plebian' password; choose --password")
 
     out_iso = (args.iso or args.out or (REPO / f"plebian-os-{cfg.name}.iso")).resolve()
     unattended_disk = args.autoboot or args.unattended_disk
@@ -443,8 +538,10 @@ def main() -> None:
     else:
         # --dry-run writes NOTHING: skip generating the temp preseed (which would
         # spawn openssl and drop a /tmp file) since build_iso won't consume it.
-        preseed = None if args.dry_run else make_usb_preseed(cfg, unattended_disk)
-        iso = build_iso(preseed, out_iso, args.autoboot, unattended_disk, args.dry_run)
+        preseed = (None if args.dry_run else
+                   make_usb_preseed(cfg, unattended_disk, enable_ssh=args.with_ssh))
+        iso = build_iso(cfg, preseed, out_iso, args.autoboot,
+                        unattended_disk, args.dry_run, ssh_enabled=args.with_ssh)
 
     if not args.dry_run and iso.exists():
         check_iso_bootsig(iso)
@@ -467,7 +564,9 @@ def main() -> None:
              "status=progress oflag=sync conv=fsync ; sync")
         return
 
-    size, model, removable = validate_device(args.device, args.force)
+    size, model, removable, identity = validate_device(args.device, args.force)
+    if not args.dry_run:
+        validate_image_fits(args.device, iso)
     if args.dry_run:
         info(f"(dry-run) would ERASE {args.device} ({size}, {model}) and write {iso}")
         info(f"    + umount <all mountpoints on {args.device}> ; dd if={iso} of={args.device} bs=4M "
@@ -480,7 +579,7 @@ def main() -> None:
         warn(f"{args.device} is a non-removable disk (--force); requiring typed "
              "confirmation despite --yes")
     confirm_device(args.device, iso, size, model, args.yes and removable)
-    flash(args.device, iso)
+    flash(args.device, iso, identity)
     final_summary(cfg, iso, args.device, args.autoboot, from_iso=args.iso is not None)
 
 

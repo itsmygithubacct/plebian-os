@@ -78,24 +78,83 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     # pin + verify; without the sha it runs unverified with a loud warning.
     uv_ver="${PLEBIAN_OS_UV_VERSION:-}"
     uv_sha="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
+    uv_release="${PLEBIAN_OS_RELEASE_MODE:-0}"
+    uv_ok=1
+    if [ "$uv_release" = 1 ]; then
+        if ! [[ "$uv_ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            warn "release mode requires an exact PLEBIAN_OS_UV_VERSION when uv is enabled"
+            uv_ok=0
+        fi
+        if ! [[ "$uv_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            warn "release mode requires a 64-character PLEBIAN_OS_UV_INSTALLER_SHA256 when uv is enabled"
+            uv_ok=0
+        fi
+    fi
     uv_url="https://astral.sh/uv/${uv_ver:+$uv_ver/}install.sh"
     log "installing uv (operator-requested; $uv_url -> /usr/local/bin)"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + curl -LsSf $uv_url -o <tmp>"
         if [ -n "$uv_sha" ]; then echo "    + verify sha256=$uv_sha"
         else echo "    + (WARNING: PLEBIAN_OS_UV_INSTALLER_SHA256 unset — installer unverified)"; fi
-        echo "    + UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh <tmp>"
+        echo "    + UV_INSTALL_DIR=<staging> UV_NO_MODIFY_PATH=1 sh <tmp>"
+        echo "    + verify staged uv --version reports exactly uv $uv_ver, then install it into /usr/local/bin"
     else
-        uv_tmp="$(mktemp)"
-        if ! curl -LsSf "$uv_url" -o "$uv_tmp"; then
-            warn "uv installer download failed (optional tool — continuing)"; rm -f "$uv_tmp"
-        elif [ -n "$uv_sha" ] && ! printf '%s  %s\n' "$uv_sha" "$uv_tmp" | sha256sum -c --status; then
-            warn "uv installer sha256 mismatch — refusing to run it (expected $uv_sha)"; rm -f "$uv_tmp"
+        uv_tmp=""; uv_stage=""
+        if [ "$uv_ok" = 1 ]; then
+            uv_tmp="$(mktemp)" || { warn "could not create uv installer temp file"; uv_ok=0; }
+            uv_stage="$(mktemp -d)" || { warn "could not create uv staging directory"; uv_ok=0; }
+        fi
+        if [ "$uv_ok" = 1 ] && ! curl -LsSf "$uv_url" -o "$uv_tmp"; then
+            warn "uv installer download failed"
+            uv_ok=0
+        fi
+        if [ "$uv_ok" = 1 ] && [ -n "$uv_sha" ] \
+            && ! printf '%s  %s\n' "$uv_sha" "$uv_tmp" | sha256sum -c --status; then
+            warn "uv installer sha256 mismatch — refusing to run it (expected $uv_sha)"
+            uv_ok=0
+        fi
+        if [ "$uv_ok" = 1 ]; then
+            [ -n "$uv_sha" ] \
+                || warn "uv installer NOT pinned — set PLEBIAN_OS_UV_INSTALLER_SHA256 to verify it"
+            if ! env UV_INSTALL_DIR="$uv_stage" UV_NO_MODIFY_PATH=1 sh "$uv_tmp"; then
+                warn "uv install failed"
+                uv_ok=0
+            fi
+        fi
+        if [ "$uv_ok" = 1 ]; then
+            uv_actual="$("$uv_stage/uv" --version 2>/dev/null || true)"
+            if [ -n "$uv_ver" ] && [ "$uv_actual" != "uv $uv_ver" ]; then
+                warn "uv version verification failed (expected 'uv $uv_ver', got '${uv_actual:-<missing>}')"
+                uv_ok=0
+            elif [ -z "$uv_actual" ]; then
+                warn "uv installer completed but /usr/local/bin/uv is not runnable"
+                uv_ok=0
+            else
+                install -m 0755 "$uv_stage/uv" /usr/local/bin/uv || uv_ok=0
+                if [ -x "$uv_stage/uvx" ]; then
+                    install -m 0755 "$uv_stage/uvx" /usr/local/bin/uvx || uv_ok=0
+                fi
+                if [ "$uv_ok" = 1 ]; then
+                    uv_actual="$(/usr/local/bin/uv --version 2>/dev/null || true)"
+                    if [ -n "$uv_ver" ]; then
+                        [ "$uv_actual" = "uv $uv_ver" ] || uv_ok=0
+                    else
+                        [ -n "$uv_actual" ] || uv_ok=0
+                    fi
+                fi
+                [ "$uv_ok" = 1 ] \
+                    && log "verified installed $uv_actual" \
+                    || warn "uv final installation verification failed"
+            fi
+        fi
+        [ -z "$uv_tmp" ] || rm -f "$uv_tmp"
+        [ -z "$uv_stage" ] || rm -rf "$uv_stage"
+    fi
+    if [ "$uv_ok" != 1 ]; then
+        if [ "$uv_release" = 1 ]; then
+            failed+=("uv (release-required)")
         else
-            [ -n "$uv_sha" ] || warn "uv installer NOT pinned — set PLEBIAN_OS_UV_INSTALLER_SHA256 to verify it"
-            env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh "$uv_tmp" \
-                || warn "uv install failed (optional tool — continuing)"
-            rm -f "$uv_tmp"
+            warn "uv is optional outside release mode; continuing without a verified install"
         fi
     fi
 else
