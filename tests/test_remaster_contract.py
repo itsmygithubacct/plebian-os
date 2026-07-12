@@ -53,6 +53,10 @@ class RemasterContractTests(unittest.TestCase):
         self.assertIn("preseed/early_command", self.source)
         self.assertIn("02plebian-snapshot", self.source)
         self.assertIn("plebian-os-apt-snapshot-generator", self.source)
+        mkdir = self.source.index("mkdir -p /usr/lib/apt-setup/generators")
+        install = self.source.index(
+            "install -m 0755 /cdrom/plebian-os/plebian-os-apt-snapshot-generator")
+        self.assertLess(mkdir, install)
 
     def test_output_is_same_filesystem_staged_and_boot_validated(self):
         self.assertIn('refusing to overwrite the source ISO', self.source)
