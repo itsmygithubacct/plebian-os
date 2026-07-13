@@ -48,6 +48,13 @@ class DependencyManifestTests(unittest.TestCase):
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
 
+    def test_kilix_fork_system_build_dependencies_are_installed(self):
+        required = {
+            "libpng-dev", "liblcms2-dev", "libcairo2-dev",
+            "libharfbuzz-dev", "libssl-dev", "libxxhash-dev",
+        }
+        self.assertLessEqual(required, install_deps_packages())
+
     def test_recommends_policy_matches_across_paths(self):
         # Both provisioning paths must resolve the same closure: install-deps.sh
         # uses --no-install-recommends, so the preseed must disable recommends too
