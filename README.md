@@ -38,6 +38,13 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
+**GUI apps** — the session has no window manager, so shells inside kilix alias
+the common GUI commands (`chromium`, `firefox-esr`, …) to **`kilix run <app>`**:
+the app gets a private X server and streams into a kilix tab, tiling like any
+terminal program. Set `KILIX_RUN_ALIASES=0` to opt out, or
+`KILIX_RUN_ALIAS_APPS="gimp mpv"` to extend the list (the mechanism is kilix's
+`config/kilix.bashrc`, keyed off the Pleb session markers).
+
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
 pulls `~/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
 engine, and optional desktop-provider update to `pleb update --no-restart`.
