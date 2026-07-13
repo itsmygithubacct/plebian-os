@@ -52,7 +52,8 @@ This is the first publishable coordinated release. It supersedes the incomplete
   staging the validity-policy hook, preventing an early-command abort in a real
   Debian Installer boot.
 - Completed the system build dependency closure for the pinned Kilix fork,
-  including its libpng, Little CMS, Cairo, HarfBuzz, OpenSSL, and xxHash headers.
+  including its image/color, crypto, xxHash, SIMDe, and Wayland headers and
+  protocol definitions.
 - Bounded Kilix Go package compilation by default after real 2 GiB acceptance
   testing exposed repeatable compiler OOM kills in a generated dependency.
 - Made shell USB builds fresh by default; reusing an ISO is now an explicit
