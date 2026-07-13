@@ -52,6 +52,7 @@ class DependencyManifestTests(unittest.TestCase):
         required = {
             "libpng-dev", "liblcms2-dev", "libcairo2-dev",
             "libharfbuzz-dev", "libssl-dev", "libxxhash-dev",
+            "libsimde-dev", "libwayland-dev", "wayland-protocols",
         }
         self.assertLessEqual(required, install_deps_packages())
 
