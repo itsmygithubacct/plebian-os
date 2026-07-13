@@ -38,7 +38,7 @@ DEP_GROUPS=(
     "web browsers|firefox-esr chromium"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
-    "build toolchain|build-essential pkg-config golang-go python3-dev zlib1g-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
+    "build toolchain|build-essential pkg-config golang-go python3-dev zlib1g-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libpng-dev liblcms2-dev libcairo2-dev libharfbuzz-dev libssl-dev libxxhash-dev libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
     "cli utilities|tmux ncdu rsync ufw jq glances"
 )
 

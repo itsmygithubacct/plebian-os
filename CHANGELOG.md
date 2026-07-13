@@ -51,6 +51,8 @@ This is the first publishable coordinated release. It supersedes the incomplete
 - Made snapshot-pinned installer setup create its apt generator directory before
   staging the validity-policy hook, preventing an early-command abort in a real
   Debian Installer boot.
+- Completed the system build dependency closure for the pinned Kilix fork,
+  including its libpng, Little CMS, Cairo, HarfBuzz, OpenSSL, and xxHash headers.
 - Bounded Kilix Go package compilation by default after real 2 GiB acceptance
   testing exposed repeatable compiler OOM kills in a generated dependency.
 - Made shell USB builds fresh by default; reusing an ISO is now an explicit
