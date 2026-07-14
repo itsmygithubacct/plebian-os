@@ -64,10 +64,34 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    exact release-manifest source, media, snapshot, toolchain, and provider pins.
    Verify firstboot, provider, update/status, provenance, kiosk-off/on, and
    restart paths. Also boot the strict release artifact on both BIOS and UEFI
-   firmware before publication.
+   firmware before publication. Check the versioned Plebian-OS titles in the
+   default, advanced, and accessible-dark menus, then enter the graphical
+   installer and verify both banner variants. The angular-P mark must retain
+   one eye, two hair strokes, and the complete orange `>_` cursor.
+   In an installed guest, complete these distribution-asset checks:
+
+   - verify `/usr/local/share/plebian-os/wallpapers/plebian-os.png` is
+     `root:root`, mode `0644`, and has the expected tracked/build-info SHA-256;
+   - verify a fresh Kilix desktop selects that stable wallpaper path, while an
+     existing `.state.json` (including a custom wallpaper choice) remains
+     byte-for-byte unchanged across reprovisioning and update;
+   - exercise a successful ten-file OS-layer update and an induced failure,
+     confirming rollback restores the prior wallpaper, attribution, license,
+     scripts, and state; separately test the documented v0.1.1 migration with
+     two updater runs (seven-file updater first, ten-file updater second);
+   - verify the installed
+     `/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md` and
+     `/usr/local/share/doc/plebian-os/COPYING.GPL-2` are `root:root`, mode
+     `0644`, match their expected hashes, and retain the attribution's working
+     relative `../COPYING.GPL-2` reference.
 7. Re-check that every local tag resolves to the reviewed commit and that all
    worktrees remain clean. Only then push the four tags and publish the strict
-   release artifact plus its checksum.
+   release artifact, its checksum, and a checksummed release source archive
+   containing the exact tracked artwork, editable source, attribution, license
+   text, and provenance records used for the image. Publish that source archive
+   and provenance alongside the ISO as release assets, rather than relying only
+   on a mutable branch checkout. These records support review and redistribution;
+   they are evidence of the release inputs, not a legal opinion or guarantee.
 
 If validation fails before publication, fix the problem in new commits and
 delete/recreate only the **unpublished local candidate tags**. Once any tag is

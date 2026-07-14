@@ -1,5 +1,9 @@
 # Plebian-OS
 
+<p align="center">
+  <img src="assets/installer/logo.png" width="160" alt="Plebian-OS angular-P geek logo">
+</p>
+
 **A regular Debian install whose desktop is [Pleb](https://github.com/itsmygithubacct/pleb) —
 a single fullscreen [kilix](https://github.com/itsmygithubacct/kilix) as the whole
 session — in place of XFCE.**
@@ -33,6 +37,10 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
      registers **Pleb** as a LightDM session;
    - initializes the Kilix source submodule, installs/upgrades Go when needed,
      builds the clickable-chrome fork, and verifies Kilix uses that fork engine;
+   - installs the Plebian-OS wallpaper at a stable system path and selects it
+     only for a new Kilix/Kilix-95 desktop (an existing wallpaper is preserved);
+   - validates and installs the artwork attribution and GPL version 2 text under
+     `/usr/local/share/doc/plebian-os/`, preserving their relative link;
    - pins Pleb as the default session (and, with `--kiosk`, enables autologin);
    - marks itself done and disables the service.
 3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
@@ -49,8 +57,9 @@ terminal program. Set `KILIX_RUN_ALIASES=0` to opt out, or
 pulls `~/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
 engine, and optional desktop-provider update to `pleb update --no-restart`.
 It **also refreshes the Plebian-OS layer itself** as one validated, rollback-safe
-transaction (provisioner, dependency installer, unit, helpers, and version) from
-a `plebian-os` checkout, so OS-layer fixes reach installed systems too — pinned
+transaction (provisioner, dependency installer, unit, helpers, version,
+branded wallpaper, and artwork notices) from a `plebian-os` checkout, so OS-layer fixes reach
+installed systems too — pinned
 by `PLEBIAN_OS_REF` and disablable with
 `PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
 `KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, the update helper keeps using
@@ -68,6 +77,21 @@ Downloaded git objects, package-manager additions, and a newly installed Go
 toolchain are intentionally not removed during rollback; they are additive and
 not selected by the restored runtime. A checkout created during a failed update
 is moved into the reported recovery directory instead of being deleted.
+
+**Upgrading from v0.1.1:** run `plebian-os-update` twice as the desktop user
+after moving the Plebian-OS ref/branch to this newer revision. The immutable
+v0.1.1 updater has a fixed seven-file OS-layer manifest: its first invocation
+can deploy the new updater and provisioner, but cannot deploy the newly added
+three files (the wallpaper, attribution, and license text). The second invocation
+runs the new ten-file transaction, installs all three validated payloads,
+commits the complete stack, and only then seeds the wallpaper for a desktop with
+no existing Kilix state. Both invocations
+are required; do not run a bare `sudo plebian-os-provision` between them because
+sudo does not preserve all coordinated provider/ref/kiosk settings. The
+new provisioner's validated-checkout fallback exists only for an externally
+orchestrated, configuration-preserving reprovision. The normal upgrade contract
+is two updater runs, and neither run overwrites existing desktop state or a
+wallpaper choice.
 
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
 thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
@@ -89,7 +113,8 @@ sudo ~/plebian-os/bootstrap.sh --kiosk    # …and boot straight into it
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 
 **Build an installer ISO** (the Debian netinst is downloaded + signature/hash
-verified for you; needs `xorriso`, `gpgv`, and `debian-archive-keyring`):
+verified for you; needs `xorriso`, GNU `cpio`, `gzip`, `gpgv`, and
+`debian-archive-keyring`):
 
 ```sh
 build/remaster-iso.sh                          # auto-download the netinst, build the ISO
@@ -102,6 +127,12 @@ is usable out of the box; it ships no ssh-server, and the desktop persistently
 prompts for the one-time transition to a new password. Python `--yes` builds
 instead generate and print a random password. Any builder path that enables SSH
 refuses the shipped password. Pass `--password` to choose your own secret.
+
+The remaster brands the shared BIOS/UEFI splash, every normal and accessible
+GRUB theme, the BIOS menu title, and both graphical-installer banners from
+[`assets/installer/`](assets/installer/). Menu text renders the resolved
+Plebian-OS release version at build time; versions are deliberately not baked
+into the artwork.
 
 **Build a bootable USB install stick** — one command downloads the netinst,
 builds the (isohybrid) ISO, and flashes it to the stick:
@@ -133,6 +164,9 @@ to trust an existing artifact.
 | `provision/plebian-os-firstboot.service` | systemd oneshot that runs it once on first boot |
 | `preseed/preseed.cfg` | a regular Debian install, no desktop task, wires in the provisioner |
 | `build/remaster-iso.sh` | inject the preseed + provisioner into a trixie netinst ISO |
+| `build/brand-installer.py` | validate artwork, brand BIOS/UEFI text, and refresh Debian's existing media-check entries |
+| `assets/installer/` | editable logo, installer-ready artwork, provenance, and licensing |
+| `assets/desktop/` | matching desktop wallpaper, installed at `/usr/local/share/plebian-os/wallpapers/plebian-os.png` |
 | `build/make-usb.sh` | build the ISO and flash it to a USB stick (with safety guards) |
 | `build/acceptance-vm.sh` | operator-run VirtualBox acceptance: build ISO, install, wait for firstboot |
 | `build/install-vm-from-usb-iso.sh` | build a USB-style ISO, then install it in a 4 GB / 4-core VirtualBox VM |
@@ -142,8 +176,8 @@ to trust an existing artifact.
 
 Every remastered ISO also stages `/etc/plebian-os/build-info.env` and
 `/etc/default/plebian-os` into the installed system. The manifest records the
-Plebian-OS commit/dirty state, source Debian ISO checksum, and the
-repo/ref/provider knobs used for that image; the firstboot env is what
+Plebian-OS commit/dirty state, source Debian ISO checksum, installer and desktop
+artwork checksums, and the repo/ref/provider knobs used for that image; the firstboot env is what
 `plebian-os-firstboot.service` reads when it provisions the installed system.
 After provisioning finishes, `/var/lib/plebian-os/packages.list`,
 `versions.env`, and `apt-sources.list` record the final installed packages,

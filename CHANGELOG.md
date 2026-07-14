@@ -4,6 +4,31 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [Unreleased]
+
+### Installer identity
+
+- Added the editable angular-P geek logo, matching desktop wallpaper, and
+  GPL-2.0-or-later attribution/provenance records.
+- Brand the shared BIOS/UEFI splash, the BIOS title, all normal and accessible
+  GRUB themes, and both graphical-installer banners. Bootloader-rendered text
+  carries the coordinated Plebian-OS version so release numbers never become
+  stale inside artwork.
+- Validate exact PNG contracts, preserve Debian's original GTK initrd as an
+  exact prefix with a deterministic two-file overlay, and refresh every entry
+  in Debian's existing ISO media-check manifest after all remaster mutations.
+- Install the matching desktop wallpaper as a root-owned OS asset, select it
+  only for desktops without existing Kilix state, record its build-time hash,
+  and carry future artwork revisions through transactional self-update.
+- Ship the artwork attribution and complete GPL version 2 text on installer
+  media and installed systems, record their hashes, and update or roll them
+  back with the same OS-layer transaction as the wallpaper.
+- Bridge upgrades from v0.1.1's immutable seven-file updater explicitly: the
+  first update deploys the new scripts and a required second update transaction
+  runs the ten-file manifest and installs all three new payloads; updater state seeding occurs only after the
+  complete stack commits. Configuration-preserving reprovisioning retains a
+  strict validated-checkout recovery path without making bare sudo safe.
+
 ## [0.1.1] — 2026-07-12
 
 This is the first publishable coordinated release. It supersedes the incomplete
