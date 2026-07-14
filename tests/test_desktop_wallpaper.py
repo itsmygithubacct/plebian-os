@@ -587,6 +587,7 @@ desktop_wallpaper_matches_expected_hash \
             "/usr/local/share/doc",
             "/usr/local/share/doc/plebian-os",
             "/usr/local/share/doc/plebian-os/installer",
+            "/usr/local/share/doc/pleb",
         ):
             self.assertIn(directory, snapshot)
             self.assertIn(directory, restore)

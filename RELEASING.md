@@ -8,8 +8,8 @@ network-fetched build input.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The next coordinated release is **0.1.2**; its pin manifest is intentionally
-created only after the four final component commits are known.
+The current coordinated release is **0.1.2**; its pin manifest was created only
+after the four final component commits were known.
 
 ## Version commands
 
@@ -74,6 +74,10 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
 
    - verify `/usr/local/share/plebian-os/wallpapers/plebian-os.png` is
      `root:root`, mode `0644`, and has the expected tracked/build-info SHA-256;
+   - open **Start > Help > Pleb Recovery Guide**, confirm it displays the
+     installed `/usr/local/share/doc/pleb/RECOVERY.md`, and verify the guide
+     includes both the full Plebian-OS dependency helper and the
+     `libxxhash-dev` fallback;
    - verify a fresh Kilix desktop selects that stable wallpaper path, while an
      existing `.state.json` (including a custom wallpaper choice) remains
      byte-for-byte unchanged across reprovisioning and update;
@@ -85,8 +89,9 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
      Kilix-95 standalone still uses its XP wallpaper;
    - exercise a successful ten-file OS-layer update and an induced failure,
      confirming rollback restores the prior wallpaper, attribution, license,
-     scripts, and state; separately test the documented v0.1.1 migration with
-     two updater runs (seven-file updater first, ten-file updater second);
+     scripts, Pleb recovery guide (or removes it if newly created), and state;
+     separately test the documented v0.1.1 migration with two updater runs
+     (seven-file updater first, ten-file updater second);
    - verify the installed
      `/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md` and
      `/usr/local/share/doc/plebian-os/COPYING.GPL-2` are `root:root`, mode

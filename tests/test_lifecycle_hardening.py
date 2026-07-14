@@ -108,8 +108,13 @@ class UpdateLifecycleTests(unittest.TestCase):
             "/usr/share/xsessions/pleb.desktop",
             "/usr/local/bin/kilix",
             "/usr/local/bin/pleb",
+            "/usr/local/share/doc/pleb/RECOVERY.md",
         ):
             self.assertIn(primitive, UPDATE)
+        self.assertIn(
+            "PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md",
+            UPDATE,
+        )
         self.assertLess(UPDATE.index("begin_stack_transaction\n"),
                         UPDATE.index("self_update_os_layer\n"))
         self.assertLess(UPDATE.index("commit_stack_transaction\n"),

@@ -64,6 +64,15 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(seen["PLEBIAN_OS_AUTOBOOT"], "1")
         self.assertEqual(seen["PLEBIAN_OS_UNATTENDED_DISK"], "1")
 
+    def test_acceptance_checks_coordinated_source_allocation(self):
+        source = (ROOT / "build" / "build_vm_image.py").read_text()
+        self.assertIn('"coordinated checkouts"', source)
+        self.assertIn('"pleb recovery guide"', source)
+        self.assertIn("/usr/local/share/doc/pleb/RECOVERY.md", source)
+        self.assertIn("PLEBIAN_OS_COMMIT=[0-9a-f]{40}", source)
+        for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR"):
+            self.assertIn(checkout, source[source.index("def verify_provisioning"):])
+
     def test_yes_mode_generates_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):
             built = vm.gather_config(args(password=None))

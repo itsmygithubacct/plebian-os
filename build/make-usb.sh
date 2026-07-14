@@ -14,7 +14,7 @@
 #   build/make-usb.sh --netinst debian-13.x-amd64-netinst.iso --device /dev/sdX
 #
 #   # flash an already-built Plebian-OS ISO (no build, no xorriso needed):
-#   build/make-usb.sh --iso plebian-os-0.1.1-amd64.iso --device /dev/sdX
+#   build/make-usb.sh --iso plebian-os-0.1.2-amd64.iso --device /dev/sdX
 #   # explicitly trust/reuse the default output path (never inferred by mtime):
 #   build/make-usb.sh --reuse-iso --device /dev/sdX
 #

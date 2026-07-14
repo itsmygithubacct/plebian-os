@@ -597,6 +597,12 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
+        ("source provenance",    "grep -Eq '^PLEBIAN_OS_COMMIT=[0-9a-f]{40}$' /var/lib/plebian-os/versions.env"),
+        ("coordinated checkouts", kdir +
+         ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
+         ' p="${PLEB_DIR:-$s/pleb}";'
+         ' test -d "$o/.git" && test -d "$p/.git" && test -d "$d/.git"'),
+        ("pleb recovery guide", "test -r /usr/local/share/doc/pleb/RECOVERY.md"),
         ("pleb xsession",        "test -f /usr/share/xsessions/pleb.desktop"),
         ("pleb-session binary",  "test -x /usr/local/bin/pleb-session"),
         ("session.env",          "test -f /etc/pleb/session.env"),
