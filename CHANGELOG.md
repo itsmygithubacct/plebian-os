@@ -23,6 +23,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Plebian-OS/Pleb sessions, independent of the selected desktop provider.
   Provider-owned state is untouched, so standalone Kilix-95 keeps its XP
   wallpaper, and existing Pleb desktop state is never replaced.
+- Allocate the shared runtime-data root and every coordinated component root
+  as user-owned `0700` directories before the first provisioning lock, cache,
+  or provenance probe can create them under firstboot's conventional umask.
+  Kilix-95 also repairs its own private root and category boundaries on direct
+  launches, so standalone games and app state retain the same privacy contract.
 
 ### Coordinated release closure
 
@@ -33,6 +38,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Include Kilix's fresh-storage bootstrap repair so the verified fallback
   creates its `prebuilt/` parent before publishing `kitty.app`, preventing
   firstboot retry exhaustion on a newly installed data root.
+- Give every streamed graphics frame a unique, privately owned transport file
+  and retire it only after the terminal engine has consumed it. This prevents
+  delayed `SIGBUS` crashes caused by truncating a still-mapped framebuffer and
+  bounds both Kilix and Kilix-95 frame/cache churn during long desktop or AMP
+  sessions.
 
 ### Installer identity
 

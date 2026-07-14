@@ -593,6 +593,22 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     kdir = ('. /etc/pleb/session.env 2>/dev/null; '
             's="${GPU_TERMINAL_SOURCE_HOME:-$HOME/gpu_terminal}"; '
             'd="${KILIX_DIR:-$s/kilix}";')
+    private_storage = (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        'g="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}";'
+        'p="${PLEB_STORAGE_HOME:-$g/pleb}";'
+        'k="${KILIX_STORAGE_HOME:-$g/kilix}";'
+        'n="${KILIX95_STORAGE_HOME:-$g/kilix-95}";'
+        'o="${PLEBIAN_OS_STORAGE_HOME:-$g/plebian-os}";'
+        'case "$g" in "$HOME"/*) ;; *) exit 1;; esac;'
+        'for d in "$p" "$k" "$n" "$o"; do '
+        'case "$d" in "$g"/*) ;; *) exit 1;; esac; done;'
+        'for d in "$g" "$p" "$k" "$n" "$o"; do '
+        '[ -d "$d" ] && [ ! -L "$d" ] && '
+        '[ "$(readlink -m -- "$d")" = "$d" ] && '
+        '[ "$(stat -c \'%u\' -- "$d")" = "$(id -u)" ] && '
+        '[ "$(stat -c \'%a\' -- "$d")" = 700 ] || exit 1; '
+        'done')
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
@@ -602,6 +618,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
          ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
          ' p="${PLEB_DIR:-$s/pleb}";'
          ' test -d "$o/.git" && test -d "$p/.git" && test -d "$d/.git"'),
+        ("private storage roots", private_storage),
         ("pleb recovery guide", "test -r /usr/local/share/doc/pleb/RECOVERY.md"),
         ("pleb xsession",        "test -f /usr/share/xsessions/pleb.desktop"),
         ("pleb-session binary",  "test -x /usr/local/bin/pleb-session"),

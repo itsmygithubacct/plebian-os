@@ -73,6 +73,24 @@ class VmBuilderEnvTests(unittest.TestCase):
         for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR"):
             self.assertIn(checkout, source[source.index("def verify_provisioning"):])
 
+    def test_acceptance_checks_private_storage_roots(self):
+        source = (ROOT / "build" / "build_vm_image.py").read_text()
+        verify = source[source.index("def verify_provisioning"):]
+        self.assertIn('"private storage roots"', verify)
+        for root in (
+            "GPU_TERMINAL_HOME",
+            "PLEB_STORAGE_HOME",
+            "KILIX_STORAGE_HOME",
+            "KILIX95_STORAGE_HOME",
+            "PLEBIAN_OS_STORAGE_HOME",
+        ):
+            self.assertIn(root, verify)
+        self.assertIn("stat -c \\'%u\\'", verify)
+        self.assertIn("stat -c \\'%a\\'", verify)
+        self.assertIn("readlink -m", verify)
+        self.assertIn('case "$g" in "$HOME"/*)', verify)
+        self.assertIn('= 700 ] || exit 1', verify)
+
     def test_yes_mode_generates_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):
             built = vm.gather_config(args(password=None))
