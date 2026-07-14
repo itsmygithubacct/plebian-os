@@ -694,8 +694,52 @@ def _manifest_target(root: Path, raw_path: bytes, line_number: int) -> Path:
     return target
 
 
+def _custom_manifest_paths(root: Path) -> list[bytes]:
+    """Return every Plebian-owned regular file that the media must verify."""
+
+    required_file = root / "preseed.cfg"
+    try:
+        required_stat = required_file.lstat()
+    except OSError as exc:
+        raise _fail(required_file, f"cannot stat required media file: {exc}") from exc
+    if not stat.S_ISREG(required_stat.st_mode):
+        raise _fail(required_file, "required media file is not a regular file")
+
+    payload_root = root / "plebian-os"
+    try:
+        payload_stat = payload_root.lstat()
+    except OSError as exc:
+        raise _fail(
+            payload_root, f"cannot stat required payload directory: {exc}"
+        ) from exc
+    if not stat.S_ISDIR(payload_stat.st_mode):
+        raise _fail(payload_root, "required payload path is not a directory")
+
+    payload_paths: list[bytes] = []
+    try:
+        for path in payload_root.rglob("*"):
+            path_stat = path.lstat()
+            if stat.S_ISDIR(path_stat.st_mode):
+                continue
+            if not stat.S_ISREG(path_stat.st_mode):
+                raise _fail(path, "payload path is not a regular file")
+            relative = os.fsencode(path.relative_to(root).as_posix())
+            if b"\n" in relative or b"\r" in relative:
+                raise _fail(path, "payload filename cannot contain a newline")
+            payload_paths.append(relative)
+    except BrandingError:
+        raise
+    except OSError as exc:
+        raise _fail(payload_root, f"cannot enumerate payload files: {exc}") from exc
+
+    if not payload_paths:
+        raise _fail(payload_root, "payload directory contains no regular files")
+    payload_paths.sort()
+    return [b"preseed.cfg", *payload_paths]
+
+
 def refresh_md5_manifest(root: Path | str) -> None:
-    """Refresh existing md5sum.txt entries without changing path order/spelling."""
+    """Refresh Debian entries and append every Plebian-owned media file."""
 
     root = Path(root)
     try:
@@ -723,6 +767,7 @@ def refresh_md5_manifest(root: Path | str) -> None:
     raw_lines = original[:-1].split(b"\n") if has_terminal_newline else original.split(b"\n")
     refreshed: list[bytes] = []
     digest_cache: dict[Path, str] = {}
+    listed_paths: set[bytes] = set()
 
     for line_number, line in enumerate(raw_lines, start=1):
         match = _MANIFEST_LINE_RE.fullmatch(line)
@@ -736,9 +781,24 @@ def refresh_md5_manifest(root: Path | str) -> None:
             )
         if resolved not in digest_cache:
             digest_cache[resolved] = _md5_file(target)
+        listed_paths.add(match.group("path"))
         refreshed.append(
             digest_cache[resolved].encode("ascii") + line[32:]
         )
+
+    for raw_path in _custom_manifest_paths(root):
+        if raw_path in listed_paths:
+            continue
+        target = _manifest_target(root, raw_path, len(refreshed) + 1)
+        resolved = target.resolve(strict=True)
+        if resolved == manifest:
+            raise BrandingError("custom manifest path cannot list md5sum.txt")
+        if resolved not in digest_cache:
+            digest_cache[resolved] = _md5_file(target)
+        refreshed.append(
+            digest_cache[resolved].encode("ascii") + b"  ./" + raw_path
+        )
+        listed_paths.add(raw_path)
 
     updated = b"\n".join(refreshed)
     if has_terminal_newline:
@@ -799,7 +859,7 @@ def _parser() -> argparse.ArgumentParser:
     assets.add_argument("asset_root", type=Path)
 
     refresh = subparsers.add_parser(
-        "refresh-md5", help="refresh existing md5sum.txt entries"
+        "refresh-md5", help="refresh media md5sum.txt and add Plebian payload files"
     )
     refresh.add_argument("root", type=Path, help="extracted ISO root")
     return parser

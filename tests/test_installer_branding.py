@@ -549,6 +549,7 @@ class Md5ManifestTests(unittest.TestCase):
     def make_manifest_tree(self, base, *, terminal_newline=True):
         root = base / "iso"
         (root / "nested").mkdir(parents=True)
+        (root / "plebian-os" / "nested").mkdir(parents=True)
         entries = [
             ("z-last.bin", b"last"),
             ("a file.txt", b"space"),
@@ -558,20 +559,27 @@ class Md5ManifestTests(unittest.TestCase):
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(contents)
+        custom_entries = [
+            ("preseed.cfg", b"preseed"),
+            ("plebian-os/a file.txt", b"payload space"),
+            ("plebian-os/nested/z-last.bin", b"payload nested"),
+        ]
+        for relative, contents in custom_entries:
+            (root / relative).write_bytes(contents)
         lines = [f"{'0' * 32}  ./{relative}" for relative, _ in entries]
         manifest = root / "md5sum.txt"
         ending = "\n" if terminal_newline else ""
         manifest.write_text("\n".join(lines) + ending)
         os.utime(manifest, ns=(1_650_000_000_000_000_000,) * 2)
-        return root, manifest, entries
+        return root, manifest, entries, custom_entries
 
-    def test_refreshes_digests_in_existing_order_and_preserves_spelling(self):
+    def test_refreshes_existing_entries_and_appends_all_custom_files(self):
         for terminal_newline in (True, False):
             with (
                 self.subTest(terminal_newline=terminal_newline),
                 tempfile.TemporaryDirectory() as td,
             ):
-                root, manifest, entries = self.make_manifest_tree(
+                root, manifest, entries, custom_entries = self.make_manifest_tree(
                     Path(td), terminal_newline=terminal_newline
                 )
                 original_mtime = manifest.stat().st_mtime_ns
@@ -580,13 +588,50 @@ class Md5ManifestTests(unittest.TestCase):
 
                 expected_lines = [
                     f"{hashlib.md5(contents).hexdigest()}  ./{relative}"
-                    for relative, contents in entries
+                    for relative, contents in entries + custom_entries
                 ]
                 ending = "\n" if terminal_newline else ""
                 self.assertEqual(
                     manifest.read_text(), "\n".join(expected_lines) + ending
                 )
                 self.assertEqual(manifest.stat().st_mtime_ns, original_mtime)
+
+    def test_does_not_duplicate_custom_file_already_in_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, manifest, _, _ = self.make_manifest_tree(Path(td))
+            manifest.write_text(
+                manifest.read_text()
+                + f"{'0' * 32}  ./preseed.cfg\n"
+            )
+
+            brand_installer.refresh_md5_manifest(root)
+
+            lines = manifest.read_text().splitlines()
+            preseed_lines = [line for line in lines if line.endswith("  ./preseed.cfg")]
+            self.assertEqual(len(preseed_lines), 1)
+            self.assertEqual(
+                preseed_lines[0],
+                f"{hashlib.md5(b'preseed').hexdigest()}  ./preseed.cfg",
+            )
+
+    def test_invalid_custom_payload_leaves_manifest_unchanged(self):
+        def missing_preseed(root):
+            (root / "preseed.cfg").unlink()
+
+        def payload_symlink(root):
+            (root / "plebian-os" / "link").symlink_to(root / "z-last.bin")
+
+        for label, mutate in (
+            ("missing preseed", missing_preseed),
+            ("payload symlink", payload_symlink),
+        ):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
+                root, manifest, _, _ = self.make_manifest_tree(Path(td))
+                mutate(root)
+                before = manifest.read_bytes()
+                with self.assertRaises(brand_installer.BrandingError):
+                    brand_installer.refresh_md5_manifest(root)
+                self.assertEqual(manifest.read_bytes(), before)
 
     def test_malformed_missing_and_unsafe_entries_leave_manifest_unchanged(self):
         def uppercase(root, manifest):
@@ -621,7 +666,7 @@ class Md5ManifestTests(unittest.TestCase):
         }
         for label, mutate in cases.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
-                root, manifest, _ = self.make_manifest_tree(Path(td))
+                root, manifest, _, _ = self.make_manifest_tree(Path(td))
                 mutate(root, manifest)
                 before = manifest.read_bytes()
                 with self.assertRaises(brand_installer.BrandingError):
@@ -631,7 +676,7 @@ class Md5ManifestTests(unittest.TestCase):
     def test_rejects_symlink_that_escapes_iso_root(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
-            root, manifest, _ = self.make_manifest_tree(base)
+            root, manifest, _, _ = self.make_manifest_tree(base)
             outside = base / "outside"
             outside.write_bytes(b"not part of ISO")
             (root / "escape").symlink_to(outside)
@@ -643,7 +688,7 @@ class Md5ManifestTests(unittest.TestCase):
 
     def test_commit_failure_rolls_manifest_back(self):
         with tempfile.TemporaryDirectory() as td:
-            root, manifest, _ = self.make_manifest_tree(Path(td))
+            root, manifest, _, _ = self.make_manifest_tree(Path(td))
             before = manifest.read_bytes()
             with mock.patch.object(
                 brand_installer.os,
