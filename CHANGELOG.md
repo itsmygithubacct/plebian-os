@@ -32,8 +32,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   exact prefix with a deterministic two-file overlay, and refresh every entry
   in Debian's existing ISO media-check manifest after all remaster mutations.
 - Install the matching desktop wallpaper as a root-owned OS asset, select it
-  only for desktops without existing Kilix state, record its build-time hash,
-  and carry future artwork revisions through transactional self-update.
+  only for Pleb sessions without existing desktop state, record its build-time
+  hash, and carry future artwork revisions through transactional self-update.
 - Ship the artwork attribution and complete GPL version 2 text on installer
   media and installed systems, record their hashes, and update or roll them
   back with the same OS-layer transaction as the wallpaper.

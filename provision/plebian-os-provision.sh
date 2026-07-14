@@ -739,7 +739,7 @@ selected_desktop_wallpaper_state_dir() {
 seed_selected_desktop_wallpaper_state() {
     local state_dir
     state_dir="$(selected_desktop_wallpaper_state_dir)" || {
-        log "desktop provider $KILIX_DESKTOP_PROVIDER does not use managed Kilix wallpaper state"
+        log "desktop provider $KILIX_DESKTOP_PROVIDER does not use managed Pleb wallpaper state"
         return 0
     }
     seed_desktop_wallpaper_state "$state_dir" "$DESKTOP_WALLPAPER_DST"
@@ -752,23 +752,23 @@ seed_desktop_wallpaper_state() {
 
     [ "$DESKTOP" = 1 ] || return 0
     if [ -e "$state_path" ] || [ -L "$state_path" ]; then
-        log "preserving existing Kilix desktop state (including wallpaper): $state_path"
+        log "preserving existing Pleb desktop state (including wallpaper): $state_path"
         return 0
     fi
-    log "seeding the Plebian-OS wallpaper for a new Kilix desktop -> $state_path"
+    log "seeding the Plebian-OS wallpaper for a new Pleb desktop -> $state_path"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + (as $TARGET_USER) create $state_path (0600) only if it still does not exist"
         return 0
     fi
 
     as_user mkdir -p -- "$state_dir" \
-        || die "could not create Kilix desktop state directory as $TARGET_USER: $state_dir"
+        || die "could not create Pleb desktop state directory as $TARGET_USER: $state_dir"
     [ -d "$state_dir" ] && [ ! -L "$state_dir" ] \
-        || die "Kilix desktop state path is not a safe directory: $state_dir"
+        || die "Pleb desktop state path is not a safe directory: $state_dir"
     owner="$(stat -c '%u' "$state_dir" 2>/dev/null)" \
-        || die "could not inspect Kilix desktop state directory: $state_dir"
+        || die "could not inspect Pleb desktop state directory: $state_dir"
     [ "$owner" = "$TARGET_UID" ] \
-        || die "Kilix desktop state directory is not owned by $TARGET_USER: $state_dir"
+        || die "Pleb desktop state directory is not owned by $TARGET_USER: $state_dir"
 
     # Write to a user-owned temporary inode, fsync it, then link it into place.
     # link(2) is an atomic create-if-absent: a concurrent first desktop launch or
@@ -807,8 +807,8 @@ PY
     else
         rc=$?
         [ "$rc" = 17 ] \
-            || die "could not seed Kilix desktop wallpaper state"
-        log "Kilix desktop state appeared concurrently; preserving it"
+            || die "could not seed Pleb desktop wallpaper state"
+        log "Pleb desktop state appeared concurrently; preserving it"
     fi
 }
 
@@ -1468,9 +1468,9 @@ update_pleb_checkout() {
     if [ -n "$PLEB_BRANCH" ]; then
         as_user git -C "$PLEB_DIR" fetch --prune origin "$PLEB_BRANCH" \
             || die "pleb fetch failed"
-        current="$(git -C "$PLEB_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
+        current="$(as_target_readonly git -C "$PLEB_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
         if [ "$current" != "$PLEB_BRANCH" ]; then
-            if git -C "$PLEB_DIR" show-ref --verify --quiet "refs/heads/$PLEB_BRANCH"; then
+            if as_target_readonly git -C "$PLEB_DIR" show-ref --verify --quiet "refs/heads/$PLEB_BRANCH"; then
                 as_user git -C "$PLEB_DIR" checkout "$PLEB_BRANCH" \
                     || die "could not check out PLEB_BRANCH=$PLEB_BRANCH"
             else
