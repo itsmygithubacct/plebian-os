@@ -45,7 +45,11 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    upstream source.
 2. Run each repository's complete test/lint suite and integration contract
    tests. Confirm all four worktrees are clean, review their exact commits, and
-   commit the coordinated changes.
+   commit the coordinated changes. Immediately before tagging, confirm those
+   commits are still the intended branch tips; classify any newer commit as
+   either part of this release or explicitly post-release. For the pinned Kilix
+   commit, inspect its `src/go.mod` `toolchain` line and make the manifest's
+   exact Go version and architecture hashes match it.
 3. Push the reviewed commits **without tags**. Firstboot fetches the exact
    component SHAs from GitHub, so the pinned acceptance guest cannot test an
    unpublished object. A failed acceptance is fixed with new commits; no

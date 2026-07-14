@@ -24,6 +24,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Provider-owned state is untouched, so standalone Kilix-95 keeps its XP
   wallpaper, and existing Pleb desktop state is never replaced.
 
+### Coordinated release closure
+
+- Pin the final Pleb, Kilix, and Kilix-95 commits together with the archived
+  Debian installer, package snapshot, verified Kitty fallback, and exact Go
+  archives. The closure includes Kilix's current-kitty clickable-chrome rebase,
+  content-only fullscreen behavior, matching Kilix-95 help, and Go 1.26.5.
+
 ### Installer identity
 
 - Added the editable angular-P geek logo, matching desktop wallpaper, and
