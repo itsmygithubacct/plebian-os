@@ -94,16 +94,21 @@ class ProvisionPlumbingTests(unittest.TestCase):
             wait=False,
         )
         env = vm.runtime_build_env(cfg)
-        self.assertEqual(env["GPU_TERMINAL_SOURCE_HOME"], "/home/pleb/gpu_terminal")
-        self.assertEqual(env["PLEB_DIR"], "/home/pleb/gpu_terminal/pleb")
-        self.assertEqual(env["KILIX_DIR"], "/home/pleb/gpu_terminal/kilix")
-        self.assertEqual(env["KILIX95_DIR"], "/home/pleb/gpu_terminal/kilix-95")
         self.assertEqual(
-            env["PLEBIAN_OS_DIR"], "/home/pleb/gpu_terminal/plebian-os")
+            env["PLEBIAN_OS_TARGET_SOURCE_HOME"],
+            "/home/pleb/gpu_terminal",
+        )
         self.assertEqual(
             env["PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME"],
             "/home/pleb/.local/gpu_terminal",
         )
+        for host_or_guest_key in (
+            "GPU_TERMINAL_SOURCE_HOME", "GPU_TERMINAL_HOME",
+            "PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR", "KILIX95_DIR",
+            "PLEB_STORAGE_HOME", "KILIX_STORAGE_HOME",
+            "KILIX95_STORAGE_HOME", "PLEBIAN_OS_STORAGE_HOME",
+        ):
+            self.assertNotIn(host_or_guest_key, env)
 
     def test_source_and_data_layout_reaches_media_and_session_provenance(self):
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()

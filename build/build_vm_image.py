@@ -411,42 +411,20 @@ def runtime_build_env(cfg: Config) -> dict[str, str]:
     home = f"/home/{cfg.username}"
     source_root = os.environ.get(
         "PLEBIAN_OS_TARGET_SOURCE_HOME", f"{home}/gpu_terminal")
-    data_root = f"{home}/.local/gpu_terminal"
-    pleb_storage = f"{data_root}/pleb"
-    kilix_storage = f"{data_root}/kilix"
-    kilix95_storage = f"{data_root}/kilix-95"
-    os_storage = f"{data_root}/plebian-os"
+    data_root = os.environ.get(
+        "PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME",
+        f"{home}/.local/gpu_terminal",
+    )
     return {
         "PLEBIAN_OS_DESKTOP": "1" if cfg.desktop else "0",
         "PLEBIAN_OS_KIOSK": "1" if cfg.kiosk else "0",
         "PLEBIAN_OS_USER": cfg.username,
         "PLEBIAN_OS_NOPASSWD_SUDO": "1" if cfg.nopasswd_sudo else "0",
-        "GPU_TERMINAL_SOURCE_HOME": source_root,
-        # These three names also configure the builder's own host-side storage.
-        # Use target-prefixed transport keys so remastering never tries to write
-        # build scratch data into the future guest's /home tree.
+        # Target-prefixed transport keys keep the builder's host-side cache and
+        # scratch variables from becoming guest configuration. remaster-iso.sh
+        # derives every coordinated checkout/data path from these two roots.
+        "PLEBIAN_OS_TARGET_SOURCE_HOME": source_root,
         "PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME": data_root,
-        "PLEBIAN_OS_DIR": os.environ.get(
-            "PLEBIAN_OS_DIR", f"{source_root}/plebian-os"),
-        "PLEBIAN_OS_TARGET_STORAGE_HOME": os_storage,
-        "PLEBIAN_OS_TARGET_SESSION_HOME": f"{os_storage}/session",
-        "PLEB_DIR": os.environ.get("PLEB_DIR", f"{source_root}/pleb"),
-        "PLEB_STORAGE_HOME": pleb_storage,
-        "PLEB_CONFIG_HOME": f"{pleb_storage}/config",
-        "PLEB_STATE_HOME": f"{pleb_storage}/state",
-        "PLEB_CACHE_HOME": f"{pleb_storage}/cache",
-        "PLEB_SESSION_HOME": f"{pleb_storage}/session",
-        "PLEB_DATA_HOME": f"{pleb_storage}/data",
-        "KILIX_DIR": os.environ.get("KILIX_DIR", f"{source_root}/kilix"),
-        "KILIX_STORAGE_HOME": kilix_storage,
-        "KILIX_BUILD_DIRECTORY": f"{kilix_storage}/build",
-        "KILIX_DATA_HOME": f"{kilix_storage}/data",
-        "KILIX_DESKTOP_DIR": f"{pleb_storage}/data/desktop",
-        "KILIX_PREBUILT_HOME": f"{kilix_storage}/prebuilt/kitty.app",
-        "KILIX95_DIR": os.environ.get(
-            "KILIX95_DIR", f"{source_root}/kilix-95"),
-        "KILIX95_STORAGE_HOME": kilix95_storage,
-        "KILIX95_DATA_HOME": f"{kilix95_storage}/data",
     }
 
 

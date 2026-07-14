@@ -121,7 +121,7 @@ run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
 validate_release_inputs() {
     [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
     local key
-    for key in PLEB_REF KILIX_REF KILIX95_REF; do
+    for key in PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF; do
         [[ "${!key}" =~ ^[0-9a-fA-F]{40}$ ]] \
             || die "release mode requires $key to be a full 40-character commit SHA"
     done
@@ -1175,28 +1175,29 @@ write_source_tool_manifest() {
         return 0
     fi
     local state=/var/lib/plebian-os versions_tmp sources_tmp
-    local pleb_commit kilix_commit kilix_source_commit kilix95_commit
+    local plebian_os_commit pleb_commit kilix_commit kilix_source_commit kilix95_commit
     local pleb_version kilix_version kilix95_version go_version engine engine_version uv_version
     mkdir -p "$state"
     versions_tmp="$(mktemp "$state/.versions.env.XXXXXX")"
     sources_tmp="$(mktemp "$state/.apt-sources.list.XXXXXX")"
 
+    plebian_os_commit="$(as_user git -C "$PLEBIAN_OS_DIR" rev-parse HEAD 2>/dev/null || true)"
     pleb_commit="$(as_user git -C "$PLEB_DIR" rev-parse HEAD 2>/dev/null || true)"
     kilix_commit="$(as_user git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
     kilix_source_commit="$(as_user git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
     kilix95_commit="$(as_user git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
-    pleb_version="$(as_user "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
-    kilix_version="$(as_user "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
+    pleb_version="$(as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
+    kilix_version="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
     if [ -f "$KILIX95_DIR/main.py" ]; then
-        kilix95_version="$(as_user python3 "$KILIX95_DIR/main.py" --version 2>/dev/null || true)"
+        kilix95_version="$(as_user env "${install_env[@]}" python3 "$KILIX95_DIR/main.py" --version 2>/dev/null || true)"
     else
         kilix95_version=""
     fi
     go_version="$(as_user bash -lc 'go version' 2>/dev/null || true)"
     uv_version="$(/usr/local/bin/uv --version 2>/dev/null || true)"
-    engine="$(as_user "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
+    engine="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
     if [ -n "$engine" ] && [ -x "$engine" ]; then
-        engine_version="$(as_user "$engine" --version 2>/dev/null | head -1 || true)"
+        engine_version="$(as_user env "${install_env[@]}" "$engine" --version 2>/dev/null | head -1 || true)"
     else
         engine_version=""
     fi
@@ -1209,6 +1210,10 @@ write_source_tool_manifest() {
         provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
         provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
         provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
+        provenance_kv PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
+        provenance_kv PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
+        provenance_kv PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
+        provenance_kv PLEBIAN_OS_COMMIT "$plebian_os_commit"
         provenance_kv PLEBIAN_OS_DIR "$PLEBIAN_OS_DIR"
         provenance_kv PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
         provenance_kv PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"
@@ -1263,6 +1268,8 @@ write_source_tool_manifest() {
             rm -f "$versions_tmp" "$sources_tmp"
             die "release apt provenance contains a non-snapshot index"
         fi
+        [ "$plebian_os_commit" = "${PLEBIAN_OS_REF,,}" ] \
+            || die "resolved plebian-os commit $plebian_os_commit does not match PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
         [ "$pleb_commit" = "${PLEB_REF,,}" ] \
             || die "resolved pleb commit $pleb_commit does not match PLEB_REF=$PLEB_REF"
         [ "$kilix_commit" = "${KILIX_REF,,}" ] \
@@ -1421,6 +1428,28 @@ checkout_pinned_ref() {
         || die "pinned $name checkout resolved to $resolved but HEAD is $actual"
     require_clean_pinned_checkout "$dir" "$name"
     log "$name pinned ref $ref verified at $actual"
+}
+
+ensure_plebian_os_checkout() {
+    local clone_args=()
+    if [ -d "$PLEBIAN_OS_DIR/.git" ]; then
+        log "plebian-os source present at $PLEBIAN_OS_DIR"
+        validate_checkout "$PLEBIAN_OS_DIR" "$PLEBIAN_OS_REPO" "plebian-os"
+        if [ -n "$PLEBIAN_OS_REF" ]; then
+            checkout_pinned_ref "$PLEBIAN_OS_DIR" "$PLEBIAN_OS_REF" "plebian-os"
+        fi
+        return 0
+    fi
+    [ ! -e "$PLEBIAN_OS_DIR" ] && [ ! -L "$PLEBIAN_OS_DIR" ] \
+        || die "plebian-os source path exists but is not a git checkout: $PLEBIAN_OS_DIR"
+
+    log "cloning plebian-os source -> $PLEBIAN_OS_DIR"
+    [ -n "$PLEBIAN_OS_BRANCH" ] && clone_args=(--branch "$PLEBIAN_OS_BRANCH")
+    as_user git clone "${clone_args[@]}" "$PLEBIAN_OS_REPO" "$PLEBIAN_OS_DIR" \
+        || die "git clone of plebian-os failed ($PLEBIAN_OS_REPO)"
+    if [ -n "$PLEBIAN_OS_REF" ]; then
+        checkout_pinned_ref "$PLEBIAN_OS_DIR" "$PLEBIAN_OS_REF" "plebian-os"
+    fi
 }
 
 update_pleb_checkout() {
@@ -1590,13 +1619,13 @@ build_kilix_fork() {
     ensure_go_for_kilix_build
 
     log "building kilix clickable-chrome fork"
-    as_user "$KILIX_DIR/kilix" --build \
+    as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --build \
         || die "kilix fork build failed"
 
     local fork engine
     fork="$KILIX_BUILD_DIRECTORY/current/src/kitty/launcher/kitty"
     [ -x "$fork" ] || die "kilix fork build did not produce $fork"
-    engine="$(as_user "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
+    engine="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
     [ "$engine" = "$fork" ] \
         || die "kilix is not using the fork engine after build (got: ${engine:-<empty>})"
     log "kilix engine verified: $engine"
@@ -1730,7 +1759,7 @@ fi
 # Password-change helper + scoped sudoers (the default-password desktop nag).
 install_passwd_nag
 
-# ── 2. clone pleb into the shared source root (as the user) ─────────────────
+# ── 2. allocate all coordinated source checkouts under the shared root ───────
 case "$GPU_TERMINAL_SOURCE_HOME" in
     /*) ;;
     *) die "GPU_TERMINAL_SOURCE_HOME must be absolute: $GPU_TERMINAL_SOURCE_HOME" ;;
@@ -1745,6 +1774,7 @@ else
     [ "$(stat -c '%u' "$GPU_TERMINAL_SOURCE_HOME" 2>/dev/null)" = "$TARGET_UID" ] \
         || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
 fi
+ensure_plebian_os_checkout
 if [ -d "$PLEB_DIR/.git" ]; then
     log "pleb present at $PLEB_DIR — updating"
     update_pleb_checkout
@@ -1922,12 +1952,12 @@ fi
 
 if [ "$KIOSK" = 1 ]; then
     log "enabling autologin into Pleb (kiosk)"
-    as_user "$PLEB_DIR/bin/pleb" autologin on "$TARGET_USER" \
+    as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" autologin on "$TARGET_USER" \
         || die "pleb autologin failed; requested kiosk state was not applied"
     pin_remembered_session
 else
     log "ensuring Pleb autologin is disabled (non-kiosk mode)"
-    as_user "$PLEB_DIR/bin/pleb" autologin off \
+    as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" autologin off \
         || die "could not disable Pleb autologin; refusing to report reconciled state"
 fi
 
