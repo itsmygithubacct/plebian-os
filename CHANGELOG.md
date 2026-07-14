@@ -15,10 +15,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   provenance.
 - Mark Pleb installs launched by Plebian-OS as managed installs, preserving the
   distribution's coordinated storage and provider configuration.
-- Seed the branded wallpaper in the state directory for the provider that will
-  actually run: Kilix-95 for `external`, builtin Kilix for `builtin`, and the
-  installed external provider (falling back to builtin) for `auto`; existing
-  desktop state is never replaced.
+- Seed the branded wallpaper only in Pleb's persisted desktop state for
+  Plebian-OS/Pleb sessions, independent of the selected desktop provider.
+  Provider-owned state is untouched, so standalone Kilix-95 keeps its XP
+  wallpaper, and existing Pleb desktop state is never replaced.
 
 ### Installer identity
 
