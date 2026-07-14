@@ -32,6 +32,10 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "PLEB_REF",
             "KILIX_REPO",
             "KILIX_STORAGE_HOME",
+            "KILIX_CONFIG_HOME",
+            "KILIX_STATE_DIRECTORY",
+            "KILIX_CACHE_HOME",
+            "KILIX_SESSION_HOME",
             "KILIX_BUILD_DIRECTORY",
             "KILIX_DATA_HOME",
             "KILIX_DESKTOP_DIR",
@@ -49,6 +53,10 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "KILIX95_AUTO_INSTALL",
             "KILIX95_DIR",
             "KILIX95_STORAGE_HOME",
+            "KILIX95_CONFIG_HOME",
+            "KILIX95_STATE_HOME",
+            "KILIX95_CACHE_HOME",
+            "KILIX95_SESSION_HOME",
             "KILIX95_DATA_HOME",
             "KILIX95_REF",
         ]
@@ -119,9 +127,13 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "PLEB_DIR", "PLEB_STORAGE_HOME", "PLEB_CONFIG_HOME",
             "PLEB_STATE_HOME", "PLEB_CACHE_HOME", "PLEB_SESSION_HOME",
             "PLEB_DATA_HOME",
-            "KILIX_DIR", "KILIX_STORAGE_HOME", "KILIX_BUILD_DIRECTORY",
+            "KILIX_DIR", "KILIX_STORAGE_HOME", "KILIX_CONFIG_HOME",
+            "KILIX_STATE_DIRECTORY", "KILIX_CACHE_HOME",
+            "KILIX_SESSION_HOME", "KILIX_BUILD_DIRECTORY",
             "KILIX_DATA_HOME", "KILIX_DESKTOP_DIR", "KILIX_PREBUILT_HOME",
-            "KILIX95_DIR", "KILIX95_STORAGE_HOME", "KILIX95_DATA_HOME",
+            "KILIX95_DIR", "KILIX95_STORAGE_HOME", "KILIX95_CONFIG_HOME",
+            "KILIX95_STATE_HOME", "KILIX95_CACHE_HOME",
+            "KILIX95_SESSION_HOME", "KILIX95_DATA_HOME",
         )
         for key in keys:
             with self.subTest(key=key):
@@ -134,6 +146,11 @@ class ProvisionPlumbingTests(unittest.TestCase):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn("write_session_default", text)
         self.assertIn("printf 'if [ -z", text)
+        self.assertIn(
+            "export KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY KILIX_CACHE_HOME "
+            "KILIX_SESSION_HOME KILIX_PREBUILT_HOME",
+            text,
+        )
         self.assertNotIn(': "\\${KILIX_DIR:=', text)
 
     def test_env_forwarding_uses_arrays_not_optional_word_splitting(self):

@@ -105,8 +105,15 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
      Kilix-95 standalone still uses its XP wallpaper;
    - verify the shared data root and its `pleb`, `kilix`, `kilix-95`, and
      `plebian-os` component roots are real, target-user-owned directories with
-     mode `0700`; exercise Kilix-95 directly under a conventional umask and
-     confirm its config/state/cache/data/session roots remain private;
+     mode `0700`; check every persisted category below them, including Pleb's
+     config/state/cache/session/data and canonical `data/desktop`, Kilix's
+     config/state/cache/session/build/data and every component of the configured
+     prebuilt path, Kilix-95's config/state/cache/session/data, and Plebian-OS's
+     session directory. Repeat after `pleb update`, `plebian-os-update`, and a
+     reboot, preserving sentinel files throughout. Exercise Kilix-95 directly
+     under a conventional umask, confirm its categories remain private, verify
+     an external desktop override is not chmodded, and confirm a root invocation
+     of `plebian-os-update` fails immediately with “run without sudo” guidance;
    - exercise a successful eleven-file OS-layer update and an induced failure,
      confirming rollback restores the prior wallpaper, LightDM greeter
      override, attribution, license, scripts, Pleb recovery guide (or removes
