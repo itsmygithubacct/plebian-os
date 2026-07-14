@@ -271,7 +271,7 @@ class ProvisioningLifecycleTests(unittest.TestCase):
         self.assertGreater(source_call, package_call)
         for artifact in ("packages.list", "versions.env", "apt-sources.list"):
             self.assertIn(artifact, PROVISION)
-        for key in ("PLEB_COMMIT", "KILIX_COMMIT", "KILIX95_COMMIT",
+        for key in ("PLEBIAN_OS_COMMIT", "PLEB_COMMIT", "KILIX_COMMIT", "KILIX95_COMMIT",
                     "GO_VERSION", "KILIX_ENGINE_VERSION"):
             self.assertIn(key, PROVISION)
 

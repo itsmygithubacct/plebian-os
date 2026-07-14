@@ -149,6 +149,42 @@ class ProvisionPlumbingTests(unittest.TestCase):
                 self.assertNotIn("${KILIX_REF:+", text)
                 self.assertNotIn("${KILIX95_REF:+", text)
 
+    def test_firstboot_allocates_and_records_plebian_os_checkout(self):
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertIn("ensure_plebian_os_checkout()", provision)
+        self.assertIn(
+            'as_user git clone "${clone_args[@]}" "$PLEBIAN_OS_REPO" "$PLEBIAN_OS_DIR"',
+            provision,
+        )
+        self.assertLess(
+            provision.rindex("\nensure_plebian_os_checkout\n"),
+            provision.index(
+                'as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install'
+            ),
+        )
+        for key in (
+            "PLEBIAN_OS_REPO", "PLEBIAN_OS_BRANCH", "PLEBIAN_OS_REF",
+            "PLEBIAN_OS_COMMIT",
+        ):
+            self.assertIn(f"provenance_kv {key}", provision)
+
+    def test_reset_env_runtime_calls_receive_coordinated_storage(self):
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        for invocation in (
+            'as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --build',
+            'as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which',
+            'as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" autologin',
+        ):
+            self.assertIn(invocation, provision)
+
+    def test_privileged_dependency_staging_never_uses_user_session_state(self):
+        deps = (ROOT / "provision" / "install-deps.sh").read_text()
+        self.assertNotIn("PLEBIAN_OS_SESSION_HOME", deps)
+        self.assertIn("PLEBIAN_OS_ROOT_SESSION_HOME", deps)
+        self.assertIn("/var/lib/plebian-os/session", deps)
+        self.assertIn("root:root mode 0700", deps)
+        self.assertIn('readlink -m -- "$PLEBIAN_OS_ROOT_SESSION_HOME"', deps)
+
     def test_update_honors_pinned_pleb_ref(self):
         text = (ROOT / "provision" / "plebian-os-update.sh").read_text()
         self.assertIn("PLEB_REF", text)
