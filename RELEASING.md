@@ -86,6 +86,10 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
 
    - verify `/usr/local/share/plebian-os/wallpapers/plebian-os.png` is
      `root:root`, mode `0644`, and has the expected tracked/build-info SHA-256;
+   - verify `/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf` is
+     `root:root`, mode `0644`, matches the build-info SHA-256, selects that
+     wallpaper with `user-background=false`, and shows Plebian branding in both
+     the normal greeter and the exhausted-firstboot recovery path;
    - open **Start > Help > Pleb Recovery Guide**, confirm it displays the
      installed `/usr/local/share/doc/pleb/RECOVERY.md`, and verify the guide
      includes both the full Plebian-OS dependency helper and the
@@ -99,11 +103,12 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
      session defaults, and final provenance; confirm `external`, `builtin`, and
      both `auto` outcomes seed only Pleb's `data/desktop` state, while launching
      Kilix-95 standalone still uses its XP wallpaper;
-   - exercise a successful ten-file OS-layer update and an induced failure,
-     confirming rollback restores the prior wallpaper, attribution, license,
-     scripts, Pleb recovery guide (or removes it if newly created), and state;
+   - exercise a successful eleven-file OS-layer update and an induced failure,
+     confirming rollback restores the prior wallpaper, LightDM greeter
+     override, attribution, license, scripts, Pleb recovery guide (or removes
+     newly introduced files/directories), and state;
      separately test the documented v0.1.1 migration with two updater runs
-     (seven-file updater first, ten-file updater second);
+     (seven-file updater first, eleven-file updater second);
    - verify the installed
      `/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md` and
      `/usr/local/share/doc/plebian-os/COPYING.GPL-2` are `root:root`, mode

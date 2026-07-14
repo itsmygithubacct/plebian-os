@@ -37,8 +37,9 @@ bytes as `PLEBIAN_OS_DESKTOP_WALLPAPER_SHA256` in
 
 The immutable v0.1.1 updater knows a fixed seven-file OS-layer manifest, so an
 upgrade from v0.1.1 needs two `plebian-os-update` invocations: the first deploys
-the new scripts, and the second uses their ten-file manifest to install this
-asset plus the attribution and GPL text, then seed a new desktop. Do not substitute a bare
+the new scripts, and the second uses their eleven-file manifest to install this
+asset, its LightDM greeter override, the attribution, and GPL text, then seed a
+new desktop. Do not substitute a bare
 `sudo plebian-os-provision` between those runs because sudo does not preserve
 the coordinated install settings. For configuration-preserving reprovisioning
 orchestration, the provisioner has a defensive fallback that accepts the asset

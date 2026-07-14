@@ -43,6 +43,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    - installs the Plebian-OS wallpaper at a stable system path and selects it
      only in Pleb's persisted desktop state (existing Pleb state is preserved,
      while standalone Kilix-95 retains its XP wallpaper);
+   - selects that same branded asset for the LightDM GTK greeter and disables
+     per-user greeter backgrounds, including before firstboot succeeds;
    - validates and installs the artwork attribution and GPL version 2 text under
      `/usr/local/share/doc/plebian-os/`, preserving their relative link;
    - installs Pleb's update recovery guide under
@@ -88,8 +90,9 @@ is moved into the reported recovery directory instead of being deleted.
 after moving the Plebian-OS ref/branch to this newer revision. The immutable
 v0.1.1 updater has a fixed seven-file OS-layer manifest: its first invocation
 can deploy the new updater and provisioner, but cannot deploy the newly added
-three files (the wallpaper, attribution, and license text). The second invocation
-runs the new ten-file transaction, installs all three validated payloads,
+four files (the wallpaper, LightDM greeter override, attribution, and license
+text). The second invocation runs the new eleven-file transaction, installs all
+four validated payloads,
 commits the complete stack, and only then seeds the wallpaper for a Pleb session
 with no existing desktop state. Both invocations
 are required; do not run a bare `sudo plebian-os-provision` between them because
@@ -179,6 +182,7 @@ to trust an existing artifact.
 |---|---|
 | `provision/plebian-os-provision.sh` | the provisioner: apt deps → clone pleb → `pleb install` → set the session |
 | `provision/plebian-os-firstboot.service` | systemd oneshot that runs it once on first boot |
+| `provision/lightdm-gtk-greeter.conf` | fixed greeter override selecting the installed Plebian wallpaper |
 | `preseed/preseed.cfg` | a regular Debian install, no desktop task, wires in the provisioner |
 | `build/remaster-iso.sh` | inject the preseed + provisioner into a trixie netinst ISO |
 | `build/brand-installer.py` | validate artwork, brand BIOS/UEFI text, and refresh Debian's existing media-check entries |

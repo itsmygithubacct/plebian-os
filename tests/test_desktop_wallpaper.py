@@ -434,7 +434,7 @@ fi
         ]
         self.assertNotIn("exit 1", root_deploy)
         self.assertGreaterEqual(
-            update.count("for dir in / /usr /usr/local /usr/local/share; do"), 3
+            update.count("for dir in / /usr /usr/local /usr/local/share"), 4
         )
         self.assertIn("for path in / /usr /usr/local /usr/local/share; do", provision)
         self.assertIn("(8#$mode & 8#1) != 0", provision)
@@ -534,7 +534,7 @@ desktop_wallpaper_matches_expected_hash \
         self.assertIn('wallpaper_actual" = "$wallpaper_expected', update)
         self.assertIn('wallpaper_actual" = "$wallpaper_update_expected', update)
         self.assertGreaterEqual(update.count(destination), 3)
-        self.assertIn('[ "${#expected_hashes[@]}" -eq 10 ]', update)
+        self.assertIn('[ "${#expected_hashes[@]}" -eq 11 ]', update)
         for source, installed in (
             (
                 "assets/installer/ATTRIBUTION.md",
@@ -564,9 +564,11 @@ desktop_wallpaper_matches_expected_hash \
         for marker in (
             "ATTRIBUTION.md",
             "COPYING.GPL-2",
-            "modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644)",
-            "1048576 1048576)",
+            "lightdm-gtk-greeter.conf",
+            "modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644)",
+            "1048576 1048576 1048576)",
             'python3 - "${new_paths[8]}" "${new_paths[9]}"',
+            'python3 - "${new_paths[10]}"',
         ):
             self.assertIn(marker, root_deploy)
 
@@ -588,6 +590,7 @@ desktop_wallpaper_matches_expected_hash \
             "/usr/local/share/doc/plebian-os",
             "/usr/local/share/doc/plebian-os/installer",
             "/usr/local/share/doc/pleb",
+            "/etc/lightdm/lightdm-gtk-greeter.conf.d",
         ):
             self.assertIn(directory, snapshot)
             self.assertIn(directory, restore)
@@ -600,7 +603,7 @@ desktop_wallpaper_matches_expected_hash \
             self.assertIn("immutable v0.1.1 updater", normalized)
             self.assertIn("seven-file", normalized)
             self.assertIn("second", normalized)
-            self.assertIn("ten-file", normalized)
+            self.assertIn("eleven-file", normalized)
             self.assertIn("bare `sudo plebian-os-provision`", normalized)
 
 

@@ -104,6 +104,7 @@ validate_artwork_notice "$LICENSE" "$GPL2_LICENSE_SHA256" \
             "desktop-wallpaper.png",
             "ATTRIBUTION.md",
             "COPYING.GPL-2",
+            "lightdm-gtk-greeter.conf",
         )
         positions = [stage_names.index(name) for name in expected]
         self.assertEqual(positions, sorted(positions))
