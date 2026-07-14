@@ -55,9 +55,26 @@ class RemasterContractTests(unittest.TestCase):
                 "printf '%s\\n' \"$PLEBIAN_OS_USER\" "
                 "\"$GPU_TERMINAL_SOURCE_HOME\" \"$PLEB_DIR\" "
                 "\"$KILIX_DIR\" \"$KILIX95_DIR\" \"$PLEBIAN_OS_DIR\" "
-                "\"$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME\"\n"
+                "\"$GPU_TERMINAL_HOME\" \"$PLEB_STORAGE_HOME\" "
+                "\"$KILIX_STORAGE_HOME\" \"$KILIX95_STORAGE_HOME\" "
+                "\"$PLEBIAN_OS_STORAGE_HOME\" \"$KILIX_DESKTOP_DIR\"\n"
             )
-            env = {"PATH": os.environ["PATH"]}
+            # A live host Pleb session exports these unprefixed names. Poison
+            # them here so the test proves they cannot leak into guest media.
+            env = {
+                "PATH": os.environ["PATH"],
+                "GPU_TERMINAL_SOURCE_HOME": "/home/builder/gpu_terminal",
+                "GPU_TERMINAL_HOME": "/home/builder/.local/gpu_terminal",
+                "PLEBIAN_OS_DIR": "/home/builder/gpu_terminal/plebian-os",
+                "PLEB_DIR": "/home/builder/gpu_terminal/pleb",
+                "KILIX_DIR": "/home/builder/gpu_terminal/kilix",
+                "KILIX95_DIR": "/home/builder/gpu_terminal/kilix-95",
+                "PLEBIAN_OS_STORAGE_HOME": "/home/builder/os-data",
+                "PLEBIAN_OS_SESSION_HOME": "/home/builder/os-session",
+                "PLEB_STORAGE_HOME": "/home/builder/pleb-data",
+                "KILIX_STORAGE_HOME": "/home/builder/kilix-data",
+                "KILIX95_STORAGE_HOME": "/home/builder/kilix95-data",
+            }
             result = subprocess.run(
                 ["bash", "-c", harness], env=env, text=True,
                 capture_output=True, check=True,
@@ -70,7 +87,35 @@ class RemasterContractTests(unittest.TestCase):
             "/home/operator/gpu_terminal/kilix-95",
             "/home/operator/gpu_terminal/plebian-os",
             "/home/operator/.local/gpu_terminal",
+            "/home/operator/.local/gpu_terminal/pleb",
+            "/home/operator/.local/gpu_terminal/kilix",
+            "/home/operator/.local/gpu_terminal/kilix-95",
+            "/home/operator/.local/gpu_terminal/plebian-os",
+            "/home/operator/.local/gpu_terminal/pleb/data/desktop",
         ])
+
+    def test_remaster_rejects_user_that_disagrees_with_preseed(self):
+        start = self.source.index("resolve_target_layout() {")
+        end = self.source.index("\nresolve_target_layout\n", start)
+        resolver = self.source[start:end]
+        with tempfile.TemporaryDirectory() as td:
+            preseed = Path(td) / "preseed.cfg"
+            preseed.write_text("d-i passwd/username string operator\n")
+            harness = (
+                "set -euo pipefail\n"
+                f"PRESEED={preseed!s}\n"
+                "PLEBIAN_OS_USER=someone_else\n"
+                f"{resolver}\n"
+                "resolve_target_layout\n"
+            )
+            result = subprocess.run(
+                ["bash", "-c", harness],
+                env={"PATH": os.environ["PATH"]},
+                text=True,
+                capture_output=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("disagrees with preseed target user operator", result.stderr)
 
     def test_effective_preseed_controls_release_ssh_safety(self):
         self.assertIn("sed '/^[[:space:]]*#/d' \"$PRESEED\"", self.source)
