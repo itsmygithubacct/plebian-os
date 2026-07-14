@@ -118,6 +118,47 @@ def write_text_fixture(root):
         )
     (theme_root / "hl_c.png").write_bytes(b"highlight fixture")
 
+    (root / "README.txt").write_bytes(
+        b"\r\n".join(
+            marker
+            for marker, expected in brand_installer.README_TEXT_REQUIRED
+            for _ in range(expected)
+        )
+        + b"\r\n"
+    )
+    (root / "README.html").write_bytes(
+        b"\n".join(
+            marker
+            for marker, expected in brand_installer.README_HTML_REQUIRED
+            for _ in range(expected)
+        )
+        + b"\n"
+    )
+    (root / "isolinux" / "f1.txt").write_bytes(
+        b"\n".join(
+            (
+                brand_installer.F1_WELCOME,
+                brand_installer.F1_MEDIA,
+                brand_installer.F1_BUILD,
+                brand_installer.F1_PREREQUISITES,
+            )
+        )
+        + b"\n"
+    )
+    (root / "isolinux" / "f2.txt").write_bytes(
+        b"\n".join(
+            (
+                brand_installer.F2_HEADING,
+                brand_installer.F2_DEBIAN_REQUIREMENTS,
+                b"Thank you for choosing Debian!",
+            )
+        )
+        + b"\n"
+    )
+    (root / "isolinux" / "f9.txt").write_bytes(
+        brand_installer.F9_DEBIAN_SUPPORT + b"\n"
+    )
+
     timestamp_ns = 1_650_000_000_123_456_789
     for path in root.rglob("*"):
         if path.is_file():
@@ -351,6 +392,43 @@ class TextBrandingTests(unittest.TestCase):
             self.assertNotIn(brand_installer.BIOS_TITLE, menu_bytes)
             self.assertEqual(menu_bytes.count(b"\x07"), 1)
 
+            readme_text = (root / "README.txt").read_bytes()
+            readme_html = (root / "README.html").read_bytes()
+            for rendered in (readme_text, readme_html):
+                normalized = b" ".join(rendered.split())
+                self.assertIn(b"Plebian-OS 9.8.7", normalized)
+                self.assertIn(b"Debian 13", normalized)
+                self.assertIn(b"not an official Debian image", normalized)
+                self.assertIn(b"not endorsed by the Debian Project", normalized)
+                self.assertIn(b"itsmygithubacct/plebian-os/issues", normalized)
+                self.assertNotIn(b"Official amd64 NETINST", normalized)
+                self.assertNotIn(b"official release of the Debian", normalized)
+            self.assertIn(b"/install.amd/", readme_text)
+            self.assertIn(b"<title>Plebian-OS 9.8.7 installer</title>", readme_html)
+            self.assertNotIn(b"openlogo-nd-50.png", readme_html)
+
+            f1 = (root / "isolinux" / "f1.txt").read_bytes()
+            f2 = (root / "isolinux" / "f2.txt").read_bytes()
+            f9 = (root / "isolinux" / "f9.txt").read_bytes()
+            self.assertIn(b"Welcome to Plebian-OS 9.8.7!", f1)
+            self.assertIn(b"based on Debian 13 (trixie)", f1)
+            self.assertIn(b"INSTALLING PLEBIAN-OS", f2)
+            self.assertIn(b"at least 4 GiB of RAM and 20 GiB", f2)
+            self.assertIn(b"network connection is required on first boot", f2)
+            self.assertNotIn(b"350 megabytes", f2)
+            self.assertNotIn(b"1160 megabytes", f2)
+            self.assertIn(b"Thank you for choosing Plebian-OS!", f2)
+            self.assertIn(b"itsmygithubacct/plebian-os/issues", f9)
+            self.assertIn(b"/cdrom/plebian-os/build-info.env", f9)
+            self.assertIn(b"/etc/plebian-os/build-info.env", f9)
+            self.assertIn(b"underlying Debian Installer", f9)
+            self.assertNotIn(b"Debian team is ready", f9)
+            for help_page in (f1, f2, f9):
+                self.assertLessEqual(
+                    max(len(line) for line in help_page.splitlines()),
+                    80,
+                )
+
             self.assertEqual(len(brand_installer.THEME_NAMES), 10)
             for name in brand_installer.THEME_NAMES:
                 themed = (theme_root / name).read_bytes()
@@ -404,6 +482,14 @@ class TextBrandingTests(unittest.TestCase):
         def extra_theme(root, menu, theme_root):
             (theme_root / "future-theme").write_bytes(b"upstream drift")
 
+        def missing_readme_marker(root, menu, theme_root):
+            path = root / "README.txt"
+            path.write_bytes(
+                path.read_bytes().replace(
+                    brand_installer.README_TEXT_REQUIRED[0][0], b"upstream drift"
+                )
+            )
+
         cases = {
             "missing BIOS title": missing_bios,
             "duplicate BIOS title": duplicate_bios,
@@ -411,6 +497,7 @@ class TextBrandingTests(unittest.TestCase):
             "duplicate UEFI heading": duplicate_theme_heading,
             "missing theme": missing_theme,
             "extra theme": extra_theme,
+            "missing README marker": missing_readme_marker,
         }
         for label, mutate in cases.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as td:
@@ -421,6 +508,41 @@ class TextBrandingTests(unittest.TestCase):
                 with self.assertRaises(brand_installer.BrandingError):
                     brand_installer.brand_boot_text(root, "9.8.7")
                 self.assertEqual(tree_bytes(root), before)
+
+    def test_main_menu_template_receives_dynamic_product_title(self):
+        with tempfile.TemporaryDirectory() as td:
+            template = Path(td) / "main-menu.templates"
+            template.write_bytes(
+                brand_installer.MAIN_MENU_TITLE
+                + b"Description-de.UTF-8: Debian-Installer --- Hauptmenu\n"
+            )
+            timestamp_ns = 1_650_000_000_123_456_789
+            os.utime(template, ns=(timestamp_ns, timestamp_ns))
+            brand_installer.brand_main_menu_template(template, "9.8.7")
+            rendered = template.read_bytes()
+            self.assertIn(
+                b"Description: Plebian-OS 9.8.7 installer main menu "
+                b"(Debian Installer)\n",
+                rendered,
+            )
+            self.assertNotIn(brand_installer.MAIN_MENU_TITLE, rendered)
+            self.assertIn(b"Description-de.UTF-8: Debian-Installer", rendered)
+            self.assertEqual(template.stat().st_mtime_ns, timestamp_ns)
+
+    def test_main_menu_drift_and_unsafe_version_leave_file_unchanged(self):
+        cases = (
+            (b"Description: future installer title\n", "9.8.7"),
+            (brand_installer.MAIN_MENU_TITLE, "9 8 7"),
+            (brand_installer.MAIN_MENU_TITLE * 2, "9.8.7"),
+        )
+        for contents, version in cases:
+            with self.subTest(contents=contents, version=version), tempfile.TemporaryDirectory() as td:
+                template = Path(td) / "main-menu.templates"
+                template.write_bytes(contents)
+                before = template.read_bytes()
+                with self.assertRaises(brand_installer.BrandingError):
+                    brand_installer.brand_main_menu_template(template, version)
+                self.assertEqual(template.read_bytes(), before)
 
 
 class Md5ManifestTests(unittest.TestCase):

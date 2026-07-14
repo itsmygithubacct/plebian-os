@@ -70,6 +70,14 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    default, advanced, and accessible-dark menus, then enter the graphical
    installer and verify both banner variants. The angular-P mark must retain
    one eye, two hair strokes, and the complete orange `>_` cursor.
+   Confirm the ISO volume ID is `PLEBIAN-OS <x.y.z> AMD64` and `/.disk/info`
+   identifies Plebian-OS—not an unmodified “Official” Debian image.
+   Mount the ISO and confirm both root READMEs identify an unofficial,
+   non-endorsed Plebian-OS remaster, route derivative support to Plebian-OS,
+   and retain Debian 13 base attribution. Check BIOS Help F1/F2/F9 and the
+   text/graphical installer main menu for the same product boundary. F2 must
+   list 4 GiB RAM, 20 GiB disk, and first-boot networking; F9 must distinguish
+   `/cdrom/plebian-os/build-info.env` from `/etc/plebian-os/build-info.env`.
    In an installed guest, complete these distribution-asset checks:
 
    - verify `/usr/local/share/plebian-os/wallpapers/plebian-os.png` is

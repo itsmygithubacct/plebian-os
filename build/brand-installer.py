@@ -44,6 +44,41 @@ BIOS_TITLE = b"menu title \x07Debian GNU/Linux installer menu (BIOS mode)"
 UEFI_TITLE = b'title-text: "Debian GNU/Linux 13.5.0"'
 UEFI_HEADING = b'text = "Debian GNU/Linux UEFI Installer menu"'
 
+README_TEXT_REQUIRED = (
+    (b'Debian GNU/Linux 13.5.0 "Trixie" - Official amd64 NETINST with firmware', 2),
+    (b"This disc contains the installer for the Debian GNU/Linux distribution.", 1),
+    (b"This disc is labeled", 1),
+    (b"This is an official release of the Debian system.", 1),
+)
+README_HTML_REQUIRED = (
+    (b"<title>Debian GNU/Linux -- The Universal Operating System</title>", 1),
+    (b'src="pics/openlogo-nd-50.png"', 1),
+    (b'Debian GNU/Linux 13.5.0 "Trixie" - Official amd64 NETINST with firmware', 2),
+    (b"This is an official release of the Debian system.", 1),
+)
+F1_WELCOME = b"Welcome to Debian GNU/Linux!"
+F1_MEDIA = b"This is a Debian 13 (trixie) installation CD-ROM."
+F1_BUILD = b"It was built 20260516-10:08; d-i 20250803+deb13u5."
+F1_PREREQUISITES = b"Prerequisites for installing Debian."
+F2_HEADING = b"PREREQUISITES FOR INSTALLING DEBIAN"
+F2_DEBIAN_REQUIREMENTS = (
+    b"You must have at least 350 megabytes of RAM to use this Debian installer.\n\n"
+    b"You should have space on your hard disk to create a new disk partition\n"
+    b"of at least 1160 megabytes to install the base system. You'll need more\n"
+    b"disk space to install additional packages, depending on what you wish\n"
+    b"to do with your new Debian system."
+)
+F9_DEBIAN_SUPPORT = (
+    b"If you can't install Debian, don't despair! The Debian team is ready to\n"
+    b"help you! We are especially interested in hearing about installation\n"
+    b"problems, because in general they don't happen to only \x0f0fone\x0f07 person.\n"
+    b"We've either already heard about your particular problem and can dispense a\n"
+    b"quick fix, or we would like to hear about it and work through it with you,\n"
+    b"and the next user who comes up with the same problem will profit from your\n"
+    b"experience!"
+)
+MAIN_MENU_TITLE = b"Description: Debian installer main menu\n"
+
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _IHDR = struct.Struct(">IIBBBBB")
 _VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z.+~-]*\Z")
@@ -116,6 +151,81 @@ def _prepare_replacements(
     )
 
 
+def _prepare_document_replacement(
+    path: Path, required_markers: Iterable[tuple[bytes, int]], updated: bytes
+) -> _Mutation:
+    """Validate pinned upstream document markers, then replace it completely."""
+
+    marker_replacements = [
+        (marker, marker, expected) for marker, expected in required_markers
+    ]
+    source = _prepare_replacements(path, marker_replacements)
+    if not updated or not updated.endswith(b"\n"):
+        raise _fail(path, "replacement document must be nonempty and newline-terminated")
+    return _Mutation(
+        path=source.path,
+        original=source.original,
+        updated=updated,
+        atime_ns=source.atime_ns,
+        mtime_ns=source.mtime_ns,
+    )
+
+
+def _media_readme_text(version: str) -> bytes:
+    return f"""Plebian-OS {version} amd64 installer media
+========================================
+
+This is an unofficial Plebian-OS remaster based on Debian 13 (trixie). It is
+not an official Debian image, is not endorsed by the Debian Project, and must
+not be represented as one.
+
+The installer lays down a Debian base system, then first boot installs the
+configured Pleb, Kilix, and Kilix-95 stack. Build inputs and configured source
+references are recorded in /plebian-os/build-info.env on this medium.
+
+Boot this disc to install, or inspect /install.amd/ for the Debian Installer
+kernel and initrds. Report Plebian-OS media, branding, provisioning, or desktop
+issues at:
+
+  https://github.com/itsmygithubacct/plebian-os/issues
+
+For upstream Debian documentation, release notes, and the Debian Installer
+guide, visit https://www.debian.org/doc/ . Debian copyrights and licenses remain
+in /doc/ and in the package metadata. Plebian-OS artwork attribution and GPL-2
+text are under /plebian-os/doc/installer/ and /plebian-os/doc/ .
+""".encode("ascii")
+
+
+def _media_readme_html(version: str) -> bytes:
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Plebian-OS {version} installer</title>
+</head>
+<body>
+  <h1>Plebian-OS {version} amd64 installer media</h1>
+  <p><strong>Unofficial Debian-based remaster.</strong> This Plebian-OS image is
+  based on Debian 13 (trixie), is not an official Debian image, and is not
+  endorsed by the Debian Project.</p>
+  <p>The installer lays down a Debian base system. First boot then installs the
+  configured Pleb, Kilix, and Kilix-95 stack. Build inputs and configured source
+  references are recorded in <code>/plebian-os/build-info.env</code>.</p>
+  <p>Boot this disc to install. The Debian Installer kernel and initrds are under
+  <code>/install.amd/</code>.</p>
+  <h2>Support and documentation</h2>
+  <p>Report Plebian-OS media, branding, provisioning, or desktop issues to the
+  <a href="https://github.com/itsmygithubacct/plebian-os/issues">Plebian-OS issue tracker</a>.</p>
+  <p>Upstream Debian documentation, release notes, and the Debian Installer
+  guide are available from <a href="https://www.debian.org/doc/">debian.org</a>.
+  Debian copyrights and licenses remain in <code>/doc/</code> and package
+  metadata. Plebian-OS artwork notices are under <code>/plebian-os/doc/</code>.</p>
+  <p><a href="README.txt">Plain-text version</a></p>
+</body>
+</html>
+""".encode("ascii")
+
+
 def _write_mutations(mutations: Sequence[_Mutation]) -> None:
     written: list[_Mutation] = []
     try:
@@ -144,7 +254,7 @@ def _write_mutations(mutations: Sequence[_Mutation]) -> None:
 
 
 def brand_boot_text(root: Path | str, version: str) -> None:
-    """Patch the exact BIOS and UEFI strings in an extracted Debian 13.5 ISO.
+    """Patch product-facing text in an extracted Debian 13.5 ISO.
 
     Every input and replacement count is checked before any file is modified.
     The literal BIOS BEL byte and each file's access/modify timestamps are
@@ -185,7 +295,73 @@ def brand_boot_text(root: Path | str, version: str) -> None:
                     1,
                 )
             ],
-        )
+        ),
+        _prepare_document_replacement(
+            root / "README.txt",
+            README_TEXT_REQUIRED,
+            _media_readme_text(version),
+        ),
+        _prepare_document_replacement(
+            root / "README.html",
+            README_HTML_REQUIRED,
+            _media_readme_html(version),
+        ),
+        _prepare_replacements(
+            root / "isolinux/f1.txt",
+            [
+                (F1_WELCOME, b"Welcome to Plebian-OS " + version_b + b"!", 1),
+                (
+                    F1_MEDIA,
+                    b"This is Plebian-OS installer media based on Debian 13 (trixie).",
+                    1,
+                ),
+                (
+                    F1_BUILD,
+                    b"Debian Installer base: build 20260516-10:08; d-i 20250803+deb13u5.",
+                    1,
+                ),
+                (
+                    F1_PREREQUISITES,
+                    b"Prerequisites for installing Plebian-OS.",
+                    1,
+                ),
+            ],
+        ),
+        _prepare_replacements(
+            root / "isolinux/f2.txt",
+            [
+                (F2_HEADING, b"INSTALLING PLEBIAN-OS: REQUIREMENTS", 1),
+                (
+                    F2_DEBIAN_REQUIREMENTS,
+                    b"Plebian-OS is release-tested with at least 4 GiB of RAM and 20 GiB of\n"
+                    b"available disk space. More space is recommended for models and user data.\n\n"
+                    b"A working network connection is required on first boot to install the\n"
+                    b"configured Pleb, Kilix, and Kilix-95 software stack.",
+                    1,
+                ),
+                (
+                    b"Thank you for choosing Debian!",
+                    b"Thank you for choosing Plebian-OS!",
+                    1,
+                ),
+            ],
+        ),
+        _prepare_replacements(
+            root / "isolinux/f9.txt",
+            [
+                (
+                    F9_DEBIAN_SUPPORT,
+                    b"If Plebian-OS installation fails, start with its issue tracker:\n"
+                    b"https://github.com/itsmygithubacct/plebian-os/issues\n"
+                    b"Include /cdrom/plebian-os/build-info.env for failures in the installer, or\n"
+                    b"/etc/plebian-os/build-info.env after installation. Say whether the failure\n"
+                    b"happened before or after first boot. Plebian-OS is an unofficial Debian\n"
+                    b"remaster. For failures in the underlying Debian Installer, the Debian\n"
+                    b"installation guide and support resources below remain useful.",
+                    1,
+                )
+            ],
+        ),
     ]
 
     for name in sorted(THEME_NAMES):
@@ -208,6 +384,25 @@ def brand_boot_text(root: Path | str, version: str) -> None:
         )
 
     _write_mutations(mutations)
+
+
+def brand_main_menu_template(path: Path | str, version: str) -> None:
+    """Brand the default English Debian Installer main-menu title."""
+
+    version_b = _version_bytes(version)
+    mutation = _prepare_replacements(
+        Path(path),
+        [
+            (
+                MAIN_MENU_TITLE,
+                b"Description: Plebian-OS "
+                + version_b
+                + b" installer main menu (Debian Installer)\n",
+                1,
+            )
+        ],
+    )
+    _write_mutations([mutation])
 
 
 def _png_chunk_name(chunk_type: bytes) -> str:
@@ -581,9 +776,17 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    patch = subparsers.add_parser("patch-text", help="brand BIOS and UEFI text")
+    patch = subparsers.add_parser(
+        "patch-text", help="brand ISO README, BIOS help, BIOS, and UEFI text"
+    )
     patch.add_argument("root", type=Path, help="extracted ISO root")
     patch.add_argument("version", help="resolved PLEBIAN_OS_VERSION")
+
+    menu = subparsers.add_parser(
+        "patch-main-menu", help="brand an extracted Debian Installer menu template"
+    )
+    menu.add_argument("path", type=Path)
+    menu.add_argument("version", help="resolved PLEBIAN_OS_VERSION")
 
     png = subparsers.add_parser("validate-png", help="validate one embedded PNG")
     png.add_argument("path", type=Path)
@@ -607,6 +810,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "patch-text":
             brand_boot_text(args.root, args.version)
+        elif args.command == "patch-main-menu":
+            brand_main_menu_template(args.path, args.version)
         elif args.command == "validate-png":
             validate_png_asset(args.path, args.width, args.height)
         elif args.command == "validate-assets":

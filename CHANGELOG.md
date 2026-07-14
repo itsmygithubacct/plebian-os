@@ -32,8 +32,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   GRUB themes, and both graphical-installer banners. Bootloader-rendered text
   carries the coordinated Plebian-OS version so release numbers never become
   stale inside artwork.
+- Replace Debian's source volume label, “Official” media descriptor, mounted
+  READMEs, BIOS help identity/support route, and default English installer menu
+  title with versioned Plebian-OS identity while retaining an honest Debian 13
+  base description and upstream documentation links. BIOS help now advertises
+  the tested 4 GiB RAM / 20 GiB disk baseline, first-boot network requirement,
+  and the correct media and installed build-manifest paths.
 - Validate exact PNG contracts, preserve Debian's original GTK initrd as an
-  exact prefix with a deterministic two-file overlay, and refresh every entry
+  exact prefix with a deterministic three-file overlay, and refresh every entry
   in Debian's existing ISO media-check manifest after all remaster mutations.
 - Install the matching desktop wallpaper as a root-owned OS asset, select it
   only for Pleb sessions without existing desktop state, record its build-time

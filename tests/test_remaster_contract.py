@@ -159,6 +159,46 @@ class RemasterContractTests(unittest.TestCase):
         self.assertIn("rebuilt ISO has no BIOS El Torito boot image", self.source)
         self.assertIn("rebuilt ISO has no UEFI El Torito boot image", self.source)
         self.assertIn("rebuilt ISO lacks an isohybrid MBR signature", self.source)
+        self.assertIn("rebuilt ISO has wrong volume ID", self.source)
+
+    def test_media_identity_is_plebian_and_source_volume_is_not_reused(self):
+        self.assertIn(
+            'PLEBIAN_OS_ISO_VOLUME_ID="PLEBIAN-OS $PLEBIAN_OS_VERSION AMD64"',
+            self.source,
+        )
+        self.assertIn(
+            'PLEBIAN_OS_MEDIA_INFO="Plebian-OS $PLEBIAN_OS_VERSION amd64 '
+            'installer (Debian 13 trixie base)"',
+            self.source,
+        )
+        identity = self.source_section(
+            "brand_media_identity() {", "\nbrand_graphical_installer() {"
+        )
+        for marker in (
+            'disk_info="$EXTRACT/.disk/info"',
+            'mkisofs_info="$EXTRACT/.disk/mkisofs"',
+            '[ -f "$disk_info" ] && [ ! -L "$disk_info" ]',
+            'printf \'%s\\n\' "$PLEBIAN_OS_MEDIA_INFO" > "$disk_info"',
+            'touch --reference="$metadata_ref" "$disk_info"',
+            'see /plebian-os/build-info.env',
+        ):
+            self.assertIn(marker, identity)
+        self.assertIn('if token in ("-V", "-volid"):', self.source)
+        self.assertIn(
+            'xorriso -as mkisofs -V "$PLEBIAN_OS_ISO_VOLUME_ID"',
+            self.source,
+        )
+        self.assertIn(
+            'manifest_kv PLEBIAN_OS_ISO_VOLUME_ID '
+            '"$PLEBIAN_OS_ISO_VOLUME_ID"',
+            self.source,
+        )
+        self.assert_in_order(
+            self.source,
+            'python3 "$INSTALLER_BRANDER" patch-text "$EXTRACT"',
+            "\nbrand_media_identity\n",
+            'python3 "$INSTALLER_BRANDER" refresh-md5 "$EXTRACT"',
+        )
 
     def test_tracked_installer_assets_are_validated_before_iso_mutation(self):
         validation = (
@@ -230,7 +270,7 @@ class RemasterContractTests(unittest.TestCase):
             "add_bootarg() {",
         )
 
-    def test_graphical_installer_overlay_is_deterministic_and_exactly_two_files(self):
+    def test_graphical_installer_overlay_is_deterministic_and_exactly_three_files(self):
         graphical = self.source_section(
             "brand_graphical_installer() {",
             '\nBUILD_PRESEED="$WORK/preseed.cfg"',
@@ -249,7 +289,8 @@ class RemasterContractTests(unittest.TestCase):
         )
         self.assertEqual(graphical.count("install -m 0644"), 2)
         self.assertIn(
-            'touch -d @0 "$overlay/usr/share/graphics/logo_debian.png" '
+            'touch -d @0 "$overlay/var/lib/dpkg/info/main-menu.templates" '
+            '"$overlay/usr/share/graphics/logo_debian.png" '
             '"$overlay/usr/share/graphics/logo_debian_dark.png"',
             compact,
         )
@@ -269,6 +310,10 @@ class RemasterContractTests(unittest.TestCase):
                 "usr/share/graphics/logo_debian_dark.png",
             ],
         )
+        self.assertIn(
+            "var/lib/dpkg/info/main-menu.templates",
+            graphical[archive_start:archive_end],
+        )
         for flag in (
             "--null",
             "--create",
@@ -282,6 +327,62 @@ class RemasterContractTests(unittest.TestCase):
         self.assertIn(
             "LC_ALL=C cpio --help 2>&1 | grep -q -- '--reproducible'",
             self.source,
+        )
+
+    def test_both_installer_modes_overlay_the_plebian_main_menu_title(self):
+        menu = self.source_section(
+            "brand_installer_main_menu() {",
+            "\nbrand_graphical_installer() {",
+        )
+        compact = " ".join(re.sub(r"\\\n\s*", " ", menu).split())
+        for marker in (
+            'cpio -i --quiet --to-stdout var/lib/dpkg/info/main-menu.templates',
+            'python3 "$INSTALLER_BRANDER" patch-main-menu "$template" '
+            '"$PLEBIAN_OS_VERSION"',
+            'install -m 0644 "$template" '
+            '"$overlay/var/lib/dpkg/info/main-menu.templates"',
+            "--format=newc",
+            "--owner=0:0",
+            "--reproducible",
+            'gzip -n -9 -c "$overlay_cpio" >> "$combined"',
+            'cmp -n "$original_size" "$initrd" "$combined"',
+            '| cmp - "$template"',
+        ):
+            self.assertIn(marker, compact)
+        self.assertEqual(
+            self.source.count(
+                'brand_installer_main_menu "$EXTRACT/install.amd/initrd.gz" text'
+            ),
+            1,
+        )
+        self.assertEqual(
+            self.source.count(
+                'brand_installer_main_menu '
+                '"$EXTRACT/install.amd/gtk/initrd.gz" gtk'
+            ),
+            0,
+        )
+        graphical = self.source_section(
+            "brand_graphical_installer() {",
+            '\nBUILD_PRESEED="$WORK/preseed.cfg"',
+        )
+        graphical_compact = " ".join(
+            re.sub(r"\\\n\s*", " ", graphical).split()
+        )
+        for marker in (
+            'cpio -i --quiet --to-stdout var/lib/dpkg/info/main-menu.templates',
+            'python3 "$INSTALLER_BRANDER" patch-main-menu '
+            '"$overlay/var/lib/dpkg/info/main-menu.templates" '
+            '"$PLEBIAN_OS_VERSION"',
+            'var/lib/dpkg/info/main-menu.templates | cmp - '
+            '"$overlay/var/lib/dpkg/info/main-menu.templates"',
+        ):
+            self.assertIn(marker, graphical_compact)
+        self.assert_in_order(
+            self.source,
+            "\nbrand_media_identity\n",
+            'brand_installer_main_menu "$EXTRACT/install.amd/initrd.gz" text',
+            "\nbrand_graphical_installer\n",
         )
 
     def test_graphical_overlay_validates_source_prefix_and_both_payloads(self):
@@ -304,6 +405,10 @@ class RemasterContractTests(unittest.TestCase):
                 "usr/share/graphics/logo_installer_dark.png",
             ],
         )
+        self.assertIn(
+            "var/lib/dpkg/info/main-menu.templates",
+            graphical[inventory_start:inventory_end],
+        )
         self.assertIn('grep -Fxq "$path" "$inventory"', graphical)
 
         self.assert_in_order(
@@ -319,6 +424,8 @@ class RemasterContractTests(unittest.TestCase):
             "| gzip -dc",
             '| cpio -i --quiet --to-stdout "usr/share/graphics/$path"',
             '| cmp - "$asset"',
+            '| cpio -i --quiet --to-stdout var/lib/dpkg/info/main-menu.templates',
+            '| cmp - "$overlay/var/lib/dpkg/info/main-menu.templates"',
             'touch --reference="$initrd" "$combined"',
             'chmod "$mode" "$combined"',
             'mv -f "$combined" "$initrd"',
@@ -425,7 +532,10 @@ class RemasterContractTests(unittest.TestCase):
 
     def test_media_checksum_refresh_follows_all_mutations_and_precedes_repack(self):
         refresh = 'python3 "$INSTALLER_BRANDER" refresh-md5 "$EXTRACT"'
-        repack = 'xorriso -as mkisofs "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"'
+        repack = (
+            'xorriso -as mkisofs -V "$PLEBIAN_OS_ISO_VOLUME_ID" '
+            '\\\n    "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"'
+        )
         self.assertEqual(self.source.count(refresh), 1)
         self.assertEqual(self.source.count(repack), 1)
         self.assertIn(f"\n{refresh}\n", self.source)
@@ -434,6 +544,8 @@ class RemasterContractTests(unittest.TestCase):
         mutation_markers = (
             '"$INSTALLER_ASSETS/splash.png"',
             'python3 "$INSTALLER_BRANDER" patch-text "$EXTRACT"',
+            "\nbrand_media_identity\n",
+            'brand_installer_main_menu "$EXTRACT/install.amd/initrd.gz" text',
             "\nbrand_graphical_installer\n",
             'cp "$PRESEED" "$EXTRACT/preseed.cfg"',
             'write_build_info "$EXTRACT/plebian-os/build-info.env"',
