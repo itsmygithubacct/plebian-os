@@ -20,9 +20,10 @@ injection), so that intricate logic lives in **one** place and stays in sync wit
 
 ## Requirements
 
-- **xorriso** — builds the ISO. The first download also needs `curl`,
-  `sha256sum`, `gpgv`, and `debian-archive-keyring` to verify Debian's signed
-  checksums. Not needed with `--iso`.
+- **xorriso**, GNU **cpio**, and **gzip** — build and brand the ISO. The first
+  download also needs `curl`, `sha256sum`, `gpgv`, and
+  `debian-archive-keyring` to verify Debian's signed checksums. Not needed with
+  `--iso`.
 - **openssl** — hashes the password so the plaintext never lands on the ISO; the
   builder refuses a plaintext-password fallback.
 - **lsblk / findmnt** (util-linux) — device inspection + safety checks.

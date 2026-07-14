@@ -49,6 +49,7 @@ KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
 PLEBIAN_OS_BRANCH="${PLEBIAN_OS_BRANCH:-}"     # empty = repo default
 PLEBIAN_OS_REF="${PLEBIAN_OS_REF:-}"           # optional exact commit/tag
+PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-}"           # default after target user is known
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file below if empty
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
@@ -66,6 +67,19 @@ NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the u
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into `kilix desktop`
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
+
+# Stable, distribution-owned wallpaper path shared by the builtin Kilix desktop
+# and the external Kilix 95 provider.  Keep this checksum in sync with the
+# tracked asset: firstboot and in-repo bootstrap fail closed rather than seed a
+# desktop state that points at missing or substituted artwork.
+DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
+DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
+DESKTOP_WALLPAPER_MAX_BYTES=$((32 * 1024 * 1024))
+INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
+INSTALLER_ATTRIBUTION_SHA256=5216b6ee1ef154dab56cc5d0a026d28f67ed50feec4129d4fedd6ae2fc2b2fb6
+GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
+GPL2_LICENSE_SHA256=8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643
+ARTWORK_NOTICE_MAX_BYTES=$((1024 * 1024))
 
 # Where this script lives (deployed as /usr/local/sbin/plebian-os-provision, or
 # run in-repo from provision/). The runtime dependency set now lives beside us
@@ -159,11 +173,26 @@ validate_target_user() {
 }
 
 PROVISION_LOCK_FD=""
+DESKTOP_WALLPAPER_TMP=""
+DESKTOP_WALLPAPER_CREATED_DIRS=()
+ARTWORK_NOTICE_TMP=""
+ARTWORK_NOTICE_CREATED_DIRS=()
 SUDOERS=/etc/sudoers.d/plebian-os-provision
 
 cleanup() {
     if [ "$DRY_RUN" != 1 ]; then
         rm -f "$SUDOERS"
+        [ -z "${DESKTOP_WALLPAPER_TMP:-}" ] \
+            || rm -f -- "$DESKTOP_WALLPAPER_TMP"
+        [ -z "${ARTWORK_NOTICE_TMP:-}" ] \
+            || rm -f -- "$ARTWORK_NOTICE_TMP"
+        local i
+        for ((i=${#DESKTOP_WALLPAPER_CREATED_DIRS[@]}-1; i>=0; i--)); do
+            rmdir -- "${DESKTOP_WALLPAPER_CREATED_DIRS[$i]}" 2>/dev/null || true
+        done
+        for ((i=${#ARTWORK_NOTICE_CREATED_DIRS[@]}-1; i>=0; i--)); do
+            rmdir -- "${ARTWORK_NOTICE_CREATED_DIRS[$i]}" 2>/dev/null || true
+        done
         if [ -n "${PROVISION_LOCK_FD:-}" ]; then
             flock -u "$PROVISION_LOCK_FD" 2>/dev/null || true
             exec {PROVISION_LOCK_FD}>&-
@@ -236,6 +265,533 @@ install pcspkr /bin/false
 install snd_pcsp /bin/false
 EOF
     modprobe -r snd_pcsp pcspkr 2>/dev/null || true
+}
+
+validate_desktop_wallpaper() {
+    local path="$1" actual
+    [ -f "$path" ] && [ ! -L "$path" ] \
+        || die "desktop wallpaper is not a safe regular file: $path"
+    command -v sha256sum >/dev/null 2>&1 \
+        || die "sha256sum is required to validate the desktop wallpaper"
+    actual="$(sha256sum "$path" | awk '{print $1}')" \
+        || die "could not hash desktop wallpaper: $path"
+    [ "$actual" = "$DESKTOP_WALLPAPER_SHA256" ] \
+        || die "desktop wallpaper checksum mismatch: $path"
+    python3 - "$path" <<'PY' \
+        || die "desktop wallpaper does not satisfy the 1920x1080 RGB PNG contract: $path"
+import pathlib
+import struct
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+    raise SystemExit(1)
+width, height, depth, color_type, compression, filtering, interlace = \
+    struct.unpack(">IIBBBBB", data[16:29])
+if (width, height, depth, color_type, compression, filtering, interlace) != \
+        (1920, 1080, 8, 2, 0, 0, 0):
+    raise SystemExit(1)
+PY
+}
+
+as_target_readonly() {
+    if [ "$(id -u)" = "$TARGET_UID" ] && [ "$(id -g)" = "$TARGET_GID" ]; then
+        "$@"
+        return
+    fi
+    if [ "$(id -u)" != 0 ]; then
+        die "cannot validate $TARGET_USER's Plebian-OS checkout without root"
+    fi
+    command -v setpriv >/dev/null 2>&1 \
+        || die "setpriv is required to validate the target user's Plebian-OS checkout"
+    setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
+        --reset-env -- "$@"
+}
+
+validated_checkout_wallpaper() {
+    local checkout="$PLEBIAN_OS_DIR" asset remote dirty tracked_blob working_blob
+    local owner checkout_real home_real actual resolved fetch_head fetch_mode fetch_lines
+    local tag_marker branch_marker
+    [ -n "$checkout" ] \
+        || die "no PLEBIAN_OS checkout configured for the wallpaper migration"
+    case "$checkout" in /*) ;; *) die "PLEBIAN_OS_DIR must be absolute: $checkout" ;; esac
+    [ -d "$checkout" ] && [ ! -L "$checkout" ] \
+        || die "target user's Plebian-OS checkout is missing or unsafe: $checkout"
+    checkout_real="$(readlink -f -- "$checkout" 2>/dev/null)" \
+        || die "could not resolve Plebian-OS checkout: $checkout"
+    home_real="$(readlink -f -- "$USER_HOME" 2>/dev/null)" \
+        || die "could not resolve target home: $USER_HOME"
+    case "$checkout_real" in
+        "$home_real"/*) ;;
+        *) die "Plebian-OS checkout must remain inside $TARGET_USER's home: $checkout" ;;
+    esac
+    owner="$(stat -c '%u' "$checkout_real" 2>/dev/null)" \
+        || die "could not inspect Plebian-OS checkout: $checkout"
+    [ "$owner" = "$TARGET_UID" ] \
+        || die "Plebian-OS checkout is not owned by $TARGET_USER: $checkout"
+    if [ -L "$checkout/.git" ] \
+        || { [ ! -d "$checkout/.git" ] && [ ! -f "$checkout/.git" ]; }; then
+        die "Plebian-OS path is not a safe git checkout: $checkout"
+    fi
+    remote="$(as_target_readonly git -C "$checkout" config --get remote.origin.url 2>/dev/null)" \
+        || die "could not validate Plebian-OS checkout origin"
+    if [ "$remote" != "$PLEBIAN_OS_REPO" ] \
+        && [ "${PLEBIAN_OS_TRUST_EXISTING_CHECKOUT:-0}" != 1 ]; then
+        die "Plebian-OS checkout at $checkout has origin '$remote', expected '$PLEBIAN_OS_REPO'"
+    fi
+    dirty="$(as_target_readonly git -C "$checkout" status --porcelain --untracked-files=normal 2>/dev/null)" \
+        || die "could not inspect Plebian-OS checkout state"
+    [ -z "$dirty" ] \
+        || die "Plebian-OS checkout has local changes; refusing wallpaper migration"
+
+    asset="$checkout/assets/desktop/plebian-os.png"
+    [ -f "$asset" ] && [ ! -L "$asset" ] \
+        || die "validated Plebian-OS checkout lacks the tracked desktop wallpaper: $asset"
+    tracked_blob="$(as_target_readonly git -C "$checkout" rev-parse \
+        'HEAD:assets/desktop/plebian-os.png' 2>/dev/null)" \
+        || die "desktop wallpaper is not tracked at Plebian-OS checkout HEAD"
+    working_blob="$(as_target_readonly git -C "$checkout" hash-object -- "$asset" 2>/dev/null)" \
+        || die "could not bind desktop wallpaper to Plebian-OS checkout HEAD"
+    [ "$working_blob" = "$tracked_blob" ] \
+        || die "desktop wallpaper differs from Plebian-OS checkout HEAD"
+    if [ -n "$PLEBIAN_OS_REF" ]; then
+        actual="$(as_target_readonly git -C "$checkout" rev-parse --verify HEAD 2>/dev/null)" \
+            || die "could not resolve Plebian-OS checkout HEAD"
+        resolved="$(as_target_readonly git -C "$checkout" rev-parse --verify \
+            "${PLEBIAN_OS_REF}^{commit}" 2>/dev/null || true)"
+        if [ -z "$resolved" ]; then
+            # checkout_pinned_ref deliberately resolves the fetched object from
+            # FETCH_HEAD and detaches without creating a local tag. Preserve
+            # that trust shape for release-tag upgrades: accept only the one
+            # safe FETCH_HEAD record naming the requested tag/branch and only
+            # when its commit is exactly the current detached HEAD.
+            fetch_head="$(as_target_readonly git -C "$checkout" rev-parse \
+                --path-format=absolute --git-path FETCH_HEAD 2>/dev/null)" \
+                || die "could not locate FETCH_HEAD for PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
+            [ -f "$fetch_head" ] && [ ! -L "$fetch_head" ] \
+                || die "missing or unsafe FETCH_HEAD for PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
+            owner="$(stat -c '%u' "$fetch_head" 2>/dev/null)" \
+                || die "could not inspect Plebian-OS FETCH_HEAD"
+            fetch_mode="$(stat -c '%a' "$fetch_head" 2>/dev/null)" \
+                || die "could not inspect Plebian-OS FETCH_HEAD mode"
+            [ "$owner" = "$TARGET_UID" ] && (( (8#$fetch_mode & 8#22) == 0 )) \
+                || die "Plebian-OS FETCH_HEAD has unsafe ownership or mode"
+            fetch_lines="$(as_target_readonly awk 'END { print NR }' "$fetch_head")"
+            [ "$fetch_lines" = 1 ] \
+                || die "PLEBIAN_OS_REF fallback requires exactly one FETCH_HEAD record"
+            tag_marker="$(printf "\t\ttag '%s' of " "$PLEBIAN_OS_REF")"
+            branch_marker="$(printf "\t\tbranch '%s' of " "$PLEBIAN_OS_REF")"
+            if ! as_target_readonly grep -Fq -- "$tag_marker" "$fetch_head" \
+                && ! as_target_readonly grep -Fq -- "$branch_marker" "$fetch_head"; then
+                die "FETCH_HEAD does not name PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
+            fi
+            resolved="$(as_target_readonly git -C "$checkout" rev-parse --verify \
+                'FETCH_HEAD^{commit}' 2>/dev/null)" \
+                || die "FETCH_HEAD does not resolve to a commit"
+        fi
+        [ "$actual" = "$resolved" ] \
+            || die "Plebian-OS checkout HEAD does not match PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
+    fi
+    printf '%s\n' "$asset"
+}
+
+copy_wallpaper_as_target_bounded() {
+    local source="$1" destination="$2"
+    local limit="${3:-$DESKTOP_WALLPAPER_MAX_BYTES}" label="${4:-desktop wallpaper}"
+    local output_fd rc=0
+    command -v timeout >/dev/null 2>&1 \
+        || die "timeout is required for the unprivileged wallpaper copy"
+    exec {output_fd}>"$destination" \
+        || die "could not open private wallpaper staging file"
+    if as_target_readonly timeout 30s python3 - \
+        "$source" "$limit" "$label" >&"$output_fd" <<'PY'
+import sys
+
+source, limit_text, label = sys.argv[1:]
+limit = int(limit_text)
+total = 0
+with open(source, "rb", buffering=0) as stream:
+    while True:
+        chunk = stream.read(min(1024 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise SystemExit(f"{label} exceeds bounded copy limit")
+        sys.stdout.buffer.write(chunk)
+PY
+    then
+        rc=0
+    else
+        rc=$?
+    fi
+    exec {output_fd}>&-
+    return "$rc"
+}
+
+install_desktop_wallpaper() {
+    local repo_root="$SELF_DIR/.." repo_asset source="" dest_dir tmp owner mode size path
+    repo_asset="$repo_root/assets/desktop/plebian-os.png"
+
+    # Establish a trusted fixed path before probing or reading the installed
+    # asset.  Only the two distribution-owned children may be absent; their
+    # fixed ancestors must already be real, root-owned, non-writable dirs.
+    for path in / /usr /usr/local /usr/local/share; do
+        [ -d "$path" ] && [ ! -L "$path" ] \
+            || die "wallpaper destination ancestor is unsafe: $path"
+        owner="$(stat -c '%u' "$path" 2>/dev/null)" \
+            || die "could not inspect wallpaper destination ancestor: $path"
+        mode="$(stat -c '%a' "$path" 2>/dev/null)" \
+            || die "could not inspect wallpaper destination ancestor mode: $path"
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+            || die "wallpaper destination ancestor is not safely root-owned: $path"
+    done
+    dest_dir="$(dirname "$DESKTOP_WALLPAPER_DST")"
+    for path in /usr/local/share/plebian-os "$dest_dir"; do
+        [ ! -L "$path" ] || die "refusing symlink in wallpaper destination: $path"
+        if [ -e "$path" ] && [ ! -d "$path" ]; then
+            die "wallpaper destination component is not a directory: $path"
+        fi
+        if [ ! -e "$path" ] && [ "$DRY_RUN" != 1 ]; then
+            install -d -o root -g root -m 0755 "$path" \
+                || die "could not create wallpaper destination: $path"
+            DESKTOP_WALLPAPER_CREATED_DIRS+=("$path")
+        fi
+        if [ -e "$path" ]; then
+            owner="$(stat -c '%u' "$path" 2>/dev/null)" \
+                || die "could not inspect wallpaper destination: $path"
+            mode="$(stat -c '%a' "$path" 2>/dev/null)" \
+                || die "could not inspect wallpaper destination mode: $path"
+            [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+                && (( (8#$mode & 8#1) != 0 )) \
+                || die "wallpaper destination is not safely root-owned: $path"
+        fi
+    done
+
+    # A repository checkout is authoritative.  Do not silently reuse an older
+    # installed copy if the tracked asset disappeared from a bootstrap checkout.
+    if [ -f "$repo_root/VERSION" ]; then
+        [ -f "$repo_asset" ] && [ ! -L "$repo_asset" ] \
+            || die "tracked desktop wallpaper missing or unsafe: $repo_asset"
+        source="$repo_asset"
+    elif [ -f "$DESKTOP_WALLPAPER_DST" ] && [ ! -L "$DESKTOP_WALLPAPER_DST" ]; then
+        # The remastered ISO stages the asset before firstboot starts.
+        source="$DESKTOP_WALLPAPER_DST"
+    elif [ -e "$DESKTOP_WALLPAPER_DST" ] || [ -L "$DESKTOP_WALLPAPER_DST" ]; then
+        die "installed desktop wallpaper is present but unsafe: $DESKTOP_WALLPAPER_DST"
+    else
+        # Upgrade bridge: the immutable v0.1.1 updater can deploy this new
+        # provisioner but cannot know about the newly added OS-layer payloads.
+        # A full reprovision may recover the wallpaper only from the target user's
+        # clean, origin-checked checkout and exact tracked blob.
+        source="$(validated_checkout_wallpaper)"
+    fi
+
+    log "installing Plebian-OS desktop wallpaper -> $DESKTOP_WALLPAPER_DST"
+    if [ "$DRY_RUN" = 1 ]; then
+        if [ "$source" = "$DESKTOP_WALLPAPER_DST" ]; then
+            owner="$(stat -c '%u' "$source" 2>/dev/null)" \
+                || die "could not inspect installed desktop wallpaper"
+            mode="$(stat -c '%a' "$source" 2>/dev/null)" \
+                || die "could not inspect installed desktop wallpaper mode"
+            size="$(stat -c '%s' "$source" 2>/dev/null)" \
+                || die "could not inspect installed desktop wallpaper size"
+            [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -le "$DESKTOP_WALLPAPER_MAX_BYTES" ] \
+                && [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+                || die "installed desktop wallpaper has unsafe ownership, mode, or size"
+            validate_desktop_wallpaper "$source"
+        else
+            tmp="$(mktemp "${TMPDIR:-/tmp}/plebian-os-wallpaper-validate.XXXXXX")" \
+                || die "could not create private wallpaper validation file"
+            chmod 0600 "$tmp" || { rm -f -- "$tmp"; die "could not secure wallpaper validation file"; }
+            if ! copy_wallpaper_as_target_bounded "$source" "$tmp"; then
+                rm -f -- "$tmp"
+                die "could not copy the desktop wallpaper as $TARGET_USER"
+            fi
+            if ! (validate_desktop_wallpaper "$tmp"); then
+                rm -f -- "$tmp"
+                return 1
+            fi
+            rm -f -- "$tmp"
+        fi
+        echo "    + install root:root 0644 $source $DESKTOP_WALLPAPER_DST (atomic replace)"
+        return 0
+    fi
+
+    [ ! -L "$DESKTOP_WALLPAPER_DST" ] \
+        || die "refusing symlink wallpaper destination: $DESKTOP_WALLPAPER_DST"
+
+    if [ "$source" != "$DESKTOP_WALLPAPER_DST" ]; then
+        tmp="$(mktemp "$dest_dir/.plebian-os.png.XXXXXX")" \
+            || die "could not stage the desktop wallpaper"
+        DESKTOP_WALLPAPER_TMP="$tmp"
+        chown root:root "$tmp" && chmod 0600 "$tmp" \
+            || die "could not secure private wallpaper staging file"
+        if ! copy_wallpaper_as_target_bounded "$source" "$tmp"; then
+            rm -f -- "$tmp"
+            DESKTOP_WALLPAPER_TMP=""
+            die "could not copy the desktop wallpaper as $TARGET_USER"
+        fi
+        if ! validate_desktop_wallpaper "$tmp"; then
+            rm -f -- "$tmp"
+            return 1
+        fi
+        chmod 0644 "$tmp" \
+            || die "could not publish validated wallpaper staging permissions"
+        if ! mv -fT -- "$tmp" "$DESKTOP_WALLPAPER_DST"; then
+            rm -f -- "$tmp"
+            DESKTOP_WALLPAPER_TMP=""
+            die "could not atomically install the desktop wallpaper"
+        fi
+        DESKTOP_WALLPAPER_TMP=""
+    else
+        owner="$(stat -c '%u' "$source" 2>/dev/null)" \
+            || die "could not inspect installed desktop wallpaper"
+        mode="$(stat -c '%a' "$source" 2>/dev/null)" \
+            || die "could not inspect installed desktop wallpaper mode"
+        size="$(stat -c '%s' "$source" 2>/dev/null)" \
+            || die "could not inspect installed desktop wallpaper size"
+        [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -le "$DESKTOP_WALLPAPER_MAX_BYTES" ] \
+            && [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+            || die "installed desktop wallpaper has unsafe ownership, mode, or size"
+        validate_desktop_wallpaper "$source"
+        chown root:root "$DESKTOP_WALLPAPER_DST" \
+            || die "could not enforce wallpaper ownership"
+        chmod 0644 "$DESKTOP_WALLPAPER_DST" \
+            || die "could not enforce wallpaper permissions"
+    fi
+    validate_desktop_wallpaper "$DESKTOP_WALLPAPER_DST"
+}
+
+validate_artwork_notice() {
+    local path="$1" expected="$2" label="$3" kind="$4" actual size
+    [ -f "$path" ] && [ ! -L "$path" ] \
+        || die "$label is not a safe regular file: $path"
+    size="$(stat -c '%s' "$path" 2>/dev/null)" \
+        || die "could not inspect $label size: $path"
+    [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -le "$ARTWORK_NOTICE_MAX_BYTES" ] \
+        || die "$label exceeds its bounded size contract: $path"
+    actual="$(sha256sum "$path" | awk '{print $1}')" \
+        || die "could not hash $label: $path"
+    [ "$actual" = "$expected" ] || die "$label checksum mismatch: $path"
+    python3 - "$path" "$kind" <<'PY' \
+        || die "$label text contract failed: $path"
+import pathlib
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+kind = sys.argv[2]
+if not data or b"\x00" in data or not data.endswith(b"\n"):
+    raise SystemExit(1)
+text = data.decode("utf-8")
+if kind == "attribution":
+    if "../COPYING.GPL-2" not in text or "GPL-2.0-or-later" not in text:
+        raise SystemExit(1)
+elif kind == "license":
+    if "GNU GENERAL PUBLIC LICENSE" not in text or "Version 2, June 1991" not in text:
+        raise SystemExit(1)
+else:
+    raise SystemExit(1)
+PY
+}
+
+validate_artwork_notice_destination_dirs() {
+    local path owner mode
+    for path in / /usr /usr/local /usr/local/share; do
+        [ -d "$path" ] && [ ! -L "$path" ] \
+            || die "artwork notice destination ancestor is unsafe: $path"
+        owner="$(stat -c '%u' "$path" 2>/dev/null)" \
+            || die "could not inspect artwork notice destination ancestor: $path"
+        mode="$(stat -c '%a' "$path" 2>/dev/null)" \
+            || die "could not inspect artwork notice destination ancestor mode: $path"
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+            || die "artwork notice destination ancestor is not safely root-owned: $path"
+    done
+    for path in \
+        /usr/local/share/doc \
+        /usr/local/share/doc/plebian-os \
+        /usr/local/share/doc/plebian-os/installer; do
+        [ ! -L "$path" ] || die "refusing symlink in artwork notice destination: $path"
+        if [ -e "$path" ] && [ ! -d "$path" ]; then
+            die "artwork notice destination component is not a directory: $path"
+        fi
+        if [ ! -e "$path" ] && [ "$DRY_RUN" != 1 ]; then
+            install -d -o root -g root -m 0755 "$path" \
+                || die "could not create artwork notice destination: $path"
+            ARTWORK_NOTICE_CREATED_DIRS+=("$path")
+        fi
+        if [ -e "$path" ]; then
+            owner="$(stat -c '%u' "$path" 2>/dev/null)" \
+                || die "could not inspect artwork notice destination: $path"
+            mode="$(stat -c '%a' "$path" 2>/dev/null)" \
+                || die "could not inspect artwork notice destination mode: $path"
+            [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+                && (( (8#$mode & 8#1) != 0 )) \
+                || die "artwork notice destination is not safely root-owned: $path"
+        fi
+    done
+}
+
+install_artwork_notice() {
+    local source="$1" destination="$2" expected="$3" label="$4" kind="$5"
+    local tmp owner group mode size dest_dir
+    dest_dir="$(dirname "$destination")"
+    log "installing $label -> $destination"
+
+    if [ "$source" = "$destination" ]; then
+        owner="$(stat -c '%u' "$source" 2>/dev/null)" \
+            || die "could not inspect installed $label owner"
+        group="$(stat -c '%g' "$source" 2>/dev/null)" \
+            || die "could not inspect installed $label group"
+        mode="$(stat -c '%a' "$source" 2>/dev/null)" \
+            || die "could not inspect installed $label mode"
+        size="$(stat -c '%s' "$source" 2>/dev/null)" \
+            || die "could not inspect installed $label size"
+        [ "$owner" = 0 ] && [ "$group" = 0 ] \
+            && [[ "$size" =~ ^[0-9]+$ ]] \
+            && [ "$size" -le "$ARTWORK_NOTICE_MAX_BYTES" ] \
+            && (( (8#$mode & 8#22) == 0 )) \
+            || die "installed $label has unsafe ownership, mode, or size"
+        validate_artwork_notice "$source" "$expected" "$label" "$kind"
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + enforce root:root 0644 $destination"
+        else
+            chown root:root "$destination" && chmod 0644 "$destination" \
+                || die "could not enforce installed $label ownership and permissions"
+        fi
+        return 0
+    fi
+
+    if [ "$DRY_RUN" = 1 ]; then
+        tmp="$(mktemp "${TMPDIR:-/tmp}/plebian-os-notice-validate.XXXXXX")" \
+            || die "could not create private $label validation file"
+    else
+        tmp="$(mktemp "$dest_dir/.$(basename "$destination").XXXXXX")" \
+            || die "could not create private $label staging file"
+        ARTWORK_NOTICE_TMP="$tmp"
+    fi
+    chmod 0600 "$tmp" || { rm -f -- "$tmp"; die "could not secure $label staging file"; }
+    if ! copy_wallpaper_as_target_bounded \
+        "$source" "$tmp" "$ARTWORK_NOTICE_MAX_BYTES" "$label"; then
+        rm -f -- "$tmp"
+        ARTWORK_NOTICE_TMP=""
+        die "could not copy $label as $TARGET_USER"
+    fi
+    if ! (validate_artwork_notice "$tmp" "$expected" "$label" "$kind"); then
+        rm -f -- "$tmp"
+        ARTWORK_NOTICE_TMP=""
+        return 1
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+        rm -f -- "$tmp"
+        echo "    + install root:root 0644 $source $destination (atomic replace)"
+        return 0
+    fi
+    chown root:root "$tmp" && chmod 0644 "$tmp" \
+        || die "could not publish validated $label staging permissions"
+    if ! mv -fT -- "$tmp" "$destination"; then
+        rm -f -- "$tmp"
+        ARTWORK_NOTICE_TMP=""
+        die "could not atomically install $label"
+    fi
+    ARTWORK_NOTICE_TMP=""
+    validate_artwork_notice "$destination" "$expected" "$label" "$kind"
+    [ "$(stat -c '%u:%g:%a' "$destination")" = 0:0:644 ] \
+        || die "installed $label does not have root:root 0644 metadata"
+}
+
+install_artwork_notices() {
+    local repo_root="$SELF_DIR/.." attribution_source license_source
+    validate_artwork_notice_destination_dirs
+    if [ -f "$repo_root/VERSION" ]; then
+        attribution_source="$repo_root/assets/installer/ATTRIBUTION.md"
+        license_source="$repo_root/assets/COPYING.GPL-2"
+        [ -f "$attribution_source" ] && [ ! -L "$attribution_source" ] \
+            || die "tracked installer artwork attribution missing or unsafe: $attribution_source"
+        [ -f "$license_source" ] && [ ! -L "$license_source" ] \
+            || die "tracked GPL version 2 license missing or unsafe: $license_source"
+    else
+        attribution_source="$INSTALLER_ATTRIBUTION_DST"
+        license_source="$GPL2_LICENSE_DST"
+        [ -e "$attribution_source" ] || [ -L "$attribution_source" ] \
+            || die "installed installer artwork attribution is missing: $attribution_source"
+        [ -e "$license_source" ] || [ -L "$license_source" ] \
+            || die "installed GPL version 2 license is missing: $license_source"
+    fi
+
+    # Publish the license first so the attribution's relative link is never
+    # introduced before its target exists.
+    install_artwork_notice "$license_source" "$GPL2_LICENSE_DST" \
+        "$GPL2_LICENSE_SHA256" "GPL version 2 license" license
+    install_artwork_notice "$attribution_source" "$INSTALLER_ATTRIBUTION_DST" \
+        "$INSTALLER_ATTRIBUTION_SHA256" "installer artwork attribution" attribution
+}
+
+seed_desktop_wallpaper_state() {
+    local state_dir="${1:-$USER_HOME/.local/share/kilix/desktop}"
+    local wallpaper="${2:-$DESKTOP_WALLPAPER_DST}"
+    local state_path="$state_dir/.state.json" owner rc
+
+    [ "$DESKTOP" = 1 ] || return 0
+    if [ -e "$state_path" ] || [ -L "$state_path" ]; then
+        log "preserving existing Kilix desktop state (including wallpaper): $state_path"
+        return 0
+    fi
+    log "seeding the Plebian-OS wallpaper for a new Kilix desktop -> $state_path"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) create $state_path (0600) only if it still does not exist"
+        return 0
+    fi
+
+    as_user mkdir -p -- "$state_dir" \
+        || die "could not create Kilix desktop state directory as $TARGET_USER: $state_dir"
+    [ -d "$state_dir" ] && [ ! -L "$state_dir" ] \
+        || die "Kilix desktop state path is not a safe directory: $state_dir"
+    owner="$(stat -c '%u' "$state_dir" 2>/dev/null)" \
+        || die "could not inspect Kilix desktop state directory: $state_dir"
+    [ "$owner" = "$TARGET_UID" ] \
+        || die "Kilix desktop state directory is not owned by $TARGET_USER: $state_dir"
+
+    # Write to a user-owned temporary inode, fsync it, then link it into place.
+    # link(2) is an atomic create-if-absent: a concurrent first desktop launch or
+    # user choice wins, and this provisioner never overwrites it.
+    if as_user python3 - "$state_dir" "$state_path" "$wallpaper" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+state_dir, state_path, wallpaper = sys.argv[1:]
+fd, temporary = tempfile.mkstemp(prefix=".state.json.plebian-os.", dir=state_dir)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump({
+            "wall_image": wallpaper,
+            "wall_mode": "stretch",
+            "wall_custom": True,
+        }, stream, indent=1)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        os.link(temporary, state_path, follow_symlinks=False)
+    except FileExistsError:
+        raise SystemExit(17)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+    then
+        log "new Kilix desktop will use $wallpaper"
+    else
+        rc=$?
+        [ "$rc" = 17 ] \
+            || die "could not seed Kilix desktop wallpaper state"
+        log "Kilix desktop state appeared concurrently; preserving it"
+    fi
 }
 
 install_quiet_console_defaults() {
@@ -1045,6 +1601,7 @@ validate_target_user
 KILIX_DIR="${KILIX_DIR:-$USER_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$USER_HOME/kilix-95}"
 PLEB_STATE_HOME="${PLEB_STATE_HOME:-$USER_HOME/.local/state/pleb}"
+PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$USER_HOME/plebian-os}"
 
 log "plebian-os  : version $PLEBIAN_OS_VERSION"
 log "target user : $TARGET_USER ($USER_HOME)"
@@ -1085,6 +1642,8 @@ else
 fi
 install_no_beep_defaults
 install_quiet_console_defaults
+install_desktop_wallpaper
+install_artwork_notices
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same
@@ -1173,6 +1732,8 @@ install_env=(
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 build_kilix_fork
+seed_desktop_wallpaper_state \
+    "$USER_HOME/.local/share/kilix/desktop" "$DESKTOP_WALLPAPER_DST"
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
 # With no other desktop task installed, Pleb is the only /usr/share/xsessions
@@ -1243,6 +1804,7 @@ EOF
     write_session_default PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
     write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
     write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
+    write_session_default PLEBIAN_OS_DIR "$PLEBIAN_OS_DIR"
     write_session_default PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'
     } > "$PLEB_ENV_TMP"

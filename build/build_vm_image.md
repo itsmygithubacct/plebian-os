@@ -22,9 +22,10 @@ answers ─▶ custom preseed ─▶ ISO (remaster-iso.sh) ─▶ VBox VM ─▶
 ## Requirements
 
 - **VirtualBox** (`VBoxManage` on `PATH`)
-- **xorriso** — builds the ISO. The first download also needs `curl`,
-  `sha256sum`, `gpgv`, and `debian-archive-keyring` to verify Debian's signed
-  checksums; the verified ISO is then cached.
+- **xorriso**, GNU **cpio**, and **gzip** — build and brand the ISO. The first
+  download also needs `curl`, `sha256sum`, `gpgv`, and
+  `debian-archive-keyring` to verify Debian's signed checksums; the verified ISO
+  is then cached.
 - **openssl** — hashes the password so the plaintext never lands on the ISO;
   the builder refuses to create a plaintext-password preseed if it is absent.
 - **ssh** — used to detect when the install + provisioning have finished

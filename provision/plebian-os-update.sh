@@ -7,7 +7,8 @@
 # kilix/pleb command symlinks, the pleb-session launcher, and the xsession entry
 # — so a change to any of those lands too. It ALSO refreshes the Plebian-OS layer
 # itself (the provisioner, dependency installer, password helper, systemd unit,
-# version marker, and this helper) from a plebian-os checkout. Updates are
+# version marker, branded desktop wallpaper, artwork notices, and this helper) from a plebian-os
+# checkout. Updates are
 # serialized; participating checkouts must be clean and pinned refs resolve to
 # the fetched commit. One outer recovery transaction covers the deployed OS
 # layer, checkout positions, engine artifacts, and `pleb install` outputs.
@@ -25,6 +26,142 @@ set -euo pipefail
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+
+DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
+DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
+# These notice constants are also an exact staged-script contract consumed by
+# stage_and_validate_os_layer; they are deliberately not expanded at runtime.
+# shellcheck disable=SC2034
+INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
+# shellcheck disable=SC2034
+INSTALLER_ATTRIBUTION_SHA256=5216b6ee1ef154dab56cc5d0a026d28f67ed50feec4129d4fedd6ae2fc2b2fb6
+# shellcheck disable=SC2034
+GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
+# shellcheck disable=SC2034
+GPL2_LICENSE_SHA256=8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643
+_DEPLOYED_DESKTOP_WALLPAPER_SHA256="$DESKTOP_WALLPAPER_SHA256"
+
+desktop_wallpaper_matches_expected_hash() {
+    local path="$1" expected="$2" actual
+    [[ "$expected" =~ ^[0-9a-f]{64}$ ]] || return 1
+    actual="$(sha256sum "$path" 2>/dev/null | awk '{print $1}')" || return 1
+    [ "$actual" = "$expected" ]
+}
+
+seed_desktop_wallpaper_state_if_absent() {
+    local state_dir="$1" wallpaper="$2" state_path="$1/.state.json" owner rc
+    if [ -e "$state_path" ] || [ -L "$state_path" ]; then
+        log "preserving existing Kilix desktop state (including wallpaper): $state_path"
+        return 0
+    fi
+    mkdir -p -- "$state_dir" \
+        || { warn "could not create Kilix desktop state directory: $state_dir"; return 1; }
+    [ -d "$state_dir" ] && [ ! -L "$state_dir" ] \
+        || { warn "Kilix desktop state path is not a safe directory: $state_dir"; return 1; }
+    owner="$(stat -c '%u' "$state_dir" 2>/dev/null)" \
+        || { warn "could not inspect Kilix desktop state directory: $state_dir"; return 1; }
+    [ "$owner" = "$(id -u)" ] \
+        || { warn "Kilix desktop state directory is not owned by the updating user: $state_dir"; return 1; }
+
+    if python3 - "$state_dir" "$state_path" "$wallpaper" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+state_dir, state_path, wallpaper = sys.argv[1:]
+fd, temporary = tempfile.mkstemp(prefix=".state.json.plebian-os.", dir=state_dir)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        json.dump({
+            "wall_image": wallpaper,
+            "wall_mode": "stretch",
+            "wall_custom": True,
+        }, stream, indent=1)
+        stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        os.link(temporary, state_path, follow_symlinks=False)
+    except FileExistsError:
+        raise SystemExit(17)
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+PY
+    then
+        log "new Kilix desktop will use $wallpaper"
+    else
+        rc=$?
+        if [ "$rc" = 17 ]; then
+            log "Kilix desktop state appeared concurrently; preserving it"
+            return 0
+        fi
+        warn "could not seed Kilix desktop wallpaper state"
+        return 1
+    fi
+}
+
+seed_desktop_wallpaper_after_commit() {
+    local data_home state_dir owner mode dir
+    case "${PLEB_DESKTOP:-0}" in 1|yes|true|on) ;; *) return 0 ;; esac
+    if [ "$(id -u)" = 0 ]; then
+        warn "stack committed; run plebian-os-update as the desktop user to seed its wallpaper"
+        return 0
+    fi
+    for dir in / /usr /usr/local /usr/local/share; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || {
+            warn "installed desktop wallpaper has an unsafe fixed ancestor: $dir"
+            return 1
+        }
+        owner="$(stat -c '%u' "$dir" 2>/dev/null)" || return 1
+        mode="$(stat -c '%a' "$dir" 2>/dev/null)" || return 1
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || {
+            warn "desktop wallpaper ancestor is not safely root-owned: $dir"
+            return 1
+        }
+    done
+    for dir in /usr/local/share/plebian-os \
+        /usr/local/share/plebian-os/wallpapers; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || {
+            warn "installed desktop wallpaper has an unsafe parent directory"
+            return 1
+        }
+        owner="$(stat -c '%u' "$dir" 2>/dev/null)" || return 1
+        mode="$(stat -c '%a' "$dir" 2>/dev/null)" || return 1
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+            && (( (8#$mode & 8#1) != 0 )) || {
+            warn "desktop wallpaper directory is not safely user-traversable: $dir"
+            return 1
+        }
+    done
+    if [ ! -f "$DESKTOP_WALLPAPER_DST" ] || [ -L "$DESKTOP_WALLPAPER_DST" ]; then
+        warn "stack committed, but the validated desktop wallpaper is not installed; not seeding user state"
+        return 0
+    fi
+    owner="$(stat -c '%u' "$DESKTOP_WALLPAPER_DST" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' "$DESKTOP_WALLPAPER_DST" 2>/dev/null)" || return 1
+    [ "$owner" = 0 ] && [ "$mode" = 644 ] || {
+        warn "installed desktop wallpaper has unsafe ownership or mode; not seeding user state"
+        return 1
+    }
+    desktop_wallpaper_matches_expected_hash \
+        "$DESKTOP_WALLPAPER_DST" "$_DEPLOYED_DESKTOP_WALLPAPER_SHA256" || {
+        warn "installed desktop wallpaper checksum mismatch; not seeding user state"
+        return 1
+    }
+    data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+    case "$data_home" in /*) ;; *) data_home="$HOME/.local/share" ;; esac
+    state_dir="${KILIX_DESKTOP_DIR:-$data_home/kilix/desktop}"
+    case "$state_dir" in
+        /*) ;;
+        *) warn "KILIX_DESKTOP_DIR must be absolute to seed the wallpaper"; return 1 ;;
+    esac
+    seed_desktop_wallpaper_state_if_absent "$state_dir" "$DESKTOP_WALLPAPER_DST"
+}
 
 root_config_safe_to_source() {
     local cfg="$1" owner mode dir
@@ -189,10 +326,20 @@ paths=(
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
+    /usr/local/share/plebian-os/wallpapers/plebian-os.png
+    /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
+    /usr/local/share/doc/plebian-os/COPYING.GPL-2
     /usr/local/bin/pleb-session
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/pleb
+)
+managed_dirs=(
+    /usr/local/share/plebian-os
+    /usr/local/share/plebian-os/wallpapers
+    /usr/local/share/doc
+    /usr/local/share/doc/plebian-os
+    /usr/local/share/doc/plebian-os/installer
 )
 cleanup() {
     rc=$?
@@ -202,6 +349,23 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir "$txn/items"
+for dir in / /usr /usr/local /usr/local/share; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
+        || exit 2
+    dir_mode="$(stat -c '%a' "$dir")"
+    (( (8#$dir_mode & 8#22) == 0 )) || exit 2
+done
+for i in "${!managed_dirs[@]}"; do
+    dir="${managed_dirs[$i]}"
+    if [ -e "$dir" ] || [ -L "$dir" ]; then
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
+            || exit 2
+        dir_mode="$(stat -c '%a' "$dir")"
+        (( (8#$dir_mode & 8#22) == 0 )) \
+            && (( (8#$dir_mode & 8#1) != 0 )) || exit 2
+        : >"$txn/dir.$i.present"
+    fi
+done
 for i in "${!paths[@]}"; do
     if [ -e "${paths[$i]}" ] || [ -L "${paths[$i]}" ]; then
         : >"$txn/$i.present"
@@ -239,10 +403,20 @@ paths=(
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
+    /usr/local/share/plebian-os/wallpapers/plebian-os.png
+    /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
+    /usr/local/share/doc/plebian-os/COPYING.GPL-2
     /usr/local/bin/pleb-session
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/pleb
+)
+managed_dirs=(
+    /usr/local/share/plebian-os
+    /usr/local/share/plebian-os/wallpapers
+    /usr/local/share/doc
+    /usr/local/share/doc/plebian-os
+    /usr/local/share/doc/plebian-os/installer
 )
 new_paths=()
 cleanup_new() {
@@ -268,6 +442,15 @@ for i in "${!paths[@]}"; do
         new_paths[$i]=""
     else
         rm -rf -- "$dest"
+    fi
+done
+for ((i=${#managed_dirs[@]}-1; i>=0; i--)); do
+    [ -f "$txn/dir.$i.present" ] && continue
+    dir="${managed_dirs[$i]}"
+    if [ -d "$dir" ] && [ ! -L "$dir" ]; then
+        rmdir -- "$dir"
+    elif [ -e "$dir" ] || [ -L "$dir" ]; then
+        exit 1
     fi
 done
 systemctl daemon-reload
@@ -569,6 +752,9 @@ update_os_checkout() {
 # validate the complete set before any privileged destination is touched.
 stage_and_validate_os_layer() {
     local prov="$PLEBIAN_OS_DIR/provision" stage="$1" file
+    local wallpaper_expected wallpaper_update_expected wallpaper_actual
+    local attribution_expected attribution_update_expected attribution_actual
+    local license_expected license_update_expected license_actual
     local required=(
         "$prov/plebian-os-provision.sh"
         "$prov/install-deps.sh"
@@ -577,10 +763,19 @@ stage_and_validate_os_layer() {
         "$prov/plebian-os-firstboot.service"
         "$prov/plebian-os-firstboot-attempt"
         "$PLEBIAN_OS_DIR/VERSION"
+        "$PLEBIAN_OS_DIR/assets/desktop/plebian-os.png"
+        "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md"
+        "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2"
     )
     for file in "${required[@]}"; do
         [ -f "$file" ] || die "OS-layer checkout is incomplete; required file missing: $file"
     done
+    [ ! -L "$PLEBIAN_OS_DIR/assets/desktop/plebian-os.png" ] \
+        || die "OS-layer checkout has an unsafe wallpaper symlink"
+    [ ! -L "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md" ] \
+        || die "OS-layer checkout has an unsafe attribution symlink"
+    [ ! -L "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" ] \
+        || die "OS-layer checkout has an unsafe GPL license symlink"
 
     install -m 0755 "$prov/plebian-os-provision.sh" "$stage/plebian-os-provision"
     install -m 0755 "$prov/install-deps.sh" "$stage/plebian-os-install-deps"
@@ -589,6 +784,9 @@ stage_and_validate_os_layer() {
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
     install -m 0755 "$prov/plebian-os-firstboot-attempt" "$stage/plebian-os-firstboot-attempt"
     install -m 0644 "$PLEBIAN_OS_DIR/VERSION" "$stage/VERSION"
+    install -m 0644 "$PLEBIAN_OS_DIR/assets/desktop/plebian-os.png" "$stage/desktop-wallpaper.png"
+    install -m 0644 "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md" "$stage/ATTRIBUTION.md"
+    install -m 0644 "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" "$stage/COPYING.GPL-2"
 
     bash -n "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
@@ -612,6 +810,76 @@ PY
     fi
     grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' "$stage/VERSION" \
         || die "staged VERSION is not semantic MAJOR.MINOR.PATCH"
+    python3 - "$stage/desktop-wallpaper.png" <<'PY' \
+        || die "staged desktop wallpaper is not a 1920x1080 RGB PNG"
+import pathlib
+import struct
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+    raise SystemExit(1)
+ihdr = struct.unpack(">IIBBBBB", data[16:29])
+if ihdr != (1920, 1080, 8, 2, 0, 0, 0):
+    raise SystemExit(1)
+PY
+    wallpaper_expected="$(sed -n \
+        's/^DESKTOP_WALLPAPER_SHA256=\([0-9a-f]\{64\}\)$/\1/p' \
+        "$stage/plebian-os-provision")"
+    [[ "$wallpaper_expected" =~ ^[0-9a-f]{64}$ ]] \
+        || die "staged provisioner has no exact desktop wallpaper checksum"
+    wallpaper_update_expected="$(sed -n \
+        's/^DESKTOP_WALLPAPER_SHA256=\([0-9a-f]\{64\}\)$/\1/p' \
+        "$stage/plebian-os-update")"
+    [[ "$wallpaper_update_expected" =~ ^[0-9a-f]{64}$ ]] \
+        || die "staged updater has no exact desktop wallpaper checksum"
+    wallpaper_actual="$(sha256sum "$stage/desktop-wallpaper.png" | awk '{print $1}')"
+    [ "$wallpaper_actual" = "$wallpaper_expected" ] \
+        || die "staged desktop wallpaper does not match the staged provisioner"
+    [ "$wallpaper_actual" = "$wallpaper_update_expected" ] \
+        || die "staged desktop wallpaper does not match the staged updater"
+
+    python3 - "$stage/ATTRIBUTION.md" "$stage/COPYING.GPL-2" <<'PY' \
+        || die "staged artwork attribution/license text contract failed"
+import pathlib
+import sys
+
+attribution = pathlib.Path(sys.argv[1]).read_bytes()
+license_text = pathlib.Path(sys.argv[2]).read_bytes()
+for data in (attribution, license_text):
+    if not data or b"\x00" in data or not data.endswith(b"\n"):
+        raise SystemExit(1)
+    data.decode("utf-8")
+if b"../COPYING.GPL-2" not in attribution or b"GPL-2.0-or-later" not in attribution:
+    raise SystemExit(1)
+if b"GNU GENERAL PUBLIC LICENSE" not in license_text or b"Version 2, June 1991" not in license_text:
+    raise SystemExit(1)
+PY
+    attribution_expected="$(sed -n \
+        's/^INSTALLER_ATTRIBUTION_SHA256=\([0-9a-f]\{64\}\)$/\1/p' \
+        "$stage/plebian-os-provision")"
+    attribution_update_expected="$(sed -n \
+        's/^INSTALLER_ATTRIBUTION_SHA256=\([0-9a-f]\{64\}\)$/\1/p' \
+        "$stage/plebian-os-update")"
+    license_expected="$(sed -n \
+        's/^GPL2_LICENSE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' \
+        "$stage/plebian-os-provision")"
+    license_update_expected="$(sed -n \
+        's/^GPL2_LICENSE_SHA256=\([0-9a-f]\{64\}\)$/\1/p' \
+        "$stage/plebian-os-update")"
+    for file in "$attribution_expected" "$attribution_update_expected" \
+        "$license_expected" "$license_update_expected"; do
+        [[ "$file" =~ ^[0-9a-f]{64}$ ]] \
+            || die "staged provisioner/updater has no exact artwork notice checksum"
+    done
+    attribution_actual="$(sha256sum "$stage/ATTRIBUTION.md" | awk '{print $1}')"
+    license_actual="$(sha256sum "$stage/COPYING.GPL-2" | awk '{print $1}')"
+    [ "$attribution_actual" = "$attribution_expected" ] \
+        && [ "$attribution_actual" = "$attribution_update_expected" ] \
+        || die "staged artwork attribution does not match the staged provisioner/updater"
+    [ "$license_actual" = "$license_expected" ] \
+        && [ "$license_actual" = "$license_update_expected" ] \
+        || die "staged GPL license does not match the staged provisioner/updater"
 }
 
 # Privileged deployment is transactional: first place every new file beside its
@@ -622,15 +890,33 @@ deploy_staged_os_layer() {
     local stage="$1"
     shift
     local -a expected_hashes=("$@")
-    local -a elevate=()
-    [ "${#expected_hashes[@]}" -eq 7 ] \
+    local -a root_command
+    [ "${#expected_hashes[@]}" -eq 10 ] \
         || die "OS-layer deployment requires one expected hash per staged file"
-    [ "$(id -u)" = 0 ] || elevate=(sudo)
-    "${elevate[@]}" bash -s -- "$stage" "${expected_hashes[@]}" <<'ROOT_DEPLOY'
+    if [ "$EUID" = 0 ]; then
+        # A root-run updater stages root-owned files. Clear inherited sudo
+        # metadata so the inner boundary cannot mistake the original login UID
+        # for the owner of this root-created stage.
+        root_command=(env -u SUDO_UID -u SUDO_GID -u SUDO_USER)
+    else
+        root_command=(sudo)
+    fi
+    "${root_command[@]}" bash -s -- "$stage" "${expected_hashes[@]}" <<'ROOT_DEPLOY'
 set -euo pipefail
 stage="$1"
 shift
 expected_hashes=("$@")
+caller_uid="${SUDO_UID:-0}"
+[[ "$caller_uid" =~ ^[0-9]+$ ]] || exit 2
+[ "$EUID" = 0 ] || exit 2
+if [ -n "${SUDO_UID:-}" ]; then
+    [ "$caller_uid" -gt 0 ] || exit 2
+else
+    [ "$caller_uid" = 0 ] || exit 2
+fi
+[ -d "$stage" ] && [ ! -L "$stage" ] \
+    && [ "$(stat -c '%u' "$stage")" = "$caller_uid" ] \
+    && [ "$(stat -c '%a' "$stage")" = 700 ] || exit 2
 names=(
     plebian-os-provision
     plebian-os-install-deps
@@ -639,6 +925,9 @@ names=(
     plebian-os-firstboot.service
     plebian-os-firstboot-attempt
     VERSION
+    desktop-wallpaper.png
+    ATTRIBUTION.md
+    COPYING.GPL-2
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -648,18 +937,28 @@ dests=(
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
+    /usr/local/share/plebian-os/wallpapers/plebian-os.png
+    /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
+    /usr/local/share/doc/plebian-os/COPYING.GPL-2
 )
-modes=(0755 0755 0755 0755 0644 0755 0644)
-new_paths=() backup_paths=() existed=() changed=()
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576)
+new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
+[ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
+[ "${#modes[@]}" -eq "${#names[@]}" ] || exit 2
+[ "${#max_sizes[@]}" -eq "${#names[@]}" ] || exit 2
 for hash in "${expected_hashes[@]}"; do
     [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || exit 2
 done
 
 cleanup_transaction_files() {
-    local path
+    local path i
     for path in "${new_paths[@]:-}" "${backup_paths[@]:-}"; do
         [ -n "$path" ] && rm -f -- "$path"
+    done
+    for ((i=${#created_dirs[@]}-1; i>=0; i--)); do
+        rmdir -- "${created_dirs[$i]}" 2>/dev/null || true
     done
 }
 
@@ -693,13 +992,109 @@ rollback() {
 }
 trap rollback ERR INT TERM HUP
 
-# Root-stage every file on the destination filesystem before changing anything.
+# Distribution assets live below fixed root-owned directories. Reject any
+# symlink or user-writable fixed ancestor before root stages bytes beneath it.
+for dir in / /usr /usr/local /usr/local/share; do
+    if [ ! -d "$dir" ] || [ -L "$dir" ]; then
+        printf 'plebian-os-update: unsafe distribution asset destination ancestor: %s\n' "$dir" >&2
+        false
+    fi
+    owner="$(stat -c '%u' "$dir")"
+    mode="$(stat -c '%a' "$dir")"
+    if [ "$owner" != 0 ] || (( (8#$mode & 8#22) != 0 )); then
+        printf 'plebian-os-update: unsafe distribution asset ancestor ownership/mode: %s\n' "$dir" >&2
+        false
+    fi
+done
+
+# The managed children may be created here, but must remain root-controlled and
+# traversable by the desktop user.
+for dir in \
+    /usr/local/share/plebian-os \
+    /usr/local/share/plebian-os/wallpapers \
+    /usr/local/share/doc \
+    /usr/local/share/doc/plebian-os \
+    /usr/local/share/doc/plebian-os/installer; do
+    if [ -L "$dir" ]; then
+        printf 'plebian-os-update: unsafe distribution asset destination symlink: %s\n' "$dir" >&2
+        false
+    elif [ -e "$dir" ] && [ ! -d "$dir" ]; then
+        printf 'plebian-os-update: distribution asset destination is not a directory: %s\n' "$dir" >&2
+        false
+    elif [ ! -e "$dir" ]; then
+        install -d -o root -g root -m 0755 -- "$dir"
+        created_dirs+=("$dir")
+    fi
+    owner="$(stat -c '%u' "$dir")"
+    mode="$(stat -c '%a' "$dir")"
+    if [ "$owner" != 0 ] || (( (8#$mode & 8#22) != 0 )) \
+        || (( (8#$mode & 8#1) == 0 )); then
+        printf 'plebian-os-update: unsafe distribution asset destination ownership/mode: %s\n' "$dir" >&2
+        false
+    fi
+done
+
+# Root-stage every file privately on the destination filesystem before changing
+# anything. Open each caller-owned source exactly once with O_NOFOLLOW, reject
+# non-regular or writable inputs and bound the read, so a same-user path race
+# cannot make root follow a FIFO/device/symlink or disclose substituted bytes.
 for i in "${!dests[@]}"; do
     dest="${dests[$i]}"
     mkdir -p -- "$(dirname "$dest")"
     new="$(dirname "$dest")/.$(basename "$dest").plebian-os-new.$$"
-    install -m "${modes[$i]}" -- "$stage/${names[$i]}" "$new"
     new_paths[$i]="$new"
+    python3 - "$stage/${names[$i]}" "$new" "$caller_uid" "${max_sizes[$i]}" <<'PY'
+import os
+import stat
+import sys
+
+source, destination, caller_uid_text, limit_text = sys.argv[1:]
+caller_uid = int(caller_uid_text)
+limit = int(limit_text)
+read_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW
+source_fd = os.open(source, read_flags)
+destination_fd = None
+try:
+    source_stat = os.fstat(source_fd)
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise RuntimeError("OS-layer source is not a regular file")
+    if source_stat.st_uid != caller_uid:
+        raise RuntimeError("OS-layer source is not owned by the invoking updater")
+    if source_stat.st_mode & 0o022:
+        raise RuntimeError("OS-layer source is group/world writable")
+    if source_stat.st_size > limit:
+        raise RuntimeError("OS-layer source exceeds its copy limit")
+    write_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+    destination_fd = os.open(destination, write_flags, 0o600)
+    os.fchown(destination_fd, 0, 0)
+    os.fchmod(destination_fd, 0o600)
+    total = 0
+    while True:
+        chunk = os.read(source_fd, min(1024 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise RuntimeError("OS-layer source grew beyond its copy limit")
+        view = memoryview(chunk)
+        while view:
+            written = os.write(destination_fd, view)
+            view = view[written:]
+    os.fsync(destination_fd)
+except BaseException:
+    if destination_fd is not None:
+        os.close(destination_fd)
+        destination_fd = None
+    try:
+        os.unlink(destination)
+    except FileNotFoundError:
+        pass
+    raise
+finally:
+    os.close(source_fd)
+    if destination_fd is not None:
+        os.close(destination_fd)
+PY
 done
 
 # Re-validate the root-owned copies, not only the user-owned staging directory.
@@ -711,7 +1106,7 @@ for i in "${!new_paths[@]}"; do
     [ "$actual" = "${expected_hashes[$i]}" ] || {
         printf 'plebian-os-update: staged %s changed before privileged deployment\n' \
             "${names[$i]}" >&2
-        exit 1
+        false
     }
 done
 bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" "${new_paths[5]}"
@@ -725,6 +1120,41 @@ grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^ExecStart=/usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
     && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' "${new_paths[6]}"
+python3 - "${new_paths[7]}" <<'PY'
+import pathlib
+import struct
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+    raise SystemExit(1)
+if struct.unpack(">IIBBBBB", data[16:29]) != (1920, 1080, 8, 2, 0, 0, 0):
+    raise SystemExit(1)
+PY
+python3 - "${new_paths[8]}" "${new_paths[9]}" <<'PY'
+import pathlib
+import sys
+
+attribution = pathlib.Path(sys.argv[1]).read_bytes()
+license_text = pathlib.Path(sys.argv[2]).read_bytes()
+for data in (attribution, license_text):
+    if not data or b"\x00" in data or not data.endswith(b"\n"):
+        raise SystemExit(1)
+    data.decode("utf-8")
+if b"../COPYING.GPL-2" not in attribution or b"GPL-2.0-or-later" not in attribution:
+    raise SystemExit(1)
+if b"GNU GENERAL PUBLIC LICENSE" not in license_text or b"Version 2, June 1991" not in license_text:
+    raise SystemExit(1)
+PY
+
+# Nothing becomes destination-readable until all private root-owned copies have
+# passed their exact hashes and type-specific validation.
+for i in "${!new_paths[@]}"; do
+    [ "$(stat -c '%u' "${new_paths[$i]}")" = 0 ] \
+        && [ "$(stat -c '%g' "${new_paths[$i]}")" = 0 ] \
+        && [ "$(stat -c '%a' "${new_paths[$i]}")" = 600 ]
+    chmod "${modes[$i]}" -- "${new_paths[$i]}"
+done
 
 # Back up the complete old set before the first rename.
 for i in "${!dests[@]}"; do
@@ -772,6 +1202,9 @@ self_update_os_layer() {
         plebian-os-firstboot.service
         plebian-os-firstboot-attempt
         VERSION
+        desktop-wallpaper.png
+        ATTRIBUTION.md
+        COPYING.GPL-2
     )
     stage="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-layer.XXXXXX")"
     _OS_LAYER_STAGE="$stage"
@@ -782,6 +1215,7 @@ self_update_os_layer() {
     log "atomically redeploying the validated OS layer (needs root)"
     deploy_staged_os_layer "$stage" "${stage_hashes[@]}" \
         || die "OS-layer deployment failed and was rolled back"
+    _DEPLOYED_DESKTOP_WALLPAPER_SHA256="${stage_hashes[7]}"
     rm -rf "$stage"
     _OS_LAYER_STAGE=""
     log "OS layer refreshed to $(cat "$PLEBIAN_OS_DIR/VERSION" 2>/dev/null || echo unknown)"
@@ -859,6 +1293,9 @@ else
 fi
 
 commit_stack_transaction
+if ! seed_desktop_wallpaper_after_commit; then
+    warn "stack committed, but wallpaper state seeding failed; existing state was not changed"
+fi
 log "Plebian-OS stack updated."
 restart_session_after_commit
 if [ "$restart_arg" = --no-restart ]; then
