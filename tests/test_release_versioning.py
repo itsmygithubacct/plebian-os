@@ -19,10 +19,17 @@ class ReleaseVersioningTests(unittest.TestCase):
 
     @property
     def manifest(self):
-        return _read("releases", f"{self.version}.env")
+        path = ROOT / "releases" / f"{self.version}.env"
+        if not path.exists():
+            self.skipTest(
+                f"coordinated {self.version} pin manifest is finalized only "
+                "after all component release commits exist"
+            )
+        return path.read_text()
 
     def test_version_file_is_semver(self):
         self.assertRegex((ROOT / "VERSION").read_text().strip(), r"^\d+\.\d+\.\d+$")
+        self.assertIn(f"## [{self.version}]", _read("CHANGELOG.md"))
 
     def test_release_manifest_pins_refs(self):
         m = self.manifest
@@ -52,6 +59,37 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("load_release_manifest", r)
         self.assertIn("PLEBIAN_OS_RELEASE", r)
         self.assertIn("REPLACE_ME", r)
+
+    def test_release_iso_defaults_include_version_and_architecture(self):
+        r = _read("build", "remaster-iso.sh")
+        self.assertIn(
+            'default_iso_name="plebian-os-$PLEBIAN_OS_VERSION-amd64.iso"', r)
+        make_usb = _read("build", "make-usb.sh")
+        self.assertIn(
+            'default_iso_name="plebian-os-$release_iso_version-amd64.iso"',
+            make_usb,
+        )
+        import sys
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "build"))
+        import build_vm_image as vm
+
+        with mock.patch.dict(os.environ, {
+            "PLEBIAN_OS_RELEASE_MODE": "1",
+            "PLEBIAN_OS_VERSION": "9.8.7",
+        }, clear=False):
+            os.environ.pop("PLEBIAN_OS_RELEASE", None)
+            self.assertEqual(
+                vm.default_iso_filename("custom"),
+                "plebian-os-9.8.7-amd64.iso",
+            )
+        with mock.patch.dict(os.environ, {
+            "PLEBIAN_OS_RELEASE_MODE": "0",
+        }, clear=False):
+            self.assertEqual(
+                vm.default_iso_filename("custom"),
+                "plebian-os-custom.iso",
+            )
 
     def test_shell_release_manifest_overrides_ambient_bypass_values(self):
         source = _read("build", "remaster-iso.sh")

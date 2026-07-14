@@ -4,7 +4,21 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [Unreleased]
+## [0.1.2] — 2026-07-14
+
+### Fresh-install layout
+
+- Place all four coordinated source checkouts under
+  `~/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}` and keep runtime data under
+  `~/.local/gpu_terminal/`, with the resolved source/data paths carried through
+  builder metadata, firstboot configuration, session defaults, and installed
+  provenance.
+- Mark Pleb installs launched by Plebian-OS as managed installs, preserving the
+  distribution's coordinated storage and provider configuration.
+- Seed the branded wallpaper in the state directory for the provider that will
+  actually run: Kilix-95 for `external`, builtin Kilix for `builtin`, and the
+  installed external provider (falling back to builtin) for `auto`; existing
+  desktop state is never replaced.
 
 ### Installer identity
 

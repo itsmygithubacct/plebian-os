@@ -8,7 +8,7 @@
 #
 # It just runs the same provisioner the ISO's first-boot service runs. On a
 # fresh graphical Debian this installs the Pleb session alongside your current
-# desktop (reversible: `~/pleb/bin/pleb uninstall`). On a base (no-desktop)
+# desktop (reversible: `~/gpu_terminal/pleb/bin/pleb uninstall`). On a base (no-desktop)
 # Debian it pulls the whole graphical stack too.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

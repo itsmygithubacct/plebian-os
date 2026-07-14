@@ -8,6 +8,8 @@ network-fetched build input.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
+The next coordinated release is **0.1.2**; its pin manifest is intentionally
+created only after the four final component commits are known.
 
 ## Version commands
 
@@ -75,6 +77,11 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    - verify a fresh Kilix desktop selects that stable wallpaper path, while an
      existing `.state.json` (including a custom wallpaper choice) remains
      byte-for-byte unchanged across reprovisioning and update;
+   - verify firstboot records
+     `~/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}` as the coordinated
+     source layout and `~/.local/gpu_terminal/` as the data root in build info,
+     session defaults, and final provenance; confirm `external`, `builtin`, and
+     both `auto` provider outcomes seed only the state tree that will run;
    - exercise a successful ten-file OS-layer update and an induced failure,
      confirming rollback restores the prior wallpaper, attribution, license,
      scripts, and state; separately test the documented v0.1.1 migration with

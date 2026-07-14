@@ -82,7 +82,9 @@ once instead of using the interactive `plebian` default.
 
 --target virtualbox    only virtualbox today (qemu/docker planned)
 --iso PATH             use a prebuilt ISO, skip building (see note below)
---out PATH             ISO output path (default: plebian-os-<name>.iso)
+--out PATH             ISO output path (release default:
+                       plebian-os-<version>-amd64.iso; otherwise
+                       plebian-os-<name>.iso)
 --replace              explicitly allow deleting an existing same-name VM
 --gui                  start the VM with a window instead of headless
 --no-wait              create + start the VM, but don't block on provisioning
@@ -141,8 +143,9 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
   verify the downloaded fallback kitty bundle. `KILIX95_DIR`, `KILIX95_REPO`,
   and `KILIX95_BRANCH` still select the external Kilix 95 checkout.
 - `PLEBIAN_OS_BUILD_KILIX_FORK=0` allows the prebuilt fallback engine. The
-  default is `1`, which builds and verifies `~/kilix/src/kitty/launcher/kitty`.
-- Autologin: `~/pleb/bin/pleb autologin on|off`.
+  default is `1`, which builds and verifies
+  `~/.local/gpu_terminal/kilix/build/current/src/kitty/launcher/kitty`.
+- Autologin: `~/gpu_terminal/pleb/bin/pleb autologin on|off`.
 - Passwordless sudo: remove or edit `/etc/sudoers.d/plebian-os-nopasswd`.
 
 At build time these come from `--session` / `--kiosk` /
@@ -155,6 +158,13 @@ At build time these come from `--session` / `--kiosk` /
 `KILIX_DESKTOP_FLAVOR`, `KILIX95_AUTO_INSTALL`, `KILIX95_REPO`,
 `KILIX95_BRANCH`, and `KILIX95_REF`
 are also copied into the first-boot environment when present.
+
+Fresh guests default all coordinated checkouts to siblings under
+`~/gpu_terminal/` and all runtime state to siblings under
+`~/.local/gpu_terminal/`. The builder records those target paths in both the
+firstboot environment and build provenance; its own host-side cache and scratch
+directories remain separate. `PLEBIAN_OS_TARGET_SOURCE_HOME` can override the
+guest source root without redirecting host-side build storage.
 
 ## How it works
 

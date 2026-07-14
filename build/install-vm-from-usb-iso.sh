@@ -13,12 +13,12 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(cd "$HERE/.." && pwd)"
+. "$HERE/lib.sh"
 
 NAME="${PLEBIAN_OS_VM_NAME:-plebian-e2e}"
 USER_NAME="${PLEBIAN_OS_VM_USER:-pleb}"
 PASSWORD="${PLEBIAN_OS_VM_PASSWORD:-}"
-ISO="${PLEBIAN_OS_VM_ISO:-$ROOT/plebian-os-${NAME}.iso}"
+ISO="${PLEBIAN_OS_VM_ISO:-$PLEBIAN_OS_ARTIFACTS/plebian-os-${NAME}.iso}"
 RAM="${PLEBIAN_OS_VM_RAM_MB:-4096}"
 CPUS="${PLEBIAN_OS_VM_CPUS:-4}"
 VRAM="${PLEBIAN_OS_VM_VRAM_MB:-256}"

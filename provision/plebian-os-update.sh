@@ -105,8 +105,15 @@ PY
     fi
 }
 
+selected_desktop_wallpaper_state_dir() {
+    case "$KILIX_DESKTOP_PROVIDER" in
+        external|builtin|auto) printf '%s\n' "$KILIX_DESKTOP_DIR" ;;
+        *) return 1 ;;
+    esac
+}
+
 seed_desktop_wallpaper_after_commit() {
-    local data_home state_dir owner mode dir
+    local state_dir owner mode dir
     case "${PLEB_DESKTOP:-0}" in 1|yes|true|on) ;; *) return 0 ;; esac
     if [ "$(id -u)" = 0 ]; then
         warn "stack committed; run plebian-os-update as the desktop user to seed its wallpaper"
@@ -153,9 +160,10 @@ seed_desktop_wallpaper_after_commit() {
         warn "installed desktop wallpaper checksum mismatch; not seeding user state"
         return 1
     }
-    data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
-    case "$data_home" in /*) ;; *) data_home="$HOME/.local/share" ;; esac
-    state_dir="${KILIX_DESKTOP_DIR:-$data_home/kilix/desktop}"
+    state_dir="$(selected_desktop_wallpaper_state_dir)" || {
+        log "desktop provider $KILIX_DESKTOP_PROVIDER does not use managed Kilix wallpaper state"
+        return 0
+    }
     case "$state_dir" in
         /*) ;;
         *) warn "KILIX_DESKTOP_DIR must be absolute to seed the wallpaper"; return 1 ;;
@@ -186,12 +194,24 @@ if [ -r /etc/pleb/session.env ]; then
     . /etc/pleb/session.env
 fi
 
-PLEB_DIR="${PLEB_DIR:-$HOME/pleb}"
+GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$HOME/gpu_terminal}"
+PLEB_DIR="${PLEB_DIR:-$GPU_TERMINAL_SOURCE_HOME/pleb}"
 PLEB_REPO="${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
 PLEB_BRANCH="${PLEB_BRANCH:-}"
 PLEB_REF="${PLEB_REF:-}"
-PLEB_STATE_HOME="${PLEB_STATE_HOME:-${XDG_STATE_HOME:-$HOME/.local/state}/pleb}"
-KILIX_DIR="${KILIX_DIR:-$HOME/kilix}"
+GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"
+PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
+PLEB_CONFIG_HOME="${PLEB_CONFIG_HOME:-$PLEB_STORAGE_HOME/config}"
+PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
+PLEB_CACHE_HOME="${PLEB_CACHE_HOME:-$PLEB_STORAGE_HOME/cache}"
+PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
+PLEB_DATA_HOME="${PLEB_DATA_HOME:-$PLEB_STORAGE_HOME/data}"
+KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
+KILIX_STORAGE_HOME="${KILIX_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix}"
+KILIX_BUILD_DIRECTORY="${KILIX_BUILD_DIRECTORY:-$KILIX_STORAGE_HOME/build}"
+KILIX_DATA_HOME="${KILIX_DATA_HOME:-$KILIX_STORAGE_HOME/data}"
+KILIX_DESKTOP_DIR="${KILIX_DESKTOP_DIR:-$PLEB_DATA_HOME/desktop}"
+KILIX_PREBUILT_HOME="${KILIX_PREBUILT_HOME:-$KILIX_STORAGE_HOME/prebuilt/kitty.app}"
 KILIX_REPO="${KILIX_REPO:-https://github.com/itsmygithubacct/kilix.git}"
 KILIX_BRANCH="${KILIX_BRANCH:-}"
 KILIX_REF="${KILIX_REF:-}"
@@ -206,12 +226,16 @@ KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
 KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-}"
-KILIX95_DIR="${KILIX95_DIR:-$HOME/kilix-95}"
+KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-95}"
+KILIX95_STORAGE_HOME="${KILIX95_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix-95}"
+KILIX95_DATA_HOME="${KILIX95_DATA_HOME:-$KILIX95_STORAGE_HOME/data}"
 KILIX95_REPO="${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
 PLEB_DESKTOP="${PLEB_DESKTOP:-0}"
+PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
+PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
 # `pleb install` normally owns these four system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
@@ -227,7 +251,7 @@ PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
 # Plebian-OS layer self-update: the OS's own scripts (provisioner, dependency
 # installer, this update helper) come from a plebian-os checkout so an installed
 # system can pull OS-layer fixes — not just pleb/kilix — with one command.
-PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$HOME/plebian-os}"
+PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
 PLEBIAN_OS_BRANCH="${PLEBIAN_OS_BRANCH:-}"
 PLEBIAN_OS_REF="${PLEBIAN_OS_REF:-}"
@@ -517,6 +541,24 @@ restore_stack_path() {
     fi
 }
 
+restore_kilix_engine_generation() {
+    local current="$KILIX_BUILD_DIRECTORY/current"
+    local previous="$KILIX_BUILD_DIRECTORY/previous"
+    local existed old_id current_id previous_id
+    existed="$(cat "$_STACK_TXN_DIR/kilix-engine.existed" 2>/dev/null || echo 0)"
+    if [ "$existed" = 0 ]; then
+        rm -rf -- "$current"
+        return 0
+    fi
+    old_id="$(cat "$_STACK_TXN_DIR/kilix-engine.source-id" 2>/dev/null || true)"
+    current_id="$(cat "$current/source-id" 2>/dev/null || true)"
+    [ "$current_id" != "$old_id" ] || return 0
+    previous_id="$(cat "$previous/source-id" 2>/dev/null || true)"
+    [ -d "$previous" ] && [ "$previous_id" = "$old_id" ] || return 1
+    rm -rf -- "$current"
+    mv "$previous" "$current"
+}
+
 rollback_stack_transaction() {
     local failed=0
     warn "stack update failed; restoring the previous coherent installation"
@@ -532,9 +574,8 @@ rollback_stack_transaction() {
     fi
     restore_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95" || failed=1
 
-    restore_stack_path "$KILIX_DIR/kitty.app" kilix-prebuilt || failed=1
-    restore_stack_path "$KILIX_DIR/src/kitty/launcher/kitty" fork-kitty || failed=1
-    restore_stack_path "$KILIX_DIR/src/kitty/launcher/kitten" fork-kitten || failed=1
+    restore_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt || failed=1
+    restore_kilix_engine_generation || failed=1
     restore_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" fork-stamp || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
@@ -590,9 +631,15 @@ begin_stack_transaction() {
         record_stack_checkout "$KILIX_DIR/src" kilix-src "kilix source"
     fi
     record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
-    snapshot_stack_path "$KILIX_DIR/kitty.app" kilix-prebuilt
-    snapshot_stack_path "$KILIX_DIR/src/kitty/launcher/kitty" fork-kitty
-    snapshot_stack_path "$KILIX_DIR/src/kitty/launcher/kitten" fork-kitten
+    snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
+    if [ -d "$KILIX_BUILD_DIRECTORY/current" ]; then
+        printf '%s\n' 1 >"$_STACK_TXN_DIR/kilix-engine.existed"
+        cat "$KILIX_BUILD_DIRECTORY/current/source-id" \
+            >"$_STACK_TXN_DIR/kilix-engine.source-id" 2>/dev/null \
+            || : >"$_STACK_TXN_DIR/kilix-engine.source-id"
+    else
+        printf '%s\n' 0 >"$_STACK_TXN_DIR/kilix-engine.existed"
+    fi
     snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" fork-stamp
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
@@ -1206,7 +1253,8 @@ self_update_os_layer() {
         ATTRIBUTION.md
         COPYING.GPL-2
     )
-    stage="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-layer.XXXXXX")"
+    mkdir -p "$PLEBIAN_OS_SESSION_HOME"
+    stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
     _OS_LAYER_STAGE="$stage"
     stage_and_validate_os_layer "$stage"
     for file in "${stage_names[@]}"; do
@@ -1223,9 +1271,26 @@ self_update_os_layer() {
 }
 
 stack_env=(
+    "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
+    "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
+    "PLEBIAN_OS_MANAGED_INSTALL=1"
+    "PLEBIAN_OS_DIR=$PLEBIAN_OS_DIR"
+    "PLEBIAN_OS_STORAGE_HOME=$PLEBIAN_OS_STORAGE_HOME"
+    "PLEBIAN_OS_SESSION_HOME=$PLEBIAN_OS_SESSION_HOME"
+    "PLEB_DIR=$PLEB_DIR"
+    "PLEB_STORAGE_HOME=$PLEB_STORAGE_HOME"
+    "PLEB_CONFIG_HOME=$PLEB_CONFIG_HOME"
     "PLEB_STATE_HOME=$PLEB_STATE_HOME"
+    "PLEB_CACHE_HOME=$PLEB_CACHE_HOME"
+    "PLEB_SESSION_HOME=$PLEB_SESSION_HOME"
+    "PLEB_DATA_HOME=$PLEB_DATA_HOME"
     "PLEB_UPDATE_LOCK_FD=9"
     "KILIX_DIR=$KILIX_DIR"
+    "KILIX_STORAGE_HOME=$KILIX_STORAGE_HOME"
+    "KILIX_BUILD_DIRECTORY=$KILIX_BUILD_DIRECTORY"
+    "KILIX_DATA_HOME=$KILIX_DATA_HOME"
+    "KILIX_DESKTOP_DIR=$KILIX_DESKTOP_DIR"
+    "KILIX_PREBUILT_HOME=$KILIX_PREBUILT_HOME"
     "KILIX_REPO=$KILIX_REPO"
     "KILIX_BRANCH=$KILIX_BRANCH"
     "KILIX_REF=$KILIX_REF"
@@ -1242,6 +1307,8 @@ stack_env=(
     "KILIX_DESKTOP_FLAVOR=$KILIX_DESKTOP_FLAVOR"
     "PLEB_DESKTOP=$PLEB_DESKTOP"
     "KILIX95_AUTO_INSTALL=$KILIX95_AUTO_INSTALL"
+    "KILIX95_STORAGE_HOME=$KILIX95_STORAGE_HOME"
+    "KILIX95_DATA_HOME=$KILIX95_DATA_HOME"
     "KILIX95_DIR=$KILIX95_DIR"
     "KILIX95_REPO=$KILIX95_REPO"
     "KILIX95_BRANCH=$KILIX95_BRANCH"

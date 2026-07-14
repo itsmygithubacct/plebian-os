@@ -18,6 +18,44 @@ UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 
 
 class DesktopWallpaperTests(unittest.TestCase):
+    def selected_state_dir(
+        self, script_path: Path, provider: str, *, external_installed: bool
+    ) -> str:
+        script = r'''
+set -euo pipefail
+if [ "$SCRIPT_KIND" = provision ]; then
+    export PLEBIAN_OS_PROVISION_LIB_ONLY=1
+else
+    export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
+fi
+source "$SCRIPT_PATH"
+KILIX_DESKTOP_PROVIDER="$PROVIDER"
+KILIX_DESKTOP_DIR="$TEST_ROOT/pleb/data/desktop"
+KILIX_DATA_HOME="$TEST_ROOT/kilix/data"
+KILIX95_DATA_HOME="$TEST_ROOT/kilix-95/data"
+KILIX95_DIR="$TEST_ROOT/sources/kilix-95"
+selected_desktop_wallpaper_state_dir
+'''
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            if external_installed:
+                (root / "sources" / "kilix-95").mkdir(parents=True)
+                (root / "sources" / "kilix-95" / "main.py").write_text("# installed\n")
+            result = subprocess.run(
+                ["bash", "-c", script], cwd=ROOT,
+                env={
+                    **os.environ,
+                    "SCRIPT_PATH": str(script_path),
+                    "SCRIPT_KIND": "provision" if script_path == PROVISION else "update",
+                    "PROVIDER": provider,
+                    "TEST_ROOT": str(root),
+                    "HOME": str(root / "home"),
+                    "PLEB_STATE_HOME": str(root / "state"),
+                },
+                text=True, capture_output=True, check=True,
+            )
+            return result.stdout.strip().replace(str(root), "$ROOT")
+
     def run_seed(self, desktop: Path, *, enabled: bool = True, dry_run: bool = False):
         script = r'''
 set -euo pipefail
@@ -273,6 +311,33 @@ fi
             )
             self.assertEqual(stat.S_IMODE(state_path.stat().st_mode), 0o600)
             self.assertEqual(state_path.stat().st_uid, os.getuid())
+
+    def test_pleb_session_wallpaper_state_is_provider_independent(self):
+        for script in (PROVISION, UPDATE):
+            with self.subTest(script=script.name, provider="external"):
+                self.assertEqual(
+                    self.selected_state_dir(
+                        script, "external", external_installed=True),
+                    "$ROOT/pleb/data/desktop",
+                )
+            with self.subTest(script=script.name, provider="builtin"):
+                self.assertEqual(
+                    self.selected_state_dir(
+                        script, "builtin", external_installed=True),
+                    "$ROOT/pleb/data/desktop",
+                )
+            with self.subTest(script=script.name, provider="auto-external"):
+                self.assertEqual(
+                    self.selected_state_dir(
+                        script, "auto", external_installed=True),
+                    "$ROOT/pleb/data/desktop",
+                )
+            with self.subTest(script=script.name, provider="auto-builtin"):
+                self.assertEqual(
+                    self.selected_state_dir(
+                        script, "auto", external_installed=False),
+                    "$ROOT/pleb/data/desktop",
+                )
 
     def test_reprovision_preserves_existing_wallpaper_choice_byte_for_byte(self):
         with tempfile.TemporaryDirectory() as td:

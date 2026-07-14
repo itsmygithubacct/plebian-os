@@ -33,6 +33,11 @@ injection), so that intricate logic lives in **one** place and stays in sync wit
 Internet access is required at build time (the netinst download) and at install
 time (apt + the GitHub clones on first boot).
 
+On the installed machine, the coordinated source checkouts default to
+`~/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}` and their runtime data lives
+under `~/.local/gpu_terminal/`. These target paths are recorded in the ISO's
+firstboot configuration and build provenance.
+
 ## Quick start
 
 ```sh
@@ -71,7 +76,9 @@ once instead of using the interactive `plebian` default.
 
 --device /dev/sdX      target USB stick (omit → build the ISO only, then print how to flash)
 --iso PATH             flash a prebuilt ISO, skip building (see note below)
---out PATH             ISO output path (default: plebian-os-<name>.iso in the repo)
+--out PATH             ISO output path (release default:
+                       plebian-os-<version>-amd64.iso; otherwise
+                       plebian-os-<name>.iso in project artifacts)
 --autoboot             build a hands-off stick that auto-selects the install (see warning)
 --unattended-disk      preseed partitioning too; choosing install erases without another prompt
 --with-ssh             install ssh-server (off by default; refuses password `plebian`)

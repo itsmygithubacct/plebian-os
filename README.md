@@ -31,14 +31,17 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    [`provision/plebian-os-provision.sh`](provision/plebian-os-provision.sh) once,
    after the network is up. It:
    - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux);
-   - clones `pleb` into the user's `~/pleb`;
-   - runs `pleb install`, which clones `kilix` into `~/kilix`, optionally sets up
+   - creates the shared source root `~/gpu_terminal` and clones `pleb` into
+     `~/gpu_terminal/pleb`;
+   - runs a Plebian-OS-managed `pleb install`, which clones `kilix` into
+     `~/gpu_terminal/kilix`, optionally places Kilix-95 beside it, and sets up
      the selected `kilix desktop` provider, fetches a prebuilt kitty engine, and
      registers **Pleb** as a LightDM session;
    - initializes the Kilix source submodule, installs/upgrades Go when needed,
      builds the clickable-chrome fork, and verifies Kilix uses that fork engine;
    - installs the Plebian-OS wallpaper at a stable system path and selects it
-     only for a new Kilix/Kilix-95 desktop (an existing wallpaper is preserved);
+     only in the state tree for the provider that will actually run (an existing
+     wallpaper or desktop state is preserved);
    - validates and installs the artwork attribution and GPL version 2 text under
      `/usr/local/share/doc/plebian-os/`, preserving their relative link;
    - pins Pleb as the default session (and, with `--kiosk`, enables autologin);
@@ -54,7 +57,7 @@ terminal program. Set `KILIX_RUN_ALIASES=0` to opt out, or
 `config/kilix.bashrc`, keyed off the Pleb session markers).
 
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
-pulls `~/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
+pulls `~/gpu_terminal/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
 engine, and optional desktop-provider update to `pleb update --no-restart`.
 It **also refreshes the Plebian-OS layer itself** as one validated, rollback-safe
 transaction (provisioner, dependency installer, unit, helpers, version,
@@ -103,11 +106,12 @@ installed system tracks upstream.
 **Convert a running Debian (fastest to try):**
 
 ```sh
-git clone https://github.com/itsmygithubacct/plebian-os ~/plebian-os
-sudo ~/plebian-os/bootstrap.sh            # add Pleb alongside your current desktop
-sudo ~/plebian-os/bootstrap.sh --kiosk    # …and boot straight into it
+mkdir -p ~/gpu_terminal
+git clone https://github.com/itsmygithubacct/plebian-os ~/gpu_terminal/plebian-os
+sudo ~/gpu_terminal/plebian-os/bootstrap.sh            # add Pleb alongside your current desktop
+sudo ~/gpu_terminal/plebian-os/bootstrap.sh --kiosk    # …and boot straight into it
 # preview without touching anything:
-~/plebian-os/bootstrap.sh --dry-run
+~/gpu_terminal/plebian-os/bootstrap.sh --dry-run
 ```
 
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
@@ -120,6 +124,16 @@ verified for you; needs `xorriso`, GNU `cpio`, `gzip`, `gpgv`, and
 build/remaster-iso.sh                          # auto-download the netinst, build the ISO
 build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netinst
 ```
+
+Fresh installations keep coordinated source checkouts in
+`~/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}` and runtime data in
+`~/.local/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}`. No legacy checkout or
+data directories are moved automatically. Build cache, remaster work, session
+files, and ordinary ISO artifacts live in
+`~/.local/gpu_terminal/plebian-os/{cache,build,session,artifacts}`. The source
+checkout stays clean. An explicit ISO output argument is always honored, so a
+named release ISO can remain at its deliberate release location. Strict release
+builds default to `plebian-os-<version>-amd64.iso`.
 
 Install it like normal Debian; the first boot pulls everything and comes up as
 Pleb. The raw template's offline login is **`pleb` / `plebian`** so the install

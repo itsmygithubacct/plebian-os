@@ -17,6 +17,9 @@ set -uo pipefail
 
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"
+PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
+PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
 log()  { printf '\033[1;36m[deps]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[deps]\033[0m %s\n' "$*" >&2; }
@@ -101,8 +104,15 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     else
         uv_tmp=""; uv_stage=""
         if [ "$uv_ok" = 1 ]; then
-            uv_tmp="$(mktemp)" || { warn "could not create uv installer temp file"; uv_ok=0; }
-            uv_stage="$(mktemp -d)" || { warn "could not create uv staging directory"; uv_ok=0; }
+            if mkdir -p "$PLEBIAN_OS_SESSION_HOME"; then
+                uv_tmp="$(mktemp "$PLEBIAN_OS_SESSION_HOME/uv-installer.XXXXXX")" \
+                    || { warn "could not create uv installer temp file"; uv_ok=0; }
+                uv_stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/uv-stage.XXXXXX")" \
+                    || { warn "could not create uv staging directory"; uv_ok=0; }
+            else
+                warn "could not create Plebian-OS session directory"
+                uv_ok=0
+            fi
         fi
         if [ "$uv_ok" = 1 ] && ! curl -LsSf "$uv_url" -o "$uv_tmp"; then
             warn "uv installer download failed"

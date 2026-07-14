@@ -1,4 +1,5 @@
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -16,10 +17,25 @@ class ProvisionPlumbingTests(unittest.TestCase):
 
     def test_provision_and_update_pass_generic_desktop_knobs(self):
         required = [
+            "GPU_TERMINAL_SOURCE_HOME",
+            "GPU_TERMINAL_HOME",
+            "PLEBIAN_OS_MANAGED_INSTALL",
+            "PLEB_DIR",
+            "PLEB_STORAGE_HOME",
+            "PLEB_CONFIG_HOME",
+            "PLEB_STATE_HOME",
+            "PLEB_CACHE_HOME",
+            "PLEB_SESSION_HOME",
+            "PLEB_DATA_HOME",
             "PLEB_REPO",
             "PLEB_BRANCH",
             "PLEB_REF",
             "KILIX_REPO",
+            "KILIX_STORAGE_HOME",
+            "KILIX_BUILD_DIRECTORY",
+            "KILIX_DATA_HOME",
+            "KILIX_DESKTOP_DIR",
+            "KILIX_PREBUILT_HOME",
             "KILIX_BRANCH",
             "KILIX_REF",
             "KILIX_PREBUILT_VERSION",
@@ -31,6 +47,9 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "KILIX_DESKTOP_NAME",
             "KILIX_DESKTOP_FLAVOR",
             "KILIX95_AUTO_INSTALL",
+            "KILIX95_DIR",
+            "KILIX95_STORAGE_HOME",
+            "KILIX95_DATA_HOME",
             "KILIX95_REF",
         ]
         for path in [
@@ -41,6 +60,70 @@ class ProvisionPlumbingTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 for key in required:
                     self.assertIn(key, text)
+
+    def test_fresh_install_uses_sibling_source_and_data_roots(self):
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
+        for source, source_default in (
+            (provision, 'GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/gpu_terminal}"'),
+            (update, 'GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$HOME/gpu_terminal}"'),
+        ):
+            for contract in (
+                source_default,
+                '$GPU_TERMINAL_SOURCE_HOME/pleb',
+                '$GPU_TERMINAL_SOURCE_HOME/kilix',
+                '$GPU_TERMINAL_SOURCE_HOME/kilix-95',
+                '$GPU_TERMINAL_SOURCE_HOME/plebian-os',
+                '$GPU_TERMINAL_HOME/pleb',
+                '$GPU_TERMINAL_HOME/kilix',
+                '$GPU_TERMINAL_HOME/kilix-95',
+                '$GPU_TERMINAL_HOME/plebian-os',
+            ):
+                self.assertIn(contract, source)
+        self.assertNotIn('PLEB_DIR="$USER_HOME/pleb"', provision)
+        for source in (provision, update):
+            self.assertIn('"PLEBIAN_OS_MANAGED_INSTALL=1"', source)
+
+        sys.path.insert(0, str(ROOT / "build"))
+        import build_vm_image as vm
+        cfg = vm.Config(
+            name="fresh", username="pleb", fullname="Plebian User",
+            password="unused", hostname="fresh", ram_mb=4096, cpus=2,
+            vram_mb=128, accelerate_3d=False, disk_gb=20, desktop=True,
+            kiosk=False, nopasswd_sudo=False, ssh_port=2222, gui=False,
+            wait=False,
+        )
+        env = vm.runtime_build_env(cfg)
+        self.assertEqual(env["GPU_TERMINAL_SOURCE_HOME"], "/home/pleb/gpu_terminal")
+        self.assertEqual(env["PLEB_DIR"], "/home/pleb/gpu_terminal/pleb")
+        self.assertEqual(env["KILIX_DIR"], "/home/pleb/gpu_terminal/kilix")
+        self.assertEqual(env["KILIX95_DIR"], "/home/pleb/gpu_terminal/kilix-95")
+        self.assertEqual(
+            env["PLEBIAN_OS_DIR"], "/home/pleb/gpu_terminal/plebian-os")
+        self.assertEqual(
+            env["PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME"],
+            "/home/pleb/.local/gpu_terminal",
+        )
+
+    def test_source_and_data_layout_reaches_media_and_session_provenance(self):
+        remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        keys = (
+            "GPU_TERMINAL_SOURCE_HOME", "GPU_TERMINAL_HOME",
+            "PLEBIAN_OS_DIR", "PLEBIAN_OS_STORAGE_HOME",
+            "PLEB_DIR", "PLEB_STORAGE_HOME", "PLEB_CONFIG_HOME",
+            "PLEB_STATE_HOME", "PLEB_CACHE_HOME", "PLEB_SESSION_HOME",
+            "PLEB_DATA_HOME",
+            "KILIX_DIR", "KILIX_STORAGE_HOME", "KILIX_BUILD_DIRECTORY",
+            "KILIX_DATA_HOME", "KILIX_DESKTOP_DIR", "KILIX_PREBUILT_HOME",
+            "KILIX95_DIR", "KILIX95_STORAGE_HOME", "KILIX95_DATA_HOME",
+        )
+        for key in keys:
+            with self.subTest(key=key):
+                self.assertIn(f"manifest_kv {key}", remaster)
+                self.assertIn(f"env_kv {key}", remaster)
+                self.assertIn(f"write_session_default {key}", provision)
+                self.assertIn(f"provenance_kv {key}", provision)
 
     def test_session_env_writer_uses_shell_escaped_defaults(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()

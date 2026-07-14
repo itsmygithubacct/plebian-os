@@ -35,6 +35,17 @@ PRESEED_TEMPLATE = REPO / "preseed" / "preseed.cfg"
 REMASTER = REPO / "build" / "remaster-iso.sh"
 
 
+def storage_dir(kind: str) -> Path:
+    base = Path(os.environ.get(
+        "GPU_TERMINAL_HOME", Path.home() / ".local" / "gpu_terminal"))
+    root = Path(os.environ.get("PLEBIAN_OS_STORAGE_HOME", base / "plebian-os"))
+    env_name = {
+        "artifacts": "PLEBIAN_OS_ARTIFACTS",
+        "session": "PLEBIAN_OS_SESSION_HOME",
+    }.get(kind)
+    return Path(os.environ.get(env_name, root / kind)) if env_name else root / kind
+
+
 def repo_version() -> str:
     """The shared version; named releases always use the tracked VERSION."""
     if os.environ.get("PLEBIAN_OS_RELEASE"):
@@ -49,6 +60,16 @@ def repo_version() -> str:
         return (REPO / "VERSION").read_text().strip()
     except OSError:
         return ""
+
+
+def default_iso_filename(name: str) -> str:
+    """Use a publishable, versioned filename for strict release artifacts."""
+    if os.environ.get("PLEBIAN_OS_RELEASE_MODE") == "1":
+        version = repo_version()
+        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+            die("release ISO filename requires a semantic PLEBIAN_OS_VERSION")
+        return f"plebian-os-{version}-amd64.iso"
+    return f"plebian-os-{name}.iso"
 
 
 def apply_release_manifest(release: str | None = None) -> None:
@@ -376,7 +397,10 @@ def generate_preseed(cfg: Config, enable_ssh: bool = False) -> Path:
     # late_command writer here previously made installed state disagree with its
     # provenance manifest.
 
-    tmp = Path(tempfile.mkstemp(prefix="plebian-preseed-", suffix=".cfg")[1])
+    session = storage_dir("session")
+    session.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkstemp(prefix="plebian-preseed-", suffix=".cfg",
+                               dir=session)[1])
     tmp.write_text(text)
     atexit.register(lambda: tmp.unlink(missing_ok=True))
     return tmp
@@ -385,13 +409,44 @@ def generate_preseed(cfg: Config, enable_ssh: bool = False) -> Path:
 def runtime_build_env(cfg: Config) -> dict[str, str]:
     """Map user choices to the single remaster/firstboot configuration path."""
     home = f"/home/{cfg.username}"
+    source_root = os.environ.get(
+        "PLEBIAN_OS_TARGET_SOURCE_HOME", f"{home}/gpu_terminal")
+    data_root = f"{home}/.local/gpu_terminal"
+    pleb_storage = f"{data_root}/pleb"
+    kilix_storage = f"{data_root}/kilix"
+    kilix95_storage = f"{data_root}/kilix-95"
+    os_storage = f"{data_root}/plebian-os"
     return {
         "PLEBIAN_OS_DESKTOP": "1" if cfg.desktop else "0",
         "PLEBIAN_OS_KIOSK": "1" if cfg.kiosk else "0",
         "PLEBIAN_OS_USER": cfg.username,
         "PLEBIAN_OS_NOPASSWD_SUDO": "1" if cfg.nopasswd_sudo else "0",
-        "KILIX_DIR": os.environ.get("KILIX_DIR", f"{home}/kilix"),
-        "KILIX95_DIR": os.environ.get("KILIX95_DIR", f"{home}/kilix-95"),
+        "GPU_TERMINAL_SOURCE_HOME": source_root,
+        # These three names also configure the builder's own host-side storage.
+        # Use target-prefixed transport keys so remastering never tries to write
+        # build scratch data into the future guest's /home tree.
+        "PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME": data_root,
+        "PLEBIAN_OS_DIR": os.environ.get(
+            "PLEBIAN_OS_DIR", f"{source_root}/plebian-os"),
+        "PLEBIAN_OS_TARGET_STORAGE_HOME": os_storage,
+        "PLEBIAN_OS_TARGET_SESSION_HOME": f"{os_storage}/session",
+        "PLEB_DIR": os.environ.get("PLEB_DIR", f"{source_root}/pleb"),
+        "PLEB_STORAGE_HOME": pleb_storage,
+        "PLEB_CONFIG_HOME": f"{pleb_storage}/config",
+        "PLEB_STATE_HOME": f"{pleb_storage}/state",
+        "PLEB_CACHE_HOME": f"{pleb_storage}/cache",
+        "PLEB_SESSION_HOME": f"{pleb_storage}/session",
+        "PLEB_DATA_HOME": f"{pleb_storage}/data",
+        "KILIX_DIR": os.environ.get("KILIX_DIR", f"{source_root}/kilix"),
+        "KILIX_STORAGE_HOME": kilix_storage,
+        "KILIX_BUILD_DIRECTORY": f"{kilix_storage}/build",
+        "KILIX_DATA_HOME": f"{kilix_storage}/data",
+        "KILIX_DESKTOP_DIR": f"{pleb_storage}/data/desktop",
+        "KILIX_PREBUILT_HOME": f"{kilix_storage}/prebuilt/kitty.app",
+        "KILIX95_DIR": os.environ.get(
+            "KILIX95_DIR", f"{source_root}/kilix-95"),
+        "KILIX95_STORAGE_HOME": kilix95_storage,
+        "KILIX95_DATA_HOME": f"{kilix95_storage}/data",
     }
 
 
@@ -486,7 +541,9 @@ def vbox_detach_iso(cfg: Config) -> None:
 
 # ── SSH into the guest (password auth via SSH_ASKPASS; no sshpass needed) ─────
 def _askpass_for(pw: str) -> str:
-    d = tempfile.mkdtemp(prefix="plebian-askpass-")
+    session = storage_dir("session")
+    session.mkdir(parents=True, exist_ok=True)
+    d = tempfile.mkdtemp(prefix="plebian-askpass-", dir=session)
     f = os.path.join(d, "askpass.sh")
     with open(f, "w") as fh:
         fh.write("#!/bin/sh\nexec printf '%s\\n' \"$PLEBIAN_ASKPASS_PW\"\n")
@@ -554,8 +611,10 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
     info("verifying the provisioned system (acceptance checks) …")
     # Resolve KILIX_DIR from the target's own session.env so an overridden
-    # checkout location is honored (default $HOME/kilix).
-    kdir = '. /etc/pleb/session.env 2>/dev/null; d="${KILIX_DIR:-$HOME/kilix}";'
+    # checkout location is honored (default ~/gpu_terminal/kilix).
+    kdir = ('. /etc/pleb/session.env 2>/dev/null; '
+            's="${GPU_TERMINAL_SOURCE_HOME:-$HOME/gpu_terminal}"; '
+            'd="${KILIX_DIR:-$s/kilix}";')
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
@@ -572,7 +631,9 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     # with it off, provisioning ships the prebuilt engine, so check that instead.
     fork_on = os.environ.get("PLEBIAN_OS_BUILD_KILIX_FORK", "1") not in ("0", "no", "false", "off")
     if fork_on:
-        checks.append(("kilix fork engine", kdir + ' test -x "$d/src/kitty/launcher/kitty"'))
+        checks.append(("kilix fork engine", kdir +
+                       ' s="${KILIX_STORAGE_HOME:-$HOME/.local/gpu_terminal/kilix}";'
+                       ' test -x "$s/build/current/src/kitty/launcher/kitty"'))
     else:
         checks.append(("kilix engine", kdir + ' test -x "$d/kilix"'))
     failed = []
@@ -622,8 +683,11 @@ def main() -> None:
                     help="require a password for sudo")
     ap.add_argument("--port", type=int, help="SSH host port -> guest 22")
     ap.add_argument("--iso", type=Path, help="use this prebuilt ISO (skip building)")
-    ap.add_argument("--out", type=Path, default=None,
-                    help="ISO output path when building (default: plebian-os-<name>.iso)")
+    ap.add_argument(
+        "--out", type=Path, default=None,
+        help=("ISO output path when building (release default: "
+              "plebian-os-<version>-amd64.iso; otherwise "
+              "plebian-os-<name>.iso)"))
     ap.add_argument("--gui", action="store_true", help="start the VM with a window")
     ap.add_argument("--no-wait", action="store_true", help="don't block on provisioning")
     ap.add_argument("--no-verify", action="store_true",
@@ -671,7 +735,8 @@ def main() -> None:
         if not iso.exists() and not args.dry_run:
             die(f"--iso not found: {iso}")
     else:
-        out = (args.out or (REPO / f"plebian-os-{cfg.name}.iso")).resolve()
+        out = (args.out or (storage_dir("artifacts") /
+                            default_iso_filename(cfg.name))).resolve()
         preseed = None if args.dry_run else generate_preseed(cfg, enable_ssh=True)
         iso = build_iso(cfg, preseed, out, args.dry_run)
 

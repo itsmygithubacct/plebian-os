@@ -6,10 +6,11 @@
 # The OS ships none of that; this script pulls it from GitHub on first boot:
 #
 #   1. apt-installs the runtime deps (Xorg, LightDM, git/curl/tar, GL, fonts)
-#   2. clones  github.com/itsmygithubacct/pleb  into the target user's ~/pleb
+#   2. clones  github.com/itsmygithubacct/pleb  into ~/gpu_terminal/pleb
 #   3. runs    pleb install  — which itself clones github.com/itsmygithubacct/kilix
-#      into ~/kilix, optionally clones github.com/itsmygithubacct/kilix-95 into
-#      ~/kilix-95, fetches a prebuilt kitty engine, and registers "Pleb" as a
+#      into ~/gpu_terminal/kilix, optionally clones github.com/itsmygithubacct/kilix-95
+#      into ~/gpu_terminal/kilix-95, fetches a prebuilt kitty engine, and
+#      registers "Pleb" as a
 #      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb
 #      on PATH. This provisioner then builds and verifies the kilix fork so the
 #      first boot uses the clickable-chrome engine instead of the fallback.
@@ -60,6 +61,7 @@ UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
 # The apt root is overridable only to exercise snapshot transactions in an
 # isolated test tree. Production and firstboot leave it at /etc.
 APT_ETC_ROOT="${PLEBIAN_OS_APT_ETC_ROOT:-/etc}"
+PLEB_DIR="${PLEB_DIR:-}"                       # defaults after target user is known
 KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
@@ -727,8 +729,24 @@ install_artwork_notices() {
         "$INSTALLER_ATTRIBUTION_SHA256" "installer artwork attribution" attribution
 }
 
+selected_desktop_wallpaper_state_dir() {
+    case "$KILIX_DESKTOP_PROVIDER" in
+        external|builtin|auto) printf '%s\n' "$KILIX_DESKTOP_DIR" ;;
+        *) return 1 ;;
+    esac
+}
+
+seed_selected_desktop_wallpaper_state() {
+    local state_dir
+    state_dir="$(selected_desktop_wallpaper_state_dir)" || {
+        log "desktop provider $KILIX_DESKTOP_PROVIDER does not use managed Kilix wallpaper state"
+        return 0
+    }
+    seed_desktop_wallpaper_state "$state_dir" "$DESKTOP_WALLPAPER_DST"
+}
+
 seed_desktop_wallpaper_state() {
-    local state_dir="${1:-$USER_HOME/.local/share/kilix/desktop}"
+    local state_dir="${1:?desktop state directory is required}"
     local wallpaper="${2:-$DESKTOP_WALLPAPER_DST}"
     local state_path="$state_dir/.state.json" owner rc
 
@@ -1189,16 +1207,37 @@ write_source_tool_manifest() {
         provenance_kv PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
         provenance_kv PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
         provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
+        provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
+        provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
+        provenance_kv PLEBIAN_OS_DIR "$PLEBIAN_OS_DIR"
+        provenance_kv PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
+        provenance_kv PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"
+        provenance_kv PLEB_DIR "$PLEB_DIR"
+        provenance_kv PLEB_STORAGE_HOME "$PLEB_STORAGE_HOME"
+        provenance_kv PLEB_CONFIG_HOME "$PLEB_CONFIG_HOME"
+        provenance_kv PLEB_STATE_HOME "$PLEB_STATE_HOME"
+        provenance_kv PLEB_CACHE_HOME "$PLEB_CACHE_HOME"
+        provenance_kv PLEB_SESSION_HOME "$PLEB_SESSION_HOME"
+        provenance_kv PLEB_DATA_HOME "$PLEB_DATA_HOME"
         provenance_kv PLEB_REF "$PLEB_REF"
         provenance_kv PLEB_COMMIT "$pleb_commit"
         provenance_kv PLEB_VERSION "$pleb_version"
         provenance_kv KILIX_REF "$KILIX_REF"
+        provenance_kv KILIX_DIR "$KILIX_DIR"
+        provenance_kv KILIX_STORAGE_HOME "$KILIX_STORAGE_HOME"
+        provenance_kv KILIX_BUILD_DIRECTORY "$KILIX_BUILD_DIRECTORY"
+        provenance_kv KILIX_DATA_HOME "$KILIX_DATA_HOME"
+        provenance_kv KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
+        provenance_kv KILIX_PREBUILT_HOME "$KILIX_PREBUILT_HOME"
         provenance_kv KILIX_COMMIT "$kilix_commit"
         provenance_kv KILIX_SOURCE_COMMIT "$kilix_source_commit"
         provenance_kv KILIX_VERSION "$kilix_version"
         provenance_kv KILIX_ENGINE "$engine"
         provenance_kv KILIX_ENGINE_VERSION "$engine_version"
         provenance_kv KILIX95_REF "$KILIX95_REF"
+        provenance_kv KILIX95_DIR "$KILIX95_DIR"
+        provenance_kv KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
+        provenance_kv KILIX95_DATA_HOME "$KILIX95_DATA_HOME"
         provenance_kv KILIX95_COMMIT "$kilix95_commit"
         provenance_kv KILIX95_VERSION "$kilix95_version"
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
@@ -1537,7 +1576,7 @@ build_kilix_fork() {
         echo "    + (as $TARGET_USER) git -C $KILIX_DIR submodule update --init --recursive"
         echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
         echo "    + (as $TARGET_USER) $KILIX_DIR/kilix --build"
-        echo "    + verify $KILIX_DIR/kilix --which uses $KILIX_DIR/src/kitty/launcher/kitty"
+        echo "    + verify $KILIX_DIR/kilix --which uses $KILIX_BUILD_DIRECTORY/current/src/kitty/launcher/kitty"
         return 0
     fi
 
@@ -1555,7 +1594,7 @@ build_kilix_fork() {
         || die "kilix fork build failed"
 
     local fork engine
-    fork="$KILIX_DIR/src/kitty/launcher/kitty"
+    fork="$KILIX_BUILD_DIRECTORY/current/src/kitty/launcher/kitty"
     [ -x "$fork" ] || die "kilix fork build did not produce $fork"
     engine="$(as_user "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
     [ "$engine" = "$fork" ] \
@@ -1598,13 +1637,34 @@ pick_user() {
 [ -n "$TARGET_USER" ] || TARGET_USER="$(pick_user)"
 [ -n "$TARGET_USER" ] || die "no regular user found — create one, or pass --user"
 validate_target_user
-KILIX_DIR="${KILIX_DIR:-$USER_HOME/kilix}"
-KILIX95_DIR="${KILIX95_DIR:-$USER_HOME/kilix-95}"
-PLEB_STATE_HOME="${PLEB_STATE_HOME:-$USER_HOME/.local/state/pleb}"
-PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$USER_HOME/plebian-os}"
+GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/gpu_terminal}"
+PLEB_DIR="${PLEB_DIR:-$GPU_TERMINAL_SOURCE_HOME/pleb}"
+KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
+KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-95}"
+PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
+GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$USER_HOME/.local/gpu_terminal}"
+PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
+PLEB_CONFIG_HOME="${PLEB_CONFIG_HOME:-$PLEB_STORAGE_HOME/config}"
+PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
+PLEB_CACHE_HOME="${PLEB_CACHE_HOME:-$PLEB_STORAGE_HOME/cache}"
+PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
+PLEB_DATA_HOME="${PLEB_DATA_HOME:-$PLEB_STORAGE_HOME/data}"
+KILIX_STORAGE_HOME="${KILIX_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix}"
+KILIX_BUILD_DIRECTORY="${KILIX_BUILD_DIRECTORY:-$KILIX_STORAGE_HOME/build}"
+KILIX_DATA_HOME="${KILIX_DATA_HOME:-$KILIX_STORAGE_HOME/data}"
+KILIX_DESKTOP_DIR="${KILIX_DESKTOP_DIR:-$PLEB_DATA_HOME/desktop}"
+KILIX_PREBUILT_HOME="${KILIX_PREBUILT_HOME:-$KILIX_STORAGE_HOME/prebuilt/kitty.app}"
+KILIX95_STORAGE_HOME="${KILIX95_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix-95}"
+KILIX95_DATA_HOME="${KILIX95_DATA_HOME:-$KILIX95_STORAGE_HOME/data}"
+PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
+PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
+export GPU_TERMINAL_SOURCE_HOME GPU_TERMINAL_HOME
+export PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME
 
 log "plebian-os  : version $PLEBIAN_OS_VERSION"
 log "target user : $TARGET_USER ($USER_HOME)"
+log "source root : $GPU_TERMINAL_SOURCE_HOME"
+log "data root   : $GPU_TERMINAL_HOME"
 log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
 log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (cloned by pleb)"
 if [ "$DESKTOP" = 1 ]; then
@@ -1670,8 +1730,21 @@ fi
 # Password-change helper + scoped sudoers (the default-password desktop nag).
 install_passwd_nag
 
-# ── 2. clone pleb into the user's home (as the user, correct ownership) ──────
-PLEB_DIR="$USER_HOME/pleb"
+# ── 2. clone pleb into the shared source root (as the user) ─────────────────
+case "$GPU_TERMINAL_SOURCE_HOME" in
+    /*) ;;
+    *) die "GPU_TERMINAL_SOURCE_HOME must be absolute: $GPU_TERMINAL_SOURCE_HOME" ;;
+esac
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + (as $TARGET_USER) mkdir -p $GPU_TERMINAL_SOURCE_HOME"
+else
+    as_user mkdir -p -- "$GPU_TERMINAL_SOURCE_HOME" \
+        || die "could not create source root as $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
+    [ -d "$GPU_TERMINAL_SOURCE_HOME" ] && [ ! -L "$GPU_TERMINAL_SOURCE_HOME" ] \
+        || die "source root is not a safe directory: $GPU_TERMINAL_SOURCE_HOME"
+    [ "$(stat -c '%u' "$GPU_TERMINAL_SOURCE_HOME" 2>/dev/null)" = "$TARGET_UID" ] \
+        || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
+fi
 if [ -d "$PLEB_DIR/.git" ]; then
     log "pleb present at $PLEB_DIR — updating"
     update_pleb_checkout
@@ -1704,7 +1777,26 @@ fi
 
 log "running 'pleb install' (clones kilix + optional desktop provider, adds the Pleb session)"
 install_env=(
+    "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
+    "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
+    "PLEBIAN_OS_MANAGED_INSTALL=1"
+    "PLEBIAN_OS_DIR=$PLEBIAN_OS_DIR"
+    "PLEBIAN_OS_STORAGE_HOME=$PLEBIAN_OS_STORAGE_HOME"
+    "PLEBIAN_OS_SESSION_HOME=$PLEBIAN_OS_SESSION_HOME"
+    "PLEB_DIR=$PLEB_DIR"
+    "PLEB_STORAGE_HOME=$PLEB_STORAGE_HOME"
+    "PLEB_CONFIG_HOME=$PLEB_CONFIG_HOME"
     "PLEB_STATE_HOME=$PLEB_STATE_HOME"
+    "PLEB_CACHE_HOME=$PLEB_CACHE_HOME"
+    "PLEB_SESSION_HOME=$PLEB_SESSION_HOME"
+    "PLEB_DATA_HOME=$PLEB_DATA_HOME"
+    "KILIX_STORAGE_HOME=$KILIX_STORAGE_HOME"
+    "KILIX_BUILD_DIRECTORY=$KILIX_BUILD_DIRECTORY"
+    "KILIX_DATA_HOME=$KILIX_DATA_HOME"
+    "KILIX_DESKTOP_DIR=$KILIX_DESKTOP_DIR"
+    "KILIX_PREBUILT_HOME=$KILIX_PREBUILT_HOME"
+    "KILIX95_STORAGE_HOME=$KILIX95_STORAGE_HOME"
+    "KILIX95_DATA_HOME=$KILIX95_DATA_HOME"
     "KILIX_DIR=$KILIX_DIR"
     "KILIX_REPO=$KILIX_REPO"
     "KILIX_BRANCH=$KILIX_BRANCH"
@@ -1732,8 +1824,7 @@ install_env=(
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 build_kilix_fork
-seed_desktop_wallpaper_state \
-    "$USER_HOME/.local/share/kilix/desktop" "$DESKTOP_WALLPAPER_DST"
+seed_selected_desktop_wallpaper_state
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
 # With no other desktop task installed, Pleb is the only /usr/share/xsessions
@@ -1771,12 +1862,25 @@ else
 # kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, command,
 # or none. pleb-session documents the other knobs.
 EOF
+    write_session_default GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
+    write_session_default GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
+    write_session_default PLEBIAN_OS_MANAGED_INSTALL 1
     write_session_default PLEB_DIR "$PLEB_DIR"
+    write_session_default PLEB_STORAGE_HOME "$PLEB_STORAGE_HOME"
+    write_session_default PLEB_CONFIG_HOME "$PLEB_CONFIG_HOME"
     write_session_default PLEB_STATE_HOME "$PLEB_STATE_HOME"
+    write_session_default PLEB_CACHE_HOME "$PLEB_CACHE_HOME"
+    write_session_default PLEB_SESSION_HOME "$PLEB_SESSION_HOME"
+    write_session_default PLEB_DATA_HOME "$PLEB_DATA_HOME"
     write_session_default PLEB_REPO "$PLEB_REPO"
     write_session_default PLEB_BRANCH "$PLEB_BRANCH"
     write_session_default PLEB_REF "$PLEB_REF"
     write_session_default KILIX_DIR "$KILIX_DIR"
+    write_session_default KILIX_STORAGE_HOME "$KILIX_STORAGE_HOME"
+    write_session_default KILIX_BUILD_DIRECTORY "$KILIX_BUILD_DIRECTORY"
+    write_session_default KILIX_DATA_HOME "$KILIX_DATA_HOME"
+    write_session_default KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
+    write_session_default KILIX_PREBUILT_HOME "$KILIX_PREBUILT_HOME"
     write_session_default KILIX "$KILIX_DIR/kilix"
     write_session_default KILIX_REPO "$KILIX_REPO"
     write_session_default KILIX_BRANCH "$KILIX_BRANCH"
@@ -1794,6 +1898,8 @@ EOF
     write_session_default KILIX_DESKTOP_NAME "$KILIX_DESKTOP_NAME"
     write_session_default KILIX_DESKTOP_FLAVOR "$KILIX_DESKTOP_FLAVOR"
     write_session_default KILIX95_AUTO_INSTALL "$KILIX95_AUTO_INSTALL"
+    write_session_default KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
+    write_session_default KILIX95_DATA_HOME "$KILIX95_DATA_HOME"
     write_session_default KILIX95_DIR "$KILIX95_DIR"
     write_session_default KILIX95_REPO "$KILIX95_REPO"
     write_session_default KILIX95_BRANCH "$KILIX95_BRANCH"
@@ -1805,6 +1911,8 @@ EOF
     write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
     write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
     write_session_default PLEBIAN_OS_DIR "$PLEBIAN_OS_DIR"
+    write_session_default PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
+    write_session_default PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"
     write_session_default PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'
     } > "$PLEB_ENV_TMP"

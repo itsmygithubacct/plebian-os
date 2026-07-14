@@ -14,7 +14,7 @@
 #   build/make-usb.sh --netinst debian-13.x-amd64-netinst.iso --device /dev/sdX
 #
 #   # flash an already-built Plebian-OS ISO (no build, no xorriso needed):
-#   build/make-usb.sh --iso plebian-os-netinst-amd64.iso --device /dev/sdX
+#   build/make-usb.sh --iso plebian-os-0.1.1-amd64.iso --device /dev/sdX
 #   # explicitly trust/reuse the default output path (never inferred by mtime):
 #   build/make-usb.sh --reuse-iso --device /dev/sdX
 #
@@ -135,7 +135,20 @@ while [ $# -gt 0 ]; do
 done
 
 # ── 1. get the Plebian-OS ISO (build it, pulling the netinst, unless one exists)
-: "${ISO:=plebian-os-netinst-amd64.iso}"
+if [ -z "$ISO" ]; then
+    default_iso_name=plebian-os-netinst-amd64.iso
+    release_iso_version="${PLEBIAN_OS_RELEASE:-}"
+    if [ -z "$release_iso_version" ] \
+         && [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        release_iso_version="${PLEBIAN_OS_VERSION:-}"
+    fi
+    if [ -n "$release_iso_version" ]; then
+        [[ "$release_iso_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+            || die "release ISO filename requires a semantic version"
+        default_iso_name="plebian-os-$release_iso_version-amd64.iso"
+    fi
+    ISO="$PLEBIAN_OS_ARTIFACTS/$default_iso_name"
+fi
 # Default to a fresh build. Reuse is only allowed through the explicit --iso or
 # --reuse-iso gates; mtimes cannot represent all baked environment/release inputs.
 need_build=1
