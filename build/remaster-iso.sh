@@ -125,6 +125,8 @@ load_release_manifest() {
 # A named release manifest is authoritative; without one, an explicit value
 # takes precedence over the repo VERSION file.
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-$(cat "$HERE/VERSION" 2>/dev/null || echo 0.0.0-dev)}"
+PLEBIAN_OS_ISO_VOLUME_ID="PLEBIAN-OS $PLEBIAN_OS_VERSION AMD64"
+PLEBIAN_OS_MEDIA_INFO="Plebian-OS $PLEBIAN_OS_VERSION amd64 installer (Debian 13 trixie base)"
 # Plebian-OS builds amd64 images, so even non-release installs use a known-good
 # verified fallback engine instead of silently consenting to an unpinned asset.
 : "${KILIX_PREBUILT_VERSION:=0.47.4}"
@@ -394,6 +396,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_RELEASE "${PLEBIAN_OS_RELEASE:-}"
         manifest_kv PLEBIAN_OS_COMMIT "$commit"
         manifest_kv PLEBIAN_OS_DIRTY "$dirty"
+        manifest_kv PLEBIAN_OS_ISO_VOLUME_ID "$PLEBIAN_OS_ISO_VOLUME_ID"
         manifest_kv PLEBIAN_OS_SOURCE_ISO "$(basename "$SRC_ISO")"
         manifest_kv PLEBIAN_OS_SOURCE_ISO_SHA256 "$iso_sha"
         manifest_kv PLEBIAN_OS_PRESEED_SHA256 "$preseed_sha"
@@ -558,6 +561,81 @@ replace_installer_asset() {
     rm -f "$metadata_ref"
 }
 
+brand_media_identity() {
+    local disk_info="$EXTRACT/.disk/info" mkisofs_info="$EXTRACT/.disk/mkisofs"
+    local metadata_ref mode
+    [ -f "$disk_info" ] && [ ! -L "$disk_info" ] \
+        || { echo "installer media identity missing or unsafe: $disk_info" >&2; exit 1; }
+    metadata_ref="$(mktemp "$WORK/media-info-metadata.XXXXXX")"
+    touch --reference="$disk_info" "$metadata_ref"
+    mode="$(stat -c '%a' "$disk_info")"
+    printf '%s\n' "$PLEBIAN_OS_MEDIA_INFO" > "$disk_info"
+    chmod "$mode" "$disk_info"
+    touch --reference="$metadata_ref" "$disk_info"
+    rm -f "$metadata_ref"
+
+    [ -f "$mkisofs_info" ] && [ ! -L "$mkisofs_info" ] \
+        || { echo "installer build identity missing or unsafe: $mkisofs_info" >&2; exit 1; }
+    metadata_ref="$(mktemp "$WORK/media-build-metadata.XXXXXX")"
+    touch --reference="$mkisofs_info" "$metadata_ref"
+    mode="$(stat -c '%a' "$mkisofs_info")"
+    printf '%s\n' \
+        "Plebian-OS $PLEBIAN_OS_VERSION remaster; source $(basename "$SRC_ISO"); see /plebian-os/build-info.env" \
+        > "$mkisofs_info"
+    chmod "$mode" "$mkisofs_info"
+    touch --reference="$metadata_ref" "$mkisofs_info"
+    rm -f "$metadata_ref"
+}
+
+brand_installer_main_menu() {
+    local initrd="$1" label="$2"
+    local template="$WORK/$label-main-menu.templates"
+    local overlay="$WORK/$label-main-menu-overlay"
+    local overlay_cpio="$WORK/$label-main-menu.cpio"
+    local combined="$WORK/$label-main-menu-initrd.gz"
+    local original_size mode
+
+    [ -f "$initrd" ] && [ ! -L "$initrd" ] \
+        || { echo "$label installer initrd missing or unsafe: $initrd" >&2; exit 1; }
+    gzip -dc "$initrd" \
+        | cpio -i --quiet --to-stdout var/lib/dpkg/info/main-menu.templates \
+        > "$template" \
+        || { echo "could not extract $label installer main-menu template" >&2; exit 1; }
+    [ -s "$template" ] \
+        || { echo "$label installer main-menu template is empty" >&2; exit 1; }
+    python3 "$INSTALLER_BRANDER" patch-main-menu "$template" "$PLEBIAN_OS_VERSION"
+
+    mkdir -p "$overlay/var/lib/dpkg/info"
+    install -m 0644 "$template" "$overlay/var/lib/dpkg/info/main-menu.templates"
+    touch -d @0 "$overlay/var/lib/dpkg/info/main-menu.templates"
+    (
+        cd "$overlay"
+        printf '%s\0' var/lib/dpkg/info/main-menu.templates \
+            | LC_ALL=C cpio --null --create --format=newc --owner=0:0 \
+                --reproducible --quiet
+    ) > "$overlay_cpio"
+    [ -s "$overlay_cpio" ] \
+        || { echo "$label installer main-menu overlay is empty" >&2; exit 1; }
+
+    original_size="$(stat -c '%s' "$initrd")"
+    mode="$(stat -c '%a' "$initrd")"
+    cp --preserve=mode,timestamps "$initrd" "$combined"
+    chmod u+w "$combined"
+    gzip -n -9 -c "$overlay_cpio" >> "$combined"
+    gzip -t "$combined"
+    cmp -n "$original_size" "$initrd" "$combined" \
+        || { echo "$label installer initrd prefix changed" >&2; exit 1; }
+    tail -c "+$((original_size + 1))" "$combined" \
+        | gzip -dc \
+        | cpio -i --quiet --to-stdout var/lib/dpkg/info/main-menu.templates \
+        | cmp - "$template" \
+        || { echo "$label installer main-menu overlay validation failed" >&2; exit 1; }
+
+    touch --reference="$initrd" "$combined"
+    chmod "$mode" "$combined"
+    mv -f "$combined" "$initrd"
+}
+
 brand_graphical_installer() {
     local initrd="$EXTRACT/install.amd/gtk/initrd.gz"
     local inventory="$WORK/gtk-initrd.inventory"
@@ -573,6 +651,7 @@ brand_graphical_installer() {
         exit 1
     fi
     for path in \
+        var/lib/dpkg/info/main-menu.templates \
         usr/share/graphics/logo_debian.png \
         usr/share/graphics/logo_debian_dark.png \
         usr/share/graphics/logo_installer.png \
@@ -583,18 +662,28 @@ brand_graphical_installer() {
         }
     done
 
-    mkdir -p "$overlay/usr/share/graphics"
+    mkdir -p "$overlay/usr/share/graphics" "$overlay/var/lib/dpkg/info"
+    gzip -dc "$initrd" \
+        | cpio -i --quiet --to-stdout var/lib/dpkg/info/main-menu.templates \
+        > "$overlay/var/lib/dpkg/info/main-menu.templates" \
+        || { echo "could not extract graphical installer main-menu template" >&2; exit 1; }
+    [ -s "$overlay/var/lib/dpkg/info/main-menu.templates" ] \
+        || { echo "graphical installer main-menu template is empty" >&2; exit 1; }
+    python3 "$INSTALLER_BRANDER" patch-main-menu \
+        "$overlay/var/lib/dpkg/info/main-menu.templates" "$PLEBIAN_OS_VERSION"
     install -m 0644 "$INSTALLER_ASSETS/banner.png" \
         "$overlay/usr/share/graphics/logo_debian.png"
     install -m 0644 "$INSTALLER_ASSETS/banner-dark.png" \
         "$overlay/usr/share/graphics/logo_debian_dark.png"
     touch -d @0 \
+        "$overlay/var/lib/dpkg/info/main-menu.templates" \
         "$overlay/usr/share/graphics/logo_debian.png" \
         "$overlay/usr/share/graphics/logo_debian_dark.png"
 
     (
         cd "$overlay"
         printf '%s\0' \
+            var/lib/dpkg/info/main-menu.templates \
             usr/share/graphics/logo_debian.png \
             usr/share/graphics/logo_debian_dark.png \
             | LC_ALL=C cpio --null --create --format=newc --owner=0:0 \
@@ -623,6 +712,11 @@ brand_graphical_installer() {
             | cmp - "$asset" \
             || { echo "graphical installer overlay validation failed: $path" >&2; exit 1; }
     done
+    tail -c "+$((original_size + 1))" "$combined" \
+        | gzip -dc \
+        | cpio -i --quiet --to-stdout var/lib/dpkg/info/main-menu.templates \
+        | cmp - "$overlay/var/lib/dpkg/info/main-menu.templates" \
+        || { echo "graphical installer main-menu overlay validation failed" >&2; exit 1; }
 
     touch --reference="$initrd" "$combined"
     chmod "$mode" "$combined"
@@ -695,6 +789,8 @@ replace_installer_asset \
     "$INSTALLER_ASSETS/splash.png" \
     "$EXTRACT/isolinux/splash.png"
 python3 "$INSTALLER_BRANDER" patch-text "$EXTRACT" "$PLEBIAN_OS_VERSION"
+brand_media_identity
+brand_installer_main_menu "$EXTRACT/install.amd/initrd.gz" text
 brand_graphical_installer
 
 echo "==> injecting preseed + provisioner"
@@ -780,15 +876,23 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
     if line.lstrip().startswith("-outdev"):
         continue
     text.append(line)
-for token in shlex.split("".join(text)):
+tokens = shlex.split("".join(text))
+i = 0
+while i < len(tokens):
+    token = tokens[i]
+    if token in ("-V", "-volid"):
+        i += 2
+        continue
     print(token)
+    i += 1
 PY
 )
 [ "${#mkisofs_argv[@]}" -gt 0 ] || {
     echo "source ISO boot layout parsed to an empty argument list" >&2
     exit 1
 }
-xorriso -as mkisofs "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"
+xorriso -as mkisofs -V "$PLEBIAN_OS_ISO_VOLUME_ID" \
+    "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"
 
 # Refuse to replace a known-good output with a nominally successful but
 # non-bootable image. Debian amd64 netinst media should retain both an MBR boot
@@ -800,6 +904,10 @@ grep -q 'El Torito boot img.*BIOS' "$WORK/boot-report" \
     || { echo "rebuilt ISO has no BIOS El Torito boot image" >&2; exit 1; }
 grep -q 'El Torito boot img.*UEFI' "$WORK/boot-report" \
     || { echo "rebuilt ISO has no UEFI El Torito boot image" >&2; exit 1; }
+actual_volume_id="$(xorriso -indev "$OUT_TMP" -pvd_info 2>&1 \
+    | sed -n "s/^Volume id    : '\(.*\)'$/\1/p" | head -1)"
+[ "$actual_volume_id" = "$PLEBIAN_OS_ISO_VOLUME_ID" ] \
+    || { echo "rebuilt ISO has wrong volume ID: $actual_volume_id" >&2; exit 1; }
 mv -f "$OUT_TMP" "$OUT_ISO"
 
 echo "==> done: $OUT_ISO"
