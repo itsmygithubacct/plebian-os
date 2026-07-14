@@ -30,6 +30,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Debian installer, package snapshot, verified Kitty fallback, and exact Go
   archives. The closure includes Kilix's current-kitty clickable-chrome rebase,
   content-only fullscreen behavior, matching Kilix-95 help, and Go 1.26.5.
+- Include Kilix's fresh-storage bootstrap repair so the verified fallback
+  creates its `prebuilt/` parent before publishing `kitty.app`, preventing
+  firstboot retry exhaustion on a newly installed data root.
 
 ### Installer identity
 
@@ -51,14 +54,18 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Install the matching desktop wallpaper as a root-owned OS asset, select it
   only for Pleb sessions without existing desktop state, record its build-time
   hash, and carry future artwork revisions through transactional self-update.
+- Override Debian 13's LightDM GTK greeter with that same Plebian wallpaper,
+  disabling per-user background substitution so failed-firstboot recovery and
+  normal non-kiosk login screens retain the distribution identity.
 - Ship the artwork attribution and complete GPL version 2 text on installer
   media and installed systems, record their hashes, and update or roll them
   back with the same OS-layer transaction as the wallpaper.
 - Bridge upgrades from v0.1.1's immutable seven-file updater explicitly: the
   first update deploys the new scripts and a required second update transaction
-  runs the ten-file manifest and installs all three new payloads; updater state seeding occurs only after the
-  complete stack commits. Configuration-preserving reprovisioning retains a
-  strict validated-checkout recovery path without making bare sudo safe.
+  runs the eleven-file manifest and installs all four new payloads; updater
+  state seeding occurs only after the complete stack commits.
+  Configuration-preserving reprovisioning retains a strict validated-checkout
+  recovery path without making bare sudo safe.
 
 ## [0.1.1] — 2026-07-12
 

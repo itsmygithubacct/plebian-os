@@ -20,6 +20,8 @@ INSTALLER_ASSETS="$HERE/assets/installer"
 INSTALLER_BRANDER="$HERE/build/brand-installer.py"
 DESKTOP_WALLPAPER="$HERE/assets/desktop/plebian-os.png"
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
+LIGHTDM_GREETER_CONFIG="$HERE/provision/lightdm-gtk-greeter.conf"
+LIGHTDM_GREETER_CONFIG_SHA256=985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560
 INSTALLER_ATTRIBUTION="$HERE/assets/installer/ATTRIBUTION.md"
 INSTALLER_ATTRIBUTION_SHA256=5216b6ee1ef154dab56cc5d0a026d28f67ed50feec4129d4fedd6ae2fc2b2fb6
 GPL2_LICENSE="$HERE/assets/COPYING.GPL-2"
@@ -49,6 +51,20 @@ python3 "$INSTALLER_BRANDER" validate-assets "$INSTALLER_ASSETS"
     echo "tracked desktop wallpaper checksum mismatch: $DESKTOP_WALLPAPER" >&2
     exit 1
 }
+if [ ! -f "$LIGHTDM_GREETER_CONFIG" ] || [ -L "$LIGHTDM_GREETER_CONFIG" ]; then
+    echo "tracked LightDM greeter configuration missing or unsafe: $LIGHTDM_GREETER_CONFIG" >&2
+    exit 1
+fi
+[ "$(sha256sum "$LIGHTDM_GREETER_CONFIG" | awk '{print $1}')" = "$LIGHTDM_GREETER_CONFIG_SHA256" ] || {
+    echo "tracked LightDM greeter configuration checksum mismatch: $LIGHTDM_GREETER_CONFIG" >&2
+    exit 1
+}
+if ! grep -Fxq 'background=/usr/local/share/plebian-os/wallpapers/plebian-os.png' \
+        "$LIGHTDM_GREETER_CONFIG" \
+        || ! grep -Fxq 'user-background=false' "$LIGHTDM_GREETER_CONFIG"; then
+    echo "tracked LightDM greeter configuration does not select fixed Plebian branding" >&2
+    exit 1
+fi
 for notice_contract in \
     "$INSTALLER_ATTRIBUTION|$INSTALLER_ATTRIBUTION_SHA256|installer artwork attribution" \
     "$GPL2_LICENSE|$GPL2_LICENSE_SHA256|GPL version 2 license"; do
@@ -374,7 +390,8 @@ release_mode_check() {
 
 write_build_info() {
     local out="$1" commit dirty iso_sha preseed_sha splash_sha banner_sha banner_dark_sha
-    local desktop_wallpaper_sha installer_attribution_sha gpl2_license_sha
+    local desktop_wallpaper_sha lightdm_greeter_config_sha
+    local installer_attribution_sha gpl2_license_sha
     commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
     if [ -z "$(git -C "$HERE" status --porcelain --untracked-files=normal 2>/dev/null)" ]; then
         dirty=0
@@ -387,6 +404,7 @@ write_build_info() {
     banner_sha="$(sha256sum "$INSTALLER_ASSETS/banner.png" | awk '{print $1}')"
     banner_dark_sha="$(sha256sum "$INSTALLER_ASSETS/banner-dark.png" | awk '{print $1}')"
     desktop_wallpaper_sha="$(sha256sum "$DESKTOP_WALLPAPER" | awk '{print $1}')"
+    lightdm_greeter_config_sha="$(sha256sum "$LIGHTDM_GREETER_CONFIG" | awk '{print $1}')"
     installer_attribution_sha="$(sha256sum "$INSTALLER_ATTRIBUTION" | awk '{print $1}')"
     gpl2_license_sha="$(sha256sum "$GPL2_LICENSE" | awk '{print $1}')"
     {
@@ -404,6 +422,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_SHA256 "$banner_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_DARK_SHA256 "$banner_dark_sha"
         manifest_kv PLEBIAN_OS_DESKTOP_WALLPAPER_SHA256 "$desktop_wallpaper_sha"
+        manifest_kv PLEBIAN_OS_LIGHTDM_GREETER_CONFIG_SHA256 "$lightdm_greeter_config_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_ATTRIBUTION_SHA256 "$installer_attribution_sha"
         manifest_kv PLEBIAN_OS_GPL2_LICENSE_SHA256 "$gpl2_license_sha"
         manifest_kv PLEBIAN_OS_NETINST_URL "$PLEBIAN_OS_NETINST_URL"
@@ -807,6 +826,7 @@ cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-passwd"           "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-apt-snapshot-generator" "$EXTRACT/plebian-os/"
 install -m 0644 "$DESKTOP_WALLPAPER" "$EXTRACT/plebian-os/desktop-wallpaper.png"
+install -m 0644 "$LIGHTDM_GREETER_CONFIG" "$EXTRACT/plebian-os/lightdm-gtk-greeter.conf"
 mkdir -p "$EXTRACT/plebian-os/doc/installer"
 install -m 0644 "$INSTALLER_ATTRIBUTION" "$EXTRACT/plebian-os/doc/installer/ATTRIBUTION.md"
 install -m 0644 "$GPL2_LICENSE" "$EXTRACT/plebian-os/doc/COPYING.GPL-2"

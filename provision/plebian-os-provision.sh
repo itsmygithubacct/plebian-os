@@ -77,6 +77,8 @@ DRY_RUN=0
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 DESKTOP_WALLPAPER_MAX_BYTES=$((32 * 1024 * 1024))
+LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
+LIGHTDM_GREETER_CONFIG_SHA256=985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560
 INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
 INSTALLER_ATTRIBUTION_SHA256=5216b6ee1ef154dab56cc5d0a026d28f67ed50feec4129d4fedd6ae2fc2b2fb6
 GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
@@ -592,6 +594,16 @@ if kind == "attribution":
 elif kind == "license":
     if "GNU GENERAL PUBLIC LICENSE" not in text or "Version 2, June 1991" not in text:
         raise SystemExit(1)
+elif kind == "greeter":
+    required = {
+        "[greeter]",
+        "background=/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+        "user-background=false",
+    }
+    lines = {line.strip() for line in text.splitlines()
+             if line.strip() and not line.lstrip().startswith("#")}
+    if lines != required or "Debian" in text:
+        raise SystemExit(1)
 else:
     raise SystemExit(1)
 PY
@@ -727,6 +739,61 @@ install_artwork_notices() {
         "$GPL2_LICENSE_SHA256" "GPL version 2 license" license
     install_artwork_notice "$attribution_source" "$INSTALLER_ATTRIBUTION_DST" \
         "$INSTALLER_ATTRIBUTION_SHA256" "installer artwork attribution" attribution
+}
+
+install_lightdm_greeter_branding() {
+    local repo_root="$SELF_DIR/.." source path owner mode config_dir
+    config_dir="$(dirname "$LIGHTDM_GREETER_CONFIG_DST")"
+
+    # LightDM owns /etc/lightdm. Plebian-OS owns only its drop-in directory and
+    # file; reject link tricks or writable ancestors before creating either.
+    for path in / /etc /etc/lightdm; do
+        [ -d "$path" ] && [ ! -L "$path" ] \
+            || die "LightDM greeter destination ancestor is unsafe: $path"
+        owner="$(stat -c '%u' "$path" 2>/dev/null)" \
+            || die "could not inspect LightDM greeter destination ancestor: $path"
+        mode="$(stat -c '%a' "$path" 2>/dev/null)" \
+            || die "could not inspect LightDM greeter destination ancestor mode: $path"
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+            || die "LightDM greeter destination ancestor is not safely root-owned: $path"
+    done
+    [ ! -L "$config_dir" ] \
+        || die "refusing symlink LightDM greeter configuration directory: $config_dir"
+    if [ -e "$config_dir" ] && [ ! -d "$config_dir" ]; then
+        die "LightDM greeter configuration path is not a directory: $config_dir"
+    fi
+    if [ ! -e "$config_dir" ] && [ "$DRY_RUN" != 1 ]; then
+        install -d -o root -g root -m 0755 "$config_dir" \
+            || die "could not create LightDM greeter configuration directory"
+        ARTWORK_NOTICE_CREATED_DIRS+=("$config_dir")
+    fi
+    if [ -e "$config_dir" ]; then
+        owner="$(stat -c '%u' "$config_dir" 2>/dev/null)"
+        mode="$(stat -c '%a' "$config_dir" 2>/dev/null)"
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+            && (( (8#$mode & 8#1) != 0 )) \
+            || die "LightDM greeter configuration directory is not safely root-owned"
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + enforce root:root 0755 $config_dir"
+        else
+            chown root:root "$config_dir" && chmod 0755 "$config_dir" \
+                || die "could not enforce LightDM greeter configuration directory metadata"
+        fi
+    fi
+    [ ! -L "$LIGHTDM_GREETER_CONFIG_DST" ] \
+        || die "refusing symlink LightDM greeter configuration"
+
+    if [ -f "$repo_root/VERSION" ]; then
+        source="$SELF_DIR/lightdm-gtk-greeter.conf"
+        [ -f "$source" ] && [ ! -L "$source" ] \
+            || die "tracked LightDM greeter configuration missing or unsafe: $source"
+    else
+        source="$LIGHTDM_GREETER_CONFIG_DST"
+        [ -e "$source" ] || [ -L "$source" ] \
+            || die "installed LightDM greeter configuration is missing: $source"
+    fi
+    install_artwork_notice "$source" "$LIGHTDM_GREETER_CONFIG_DST" \
+        "$LIGHTDM_GREETER_CONFIG_SHA256" "LightDM greeter branding" greeter
 }
 
 selected_desktop_wallpaper_state_dir() {
@@ -1738,6 +1805,7 @@ fi
 install_no_beep_defaults
 install_quiet_console_defaults
 install_desktop_wallpaper
+install_lightdm_greeter_branding
 install_artwork_notices
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap

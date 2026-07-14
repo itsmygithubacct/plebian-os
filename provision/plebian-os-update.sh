@@ -7,7 +7,8 @@
 # kilix/pleb command symlinks, the pleb-session launcher, and the xsession entry
 # — so a change to any of those lands too. It ALSO refreshes the Plebian-OS layer
 # itself (the provisioner, dependency installer, password helper, systemd unit,
-# version marker, branded desktop wallpaper, artwork notices, and this helper) from a plebian-os
+# version marker, branded desktop/greeter wallpaper configuration, artwork
+# notices, and this helper) from a plebian-os
 # checkout. Updates are
 # serialized; participating checkouts must be clean and pinned refs resolve to
 # the fetched commit. One outer recovery transaction covers the deployed OS
@@ -29,6 +30,8 @@ die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
+# shellcheck disable=SC2034
+LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
 # These notice constants are also an exact staged-script contract consumed by
 # stage_and_validate_os_layer; they are deliberately not expanded at runtime.
 # shellcheck disable=SC2034
@@ -355,6 +358,7 @@ paths=(
     /usr/local/share/plebian-os/wallpapers/plebian-os.png
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
+    /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/pleb-session
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
@@ -368,6 +372,7 @@ managed_dirs=(
     /usr/local/share/doc/plebian-os
     /usr/local/share/doc/plebian-os/installer
     /usr/local/share/doc/pleb
+    /etc/lightdm/lightdm-gtk-greeter.conf.d
 )
 cleanup() {
     rc=$?
@@ -377,7 +382,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir "$txn/items"
-for dir in / /usr /usr/local /usr/local/share; do
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
     dir_mode="$(stat -c '%a' "$dir")"
@@ -423,6 +428,12 @@ case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
 [ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
 mode="$(stat -c '%a' "$txn")"
 (( (8#$mode & 8#077) == 0 )) || exit 2
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
+        || exit 2
+    dir_mode="$(stat -c '%a' "$dir")"
+    (( (8#$dir_mode & 8#22) == 0 )) || exit 2
+done
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
@@ -434,6 +445,7 @@ paths=(
     /usr/local/share/plebian-os/wallpapers/plebian-os.png
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
+    /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/pleb-session
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
@@ -447,6 +459,7 @@ managed_dirs=(
     /usr/local/share/doc/plebian-os
     /usr/local/share/doc/plebian-os/installer
     /usr/local/share/doc/pleb
+    /etc/lightdm/lightdm-gtk-greeter.conf.d
 )
 new_paths=()
 cleanup_new() {
@@ -819,6 +832,7 @@ stage_and_validate_os_layer() {
         "$PLEBIAN_OS_DIR/assets/desktop/plebian-os.png"
         "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md"
         "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2"
+        "$prov/lightdm-gtk-greeter.conf"
     )
     for file in "${required[@]}"; do
         [ -f "$file" ] || die "OS-layer checkout is incomplete; required file missing: $file"
@@ -829,6 +843,8 @@ stage_and_validate_os_layer() {
         || die "OS-layer checkout has an unsafe attribution symlink"
     [ ! -L "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" ] \
         || die "OS-layer checkout has an unsafe GPL license symlink"
+    [ ! -L "$prov/lightdm-gtk-greeter.conf" ] \
+        || die "OS-layer checkout has an unsafe LightDM greeter configuration symlink"
 
     install -m 0755 "$prov/plebian-os-provision.sh" "$stage/plebian-os-provision"
     install -m 0755 "$prov/install-deps.sh" "$stage/plebian-os-install-deps"
@@ -840,6 +856,7 @@ stage_and_validate_os_layer() {
     install -m 0644 "$PLEBIAN_OS_DIR/assets/desktop/plebian-os.png" "$stage/desktop-wallpaper.png"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md" "$stage/ATTRIBUTION.md"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" "$stage/COPYING.GPL-2"
+    install -m 0644 "$prov/lightdm-gtk-greeter.conf" "$stage/lightdm-gtk-greeter.conf"
 
     bash -n "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
@@ -933,6 +950,21 @@ PY
     [ "$license_actual" = "$license_expected" ] \
         && [ "$license_actual" = "$license_update_expected" ] \
         || die "staged GPL license does not match the staged provisioner/updater"
+    python3 - "$stage/lightdm-gtk-greeter.conf" <<'PY' \
+        || die "staged LightDM greeter configuration contract failed"
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+lines = {line.strip() for line in text.splitlines()
+         if line.strip() and not line.lstrip().startswith("#")}
+if lines != {
+    "[greeter]",
+    "background=/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+    "user-background=false",
+} or "Debian" in text:
+    raise SystemExit(1)
+PY
 }
 
 # Privileged deployment is transactional: first place every new file beside its
@@ -944,7 +976,7 @@ deploy_staged_os_layer() {
     shift
     local -a expected_hashes=("$@")
     local -a root_command
-    [ "${#expected_hashes[@]}" -eq 10 ] \
+    [ "${#expected_hashes[@]}" -eq 11 ] \
         || die "OS-layer deployment requires one expected hash per staged file"
     if [ "$EUID" = 0 ]; then
         # A root-run updater stages root-owned files. Clear inherited sudo
@@ -981,6 +1013,7 @@ names=(
     desktop-wallpaper.png
     ATTRIBUTION.md
     COPYING.GPL-2
+    lightdm-gtk-greeter.conf
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -993,9 +1026,10 @@ dests=(
     /usr/local/share/plebian-os/wallpapers/plebian-os.png
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
+    /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -1047,7 +1081,7 @@ trap rollback ERR INT TERM HUP
 
 # Distribution assets live below fixed root-owned directories. Reject any
 # symlink or user-writable fixed ancestor before root stages bytes beneath it.
-for dir in / /usr /usr/local /usr/local/share; do
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm; do
     if [ ! -d "$dir" ] || [ -L "$dir" ]; then
         printf 'plebian-os-update: unsafe distribution asset destination ancestor: %s\n' "$dir" >&2
         false
@@ -1067,7 +1101,8 @@ for dir in \
     /usr/local/share/plebian-os/wallpapers \
     /usr/local/share/doc \
     /usr/local/share/doc/plebian-os \
-    /usr/local/share/doc/plebian-os/installer; do
+    /usr/local/share/doc/plebian-os/installer \
+    /etc/lightdm/lightdm-gtk-greeter.conf.d; do
     if [ -L "$dir" ]; then
         printf 'plebian-os-update: unsafe distribution asset destination symlink: %s\n' "$dir" >&2
         false
@@ -1199,6 +1234,20 @@ if b"../COPYING.GPL-2" not in attribution or b"GPL-2.0-or-later" not in attribut
 if b"GNU GENERAL PUBLIC LICENSE" not in license_text or b"Version 2, June 1991" not in license_text:
     raise SystemExit(1)
 PY
+python3 - "${new_paths[10]}" <<'PY'
+import pathlib
+import sys
+
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+lines = {line.strip() for line in text.splitlines()
+         if line.strip() and not line.lstrip().startswith("#")}
+if lines != {
+    "[greeter]",
+    "background=/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+    "user-background=false",
+} or "Debian" in text:
+    raise SystemExit(1)
+PY
 
 # Nothing becomes destination-readable until all private root-owned copies have
 # passed their exact hashes and type-specific validation.
@@ -1258,6 +1307,7 @@ self_update_os_layer() {
         desktop-wallpaper.png
         ATTRIBUTION.md
         COPYING.GPL-2
+        lightdm-gtk-greeter.conf
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
