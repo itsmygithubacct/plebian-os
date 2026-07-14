@@ -31,8 +31,9 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    [`provision/plebian-os-provision.sh`](provision/plebian-os-provision.sh) once,
    after the network is up. It:
    - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux);
-   - creates the shared source root `~/.local/gpu_terminal/sources` and clones `pleb` into
-     `~/.local/gpu_terminal/sources/pleb`;
+   - creates the shared source root `~/.local/gpu_terminal/sources`, clones/pins the
+     Plebian-OS source at `~/.local/gpu_terminal/sources/plebian-os`, and clones `pleb` beside
+     it at `~/.local/gpu_terminal/sources/pleb`;
    - runs a Plebian-OS-managed `pleb install`, which clones `kilix` into
      `~/.local/gpu_terminal/sources/kilix`, optionally places Kilix-95 beside it, and sets up
      the selected `kilix desktop` provider, fetches a prebuilt kitty engine, and

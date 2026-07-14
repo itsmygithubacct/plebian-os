@@ -1387,9 +1387,15 @@ desktop_provider_needs_kilix95() {
 
 validate_checkout() {
     local dir="$1" repo="$2" name="$3" remote
-    [ -d "$dir/.git" ] || return 0
-    remote="$(git -C "$dir" config --get remote.origin.url 2>/dev/null || true)"
-    if [ -n "$remote" ] && [ "$remote" != "$repo" ] \
+    [ -d "$dir" ] && [ ! -L "$dir" ] \
+        || die "$name checkout is not a safe directory: $dir"
+    if [ -L "$dir/.git" ] \
+        || { [ ! -d "$dir/.git" ] && [ ! -f "$dir/.git" ]; }; then
+        die "$name path is not a safe git checkout: $dir"
+    fi
+    remote="$(as_target_readonly git -C "$dir" config --get remote.origin.url 2>/dev/null)" \
+        || die "could not validate $name checkout origin at $dir"
+    if [ "$remote" != "$repo" ] \
         && [ "${PLEBIAN_OS_TRUST_EXISTING_CHECKOUT:-0}" != 1 ]; then
         die "$name checkout at $dir has origin '$remote', expected '$repo' (set PLEBIAN_OS_TRUST_EXISTING_CHECKOUT=1 to override)"
     fi
