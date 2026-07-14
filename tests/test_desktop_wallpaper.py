@@ -56,7 +56,14 @@ selected_desktop_wallpaper_state_dir
             )
             return result.stdout.strip().replace(str(root), "$ROOT")
 
-    def run_seed(self, desktop: Path, *, enabled: bool = True, dry_run: bool = False):
+    def run_seed(
+        self,
+        desktop: Path,
+        *,
+        enabled: bool = True,
+        dry_run: bool = False,
+        pleb_data: Path | None = None,
+    ):
         script = r'''
 set -euo pipefail
 export PLEBIAN_OS_PROVISION_LIB_ONLY=1
@@ -65,15 +72,20 @@ TARGET_USER="$(id -un)"
 TARGET_UID="$(id -u)"
 TARGET_GID="$(id -g)"
 USER_HOME="$TEST_HOME"
+PLEB_STORAGE_HOME="$TEST_PLEB_STORAGE"
+PLEB_DATA_HOME="$TEST_PLEB_DATA"
 DESKTOP="$DESKTOP_ENABLED"
 DRY_RUN="$TEST_DRY_RUN"
 as_user() { "$@"; }
 seed_desktop_wallpaper_state "$DESKTOP_DIR" "$WALLPAPER"
 '''
+        data = pleb_data or desktop.parent
         env = {
             **os.environ,
             "PROVISION": str(PROVISION),
             "TEST_HOME": str(desktop.parent.parent.parent),
+            "TEST_PLEB_STORAGE": str(data.parent),
+            "TEST_PLEB_DATA": str(data),
             "DESKTOP_DIR": str(desktop),
             "WALLPAPER": "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
             "DESKTOP_ENABLED": "1" if enabled else "0",
@@ -130,13 +142,16 @@ install_desktop_wallpaper
             check=check,
         )
 
-    def run_update_state_seed(self, desktop: Path):
+    def run_update_state_seed(
+        self, desktop: Path, *, pleb_data: Path | None = None
+    ):
         script = r'''
 set -euo pipefail
 export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
 source "$UPDATE"
 seed_desktop_wallpaper_state_if_absent "$DESKTOP_DIR" "$WALLPAPER"
 '''
+        data = pleb_data or desktop.parent
         return subprocess.run(
             ["bash", "-c", script],
             cwd=ROOT,
@@ -145,6 +160,8 @@ seed_desktop_wallpaper_state_if_absent "$DESKTOP_DIR" "$WALLPAPER"
                 "UPDATE": str(UPDATE),
                 "HOME": str(desktop.parent),
                 "PLEB_STATE_HOME": str(desktop.parent / "state"),
+                "PLEB_STORAGE_HOME": str(data.parent),
+                "PLEB_DATA_HOME": str(data),
                 "DESKTOP_DIR": str(desktop),
                 "WALLPAPER": "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
             },
@@ -311,6 +328,7 @@ fi
             )
             self.assertEqual(stat.S_IMODE(state_path.stat().st_mode), 0o600)
             self.assertEqual(state_path.stat().st_uid, os.getuid())
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o700)
 
     def test_pleb_session_wallpaper_state_is_provider_independent(self):
         for script in (PROVISION, UPDATE):
@@ -347,9 +365,21 @@ fi
             original = b'{"wall_image":"/home/me/my-wall.png","wall_mode":"tile"}\n'
             state_path.write_bytes(original)
             state_path.chmod(0o640)
+            desktop.chmod(0o755)
             self.run_seed(desktop)
             self.assertEqual(state_path.read_bytes(), original)
             self.assertEqual(stat.S_IMODE(state_path.stat().st_mode), 0o640)
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o700)
+
+    def test_provision_seed_leaves_external_desktop_permissions_untouched(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            desktop = root / "operator-desktop"
+            desktop.mkdir(mode=0o755)
+            pleb_data = root / "managed" / "pleb" / "data"
+            self.run_seed(desktop, pleb_data=pleb_data)
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o755)
+            self.assertTrue((desktop / ".state.json").exists())
 
     def test_symlink_state_is_treated_as_existing_and_never_followed(self):
         with tempfile.TemporaryDirectory() as td:
@@ -385,6 +415,7 @@ fi
             )
             self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o600)
             self.assertEqual(state.stat().st_uid, os.getuid())
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o700)
 
     def test_new_updater_preserves_existing_and_symlink_state(self):
         with tempfile.TemporaryDirectory() as td:
@@ -395,9 +426,11 @@ fi
             original = b'{"wall_image":"/home/me/custom.png"}\n'
             state.write_bytes(original)
             state.chmod(0o640)
+            desktop.chmod(0o755)
             self.run_update_state_seed(desktop)
             self.assertEqual(state.read_bytes(), original)
             self.assertEqual(stat.S_IMODE(state.stat().st_mode), 0o640)
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o700)
 
             state.unlink()
             target = root / "chosen.json"
@@ -405,6 +438,16 @@ fi
             state.symlink_to(target)
             self.run_update_state_seed(desktop)
             self.assertEqual(target.read_bytes(), original)
+
+    def test_update_seed_leaves_external_desktop_permissions_untouched(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            desktop = root / "operator-desktop"
+            desktop.mkdir(mode=0o755)
+            pleb_data = root / "managed" / "pleb" / "data"
+            self.run_update_state_seed(desktop, pleb_data=pleb_data)
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o755)
+            self.assertTrue((desktop / ".state.json").exists())
 
     def test_update_seeds_after_commit_and_tracks_created_directories(self):
         update = UPDATE.read_text()

@@ -83,13 +83,40 @@ class VmBuilderEnvTests(unittest.TestCase):
             "KILIX_STORAGE_HOME",
             "KILIX95_STORAGE_HOME",
             "PLEBIAN_OS_STORAGE_HOME",
+            "PLEB_CONFIG_HOME",
+            "PLEB_STATE_HOME",
+            "PLEB_CACHE_HOME",
+            "PLEB_SESSION_HOME",
+            "PLEB_DATA_HOME",
+            "KILIX_CONFIG_HOME",
+            "KILIX_STATE_DIRECTORY",
+            "KILIX_CACHE_HOME",
+            "KILIX_SESSION_HOME",
+            "KILIX_BUILD_DIRECTORY",
+            "KILIX_DATA_HOME",
+            "KILIX_PREBUILT_HOME",
+            "KILIX95_CONFIG_HOME",
+            "KILIX95_STATE_HOME",
+            "KILIX95_CACHE_HOME",
+            "KILIX95_SESSION_HOME",
+            "KILIX95_DATA_HOME",
+            "PLEBIAN_OS_SESSION_HOME",
+            "KILIX_DESKTOP_DIR",
         ):
             self.assertIn(root, verify)
         self.assertIn("stat -c \\'%u\\'", verify)
         self.assertIn("stat -c \\'%a\\'", verify)
         self.assertIn("readlink -m", verify)
-        self.assertIn('case "$g" in "$HOME"/*)', verify)
-        self.assertIn('= 700 ] || exit 1', verify)
+        self.assertIn('case "$d" in "$anchor"/*)', verify)
+        self.assertIn('private_dir "$HOME" "$g"', verify)
+        self.assertIn('private_dir "$p" "$pc"', verify)
+        self.assertIn('private_dir "$k" "$kc"', verify)
+        self.assertIn('private_tree "$k" "$kp"', verify)
+        self.assertIn('private_dir "$tree_root" "$tree_current"', verify)
+        self.assertIn('private_dir "$n" "$nc"', verify)
+        self.assertIn('private_dir "$o" "$or"', verify)
+        self.assertIn('"$pd"/*) private_dir "$pd" "$w"', verify)
+        self.assertIn('= 700 ];', verify)
 
     def test_yes_mode_generates_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):

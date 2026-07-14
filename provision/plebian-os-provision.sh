@@ -177,7 +177,10 @@ validate_target_user() {
 }
 
 ensure_private_storage_root() {
-    local path="$1" anchor="$2" label="$3" resolved anchor_real path_real metadata
+    local path="$1" anchor="$2" label="$3"
+    local secure_intermediates="${4:-0}"
+    local resolved anchor_real path_real metadata current remaining component
+    local -a allocations
     case "$path" in
         /*) ;;
         *) die "$label must be an absolute path: $path" ;;
@@ -196,13 +199,45 @@ ensure_private_storage_root() {
     [ "$resolved" = "$path" ] \
         || die "$label must not contain symlinks or non-normal components: $path"
 
-    if [ "$DRY_RUN" = 1 ]; then
-        echo "    + (as $TARGET_USER) install -d -m 0700 $path"
-        return 0
+    allocations=("$path")
+    if [ "$secure_intermediates" = 1 ]; then
+        allocations=()
+        current="$anchor"
+        remaining="${path#"$anchor"/}"
+        while [ -n "$remaining" ]; do
+            component="${remaining%%/*}"
+            [ -n "$component" ] \
+                || die "$label contains an empty path component: $path"
+            current="$current/$component"
+            allocations+=("$current")
+            if [ "$component" = "$remaining" ]; then
+                remaining=""
+            else
+                remaining="${remaining#*/}"
+            fi
+        done
     fi
 
-    as_user install -d -m 0700 -- "$path" \
-        || die "could not create or secure $label as $TARGET_USER: $path"
+    for current in "${allocations[@]}"; do
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + (as $TARGET_USER) install -d -m 0700 $current"
+            continue
+        fi
+        as_user install -d -m 0700 -- "$current" \
+            || die "could not create or secure $label as $TARGET_USER: $current"
+        resolved="$(readlink -m -- "$current" 2>/dev/null)" \
+            || die "could not resolve allocated $label component: $current"
+        if [ "$resolved" != "$current" ] || [ ! -d "$current" ] \
+            || [ -L "$current" ]; then
+            die "$label acquired an unsafe directory component: $current"
+        fi
+        metadata="$(stat -c '%u:%a' -- "$current" 2>/dev/null)" \
+            || die "could not inspect allocated $label component: $current"
+        [ "$metadata" = "$TARGET_UID:700" ] \
+            || die "$label components must be owned by $TARGET_USER with mode 0700: $current ($metadata)"
+    done
+    [ "$DRY_RUN" != 1 ] || return 0
+
     resolved="$(readlink -m -- "$path" 2>/dev/null)" \
         || die "could not resolve allocated $label: $path"
     if [ "$resolved" != "$path" ] || [ ! -d "$path" ] || [ -L "$path" ]; then
@@ -218,15 +253,31 @@ ensure_private_storage_root() {
         *) die "$label escaped its private parent $anchor: $path" ;;
     esac
 
-    metadata="$(stat -c '%u:%a' -- "$path" 2>/dev/null)" \
-        || die "could not inspect allocated $label: $path"
-    [ "$metadata" = "$TARGET_UID:700" ] \
-        || die "$label must be owned by $TARGET_USER with mode 0700: $path ($metadata)"
+}
+
+secure_managed_pleb_desktop_dir() {
+    local state_dir="$1"
+    # KILIX_DESKTOP_DIR can deliberately point at operator-shared storage for
+    # custom providers.  Only the canonical Pleb-owned location (or a child of
+    # it) is ours to create or chmod.
+    case "$state_dir" in
+        "$PLEB_DATA_HOME")
+            ensure_private_storage_root "$PLEB_DATA_HOME" \
+                "$PLEB_STORAGE_HOME" PLEB_DATA_HOME 1
+            ;;
+        "$PLEB_DATA_HOME"/*)
+            ensure_private_storage_root "$PLEB_DATA_HOME" \
+                "$PLEB_STORAGE_HOME" PLEB_DATA_HOME 1
+            ensure_private_storage_root "$state_dir" "$PLEB_DATA_HOME" \
+                KILIX_DESKTOP_DIR 1
+            ;;
+        *) return 0 ;;
+    esac
 }
 
 allocate_coordinated_private_storage() {
     local resolved home_real data_real i
-    local -a labels roots
+    local -a labels roots category_labels category_roots category_paths
     case "$GPU_TERMINAL_HOME" in
         /*) ;;
         *) die "GPU_TERMINAL_HOME must be an absolute path: $GPU_TERMINAL_HOME" ;;
@@ -270,8 +321,80 @@ allocate_coordinated_private_storage() {
     )
     for i in "${!roots[@]}"; do
         ensure_private_storage_root "${roots[$i]}" "$GPU_TERMINAL_HOME" \
-            "${labels[$i]}"
+            "${labels[$i]}" 1
     done
+
+    # Secure every app-owned category before the provision lock or a version
+    # probe can become its first writer.  Each category has its own component
+    # root as the trust anchor: a misplaced override is rejected instead of
+    # chmodding an operator-managed directory elsewhere.  KILIX_DESKTOP_DIR is
+    # handled separately below: its canonical PLEB_DATA_HOME location is
+    # private, while a cross-provider/shared-data override remains untouched.
+    category_labels=(
+        PLEB_CONFIG_HOME
+        PLEB_STATE_HOME
+        PLEB_CACHE_HOME
+        PLEB_SESSION_HOME
+        PLEB_DATA_HOME
+        KILIX_CONFIG_HOME
+        KILIX_STATE_DIRECTORY
+        KILIX_CACHE_HOME
+        KILIX_SESSION_HOME
+        KILIX_BUILD_DIRECTORY
+        KILIX_DATA_HOME
+        KILIX_PREBUILT_HOME
+        KILIX95_CONFIG_HOME
+        KILIX95_STATE_HOME
+        KILIX95_CACHE_HOME
+        KILIX95_SESSION_HOME
+        KILIX95_DATA_HOME
+        PLEBIAN_OS_SESSION_HOME
+    )
+    category_roots=(
+        "$PLEB_STORAGE_HOME"
+        "$PLEB_STORAGE_HOME"
+        "$PLEB_STORAGE_HOME"
+        "$PLEB_STORAGE_HOME"
+        "$PLEB_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME"
+        "$PLEBIAN_OS_STORAGE_HOME"
+    )
+    category_paths=(
+        "$PLEB_CONFIG_HOME"
+        "$PLEB_STATE_HOME"
+        "$PLEB_CACHE_HOME"
+        "$PLEB_SESSION_HOME"
+        "$PLEB_DATA_HOME"
+        "$KILIX_CONFIG_HOME"
+        "$KILIX_STATE_DIRECTORY"
+        "$KILIX_CACHE_HOME"
+        "$KILIX_SESSION_HOME"
+        "$KILIX_BUILD_DIRECTORY"
+        "$KILIX_DATA_HOME"
+        "$KILIX_PREBUILT_HOME"
+        "$KILIX95_CONFIG_HOME"
+        "$KILIX95_STATE_HOME"
+        "$KILIX95_CACHE_HOME"
+        "$KILIX95_SESSION_HOME"
+        "$KILIX95_DATA_HOME"
+        "$PLEBIAN_OS_SESSION_HOME"
+    )
+    for i in "${!category_paths[@]}"; do
+        ensure_private_storage_root "${category_paths[$i]}" \
+            "${category_roots[$i]}" "${category_labels[$i]}" 1
+    done
+    secure_managed_pleb_desktop_dir "$KILIX_DESKTOP_DIR"
 }
 
 PROVISION_LOCK_FD=""
@@ -916,6 +1039,7 @@ seed_desktop_wallpaper_state() {
     local state_path="$state_dir/.state.json" owner rc
 
     [ "$DESKTOP" = 1 ] || return 0
+    secure_managed_pleb_desktop_dir "$state_dir"
     if [ -e "$state_path" ] || [ -L "$state_path" ]; then
         log "preserving existing Pleb desktop state (including wallpaper): $state_path"
         return 0
@@ -1395,6 +1519,10 @@ write_source_tool_manifest() {
         provenance_kv KILIX_REF "$KILIX_REF"
         provenance_kv KILIX_DIR "$KILIX_DIR"
         provenance_kv KILIX_STORAGE_HOME "$KILIX_STORAGE_HOME"
+        provenance_kv KILIX_CONFIG_HOME "$KILIX_CONFIG_HOME"
+        provenance_kv KILIX_STATE_DIRECTORY "$KILIX_STATE_DIRECTORY"
+        provenance_kv KILIX_CACHE_HOME "$KILIX_CACHE_HOME"
+        provenance_kv KILIX_SESSION_HOME "$KILIX_SESSION_HOME"
         provenance_kv KILIX_BUILD_DIRECTORY "$KILIX_BUILD_DIRECTORY"
         provenance_kv KILIX_DATA_HOME "$KILIX_DATA_HOME"
         provenance_kv KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
@@ -1407,6 +1535,10 @@ write_source_tool_manifest() {
         provenance_kv KILIX95_REF "$KILIX95_REF"
         provenance_kv KILIX95_DIR "$KILIX95_DIR"
         provenance_kv KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
+        provenance_kv KILIX95_CONFIG_HOME "$KILIX95_CONFIG_HOME"
+        provenance_kv KILIX95_STATE_HOME "$KILIX95_STATE_HOME"
+        provenance_kv KILIX95_CACHE_HOME "$KILIX95_CACHE_HOME"
+        provenance_kv KILIX95_SESSION_HOME "$KILIX95_SESSION_HOME"
         provenance_kv KILIX95_DATA_HOME "$KILIX95_DATA_HOME"
         provenance_kv KILIX95_COMMIT "$kilix95_commit"
         provenance_kv KILIX95_VERSION "$kilix95_version"
@@ -1850,11 +1982,19 @@ PLEB_CACHE_HOME="${PLEB_CACHE_HOME:-$PLEB_STORAGE_HOME/cache}"
 PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
 PLEB_DATA_HOME="${PLEB_DATA_HOME:-$PLEB_STORAGE_HOME/data}"
 KILIX_STORAGE_HOME="${KILIX_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix}"
+KILIX_CONFIG_HOME="${KILIX_CONFIG_HOME:-$KILIX_STORAGE_HOME/config}"
+KILIX_STATE_DIRECTORY="${KILIX_STATE_DIRECTORY:-$KILIX_STORAGE_HOME/state}"
+KILIX_CACHE_HOME="${KILIX_CACHE_HOME:-$KILIX_STORAGE_HOME/cache}"
+KILIX_SESSION_HOME="${KILIX_SESSION_HOME:-$KILIX_STORAGE_HOME/session}"
 KILIX_BUILD_DIRECTORY="${KILIX_BUILD_DIRECTORY:-$KILIX_STORAGE_HOME/build}"
 KILIX_DATA_HOME="${KILIX_DATA_HOME:-$KILIX_STORAGE_HOME/data}"
 KILIX_DESKTOP_DIR="${KILIX_DESKTOP_DIR:-$PLEB_DATA_HOME/desktop}"
 KILIX_PREBUILT_HOME="${KILIX_PREBUILT_HOME:-$KILIX_STORAGE_HOME/prebuilt/kitty.app}"
 KILIX95_STORAGE_HOME="${KILIX95_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix-95}"
+KILIX95_CONFIG_HOME="${KILIX95_CONFIG_HOME:-$KILIX95_STORAGE_HOME/config}"
+KILIX95_STATE_HOME="${KILIX95_STATE_HOME:-$KILIX95_STORAGE_HOME/state}"
+KILIX95_CACHE_HOME="${KILIX95_CACHE_HOME:-$KILIX95_STORAGE_HOME/cache}"
+KILIX95_SESSION_HOME="${KILIX95_SESSION_HOME:-$KILIX95_STORAGE_HOME/session}"
 KILIX95_DATA_HOME="${KILIX95_DATA_HOME:-$KILIX95_STORAGE_HOME/data}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
@@ -1998,11 +2138,19 @@ install_env=(
     "PLEB_SESSION_HOME=$PLEB_SESSION_HOME"
     "PLEB_DATA_HOME=$PLEB_DATA_HOME"
     "KILIX_STORAGE_HOME=$KILIX_STORAGE_HOME"
+    "KILIX_CONFIG_HOME=$KILIX_CONFIG_HOME"
+    "KILIX_STATE_DIRECTORY=$KILIX_STATE_DIRECTORY"
+    "KILIX_CACHE_HOME=$KILIX_CACHE_HOME"
+    "KILIX_SESSION_HOME=$KILIX_SESSION_HOME"
     "KILIX_BUILD_DIRECTORY=$KILIX_BUILD_DIRECTORY"
     "KILIX_DATA_HOME=$KILIX_DATA_HOME"
     "KILIX_DESKTOP_DIR=$KILIX_DESKTOP_DIR"
     "KILIX_PREBUILT_HOME=$KILIX_PREBUILT_HOME"
     "KILIX95_STORAGE_HOME=$KILIX95_STORAGE_HOME"
+    "KILIX95_CONFIG_HOME=$KILIX95_CONFIG_HOME"
+    "KILIX95_STATE_HOME=$KILIX95_STATE_HOME"
+    "KILIX95_CACHE_HOME=$KILIX95_CACHE_HOME"
+    "KILIX95_SESSION_HOME=$KILIX95_SESSION_HOME"
     "KILIX95_DATA_HOME=$KILIX95_DATA_HOME"
     "KILIX_DIR=$KILIX_DIR"
     "KILIX_REPO=$KILIX_REPO"
@@ -2084,6 +2232,10 @@ EOF
     write_session_default PLEB_REF "$PLEB_REF"
     write_session_default KILIX_DIR "$KILIX_DIR"
     write_session_default KILIX_STORAGE_HOME "$KILIX_STORAGE_HOME"
+    write_session_default KILIX_CONFIG_HOME "$KILIX_CONFIG_HOME"
+    write_session_default KILIX_STATE_DIRECTORY "$KILIX_STATE_DIRECTORY"
+    write_session_default KILIX_CACHE_HOME "$KILIX_CACHE_HOME"
+    write_session_default KILIX_SESSION_HOME "$KILIX_SESSION_HOME"
     write_session_default KILIX_BUILD_DIRECTORY "$KILIX_BUILD_DIRECTORY"
     write_session_default KILIX_DATA_HOME "$KILIX_DATA_HOME"
     write_session_default KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
@@ -2106,6 +2258,10 @@ EOF
     write_session_default KILIX_DESKTOP_FLAVOR "$KILIX_DESKTOP_FLAVOR"
     write_session_default KILIX95_AUTO_INSTALL "$KILIX95_AUTO_INSTALL"
     write_session_default KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
+    write_session_default KILIX95_CONFIG_HOME "$KILIX95_CONFIG_HOME"
+    write_session_default KILIX95_STATE_HOME "$KILIX95_STATE_HOME"
+    write_session_default KILIX95_CACHE_HOME "$KILIX95_CACHE_HOME"
+    write_session_default KILIX95_SESSION_HOME "$KILIX95_SESSION_HOME"
     write_session_default KILIX95_DATA_HOME "$KILIX95_DATA_HOME"
     write_session_default KILIX95_DIR "$KILIX95_DIR"
     write_session_default KILIX95_REPO "$KILIX95_REPO"
@@ -2121,6 +2277,11 @@ EOF
     write_session_default PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
     write_session_default PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"
     write_session_default PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
+    # Pleb versions predating these category-level names do not explicitly
+    # re-export them after sourcing session.env.  Export them here so the
+    # coordinated values still reach the Kilix launcher and Kilix 95 provider.
+    printf '%s\n' 'export KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY KILIX_CACHE_HOME KILIX_SESSION_HOME KILIX_PREBUILT_HOME'
+    printf '%s\n' 'export KILIX95_CONFIG_HOME KILIX95_STATE_HOME KILIX95_CACHE_HOME KILIX95_SESSION_HOME KILIX95_DATA_HOME'
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'
     } > "$PLEB_ENV_TMP"
     chmod 0644 "$PLEB_ENV_TMP"

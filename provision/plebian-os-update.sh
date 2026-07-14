@@ -28,6 +28,16 @@ log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 
+require_unprivileged_updater() {
+    [ "${1:-$EUID}" -ne 0 ] \
+        || die "run plebian-os-update without sudo (it elevates only bounded system steps)"
+}
+# The library-only hook lets focused tests load functions as root.  Every real
+# invocation rejects root before config loading, allocation, locking, or writes.
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+    require_unprivileged_updater "$EUID"
+fi
+
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 # shellcheck disable=SC2034
@@ -51,8 +61,148 @@ desktop_wallpaper_matches_expected_hash() {
     [ "$actual" = "$expected" ]
 }
 
+ensure_private_update_dir() {
+    local path="$1" anchor="$2" label="$3"
+    local secure_intermediates="${4:-0}"
+    local resolved anchor_real path_real owner mode current remaining component
+    local -a allocations
+    case "$path" in
+        /*) ;;
+        *) die "$label must be an absolute path: $path" ;;
+    esac
+    case "$path" in
+        "$anchor"/*) ;;
+        *) die "$label must be a strict descendant of $anchor: $path" ;;
+    esac
+    resolved="$(readlink -m -- "$path" 2>/dev/null)" \
+        || die "could not resolve $label: $path"
+    [ "$resolved" = "$path" ] \
+        || die "$label must not contain symlinks or non-normal components: $path"
+    allocations=("$path")
+    if [ "$secure_intermediates" = 1 ]; then
+        allocations=()
+        current="$anchor"
+        remaining="${path#"$anchor"/}"
+        while [ -n "$remaining" ]; do
+            component="${remaining%%/*}"
+            [ -n "$component" ] \
+                || die "$label contains an empty path component: $path"
+            current="$current/$component"
+            allocations+=("$current")
+            if [ "$component" = "$remaining" ]; then
+                remaining=""
+            else
+                remaining="${remaining#*/}"
+            fi
+        done
+    fi
+    for current in "${allocations[@]}"; do
+        install -d -m 0700 -- "$current" \
+            || die "could not create or secure $label: $current"
+        resolved="$(readlink -m -- "$current" 2>/dev/null)" \
+            || die "could not resolve allocated $label component: $current"
+        [ "$resolved" = "$current" ] && [ -d "$current" ] \
+            && [ ! -L "$current" ] \
+            || die "$label acquired an unsafe directory component: $current"
+        owner="$(stat -c '%u' -- "$current" 2>/dev/null)" \
+            || die "could not inspect allocated $label component: $current"
+        mode="$(stat -c '%a' -- "$current" 2>/dev/null)" \
+            || die "could not inspect allocated $label component mode: $current"
+        [ "$owner" = "$EUID" ] && [ "$mode" = 700 ] \
+            || die "$label components must be owned by the updating user with mode 0700: $current"
+    done
+    resolved="$(readlink -m -- "$path" 2>/dev/null)" \
+        || die "could not resolve allocated $label: $path"
+    [ "$resolved" = "$path" ] && [ -d "$path" ] && [ ! -L "$path" ] \
+        || die "$label became an unsafe directory during allocation: $path"
+    anchor_real="$(readlink -f -- "$anchor" 2>/dev/null)" \
+        || die "could not resolve $label parent: $anchor"
+    path_real="$(readlink -f -- "$path" 2>/dev/null)" \
+        || die "could not resolve allocated $label: $path"
+    case "$path_real" in
+        "$anchor_real"/*) ;;
+        *) die "$label escaped its private parent $anchor: $path" ;;
+    esac
+}
+
+secure_managed_pleb_desktop_dir() {
+    local state_dir="$1"
+    # An explicit desktop outside PLEB_DATA_HOME belongs to its operator.  The
+    # updater may seed its state file, but must not chmod the directory.
+    case "$state_dir" in
+        "$PLEB_DATA_HOME")
+            ensure_private_update_dir "$PLEB_DATA_HOME" \
+                "$PLEB_STORAGE_HOME" PLEB_DATA_HOME 1
+            ;;
+        "$PLEB_DATA_HOME"/*)
+            ensure_private_update_dir "$PLEB_DATA_HOME" \
+                "$PLEB_STORAGE_HOME" PLEB_DATA_HOME 1
+            ensure_private_update_dir "$state_dir" "$PLEB_DATA_HOME" \
+                KILIX_DESKTOP_DIR 1
+            ;;
+        *) return 0 ;;
+    esac
+}
+
+allocate_coordinated_private_storage() {
+    local i
+    local -a labels roots category_labels category_roots category_paths
+    labels=(
+        GPU_TERMINAL_HOME
+        PLEB_STORAGE_HOME
+        KILIX_STORAGE_HOME
+        KILIX95_STORAGE_HOME
+        PLEBIAN_OS_STORAGE_HOME
+    )
+    roots=(
+        "$GPU_TERMINAL_HOME"
+        "$PLEB_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME"
+        "$PLEBIAN_OS_STORAGE_HOME"
+    )
+    ensure_private_update_dir "${roots[0]}" "$HOME" "${labels[0]}"
+    for i in 1 2 3 4; do
+        ensure_private_update_dir "${roots[$i]}" "$GPU_TERMINAL_HOME" \
+            "${labels[$i]}" 1
+    done
+
+    category_labels=(
+        PLEB_CONFIG_HOME PLEB_STATE_HOME PLEB_CACHE_HOME PLEB_SESSION_HOME
+        PLEB_DATA_HOME KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY
+        KILIX_CACHE_HOME KILIX_SESSION_HOME KILIX_BUILD_DIRECTORY
+        KILIX_DATA_HOME KILIX_PREBUILT_HOME KILIX95_CONFIG_HOME
+        KILIX95_STATE_HOME KILIX95_CACHE_HOME KILIX95_SESSION_HOME
+        KILIX95_DATA_HOME PLEBIAN_OS_SESSION_HOME
+    )
+    category_roots=(
+        "$PLEB_STORAGE_HOME" "$PLEB_STORAGE_HOME" "$PLEB_STORAGE_HOME"
+        "$PLEB_STORAGE_HOME" "$PLEB_STORAGE_HOME" "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME" "$KILIX_STORAGE_HOME" "$KILIX_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME" "$KILIX_STORAGE_HOME" "$KILIX_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME" "$KILIX95_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME" "$KILIX95_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME" "$PLEBIAN_OS_STORAGE_HOME"
+    )
+    category_paths=(
+        "$PLEB_CONFIG_HOME" "$PLEB_STATE_HOME" "$PLEB_CACHE_HOME"
+        "$PLEB_SESSION_HOME" "$PLEB_DATA_HOME" "$KILIX_CONFIG_HOME"
+        "$KILIX_STATE_DIRECTORY" "$KILIX_CACHE_HOME" "$KILIX_SESSION_HOME"
+        "$KILIX_BUILD_DIRECTORY" "$KILIX_DATA_HOME" "$KILIX_PREBUILT_HOME"
+        "$KILIX95_CONFIG_HOME" "$KILIX95_STATE_HOME" "$KILIX95_CACHE_HOME"
+        "$KILIX95_SESSION_HOME" "$KILIX95_DATA_HOME"
+        "$PLEBIAN_OS_SESSION_HOME"
+    )
+    for i in "${!category_paths[@]}"; do
+        ensure_private_update_dir "${category_paths[$i]}" \
+            "${category_roots[$i]}" "${category_labels[$i]}" 1
+    done
+    secure_managed_pleb_desktop_dir "$KILIX_DESKTOP_DIR"
+}
+
 seed_desktop_wallpaper_state_if_absent() {
     local state_dir="$1" wallpaper="$2" state_path="$1/.state.json" owner rc
+    secure_managed_pleb_desktop_dir "$state_dir" || return 1
     if [ -e "$state_path" ] || [ -L "$state_path" ]; then
         log "preserving existing Pleb desktop state (including wallpaper): $state_path"
         return 0
@@ -211,6 +361,10 @@ PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
 PLEB_DATA_HOME="${PLEB_DATA_HOME:-$PLEB_STORAGE_HOME/data}"
 KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
 KILIX_STORAGE_HOME="${KILIX_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix}"
+KILIX_CONFIG_HOME="${KILIX_CONFIG_HOME:-$KILIX_STORAGE_HOME/config}"
+KILIX_STATE_DIRECTORY="${KILIX_STATE_DIRECTORY:-$KILIX_STORAGE_HOME/state}"
+KILIX_CACHE_HOME="${KILIX_CACHE_HOME:-$KILIX_STORAGE_HOME/cache}"
+KILIX_SESSION_HOME="${KILIX_SESSION_HOME:-$KILIX_STORAGE_HOME/session}"
 KILIX_BUILD_DIRECTORY="${KILIX_BUILD_DIRECTORY:-$KILIX_STORAGE_HOME/build}"
 KILIX_DATA_HOME="${KILIX_DATA_HOME:-$KILIX_STORAGE_HOME/data}"
 KILIX_DESKTOP_DIR="${KILIX_DESKTOP_DIR:-$PLEB_DATA_HOME/desktop}"
@@ -231,6 +385,10 @@ KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
 KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-}"
 KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-95}"
 KILIX95_STORAGE_HOME="${KILIX95_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix-95}"
+KILIX95_CONFIG_HOME="${KILIX95_CONFIG_HOME:-$KILIX95_STORAGE_HOME/config}"
+KILIX95_STATE_HOME="${KILIX95_STATE_HOME:-$KILIX95_STORAGE_HOME/state}"
+KILIX95_CACHE_HOME="${KILIX95_CACHE_HOME:-$KILIX95_STORAGE_HOME/cache}"
+KILIX95_SESSION_HOME="${KILIX95_SESSION_HOME:-$KILIX95_STORAGE_HOME/session}"
 KILIX95_DATA_HOME="${KILIX95_DATA_HOME:-$KILIX95_STORAGE_HOME/data}"
 KILIX95_REPO="${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
@@ -273,17 +431,26 @@ case "${1:-}" in
     *) die "unknown option: $1 (try --help)" ;;
 esac
 
+# Repair the complete coordinated data tree before the update lock is the first
+# writer on an older or freshly created installation.
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+    allocate_coordinated_private_storage
+fi
+
 acquire_update_lock() {
     local lock="$PLEB_STATE_HOME/update.lock"
     command -v flock >/dev/null 2>&1 \
         || die "flock is required to serialize stack updates (install util-linux)"
     mkdir -p "$PLEB_STATE_HOME"
-    chmod 0700 "$PLEB_STATE_HOME" 2>/dev/null || true
     exec 9>>"$lock"
+    chmod 0600 "$lock" \
+        || die "could not secure update lock: $lock"
     flock -n 9 \
         || die "another Pleb/Plebian-OS update is already running (lock: $lock)"
 }
-acquire_update_lock
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+    acquire_update_lock
+fi
 
 _STACK_TXN_DIR=""
 _STACK_ROOT_TXN_DIR=""
@@ -1343,6 +1510,10 @@ stack_env=(
     "PLEB_UPDATE_LOCK_FD=9"
     "KILIX_DIR=$KILIX_DIR"
     "KILIX_STORAGE_HOME=$KILIX_STORAGE_HOME"
+    "KILIX_CONFIG_HOME=$KILIX_CONFIG_HOME"
+    "KILIX_STATE_DIRECTORY=$KILIX_STATE_DIRECTORY"
+    "KILIX_CACHE_HOME=$KILIX_CACHE_HOME"
+    "KILIX_SESSION_HOME=$KILIX_SESSION_HOME"
     "KILIX_BUILD_DIRECTORY=$KILIX_BUILD_DIRECTORY"
     "KILIX_DATA_HOME=$KILIX_DATA_HOME"
     "KILIX_DESKTOP_DIR=$KILIX_DESKTOP_DIR"
@@ -1364,6 +1535,10 @@ stack_env=(
     "PLEB_DESKTOP=$PLEB_DESKTOP"
     "KILIX95_AUTO_INSTALL=$KILIX95_AUTO_INSTALL"
     "KILIX95_STORAGE_HOME=$KILIX95_STORAGE_HOME"
+    "KILIX95_CONFIG_HOME=$KILIX95_CONFIG_HOME"
+    "KILIX95_STATE_HOME=$KILIX95_STATE_HOME"
+    "KILIX95_CACHE_HOME=$KILIX95_CACHE_HOME"
+    "KILIX95_SESSION_HOME=$KILIX95_SESSION_HOME"
     "KILIX95_DATA_HOME=$KILIX95_DATA_HOME"
     "KILIX95_DIR=$KILIX95_DIR"
     "KILIX95_REPO=$KILIX95_REPO"

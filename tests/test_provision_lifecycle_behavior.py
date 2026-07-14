@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
+UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 DEPS = ROOT / "provision" / "install-deps.sh"
 
 
@@ -39,6 +40,42 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             capture_output=True,
             check=False,
         )
+
+    @staticmethod
+    def _private_storage_layout(data: Path) -> dict[str, Path]:
+        pleb = data / "pleb"
+        kilix = data / "kilix"
+        kilix95 = data / "kilix-95"
+        plebian_os = data / "plebian-os"
+        return {
+            "GPU_TERMINAL_HOME": data,
+            "PLEB_STORAGE_HOME": pleb,
+            "KILIX_STORAGE_HOME": kilix,
+            "KILIX95_STORAGE_HOME": kilix95,
+            "PLEBIAN_OS_STORAGE_HOME": plebian_os,
+            "PLEB_CONFIG_HOME": pleb / "config",
+            "PLEB_STATE_HOME": pleb / "state",
+            "PLEB_CACHE_HOME": pleb / "cache",
+            "PLEB_SESSION_HOME": pleb / "session",
+            "PLEB_DATA_HOME": pleb / "data",
+            "KILIX_CONFIG_HOME": kilix / "config",
+            "KILIX_STATE_DIRECTORY": kilix / "state",
+            "KILIX_CACHE_HOME": kilix / "cache",
+            "KILIX_SESSION_HOME": kilix / "session",
+            "KILIX_BUILD_DIRECTORY": kilix / "build",
+            "KILIX_DATA_HOME": kilix / "data",
+            "KILIX_PREBUILT_HOME": kilix / "prebuilt" / "kitty.app",
+            "KILIX95_CONFIG_HOME": kilix95 / "config",
+            "KILIX95_STATE_HOME": kilix95 / "state",
+            "KILIX95_CACHE_HOME": kilix95 / "cache",
+            "KILIX95_SESSION_HOME": kilix95 / "session",
+            "KILIX95_DATA_HOME": kilix95 / "data",
+            "PLEBIAN_OS_SESSION_HOME": plebian_os / "session",
+        }
+
+    @staticmethod
+    def _private_storage_assignments(layout: dict[str, Path]) -> str:
+        return "".join(f"{key}={str(path)!r}\n" for key, path in layout.items())
 
     def test_snapshot_round_trip_preserves_operator_snapshot_source(self):
         with tempfile.TemporaryDirectory() as td:
@@ -148,17 +185,19 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td) / "home"
             data = home / ".local" / "gpu_terminal"
-            roots = [
-                data,
-                data / "pleb",
-                data / "kilix",
-                data / "kilix-95",
-                data / "plebian-os",
-            ]
-            for root in roots:
+            layout = self._private_storage_layout(data)
+            prebuilt_parent = layout["KILIX_PREBUILT_HOME"].parent
+            expected_paths = [*layout.values(), prebuilt_parent]
+            for root in expected_paths:
                 root.mkdir(parents=True, exist_ok=True)
                 root.chmod(0o755)
-            sentinel = roots[3] / "keep-me"
+            prebuilt_sentinel = prebuilt_parent / "keep-parent"
+            prebuilt_sentinel.write_text("preserved\n")
+            operator_desktop = home / "operator-desktop"
+            operator_desktop.mkdir(mode=0o755)
+            operator_sentinel = operator_desktop / "keep-me"
+            operator_sentinel.write_text("operator-owned\n")
+            sentinel = layout["KILIX95_CACHE_HOME"] / "keep-me"
             sentinel.write_text("preserved\n")
             env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
             body = (
@@ -167,18 +206,18 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 "DRY_RUN=0\n"
                 "as_user() { \"$@\"; }\n"
                 f"USER_HOME={str(home)!r}\n"
-                f"GPU_TERMINAL_HOME={str(data)!r}\n"
-                f"PLEB_STORAGE_HOME={str(roots[1])!r}\n"
-                f"KILIX_STORAGE_HOME={str(roots[2])!r}\n"
-                f"KILIX95_STORAGE_HOME={str(roots[3])!r}\n"
-                f"PLEBIAN_OS_STORAGE_HOME={str(roots[4])!r}\n"
+                f"{self._private_storage_assignments(layout)}"
+                f"KILIX_DESKTOP_DIR={str(operator_desktop)!r}\n"
                 "allocate_coordinated_private_storage\n"
                 "allocate_coordinated_private_storage\n"
             )
             result = self._run_library(body, env)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(sentinel.read_text(), "preserved\n")
-            for root in roots:
+            self.assertEqual(prebuilt_sentinel.read_text(), "preserved\n")
+            self.assertEqual(operator_sentinel.read_text(), "operator-owned\n")
+            self.assertEqual(stat.S_IMODE(operator_desktop.stat().st_mode), 0o755)
+            for root in expected_paths:
                 with self.subTest(root=root):
                     self.assertFalse(root.is_symlink())
                     self.assertEqual(root.stat().st_uid, user.pw_uid)
@@ -192,6 +231,8 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             outside = home / "operator-data"
             home.mkdir()
             outside.mkdir(mode=0o755)
+            layout = self._private_storage_layout(data)
+            layout["PLEB_STORAGE_HOME"] = outside
             env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
             body = (
                 f"TARGET_USER={user.pw_name!r}\n"
@@ -199,11 +240,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 "DRY_RUN=0\n"
                 "as_user() { \"$@\"; }\n"
                 f"USER_HOME={str(home)!r}\n"
-                f"GPU_TERMINAL_HOME={str(data)!r}\n"
-                f"PLEB_STORAGE_HOME={str(outside)!r}\n"
-                f"KILIX_STORAGE_HOME={str(data / 'kilix')!r}\n"
-                f"KILIX95_STORAGE_HOME={str(data / 'kilix-95')!r}\n"
-                f"PLEBIAN_OS_STORAGE_HOME={str(data / 'plebian-os')!r}\n"
+                f"{self._private_storage_assignments(layout)}"
                 "allocate_coordinated_private_storage\n"
             )
             result = self._run_library(body, env)
@@ -220,6 +257,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             data.mkdir(parents=True)
             target.mkdir(mode=0o755)
             (data / "pleb").symlink_to(target, target_is_directory=True)
+            layout = self._private_storage_layout(data)
             env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
             body = (
                 f"TARGET_USER={user.pw_name!r}\n"
@@ -227,17 +265,212 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 "DRY_RUN=0\n"
                 "as_user() { \"$@\"; }\n"
                 f"USER_HOME={str(home)!r}\n"
-                f"GPU_TERMINAL_HOME={str(data)!r}\n"
-                f"PLEB_STORAGE_HOME={str(data / 'pleb')!r}\n"
-                f"KILIX_STORAGE_HOME={str(data / 'kilix')!r}\n"
-                f"KILIX95_STORAGE_HOME={str(data / 'kilix-95')!r}\n"
-                f"PLEBIAN_OS_STORAGE_HOME={str(data / 'plebian-os')!r}\n"
+                f"{self._private_storage_assignments(layout)}"
                 "allocate_coordinated_private_storage\n"
             )
             result = self._run_library(body, env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("must not contain symlinks", result.stderr)
             self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+
+    def test_private_storage_allocator_rejects_external_category(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            outside = home / "operator-cache"
+            home.mkdir()
+            outside.mkdir(mode=0o755)
+            layout = self._private_storage_layout(data)
+            layout["KILIX_CACHE_HOME"] = outside
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"{self._private_storage_assignments(layout)}"
+                "allocate_coordinated_private_storage\n"
+            )
+            result = self._run_library(body, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("KILIX_CACHE_HOME must be a strict descendant", result.stderr)
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o755)
+
+    def test_private_storage_allocator_rejects_symlink_category(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            target = home / "operator-cache"
+            target.mkdir(parents=True, mode=0o755)
+            layout = self._private_storage_layout(data)
+            link = layout["KILIX95_CACHE_HOME"]
+            link.parent.mkdir(parents=True)
+            link.symlink_to(target, target_is_directory=True)
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"{self._private_storage_assignments(layout)}"
+                "allocate_coordinated_private_storage\n"
+            )
+            result = self._run_library(body, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("KILIX95_CACHE_HOME must not contain symlinks", result.stderr)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+
+    def test_private_storage_allocator_creates_and_repairs_canonical_desktop(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            layout = self._private_storage_layout(data)
+            desktop = layout["PLEB_DATA_HOME"] / "desktop"
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            prefix = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"{self._private_storage_assignments(layout)}"
+                f"KILIX_DESKTOP_DIR={str(desktop)!r}\n"
+            )
+            created = self._run_library(
+                prefix + "allocate_coordinated_private_storage\n", env
+            )
+            self.assertEqual(created.returncode, 0, created.stderr)
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o700)
+
+            sentinel = desktop / "keep-me"
+            sentinel.write_text("preserved\n")
+            desktop.chmod(0o755)
+            repaired = self._run_library(
+                prefix + "allocate_coordinated_private_storage\n", env
+            )
+            self.assertEqual(repaired.returncode, 0, repaired.stderr)
+            self.assertEqual(stat.S_IMODE(desktop.stat().st_mode), 0o700)
+            self.assertEqual(sentinel.read_text(), "preserved\n")
+
+    def test_private_storage_allocator_honors_custom_in_root_prebuilt(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            layout = self._private_storage_layout(data)
+            custom = layout["KILIX_STORAGE_HOME"] / "bundles" / "custom.app"
+            layout["KILIX_PREBUILT_HOME"] = custom
+            desktop = layout["PLEB_DATA_HOME"] / "desktop"
+            custom.parent.mkdir(parents=True)
+            custom.parent.chmod(0o755)
+            sentinel = custom.parent / "keep-me"
+            sentinel.write_text("preserved\n")
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"{self._private_storage_assignments(layout)}"
+                f"KILIX_DESKTOP_DIR={str(desktop)!r}\n"
+                "allocate_coordinated_private_storage\n"
+            )
+            result = self._run_library(body, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(stat.S_IMODE(custom.stat().st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(custom.parent.stat().st_mode), 0o700)
+            self.assertEqual(sentinel.read_text(), "preserved\n")
+            self.assertFalse(
+                (layout["KILIX_STORAGE_HOME"] / "prebuilt" / "kitty.app").exists()
+            )
+
+    def test_private_storage_allocator_rejects_prebuilt_parent_symlink(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            layout = self._private_storage_layout(data)
+            custom = layout["KILIX_STORAGE_HOME"] / "bundles" / "custom.app"
+            layout["KILIX_PREBUILT_HOME"] = custom
+            target = home / "operator-bundles"
+            target.mkdir(parents=True, mode=0o755)
+            layout["KILIX_STORAGE_HOME"].mkdir(parents=True)
+            custom.parent.symlink_to(target, target_is_directory=True)
+            desktop = layout["PLEB_DATA_HOME"] / "desktop"
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"{self._private_storage_assignments(layout)}"
+                f"KILIX_DESKTOP_DIR={str(desktop)!r}\n"
+                "allocate_coordinated_private_storage\n"
+            )
+            result = self._run_library(body, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("KILIX_PREBUILT_HOME must not contain symlinks", result.stderr)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+            self.assertFalse((target / "custom.app").exists())
+
+    def test_updater_allocates_private_categories_before_first_lock_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            layout = self._private_storage_layout(data)
+            desktop = layout["PLEB_DATA_HOME"] / "desktop"
+            custom = layout["KILIX_STORAGE_HOME"] / "bundles" / "custom.app"
+            layout["KILIX_PREBUILT_HOME"] = custom
+            # Exercise repair as well as fresh child allocation.
+            for path in (data, layout["PLEB_STORAGE_HOME"], layout["PLEB_STATE_HOME"]):
+                path.mkdir(parents=True, exist_ok=True)
+                path.chmod(0o755)
+            custom.parent.mkdir(parents=True, exist_ok=True)
+            custom.parent.chmod(0o755)
+            assignments = self._private_storage_assignments(layout)
+            paths = [*layout.values(), custom.parent, desktop]
+            quoted_paths = " ".join(repr(str(path)) for path in paths)
+            body = (
+                "set -euo pipefail\n"
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                f"HOME={str(home)!r}\n"
+                f"{assignments}"
+                f"KILIX_DESKTOP_DIR={str(desktop)!r}\n"
+                f"source {str(UPDATE)!r}\n"
+                "allocate_coordinated_private_storage\n"
+                f"for d in {quoted_paths}; do "
+                "[ -d \"$d\" ] && [ ! -L \"$d\" ] && "
+                "[ \"$(stat -c '%u:%a' -- \"$d\")\" = \"$(id -u):700\" ]; done\n"
+                "[ ! -e \"$PLEB_STATE_HOME/update.lock\" ]\n"
+                "acquire_update_lock\n"
+                "[ \"$(stat -c '%a' -- \"$PLEB_STATE_HOME/update.lock\")\" = 600 ]\n"
+            )
+            result = subprocess.run(
+                ["bash", "-c", body], text=True, capture_output=True, check=False
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_updater_root_guard_says_to_run_without_sudo(self):
+        with tempfile.TemporaryDirectory() as td:
+            body = (
+                "set -euo pipefail\n"
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                f"HOME={td!r}\nPLEB_STATE_HOME={str(Path(td) / 'state')!r}\n"
+                f"source {str(UPDATE)!r}\n"
+                "require_unprivileged_updater 0\n"
+            )
+            result = subprocess.run(
+                ["bash", "-c", body], text=True, capture_output=True, check=False
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("run plebian-os-update without sudo", result.stderr)
 
     def test_provision_lock_wraps_the_complete_mutation_window(self):
         source = PROVISION.read_text()
@@ -255,6 +488,14 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         self.assertLess(apt_mutation, provenance)
         self.assertLess(provenance, released)
         self.assertIn('write_session_default PLEB_STATE_HOME "$PLEB_STATE_HOME"', source)
+
+        update = UPDATE.read_text()
+        update_allocated = update.index("\n    allocate_coordinated_private_storage\n")
+        update_acquired = update.index("\n    acquire_update_lock\n")
+        self.assertLess(update_allocated, update_acquired)
+        self.assertLess(
+            update.index('require_unprivileged_updater "$EUID"'), update_allocated
+        )
 
     def test_component_versions_are_exact_not_substrings(self):
         env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}

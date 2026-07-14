@@ -23,11 +23,20 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Plebian-OS/Pleb sessions, independent of the selected desktop provider.
   Provider-owned state is untouched, so standalone Kilix-95 keeps its XP
   wallpaper, and existing Pleb desktop state is never replaced.
-- Allocate the shared runtime-data root and every coordinated component root
-  as user-owned `0700` directories before the first provisioning lock, cache,
-  or provenance probe can create them under firstboot's conventional umask.
-  Kilix-95 also repairs its own private root and category boundaries on direct
-  launches, so standalone games and app state retain the same privacy contract.
+- Allocate the shared runtime-data root, every coordinated component root, and
+  every Pleb, Kilix, Kilix-95, and Plebian-OS config/state/cache/session/data,
+  build, prebuilt, and managed-desktop boundary as user-owned `0700`
+  directories before the first provisioning or update lock, cache, or
+  provenance probe can create them under a conventional umask. Nested
+  boundaries are repaired component by component without replacing their
+  contents; linked, escaped, or foreign-owned paths are rejected. Kilix-95 and
+  Pleb also reconcile the private boundaries they own on direct launches and
+  standalone operations, while genuine external desktop overrides remain
+  untouched.
+- Reject `sudo plebian-os-update` immediately with recovery guidance, and make
+  Pleb validate both fetched and direct-install Go caches before any privileged
+  staging. Traversing, linked, loosely permissioned, or unsafely owned external
+  cache paths are refused.
 
 ### Coordinated release closure
 
