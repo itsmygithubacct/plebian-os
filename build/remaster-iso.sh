@@ -257,49 +257,57 @@ fi
 # explicitly; a direct remaster derives them from the effective preseed user so
 # build-info.env and firstboot.env remain complete for the release path too.
 resolve_target_layout() {
-    local target_user="${PLEBIAN_OS_USER:-}" target_home key
-    if [ -z "$target_user" ]; then
-        target_user="$(sed -n \
-            's/^d-i[[:space:]]\+passwd\/username[[:space:]]\+string[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*$/\1/p' \
-            "$PRESEED" | tail -1)"
-    fi
-    [[ "$target_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
-        && [ "$target_user" != root ] || {
+    local configured_user="${PLEBIAN_OS_USER:-}" preseed_user target_home key
+    preseed_user="$(sed -n \
+        's/^d-i[[:space:]]\+passwd\/username[[:space:]]\+string[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*$/\1/p' \
+        "$PRESEED" | tail -1)"
+    [[ "$preseed_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+        && [ "$preseed_user" != root ] || {
         echo "could not resolve a safe regular target username for firstboot layout" >&2
         exit 1
     }
-    PLEBIAN_OS_USER="$target_user"
-    target_home="/home/$target_user"
+    if [ -n "$configured_user" ] && [ "$configured_user" != "$preseed_user" ]; then
+        echo "PLEBIAN_OS_USER=$configured_user disagrees with preseed target user $preseed_user" >&2
+        exit 1
+    fi
+    PLEBIAN_OS_USER="$preseed_user"
+    target_home="/home/$preseed_user"
 
-    : "${GPU_TERMINAL_SOURCE_HOME:=$target_home/gpu_terminal}"
+    # Only target-prefixed variables may transport guest roots across the
+    # host/guest boundary. The unprefixed names are commonly exported by a
+    # developer's live Pleb session and must never leak into installed media.
+    : "${PLEBIAN_OS_TARGET_SOURCE_HOME:=$target_home/gpu_terminal}"
     : "${PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME:=$target_home/.local/gpu_terminal}"
-    : "${PLEBIAN_OS_DIR:=$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
-    : "${PLEB_DIR:=$GPU_TERMINAL_SOURCE_HOME/pleb}"
-    : "${KILIX_DIR:=$GPU_TERMINAL_SOURCE_HOME/kilix}"
-    : "${KILIX95_DIR:=$GPU_TERMINAL_SOURCE_HOME/kilix-95}"
-    : "${PLEB_STORAGE_HOME:=$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME/pleb}"
-    : "${PLEB_CONFIG_HOME:=$PLEB_STORAGE_HOME/config}"
-    : "${PLEB_STATE_HOME:=$PLEB_STORAGE_HOME/state}"
-    : "${PLEB_CACHE_HOME:=$PLEB_STORAGE_HOME/cache}"
-    : "${PLEB_SESSION_HOME:=$PLEB_STORAGE_HOME/session}"
-    : "${PLEB_DATA_HOME:=$PLEB_STORAGE_HOME/data}"
-    : "${KILIX_STORAGE_HOME:=$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME/kilix}"
-    : "${KILIX_BUILD_DIRECTORY:=$KILIX_STORAGE_HOME/build}"
-    : "${KILIX_DATA_HOME:=$KILIX_STORAGE_HOME/data}"
-    : "${KILIX_DESKTOP_DIR:=$PLEB_DATA_HOME/desktop}"
-    : "${KILIX_PREBUILT_HOME:=$KILIX_STORAGE_HOME/prebuilt/kitty.app}"
-    : "${KILIX95_STORAGE_HOME:=$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME/kilix-95}"
-    : "${KILIX95_DATA_HOME:=$KILIX95_STORAGE_HOME/data}"
-    : "${PLEBIAN_OS_TARGET_STORAGE_HOME:=$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME/plebian-os}"
-    : "${PLEBIAN_OS_TARGET_SESSION_HOME:=$PLEBIAN_OS_TARGET_STORAGE_HOME/session}"
+    GPU_TERMINAL_SOURCE_HOME="$PLEBIAN_OS_TARGET_SOURCE_HOME"
+    GPU_TERMINAL_HOME="$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME"
+    PLEBIAN_OS_DIR="$GPU_TERMINAL_SOURCE_HOME/plebian-os"
+    PLEB_DIR="$GPU_TERMINAL_SOURCE_HOME/pleb"
+    KILIX_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix"
+    KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-95"
+    PLEB_STORAGE_HOME="$GPU_TERMINAL_HOME/pleb"
+    PLEB_CONFIG_HOME="$PLEB_STORAGE_HOME/config"
+    PLEB_STATE_HOME="$PLEB_STORAGE_HOME/state"
+    PLEB_CACHE_HOME="$PLEB_STORAGE_HOME/cache"
+    PLEB_SESSION_HOME="$PLEB_STORAGE_HOME/session"
+    PLEB_DATA_HOME="$PLEB_STORAGE_HOME/data"
+    KILIX_STORAGE_HOME="$GPU_TERMINAL_HOME/kilix"
+    KILIX_BUILD_DIRECTORY="$KILIX_STORAGE_HOME/build"
+    KILIX_DATA_HOME="$KILIX_STORAGE_HOME/data"
+    KILIX_DESKTOP_DIR="$PLEB_DATA_HOME/desktop"
+    KILIX_PREBUILT_HOME="$KILIX_STORAGE_HOME/prebuilt/kitty.app"
+    KILIX95_STORAGE_HOME="$GPU_TERMINAL_HOME/kilix-95"
+    KILIX95_DATA_HOME="$KILIX95_STORAGE_HOME/data"
+    PLEBIAN_OS_STORAGE_HOME="$GPU_TERMINAL_HOME/plebian-os"
+    PLEBIAN_OS_SESSION_HOME="$PLEBIAN_OS_STORAGE_HOME/session"
 
-    for key in GPU_TERMINAL_SOURCE_HOME PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME \
+    for key in PLEBIAN_OS_TARGET_SOURCE_HOME \
+        PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME GPU_TERMINAL_SOURCE_HOME \
+        GPU_TERMINAL_HOME PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME \
         PLEBIAN_OS_DIR PLEB_DIR KILIX_DIR KILIX95_DIR PLEB_STORAGE_HOME \
         PLEB_CONFIG_HOME PLEB_STATE_HOME PLEB_CACHE_HOME PLEB_SESSION_HOME \
         PLEB_DATA_HOME KILIX_STORAGE_HOME KILIX_BUILD_DIRECTORY \
         KILIX_DATA_HOME KILIX_DESKTOP_DIR KILIX_PREBUILT_HOME KILIX95_STORAGE_HOME \
-        KILIX95_DATA_HOME PLEBIAN_OS_TARGET_STORAGE_HOME \
-        PLEBIAN_OS_TARGET_SESSION_HOME; do
+        KILIX95_DATA_HOME; do
         case "${!key}" in
             /*) ;;
             *) echo "target layout requires absolute $key: ${!key}" >&2; exit 1 ;;
@@ -410,13 +418,13 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_UV_VERSION "${PLEBIAN_OS_UV_VERSION:-}"
         manifest_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
         manifest_kv GPU_TERMINAL_SOURCE_HOME "${GPU_TERMINAL_SOURCE_HOME:-}"
-        manifest_kv GPU_TERMINAL_HOME "${PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME:-}"
+        manifest_kv GPU_TERMINAL_HOME "${GPU_TERMINAL_HOME:-}"
         manifest_kv PLEBIAN_OS_REPO "${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
         manifest_kv PLEBIAN_OS_BRANCH "${PLEBIAN_OS_BRANCH:-}"
         manifest_kv PLEBIAN_OS_REF "${PLEBIAN_OS_REF:-}"
         manifest_kv PLEBIAN_OS_DIR "${PLEBIAN_OS_DIR:-}"
-        manifest_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_TARGET_STORAGE_HOME:-}"
-        manifest_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_TARGET_SESSION_HOME:-}"
+        manifest_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_STORAGE_HOME:-}"
+        manifest_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_SESSION_HOME:-}"
         manifest_kv PLEBIAN_OS_CDIMAGE "$PLEBIAN_OS_CDIMAGE"
         manifest_kv PLEB_REPO "${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
         manifest_kv PLEB_BRANCH "${PLEB_BRANCH:-}"
@@ -475,7 +483,7 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_UV_VERSION "${PLEBIAN_OS_UV_VERSION:-}"
         env_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
         env_kv GPU_TERMINAL_SOURCE_HOME "${GPU_TERMINAL_SOURCE_HOME:-}"
-        env_kv GPU_TERMINAL_HOME "${PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME:-}"
+        env_kv GPU_TERMINAL_HOME "${GPU_TERMINAL_HOME:-}"
         env_kv PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
         env_kv PLEBIAN_OS_RELEASE "${PLEBIAN_OS_RELEASE:-}"
         env_kv PLEBIAN_OS_RELEASE_MODE "${PLEBIAN_OS_RELEASE_MODE:-0}"
@@ -486,8 +494,8 @@ write_firstboot_env() {
         # separately retains the human release tag as artifact metadata.
         env_kv PLEBIAN_OS_REF "$runtime_os_ref"
         env_kv PLEBIAN_OS_DIR "${PLEBIAN_OS_DIR:-}"
-        env_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_TARGET_STORAGE_HOME:-}"
-        env_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_TARGET_SESSION_HOME:-}"
+        env_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_STORAGE_HOME:-}"
+        env_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_SESSION_HOME:-}"
         env_kv PLEB_REPO "${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
         env_kv PLEB_BRANCH "${PLEB_BRANCH:-}"
         env_kv PLEB_REF "${PLEB_REF:-}"

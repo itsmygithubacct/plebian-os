@@ -17,12 +17,41 @@ set -uo pipefail
 
 DRY_RUN=0
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
-GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"
-PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
-PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
+PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-os/session}"
 
 log()  { printf '\033[1;36m[deps]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[deps]\033[0m %s\n' "$*" >&2; }
+
+prepare_root_session_home() {
+    local resolved metadata
+    case "$PLEBIAN_OS_ROOT_SESSION_HOME" in
+        /var/lib/plebian-os/*) ;;
+        *) warn "privileged staging must stay under /var/lib/plebian-os"; return 1 ;;
+    esac
+    resolved="$(readlink -m -- "$PLEBIAN_OS_ROOT_SESSION_HOME" 2>/dev/null)" \
+        || { warn "could not resolve privileged staging path"; return 1; }
+    [ "$resolved" = "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
+        || { warn "privileged staging path contains a symlink"; return 1; }
+    [ ! -L "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
+        || { warn "privileged staging path is a symlink"; return 1; }
+    if [ -e "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
+        && [ ! -d "$PLEBIAN_OS_ROOT_SESSION_HOME" ]; then
+        warn "privileged staging path is not a directory"
+        return 1
+    fi
+    install -d -o root -g root -m 0700 -- "$PLEBIAN_OS_ROOT_SESSION_HOME" \
+        || { warn "could not create privileged staging directory"; return 1; }
+    [ -d "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
+        && [ ! -L "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
+        || { warn "privileged staging directory became unsafe"; return 1; }
+    chown root:root -- "$PLEBIAN_OS_ROOT_SESSION_HOME" \
+        && chmod 0700 -- "$PLEBIAN_OS_ROOT_SESSION_HOME" \
+        || { warn "could not secure privileged staging directory"; return 1; }
+    metadata="$(stat -c '%u:%g:%a' -- "$PLEBIAN_OS_ROOT_SESSION_HOME" 2>/dev/null)" \
+        || { warn "could not inspect privileged staging directory"; return 1; }
+    [ "$metadata" = 0:0:700 ] \
+        || { warn "privileged staging directory must be root:root mode 0700"; return 1; }
+}
 
 # "group label|space-separated packages" — grouped so a failure is easy to
 # locate. The base graphical stack + git/curl are usually already present from
@@ -96,6 +125,7 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     uv_url="https://astral.sh/uv/${uv_ver:+$uv_ver/}install.sh"
     log "installing uv (operator-requested; $uv_url -> /usr/local/bin)"
     if [ "$DRY_RUN" = 1 ]; then
+        echo "    + stage the uv installer under $PLEBIAN_OS_ROOT_SESSION_HOME (root:root 0700)"
         echo "    + curl -LsSf $uv_url -o <tmp>"
         if [ -n "$uv_sha" ]; then echo "    + verify sha256=$uv_sha"
         else echo "    + (WARNING: PLEBIAN_OS_UV_INSTALLER_SHA256 unset — installer unverified)"; fi
@@ -104,13 +134,13 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     else
         uv_tmp=""; uv_stage=""
         if [ "$uv_ok" = 1 ]; then
-            if mkdir -p "$PLEBIAN_OS_SESSION_HOME"; then
-                uv_tmp="$(mktemp "$PLEBIAN_OS_SESSION_HOME/uv-installer.XXXXXX")" \
+            if prepare_root_session_home; then
+                uv_tmp="$(mktemp "$PLEBIAN_OS_ROOT_SESSION_HOME/uv-installer.XXXXXX")" \
                     || { warn "could not create uv installer temp file"; uv_ok=0; }
-                uv_stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/uv-stage.XXXXXX")" \
+                uv_stage="$(mktemp -d "$PLEBIAN_OS_ROOT_SESSION_HOME/uv-stage.XXXXXX")" \
                     || { warn "could not create uv staging directory"; uv_ok=0; }
             else
-                warn "could not create Plebian-OS session directory"
+                warn "could not prepare privileged uv staging directory"
                 uv_ok=0
             fi
         fi
