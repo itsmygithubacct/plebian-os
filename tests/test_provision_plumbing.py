@@ -153,6 +153,10 @@ class ProvisionPlumbingTests(unittest.TestCase):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn("ensure_plebian_os_checkout()", provision)
         self.assertIn(
+            'remote="$(as_target_readonly git -C "$dir" config --get remote.origin.url',
+            provision,
+        )
+        self.assertIn(
             'as_user git clone "${clone_args[@]}" "$PLEBIAN_OS_REPO" "$PLEBIAN_OS_DIR"',
             provision,
         )
