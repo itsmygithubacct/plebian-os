@@ -102,7 +102,8 @@ class UpdateLifecycleTests(unittest.TestCase):
             "rollback_stack_transaction",
             "restore_root_stack_snapshot",
             'record_stack_checkout "$PLEB_DIR" pleb pleb',
-            'snapshot_stack_path "$KILIX_DIR/kitty.app" kilix-prebuilt',
+            'snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt',
+            "restore_kilix_engine_generation",
             "/usr/local/bin/pleb-session",
             "/usr/share/xsessions/pleb.desktop",
             "/usr/local/bin/kilix",
@@ -126,6 +127,8 @@ export PLEB_STATE_HOME="$work/state"
 export PLEB_DIR="$work/pleb"
 export PLEBIAN_OS_DIR="$work/os"
 export KILIX_DIR="$work/kilix"
+export KILIX_STORAGE_HOME="$work/kilix-storage"
+export KILIX_PREBUILT_HOME="$KILIX_STORAGE_HOME/prebuilt/kitty.app"
 export KILIX95_DIR="$work/kilix95"
 export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
 mkdir -p "$HOME" "$PLEB_STATE_HOME"
@@ -143,8 +146,8 @@ init_repo "$PLEB_DIR"
 init_repo "$PLEBIAN_OS_DIR"
 init_repo "$KILIX_DIR"
 init_repo "$KILIX95_DIR"
-mkdir -p "$KILIX_DIR/kitty.app/bin"
-printf '%s\n' old-engine >"$KILIX_DIR/kitty.app/bin/kitty"
+mkdir -p "$KILIX_PREBUILT_HOME/bin"
+printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 printf '%s\n' old-root >"$work/root-output"
 cp "$work/root-output" "$work/root-backup"
 git -C "$PLEB_DIR" rev-parse HEAD >"$work/old-head"
@@ -161,7 +164,7 @@ record_stack_checkout "$PLEB_DIR" pleb pleb
 record_stack_checkout "$PLEBIAN_OS_DIR" os plebian-os
 record_stack_checkout "$KILIX_DIR" kilix kilix
 record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
-snapshot_stack_path "$KILIX_DIR/kitty.app" kilix-prebuilt
+snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
 _STACK_ROOT_TXN_DIR=/var/lib/plebian-os/update-rollback.test
 _STACK_TXN_ACTIVE=1
 _STACK_TXN_COMMITTED=0
@@ -170,7 +173,7 @@ trap stack_transaction_cleanup EXIT
 printf '%s\n' new >"$PLEB_DIR/tracked"
 git -C "$PLEB_DIR" add tracked
 git -C "$PLEB_DIR" commit -q -m new
-printf '%s\n' new-engine >"$KILIX_DIR/kitty.app/bin/kitty"
+printf '%s\n' new-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 printf '%s\n' new-root >"$work/root-output"
 export PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER="$boundary"
 test_fail_after_boundary "$boundary"
@@ -196,7 +199,8 @@ test_fail_after_boundary "$boundary"
                     (work / "old-head").read_text().strip(),
                 )
                 self.assertEqual(
-                    (work / "kilix" / "kitty.app" / "bin" / "kitty")
+                    (work / "kilix-storage" / "prebuilt" / "kitty.app" /
+                     "bin" / "kitty")
                     .read_text().strip(),
                     "old-engine",
                 )

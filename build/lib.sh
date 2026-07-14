@@ -8,7 +8,14 @@
 # release, so we read the exact filename + checksum from the mirror's signed
 # SHA256SUMS rather than hardcoding a version.
 : "${PLEBIAN_OS_CDIMAGE:=https://cdimage.debian.org/debian-cd/current/amd64/iso-cd}"
-: "${PLEBIAN_OS_CACHE:=${XDG_CACHE_HOME:-$HOME/.cache}/plebian-os}"
+: "${GPU_TERMINAL_HOME:=$HOME/.local/gpu_terminal}"
+: "${PLEBIAN_OS_STORAGE_HOME:=$GPU_TERMINAL_HOME/plebian-os}"
+: "${PLEBIAN_OS_CACHE:=$PLEBIAN_OS_STORAGE_HOME/cache}"
+: "${PLEBIAN_OS_BUILD_HOME:=$PLEBIAN_OS_STORAGE_HOME/build}"
+: "${PLEBIAN_OS_SESSION_HOME:=$PLEBIAN_OS_STORAGE_HOME/session}"
+: "${PLEBIAN_OS_ARTIFACTS:=$PLEBIAN_OS_STORAGE_HOME/artifacts}"
+export GPU_TERMINAL_HOME PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_CACHE
+export PLEBIAN_OS_BUILD_HOME PLEBIAN_OS_SESSION_HOME PLEBIAN_OS_ARTIFACTS
 : "${PLEBIAN_OS_DEBIAN_CD_KEY_URL:=https://www.debian.org/CD/key-DA87E80D6294BE9B.txt}"
 : "${PLEBIAN_OS_DEBIAN_CD_KEY_FINGERPRINT:=DF9B9C49EAA9298432589D76DA87E80D6294BE9B}"
 : "${PLEBIAN_OS_NETINST_URL:=}"

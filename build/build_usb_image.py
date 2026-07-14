@@ -480,8 +480,11 @@ def main() -> None:
     ap.add_argument("--device", help="target USB device, e.g. /dev/sdX "
                     "(omit to build the ISO only)")
     ap.add_argument("--iso", type=Path, help="flash this prebuilt ISO, skip building")
-    ap.add_argument("--out", type=Path, default=None,
-                    help="ISO output path when building (default: plebian-os-<name>.iso)")
+    ap.add_argument(
+        "--out", type=Path, default=None,
+        help=("ISO output path when building (release default: "
+              "plebian-os-<version>-amd64.iso; otherwise "
+              "plebian-os-<name>.iso)"))
     ap.add_argument("--autoboot", action="store_true",
                     help="build a hands-off stick that auto-selects the install "
                          "(it then ERASES the booted machine's disk with no prompt)")
@@ -526,7 +529,8 @@ def main() -> None:
         if args.with_ssh and cfg.password == "plebian":
             die("--with-ssh refuses the shipped 'plebian' password; choose --password")
 
-    out_iso = (args.iso or args.out or (REPO / f"plebian-os-{cfg.name}.iso")).resolve()
+    out_iso = (args.iso or args.out or (vm.storage_dir("artifacts") /
+                                        vm.default_iso_filename(cfg.name))).resolve()
     unattended_disk = args.autoboot or args.unattended_disk
     confirm_summary(cfg, out_iso, args.device, args.autoboot, unattended_disk, args.yes)
 

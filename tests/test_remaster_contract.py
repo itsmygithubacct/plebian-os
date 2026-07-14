@@ -39,6 +39,39 @@ class RemasterContractTests(unittest.TestCase):
         for key in ("PLEBIAN_OS_AUTOBOOT", "PLEBIAN_OS_UNATTENDED_DISK"):
             self.assertIn(key, manifest)
 
+    def test_direct_remaster_derives_complete_guest_layout_from_preseed(self):
+        start = self.source.index("resolve_target_layout() {")
+        end = self.source.index("\nresolve_target_layout\n", start)
+        resolver = self.source[start:end]
+        with tempfile.TemporaryDirectory() as td:
+            preseed = Path(td) / "preseed.cfg"
+            preseed.write_text("d-i passwd/username string operator\n")
+            harness = (
+                "set -euo pipefail\n"
+                f"PRESEED={preseed!s}\n"
+                "PLEBIAN_OS_USER=\n"
+                f"{resolver}\n"
+                "resolve_target_layout\n"
+                "printf '%s\\n' \"$PLEBIAN_OS_USER\" "
+                "\"$GPU_TERMINAL_SOURCE_HOME\" \"$PLEB_DIR\" "
+                "\"$KILIX_DIR\" \"$KILIX95_DIR\" \"$PLEBIAN_OS_DIR\" "
+                "\"$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME\"\n"
+            )
+            env = {"PATH": os.environ["PATH"]}
+            result = subprocess.run(
+                ["bash", "-c", harness], env=env, text=True,
+                capture_output=True, check=True,
+            )
+        self.assertEqual(result.stdout.splitlines(), [
+            "operator",
+            "/home/operator/gpu_terminal",
+            "/home/operator/gpu_terminal/pleb",
+            "/home/operator/gpu_terminal/kilix",
+            "/home/operator/gpu_terminal/kilix-95",
+            "/home/operator/gpu_terminal/plebian-os",
+            "/home/operator/.local/gpu_terminal",
+        ])
+
     def test_effective_preseed_controls_release_ssh_safety(self):
         self.assertIn("sed '/^[[:space:]]*#/d' \"$PRESEED\"", self.source)
         self.assertIn("(ssh-server|openssh-server)", self.source)
@@ -100,7 +133,10 @@ class RemasterContractTests(unittest.TestCase):
         )
         self.assertEqual(self.source.count(validation), 1)
         self.assertIn(f"\n{validation}\n", self.source)
-        self.assertNotIn("/home/", self.source)
+        # Installer assets stay checkout-relative. A dynamic `/home/$user`
+        # target layout is expected for firstboot metadata, but a developer's
+        # literal home path must never become an artwork dependency.
+        self.assertNotRegex(self.source, r"/home/[A-Za-z0-9_.-]+/")
         self.assert_in_order(
             compact,
             validation,

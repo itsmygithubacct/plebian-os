@@ -11,12 +11,13 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
+. "$HERE/lib.sh"
 
 NAME="${PLEBIAN_OS_ACCEPTANCE_NAME:-plebian-acceptance}"
 RAM="${PLEBIAN_OS_ACCEPTANCE_RAM:-4096}"
 CPUS="${PLEBIAN_OS_ACCEPTANCE_CPUS:-2}"
 DISK="${PLEBIAN_OS_ACCEPTANCE_DISK_GB:-20}"
-OUT="${PLEBIAN_OS_ACCEPTANCE_ISO:-$ROOT/plebian-os-acceptance.iso}"
+OUT="${PLEBIAN_OS_ACCEPTANCE_ISO:-$PLEBIAN_OS_ARTIFACTS/plebian-os-acceptance.iso}"
 
 # Acceptance needs SSH, autoboot, and unattended partitioning, which a
 # publishable release image correctly forbids. Load the coordinated release
