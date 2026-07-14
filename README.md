@@ -88,8 +88,8 @@ v0.1.1 updater has a fixed seven-file OS-layer manifest: its first invocation
 can deploy the new updater and provisioner, but cannot deploy the newly added
 three files (the wallpaper, attribution, and license text). The second invocation
 runs the new ten-file transaction, installs all three validated payloads,
-commits the complete stack, and only then seeds the wallpaper for a desktop with
-no existing Kilix state. Both invocations
+commits the complete stack, and only then seeds the wallpaper for a Pleb session
+with no existing desktop state. Both invocations
 are required; do not run a bare `sudo plebian-os-provision` between them because
 sudo does not preserve all coordinated provider/ref/kiosk settings. The
 new provisioner's validated-checkout fallback exists only for an externally

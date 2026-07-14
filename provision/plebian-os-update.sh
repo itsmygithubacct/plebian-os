@@ -51,17 +51,17 @@ desktop_wallpaper_matches_expected_hash() {
 seed_desktop_wallpaper_state_if_absent() {
     local state_dir="$1" wallpaper="$2" state_path="$1/.state.json" owner rc
     if [ -e "$state_path" ] || [ -L "$state_path" ]; then
-        log "preserving existing Kilix desktop state (including wallpaper): $state_path"
+        log "preserving existing Pleb desktop state (including wallpaper): $state_path"
         return 0
     fi
     mkdir -p -- "$state_dir" \
-        || { warn "could not create Kilix desktop state directory: $state_dir"; return 1; }
+        || { warn "could not create Pleb desktop state directory: $state_dir"; return 1; }
     [ -d "$state_dir" ] && [ ! -L "$state_dir" ] \
-        || { warn "Kilix desktop state path is not a safe directory: $state_dir"; return 1; }
+        || { warn "Pleb desktop state path is not a safe directory: $state_dir"; return 1; }
     owner="$(stat -c '%u' "$state_dir" 2>/dev/null)" \
-        || { warn "could not inspect Kilix desktop state directory: $state_dir"; return 1; }
+        || { warn "could not inspect Pleb desktop state directory: $state_dir"; return 1; }
     [ "$owner" = "$(id -u)" ] \
-        || { warn "Kilix desktop state directory is not owned by the updating user: $state_dir"; return 1; }
+        || { warn "Pleb desktop state directory is not owned by the updating user: $state_dir"; return 1; }
 
     if python3 - "$state_dir" "$state_path" "$wallpaper" <<'PY'
 import json
@@ -97,10 +97,10 @@ PY
     else
         rc=$?
         if [ "$rc" = 17 ]; then
-            log "Kilix desktop state appeared concurrently; preserving it"
+            log "Pleb desktop state appeared concurrently; preserving it"
             return 0
         fi
-        warn "could not seed Kilix desktop wallpaper state"
+        warn "could not seed Pleb desktop wallpaper state"
         return 1
     fi
 }
@@ -161,7 +161,7 @@ seed_desktop_wallpaper_after_commit() {
         return 1
     }
     state_dir="$(selected_desktop_wallpaper_state_dir)" || {
-        log "desktop provider $KILIX_DESKTOP_PROVIDER does not use managed Kilix wallpaper state"
+        log "desktop provider $KILIX_DESKTOP_PROVIDER does not use managed Pleb wallpaper state"
         return 0
     }
     case "$state_dir" in

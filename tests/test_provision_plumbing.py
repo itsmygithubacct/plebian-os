@@ -208,6 +208,11 @@ class ProvisionPlumbingTests(unittest.TestCase):
                 self.assertIn('checkout "$PLEB_BRANCH"', text)
                 self.assertIn('checkout --track -b "$PLEB_BRANCH"', text)
                 self.assertIn('merge --ff-only "origin/$PLEB_BRANCH"', text)
+                if path.name == "plebian-os-provision.sh":
+                    self.assertIn(
+                        'current="$(as_target_readonly git -C "$PLEB_DIR"',
+                        text,
+                    )
 
     def test_preseed_copies_build_manifest(self):
         text = (ROOT / "preseed" / "preseed.cfg").read_text()
