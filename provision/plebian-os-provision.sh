@@ -176,6 +176,104 @@ validate_target_user() {
     [ -x "$shell" ] || die "target user $TARGET_USER has an unusable login shell: $shell"
 }
 
+ensure_private_storage_root() {
+    local path="$1" anchor="$2" label="$3" resolved anchor_real path_real metadata
+    case "$path" in
+        /*) ;;
+        *) die "$label must be an absolute path: $path" ;;
+    esac
+    case "$path" in
+        "$anchor"/*) ;;
+        *) die "$label must be a strict descendant of $anchor: $path" ;;
+    esac
+
+    # readlink -m resolves both dot components and every existing symlink.  An
+    # exact match therefore establishes a normal, symlink-free path before an
+    # as-user mkdir/chmod can touch it.  Repeat the check after creation to
+    # catch a path that changed during allocation.
+    resolved="$(readlink -m -- "$path" 2>/dev/null)" \
+        || die "could not resolve $label: $path"
+    [ "$resolved" = "$path" ] \
+        || die "$label must not contain symlinks or non-normal components: $path"
+
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) install -d -m 0700 $path"
+        return 0
+    fi
+
+    as_user install -d -m 0700 -- "$path" \
+        || die "could not create or secure $label as $TARGET_USER: $path"
+    resolved="$(readlink -m -- "$path" 2>/dev/null)" \
+        || die "could not resolve allocated $label: $path"
+    if [ "$resolved" != "$path" ] || [ ! -d "$path" ] || [ -L "$path" ]; then
+        die "$label became an unsafe directory during allocation: $path"
+    fi
+
+    anchor_real="$(readlink -f -- "$anchor" 2>/dev/null)" \
+        || die "could not resolve $label parent: $anchor"
+    path_real="$(readlink -f -- "$path" 2>/dev/null)" \
+        || die "could not resolve allocated $label: $path"
+    case "$path_real" in
+        "$anchor_real"/*) ;;
+        *) die "$label escaped its private parent $anchor: $path" ;;
+    esac
+
+    metadata="$(stat -c '%u:%a' -- "$path" 2>/dev/null)" \
+        || die "could not inspect allocated $label: $path"
+    [ "$metadata" = "$TARGET_UID:700" ] \
+        || die "$label must be owned by $TARGET_USER with mode 0700: $path ($metadata)"
+}
+
+allocate_coordinated_private_storage() {
+    local resolved home_real data_real i
+    local -a labels roots
+    case "$GPU_TERMINAL_HOME" in
+        /*) ;;
+        *) die "GPU_TERMINAL_HOME must be an absolute path: $GPU_TERMINAL_HOME" ;;
+    esac
+    case "$GPU_TERMINAL_HOME" in
+        "$USER_HOME"/*) ;;
+        *) die "GPU_TERMINAL_HOME must be a strict descendant of $USER_HOME: $GPU_TERMINAL_HOME" ;;
+    esac
+    resolved="$(readlink -m -- "$GPU_TERMINAL_HOME" 2>/dev/null)" \
+        || die "could not resolve GPU_TERMINAL_HOME: $GPU_TERMINAL_HOME"
+    [ "$resolved" = "$GPU_TERMINAL_HOME" ] \
+        || die "GPU_TERMINAL_HOME must not contain symlinks or non-normal components: $GPU_TERMINAL_HOME"
+
+    # Treat the target user's existing home as the trust anchor.  The generic
+    # helper establishes the shared data root first; component roots can then
+    # be proven to remain strict real-path descendants of it.
+    ensure_private_storage_root "$GPU_TERMINAL_HOME" "$USER_HOME" \
+        "GPU_TERMINAL_HOME"
+    if [ "$DRY_RUN" != 1 ]; then
+        home_real="$(readlink -f -- "$USER_HOME" 2>/dev/null)" \
+            || die "could not resolve target home: $USER_HOME"
+        data_real="$(readlink -f -- "$GPU_TERMINAL_HOME" 2>/dev/null)" \
+            || die "could not resolve allocated GPU_TERMINAL_HOME: $GPU_TERMINAL_HOME"
+        case "$data_real" in
+            "$home_real"/*) ;;
+            *) die "GPU_TERMINAL_HOME escaped $TARGET_USER's home: $GPU_TERMINAL_HOME" ;;
+        esac
+    fi
+
+    labels=(
+        PLEB_STORAGE_HOME
+        KILIX_STORAGE_HOME
+        KILIX95_STORAGE_HOME
+        PLEBIAN_OS_STORAGE_HOME
+    )
+    roots=(
+        "$PLEB_STORAGE_HOME"
+        "$KILIX_STORAGE_HOME"
+        "$KILIX95_STORAGE_HOME"
+        "$PLEBIAN_OS_STORAGE_HOME"
+    )
+    for i in "${!roots[@]}"; do
+        ensure_private_storage_root "${roots[$i]}" "$GPU_TERMINAL_HOME" \
+            "${labels[$i]}"
+    done
+}
+
 PROVISION_LOCK_FD=""
 DESKTOP_WALLPAPER_TMP=""
 DESKTOP_WALLPAPER_CREATED_DIRS=()
@@ -1762,6 +1860,11 @@ PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-o
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 export GPU_TERMINAL_SOURCE_HOME GPU_TERMINAL_HOME
 export PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME
+
+# Allocate the shared private data tree before even the provision/update lock
+# is created.  This prevents the first target-user write from inheriting the
+# firstboot service's permissive umask and makes reruns repair older 0755 roots.
+allocate_coordinated_private_storage
 
 log "plebian-os  : version $PLEBIAN_OS_VERSION"
 log "target user : $TARGET_USER ($USER_HOME)"

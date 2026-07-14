@@ -143,12 +143,114 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertEqual(lock.stat().st_uid, user.pw_uid)
             self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
 
+    def test_private_storage_allocator_repairs_roots_without_replacing_data(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            roots = [
+                data,
+                data / "pleb",
+                data / "kilix",
+                data / "kilix-95",
+                data / "plebian-os",
+            ]
+            for root in roots:
+                root.mkdir(parents=True, exist_ok=True)
+                root.chmod(0o755)
+            sentinel = roots[3] / "keep-me"
+            sentinel.write_text("preserved\n")
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"GPU_TERMINAL_HOME={str(data)!r}\n"
+                f"PLEB_STORAGE_HOME={str(roots[1])!r}\n"
+                f"KILIX_STORAGE_HOME={str(roots[2])!r}\n"
+                f"KILIX95_STORAGE_HOME={str(roots[3])!r}\n"
+                f"PLEBIAN_OS_STORAGE_HOME={str(roots[4])!r}\n"
+                "allocate_coordinated_private_storage\n"
+                "allocate_coordinated_private_storage\n"
+            )
+            result = self._run_library(body, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(sentinel.read_text(), "preserved\n")
+            for root in roots:
+                with self.subTest(root=root):
+                    self.assertFalse(root.is_symlink())
+                    self.assertEqual(root.stat().st_uid, user.pw_uid)
+                    self.assertEqual(stat.S_IMODE(root.stat().st_mode), 0o700)
+
+    def test_private_storage_allocator_rejects_out_of_tree_component(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            outside = home / "operator-data"
+            home.mkdir()
+            outside.mkdir(mode=0o755)
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"GPU_TERMINAL_HOME={str(data)!r}\n"
+                f"PLEB_STORAGE_HOME={str(outside)!r}\n"
+                f"KILIX_STORAGE_HOME={str(data / 'kilix')!r}\n"
+                f"KILIX95_STORAGE_HOME={str(data / 'kilix-95')!r}\n"
+                f"PLEBIAN_OS_STORAGE_HOME={str(data / 'plebian-os')!r}\n"
+                "allocate_coordinated_private_storage\n"
+            )
+            result = self._run_library(body, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("strict descendant", result.stderr)
+            self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o755)
+
+    def test_private_storage_allocator_rejects_symlink_root(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td) / "home"
+            data = home / ".local" / "gpu_terminal"
+            target = home / "operator-data"
+            data.mkdir(parents=True)
+            target.mkdir(mode=0o755)
+            (data / "pleb").symlink_to(target, target_is_directory=True)
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"GPU_TERMINAL_HOME={str(data)!r}\n"
+                f"PLEB_STORAGE_HOME={str(data / 'pleb')!r}\n"
+                f"KILIX_STORAGE_HOME={str(data / 'kilix')!r}\n"
+                f"KILIX95_STORAGE_HOME={str(data / 'kilix-95')!r}\n"
+                f"PLEBIAN_OS_STORAGE_HOME={str(data / 'plebian-os')!r}\n"
+                "allocate_coordinated_private_storage\n"
+            )
+            result = self._run_library(body, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must not contain symlinks", result.stderr)
+            self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+
     def test_provision_lock_wraps_the_complete_mutation_window(self):
         source = PROVISION.read_text()
+        paths_resolved = source.rindex(
+            'PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-'
+        )
+        allocated = source.rindex("\nallocate_coordinated_private_storage\n")
         acquired = source.rindex("\nacquire_provision_lock\n")
         apt_mutation = source.rindex("\nconfigure_apt_snapshot\n")
         provenance = source.rindex("\nwrite_source_tool_manifest\n")
         released = source.rindex("\ncleanup; trap - EXIT\n")
+        self.assertLess(paths_resolved, allocated)
+        self.assertLess(allocated, acquired)
         self.assertLess(acquired, apt_mutation)
         self.assertLess(apt_mutation, provenance)
         self.assertLess(provenance, released)
