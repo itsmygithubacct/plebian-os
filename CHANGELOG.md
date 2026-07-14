@@ -15,6 +15,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   provenance.
 - Mark Pleb installs launched by Plebian-OS as managed installs, preserving the
   distribution's coordinated storage and provider configuration.
+- Make Pleb's complete Kilix dependency verifier authoritative for
+  `pleb update`, install a recovery guide with the preferred Plebian-OS
+  dependency helper and `libxxhash-dev` fallback, and expose that guide from
+  the Kilix-95 Help menu.
 - Seed the branded wallpaper only in Pleb's persisted desktop state for
   Plebian-OS/Pleb sessions, independent of the selected desktop provider.
   Provider-owned state is untouched, so standalone Kilix-95 keeps its XP

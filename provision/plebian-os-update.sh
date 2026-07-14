@@ -237,7 +237,7 @@ PLEB_DESKTOP="${PLEB_DESKTOP:-0}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
-# `pleb install` normally owns these four system paths. The stack updater
+# `pleb install` normally owns these five system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
 # a later failure can restore the complete previous install. Custom install
 # destinations remain supported by `pleb install` directly, but are rejected by
@@ -247,6 +247,7 @@ SESSION_BIN_DST="${SESSION_BIN_DST:-/usr/local/bin/pleb-session}"
 XSESSION_DST="${XSESSION_DST:-/usr/share/xsessions/pleb.desktop}"
 KILIX_LINK="${KILIX_LINK:-/usr/local/bin/kilix}"
 PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
+PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md}"
 
 # Plebian-OS layer self-update: the OS's own scripts (provisioner, dependency
 # installer, this update helper) come from a plebian-os checkout so an installed
@@ -292,7 +293,8 @@ require_standard_install_destinations() {
     if [ "$SESSION_BIN_DST" != /usr/local/bin/pleb-session ] \
         || [ "$XSESSION_DST" != /usr/share/xsessions/pleb.desktop ] \
         || [ "$KILIX_LINK" != /usr/local/bin/kilix ] \
-        || [ "$PLEB_LINK" != /usr/local/bin/pleb ]; then
+        || [ "$PLEB_LINK" != /usr/local/bin/pleb ] \
+        || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ]; then
         die "plebian-os-update cannot transactionally protect custom Pleb install destinations; run 'pleb install' directly"
     fi
 }
@@ -357,6 +359,7 @@ paths=(
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/pleb
+    /usr/local/share/doc/pleb/RECOVERY.md
 )
 managed_dirs=(
     /usr/local/share/plebian-os
@@ -364,6 +367,7 @@ managed_dirs=(
     /usr/local/share/doc
     /usr/local/share/doc/plebian-os
     /usr/local/share/doc/plebian-os/installer
+    /usr/local/share/doc/pleb
 )
 cleanup() {
     rc=$?
@@ -434,6 +438,7 @@ paths=(
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/pleb
+    /usr/local/share/doc/pleb/RECOVERY.md
 )
 managed_dirs=(
     /usr/local/share/plebian-os
@@ -441,6 +446,7 @@ managed_dirs=(
     /usr/local/share/doc
     /usr/local/share/doc/plebian-os
     /usr/local/share/doc/plebian-os/installer
+    /usr/local/share/doc/pleb
 )
 new_paths=()
 cleanup_new() {

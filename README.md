@@ -45,6 +45,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
      while standalone Kilix-95 retains its XP wallpaper);
    - validates and installs the artwork attribution and GPL version 2 text under
      `/usr/local/share/doc/plebian-os/`, preserving their relative link;
+   - installs Pleb's update recovery guide under
+     `/usr/local/share/doc/pleb/` so Kilix-95 can open it from Help;
    - pins Pleb as the default session (and, with `--kiosk`, enables autologin);
    - marks itself done and disables the service.
 3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
@@ -239,8 +241,8 @@ images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,
 `PLEBIAN_OS_NETINST_SHA256`, `PLEBIAN_OS_APT_SNAPSHOT`, `PLEB_REF`, `KILIX_REF`,
 `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`, and the exact
 Go version/architecture checksums before building. Simpler: set
-`PLEBIAN_OS_RELEASE=0.1.1` to load the coordinated pin manifest from
-[`releases/0.1.1.env`](releases/0.1.1.env) (see
+`PLEBIAN_OS_RELEASE=0.1.2` to load the coordinated pin manifest from
+[`releases/0.1.2.env`](releases/0.1.2.env) (see
 [RELEASING.md](RELEASING.md)). The snapshot pin covers Debian Installer and
 firstboot resolution. Snapshot switching inventories and transactionally
 restores only the sources Plebian-OS disabled, preserving operator-owned files.
