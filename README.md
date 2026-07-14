@@ -40,8 +40,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    - initializes the Kilix source submodule, installs/upgrades Go when needed,
      builds the clickable-chrome fork, and verifies Kilix uses that fork engine;
    - installs the Plebian-OS wallpaper at a stable system path and selects it
-     only in the state tree for the provider that will actually run (an existing
-     wallpaper or desktop state is preserved);
+     only in Pleb's persisted desktop state (existing Pleb state is preserved,
+     while standalone Kilix-95 retains its XP wallpaper);
    - validates and installs the artwork attribution and GPL version 2 text under
      `/usr/local/share/doc/plebian-os/`, preserving their relative link;
    - pins Pleb as the default session (and, with `--kiosk`, enables autologin);

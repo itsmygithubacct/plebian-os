@@ -81,7 +81,8 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
      `~/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}` as the coordinated
      source layout and `~/.local/gpu_terminal/` as the data root in build info,
      session defaults, and final provenance; confirm `external`, `builtin`, and
-     both `auto` provider outcomes seed only the state tree that will run;
+     both `auto` outcomes seed only Pleb's `data/desktop` state, while launching
+     Kilix-95 standalone still uses its XP wallpaper;
    - exercise a successful ten-file OS-layer update and an induced failure,
      confirming rollback restores the prior wallpaper, attribution, license,
      scripts, and state; separately test the documented v0.1.1 migration with
