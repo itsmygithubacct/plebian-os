@@ -4,7 +4,7 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.1.2] — 2026-07-14
+## [0.1.2] — 2026-07-15
 
 ### Fresh-install layout
 
@@ -40,6 +40,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ### Coordinated release closure
 
+- Serialize firstboot, direct Kilix, Pleb, and whole-stack updates through the
+  same validated private Kilix transaction lock. Fork builds atomically
+  promote contained `generations/build.*` entries with coherent `current`
+  and `previous` links and one exact Kilix-owned source stamp.
+- Restore the exact prior generation after any failed or signaled update,
+  including same-source rebuilds; retire the legacy duplicate Pleb stamp only
+  when the outer transaction commits, and collect only generations that no
+  live or protected link references. Both Kitty launchers and the canonical
+  source identity must pass bounded probes before provisioning or update can
+  commit.
 - Pin the final Pleb, Kilix, and Kilix-95 commits together with the archived
   Debian installer, package snapshot, verified Kitty fallback, and exact Go
   archives. The closure includes Kilix's current-kitty clickable-chrome rebase,

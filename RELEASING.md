@@ -8,8 +8,8 @@ network-fetched build input.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The current coordinated release is **0.1.2**; its pin manifest was created only
-after the four final component commits were known.
+The current coordinated release is **0.1.2**; its closure is finalized only
+after the four final component commits are known.
 
 ## Version commands
 
@@ -40,9 +40,10 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
 
 ## Cutting `<x.y.z>`
 
-1. Update `VERSION` and `CHANGELOG.md` in all four repositories. Create and
-   review `releases/<x.y.z>.env`; verify every URL and checksum from its official
-   upstream source.
+1. Update `VERSION` and each repository's release notes
+   (`CHANGELOG.md` in Plebian-OS/Pleb and the `README.md` release section in
+   Kilix/Kilix-95). Create and review `releases/<x.y.z>.env`; verify every URL
+   and checksum from its official upstream source.
 2. Run each repository's complete test/lint suite and integration contract
    tests. Confirm all four worktrees are clean, review their exact commits, and
    commit the coordinated changes. Immediately before tagging, confirm those
@@ -84,6 +85,16 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    `/cdrom/plebian-os/build-info.env` from `/etc/plebian-os/build-info.env`.
    In an installed guest, complete these distribution-asset checks:
 
+   - verify the Kilix engine is one physically contained
+     `generations/build.*` directory selected by a relative `current`
+     symlink, with regular executable `kitty` and `kitten` launchers,
+     byte-exact `source-id`, and the single canonical
+     `$KILIX_STATE_DIRECTORY/fork-built-ref`; reject any legacy Pleb-owned
+     duplicate stamp;
+   - exercise direct Kilix, Pleb, firstboot/provision, and whole-stack lock
+     contention; inject a failure after a same-source promotion and verify the
+     exact prior `current`, `previous`, and stamp are restored while failed
+     and otherwise unreferenced generations are safely collected;
    - verify `/usr/local/share/plebian-os/wallpapers/plebian-os.png` is
      `root:root`, mode `0644`, and has the expected tracked/build-info SHA-256;
    - verify `/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf` is
