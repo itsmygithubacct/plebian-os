@@ -204,7 +204,8 @@ set -euo pipefail
 script="$1"
 work="$2"
 boundary="$3"
-shift 3
+previous_mode="$4"
+shift 4
 export HOME="$work/home"
 export PLEB_STATE_HOME="$work/state"
 export PLEB_DIR="$work/pleb"
@@ -235,18 +236,20 @@ init_repo "$KILIX95_DIR"
 mkdir -p "$KILIX_PREBUILT_HOME/bin"
 printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 mkdir -p "$KILIX_STATE_DIRECTORY" \
-    "$KILIX_BUILD_DIRECTORY/generations/build.OldCurrent" \
-    "$KILIX_BUILD_DIRECTORY/generations/build.OldPrevious"
+    "$KILIX_BUILD_DIRECTORY/generations/build.OldCurrent"
 chmod 0700 "$KILIX_STORAGE_HOME" "$KILIX_STATE_DIRECTORY" \
     "$KILIX_BUILD_DIRECTORY"
 ln -s generations/build.OldCurrent "$KILIX_BUILD_DIRECTORY/current"
-ln -s generations/build.OldPrevious "$KILIX_BUILD_DIRECTORY/previous"
+if [ "$previous_mode" = present ]; then
+    mkdir -p "$KILIX_BUILD_DIRECTORY/generations/build.OldPrevious"
+    ln -s generations/build.OldPrevious "$KILIX_BUILD_DIRECTORY/previous"
+    printf '%s\n' older-generation \
+        >"$KILIX_BUILD_DIRECTORY/previous/sentinel"
+fi
 printf '%s\n' old-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
 chmod 0600 "$KILIX_STATE_DIRECTORY/fork-built-ref"
 printf '%s\n' old-source >"$KILIX_BUILD_DIRECTORY/current/source-id"
 printf '%s\n' old-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
-printf '%s\n' older-generation \
-    >"$KILIX_BUILD_DIRECTORY/previous/sentinel"
 printf '%s\n' old-root >"$work/root-output"
 cp "$work/root-output" "$work/root-backup"
 git -C "$PLEB_DIR" rev-parse HEAD >"$work/old-head"
@@ -289,71 +292,93 @@ test_fail_after_boundary "$boundary"
 '''
         for boundary in ("os-layer", "pleb-checkout", "pleb-install",
                          "component-update"):
-            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
-                result = subprocess.run(
-                    ["bash", "-c", harness, "harness", str(UPDATE_PATH), td,
-                     boundary],
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("restored the pre-update", result.stdout)
-                work = Path(td)
-                self.assertEqual(
-                    subprocess.check_output(
-                        ["git", "-C", str(work / "pleb"), "rev-parse", "HEAD"],
-                        text=True,
-                    ).strip(),
-                    (work / "old-head").read_text().strip(),
-                )
-                self.assertEqual(
-                    (work / "kilix-storage" / "prebuilt" / "kitty.app" /
-                     "bin" / "kitty")
-                    .read_text().strip(),
-                    "old-engine",
-                )
-                self.assertEqual((work / "root-output").read_text().strip(),
-                                 "old-root")
-                self.assertEqual(
-                    (work / "kilix-storage" / "build" / "current" /
-                     "source-id").read_text().strip(),
-                    "old-source",
-                )
-                self.assertEqual(
-                    (work / "kilix-storage" / "build" / "current" /
-                     "engine").read_text().strip(),
-                    "old-built-engine",
-                )
-                self.assertEqual(
-                    os.readlink(work / "kilix-storage" / "build" / "current"),
-                    "generations/build.OldCurrent",
-                )
-                self.assertEqual(
-                    os.readlink(work / "kilix-storage" / "build" / "previous"),
-                    "generations/build.OldPrevious",
-                )
-                self.assertEqual(
-                    (work / "kilix-storage" / "build" / "previous" /
-                     "sentinel").read_text().strip(),
-                    "older-generation",
-                )
-                self.assertFalse(
-                    (work / "kilix-storage" / "build" / "generations" /
-                     "build.NewFailed").exists()
-                )
-                self.assertEqual(
-                    (work / "kilix-storage" / "state" /
-                     "fork-built-ref").read_text().strip(),
-                    "old-stamp",
-                )
-                self.assertTrue(
-                    (work / "state" / "kilix-fork-built-ref").exists()
-                )
-                self.assertEqual(
-                    (work / "state" / "kilix-fork-built-ref").read_text().strip(),
-                    "legacy-stamp",
-                )
+            for previous_mode in ("present", "absent"):
+                with self.subTest(boundary=boundary, previous=previous_mode), \
+                        tempfile.TemporaryDirectory() as td:
+                    self._assert_injected_boundary_rollback(
+                        harness, td, boundary, previous_mode
+                    )
+
+    def _assert_injected_boundary_rollback(
+            self, harness, td, boundary, previous_mode):
+        result = subprocess.run(
+            ["bash", "-c", harness, "harness", str(UPDATE_PATH), td,
+             boundary, previous_mode],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("restored the pre-update", result.stdout)
+        work = Path(td)
+        self.assertEqual(
+            subprocess.check_output(
+                ["git", "-C", str(work / "pleb"), "rev-parse", "HEAD"],
+                text=True,
+            ).strip(),
+            (work / "old-head").read_text().strip(),
+        )
+        self.assertEqual(
+            (work / "kilix-storage" / "prebuilt" / "kitty.app" /
+             "bin" / "kitty").read_text().strip(),
+            "old-engine",
+        )
+        self.assertEqual((work / "root-output").read_text().strip(),
+                         "old-root")
+        self.assertEqual(
+            (work / "kilix-storage" / "build" / "current" /
+             "source-id").read_text().strip(),
+            "old-source",
+        )
+        self.assertEqual(
+            (work / "kilix-storage" / "build" / "current" /
+             "engine").read_text().strip(),
+            "old-built-engine",
+        )
+        self.assertEqual(
+            os.readlink(work / "kilix-storage" / "build" / "current"),
+            "generations/build.OldCurrent",
+        )
+        previous = work / "kilix-storage" / "build" / "previous"
+        expected_generations = {"build.OldCurrent"}
+        if previous_mode == "present":
+            self.assertEqual(
+                os.readlink(previous),
+                "generations/build.OldPrevious",
+            )
+            self.assertEqual(
+                (previous / "sentinel").read_text().strip(),
+                "older-generation",
+            )
+            expected_generations.add("build.OldPrevious")
+        else:
+            self.assertFalse(previous.exists() or previous.is_symlink())
+        self.assertFalse(
+            (work / "kilix-storage" / "build" / "generations" /
+             "build.NewFailed").exists()
+        )
+        self.assertEqual(
+            {
+                path.name for path in
+                (work / "kilix-storage" / "build" /
+                 "generations").iterdir()
+            },
+            expected_generations,
+        )
+        stamp = work / "kilix-storage" / "state" / "fork-built-ref"
+        self.assertEqual(stamp.read_text().strip(), "old-stamp")
+        self.assertEqual(stamp.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(stamp.stat().st_nlink, 1)
+        self.assertTrue(
+            (work / "state" / "kilix-fork-built-ref").exists()
+        )
+        self.assertEqual(
+            (work / "state" / "kilix-fork-built-ref").read_text().strip(),
+            "legacy-stamp",
+        )
+        self.assertEqual(
+            list((work / "state").glob("stack-rollback.*")), []
+        )
 
 
 class FirstbootBoundTests(unittest.TestCase):
