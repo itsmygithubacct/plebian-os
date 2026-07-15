@@ -448,8 +448,75 @@ acquire_update_lock() {
     flock -n 9 \
         || die "another Pleb/Plebian-OS update is already running (lock: $lock)"
 }
+
+_STACK_KILIX_LOCK_FD=""
+_STACK_KILIX_LOCK_BORROWED=0
+
+release_kilix_transaction_lock() {
+    if [ -n "${_STACK_KILIX_LOCK_FD:-}" ]; then
+        if [ "${_STACK_KILIX_LOCK_BORROWED:-0}" != 1 ]; then
+            flock -u "$_STACK_KILIX_LOCK_FD" 2>/dev/null || true
+            exec {_STACK_KILIX_LOCK_FD}>&-
+        fi
+        _STACK_KILIX_LOCK_FD=""
+        _STACK_KILIX_LOCK_BORROWED=0
+    fi
+}
+
+acquire_kilix_transaction_lock() {
+    local lock_path fd fd_path path_identity fd_identity existed=0
+    [ -z "${_STACK_KILIX_LOCK_FD:-}" ] || return 0
+    command -v flock >/dev/null 2>&1 \
+        || die "flock is required to serialize Kilix build/update transactions"
+    [ -d "$KILIX_STATE_DIRECTORY" ] && [ ! -L "$KILIX_STATE_DIRECTORY" ] \
+        && [ "$(stat -c '%u:%a' -- "$KILIX_STATE_DIRECTORY" 2>/dev/null)" \
+            = "$EUID:700" ] \
+        || die "KILIX_STATE_DIRECTORY must be a private allocated directory"
+    lock_path="$(cd "$KILIX_STATE_DIRECTORY" && pwd -P)/build-update.lock" \
+        || die "could not resolve the Kilix transaction lock path"
+    if [ -e "$lock_path" ] || [ -L "$lock_path" ]; then
+        existed=1
+        [ -f "$lock_path" ] && [ ! -L "$lock_path" ] \
+            && [ "$(stat -c '%u:%a:%h' -- "$lock_path" 2>/dev/null)" \
+                = "$EUID:600:1" ] \
+            || die "refusing unsafe Kilix transaction lock: $lock_path"
+    fi
+    if [ -n "${KILIX_TRANSACTION_LOCK_FD:-}" ]; then
+        fd="$KILIX_TRANSACTION_LOCK_FD"
+        [[ "$fd" =~ ^[0-9]+$ ]] \
+            || die "KILIX_TRANSACTION_LOCK_FD must be a numeric inherited descriptor"
+        fd_path="/proc/$$/fd/$fd"
+        [ -e "$fd_path" ] \
+            || die "KILIX_TRANSACTION_LOCK_FD=$fd is not open in this process"
+        _STACK_KILIX_LOCK_FD="$fd"
+        _STACK_KILIX_LOCK_BORROWED=1
+    else
+        exec {_STACK_KILIX_LOCK_FD}>"$lock_path" \
+            || die "could not open the Kilix transaction lock: $lock_path"
+        fd="$_STACK_KILIX_LOCK_FD"
+        fd_path="/proc/$$/fd/$fd"
+        _STACK_KILIX_LOCK_BORROWED=0
+    fi
+    [ "$existed" = 1 ] || chmod 0600 -- "$lock_path" \
+        || die "could not protect the Kilix transaction lock: $lock_path"
+    [ -f "$lock_path" ] && [ ! -L "$lock_path" ] \
+        && [ "$(stat -c '%u:%a:%h' -- "$lock_path" 2>/dev/null)" \
+            = "$EUID:600:1" ] \
+        || die "Kilix transaction lock is not a private regular file: $lock_path"
+    path_identity="$(stat -c '%d:%i' -- "$lock_path" 2>/dev/null)" \
+        || die "could not inspect the Kilix transaction lock"
+    fd_identity="$(stat -Lc '%d:%i' -- "$fd_path" 2>/dev/null)" \
+        || die "could not inspect the inherited Kilix transaction-lock descriptor"
+    [ "$fd_identity" = "$path_identity" ] \
+        || die "KILIX_TRANSACTION_LOCK_FD does not refer to $lock_path"
+    flock -x "$fd" || die "could not acquire the Kilix transaction lock"
+    KILIX_TRANSACTION_LOCK_FD="$fd"
+    KILIX_TRANSACTION_LOCK_PATH="$lock_path"
+    export KILIX_TRANSACTION_LOCK_FD KILIX_TRANSACTION_LOCK_PATH
+}
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     acquire_update_lock
+    acquire_kilix_transaction_lock
 fi
 
 _STACK_TXN_DIR=""
@@ -719,30 +786,258 @@ restore_stack_checkout() {
 }
 
 restore_stack_path() {
-    local path="$1" key="$2"
-    rm -rf -- "$path" || return 1
-    if [ -f "$_STACK_TXN_DIR/$key.present" ]; then
-        mkdir -p -- "$(dirname "$path")" || return 1
-        cp -a -- "$_STACK_TXN_DIR/$key" "$path" || return 1
+    local path="$1" key="$2" kind="${3:-tree}" tmp
+    if [ "$kind" = file ]; then
+        [ ! -d "$path" ] || [ -L "$path" ] || return 1
+        if [ -f "$_STACK_TXN_DIR/$key.present" ]; then
+            mkdir -p -- "$(dirname "$path")" || return 1
+            tmp="$(mktemp "${path}.restore.XXXXXX")" || return 1
+            rm -f -- "$tmp" || return 1
+            if ! cp -a -- "$_STACK_TXN_DIR/$key" "$tmp" \
+                || ! mv -Tf -- "$tmp" "$path"; then
+                rm -f -- "$tmp"
+                return 1
+            fi
+        else
+            rm -f -- "$path" || return 1
+        fi
+    else
+        rm -rf -- "$path" || return 1
+        if [ -f "$_STACK_TXN_DIR/$key.present" ]; then
+            mkdir -p -- "$(dirname "$path")" || return 1
+            cp -a -- "$_STACK_TXN_DIR/$key" "$path" || return 1
+        fi
+    fi
+}
+
+validate_kilix_fork_stamp_path() {
+    local stamp="$KILIX_STATE_DIRECTORY/fork-built-ref" owner mode links
+    if [ -e "$stamp" ] || [ -L "$stamp" ]; then
+        [ -f "$stamp" ] && [ ! -L "$stamp" ] \
+            || die "refusing unsafe Kilix fork-build stamp: $stamp"
+        owner="$(stat -c '%u' -- "$stamp" 2>/dev/null)" \
+            || die "could not inspect Kilix fork-build stamp: $stamp"
+        [ "$owner" = "$EUID" ] \
+            || die "Kilix fork-build stamp is not owned by the updating user: $stamp"
+        mode="$(stat -c '%a' -- "$stamp" 2>/dev/null)" \
+            || die "could not inspect Kilix fork-build stamp mode: $stamp"
+        [ "$mode" = 600 ] \
+            || die "Kilix fork-build stamp must have mode 0600: $stamp"
+        links="$(stat -c '%h' -- "$stamp" 2>/dev/null)" \
+            || die "could not inspect Kilix fork-build stamp links: $stamp"
+        [ "$links" = 1 ] \
+            || die "Kilix fork-build stamp must have exactly one hard link: $stamp"
+    fi
+}
+
+validate_legacy_kilix_fork_stamp_path() {
+    local stamp="$PLEB_STATE_HOME/kilix-fork-built-ref" owner links
+    if [ -e "$stamp" ] || [ -L "$stamp" ]; then
+        [ -f "$stamp" ] && [ ! -L "$stamp" ] \
+            || die "refusing unsafe legacy Pleb-side Kilix fork stamp: $stamp"
+        owner="$(stat -c '%u' -- "$stamp" 2>/dev/null)" \
+            || die "could not inspect legacy Pleb-side Kilix fork stamp: $stamp"
+        [ "$owner" = "$EUID" ] \
+            || die "legacy Pleb-side Kilix fork stamp is not owned by the updating user: $stamp"
+        links="$(stat -c '%h' -- "$stamp" 2>/dev/null)" \
+            || die "could not inspect legacy Pleb-side Kilix fork stamp links: $stamp"
+        [ "$links" = 1 ] \
+            || die "legacy Pleb-side Kilix fork stamp must have exactly one hard link: $stamp"
+    fi
+}
+
+kilix_generation_entry_identity() {
+    local path="$1" output="$2" device inode target
+    if [ -L "$path" ]; then
+        target="$(readlink -- "$path")" || return 1
+        [[ "$target" =~ ^generations/build\.[A-Za-z0-9]+$ ]] || return 1
+        kilix_generation_target_is_contained "$target" || return 1
+        device="$(stat -c '%d' -- "$path")" || return 1
+        inode="$(stat -c '%i' -- "$path")" || return 1
+        printf 'symlink\t%s\t%s\t%s\n' "$device" "$inode" "$target" >"$output"
+    elif [ -d "$path" ]; then
+        device="$(stat -c '%d' -- "$path")" || return 1
+        inode="$(stat -c '%i' -- "$path")" || return 1
+        printf 'directory\t%s\t%s\n' "$device" "$inode" >"$output"
+    elif [ -e "$path" ]; then
+        return 1
+    else
+        printf '%s\n' absent >"$output"
+    fi
+}
+
+kilix_generation_target_is_contained() {
+    local target="$1" build_root candidate candidate_root
+    [[ "$target" =~ ^generations/build\.[A-Za-z0-9]+$ ]] || return 1
+    candidate="$KILIX_BUILD_DIRECTORY/$target"
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] || return 1
+    build_root="$(cd "$KILIX_BUILD_DIRECTORY" && pwd -P)" || return 1
+    candidate_root="$(cd "$candidate" && pwd -P)" || return 1
+    [ "$candidate_root" = "$build_root/$target" ]
+}
+
+kilix_generation_target() {
+    local entry="$1" target
+    [ -L "$entry" ] || return 1
+    target="$(readlink -- "$entry")" || return 1
+    [[ "$target" =~ ^generations/build\.[A-Za-z0-9]+$ ]] || return 1
+    printf '%s\n' "$target"
+}
+
+collect_unreferenced_kilix_generation() {
+    local target="$1" link path owner
+    [[ "$target" =~ ^generations/build\.[A-Za-z0-9]+$ ]] || return 1
+    for link in current previous prepared; do
+        if [ -L "$KILIX_BUILD_DIRECTORY/$link" ] \
+            && [ "$(readlink -- "$KILIX_BUILD_DIRECTORY/$link")" = "$target" ]; then
+            return 0
+        fi
+    done
+    path="$KILIX_BUILD_DIRECTORY/$target"
+    [ -e "$path" ] || [ -L "$path" ] || return 0
+    kilix_generation_target_is_contained "$target" || return 1
+    owner="$(stat -c '%u' -- "$path" 2>/dev/null)" || return 1
+    [ "$owner" = "$EUID" ] || return 1
+    rm -rf -- "$path"
+}
+
+kilix_engine_park_path() {
+    local park
+    park="$(cat "$_STACK_TXN_DIR/kilix-engine.park" 2>/dev/null || true)"
+    [ -n "$park" ] || return 1
+    [ "$(dirname "$park")" = "$KILIX_BUILD_DIRECTORY" ] || return 1
+    [[ "$(basename "$park")" =~ ^\.plebian-os-update\.[A-Za-z0-9]+$ ]] || return 1
+    printf '%s\n' "$park"
+}
+
+snapshot_kilix_engine_generation() {
+    local current="$KILIX_BUILD_DIRECTORY/current"
+    local previous="$KILIX_BUILD_DIRECTORY/previous"
+    kilix_generation_entry_identity "$current" \
+        "$_STACK_TXN_DIR/kilix-engine.current.identity" \
+        || die "refusing unsafe Kilix current generation entry: $current"
+    kilix_generation_entry_identity "$previous" \
+        "$_STACK_TXN_DIR/kilix-engine.previous.identity" \
+        || die "refusing unsafe Kilix previous generation entry: $previous"
+    if [ -L "$current" ]; then
+        cp -a -- "$current" "$_STACK_TXN_DIR/kilix-engine.current.entry" \
+            || die "could not snapshot the Kilix current generation entry"
+    fi
+    printf '%s\n' 0 >"$_STACK_TXN_DIR/kilix-engine.previous.parked"
+}
+
+begin_kilix_engine_mutation() {
+    local previous="$KILIX_BUILD_DIRECTORY/previous" park
+    if [ -e "$previous" ] || [ -L "$previous" ]; then
+        park="$(mktemp -d "$KILIX_BUILD_DIRECTORY/.plebian-os-update.XXXXXX")" \
+            || die "could not create Kilix generation rollback state"
+        chmod 0700 -- "$park" \
+            || die "could not protect Kilix generation rollback state"
+        printf '%s\n' "$park" >"$_STACK_TXN_DIR/kilix-engine.park"
+        mv -- "$previous" "$park/previous" \
+            || die "could not park the previous Kilix generation"
+        printf '%s\n' 1 >"$_STACK_TXN_DIR/kilix-engine.previous.parked"
+    fi
+}
+
+remove_kilix_generation_entry() {
+    local entry="$1"
+    if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+        rm -rf -- "$entry"
+    elif [ -e "$entry" ] || [ -L "$entry" ]; then
+        rm -f -- "$entry"
     fi
 }
 
 restore_kilix_engine_generation() {
     local current="$KILIX_BUILD_DIRECTORY/current"
     local previous="$KILIX_BUILD_DIRECTORY/previous"
-    local existed old_id current_id previous_id
-    existed="$(cat "$_STACK_TXN_DIR/kilix-engine.existed" 2>/dev/null || echo 0)"
-    if [ "$existed" = 0 ]; then
-        rm -rf -- "$current"
+    local old_current current_after previous_after park parked new_target=""
+    old_current="$(cat "$_STACK_TXN_DIR/kilix-engine.current.identity")" \
+        || return 1
+    kilix_generation_entry_identity "$current" \
+        "$_STACK_TXN_DIR/kilix-engine.current.after" || return 1
+    current_after="$(cat "$_STACK_TXN_DIR/kilix-engine.current.after")" \
+        || return 1
+    if [ "$current_after" != "$old_current" ]; then
+        new_target="$(kilix_generation_target "$current" 2>/dev/null || true)"
+        if [ "$old_current" != absent ]; then
+            kilix_generation_entry_identity "$previous" \
+                "$_STACK_TXN_DIR/kilix-engine.previous.after" || return 1
+            previous_after="$(cat "$_STACK_TXN_DIR/kilix-engine.previous.after")" \
+                || return 1
+            if [ "$previous_after" = "$old_current" ]; then
+                remove_kilix_generation_entry "$current" || return 1
+                mv -- "$previous" "$current" || return 1
+            elif [ -L "$_STACK_TXN_DIR/kilix-engine.current.entry" ]; then
+                remove_kilix_generation_entry "$current" || return 1
+                cp -a -- "$_STACK_TXN_DIR/kilix-engine.current.entry" "$current" \
+                    || return 1
+            else
+                return 1
+            fi
+        else
+            remove_kilix_generation_entry "$current" || return 1
+        fi
+    fi
+    parked="$(cat "$_STACK_TXN_DIR/kilix-engine.previous.parked" 2>/dev/null || echo 0)"
+    if [ "$parked" = 1 ]; then
+        park="$(kilix_engine_park_path)" || return 1
+        [ -e "$park/previous" ] || [ -L "$park/previous" ] || return 1
+        [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
+        mv -- "$park/previous" "$previous" || return 1
+        rmdir -- "$park" || return 1
+    else
+        [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
+    fi
+    [ -z "$new_target" ] \
+        || collect_unreferenced_kilix_generation "$new_target" || return 1
+}
+
+commit_kilix_engine_generation() {
+    local current="$KILIX_BUILD_DIRECTORY/current"
+    local previous="$KILIX_BUILD_DIRECTORY/previous"
+    local old_current current_after previous_after park parked retired_target=""
+    old_current="$(cat "$_STACK_TXN_DIR/kilix-engine.current.identity")" \
+        || return 1
+    kilix_generation_entry_identity "$current" \
+        "$_STACK_TXN_DIR/kilix-engine.current.commit" || return 1
+    current_after="$(cat "$_STACK_TXN_DIR/kilix-engine.current.commit")" \
+        || return 1
+    parked="$(cat "$_STACK_TXN_DIR/kilix-engine.previous.parked" 2>/dev/null || echo 0)"
+    if [ "$current_after" = "$old_current" ]; then
+        if [ "$parked" = 1 ]; then
+            park="$(kilix_engine_park_path)" || return 1
+            [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
+            mv -- "$park/previous" "$previous" || return 1
+            rmdir -- "$park" || return 1
+        else
+            [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
+        fi
         return 0
     fi
-    old_id="$(cat "$_STACK_TXN_DIR/kilix-engine.source-id" 2>/dev/null || true)"
-    current_id="$(cat "$current/source-id" 2>/dev/null || true)"
-    [ "$current_id" != "$old_id" ] || return 0
-    previous_id="$(cat "$previous/source-id" 2>/dev/null || true)"
-    [ -d "$previous" ] && [ "$previous_id" = "$old_id" ] || return 1
-    rm -rf -- "$current"
-    mv "$previous" "$current"
+    if [ "$old_current" != absent ]; then
+        kilix_generation_entry_identity "$previous" \
+            "$_STACK_TXN_DIR/kilix-engine.previous.commit" || return 1
+        previous_after="$(cat "$_STACK_TXN_DIR/kilix-engine.previous.commit")" \
+            || return 1
+        [ "$previous_after" = "$old_current" ] || return 1
+    else
+        [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
+    fi
+    if [ "$parked" = 1 ]; then
+        park="$(kilix_engine_park_path)" || return 1
+        retired_target="$(kilix_generation_target "$park/previous" 2>/dev/null || true)"
+        if ! remove_kilix_generation_entry "$park/previous" \
+            || ! rmdir -- "$park"; then
+            warn "stack committed, but old Kilix generation recovery data remains at $park"
+            return 0
+        fi
+        if [ -n "$retired_target" ] \
+            && ! collect_unreferenced_kilix_generation "$retired_target"; then
+            warn "stack committed, but superseded Kilix generation cleanup was incomplete: $retired_target"
+        fi
+    fi
 }
 
 rollback_stack_transaction() {
@@ -762,7 +1057,8 @@ rollback_stack_transaction() {
 
     restore_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt || failed=1
     restore_kilix_engine_generation || failed=1
-    restore_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" fork-stamp || failed=1
+    restore_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp file || failed=1
+    restore_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp file || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
     if [ "$failed" = 0 ]; then
@@ -792,11 +1088,15 @@ stack_transaction_cleanup() {
         warn "stack update recovery data was retained for manual inspection"
         [ "$rollback_ok" = 1 ] || rc=70
     fi
+    release_kilix_transaction_lock
     exit "$rc"
 }
 
 begin_stack_transaction() {
     require_standard_install_destinations
+    acquire_kilix_transaction_lock
+    validate_kilix_fork_stamp_path
+    validate_legacy_kilix_fork_stamp_path
     mkdir -p "$PLEB_STATE_HOME"
     chmod 0700 "$PLEB_STATE_HOME" 2>/dev/null || true
     _STACK_TXN_DIR="$(mktemp -d "$PLEB_STATE_HOME/stack-rollback.XXXXXX")" \
@@ -818,23 +1118,22 @@ begin_stack_transaction() {
     fi
     record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
     snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
-    if [ -d "$KILIX_BUILD_DIRECTORY/current" ]; then
-        printf '%s\n' 1 >"$_STACK_TXN_DIR/kilix-engine.existed"
-        cat "$KILIX_BUILD_DIRECTORY/current/source-id" \
-            >"$_STACK_TXN_DIR/kilix-engine.source-id" 2>/dev/null \
-            || : >"$_STACK_TXN_DIR/kilix-engine.source-id"
-    else
-        printf '%s\n' 0 >"$_STACK_TXN_DIR/kilix-engine.existed"
-    fi
-    snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" fork-stamp
+    snapshot_kilix_engine_generation
+    snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp
+    snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
     validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
         || die "root stack snapshot returned an unsafe recovery path"
     _STACK_TXN_ACTIVE=1
+    begin_kilix_engine_mutation
+    rm -f -- "$PLEB_STATE_HOME/kilix-fork-built-ref" \
+        || die "could not retire the legacy Pleb-side Kilix fork stamp"
 }
 
 commit_stack_transaction() {
+    commit_kilix_engine_generation \
+        || die "could not commit the coherent Kilix generation transaction"
     _STACK_TXN_COMMITTED=1
     _STACK_TXN_ACTIVE=0
     if ! remove_root_stack_snapshot "$_STACK_ROOT_TXN_DIR"; then
@@ -845,6 +1144,7 @@ commit_stack_transaction() {
     rm -rf -- "$_STACK_TXN_DIR"
     _STACK_TXN_DIR=""
     trap - EXIT INT TERM HUP
+    release_kilix_transaction_lock
 }
 
 test_fail_after_boundary() {
@@ -1512,6 +1812,8 @@ stack_env=(
     "KILIX_STORAGE_HOME=$KILIX_STORAGE_HOME"
     "KILIX_CONFIG_HOME=$KILIX_CONFIG_HOME"
     "KILIX_STATE_DIRECTORY=$KILIX_STATE_DIRECTORY"
+    "KILIX_TRANSACTION_LOCK_FD=${KILIX_TRANSACTION_LOCK_FD:-}"
+    "KILIX_TRANSACTION_LOCK_PATH=${KILIX_TRANSACTION_LOCK_PATH:-}"
     "KILIX_CACHE_HOME=$KILIX_CACHE_HOME"
     "KILIX_SESSION_HOME=$KILIX_SESSION_HOME"
     "KILIX_BUILD_DIRECTORY=$KILIX_BUILD_DIRECTORY"

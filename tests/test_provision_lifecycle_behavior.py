@@ -180,6 +180,39 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertEqual(lock.stat().st_uid, user.pw_uid)
             self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
 
+    def test_provision_lock_contends_with_direct_kilix_lock(self):
+        user = pwd.getpwuid(os.getuid())
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            state = base / "state"
+            state.mkdir(mode=0o700)
+            env = {
+                **os.environ,
+                "PLEBIAN_OS_PROVISION_LIB_ONLY": "1",
+            }
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                f"KILIX_STATE_DIRECTORY={str(state)!r}\n"
+                f"SUDOERS={str(base / 'sudoers')!r}\n"
+                "acquire_kilix_provision_lock\n"
+                '[ -n "$KILIX_PROVISION_LOCK_FD" ] || exit 92\n'
+                f'[ "$KILIX_PROVISION_LOCK_PATH" = {str(state / "build-update.lock")!r} ] '
+                "|| exit 93\n"
+                'if flock -n "$KILIX_STATE_DIRECTORY/build-update.lock" -c true; '
+                "then exit 94; fi\n"
+                "cleanup\ntrap - EXIT INT TERM HUP\n"
+                'flock -n "$KILIX_STATE_DIRECTORY/build-update.lock" -c true\n'
+            )
+            result = self._run_library(body, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lock = state / "build-update.lock"
+            self.assertEqual(lock.stat().st_uid, user.pw_uid)
+            self.assertEqual(lock.stat().st_nlink, 1)
+            self.assertEqual(stat.S_IMODE(lock.stat().st_mode), 0o600)
+
     def test_private_storage_allocator_repairs_roots_without_replacing_data(self):
         user = pwd.getpwuid(os.getuid())
         with tempfile.TemporaryDirectory() as td:
@@ -556,6 +589,116 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(valid.returncode, 0, valid.stderr)
         self.assertIn("verify staged uv --version reports exactly uv 0.9.0", valid.stdout)
+
+    def test_verified_kilix_build_requires_one_coherent_canonical_identity(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            kilix = base / "kilix"
+            src = kilix / "src"
+            subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+            subprocess.run(["git", "-C", str(src), "config", "user.name", "Pleb Test"], check=True)
+            subprocess.run(
+                ["git", "-C", str(src), "config", "user.email", "pleb@example.invalid"],
+                check=True,
+            )
+            (src / "tracked").write_text("source\n")
+            subprocess.run(["git", "-C", str(src), "add", "tracked"], check=True)
+            subprocess.run(["git", "-C", str(src), "commit", "-q", "-m", "source"], check=True)
+            head = subprocess.check_output(
+                ["git", "-C", str(src), "rev-parse", "HEAD"], text=True
+            ).strip()
+
+            build = base / "kilix-state" / "build"
+            generation = build / "generations/build.Valid"
+            (generation / "src/kitty/launcher").mkdir(parents=True)
+            (build / "current").symlink_to("generations/build.Valid")
+            fork = build / "current/src/kitty/launcher/kitty"
+            kitten = build / "current/src/kitty/launcher/kitten"
+            for path in (fork, kitten):
+                path.write_text("#!/bin/sh\nexit 0\n")
+                path.chmod(0o755)
+            source_id = build / "current/source-id"
+            source_id.write_text(head + "\n")
+            state = base / "kilix-state" / "state"
+            state.mkdir()
+            stamp = state / "fork-built-ref"
+            stamp.write_text(f"{kilix.resolve()}\t{head}\n")
+            stamp.chmod(0o600)
+
+            launcher = kilix / "kilix"
+
+            def write_launcher(engine: Path = fork, rc: int = 0) -> None:
+                launcher.write_text(
+                    "#!/bin/sh\n"
+                    "[ \"${1:-}\" = --which ] || exit 2\n"
+                    f"printf '%s\\n' '{engine}'\n"
+                    "printf '%s\\n' 'kilix-test 1.0'\n"
+                    f"exit {rc}\n"
+                )
+                launcher.chmod(0o755)
+
+            write_launcher()
+            user = pwd.getpwuid(os.getuid())
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\n"
+                "as_user() { \"$@\"; }\n"
+                "install_env=()\n"
+                f"KILIX_DIR={str(kilix)!r}\n"
+                f"KILIX_BUILD_DIRECTORY={str(build)!r}\n"
+                f"KILIX_STATE_DIRECTORY={str(state)!r}\n"
+                "verify_kilix_fork_build\n"
+            )
+
+            valid = self._run_library(body, env)
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+
+            cases = []
+            source_id.write_text("wrong\n")
+            cases.append(("source-id", self._run_library(body, env)))
+            source_id.write_text(head + "\n\n")
+            cases.append(("source-id", self._run_library(body, env)))
+            source_id.write_text(head + "\n")
+
+            stamp.write_text("wrong\n")
+            cases.append(("stamp", self._run_library(body, env)))
+            stamp.write_text(f"{kilix.resolve()}\t{head}\n\n")
+            cases.append(("stamp", self._run_library(body, env)))
+            stamp.write_text(f"{kilix.resolve()}\t{head}\n")
+
+            kitten.unlink()
+            cases.append(("did not produce", self._run_library(body, env)))
+            kitten.write_text("#!/bin/sh\nexit 0\n")
+            kitten.chmod(0o755)
+
+            kitten.write_text("#!/bin/sh\nexit 74\n")
+            cases.append(("kitten failed", self._run_library(body, env)))
+            kitten.write_text("#!/bin/sh\nexit 0\n")
+            kitten.chmod(0o755)
+
+            (build / "current").unlink()
+            (build / "current").symlink_to(generation)
+            cases.append(("unsafe current generation", self._run_library(body, env)))
+            (build / "current").unlink()
+            (build / "current").symlink_to("generations/build.Valid")
+
+            write_launcher(base / "wrong-engine")
+            cases.append(("not using the fork engine", self._run_library(body, env)))
+            write_launcher(rc=73)
+            cases.append(("failed its post-build version probe", self._run_library(body, env)))
+
+            write_launcher()
+            alias = state / "fork-built-ref.alias"
+            os.link(stamp, alias)
+            cases.append(("exactly one hard link", self._run_library(body, env)))
+            alias.unlink()
+
+            for message, result in cases:
+                with self.subTest(message=message):
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(message, result.stderr)
 
     def test_exact_go_requires_root_owned_source_stamp(self):
         source = PROVISION.read_text()
