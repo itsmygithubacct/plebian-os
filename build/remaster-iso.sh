@@ -769,6 +769,69 @@ brand_graphical_installer() {
     mv -f "$combined" "$initrd"
 }
 
+configure_boot_menu_policy() {
+    local extract="$1" autoboot="${2:-0}"
+    local isolinux_dir="$extract/isolinux"
+    local isolinux_main="$isolinux_dir/isolinux.cfg"
+    local cfg bios_timeout grub_timeout grub_cfg grub_tmp
+
+    [ -f "$isolinux_main" ] || {
+        echo "source ISO is missing isolinux/isolinux.cfg" >&2
+        return 1
+    }
+    case "$autoboot" in
+        0)
+            bios_timeout=0
+            grub_timeout=-1
+            echo "    boot policy: BIOS and UEFI menus wait for a selection"
+            ;;
+        1)
+            bios_timeout=50
+            grub_timeout=5
+            echo "    boot policy: menus auto-select the preseeded install"
+            ;;
+        *)
+            echo "invalid PLEBIAN_OS_AUTOBOOT value: $autoboot" >&2
+            return 1
+            ;;
+    esac
+
+    # Debian's configs include spkgtk.cfg late.  Its stock speech ontimeout and
+    # timeout can override an earlier isolinux.cfg policy, so remove every
+    # timeout action/countdown (and its menu countdown text) from the complete
+    # include tree before adding one authoritative policy to isolinux.cfg.
+    while IFS= read -r -d '' cfg; do
+        sed -E -i \
+            -e '/^[[:space:]]*ontimeout([[:space:]]|$)/Id' \
+            -e '/^[[:space:]]*menu[[:space:]]+autoboot([[:space:]]|$)/Id' \
+            -e '/^[[:space:]]*timeout([[:space:]]|$)/Id' \
+            "$cfg"
+    done < <(find "$isolinux_dir" -type f -name '*.cfg' -print0)
+    # prompt.cfg is entered by the BIOS Help path and deliberately uses
+    # `prompt 1`; only canonicalize the top-level menu's prompt policy.
+    sed -E -i '/^[[:space:]]*prompt([[:space:]]|$)/Id' "$isolinux_main"
+    printf '\nprompt 0\ntimeout %s\n' "$bios_timeout" >> "$isolinux_main"
+    if [ "$autoboot" = 1 ]; then
+        printf 'ontimeout install\n' >> "$isolinux_main"
+    fi
+
+    # Do not rely on a stock `set timeout=` being present: Debian's UEFI menu
+    # can omit it.  Remove any inherited assignments and prepend exactly one.
+    grub_cfg="$extract/boot/grub/grub.cfg"
+    if [ -f "$grub_cfg" ]; then
+        sed -E -i \
+            '/^[[:space:]]*set[[:space:]]+timeout[[:space:]]*=/Id' \
+            "$grub_cfg"
+        grub_tmp="$(mktemp "$extract/boot/grub/.grub.cfg.XXXXXX")"
+        chmod --reference="$grub_cfg" "$grub_tmp"
+        {
+            printf 'set timeout=%s\n' "$grub_timeout"
+            cat "$grub_cfg"
+        } > "$grub_tmp"
+        mv -f "$grub_tmp" "$grub_cfg"
+    fi
+}
+
 BUILD_PRESEED="$WORK/preseed.cfg"
 cp "$PRESEED" "$BUILD_PRESEED"
 
@@ -884,26 +947,10 @@ if [ -f "$EXTRACT/boot/grub/grub.cfg" ]; then
     sed -i "/vmlinuz/ s#\(vmlinuz\)#\1 $BOOTARGS#" "$EXTRACT/boot/grub/grub.cfg" || true
 fi
 
-# PLEBIAN_OS_AUTOBOOT=1 makes the installer boot menu auto-select the default
-# install entry instead of waiting for a keypress — needed for a truly hands-off
-# (e.g. VM) build. Left OFF by default so a USB stick still pauses at the menu
-# rather than silently auto-wiping a machine it was booted on by accident.
-if [ "${PLEBIAN_OS_AUTOBOOT:-0}" = 1 ]; then
-    echo "    auto-boot: menu boots the preseeded install after a short timeout"
-    # The stock isolinux menu's timeout action (ontimeout) is the SPEECH-SYNTHESIS
-    # installer — an accessibility default we don't preseed. Drop every ontimeout,
-    # shorten the timeout, and point the timeout at the preseeded text install
-    # (its 'append' line already carries our BOOTARGS above).
-    for cfg in "$EXTRACT"/isolinux/*.cfg; do
-        [ -f "$cfg" ] || continue
-        sed -i '/^[[:space:]]*ontimeout[[:space:]]/d' "$cfg"
-        sed -i 's/^[[:space:]]*prompt[[:space:]].*/prompt 0/; s/^[[:space:]]*timeout[[:space:]].*/timeout 50/' "$cfg"
-    done
-    printf 'timeout 50\nontimeout install\n' >> "$EXTRACT/isolinux/isolinux.cfg"
-    if [ -f "$EXTRACT/boot/grub/grub.cfg" ]; then
-        sed -i 's/^set timeout=.*/set timeout=5/' "$EXTRACT/boot/grub/grub.cfg" || true
-    fi
-fi
+# Default media must never start an install merely because nobody pressed a
+# key.  Autoboot is an explicit VM/kiosk opt-in and gets a deterministic BIOS
+# and UEFI countdown even when the source image omitted one.
+configure_boot_menu_policy "$EXTRACT" "${PLEBIAN_OS_AUTOBOOT:-0}"
 
 echo "==> refreshing installer media checksums"
 python3 "$INSTALLER_BRANDER" refresh-md5 "$EXTRACT"
