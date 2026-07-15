@@ -30,6 +30,81 @@ class RemasterContractTests(unittest.TestCase):
         end = self.source.index(end_marker, start + len(start_marker))
         return self.source[start:end]
 
+    def run_boot_menu_policy(self, extract, autoboot):
+        function = self.source_section(
+            "configure_boot_menu_policy() {", "\n\nBUILD_PRESEED=",
+        )
+        harness = (
+            "set -euo pipefail\n"
+            f"{function}\n"
+            'configure_boot_menu_policy "$1" "$2"\n'
+        )
+        return subprocess.run(
+            ["bash", "-c", harness, "boot-policy-test", str(extract),
+             str(autoboot)],
+            text=True, capture_output=True, check=True,
+        )
+
+    def make_boot_menu_tree(self, root, grub_timeout=True):
+        isolinux = root / "isolinux"
+        nested = isolinux / "nested"
+        grub = root / "boot" / "grub"
+        nested.mkdir(parents=True)
+        grub.mkdir(parents=True)
+        (isolinux / "isolinux.cfg").write_text(
+            "default install\n"
+            "prompt 1\n"
+            "timeout 0\n"
+            "include menu.cfg\n"
+            "label help\n"
+            "  config prompt.cfg\n"
+        )
+        (isolinux / "menu.cfg").write_text(
+            "menu title Installer\n"
+            "menu autoboot Starting speech installer in # second{,s}.\n"
+            "include spkgtk.cfg\n"
+        )
+        (isolinux / "spkgtk.cfg").write_text(
+            "label speech\n"
+            "  timeout 300\n"
+            "  ontimeout speech\n"
+            "include nested/late.cfg\n"
+        )
+        (isolinux / "prompt.cfg").write_text(
+            "prompt 1\n"
+            "display f1.txt\n"
+            "label install\n"
+        )
+        (nested / "late.cfg").write_text(
+            "MENU AUTOBOOT Late stock countdown\n"
+            "TIMEOUT 900\n"
+            "ONTIMEOUT rescue\n"
+            "label rescue\n"
+        )
+        grub_lines = ["set default=0\n"]
+        if grub_timeout:
+            grub_lines.append("set timeout=300\n")
+        grub_lines.append("menuentry 'Install' { true; }\n")
+        (grub / "grub.cfg").write_text("".join(grub_lines))
+
+    def bios_policy_directives(self, root, directive):
+        pattern = re.compile(
+            rf"^[ \t]*{directive}(?:[ \t]+.*)?$", re.I | re.M,
+        )
+        text = "\n".join(
+            path.read_text()
+            for path in sorted((root / "isolinux").rglob("*.cfg"))
+        )
+        return pattern.findall(text), text
+
+    def assert_bios_prompt_contract(self, root):
+        pattern = re.compile(r"^[ \t]*prompt(?:[ \t]+.*)?$", re.I | re.M)
+        top = (root / "isolinux" / "isolinux.cfg").read_text()
+        help_prompt = (root / "isolinux" / "prompt.cfg").read_text()
+        self.assertEqual(pattern.findall(top), ["prompt 0"])
+        self.assertEqual(pattern.findall(help_prompt), ["prompt 1"])
+        self.assertIn("display f1.txt", help_prompt)
+
     def test_firstboot_environment_is_a_subset_of_build_provenance(self):
         manifest = set(re.findall(r"manifest_kv ([A-Z0-9_]+)", self.source))
         runtime = set(re.findall(r"env_kv ([A-Z0-9_]+)", self.source))
@@ -38,6 +113,62 @@ class RemasterContractTests(unittest.TestCase):
                          f"runtime keys missing from build-info: {runtime - manifest}")
         for key in ("PLEBIAN_OS_AUTOBOOT", "PLEBIAN_OS_UNATTENDED_DISK"):
             self.assertIn(key, manifest)
+
+    def test_no_autoboot_policy_waits_forever_in_bios_and_uefi(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.make_boot_menu_tree(root, grub_timeout=True)
+            self.run_boot_menu_policy(root, 0)
+            self.run_boot_menu_policy(root, 0)  # policy is deterministic
+
+            timeouts, bios = self.bios_policy_directives(root, "timeout")
+            ontimeouts, _ = self.bios_policy_directives(root, "ontimeout")
+            menu_autoboot = re.findall(
+                r"^[ \t]*menu[ \t]+autoboot(?:[ \t]+.*)?$",
+                bios, re.I | re.M,
+            )
+            self.assertEqual(timeouts, ["timeout 0"])
+            self.assertEqual(ontimeouts, [])
+            self.assertEqual(menu_autoboot, [])
+            self.assert_bios_prompt_contract(root)
+            self.assertIn("label speech", bios)
+            self.assertIn("label rescue", bios)
+
+            grub = (root / "boot" / "grub" / "grub.cfg").read_text()
+            self.assertEqual(
+                re.findall(r"^[ \t]*set[ \t]+timeout[ \t]*=[ \t]*(\S+)",
+                           grub, re.I | re.M),
+                ["-1"],
+            )
+            self.assertTrue(grub.startswith("set timeout=-1\n"))
+            self.assertIn("menuentry 'Install'", grub)
+
+    def test_autoboot_policy_adds_one_install_action_and_missing_uefi_timeout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.make_boot_menu_tree(root, grub_timeout=False)
+            self.run_boot_menu_policy(root, 1)
+            self.run_boot_menu_policy(root, 1)  # no duplicate actions/settings
+
+            timeouts, bios = self.bios_policy_directives(root, "timeout")
+            ontimeouts, _ = self.bios_policy_directives(root, "ontimeout")
+            menu_autoboot = re.findall(
+                r"^[ \t]*menu[ \t]+autoboot(?:[ \t]+.*)?$",
+                bios, re.I | re.M,
+            )
+            self.assertEqual(timeouts, ["timeout 50"])
+            self.assertEqual(ontimeouts, ["ontimeout install"])
+            self.assertEqual(menu_autoboot, [])
+            self.assert_bios_prompt_contract(root)
+
+            grub = (root / "boot" / "grub" / "grub.cfg").read_text()
+            self.assertEqual(
+                re.findall(r"^[ \t]*set[ \t]+timeout[ \t]*=[ \t]*(\S+)",
+                           grub, re.I | re.M),
+                ["5"],
+            )
+            self.assertTrue(grub.startswith("set timeout=5\n"))
+            self.assertIn("menuentry 'Install'", grub)
 
     def test_direct_remaster_derives_complete_guest_layout_from_preseed(self):
         start = self.source.index("resolve_target_layout() {")
@@ -552,9 +683,8 @@ class RemasterContractTests(unittest.TestCase):
             'write_firstboot_env "$EXTRACT/plebian-os/firstboot.env"',
             'for cfg in "$EXTRACT"/isolinux/*.cfg',
             'sed -i "/vmlinuz/ s#\\(vmlinuz\\)#\\1 $BOOTARGS#"',
-            "printf 'timeout 50\\nontimeout install\\n' >> "
-            '"$EXTRACT/isolinux/isolinux.cfg"',
-            "sed -i 's/^set timeout=.*/set timeout=5/'",
+            'configure_boot_menu_policy '
+            '"$EXTRACT" "${PLEBIAN_OS_AUTOBOOT:-0}"',
         )
         for marker in mutation_markers:
             self.assertIn(marker, self.source)
