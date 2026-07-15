@@ -697,10 +697,13 @@ managed_dirs=(
 )
 new_paths=()
 cleanup_new() {
-    local path
+    local path cleanup_failed=0
     for path in "${new_paths[@]:-}"; do
-        [ -n "$path" ] && rm -rf -- "$path"
+        if [ -n "$path" ]; then
+            rm -rf -- "$path" || cleanup_failed=1
+        fi
     done
+    return "$cleanup_failed"
 }
 trap cleanup_new EXIT
 # Prepare every old object beside its destination before changing any path.

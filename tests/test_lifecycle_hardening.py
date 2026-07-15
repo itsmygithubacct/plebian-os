@@ -98,6 +98,49 @@ class UpdateLifecycleTests(unittest.TestCase):
             UPDATE.index("# Back up the complete old set"),
         )
 
+    def test_root_rollback_cleanup_succeeds_after_staged_paths_move(self):
+        restore = UPDATE[
+            UPDATE.index("<<'ROOT_RESTORE'"):
+            UPDATE.index("\nROOT_RESTORE")
+        ]
+        cleanup = re.search(
+            r"cleanup_new\(\) \{\n.*?\n\}", restore, re.DOTALL
+        )
+        self.assertIsNotNone(cleanup)
+        with tempfile.TemporaryDirectory() as td:
+            leftover = Path(td) / "leftover"
+            leftover.write_text("staged rollback object")
+            result = subprocess.run(
+                [
+                    "bash", "-c",
+                    "set -euo pipefail\n"
+                    + cleanup.group(0)
+                    + "\nnew_paths=(\"\" \"$1\" \"\")\n"
+                    + "cleanup_new\n",
+                    "root-rollback-cleanup", str(leftover),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(leftover.exists())
+            failed_cleanup = subprocess.run(
+                [
+                    "bash", "-c",
+                    "set -uo pipefail\n"
+                    + cleanup.group(0)
+                    + "\nrm() { return 1; }\n"
+                    + "new_paths=(\"$1\")\n"
+                    + "cleanup_new\n",
+                    "root-rollback-cleanup", str(leftover),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(failed_cleanup.returncode, 0)
+
     def test_outer_transaction_covers_every_stack_boundary(self):
         for marker in ("os-layer", "pleb-checkout", "pleb-install",
                        "component-update"):

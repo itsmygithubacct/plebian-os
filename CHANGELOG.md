@@ -49,7 +49,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   when the outer transaction commits, and collect only generations that no
   live or protected link references. Both Kitty launchers and the canonical
   source identity must pass bounded probes before provisioning or update can
-  commit.
+  commit. Privileged rollback cleanup now reports success after every staged
+  path has already moved into place while still surfacing genuine removal
+  failures.
 - Pin the final Pleb, Kilix, and Kilix-95 commits together with the archived
   Debian installer, package snapshot, verified Kitty fallback, and exact Go
   archives. The closure includes Kilix's current-kitty clickable-chrome rebase,
