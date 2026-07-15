@@ -73,6 +73,28 @@ class VmBuilderEnvTests(unittest.TestCase):
         for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR"):
             self.assertIn(checkout, source[source.index("def verify_provisioning"):])
 
+    def test_acceptance_checks_coherent_canonical_kilix_generation(self):
+        source = (ROOT / "build" / "build_vm_image.py").read_text()
+        verify = source[source.index("def verify_provisioning"):]
+        self.assertIn('"kilix fork generation"', verify)
+        self.assertIn("KILIX_STATE_DIRECTORY", verify)
+        self.assertIn("KILIX_BUILD_DIRECTORY", verify)
+        self.assertIn("current/source-id", verify)
+        self.assertIn("generations/build", verify)
+        self.assertIn("readlink --", verify)
+        self.assertIn("fork-built-ref", verify)
+        self.assertIn("launcher/kitty", verify)
+        self.assertIn("launcher/kitten", verify)
+        self.assertIn("rev-parse --verify HEAD", verify)
+        self.assertIn("pwd -P", verify)
+        self.assertIn("--which", verify)
+        self.assertIn('timeout 15 "$t" --version', verify)
+        self.assertIn("cmp -s", verify)
+        self.assertIn("stat -c \\'%a\\'", verify)
+        self.assertIn("stat -c \\'%h\\'", verify)
+        self.assertIn('test ! -e "$ps/kilix-fork-built-ref"', verify)
+        self.assertIn('test ! -L "$ps/kilix-fork-built-ref"', verify)
+
     def test_acceptance_checks_private_storage_roots(self):
         source = (ROOT / "build" / "build_vm_image.py").read_text()
         verify = source[source.index("def verify_provisioning"):]

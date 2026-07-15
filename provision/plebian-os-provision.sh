@@ -398,6 +398,8 @@ allocate_coordinated_private_storage() {
 }
 
 PROVISION_LOCK_FD=""
+KILIX_PROVISION_LOCK_FD=""
+KILIX_PROVISION_LOCK_PATH=""
 DESKTOP_WALLPAPER_TMP=""
 DESKTOP_WALLPAPER_CREATED_DIRS=()
 ARTWORK_NOTICE_TMP=""
@@ -422,11 +424,16 @@ cleanup() {
             flock -u "$PROVISION_LOCK_FD" 2>/dev/null || true
             exec {PROVISION_LOCK_FD}>&-
         fi
+        if [ -n "${KILIX_PROVISION_LOCK_FD:-}" ]; then
+            flock -u "$KILIX_PROVISION_LOCK_FD" 2>/dev/null || true
+            exec {KILIX_PROVISION_LOCK_FD}>&-
+        fi
     fi
 }
 
 restore_provision_signal_traps() {
-    if [ -n "${PROVISION_LOCK_FD:-}" ]; then
+    if [ -n "${PROVISION_LOCK_FD:-}" ] \
+        || [ -n "${KILIX_PROVISION_LOCK_FD:-}" ]; then
         trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
     else
         trap - INT TERM HUP
@@ -464,6 +471,60 @@ acquire_provision_lock() {
     exec {PROVISION_LOCK_FD}>>"$lock"
     flock -n "$PROVISION_LOCK_FD" \
         || die "another Pleb update or provisioning run is active (lock: $lock)"
+    trap cleanup EXIT
+    trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
+}
+
+acquire_kilix_provision_lock() {
+    local lock owner metadata path_identity fd_identity
+    lock="$KILIX_STATE_DIRECTORY/build-update.lock"
+    log "serializing provisioning with Kilix builds/updates -> $lock"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) create $lock (0600), then acquire a nonblocking flock"
+        return 0
+    fi
+    command -v flock >/dev/null 2>&1 \
+        || die "flock is required to serialize provisioning with Kilix builds/updates"
+    [ -d "$KILIX_STATE_DIRECTORY" ] && [ ! -L "$KILIX_STATE_DIRECTORY" ] \
+        || die "Kilix state path is not a safe directory: $KILIX_STATE_DIRECTORY"
+    metadata="$(stat -c '%u:%a' -- "$KILIX_STATE_DIRECTORY" 2>/dev/null)" \
+        || die "could not inspect Kilix state directory"
+    [ "$metadata" = "$TARGET_UID:700" ] \
+        || die "Kilix state directory is not private and owned by $TARGET_USER"
+    if [ -e "$lock" ] || [ -L "$lock" ]; then
+        [ -f "$lock" ] && [ ! -L "$lock" ] \
+            || die "refusing unsafe Kilix transaction lock: $lock"
+        owner="$(stat -c '%u' -- "$lock" 2>/dev/null)" \
+            || die "could not inspect Kilix transaction lock owner"
+        [ "$owner" = "$TARGET_UID" ] \
+            || die "Kilix transaction lock is not owned by $TARGET_USER"
+    else
+        as_user touch "$lock" \
+            || die "could not create Kilix transaction lock as $TARGET_USER: $lock"
+    fi
+    as_user chmod 0600 "$lock" \
+        || die "could not secure Kilix transaction lock: $lock"
+    [ -f "$lock" ] && [ ! -L "$lock" ] \
+        || die "Kilix transaction lock is not a safe regular file: $lock"
+    owner="$(stat -c '%u' -- "$lock" 2>/dev/null)" \
+        || die "could not inspect Kilix transaction lock owner"
+    [ "$owner" = "$TARGET_UID" ] \
+        || die "Kilix transaction lock is not owned by $TARGET_USER"
+    [ "$(stat -c '%a:%h' -- "$lock" 2>/dev/null)" = 600:1 ] \
+        || die "Kilix transaction lock must be mode 0600 and singly linked"
+    exec {KILIX_PROVISION_LOCK_FD}>>"$lock" \
+        || die "could not open Kilix transaction lock"
+    [ -f "$lock" ] && [ ! -L "$lock" ] \
+        || die "Kilix transaction lock changed while it was opened"
+    path_identity="$(stat -c '%d:%i' -- "$lock" 2>/dev/null)" \
+        || die "could not inspect Kilix transaction lock identity"
+    fd_identity="$(stat -Lc '%d:%i' -- "/proc/$$/fd/$KILIX_PROVISION_LOCK_FD" 2>/dev/null)" \
+        || die "could not inspect Kilix transaction lock descriptor"
+    [ "$fd_identity" = "$path_identity" ] \
+        || die "Kilix transaction lock changed while it was opened"
+    flock -n "$KILIX_PROVISION_LOCK_FD" \
+        || die "another Kilix build/update is active (lock: $lock)"
+    KILIX_PROVISION_LOCK_PATH="$(cd "$KILIX_STATE_DIRECTORY" && pwd -P)/build-update.lock"
     trap cleanup EXIT
     trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
 }
@@ -1895,6 +1956,81 @@ ensure_go_for_kilix_build() {
     log "Go is ready: $(as_user bash -lc 'go version' 2>/dev/null || true)"
 }
 
+probe_kilix_launcher() {
+    if command -v timeout >/dev/null 2>&1; then
+        as_user env "${install_env[@]}" timeout 15 "$1" --version >/dev/null 2>&1
+    else
+        as_user env "${install_env[@]}" "$1" --version >/dev/null 2>&1
+    fi
+}
+
+verify_kilix_fork_build() {
+    local current target generation generation_owner build_root generation_root
+    local fork kitten root head source_id_path stamp_path
+    local stamp_owner stamp_mode stamp_links
+    local which_output engine
+    current="$KILIX_BUILD_DIRECTORY/current"
+    [ -L "$current" ] \
+        || die "kilix fork build did not publish a current generation symlink"
+    target="$(readlink -- "$current" 2>/dev/null || true)"
+    [[ "$target" =~ ^generations/build\.[A-Za-z0-9]+$ ]] \
+        || die "kilix fork build published an unsafe current generation target"
+    generation="$KILIX_BUILD_DIRECTORY/$target"
+    [ -d "$generation" ] && [ ! -L "$generation" ] \
+        || die "kilix fork build current generation is missing or unsafe"
+    build_root="$(cd "$KILIX_BUILD_DIRECTORY" && pwd -P 2>/dev/null || true)"
+    generation_root="$(cd "$generation" && pwd -P 2>/dev/null || true)"
+    [ -n "$build_root" ] && [ "$generation_root" = "$build_root/$target" ] \
+        || die "kilix fork build current generation escapes the build root"
+    generation_owner="$(stat -c '%u' -- "$generation" 2>/dev/null || true)"
+    [ "$generation_owner" = "$TARGET_UID" ] \
+        || die "kilix fork build generation is not owned by $TARGET_USER"
+    fork="$KILIX_BUILD_DIRECTORY/current/src/kitty/launcher/kitty"
+    kitten="$KILIX_BUILD_DIRECTORY/current/src/kitty/launcher/kitten"
+    [ -f "$fork" ] && [ ! -L "$fork" ] && [ -x "$fork" ] \
+        || die "kilix fork build did not produce a regular executable $fork"
+    [ -f "$kitten" ] && [ ! -L "$kitten" ] && [ -x "$kitten" ] \
+        || die "kilix fork build did not produce a regular executable $kitten"
+    probe_kilix_launcher "$kitten" \
+        || die "kilix fork kitten failed its post-build version probe"
+
+    root="$(cd "$KILIX_DIR" && pwd -P 2>/dev/null || true)"
+    [ -n "$root" ] || die "kilix fork build has no physical checkout root to verify"
+    head="$(as_user git -C "$KILIX_DIR/src" rev-parse --verify HEAD 2>/dev/null || true)"
+    [ -n "$head" ] || die "kilix fork build has no source commit to verify"
+
+    source_id_path="$KILIX_BUILD_DIRECTORY/current/source-id"
+    [ -f "$source_id_path" ] && [ ! -L "$source_id_path" ] \
+        || die "kilix fork build has no safe source-id: $source_id_path"
+    printf '%s\n' "$head" | cmp -s - "$source_id_path" \
+        || die "kilix fork build source-id does not match the source checkout"
+
+    # `kilix --build` owns this canonical, atomically-published source-ref
+    # stamp.  Pleb update reads and rolls back the same file; firstboot must not
+    # create a second stamp that can diverge from the promoted generation.
+    stamp_path="$KILIX_STATE_DIRECTORY/fork-built-ref"
+    [ -f "$stamp_path" ] && [ ! -L "$stamp_path" ] \
+        || die "kilix fork build has no safe source-ref stamp: $stamp_path"
+    stamp_owner="$(stat -c '%u' -- "$stamp_path" 2>/dev/null || true)"
+    [ "$stamp_owner" = "$TARGET_UID" ] \
+        || die "kilix fork build stamp is not owned by $TARGET_USER: $stamp_path"
+    stamp_mode="$(stat -c '%a' -- "$stamp_path" 2>/dev/null || true)"
+    [ "$stamp_mode" = 600 ] \
+        || die "kilix fork build stamp must have mode 0600: $stamp_path"
+    stamp_links="$(stat -c '%h' -- "$stamp_path" 2>/dev/null || true)"
+    [ "$stamp_links" = 1 ] \
+        || die "kilix fork build stamp must have exactly one hard link: $stamp_path"
+    printf '%s\t%s\n' "$root" "$head" | cmp -s - "$stamp_path" \
+        || die "kilix fork build stamp does not match the source checkout"
+
+    which_output="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null)" \
+        || die "kilix fork engine failed its post-build version probe"
+    engine="${which_output%%$'\n'*}"
+    [ "$engine" = "$fork" ] \
+        || die "kilix is not using the fork engine after build (got: ${engine:-<empty>})"
+    log "kilix engine verified: $engine (source ${head:0:12})"
+}
+
 build_kilix_fork() {
     case "$BUILD_KILIX_FORK" in
         1|yes|true|on) ;;
@@ -1908,7 +2044,7 @@ build_kilix_fork() {
         echo "    + (as $TARGET_USER) git -C $KILIX_DIR submodule update --init --recursive"
         echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
         echo "    + (as $TARGET_USER) $KILIX_DIR/kilix --build"
-        echo "    + verify $KILIX_DIR/kilix --which uses $KILIX_BUILD_DIRECTORY/current/src/kitty/launcher/kitty"
+        echo "    + verify fork + kitten, source-id, $KILIX_STATE_DIRECTORY/fork-built-ref, and $KILIX_DIR/kilix --which"
         return 0
     fi
 
@@ -1924,14 +2060,7 @@ build_kilix_fork() {
     log "building kilix clickable-chrome fork"
     as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --build \
         || die "kilix fork build failed"
-
-    local fork engine
-    fork="$KILIX_BUILD_DIRECTORY/current/src/kitty/launcher/kitty"
-    [ -x "$fork" ] || die "kilix fork build did not produce $fork"
-    engine="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
-    [ "$engine" = "$fork" ] \
-        || die "kilix is not using the fork engine after build (got: ${engine:-<empty>})"
-    log "kilix engine verified: $engine"
+    verify_kilix_fork_build
 }
 
 # Tests source the path-agnostic transaction/version helpers without running the
@@ -2024,6 +2153,7 @@ log "session     : $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_P
 # Hold the same target-user lock used by direct `pleb update` before the first
 # provisioning mutation and through final provenance/session reconciliation.
 acquire_provision_lock
+acquire_kilix_provision_lock
 
 # ── 1. dependencies ──────────────────────────────────────────────────────────
 # Delegated to the standalone installer (install-deps.sh, deployed alongside us
@@ -2176,6 +2306,11 @@ install_env=(
 )
 [ -n "${PROVISION_LOCK_FD:-}" ] \
     && install_env+=("PLEB_UPDATE_LOCK_FD=$PROVISION_LOCK_FD")
+[ -n "${KILIX_PROVISION_LOCK_FD:-}" ] \
+    && install_env+=(
+        "KILIX_TRANSACTION_LOCK_FD=$KILIX_PROVISION_LOCK_FD"
+        "KILIX_TRANSACTION_LOCK_PATH=$KILIX_PROVISION_LOCK_PATH"
+    )
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 build_kilix_fork

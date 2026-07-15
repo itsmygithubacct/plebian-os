@@ -280,11 +280,20 @@ class ProvisionPlumbingTests(unittest.TestCase):
     def test_firstboot_builds_and_verifies_kilix_fork(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn("build_kilix_fork", text)
+        self.assertIn("verify_kilix_fork_build", text)
         self.assertIn("submodule update --init --recursive", text)
         self.assertIn("scripts/install-go.sh", text)
         self.assertIn('"$KILIX_DIR/kilix" --build', text)
         self.assertIn("src/kitty/launcher/kitty", text)
+        self.assertIn("src/kitty/launcher/kitten", text)
+        self.assertIn("generations/build", text)
+        self.assertIn("current/source-id", text)
+        self.assertIn('"$KILIX_STATE_DIRECTORY/fork-built-ref"', text)
         self.assertIn('"$KILIX_DIR/kilix" --which', text)
+        self.assertIn('probe_kilix_launcher "$kitten"', text)
+        self.assertIn('timeout 15 "$1" --version', text)
+        self.assertIn("cmp -s", text)
+        self.assertNotIn('"$PLEB_STATE_HOME/kilix-fork-built-ref"', text)
 
     def test_provision_disables_kernel_speaker_beeps(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()

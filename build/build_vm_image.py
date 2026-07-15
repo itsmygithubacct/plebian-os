@@ -673,9 +673,41 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     # with it off, provisioning ships the prebuilt engine, so check that instead.
     fork_on = os.environ.get("PLEBIAN_OS_BUILD_KILIX_FORK", "1") not in ("0", "no", "false", "off")
     if fork_on:
-        checks.append(("kilix fork engine", kdir +
-                       ' s="${KILIX_STORAGE_HOME:-$HOME/.local/gpu_terminal/kilix}";'
-                       ' test -x "$s/build/current/src/kitty/launcher/kitty"'))
+        checks.append(("kilix fork generation", kdir +
+                       ' k="${KILIX_STORAGE_HOME:-$HOME/.local/gpu_terminal/kilix}";'
+                       ' ks="${KILIX_STATE_DIRECTORY:-$k/state}";'
+                       ' kb="${KILIX_BUILD_DIRECTORY:-$k/build}";'
+                       ' ps="${PLEB_STATE_HOME:-$HOME/.local/gpu_terminal/pleb/state}";'
+                       ' test -L "$kb/current" &&'
+                       ' g="$(readlink -- "$kb/current")" &&'
+                       ' printf \'%s\\n\' "$g" | grep -Eq \'^generations/build\\.[A-Za-z0-9]+$\' &&'
+                       ' test -d "$kb/$g" && test ! -L "$kb/$g" &&'
+                       ' br="$(cd "$kb" && pwd -P)" &&'
+                       ' gr="$(cd "$kb/$g" && pwd -P)" &&'
+                       ' test "$gr" = "$br/$g" &&'
+                       ' test "$(stat -c \'%u\' "$kb/$g")" = "$(id -u)" &&'
+                       ' f="$kb/current/src/kitty/launcher/kitty";'
+                       ' t="$kb/current/src/kitty/launcher/kitten";'
+                       ' r="$(cd "$d" && pwd -P)" &&'
+                       ' h="$(git -C "$d/src" rev-parse --verify HEAD)" &&'
+                       ' test -n "$h" &&'
+                       ' test -f "$f" && test ! -L "$f" && test -x "$f" &&'
+                       ' test -f "$t" && test ! -L "$t" && test -x "$t" &&'
+                       ' timeout 15 "$t" --version >/dev/null 2>&1 &&'
+                       ' test -f "$kb/current/source-id" &&'
+                       ' test ! -L "$kb/current/source-id" &&'
+                       ' printf \'%s\\n\' "$h" | cmp -s - "$kb/current/source-id" &&'
+                       ' test -f "$ks/fork-built-ref" &&'
+                       ' test ! -L "$ks/fork-built-ref" &&'
+                       ' test "$(stat -c \'%u\' "$ks/fork-built-ref")" = "$(id -u)" &&'
+                       ' test "$(stat -c \'%a\' "$ks/fork-built-ref")" = 600 &&'
+                       ' test "$(stat -c \'%h\' "$ks/fork-built-ref")" = 1 &&'
+                       ' printf \'%s\\t%s\\n\' "$r" "$h" | cmp -s - "$ks/fork-built-ref" &&'
+                       ' test ! -e "$ps/kilix-fork-built-ref" &&'
+                       ' test ! -L "$ps/kilix-fork-built-ref" &&'
+                       ' q="$("$d/kilix" --which 2>/dev/null)" &&'
+                       ' e="$(printf \'%s\\n\' "$q" | sed -n \'1p\')" &&'
+                       ' test "$e" = "$f"'))
     else:
         checks.append(("kilix engine", kdir + ' test -x "$d/kilix"'))
     failed = []

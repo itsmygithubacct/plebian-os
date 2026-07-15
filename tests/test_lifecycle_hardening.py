@@ -21,6 +21,11 @@ class UpdateLifecycleTests(unittest.TestCase):
         self.assertIn("flock -n 9", UPDATE)
         self.assertIn('"PLEB_UPDATE_LOCK_FD=9"', UPDATE)
         self.assertIn('"PLEB_STATE_HOME=$PLEB_STATE_HOME"', UPDATE)
+        self.assertIn("acquire_kilix_transaction_lock", UPDATE)
+        self.assertIn("build-update.lock", UPDATE)
+        self.assertIn("KILIX_TRANSACTION_LOCK_FD", UPDATE)
+        self.assertIn("KILIX_TRANSACTION_LOCK_PATH", UPDATE)
+        self.assertIn("release_kilix_transaction_lock", UPDATE)
         self.assertNotIn("PLEBIAN_OS_UPDATE_LOCK", UPDATE)
         self.assertLess(UPDATE.index("acquire_update_lock\n"),
                         UPDATE.index("self_update_os_layer\n"))
@@ -103,6 +108,11 @@ class UpdateLifecycleTests(unittest.TestCase):
             "restore_root_stack_snapshot",
             'record_stack_checkout "$PLEB_DIR" pleb pleb',
             'snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt',
+            'snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp',
+            'restore_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp file',
+            'snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp',
+            'restore_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp file',
+            "validate_kilix_fork_stamp_path",
             "restore_kilix_engine_generation",
             "/usr/local/bin/pleb-session",
             "/usr/share/xsessions/pleb.desktop",
@@ -111,6 +121,7 @@ class UpdateLifecycleTests(unittest.TestCase):
             "/usr/local/share/doc/pleb/RECOVERY.md",
         ):
             self.assertIn(primitive, UPDATE)
+        self.assertIn('rm -f -- "$PLEB_STATE_HOME/kilix-fork-built-ref"', UPDATE)
         self.assertIn(
             "PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md",
             UPDATE,
@@ -119,6 +130,30 @@ class UpdateLifecycleTests(unittest.TestCase):
                         UPDATE.index("self_update_os_layer\n"))
         self.assertLess(UPDATE.index("commit_stack_transaction\n"),
                         UPDATE.index('log "Plebian-OS stack updated."'))
+
+    def test_outer_transaction_rejects_multiply_linked_canonical_stamp(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = Path(td) / "kilix" / "state"
+            state.mkdir(parents=True)
+            stamp = state / "fork-built-ref"
+            stamp.write_text("checkout\tcommit\n")
+            stamp.chmod(0o600)
+            os.link(stamp, state / "fork-built-ref.alias")
+            env = {
+                **os.environ,
+                "PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1",
+                "KILIX_STATE_DIRECTORY": str(state),
+            }
+            result = subprocess.run(
+                ["bash", "-c",
+                 'script=$1; set --; . "$script"; validate_kilix_fork_stamp_path',
+                 "stamp-test", str(UPDATE_PATH)],
+                env=env,
+                text=True,
+                capture_output=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exactly one hard link", result.stderr)
 
     def test_injected_boundary_failures_restore_checkout_and_outputs(self):
         harness = r'''
@@ -133,10 +168,13 @@ export PLEB_DIR="$work/pleb"
 export PLEBIAN_OS_DIR="$work/os"
 export KILIX_DIR="$work/kilix"
 export KILIX_STORAGE_HOME="$work/kilix-storage"
+export KILIX_STATE_DIRECTORY="$KILIX_STORAGE_HOME/state"
+export KILIX_BUILD_DIRECTORY="$KILIX_STORAGE_HOME/build"
 export KILIX_PREBUILT_HOME="$KILIX_STORAGE_HOME/prebuilt/kitty.app"
 export KILIX95_DIR="$work/kilix95"
 export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
 mkdir -p "$HOME" "$PLEB_STATE_HOME"
+printf '%s\n' legacy-stamp >"$PLEB_STATE_HOME/kilix-fork-built-ref"
 init_repo() {
     dir="$1"
     git init -q -b main "$dir"
@@ -153,6 +191,19 @@ init_repo "$KILIX_DIR"
 init_repo "$KILIX95_DIR"
 mkdir -p "$KILIX_PREBUILT_HOME/bin"
 printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
+mkdir -p "$KILIX_STATE_DIRECTORY" \
+    "$KILIX_BUILD_DIRECTORY/generations/build.OldCurrent" \
+    "$KILIX_BUILD_DIRECTORY/generations/build.OldPrevious"
+chmod 0700 "$KILIX_STORAGE_HOME" "$KILIX_STATE_DIRECTORY" \
+    "$KILIX_BUILD_DIRECTORY"
+ln -s generations/build.OldCurrent "$KILIX_BUILD_DIRECTORY/current"
+ln -s generations/build.OldPrevious "$KILIX_BUILD_DIRECTORY/previous"
+printf '%s\n' old-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
+chmod 0600 "$KILIX_STATE_DIRECTORY/fork-built-ref"
+printf '%s\n' old-source >"$KILIX_BUILD_DIRECTORY/current/source-id"
+printf '%s\n' old-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
+printf '%s\n' older-generation \
+    >"$KILIX_BUILD_DIRECTORY/previous/sentinel"
 printf '%s\n' old-root >"$work/root-output"
 cp "$work/root-output" "$work/root-backup"
 git -C "$PLEB_DIR" rev-parse HEAD >"$work/old-head"
@@ -170,15 +221,25 @@ record_stack_checkout "$PLEBIAN_OS_DIR" os plebian-os
 record_stack_checkout "$KILIX_DIR" kilix kilix
 record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
 snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
+snapshot_kilix_engine_generation
+snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp
+snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp
 _STACK_ROOT_TXN_DIR=/var/lib/plebian-os/update-rollback.test
 _STACK_TXN_ACTIVE=1
 _STACK_TXN_COMMITTED=0
+begin_kilix_engine_mutation
 trap stack_transaction_cleanup EXIT
 
 printf '%s\n' new >"$PLEB_DIR/tracked"
 git -C "$PLEB_DIR" add tracked
 git -C "$PLEB_DIR" commit -q -m new
 printf '%s\n' new-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
+mv "$KILIX_BUILD_DIRECTORY/current" "$KILIX_BUILD_DIRECTORY/previous"
+mkdir -p "$KILIX_BUILD_DIRECTORY/generations/build.NewFailed"
+ln -s generations/build.NewFailed "$KILIX_BUILD_DIRECTORY/current"
+printf '%s\n' new-source >"$KILIX_BUILD_DIRECTORY/current/source-id"
+printf '%s\n' new-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
+printf '%s\n' new-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
 printf '%s\n' new-root >"$work/root-output"
 export PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER="$boundary"
 test_fail_after_boundary "$boundary"
@@ -211,6 +272,45 @@ test_fail_after_boundary "$boundary"
                 )
                 self.assertEqual((work / "root-output").read_text().strip(),
                                  "old-root")
+                self.assertEqual(
+                    (work / "kilix-storage" / "build" / "current" /
+                     "source-id").read_text().strip(),
+                    "old-source",
+                )
+                self.assertEqual(
+                    (work / "kilix-storage" / "build" / "current" /
+                     "engine").read_text().strip(),
+                    "old-built-engine",
+                )
+                self.assertEqual(
+                    os.readlink(work / "kilix-storage" / "build" / "current"),
+                    "generations/build.OldCurrent",
+                )
+                self.assertEqual(
+                    os.readlink(work / "kilix-storage" / "build" / "previous"),
+                    "generations/build.OldPrevious",
+                )
+                self.assertEqual(
+                    (work / "kilix-storage" / "build" / "previous" /
+                     "sentinel").read_text().strip(),
+                    "older-generation",
+                )
+                self.assertFalse(
+                    (work / "kilix-storage" / "build" / "generations" /
+                     "build.NewFailed").exists()
+                )
+                self.assertEqual(
+                    (work / "kilix-storage" / "state" /
+                     "fork-built-ref").read_text().strip(),
+                    "old-stamp",
+                )
+                self.assertTrue(
+                    (work / "state" / "kilix-fork-built-ref").exists()
+                )
+                self.assertEqual(
+                    (work / "state" / "kilix-fork-built-ref").read_text().strip(),
+                    "legacy-stamp",
+                )
 
 
 class FirstbootBoundTests(unittest.TestCase):
