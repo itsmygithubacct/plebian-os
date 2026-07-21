@@ -12,6 +12,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# These fixtures model ordinary external directories, not the private umask of
+# the Kilix shell that may be invoking the suite.
+os.umask(0o022)
 ASSET = ROOT / "assets" / "desktop" / "plebian-os.png"
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 UPDATE = ROOT / "provision" / "plebian-os-update.sh"
