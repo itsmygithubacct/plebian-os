@@ -233,6 +233,7 @@ init_repo "$PLEB_DIR"
 init_repo "$PLEBIAN_OS_DIR"
 init_repo "$KILIX_DIR"
 init_repo "$KILIX95_DIR"
+init_repo "$work/presenter-source"
 mkdir -p "$KILIX_PREBUILT_HOME/bin"
 printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 mkdir -p "$KILIX_STATE_DIRECTORY" \
@@ -253,6 +254,7 @@ printf '%s\n' old-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
 printf '%s\n' old-root >"$work/root-output"
 cp "$work/root-output" "$work/root-backup"
 git -C "$PLEB_DIR" rev-parse HEAD >"$work/old-head"
+git -C "$KILIX_DIR" rev-parse HEAD >"$work/old-kilix-head"
 . "$script"
 
 # Replace only the privileged snapshot functions: checkout/path rollback is the
@@ -265,6 +267,9 @@ _STACK_TXN_DIR="$(mktemp -d "$PLEB_STATE_HOME/stack-rollback.XXXXXX")"
 record_stack_checkout "$PLEB_DIR" pleb pleb
 record_stack_checkout "$PLEBIAN_OS_DIR" os plebian-os
 record_stack_checkout "$KILIX_DIR" kilix kilix
+record_kilix_submodule "$KILIX_DIR/src" kilix-src "kilix source"
+record_kilix_submodule "$KILIX_DIR/third_party/kitty-frame-presenter" \
+    kilix-presenter "kilix frame presenter"
 record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
 snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
 snapshot_kilix_engine_generation
@@ -287,6 +292,9 @@ printf '%s\n' new-source >"$KILIX_BUILD_DIRECTORY/current/source-id"
 printf '%s\n' new-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
 printf '%s\n' new-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
 printf '%s\n' new-root >"$work/root-output"
+git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
+    "$work/presenter-source" third_party/kitty-frame-presenter >/dev/null
+git -C "$KILIX_DIR" commit -q -m presenter
 export PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER="$boundary"
 test_fail_after_boundary "$boundary"
 '''
@@ -317,6 +325,23 @@ test_fail_after_boundary "$boundary"
                 text=True,
             ).strip(),
             (work / "old-head").read_text().strip(),
+        )
+        self.assertEqual(
+            subprocess.check_output(
+                ["git", "-C", str(work / "kilix"), "rev-parse", "HEAD"],
+                text=True,
+            ).strip(),
+            (work / "old-kilix-head").read_text().strip(),
+        )
+        self.assertEqual(
+            subprocess.check_output(
+                ["git", "-C", str(work / "kilix"), "status", "--porcelain"],
+                text=True,
+            ).strip(),
+            "",
+        )
+        self.assertFalse(
+            (work / "kilix/third_party/kitty-frame-presenter/tracked").exists()
         )
         self.assertEqual(
             (work / "kilix-storage" / "prebuilt" / "kitty.app" /

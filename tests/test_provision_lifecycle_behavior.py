@@ -8,6 +8,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Permission-safety fixtures use conventional public directory modes even when
+# the suite is launched from a Kilix shell with umask 077.
+os.umask(0o022)
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 DEPS = ROOT / "provision" / "install-deps.sh"

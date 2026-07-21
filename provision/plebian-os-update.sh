@@ -560,6 +560,22 @@ record_stack_checkout() {
     fi
 }
 
+record_kilix_submodule() {
+    local dir="$1" key="$2" label="$3" entry
+    if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+        record_stack_checkout "$dir" "$key" "$label"
+    elif [ -e "$dir" ] || [ -L "$dir" ]; then
+        [ -d "$dir" ] && [ ! -L "$dir" ] \
+            || die "$label path at $dir is not a safe uninitialized submodule"
+        entry="$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit)"
+        [ -z "$entry" ] \
+            || die "$label path at $dir is nonempty but is not a git checkout"
+        printf '%s\n' 0 >"$_STACK_TXN_DIR/$key.existed"
+    else
+        printf '%s\n' 0 >"$_STACK_TXN_DIR/$key.existed"
+    fi
+}
+
 snapshot_stack_path() {
     local path="$1" key="$2"
     if [ -e "$path" ] || [ -L "$path" ]; then
@@ -786,6 +802,25 @@ restore_stack_checkout() {
         git -C "$dir" checkout --detach "$head" >/dev/null 2>&1 \
             && git -C "$dir" reset --hard "$head" >/dev/null 2>&1
     fi
+}
+
+deinit_new_kilix_submodule() {
+    local path="$1" key="$2" label="$3" existed mode dirty
+    existed="$(cat "$_STACK_TXN_DIR/$key.existed" 2>/dev/null || echo 0)"
+    [ "$existed" = 0 ] || return 0
+    mode="$(git -C "$KILIX_DIR" ls-files --stage -- "$path" 2>/dev/null \
+        | awk 'NR == 1 { print $1 }')"
+    [ -n "$mode" ] || return 0
+    [ "$mode" = 160000 ] || return 1
+    if [ -d "$KILIX_DIR/$path/.git" ] || [ -f "$KILIX_DIR/$path/.git" ]; then
+        dirty="$(git -C "$KILIX_DIR/$path" status --porcelain \
+            --untracked-files=normal 2>/dev/null)" || return 1
+        if [ -n "$dirty" ]; then
+            warn "$label acquired local changes while the updater was running; refusing to deinitialize it"
+            return 1
+        fi
+    fi
+    git -C "$KILIX_DIR" submodule deinit -f -- "$path" >/dev/null 2>&1
 }
 
 restore_stack_path() {
@@ -1047,14 +1082,24 @@ rollback_stack_transaction() {
     local failed=0
     warn "stack update failed; restoring the previous coherent installation"
 
-    # Restore parent repositories before their nested submodule checkout.
+    # Deinitialize submodules introduced by the failed parent update while the
+    # new .gitmodules entry still exists. Restoring the parent first would
+    # strand their worktrees/config when the old commit did not know the path.
+    deinit_new_kilix_submodule src kilix-src "kilix source" || failed=1
+    deinit_new_kilix_submodule third_party/kitty-frame-presenter \
+        kilix-presenter "kilix frame presenter" || failed=1
+    # Restore parent repositories before their pre-existing submodule checkout.
     restore_stack_checkout "$PLEB_DIR" pleb pleb || failed=1
     if [ ! -f "$_STACK_TXN_DIR/os.skipped" ]; then
         restore_stack_checkout "$PLEBIAN_OS_DIR" os plebian-os || failed=1
     fi
     restore_stack_checkout "$KILIX_DIR" kilix kilix || failed=1
-    if [ -f "$_STACK_TXN_DIR/kilix-src.existed" ]; then
+    if [ "$(cat "$_STACK_TXN_DIR/kilix-src.existed" 2>/dev/null || echo 0)" = 1 ]; then
         restore_stack_checkout "$KILIX_DIR/src" kilix-src "kilix source" || failed=1
+    fi
+    if [ "$(cat "$_STACK_TXN_DIR/kilix-presenter.existed" 2>/dev/null || echo 0)" = 1 ]; then
+        restore_stack_checkout "$KILIX_DIR/third_party/kitty-frame-presenter" \
+            kilix-presenter "kilix frame presenter" || failed=1
     fi
     restore_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95" || failed=1
 
@@ -1116,9 +1161,9 @@ begin_stack_transaction() {
         *) : >"$_STACK_TXN_DIR/os.skipped" ;;
     esac
     record_stack_checkout "$KILIX_DIR" kilix kilix
-    if [ -d "$KILIX_DIR/src/.git" ] || [ -f "$KILIX_DIR/src/.git" ]; then
-        record_stack_checkout "$KILIX_DIR/src" kilix-src "kilix source"
-    fi
+    record_kilix_submodule "$KILIX_DIR/src" kilix-src "kilix source"
+    record_kilix_submodule "$KILIX_DIR/third_party/kitty-frame-presenter" \
+        kilix-presenter "kilix frame presenter"
     record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
     snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
     snapshot_kilix_engine_generation
