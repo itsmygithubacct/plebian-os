@@ -1560,6 +1560,7 @@ write_source_tool_manifest() {
         provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
         provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
         provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
+        provenance_kv GPU_TERMINAL_SETTINGS_FILE "$GPU_TERMINAL_SETTINGS_FILE"
         provenance_kv PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
         provenance_kv PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
         provenance_kv PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
@@ -2104,6 +2105,7 @@ KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-95}"
 PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
 GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$USER_HOME/.local/gpu_terminal}"
+GPU_TERMINAL_SETTINGS_FILE="${GPU_TERMINAL_SETTINGS_FILE:-$GPU_TERMINAL_HOME/settings.conf}"
 PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
 PLEB_CONFIG_HOME="${PLEB_CONFIG_HOME:-$PLEB_STORAGE_HOME/config}"
 PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
@@ -2127,7 +2129,7 @@ KILIX95_SESSION_HOME="${KILIX95_SESSION_HOME:-$KILIX95_STORAGE_HOME/session}"
 KILIX95_DATA_HOME="${KILIX95_DATA_HOME:-$KILIX95_STORAGE_HOME/data}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
-export GPU_TERMINAL_SOURCE_HOME GPU_TERMINAL_HOME
+export GPU_TERMINAL_SOURCE_HOME GPU_TERMINAL_HOME GPU_TERMINAL_SETTINGS_FILE
 export PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME
 
 # Allocate the shared private data tree before even the provision/update lock
@@ -2256,6 +2258,7 @@ log "running 'pleb install' (clones kilix + optional desktop provider, adds the 
 install_env=(
     "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
     "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
+    "GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"
     "PLEBIAN_OS_MANAGED_INSTALL=1"
     "PLEBIAN_OS_DIR=$PLEBIAN_OS_DIR"
     "PLEBIAN_OS_STORAGE_HOME=$PLEBIAN_OS_STORAGE_HOME"
@@ -2313,6 +2316,14 @@ install_env=(
     )
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
+if [ "$DRY_RUN" != 1 ]; then
+    if [ ! -f "$GPU_TERMINAL_SETTINGS_FILE" ] \
+            || [ -L "$GPU_TERMINAL_SETTINGS_FILE" ] \
+            || [ "$(stat -c '%u:%a' -- "$GPU_TERMINAL_SETTINGS_FILE" 2>/dev/null)" \
+                 != "$TARGET_UID:600" ]; then
+        die "shared Kilix settings were not safely initialized: $GPU_TERMINAL_SETTINGS_FILE"
+    fi
+fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
 
@@ -2354,6 +2365,7 @@ else
 EOF
     write_session_default GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
     write_session_default GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
+    write_session_default GPU_TERMINAL_SETTINGS_FILE "$GPU_TERMINAL_SETTINGS_FILE"
     write_session_default PLEBIAN_OS_MANAGED_INSTALL 1
     write_session_default PLEB_DIR "$PLEB_DIR"
     write_session_default PLEB_STORAGE_HOME "$PLEB_STORAGE_HOME"
@@ -2415,6 +2427,7 @@ EOF
     # Pleb versions predating these category-level names do not explicitly
     # re-export them after sourcing session.env.  Export them here so the
     # coordinated values still reach the Kilix launcher and Kilix 95 provider.
+    printf '%s\n' 'export GPU_TERMINAL_SETTINGS_FILE'
     printf '%s\n' 'export KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY KILIX_CACHE_HOME KILIX_SESSION_HOME KILIX_PREBUILT_HOME'
     printf '%s\n' 'export KILIX95_CONFIG_HOME KILIX95_STATE_HOME KILIX95_CACHE_HOME KILIX95_SESSION_HOME KILIX95_DATA_HOME'
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'

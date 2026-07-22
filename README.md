@@ -30,7 +30,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 2. **First boot** — `plebian-os-firstboot.service` runs
    [`provision/plebian-os-provision.sh`](provision/plebian-os-provision.sh) once,
    after the network is up. It:
-   - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux);
+   - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux, and
+     NetworkManager's `nmtui`);
    - creates the shared source root `~/gpu_terminal`, clones/pins the
      Plebian-OS source at `~/gpu_terminal/plebian-os`, and clones `pleb` beside
      it at `~/gpu_terminal/pleb`;
@@ -40,6 +41,9 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
      registers **Pleb** as a LightDM session;
    - initializes the Kilix source submodule, installs/upgrades Go when needed,
      builds the clickable-chrome fork, and verifies Kilix uses that fork engine;
+   - initializes the shared clickable-chrome settings at
+     `~/.local/gpu_terminal/settings.conf` and installs `kilix-settings` on
+     `PATH`;
    - installs the Plebian-OS wallpaper at a stable system path and selects it
      only in Pleb's persisted desktop state (existing Pleb state is preserved,
      while standalone Kilix-95 retains its XP wallpaper);
@@ -122,6 +126,12 @@ sudo ~/gpu_terminal/plebian-os/bootstrap.sh --kiosk    # …and boot straight in
 
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 
+The Kilix page strip includes a network/Wi-Fi control immediately left of its
+calendar; clicking it opens `nmtui`. Run `kilix-settings` (or `pleb settings`),
+or use Kilix 95's Settings menu, to remove and re-add every top-bar item and
+pane-title button. All of those interfaces use
+`~/.local/gpu_terminal/settings.conf` as their single source of truth.
+
 **Build an installer ISO** (the Debian netinst is downloaded + signature/hash
 verified for you; needs `xorriso`, GNU `cpio`, `gzip`, `gpgv`, and
 `debian-archive-keyring`):
@@ -133,7 +143,8 @@ build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netin
 
 Fresh installations keep coordinated source checkouts in
 `~/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}` and runtime data in
-`~/.local/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}`. No legacy checkout or
+`~/.local/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}`, with shared chrome
+preferences in `~/.local/gpu_terminal/settings.conf`. No legacy checkout or
 data directories are moved automatically. Build cache, remaster work, session
 files, and ordinary ISO artifacts live in
 `~/.local/gpu_terminal/plebian-os/{cache,build,session,artifacts}`. The source

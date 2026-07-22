@@ -353,6 +353,7 @@ PLEB_REPO="${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
 PLEB_BRANCH="${PLEB_BRANCH:-}"
 PLEB_REF="${PLEB_REF:-}"
 GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"
+GPU_TERMINAL_SETTINGS_FILE="${GPU_TERMINAL_SETTINGS_FILE:-$GPU_TERMINAL_HOME/settings.conf}"
 PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
 PLEB_CONFIG_HOME="${PLEB_CONFIG_HOME:-$PLEB_STORAGE_HOME/config}"
 PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
@@ -398,7 +399,7 @@ PLEB_DESKTOP="${PLEB_DESKTOP:-0}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
-# `pleb install` normally owns these five system paths. The stack updater
+# `pleb install` normally owns these six system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
 # a later failure can restore the complete previous install. Custom install
 # destinations remain supported by `pleb install` directly, but are rejected by
@@ -407,6 +408,7 @@ PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/ses
 SESSION_BIN_DST="${SESSION_BIN_DST:-/usr/local/bin/pleb-session}"
 XSESSION_DST="${XSESSION_DST:-/usr/share/xsessions/pleb.desktop}"
 KILIX_LINK="${KILIX_LINK:-/usr/local/bin/kilix}"
+KILIX_SETTINGS_LINK="${KILIX_SETTINGS_LINK:-/usr/local/bin/kilix-settings}"
 PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
 PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md}"
 
@@ -530,6 +532,7 @@ require_standard_install_destinations() {
     if [ "$SESSION_BIN_DST" != /usr/local/bin/pleb-session ] \
         || [ "$XSESSION_DST" != /usr/share/xsessions/pleb.desktop ] \
         || [ "$KILIX_LINK" != /usr/local/bin/kilix ] \
+        || [ "$KILIX_SETTINGS_LINK" != /usr/local/bin/kilix-settings ] \
         || [ "$PLEB_LINK" != /usr/local/bin/pleb ] \
         || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ]; then
         die "plebian-os-update cannot transactionally protect custom Pleb install destinations; run 'pleb install' directly"
@@ -612,6 +615,7 @@ paths=(
     /usr/local/bin/pleb-session
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
+    /usr/local/bin/kilix-settings
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
 )
@@ -699,6 +703,7 @@ paths=(
     /usr/local/bin/pleb-session
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
+    /usr/local/bin/kilix-settings
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
 )
@@ -1852,6 +1857,7 @@ self_update_os_layer() {
 stack_env=(
     "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
     "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
+    "GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"
     "PLEBIAN_OS_MANAGED_INSTALL=1"
     "PLEBIAN_OS_DIR=$PLEBIAN_OS_DIR"
     "PLEBIAN_OS_STORAGE_HOME=$PLEBIAN_OS_STORAGE_HOME"

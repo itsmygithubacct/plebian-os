@@ -19,6 +19,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         required = [
             "GPU_TERMINAL_SOURCE_HOME",
             "GPU_TERMINAL_HOME",
+            "GPU_TERMINAL_SETTINGS_FILE",
             "PLEBIAN_OS_MANAGED_INSTALL",
             "PLEB_DIR",
             "PLEB_STORAGE_HOME",
@@ -123,6 +124,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         keys = (
             "GPU_TERMINAL_SOURCE_HOME", "GPU_TERMINAL_HOME",
+            "GPU_TERMINAL_SETTINGS_FILE",
             "PLEBIAN_OS_DIR", "PLEBIAN_OS_STORAGE_HOME",
             "PLEB_DIR", "PLEB_STORAGE_HOME", "PLEB_CONFIG_HOME",
             "PLEB_STATE_HOME", "PLEB_CACHE_HOME", "PLEB_SESSION_HOME",
@@ -141,6 +143,26 @@ class ProvisionPlumbingTests(unittest.TestCase):
                 self.assertIn(f"env_kv {key}", remaster)
                 self.assertIn(f"write_session_default {key}", provision)
                 self.assertIn(f"provenance_kv {key}", provision)
+
+    def test_shared_chrome_settings_and_nmtui_ship_with_the_os(self):
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
+        deps = (ROOT / "provision" / "install-deps.sh").read_text()
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+
+        self.assertIn('$GPU_TERMINAL_HOME/settings.conf', provision)
+        self.assertIn('"GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"',
+                      provision)
+        self.assertIn('shared Kilix settings were not safely initialized',
+                      provision)
+        self.assertIn('KILIX_SETTINGS_LINK="${KILIX_SETTINGS_LINK:-/usr/local/bin/kilix-settings}"',
+                      update)
+        self.assertGreaterEqual(
+            update.count('/usr/local/bin/kilix-settings'), 3,
+            "the settings command must be validated, snapshotted, and restored",
+        )
+        self.assertIn('network-manager', deps)
+        self.assertIn('network-manager', preseed)
 
     def test_session_env_writer_uses_shell_escaped_defaults(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
