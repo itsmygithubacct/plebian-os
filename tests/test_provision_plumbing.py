@@ -144,7 +144,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
                 self.assertIn(f"write_session_default {key}", provision)
                 self.assertIn(f"provenance_kv {key}", provision)
 
-    def test_shared_chrome_settings_and_nmtui_ship_with_the_os(self):
+    def test_shared_chrome_settings_and_widget_tools_ship_with_the_os(self):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
         deps = (ROOT / "provision" / "install-deps.sh").read_text()
@@ -163,6 +163,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
         )
         self.assertIn('network-manager', deps)
         self.assertIn('network-manager', preseed)
+        self.assertIn('pulsemixer', deps)
+        self.assertIn('pulsemixer', preseed)
 
     def test_session_env_writer_uses_shell_escaped_defaults(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()

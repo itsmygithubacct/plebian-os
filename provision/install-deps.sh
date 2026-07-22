@@ -65,7 +65,7 @@ DEP_GROUPS=(
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
     "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
-    "audio|pulseaudio pulseaudio-utils alsa-utils fluidsynth fluid-soundfont-gm"
+    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
     "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
     "web browsers|firefox-esr chromium"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
