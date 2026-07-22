@@ -1088,6 +1088,8 @@ rollback_stack_transaction() {
     deinit_new_kilix_submodule src kilix-src "kilix source" || failed=1
     deinit_new_kilix_submodule third_party/kitty-frame-presenter \
         kilix-presenter "kilix frame presenter" || failed=1
+    deinit_new_kilix_submodule third_party/kilix-content \
+        kilix-content "kilix content catalog" || failed=1
     # Restore parent repositories before their pre-existing submodule checkout.
     restore_stack_checkout "$PLEB_DIR" pleb pleb || failed=1
     if [ ! -f "$_STACK_TXN_DIR/os.skipped" ]; then
@@ -1100,6 +1102,10 @@ rollback_stack_transaction() {
     if [ "$(cat "$_STACK_TXN_DIR/kilix-presenter.existed" 2>/dev/null || echo 0)" = 1 ]; then
         restore_stack_checkout "$KILIX_DIR/third_party/kitty-frame-presenter" \
             kilix-presenter "kilix frame presenter" || failed=1
+    fi
+    if [ "$(cat "$_STACK_TXN_DIR/kilix-content.existed" 2>/dev/null || echo 0)" = 1 ]; then
+        restore_stack_checkout "$KILIX_DIR/third_party/kilix-content" \
+            kilix-content "kilix content catalog" || failed=1
     fi
     restore_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95" || failed=1
 
@@ -1164,6 +1170,8 @@ begin_stack_transaction() {
     record_kilix_submodule "$KILIX_DIR/src" kilix-src "kilix source"
     record_kilix_submodule "$KILIX_DIR/third_party/kitty-frame-presenter" \
         kilix-presenter "kilix frame presenter"
+    record_kilix_submodule "$KILIX_DIR/third_party/kilix-content" \
+        kilix-content "kilix content catalog"
     record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
     snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
     snapshot_kilix_engine_generation

@@ -234,6 +234,7 @@ init_repo "$PLEBIAN_OS_DIR"
 init_repo "$KILIX_DIR"
 init_repo "$KILIX95_DIR"
 init_repo "$work/presenter-source"
+init_repo "$work/content-source"
 mkdir -p "$KILIX_PREBUILT_HOME/bin"
 printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 mkdir -p "$KILIX_STATE_DIRECTORY" \
@@ -270,6 +271,8 @@ record_stack_checkout "$KILIX_DIR" kilix kilix
 record_kilix_submodule "$KILIX_DIR/src" kilix-src "kilix source"
 record_kilix_submodule "$KILIX_DIR/third_party/kitty-frame-presenter" \
     kilix-presenter "kilix frame presenter"
+record_kilix_submodule "$KILIX_DIR/third_party/kilix-content" \
+    kilix-content "kilix content catalog"
 record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
 snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
 snapshot_kilix_engine_generation
@@ -294,7 +297,9 @@ printf '%s\n' new-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
 printf '%s\n' new-root >"$work/root-output"
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/presenter-source" third_party/kitty-frame-presenter >/dev/null
-git -C "$KILIX_DIR" commit -q -m presenter
+git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
+    "$work/content-source" third_party/kilix-content >/dev/null
+git -C "$KILIX_DIR" commit -q -m submodules
 export PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER="$boundary"
 test_fail_after_boundary "$boundary"
 '''
@@ -342,6 +347,9 @@ test_fail_after_boundary "$boundary"
         )
         self.assertFalse(
             (work / "kilix/third_party/kitty-frame-presenter/tracked").exists()
+        )
+        self.assertFalse(
+            (work / "kilix/third_party/kilix-content/tracked").exists()
         )
         self.assertEqual(
             (work / "kilix-storage" / "prebuilt" / "kitty.app" /
