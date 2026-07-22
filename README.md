@@ -266,3 +266,14 @@ restores only the sources Plebian-OS disabled, preserving operator-owned files.
 Enabled release-mode `uv` installs require exact version/checksum pins and are
 verified after installation. Installed package/source/tool manifests make the
 resolved result auditable.
+
+## License
+
+Except where a file says otherwise, Plebian-OS code and project documentation
+are released under the [MIT License](LICENSE). The installer and desktop
+artwork listed in
+[`assets/installer/ATTRIBUTION.md`](assets/installer/ATTRIBUTION.md) are
+separate works distributed under `GPL-2.0-or-later`; the complete license text
+is in [`assets/COPYING.GPL-2`](assets/COPYING.GPL-2). Components supplied by
+Debian or fetched from Pleb, Kilix, and other upstream projects retain their own
+licenses.
