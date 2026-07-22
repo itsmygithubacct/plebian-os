@@ -30,8 +30,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 2. **First boot** — `plebian-os-firstboot.service` runs
    [`provision/plebian-os-provision.sh`](provision/plebian-os-provision.sh) once,
    after the network is up. It:
-   - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux, and
-     NetworkManager's `nmtui`);
+   - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux,
+     NetworkManager's `nmtui`, and the `pulsemixer` volume control);
    - creates the shared source root `~/gpu_terminal`, clones/pins the
      Plebian-OS source at `~/gpu_terminal/plebian-os`, and clones `pleb` beside
      it at `~/gpu_terminal/pleb`;
@@ -126,10 +126,12 @@ sudo ~/gpu_terminal/plebian-os/bootstrap.sh --kiosk    # …and boot straight in
 
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 
-The Kilix page strip includes a network/Wi-Fi control immediately left of its
-calendar; clicking it opens `nmtui`. Run `kilix-settings` (or `pleb settings`),
-or use Kilix 95's Settings menu, to remove and re-add every top-bar item and
-pane-title button. All of those interfaces use
+The Kilix page strip includes a volume control that opens `pulsemixer`, with
+`alsamixer` as a fallback. It appears immediately left of the network/Wi-Fi
+control; Network remains immediately left of the calendar and opens `nmtui`.
+Run `kilix-settings` (or `pleb settings`), or use Kilix 95's Settings menu, to
+remove and re-add every top-bar item and pane-title button. All of those
+interfaces use
 `~/.local/gpu_terminal/settings.conf` as their single source of truth.
 
 **Build an installer ISO** (the Debian netinst is downloaded + signature/hash
