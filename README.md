@@ -127,8 +127,10 @@ sudo ~/gpu_terminal/plebian-os/bootstrap.sh --kiosk    # …and boot straight in
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 
 The Kilix page strip includes a default-off thermometer that reports the
-hottest readable sensor in green/yellow/red and opens a sibling or installed
-`kilix-temps` in a new tab. The volume control opens `pulsemixer`, with
+hottest readable sensor in green/yellow/red and opens `kilix-temps` in a new
+tab. Firstboot builds and verifies Kilix's exact pinned dashboard and graphics
+closure and publishes the command on `PATH`, so this works on a clean OS install
+without a developer checkout. The volume control opens `pulsemixer`, with
 `alsamixer` as a fallback. It appears immediately left of the network/Wi-Fi
 control; Network remains immediately left of the calendar and opens `nmtui`.
 Run `kilix-settings` (or `pleb settings`), or use Kilix 95's Settings menu, to

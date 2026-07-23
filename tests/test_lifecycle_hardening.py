@@ -160,6 +160,7 @@ class UpdateLifecycleTests(unittest.TestCase):
             "/usr/local/bin/pleb-session",
             "/usr/share/xsessions/pleb.desktop",
             "/usr/local/bin/kilix",
+            "/usr/local/bin/kilix-temps",
             "/usr/local/bin/pleb",
             "/usr/local/share/doc/pleb/RECOVERY.md",
         ):

@@ -399,7 +399,7 @@ PLEB_DESKTOP="${PLEB_DESKTOP:-0}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
-# `pleb install` normally owns these six system paths. The stack updater
+# `pleb install` normally owns these seven system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
 # a later failure can restore the complete previous install. Custom install
 # destinations remain supported by `pleb install` directly, but are rejected by
@@ -409,6 +409,7 @@ SESSION_BIN_DST="${SESSION_BIN_DST:-/usr/local/bin/pleb-session}"
 XSESSION_DST="${XSESSION_DST:-/usr/share/xsessions/pleb.desktop}"
 KILIX_LINK="${KILIX_LINK:-/usr/local/bin/kilix}"
 KILIX_SETTINGS_LINK="${KILIX_SETTINGS_LINK:-/usr/local/bin/kilix-settings}"
+KILIX_TEMPS_LINK="${KILIX_TEMPS_LINK:-/usr/local/bin/kilix-temps}"
 PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
 PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md}"
 
@@ -533,6 +534,7 @@ require_standard_install_destinations() {
         || [ "$XSESSION_DST" != /usr/share/xsessions/pleb.desktop ] \
         || [ "$KILIX_LINK" != /usr/local/bin/kilix ] \
         || [ "$KILIX_SETTINGS_LINK" != /usr/local/bin/kilix-settings ] \
+        || [ "$KILIX_TEMPS_LINK" != /usr/local/bin/kilix-temps ] \
         || [ "$PLEB_LINK" != /usr/local/bin/pleb ] \
         || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ]; then
         die "plebian-os-update cannot transactionally protect custom Pleb install destinations; run 'pleb install' directly"
@@ -616,6 +618,7 @@ paths=(
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
+    /usr/local/bin/kilix-temps
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
 )
@@ -704,6 +707,7 @@ paths=(
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
+    /usr/local/bin/kilix-temps
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
 )

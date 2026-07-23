@@ -2323,6 +2323,13 @@ if [ "$DRY_RUN" != 1 ]; then
                  != "$TARGET_UID:600" ]; then
         die "shared Kilix settings were not safely initialized: $GPU_TERMINAL_SETTINGS_FILE"
     fi
+    if [ ! -x "$USER_HOME/.local/bin/kilix-temps" ] \
+            || [ ! -f "$USER_HOME/.local/lib/kilix-temps/libsoft-raster.so" ] \
+            || [ ! -L /usr/local/bin/kilix-temps ] \
+            || [ "$(readlink /usr/local/bin/kilix-temps 2>/dev/null)" \
+                 != "$USER_HOME/.local/bin/kilix-temps" ]; then
+        die "Pleb did not install and publish the pinned Kilix Temps dashboard"
+    fi
 fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
