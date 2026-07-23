@@ -149,6 +149,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
         deps = (ROOT / "provision" / "install-deps.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        readme = (ROOT / "README.md").read_text()
 
         self.assertIn('$GPU_TERMINAL_HOME/settings.conf', provision)
         self.assertIn('"GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"',
@@ -165,6 +166,9 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn('network-manager', preseed)
         self.assertIn('pulsemixer', deps)
         self.assertIn('pulsemixer', preseed)
+        self.assertIn("default-off thermometer", readme)
+        self.assertIn("kilix settings --set temperature=on", readme)
+        self.assertIn("kilix-temps", readme)
 
     def test_session_env_writer_uses_shell_escaped_defaults(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
