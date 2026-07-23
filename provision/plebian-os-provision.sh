@@ -2330,6 +2330,16 @@ if [ "$DRY_RUN" != 1 ]; then
                  != "$USER_HOME/.local/bin/kilix-temps" ]; then
         die "Pleb did not install and publish the pinned Kilix Temps dashboard"
     fi
+    if [ ! -x "$USER_HOME/.local/bin/tmux-tui" ] \
+            || [ ! -x "$USER_HOME/.local/bin/tb" ] \
+            || [ ! -L /usr/local/bin/tmux-tui ] \
+            || [ "$(readlink /usr/local/bin/tmux-tui 2>/dev/null)" \
+                 != "$USER_HOME/.local/bin/tmux-tui" ] \
+            || [ ! -L /usr/local/bin/tb ] \
+            || [ "$(readlink /usr/local/bin/tb 2>/dev/null)" \
+                 != "$USER_HOME/.local/bin/tb" ]; then
+        die "Pleb did not install Tmux Manager and publish tmux-cli's tb alias"
+    fi
 fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
