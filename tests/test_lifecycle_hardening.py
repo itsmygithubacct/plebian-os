@@ -161,6 +161,8 @@ class UpdateLifecycleTests(unittest.TestCase):
             "/usr/share/xsessions/pleb.desktop",
             "/usr/local/bin/kilix",
             "/usr/local/bin/kilix-temps",
+            "/usr/local/bin/tmux-tui",
+            "/usr/local/bin/tb",
             "/usr/local/bin/pleb",
             "/usr/local/share/doc/pleb/RECOVERY.md",
         ):

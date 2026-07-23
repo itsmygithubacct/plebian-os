@@ -399,7 +399,7 @@ PLEB_DESKTOP="${PLEB_DESKTOP:-0}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
-# `pleb install` normally owns these seven system paths. The stack updater
+# `pleb install` normally owns these nine system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
 # a later failure can restore the complete previous install. Custom install
 # destinations remain supported by `pleb install` directly, but are rejected by
@@ -410,8 +410,13 @@ XSESSION_DST="${XSESSION_DST:-/usr/share/xsessions/pleb.desktop}"
 KILIX_LINK="${KILIX_LINK:-/usr/local/bin/kilix}"
 KILIX_SETTINGS_LINK="${KILIX_SETTINGS_LINK:-/usr/local/bin/kilix-settings}"
 KILIX_TEMPS_LINK="${KILIX_TEMPS_LINK:-/usr/local/bin/kilix-temps}"
+TMUX_TUI_LINK="${TMUX_TUI_LINK:-/usr/local/bin/tmux-tui}"
+TMUX_CLI_LINK="${TMUX_CLI_LINK:-/usr/local/bin/tb}"
 PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
 PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md}"
+TMUX_TUI_BIN="$HOME/.local/bin/tmux-tui"
+TMUX_CLI_BIN="$HOME/.local/bin/tb"
+TMUX_TUI_STAMP="$KILIX_STATE_DIRECTORY/tmux-tui-install.refs"
 
 # Plebian-OS layer self-update: the OS's own scripts (provisioner, dependency
 # installer, this update helper) come from a plebian-os checkout so an installed
@@ -535,6 +540,8 @@ require_standard_install_destinations() {
         || [ "$KILIX_LINK" != /usr/local/bin/kilix ] \
         || [ "$KILIX_SETTINGS_LINK" != /usr/local/bin/kilix-settings ] \
         || [ "$KILIX_TEMPS_LINK" != /usr/local/bin/kilix-temps ] \
+        || [ "$TMUX_TUI_LINK" != /usr/local/bin/tmux-tui ] \
+        || [ "$TMUX_CLI_LINK" != /usr/local/bin/tb ] \
         || [ "$PLEB_LINK" != /usr/local/bin/pleb ] \
         || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ]; then
         die "plebian-os-update cannot transactionally protect custom Pleb install destinations; run 'pleb install' directly"
@@ -619,6 +626,8 @@ paths=(
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
     /usr/local/bin/kilix-temps
+    /usr/local/bin/tmux-tui
+    /usr/local/bin/tb
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
 )
@@ -708,6 +717,8 @@ paths=(
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
     /usr/local/bin/kilix-temps
+    /usr/local/bin/tmux-tui
+    /usr/local/bin/tb
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
 )
@@ -1122,6 +1133,9 @@ rollback_stack_transaction() {
     restore_kilix_engine_generation || failed=1
     restore_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp file || failed=1
     restore_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp file || failed=1
+    restore_stack_path "$TMUX_TUI_BIN" tmux-tui-bin file || failed=1
+    restore_stack_path "$TMUX_CLI_BIN" tmux-cli-bin file || failed=1
+    restore_stack_path "$TMUX_TUI_STAMP" tmux-tui-stamp file || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
     if [ "$failed" = 0 ]; then
@@ -1186,6 +1200,9 @@ begin_stack_transaction() {
     snapshot_kilix_engine_generation
     snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp
     snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp
+    snapshot_stack_path "$TMUX_TUI_BIN" tmux-tui-bin
+    snapshot_stack_path "$TMUX_CLI_BIN" tmux-cli-bin
+    snapshot_stack_path "$TMUX_TUI_STAMP" tmux-tui-stamp
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
     validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \

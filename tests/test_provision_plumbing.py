@@ -170,6 +170,35 @@ class ProvisionPlumbingTests(unittest.TestCase):
             update.count('/usr/local/bin/kilix-temps'), 3,
             "the dashboard command must be validated, snapshotted, and restored",
         )
+        self.assertIn(
+            "Pleb did not install Tmux Manager and publish tmux-cli's tb alias",
+            provision,
+        )
+        self.assertIn(
+            'TMUX_TUI_LINK="${TMUX_TUI_LINK:-/usr/local/bin/tmux-tui}"',
+            update,
+        )
+        self.assertIn(
+            'TMUX_CLI_LINK="${TMUX_CLI_LINK:-/usr/local/bin/tb}"',
+            update,
+        )
+        self.assertGreaterEqual(
+            update.count('/usr/local/bin/tmux-tui'), 3,
+            "the tmux manager command must be validated, snapshotted, and restored",
+        )
+        self.assertGreaterEqual(
+            update.count('/usr/local/bin/tb'), 3,
+            "the tmux-cli alias must be validated, snapshotted, and restored",
+        )
+        for variable, key in (
+            ("TMUX_TUI_BIN", "tmux-tui-bin"),
+            ("TMUX_CLI_BIN", "tmux-cli-bin"),
+            ("TMUX_TUI_STAMP", "tmux-tui-stamp"),
+        ):
+            self.assertIn(f'snapshot_stack_path "${variable}" {key}', update)
+            self.assertIn(
+                f'restore_stack_path "${variable}" {key} file', update
+            )
         self.assertIn('network-manager', deps)
         self.assertIn('network-manager', preseed)
         self.assertIn('pulsemixer', deps)
@@ -177,6 +206,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("default-off thermometer", readme)
         self.assertIn("kilix settings --set temperature=on", readme)
         self.assertIn("kilix-temps", readme)
+        self.assertIn("Tmux Manager", readme)
+        self.assertIn("`tb.py` as the `tb` command", readme)
         self.assertIn("without a developer checkout", readme)
 
     def test_session_env_writer_uses_shell_escaped_defaults(self):

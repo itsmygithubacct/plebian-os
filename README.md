@@ -44,6 +44,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    - initializes the shared clickable-chrome settings at
      `~/.local/gpu_terminal/settings.conf` and installs `kilix-settings` on
      `PATH`;
+   - installs Kilix's pinned `tmux-tui`/`tmux-cli` source closure and publishes
+     Tmux Manager plus tmux-cli's `tb.py` as the `tb` command on `PATH`;
    - installs the Plebian-OS wallpaper at a stable system path and selects it
      only in Pleb's persisted desktop state (existing Pleb state is preserved,
      while standalone Kilix-95 retains its XP wallpaper);
@@ -138,6 +140,10 @@ enable **Thermal status** and remove or re-add every top-bar item and pane-title
 button. For scripts, use `kilix settings --set temperature=on`. All of those
 interfaces use
 `~/.local/gpu_terminal/settings.conf` as their single source of truth.
+
+The Kilix 95 Start menu includes **Tmux Manager**. It opens in a new tab and
+uses the pinned `tmux-tui` plus `tmux-cli` closure installed during firstboot.
+Both `tmux-tui` and the `tb` alias are also available directly from a shell.
 
 **Build an installer ISO** (the Debian netinst is downloaded + signature/hash
 verified for you; needs `xorriso`, GNU `cpio`, `gzip`, `gpgv`, and
