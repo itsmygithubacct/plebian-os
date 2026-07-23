@@ -162,6 +162,14 @@ class ProvisionPlumbingTests(unittest.TestCase):
             update.count('/usr/local/bin/kilix-settings'), 3,
             "the settings command must be validated, snapshotted, and restored",
         )
+        self.assertIn('Pleb did not install and publish the pinned Kilix Temps',
+                      provision)
+        self.assertIn('KILIX_TEMPS_LINK="${KILIX_TEMPS_LINK:-/usr/local/bin/kilix-temps}"',
+                      update)
+        self.assertGreaterEqual(
+            update.count('/usr/local/bin/kilix-temps'), 3,
+            "the dashboard command must be validated, snapshotted, and restored",
+        )
         self.assertIn('network-manager', deps)
         self.assertIn('network-manager', preseed)
         self.assertIn('pulsemixer', deps)
@@ -169,6 +177,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("default-off thermometer", readme)
         self.assertIn("kilix settings --set temperature=on", readme)
         self.assertIn("kilix-temps", readme)
+        self.assertIn("without a developer checkout", readme)
 
     def test_session_env_writer_uses_shell_escaped_defaults(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
