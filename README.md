@@ -44,6 +44,9 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    - initializes the shared clickable-chrome settings at
      `~/.local/gpu_terminal/settings.conf` and installs `kilix-settings` on
      `PATH`;
+   - initializes and builds Kilix's pinned persistent PTY broker, making
+     `kilix pty` and the Kilix-95 **PTY Sessions** Start-menu entry ready on the
+     first boot;
    - installs Kilix's pinned `tmux-tui`/`tmux-cli` source closure and publishes
      Tmux Manager plus tmux-cli's `tb.py` as the `tb` command on `PATH`;
    - installs the Plebian-OS wallpaper at a stable system path and selects it
@@ -144,6 +147,10 @@ interfaces use
 The Kilix 95 Start menu includes **Tmux Manager**. It opens in a new tab and
 uses the pinned `tmux-tui` plus `tmux-cli` closure installed during firstboot.
 Both `tmux-tui` and the `tb` alias are also available directly from a shell.
+
+The same Programs menu includes **PTY Sessions**, a terminal UI for Kilix's
+persistent panes. It lists detached sessions first and can attach, refresh, or
+terminate one after confirmation; `kilix pty` opens it directly from a shell.
 
 **Build an installer ISO** (the Debian netinst is downloaded + signature/hash
 verified for you; needs `xorriso`, GNU `cpio`, `gzip`, `gpgv`, and

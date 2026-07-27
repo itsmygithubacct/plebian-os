@@ -175,6 +175,11 @@ class ProvisionPlumbingTests(unittest.TestCase):
             provision,
         )
         self.assertIn(
+            "Pleb did not build Kilix's pinned persistent PTY manager",
+            provision,
+        )
+        self.assertIn("PLEB_DEFER_PTY_BROKER=1", update)
+        self.assertIn(
             'TMUX_TUI_LINK="${TMUX_TUI_LINK:-/usr/local/bin/tmux-tui}"',
             update,
         )
@@ -199,6 +204,20 @@ class ProvisionPlumbingTests(unittest.TestCase):
             self.assertIn(
                 f'restore_stack_path "${variable}" {key} file', update
             )
+        self.assertIn(
+            'record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker"',
+            update,
+        )
+        self.assertIn(
+            'snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" '
+            "kilix-pty-broker-build",
+            update,
+        )
+        self.assertIn(
+            'restore_stack_path \\\n'
+            '        "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build',
+            update,
+        )
         self.assertIn('network-manager', deps)
         self.assertIn('network-manager', preseed)
         self.assertIn('pulsemixer', deps)
@@ -207,6 +226,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("kilix settings --set temperature=on", readme)
         self.assertIn("kilix-temps", readme)
         self.assertIn("Tmux Manager", readme)
+        self.assertIn("PTY Sessions", readme)
         self.assertIn("`tb.py` as the `tb` command", readme)
         self.assertIn("without a developer checkout", readme)
 

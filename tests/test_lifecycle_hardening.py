@@ -238,10 +238,12 @@ init_repo "$KILIX_DIR"
 init_repo "$KILIX95_DIR"
 init_repo "$work/presenter-source"
 init_repo "$work/content-source"
+init_repo "$work/broker-source"
 mkdir -p "$KILIX_PREBUILT_HOME/bin"
 printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 mkdir -p "$KILIX_STATE_DIRECTORY" \
-    "$KILIX_BUILD_DIRECTORY/generations/build.OldCurrent"
+    "$KILIX_BUILD_DIRECTORY/generations/build.OldCurrent" \
+    "$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker"
 chmod 0700 "$KILIX_STORAGE_HOME" "$KILIX_STATE_DIRECTORY" \
     "$KILIX_BUILD_DIRECTORY"
 ln -s generations/build.OldCurrent "$KILIX_BUILD_DIRECTORY/current"
@@ -255,6 +257,8 @@ printf '%s\n' old-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
 chmod 0600 "$KILIX_STATE_DIRECTORY/fork-built-ref"
 printf '%s\n' old-source >"$KILIX_BUILD_DIRECTORY/current/source-id"
 printf '%s\n' old-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
+printf '%s\n' old-broker \
+    >"$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker/marker"
 printf '%s\n' old-root >"$work/root-output"
 cp "$work/root-output" "$work/root-backup"
 git -C "$PLEB_DIR" rev-parse HEAD >"$work/old-head"
@@ -276,11 +280,14 @@ record_kilix_submodule "$KILIX_DIR/third_party/kitty-frame-presenter" \
     kilix-presenter "kilix frame presenter"
 record_kilix_submodule "$KILIX_DIR/third_party/kilix-content" \
     kilix-content "kilix content catalog"
+record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker" \
+    kilix-pty-broker "Kilix PTY broker"
 record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
 snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
 snapshot_kilix_engine_generation
 snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp
 snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp
+snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
 _STACK_ROOT_TXN_DIR=/var/lib/plebian-os/update-rollback.test
 _STACK_TXN_ACTIVE=1
 _STACK_TXN_COMMITTED=0
@@ -297,11 +304,15 @@ ln -s generations/build.NewFailed "$KILIX_BUILD_DIRECTORY/current"
 printf '%s\n' new-source >"$KILIX_BUILD_DIRECTORY/current/source-id"
 printf '%s\n' new-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
 printf '%s\n' new-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
+printf '%s\n' new-broker \
+    >"$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker/marker"
 printf '%s\n' new-root >"$work/root-output"
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/presenter-source" third_party/kitty-frame-presenter >/dev/null
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/content-source" third_party/kilix-content >/dev/null
+git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
+    "$work/broker-source" third_party/kitty-pty-broker >/dev/null
 git -C "$KILIX_DIR" commit -q -m submodules
 export PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER="$boundary"
 test_fail_after_boundary "$boundary"
@@ -353,6 +364,14 @@ test_fail_after_boundary "$boundary"
         )
         self.assertFalse(
             (work / "kilix/third_party/kilix-content/tracked").exists()
+        )
+        self.assertFalse(
+            (work / "kilix/third_party/kitty-pty-broker/tracked").exists()
+        )
+        self.assertEqual(
+            (work / "kilix-storage/build/libraries/kitty-pty-broker/marker")
+            .read_text().strip(),
+            "old-broker",
         )
         self.assertEqual(
             (work / "kilix-storage" / "prebuilt" / "kitty.app" /

@@ -417,6 +417,7 @@ PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVE
 TMUX_TUI_BIN="$HOME/.local/bin/tmux-tui"
 TMUX_CLI_BIN="$HOME/.local/bin/tb"
 TMUX_TUI_STAMP="$KILIX_STATE_DIRECTORY/tmux-tui-install.refs"
+KILIX_PTY_BROKER_BUILD="$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker"
 
 # Plebian-OS layer self-update: the OS's own scripts (provisioner, dependency
 # installer, this update helper) come from a plebian-os checkout so an installed
@@ -1110,6 +1111,8 @@ rollback_stack_transaction() {
         kilix-presenter "kilix frame presenter" || failed=1
     deinit_new_kilix_submodule third_party/kilix-content \
         kilix-content "kilix content catalog" || failed=1
+    deinit_new_kilix_submodule third_party/kitty-pty-broker \
+        kilix-pty-broker "Kilix PTY broker" || failed=1
     # Restore parent repositories before their pre-existing submodule checkout.
     restore_stack_checkout "$PLEB_DIR" pleb pleb || failed=1
     if [ ! -f "$_STACK_TXN_DIR/os.skipped" ]; then
@@ -1127,6 +1130,10 @@ rollback_stack_transaction() {
         restore_stack_checkout "$KILIX_DIR/third_party/kilix-content" \
             kilix-content "kilix content catalog" || failed=1
     fi
+    if [ "$(cat "$_STACK_TXN_DIR/kilix-pty-broker.existed" 2>/dev/null || echo 0)" = 1 ]; then
+        restore_stack_checkout "$KILIX_DIR/third_party/kitty-pty-broker" \
+            kilix-pty-broker "Kilix PTY broker" || failed=1
+    fi
     restore_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95" || failed=1
 
     restore_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt || failed=1
@@ -1136,6 +1143,8 @@ rollback_stack_transaction() {
     restore_stack_path "$TMUX_TUI_BIN" tmux-tui-bin file || failed=1
     restore_stack_path "$TMUX_CLI_BIN" tmux-cli-bin file || failed=1
     restore_stack_path "$TMUX_TUI_STAMP" tmux-tui-stamp file || failed=1
+    restore_stack_path \
+        "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
     if [ "$failed" = 0 ]; then
@@ -1195,6 +1204,8 @@ begin_stack_transaction() {
         kilix-presenter "kilix frame presenter"
     record_kilix_submodule "$KILIX_DIR/third_party/kilix-content" \
         kilix-content "kilix content catalog"
+    record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker" \
+        kilix-pty-broker "Kilix PTY broker"
     record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
     snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
     snapshot_kilix_engine_generation
@@ -1203,6 +1214,7 @@ begin_stack_transaction() {
     snapshot_stack_path "$TMUX_TUI_BIN" tmux-tui-bin
     snapshot_stack_path "$TMUX_CLI_BIN" tmux-cli-bin
     snapshot_stack_path "$TMUX_TUI_STAMP" tmux-tui-stamp
+    snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
     validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
@@ -1965,7 +1977,11 @@ test_fail_after_boundary pleb-checkout
 
 if [ -x "$PLEB_DIR/bin/pleb" ]; then
     log "re-running 'pleb install' (re-links commands + refreshes the session)"
-    env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" install
+    # The freshly updated Pleb may learn about a submodule that the pre-update
+    # Kilix commit does not have yet. Defer only this build until the immediately
+    # following component update advances Kilix to its pinned broker commit.
+    env "${stack_env[@]}" PLEB_DEFER_PTY_BROKER=1 \
+        "$PLEB_DIR/bin/pleb" install
     test_fail_after_boundary pleb-install
     log "updating kilix, submodules, fork engine, and optional desktop provider"
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart

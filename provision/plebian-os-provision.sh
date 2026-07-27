@@ -2340,6 +2340,11 @@ if [ "$DRY_RUN" != 1 ]; then
                  != "$USER_HOME/.local/bin/tb" ]; then
         die "Pleb did not install Tmux Manager and publish tmux-cli's tb alias"
     fi
+    _pty_broker="$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker/kitty-pty-broker"
+    if [ ! -x "$_pty_broker" ] || [ -L "$_pty_broker" ] \
+            || ! as_user "$_pty_broker" version >/dev/null 2>&1; then
+        die "Pleb did not build Kilix's pinned persistent PTY manager"
+    fi
 fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
