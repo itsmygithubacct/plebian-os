@@ -4,6 +4,30 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.1.6] — unreleased
+
+Voice lands on top of the pending 0.1.5 coordinated release. 0.1.5's pin
+manifest is cut by [RELEASING.md](RELEASING.md) and is untouched here; the
+voice pins join the closure when 0.1.6 is cut.
+
+### Added
+
+- Provision **read-aloud and dictation** for Kilix's two new top-bar widgets.
+  `espeak-ng` (the default synthesizer) and `mbrola` (the runtime behind its
+  optional quality tier) join both the provisioning dependency group and the
+  preseed package set; capture reuses the `pulseaudio-utils` already installed
+  for the volume widget. The mbrola *voice databases* are in Debian's non-free
+  component, which this image does not enable, so they stay a deliberate opt-in
+  and read-aloud falls back to plain espeak-ng without them.
+- Install the pinned Kilix Voice closure at firstboot through `pleb install`,
+  and forward `KILIX_VOICE_REF`, the verified `libvosk` pins and the
+  checksum-pinned acoustic model URL/digest into it. Empty values mean the pins
+  the Kilix checkout already carries, which the pinned Kilix commit makes
+  immutable; `PLEBIAN_OS_INSTALL_VOICE_MODEL=0` provisions read-aloud alone.
+  Unlike every other component, a voice closure that does not install is
+  reported and provisioning continues — the microphone is click-to-talk, local
+  and optional, and a machine with no sound must boot identically.
+
 ## [0.1.5] — unreleased
 
 0.1.3 and 0.1.4 were never stack releases. Both numbers appeared only as Kilix

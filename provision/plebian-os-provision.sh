@@ -33,6 +33,17 @@ KILIX_BRANCH="${KILIX_BRANCH:-}"
 KILIX_REF="${KILIX_REF:-}"
 KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-0.47.4}" # verified amd64 fallback
 KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
+# Read-aloud/dictation. Empty pins mean "use the ones the Kilix checkout carries"
+# — the normal case, since pinning the parent Kilix commit already makes the
+# voice closure transitively immutable. A release manifest can still override
+# them, and PLEBIAN_OS_INSTALL_VOICE_MODEL=0 provisions read-aloud without the
+# speech library and the acoustic model download.
+KILIX_VOICE_REF="${KILIX_VOICE_REF:-}"
+KILIX_VOICE_LIB_VERSION="${KILIX_VOICE_LIB_VERSION:-}"
+KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
+KILIX_VOICE_MODEL_URL="${KILIX_VOICE_MODEL_URL:-}"
+KILIX_VOICE_MODEL_SHA256="${KILIX_VOICE_MODEL_SHA256:-}"
+INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-1}"
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
@@ -2346,6 +2357,12 @@ install_env=(
     "KILIX_REF=$KILIX_REF"
     "KILIX_PREBUILT_VERSION=$KILIX_PREBUILT_VERSION"
     "KILIX_PREBUILT_SHA256=$KILIX_PREBUILT_SHA256"
+    "KILIX_VOICE_REF=$KILIX_VOICE_REF"
+    "KILIX_VOICE_LIB_VERSION=$KILIX_VOICE_LIB_VERSION"
+    "KILIX_VOICE_LIB_SHA256=$KILIX_VOICE_LIB_SHA256"
+    "KILIX_VOICE_MODEL_URL=$KILIX_VOICE_MODEL_URL"
+    "KILIX_VOICE_MODEL_SHA256=$KILIX_VOICE_MODEL_SHA256"
+    "PLEB_INSTALL_VOICE_MODEL=$INSTALL_VOICE_MODEL"
     "PLEBIAN_OS_BUILD_KILIX_FORK=$BUILD_KILIX_FORK"
     "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION"
     "PLEBIAN_OS_KILIX_GO_VERSION=$KILIX_GO_VERSION"
@@ -2422,6 +2439,22 @@ print('on' if settings.transcript_enabled() else 'off')
     if [ ! -x "$_pty_broker" ] || [ -L "$_pty_broker" ] \
             || ! as_user "$_pty_broker" version >/dev/null 2>&1; then
         die "Pleb did not build Kilix's pinned persistent PTY manager"
+    fi
+    # The one closure whose absence is not a provisioning failure. Voice is
+    # optional everywhere in the stack: a machine with no sound card must boot
+    # identically, dictation additionally needs a verified library and a
+    # checksum-pinned model download, and a firstboot that could not fetch them
+    # should leave a working desktop with two dimmed widgets — not a failed
+    # install. Report what is missing and continue.
+    if [ ! -x "$USER_HOME/.local/bin/kilix-tts" ] \
+            || [ ! -x "$USER_HOME/.local/bin/kilix-stt" ]; then
+        warn "the pinned Kilix Voice closure did not install; read-aloud and dictation stay unavailable (run 'kilix voice doctor' after login)"
+    elif [ "$INSTALL_VOICE_MODEL" = 1 ] \
+            && { [ ! -f "$KILIX_DATA_HOME/voice/lib/current/libvosk.so" ] \
+                 || [ -z "$(ls -A -- "$KILIX_DATA_HOME/voice/models" 2>/dev/null)" ]; }; then
+        warn "read-aloud is installed but dictation has no speech library or model; run 'kilix voice install' after login"
+    else
+        log "voice: read-aloud and dictation installed"
     fi
 fi
 build_kilix_fork

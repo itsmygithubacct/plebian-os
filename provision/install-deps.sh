@@ -66,6 +66,14 @@ DEP_GROUPS=(
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
     "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
     "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
+    # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
+    # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free and
+    # this image ships main/contrib/non-free-firmware only, so they are not
+    # listed: one unresolvable name fails the whole group, which would take
+    # espeak-ng down with it and leave the image with no speech at all.
+    # Dictation adds no package here — its library and model are pinned
+    # downloads owned by Kilix's installer.
+    "voice (tts/stt)|espeak-ng mbrola"
     "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
     "session-log archiving|zstd"
     "web browsers|firefox-esr chromium"
