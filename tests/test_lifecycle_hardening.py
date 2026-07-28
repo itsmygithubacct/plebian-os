@@ -141,6 +141,27 @@ class UpdateLifecycleTests(unittest.TestCase):
             )
             self.assertNotEqual(failed_cleanup.returncode, 0)
 
+    def test_root_snapshot_and_restore_indices_have_identical_layouts(self):
+        snapshot = UPDATE[
+            UPDATE.index("<<'ROOT_SNAPSHOT'"):
+            UPDATE.index("\nROOT_SNAPSHOT")
+        ]
+        restore = UPDATE[
+            UPDATE.index("<<'ROOT_RESTORE'"):
+            UPDATE.index("\nROOT_RESTORE")
+        ]
+        for array_name in ("paths", "managed_dirs"):
+            with self.subTest(array=array_name):
+                pattern = rf"{array_name}=\(\n(.*?)\n\)"
+                snapshot_items = re.search(pattern, snapshot, re.DOTALL)
+                restore_items = re.search(pattern, restore, re.DOTALL)
+                self.assertIsNotNone(snapshot_items)
+                self.assertIsNotNone(restore_items)
+                self.assertEqual(
+                    snapshot_items.group(1).splitlines(),
+                    restore_items.group(1).splitlines(),
+                )
+
     def test_outer_transaction_covers_every_stack_boundary(self):
         for marker in ("os-layer", "pleb-checkout", "pleb-install",
                        "component-update"):

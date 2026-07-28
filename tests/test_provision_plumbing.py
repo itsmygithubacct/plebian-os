@@ -239,6 +239,66 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn("`tb.py` as the `tb` command", readme)
         self.assertIn("without a developer checkout", readme)
 
+    def test_voice_closure_reaches_media_session_update_and_rollback(self):
+        remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
+        pins = (
+            "KILIX_VOICE_REF",
+            "KILIX_VOICE_LIB_VERSION",
+            "KILIX_VOICE_LIB_SHA256",
+            "KILIX_VOICE_MODEL_URL",
+            "KILIX_VOICE_MODEL_SHA256",
+        )
+        for key in pins:
+            with self.subTest(key=key):
+                self.assertIn(f"manifest_kv {key}", remaster)
+                self.assertIn(f"env_kv {key}", remaster)
+                self.assertIn(f'"{key}=${key}"', provision)
+                self.assertIn(f"write_session_default {key}", provision)
+                self.assertIn(f"provenance_kv {key}", provision)
+                self.assertIn(f'"{key}=${key}"', update)
+
+        policy = "PLEBIAN_OS_INSTALL_VOICE_MODEL"
+        self.assertIn(f"manifest_kv {policy}", remaster)
+        self.assertIn(f"env_kv {policy}", remaster)
+        self.assertIn(
+            f'write_session_default {policy} "$INSTALL_VOICE_MODEL"',
+            provision,
+        )
+        self.assertIn(
+            f'provenance_kv {policy} "$INSTALL_VOICE_MODEL"', provision
+        )
+        self.assertIn(
+            '"PLEB_INSTALL_VOICE_MODEL=$INSTALL_VOICE_MODEL"', provision
+        )
+        self.assertIn(
+            '"PLEB_INSTALL_VOICE_MODEL=$PLEBIAN_OS_INSTALL_VOICE_MODEL"',
+            update,
+        )
+
+        for path in (
+            "/usr/local/bin/kilix-tts",
+            "/usr/local/bin/kilix-stt",
+        ):
+            self.assertGreaterEqual(
+                update.count(path),
+                3,
+                f"{path} must be validated, snapshotted, and restored",
+            )
+        for variable, key in (
+            ("KILIX_VOICE_TTS_BIN", "kilix-voice-tts-bin"),
+            ("KILIX_VOICE_STT_BIN", "kilix-voice-stt-bin"),
+            ("KILIX_VOICE_DAEMON_BIN", "kilix-voice-daemon-bin"),
+            ("KILIX_VOICE_STAMP", "kilix-voice-stamp"),
+            ("KILIX_VOICE_LIBRARY_LINK", "kilix-voice-library"),
+            ("KILIX_VOICE_MODEL_LINK", "kilix-voice-model"),
+        ):
+            self.assertIn(f'snapshot_stack_path "${variable}" {key}', update)
+            self.assertIn(
+                f'restore_stack_path "${variable}" {key} file', update
+            )
+
     def test_session_env_writer_uses_shell_escaped_defaults(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn("write_session_default", text)

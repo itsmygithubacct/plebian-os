@@ -375,6 +375,12 @@ KILIX_BRANCH="${KILIX_BRANCH:-}"
 KILIX_REF="${KILIX_REF:-}"
 KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-0.47.4}"
 KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
+KILIX_VOICE_REF="${KILIX_VOICE_REF:-}"
+KILIX_VOICE_LIB_VERSION="${KILIX_VOICE_LIB_VERSION:-}"
+KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
+KILIX_VOICE_MODEL_URL="${KILIX_VOICE_MODEL_URL:-}"
+KILIX_VOICE_MODEL_SHA256="${KILIX_VOICE_MODEL_SHA256:-}"
+PLEBIAN_OS_INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-1}"
 PLEBIAN_OS_BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
 PLEBIAN_OS_KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 PLEBIAN_OS_KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
@@ -407,7 +413,7 @@ KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-0}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
-# `pleb install` normally owns these ten system paths. The stack updater
+# `pleb install` normally owns these twelve system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
 # a later failure can restore the complete previous install. Custom install
 # destinations remain supported by `pleb install` directly, but are rejected by
@@ -420,12 +426,20 @@ KILIX_SETTINGS_LINK="${KILIX_SETTINGS_LINK:-/usr/local/bin/kilix-settings}"
 KILIX_TEMPS_LINK="${KILIX_TEMPS_LINK:-/usr/local/bin/kilix-temps}"
 TMUX_TUI_LINK="${TMUX_TUI_LINK:-/usr/local/bin/tmux-tui}"
 TMUX_CLI_LINK="${TMUX_CLI_LINK:-/usr/local/bin/tb}"
+KILIX_VOICE_TTS_LINK="${KILIX_VOICE_TTS_LINK:-/usr/local/bin/kilix-tts}"
+KILIX_VOICE_STT_LINK="${KILIX_VOICE_STT_LINK:-/usr/local/bin/kilix-stt}"
 PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
 PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md}"
 OPENBOX_CONFIG_DST="${OPENBOX_CONFIG_DST:-/usr/local/share/pleb/openbox/rc.xml}"
 TMUX_TUI_BIN="$HOME/.local/bin/tmux-tui"
 TMUX_CLI_BIN="$HOME/.local/bin/tb"
 TMUX_TUI_STAMP="$KILIX_STATE_DIRECTORY/tmux-tui-install.refs"
+KILIX_VOICE_TTS_BIN="$HOME/.local/bin/kilix-tts"
+KILIX_VOICE_STT_BIN="$HOME/.local/bin/kilix-stt"
+KILIX_VOICE_DAEMON_BIN="$HOME/.local/bin/kilix-voiced"
+KILIX_VOICE_STAMP="$KILIX_STATE_DIRECTORY/kilix-voice-install.refs"
+KILIX_VOICE_LIBRARY_LINK="$KILIX_DATA_HOME/voice/lib/current"
+KILIX_VOICE_MODEL_LINK="$KILIX_DATA_HOME/voice/models/small-en-us"
 KILIX_PTY_BROKER_BUILD="$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker"
 
 # Plebian-OS layer self-update: the OS's own scripts (provisioner, dependency
@@ -552,6 +566,8 @@ require_standard_install_destinations() {
         || [ "$KILIX_TEMPS_LINK" != /usr/local/bin/kilix-temps ] \
         || [ "$TMUX_TUI_LINK" != /usr/local/bin/tmux-tui ] \
         || [ "$TMUX_CLI_LINK" != /usr/local/bin/tb ] \
+        || [ "$KILIX_VOICE_TTS_LINK" != /usr/local/bin/kilix-tts ] \
+        || [ "$KILIX_VOICE_STT_LINK" != /usr/local/bin/kilix-stt ] \
         || [ "$PLEB_LINK" != /usr/local/bin/pleb ] \
         || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ] \
         || [ "$OPENBOX_CONFIG_DST" != /usr/local/share/pleb/openbox/rc.xml ]; then
@@ -639,6 +655,8 @@ paths=(
     /usr/local/bin/kilix-temps
     /usr/local/bin/tmux-tui
     /usr/local/bin/tb
+    /usr/local/bin/kilix-tts
+    /usr/local/bin/kilix-stt
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
     /usr/local/share/pleb/openbox/rc.xml
@@ -735,6 +753,8 @@ paths=(
     /usr/local/bin/kilix-temps
     /usr/local/bin/tmux-tui
     /usr/local/bin/tb
+    /usr/local/bin/kilix-tts
+    /usr/local/bin/kilix-stt
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
     /usr/local/share/pleb/openbox/rc.xml
@@ -1163,6 +1183,12 @@ rollback_stack_transaction() {
     restore_stack_path "$TMUX_TUI_BIN" tmux-tui-bin file || failed=1
     restore_stack_path "$TMUX_CLI_BIN" tmux-cli-bin file || failed=1
     restore_stack_path "$TMUX_TUI_STAMP" tmux-tui-stamp file || failed=1
+    restore_stack_path "$KILIX_VOICE_TTS_BIN" kilix-voice-tts-bin file || failed=1
+    restore_stack_path "$KILIX_VOICE_STT_BIN" kilix-voice-stt-bin file || failed=1
+    restore_stack_path "$KILIX_VOICE_DAEMON_BIN" kilix-voice-daemon-bin file || failed=1
+    restore_stack_path "$KILIX_VOICE_STAMP" kilix-voice-stamp file || failed=1
+    restore_stack_path "$KILIX_VOICE_LIBRARY_LINK" kilix-voice-library file || failed=1
+    restore_stack_path "$KILIX_VOICE_MODEL_LINK" kilix-voice-model file || failed=1
     restore_stack_path \
         "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
@@ -1234,6 +1260,12 @@ begin_stack_transaction() {
     snapshot_stack_path "$TMUX_TUI_BIN" tmux-tui-bin
     snapshot_stack_path "$TMUX_CLI_BIN" tmux-cli-bin
     snapshot_stack_path "$TMUX_TUI_STAMP" tmux-tui-stamp
+    snapshot_stack_path "$KILIX_VOICE_TTS_BIN" kilix-voice-tts-bin
+    snapshot_stack_path "$KILIX_VOICE_STT_BIN" kilix-voice-stt-bin
+    snapshot_stack_path "$KILIX_VOICE_DAEMON_BIN" kilix-voice-daemon-bin
+    snapshot_stack_path "$KILIX_VOICE_STAMP" kilix-voice-stamp
+    snapshot_stack_path "$KILIX_VOICE_LIBRARY_LINK" kilix-voice-library
+    snapshot_stack_path "$KILIX_VOICE_MODEL_LINK" kilix-voice-model
     snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
@@ -2009,6 +2041,12 @@ stack_env=(
     "KILIX_REF=$KILIX_REF"
     "KILIX_PREBUILT_VERSION=$KILIX_PREBUILT_VERSION"
     "KILIX_PREBUILT_SHA256=$KILIX_PREBUILT_SHA256"
+    "KILIX_VOICE_REF=$KILIX_VOICE_REF"
+    "KILIX_VOICE_LIB_VERSION=$KILIX_VOICE_LIB_VERSION"
+    "KILIX_VOICE_LIB_SHA256=$KILIX_VOICE_LIB_SHA256"
+    "KILIX_VOICE_MODEL_URL=$KILIX_VOICE_MODEL_URL"
+    "KILIX_VOICE_MODEL_SHA256=$KILIX_VOICE_MODEL_SHA256"
+    "PLEB_INSTALL_VOICE_MODEL=$PLEBIAN_OS_INSTALL_VOICE_MODEL"
     "PLEBIAN_OS_BUILD_KILIX_FORK=$PLEBIAN_OS_BUILD_KILIX_FORK"
     "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$PLEBIAN_OS_KILIX_GO_MIN_VERSION"
     "PLEBIAN_OS_KILIX_GO_VERSION=$PLEBIAN_OS_KILIX_GO_VERSION"
