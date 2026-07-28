@@ -37,6 +37,11 @@ KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
 KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-}"
+KILIX_CAP_REPO="${KILIX_CAP_REPO:-https://github.com/itsmygithubacct/kilix-cap.git}"
+KILIX_CAP_REF="${KILIX_CAP_REF:-}"
+KILIX_CAP_AUTO_INSTALL="${KILIX_CAP_AUTO_INSTALL:-1}"
+KILIX_CAP_TRUST_EXISTING_CHECKOUT="${KILIX_CAP_TRUST_EXISTING_CHECKOUT:-0}"
+KILIX_CAP_ALLOW_MUTABLE_REF="${KILIX_CAP_ALLOW_MUTABLE_REF:-0}"
 BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
 KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
@@ -64,6 +69,7 @@ APT_ETC_ROOT="${PLEBIAN_OS_APT_ETC_ROOT:-/etc}"
 PLEB_DIR="${PLEB_DIR:-}"                       # defaults after target user is known
 KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
+KILIX_CAP_DIR="${KILIX_CAP_DIR:-}"              # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into `kilix desktop`
@@ -1635,6 +1641,9 @@ write_source_tool_manifest() {
         provenance_kv KILIX_VERSION "$kilix_version"
         provenance_kv KILIX_ENGINE "$engine"
         provenance_kv KILIX_ENGINE_VERSION "$engine_version"
+        provenance_kv KILIX_CAP_DIR "$KILIX_CAP_DIR"
+        provenance_kv KILIX_CAP_REPO "$KILIX_CAP_REPO"
+        provenance_kv KILIX_CAP_REF "$KILIX_CAP_REF"
         provenance_kv KILIX95_REF "$KILIX95_REF"
         provenance_kv KILIX95_DIR "$KILIX95_DIR"
         provenance_kv KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
@@ -2144,6 +2153,7 @@ GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/gpu_terminal}"
 PLEB_DIR="${PLEB_DIR:-$GPU_TERMINAL_SOURCE_HOME/pleb}"
 KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-95}"
+KILIX_CAP_DIR="${KILIX_CAP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-cap}"
 PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
 GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$USER_HOME/.local/gpu_terminal}"
 GPU_TERMINAL_SETTINGS_FILE="${GPU_TERMINAL_SETTINGS_FILE:-$GPU_TERMINAL_HOME/settings.conf}"
@@ -2189,6 +2199,8 @@ if [ "$DESKTOP" = 1 ]; then
     log "desktop    : provider=$KILIX_DESKTOP_PROVIDER name=$KILIX_DESKTOP_NAME"
     if desktop_provider_needs_kilix95; then
         log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
+    elif [ "$KILIX_DESKTOP_PROVIDER" = cap ]; then
+        log "kilix cap  : $KILIX_CAP_REPO -> $KILIX_CAP_DIR (first launch)"
     fi
 fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
@@ -2343,6 +2355,12 @@ install_env=(
     "KILIX_DESKTOP_COMMAND=$KILIX_DESKTOP_COMMAND"
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
     "KILIX_DESKTOP_FLAVOR=$KILIX_DESKTOP_FLAVOR"
+    "KILIX_CAP_AUTO_INSTALL=$KILIX_CAP_AUTO_INSTALL"
+    "KILIX_CAP_DIR=$KILIX_CAP_DIR"
+    "KILIX_CAP_REPO=$KILIX_CAP_REPO"
+    "KILIX_CAP_REF=$KILIX_CAP_REF"
+    "KILIX_CAP_TRUST_EXISTING_CHECKOUT=$KILIX_CAP_TRUST_EXISTING_CHECKOUT"
+    "KILIX_CAP_ALLOW_MUTABLE_REF=$KILIX_CAP_ALLOW_MUTABLE_REF"
     "PLEB_DESKTOP=$DESKTOP"
     "PLEB_WM=$PLEB_WM"
     "KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES"
@@ -2444,8 +2462,9 @@ else
     cat <<'EOF'
 # Managed by plebian-os-provision — Plebian-OS Pleb session config.
 # PLEB_DESKTOP=1 starts `kilix desktop`; set it to 0 for a plain fullscreen
-# kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, command,
-# or none. PLEB_WM selects the window manager (openbox, none, or a command line);
+# kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, cap,
+# command, or none. PLEB_WM selects the window manager (openbox, none, or a
+# command line);
 # an explicit choice here is kept by a reprovision. pleb-session documents the
 # other knobs.
 EOF
@@ -2491,6 +2510,12 @@ EOF
     write_session_default KILIX_DESKTOP_COMMAND "$KILIX_DESKTOP_COMMAND"
     write_session_default KILIX_DESKTOP_NAME "$KILIX_DESKTOP_NAME"
     write_session_default KILIX_DESKTOP_FLAVOR "$KILIX_DESKTOP_FLAVOR"
+    write_session_default KILIX_CAP_AUTO_INSTALL "$KILIX_CAP_AUTO_INSTALL"
+    write_session_default KILIX_CAP_DIR "$KILIX_CAP_DIR"
+    write_session_default KILIX_CAP_REPO "$KILIX_CAP_REPO"
+    write_session_default KILIX_CAP_REF "$KILIX_CAP_REF"
+    write_session_default KILIX_CAP_TRUST_EXISTING_CHECKOUT "$KILIX_CAP_TRUST_EXISTING_CHECKOUT"
+    write_session_default KILIX_CAP_ALLOW_MUTABLE_REF "$KILIX_CAP_ALLOW_MUTABLE_REF"
     write_session_default KILIX95_AUTO_INSTALL "$KILIX95_AUTO_INSTALL"
     write_session_default KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
     write_session_default KILIX95_CONFIG_HOME "$KILIX95_CONFIG_HOME"

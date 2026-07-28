@@ -135,9 +135,10 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
 
 - `PLEB_DESKTOP=1` → runs `kilix desktop`; `0` → a plain fullscreen
   kilix shell (or delete the file).
-- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|command|none` selects what
+- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|cap|command|none` selects what
   `kilix desktop` runs. `command` uses `KILIX_DESKTOP_COMMAND`; `none` disables
-  the facade. For a Plebian-OS shell session, prefer `PLEB_DESKTOP=0`.
+  the facade. `cap` downloads and builds Kilix Cap on first launch. For a
+  Plebian-OS shell session, prefer `PLEB_DESKTOP=0`.
 - `PLEB_REF`, `KILIX_REF`, and `KILIX95_REF` can pin exact refs for release
   images. `KILIX_PREBUILT_VERSION` plus `KILIX_PREBUILT_SHA256` can also pin and
   verify the downloaded fallback kitty bundle. `KILIX95_DIR`, `KILIX95_REPO`,
@@ -155,7 +156,9 @@ At build time these come from `--session` / `--kiosk` /
 `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`,
 `PLEBIAN_OS_BUILD_KILIX_FORK`, `PLEBIAN_OS_KILIX_GO_MIN_VERSION`,
 `KILIX_DESKTOP_PROVIDER`, `KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_NAME`,
-`KILIX_DESKTOP_FLAVOR`, `KILIX95_AUTO_INSTALL`, `KILIX95_REPO`,
+`KILIX_DESKTOP_FLAVOR`, `KILIX_CAP_AUTO_INSTALL`, `KILIX_CAP_DIR`,
+`KILIX_CAP_REPO`, `KILIX_CAP_REF`, `KILIX_CAP_TRUST_EXISTING_CHECKOUT`,
+`KILIX_CAP_ALLOW_MUTABLE_REF`, `KILIX95_AUTO_INSTALL`, `KILIX95_REPO`,
 `KILIX95_BRANCH`, and `KILIX95_REF`
 are also copied into the first-boot environment when present.
 

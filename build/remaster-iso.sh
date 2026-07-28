@@ -303,6 +303,7 @@ resolve_target_layout() {
     PLEB_DIR="$GPU_TERMINAL_SOURCE_HOME/pleb"
     KILIX_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix"
     KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-95"
+    KILIX_CAP_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-cap"
     PLEB_STORAGE_HOME="$GPU_TERMINAL_HOME/pleb"
     PLEB_CONFIG_HOME="$PLEB_STORAGE_HOME/config"
     PLEB_STATE_HOME="$PLEB_STORAGE_HOME/state"
@@ -331,7 +332,7 @@ resolve_target_layout() {
         PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME GPU_TERMINAL_SOURCE_HOME \
         GPU_TERMINAL_HOME GPU_TERMINAL_SETTINGS_FILE \
         PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME \
-        PLEBIAN_OS_DIR PLEB_DIR KILIX_DIR KILIX95_DIR PLEB_STORAGE_HOME \
+        PLEBIAN_OS_DIR PLEB_DIR KILIX_DIR KILIX95_DIR KILIX_CAP_DIR PLEB_STORAGE_HOME \
         PLEB_CONFIG_HOME PLEB_STATE_HOME PLEB_CACHE_HOME PLEB_SESSION_HOME \
         PLEB_DATA_HOME KILIX_STORAGE_HOME KILIX_CONFIG_HOME \
         KILIX_STATE_DIRECTORY KILIX_CACHE_HOME KILIX_SESSION_HOME \
@@ -486,6 +487,12 @@ write_build_info() {
         manifest_kv KILIX_DESKTOP_COMMAND "${KILIX_DESKTOP_COMMAND:-}"
         manifest_kv KILIX_DESKTOP_NAME "${KILIX_DESKTOP_NAME:-desktop}"
         manifest_kv KILIX_DESKTOP_FLAVOR "${KILIX_DESKTOP_FLAVOR:-}"
+        manifest_kv KILIX_CAP_AUTO_INSTALL "${KILIX_CAP_AUTO_INSTALL:-1}"
+        manifest_kv KILIX_CAP_DIR "${KILIX_CAP_DIR:-}"
+        manifest_kv KILIX_CAP_REPO "${KILIX_CAP_REPO:-https://github.com/itsmygithubacct/kilix-cap.git}"
+        manifest_kv KILIX_CAP_REF "${KILIX_CAP_REF:-}"
+        manifest_kv KILIX_CAP_TRUST_EXISTING_CHECKOUT "${KILIX_CAP_TRUST_EXISTING_CHECKOUT:-0}"
+        manifest_kv KILIX_CAP_ALLOW_MUTABLE_REF "${KILIX_CAP_ALLOW_MUTABLE_REF:-0}"
         manifest_kv KILIX95_REPO "${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
         manifest_kv KILIX95_BRANCH "${KILIX95_BRANCH:-}"
         manifest_kv KILIX95_REF "${KILIX95_REF:-}"
@@ -565,6 +572,12 @@ write_firstboot_env() {
         env_kv KILIX_DESKTOP_COMMAND "${KILIX_DESKTOP_COMMAND:-}"
         env_kv KILIX_DESKTOP_NAME "${KILIX_DESKTOP_NAME:-desktop}"
         env_kv KILIX_DESKTOP_FLAVOR "${KILIX_DESKTOP_FLAVOR:-}"
+        env_kv KILIX_CAP_AUTO_INSTALL "${KILIX_CAP_AUTO_INSTALL:-1}"
+        env_kv KILIX_CAP_DIR "${KILIX_CAP_DIR:-}"
+        env_kv KILIX_CAP_REPO "${KILIX_CAP_REPO:-https://github.com/itsmygithubacct/kilix-cap.git}"
+        env_kv KILIX_CAP_REF "${KILIX_CAP_REF:-}"
+        env_kv KILIX_CAP_TRUST_EXISTING_CHECKOUT "${KILIX_CAP_TRUST_EXISTING_CHECKOUT:-0}"
+        env_kv KILIX_CAP_ALLOW_MUTABLE_REF "${KILIX_CAP_ALLOW_MUTABLE_REF:-0}"
         env_kv KILIX95_REPO "${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
         env_kv KILIX95_BRANCH "${KILIX95_BRANCH:-}"
         env_kv KILIX95_REF "${KILIX95_REF:-}"

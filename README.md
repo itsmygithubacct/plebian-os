@@ -295,10 +295,12 @@ Plebian-OS for a desktop-shaped one.
 Desktop selection is controlled by `/etc/pleb/session.env` after install, or by
 environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
 fullscreen kilix shell. With desktop mode on, `KILIX_DESKTOP_PROVIDER` can be
-`auto`, `builtin`, `external`, `command`, or `none`; `command` uses
-`KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_FLAVOR=95|xp` selects the first-launch
-desktop flavor, and `none` behaves like a plain shell session. External
-Kilix 95 still uses `KILIX95_*`. Set `PLEBIAN_OS_BUILD_KILIX_FORK=0` only when
+`auto`, `builtin`, `external`, `cap`, `command`, or `none`; `cap` downloads
+and locally builds the Kilix-pinned Kilix Cap source on first launch. `command`
+uses `KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_FLAVOR=95|xp` selects the
+first-launch desktop flavor, and `none` behaves like a plain shell session.
+Kilix Cap uses `KILIX_CAP_*`; external Kilix 95 still uses `KILIX95_*`. Set
+`PLEBIAN_OS_BUILD_KILIX_FORK=0` only when
 you deliberately want to allow the prebuilt fallback engine. Release-style
 images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,
 `PLEBIAN_OS_NETINST_SHA256`, `PLEBIAN_OS_APT_SNAPSHOT`, `PLEB_REF`, `KILIX_REF`,
