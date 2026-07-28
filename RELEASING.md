@@ -8,8 +8,29 @@ network-fetched build input.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The current coordinated release is **0.1.2**; its closure is finalized only
-after the four final component commits are known.
+The last published coordinated release is **0.1.2**. The next one is **0.1.5**;
+its closure is finalized only after the four final component commits are known.
+
+### Tags are created only by this procedure
+
+A `vX.Y.Z` tag in any of the four repositories means "this commit is part of
+published stack release X.Y.Z". Component repositories may bump their own
+`VERSION` on `main` whenever their contract level changes, but **nobody pushes a
+`vX.Y.Z` tag outside step 7 below**, and the four tags are pushed together.
+
+### Why 0.1.3 and 0.1.4 do not exist as releases
+
+Both numbers were consumed by component `VERSION` bumps that marked Kilix SDK
+levels 1.3 and 1.4 (and Kilix-95's adoption of them), without a closure, an
+acceptance run, or an image. `0.1.3` was never tagged in any repository. `0.1.4`
+was additionally pushed as a **Kilix-only** `v0.1.4` tag, before this rule
+existed; that tag is published and is therefore left exactly where it is rather
+than moved or reused. Neither number can become a coordinated release — a 0.1.4
+closure would either have to pin Kilix at that tag, which no longer matches the
+work the other three repositories depend on, or re-point a published tag. The
+next coordinated release is 0.1.5, and no closure is back-filled for 0.1.3 or
+0.1.4: `releases/<x.y.z>.env` is the reproducible input manifest for an image
+that was actually built and accepted, not a changelog.
 
 ## Version commands
 
@@ -43,10 +64,23 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
 1. Update `VERSION` and each repository's release notes
    (`CHANGELOG.md` in Plebian-OS/Pleb and the `README.md` release section in
    Kilix/Kilix-95). Create and review `releases/<x.y.z>.env`; verify every URL
-   and checksum from its official upstream source.
+   and checksum from its official upstream source. Advance
+   `KILIX_COMMIT` in `kilix-95/.github/workflows/test.yml` to this release's
+   Kilix commit: Kilix owns the SDK, so a stale pin leaves Kilix-95's CI testing
+   an old pairing and reporting green while the shipped combination is untested.
+   Its advisory `pairing` job runs the same suite against Kilix's branch head; a
+   red result there is the early warning that this pin — or the provider — needs
+   to move.
 2. Run each repository's complete test/lint suite and integration contract
-   tests. Confirm all four worktrees are clean, review their exact commits, and
-   commit the coordinated changes. Immediately before tagging, confirm those
+   tests. Run them in a clean environment and outside a live Kilix session:
+   exported `KILIX_*` values and a user's persisted `kilix.env`
+   (`KILIX_DESKTOP_FLAVOR`, `KILIX_CHROME_*`) reach several suites and turn
+   them red for reasons that have nothing to do with the code. Kilix-95's
+   `tests/run.py` always resolves Kilix from the sibling `../kilix` checkout, so
+   its result reflects whatever is in that working tree. Confirm all four
+   `VERSION` files read the release version, confirm all four worktrees are
+   clean, review their exact commits, and commit the coordinated changes.
+   Immediately before tagging, confirm those
    commits are still the intended branch tips; classify any newer commit as
    either part of this release or explicitly post-release. For the pinned Kilix
    commit, inspect its `src/go.mod` `toolchain` line and make the manifest's

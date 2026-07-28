@@ -396,10 +396,12 @@ KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
 PLEB_DESKTOP="${PLEB_DESKTOP:-0}"
+PLEB_WM="${PLEB_WM:-openbox}"
+KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-0}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
-# `pleb install` normally owns these nine system paths. The stack updater
+# `pleb install` normally owns these ten system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
 # a later failure can restore the complete previous install. Custom install
 # destinations remain supported by `pleb install` directly, but are rejected by
@@ -414,6 +416,7 @@ TMUX_TUI_LINK="${TMUX_TUI_LINK:-/usr/local/bin/tmux-tui}"
 TMUX_CLI_LINK="${TMUX_CLI_LINK:-/usr/local/bin/tb}"
 PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
 PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md}"
+OPENBOX_CONFIG_DST="${OPENBOX_CONFIG_DST:-/usr/local/share/pleb/openbox/rc.xml}"
 TMUX_TUI_BIN="$HOME/.local/bin/tmux-tui"
 TMUX_CLI_BIN="$HOME/.local/bin/tb"
 TMUX_TUI_STAMP="$KILIX_STATE_DIRECTORY/tmux-tui-install.refs"
@@ -544,7 +547,8 @@ require_standard_install_destinations() {
         || [ "$TMUX_TUI_LINK" != /usr/local/bin/tmux-tui ] \
         || [ "$TMUX_CLI_LINK" != /usr/local/bin/tb ] \
         || [ "$PLEB_LINK" != /usr/local/bin/pleb ] \
-        || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ]; then
+        || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ] \
+        || [ "$OPENBOX_CONFIG_DST" != /usr/local/share/pleb/openbox/rc.xml ]; then
         die "plebian-os-update cannot transactionally protect custom Pleb install destinations; run 'pleb install' directly"
     fi
 }
@@ -631,6 +635,8 @@ paths=(
     /usr/local/bin/tb
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
+    /usr/local/share/pleb/openbox/rc.xml
+    /etc/pleb/session.env
 )
 managed_dirs=(
     /usr/local/share/plebian-os
@@ -640,6 +646,9 @@ managed_dirs=(
     /usr/local/share/doc/plebian-os/installer
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
+    /usr/local/share/pleb
+    /usr/local/share/pleb/openbox
+    /etc/pleb
 )
 cleanup() {
     rc=$?
@@ -722,6 +731,8 @@ paths=(
     /usr/local/bin/tb
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
+    /usr/local/share/pleb/openbox/rc.xml
+    /etc/pleb/session.env
 )
 managed_dirs=(
     /usr/local/share/plebian-os
@@ -731,6 +742,9 @@ managed_dirs=(
     /usr/local/share/doc/plebian-os/installer
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
+    /usr/local/share/pleb
+    /usr/local/share/pleb/openbox
+    /etc/pleb
 )
 new_paths=()
 cleanup_new() {
@@ -1270,6 +1284,75 @@ systemctl start "$svc"
     elif ! "${elevate[@]}" systemctl restart lightdm; then
         warn "stack updated, but the requested LightDM restart failed"
     fi
+}
+
+# /etc/pleb/session.env is operator-editable root configuration, so the window
+# manager defaults are appended rather than rewritten: an explicit PLEB_WM
+# (including `none`) or KILIX_RUN_ALIASES already in the file keeps winning.
+# The decision is made on the file text and never on the sourced shell values,
+# which can equally have come from this updater's own environment or from the
+# defaults above; reading the text is also what keeps the migration idempotent
+# across the many updates this helper performs. The pre-migration file is
+# already captured by the root stack snapshot, so a later failure restores it.
+migrate_pleb_session_env() {
+    local env_path=/etc/pleb/session.env
+    local -a elevate=()
+    [ -e "$env_path" ] || return 0
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    log "applying the window manager session defaults to $env_path (existing values win)"
+    "${elevate[@]}" bash -s -- "$env_path" <<'ROOT_SESSION_ENV'
+set -euo pipefail
+env_path="$1"
+case "$env_path" in /etc/pleb/session.env) ;; *) exit 2 ;; esac
+for dir in / /etc /etc/pleb; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
+        || exit 2
+    dir_mode="$(stat -c '%a' "$dir")"
+    (( (8#$dir_mode & 8#22) == 0 )) || exit 2
+done
+[ -f "$env_path" ] && [ ! -L "$env_path" ] || exit 2
+owner="$(stat -c '%u' "$env_path")"
+mode="$(stat -c '%a' "$env_path")"
+[ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || exit 2
+[ "$(stat -c '%s' -- "$env_path")" -le 1048576 ] || exit 2
+# Mirrors write_session_default in plebian-os-provision.sh: a self-guarding
+# assignment, so an explicit value set earlier in the file still wins when
+# pleb-session sources it.
+write_session_default() {
+    local name="$1" value="$2"
+    printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
+}
+# Comments are stripped first so the file's own documentation of a setting is
+# not mistaken for the setting; `NAME=` and `${NAME+x}` both define it.
+config_text="$(sed -e 's/#.*$//' -- "$env_path")"
+names=()
+values=()
+if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])PLEB_WM[=+] ]]; then
+    names+=(PLEB_WM)
+    values+=(openbox)
+fi
+if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])KILIX_RUN_ALIASES[=+] ]]; then
+    names+=(KILIX_RUN_ALIASES)
+    values+=(0)
+fi
+[ "${#names[@]}" -gt 0 ] || exit 0
+tmp="$(mktemp /etc/pleb/.session.env.XXXXXX)"
+trap 'rm -f -- "$tmp"' EXIT
+{
+    cat -- "$env_path"
+    if [ -s "$env_path" ] && [ -n "$(tail -c 1 -- "$env_path")" ]; then
+        printf '\n'
+    fi
+    printf '%s\n' '# Added by plebian-os-update — window manager session defaults.'
+    for i in "${!names[@]}"; do
+        write_session_default "${names[$i]}" "${values[$i]}"
+    done
+} >"$tmp"
+chmod 0644 "$tmp"
+mv -fT -- "$tmp" "$env_path"
+trap - EXIT
+printf 'plebian-os-update: added %s to %s\n' "${names[*]}" "$env_path"
+ROOT_SESSION_ENV
 }
 
 validate_checkout_origin() {
@@ -1930,6 +2013,8 @@ stack_env=(
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
     "KILIX_DESKTOP_FLAVOR=$KILIX_DESKTOP_FLAVOR"
     "PLEB_DESKTOP=$PLEB_DESKTOP"
+    "PLEB_WM=$PLEB_WM"
+    "KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES"
     "KILIX95_AUTO_INSTALL=$KILIX95_AUTO_INSTALL"
     "KILIX95_STORAGE_HOME=$KILIX95_STORAGE_HOME"
     "KILIX95_CONFIG_HOME=$KILIX95_CONFIG_HOME"
@@ -1986,6 +2071,15 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     log "updating kilix, submodules, fork engine, and optional desktop provider"
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart
     test_fail_after_boundary component-update
+    # Only now — after the dependency install and the whole component update
+    # have succeeded — may the persisted session select the new window manager.
+    # `pleb install` is the step that adds the openbox package and installs the
+    # Pleb profile, and it runs unguarded under `set -euo pipefail`, so a failed
+    # package install aborts above and the transaction rolls back with
+    # /etc/pleb/session.env still selecting the previous session shape.
+    migrate_pleb_session_env \
+        || die "could not apply the window manager session defaults to /etc/pleb/session.env"
+    test_fail_after_boundary session-env
 else
     warn "no pleb at $PLEB_DIR/bin/pleb — cannot run 'pleb install'"
     exit 1

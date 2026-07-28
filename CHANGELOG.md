@@ -4,6 +4,77 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.1.5] — unreleased
+
+0.1.3 and 0.1.4 were never stack releases. Both numbers appeared only as Kilix
+and Kilix-95 component `VERSION` markers for their SDK levels, and Kilix
+additionally published a `v0.1.4` tag of its own. 0.1.5 is the first coordinated
+release since 0.1.2 and restores one version across all four repositories; see
+[RELEASING.md](RELEASING.md).
+
+### Added
+
+- Provision the shared clickable-chrome settings file at
+  `~/.local/gpu_terminal/settings.conf` and install `kilix-settings` on `PATH`,
+  so the thermal, volume, network, calendar, date/time, battery, pane-memory,
+  and game toggles have one source of truth across Kilix, Kilix-95, Pleb, and
+  Plebian-OS.
+- Install `pulsemixer` (with `alsamixer` as fallback) for the top-bar volume
+  widget, placed immediately left of the network/Wi-Fi control.
+- Build, verify, and publish Kilix's exact pinned Kilix Temps dashboard and its
+  graphics closure during firstboot, so the page-strip thermometer works on a
+  clean install without a developer checkout.
+- Install Kilix's pinned `tmux-tui`/`tmux-cli` source closure and publish Tmux
+  Manager plus tmux-cli's `tb.py` as `tb` on `PATH`.
+- Provision the pinned persistent PTY session manager so panes survive a Kilix
+  crash and detached sessions are recovered on the next start.
+- Ship **session logging on by default**: the PTY broker that owns each pane
+  records that pane's output to a private, bounded transcript under
+  `~/.local/gpu_terminal/kilix/state/transcripts`, so a detached, recovered, or
+  crashed pane keeps what it printed. Firstboot verifies the delivered default
+  rather than setting it, keeping the shared settings file the single source of
+  truth. Kitty graphics payloads are elided to a byte-count marker so a pixel
+  desktop cannot flood the log; only output is captured, so hidden password
+  prompts are not recorded. Disable with `kilix settings --set transcript=off`.
+- Install **Openbox** and select it as the Pleb session's window manager, so
+  browsers and other GUI applications open real windows that can be focused,
+  raised, closed and reached with `Alt-Tab`. The graphical session previously
+  ran no window manager at all, which meant a fullscreen Kilix permanently
+  covered every other client. `openbox` is added to both the provisioning
+  dependency list and the preseed package set, and `/etc/pleb/session.env` now
+  persists `PLEB_WM=openbox` and `KILIX_RUN_ALIASES=0`. `kilix run <app>`
+  remains the explicit way to render an application inside a Kilix tab.
+
+### Fixed / hardened
+
+- Track newly added Kilix submodules, and the content and presenter submodules
+  specifically, in the whole-stack update rollback, so a failed update restores
+  a coherent submodule state instead of a partially advanced one.
+- Cover the Pleb-owned Openbox profile
+  (`/usr/local/share/pleb/openbox/rc.xml`) and `/etc/pleb/session.env` in the
+  privileged root snapshot and restore lists, and add `/etc/pleb`,
+  `/usr/local/share/pleb` and `/usr/local/share/pleb/openbox` to managed-path
+  validation, so a failed update cannot leave a new launcher paired with an old
+  window-manager profile.
+- Migrate an existing `/etc/pleb/session.env` atomically when updating, adding
+  the window-manager defaults only when they are absent: an operator's explicit
+  `PLEB_WM` — including `none` — or `KILIX_RUN_ALIASES` is preserved.
+
+### Licensing
+
+- License the Plebian-OS layer under MIT.
+
+### Release inputs
+
+- Advance the package snapshot to `20260727T000000Z`, picking up two weeks of
+  `trixie-security` / `trixie-updates` movement; the trixie base suite is
+  unchanged from 0.1.2's snapshot.
+- Retain the Debian 13.5.0 archived netinst (13.6.0 has no stable
+  `/cdimage/archive/` URL yet), the 0.47.4 fallback kitty engine (matching the
+  pinned fork base), and `go1.26.5` (matching the fork's `src/go.mod`
+  toolchain). The coordinated pin closure `releases/0.1.5.env` is added once the
+  four component release commits are final, per RELEASING.md.
+
 ## [0.1.2] — 2026-07-15
 
 ### Fresh-install layout

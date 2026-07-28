@@ -67,6 +67,8 @@ KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is kn
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into `kilix desktop`
+PLEB_WM="${PLEB_WM:-}"                         # empty = keep an existing pin, else openbox
+KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 0
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
 
@@ -532,6 +534,45 @@ acquire_kilix_provision_lock() {
 write_session_default() {
     local name="$1" value="$2"
     printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
+}
+
+# Read one knob back out of the session config the way a login shell would see
+# it: sourcing in a SUBSHELL with that name unset resolves both the guarded
+# defaults write_session_default emits and a bare `NAME=value` operator edit,
+# and leaves this script's own variables untouched. Only a root-owned,
+# non-symlink regular file that is not group/world-writable is trusted —
+# anything else is treated as "no pin" and the caller keeps its default.
+session_env_pin() {
+    local name="$1" env="$2" owner mode
+    [ -f "$env" ] && [ ! -L "$env" ] || return 1
+    owner="$(stat -c '%u' "$env" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' "$env" 2>/dev/null)" || return 1
+    [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || return 1
+    (
+        unset "$name"
+        # shellcheck source=/dev/null
+        . "$env" >/dev/null 2>&1 || exit 1
+        [ -n "${!name+x}" ] || exit 1
+        printf '%s' "${!name}"
+    )
+}
+
+# Step 5 rewrites /etc/pleb/session.env wholesale, so a window-manager choice an
+# operator pinned there by hand would silently revert on a reprovision. Explicit
+# environment wins, then that existing pin (an operator who set PLEB_WM=none
+# keeps a no-WM session), then the distribution defaults: Openbox, with kilix's
+# GUI-command aliases off because a managed window can be raised natively.
+resolve_session_wm_defaults() {
+    local env=/etc/pleb/session.env pinned
+    if [ -z "$PLEB_WM" ] && pinned="$(session_env_pin PLEB_WM "$env")"; then
+        PLEB_WM="$pinned"
+    fi
+    if [ -z "$KILIX_RUN_ALIASES" ] \
+            && pinned="$(session_env_pin KILIX_RUN_ALIASES "$env")"; then
+        KILIX_RUN_ALIASES="$pinned"
+    fi
+    PLEB_WM="${PLEB_WM:-openbox}"
+    KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-0}"
 }
 
 install_no_beep_defaults() {
@@ -2131,6 +2172,7 @@ PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-o
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 export GPU_TERMINAL_SOURCE_HOME GPU_TERMINAL_HOME GPU_TERMINAL_SETTINGS_FILE
 export PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME
+resolve_session_wm_defaults
 
 # Allocate the shared private data tree before even the provision/update lock
 # is created.  This prevents the first target-user write from inheriting the
@@ -2151,6 +2193,7 @@ if [ "$DESKTOP" = 1 ]; then
 fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
 log "session     : $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'plain kilix shell')"
+log "window mgr  : $PLEB_WM (KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES)"
 
 # Hold the same target-user lock used by direct `pleb update` before the first
 # provisioning mutation and through final provenance/session reconciliation.
@@ -2301,6 +2344,8 @@ install_env=(
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
     "KILIX_DESKTOP_FLAVOR=$KILIX_DESKTOP_FLAVOR"
     "PLEB_DESKTOP=$DESKTOP"
+    "PLEB_WM=$PLEB_WM"
+    "KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES"
     "KILIX95_AUTO_INSTALL=$KILIX95_AUTO_INSTALL"
     "KILIX95_DIR=$KILIX95_DIR"
     "KILIX95_REPO=$KILIX95_REPO"
@@ -2323,6 +2368,21 @@ if [ "$DRY_RUN" != 1 ]; then
                  != "$TARGET_UID:600" ]; then
         die "shared Kilix settings were not safely initialized: $GPU_TERMINAL_SETTINGS_FILE"
     fi
+    # Session logging ships on. `kilix-settings --ensure` seeds it through the
+    # shared SDK, so this asserts the delivered default rather than setting it
+    # here — a second source of truth for the same value would drift.
+    settings_logging="$(
+        as_user env "GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE" \
+            python3 -c "
+import sys
+sys.path.insert(0, '$KILIX_DIR/config')
+from kilix_sdk import settings
+print('on' if settings.transcript_enabled() else 'off')
+" 2>/dev/null
+    )" || settings_logging=""
+    [ "$settings_logging" = on ] \
+        || die "session logging was not enabled by default in $GPU_TERMINAL_SETTINGS_FILE"
+    log "session logs: on by default (kilix settings --set transcript=off to disable)"
     if [ ! -x "$USER_HOME/.local/bin/kilix-temps" ] \
             || [ ! -f "$USER_HOME/.local/lib/kilix-temps/libsoft-raster.so" ] \
             || [ ! -L /usr/local/bin/kilix-temps ] \
@@ -2368,13 +2428,15 @@ fi
 
 # ── 5. session mode: boot into `kilix desktop` (disablable) ─────────────────
 # pleb-session reads /etc/pleb/session.env on every login; PLEB_DESKTOP=1 brings
-# the Pleb session up as the kilix desktop instead of a bare shell. This is a
-# plain root-managed config file: edit it with sudo to flip to 0 (or remove it)
-# for a plain fullscreen kilix — no reprovision needed.
+# the Pleb session up as the kilix desktop instead of a bare shell, and PLEB_WM
+# selects the window manager it starts (openbox, or none for the historic
+# fixed-geometry session). This is a plain root-managed config file: edit it with
+# sudo to flip either knob — no reprovision needed, and a reprovision keeps the
+# window-manager choice it finds here.
 PLEB_ENV=/etc/pleb/session.env
-log "writing session config -> $PLEB_ENV (PLEB_DESKTOP=$DESKTOP)"
+log "writing session config -> $PLEB_ENV (PLEB_DESKTOP=$DESKTOP, PLEB_WM=$PLEB_WM, KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES)"
 if [ "$DRY_RUN" = 1 ]; then
-    echo "    + write $PLEB_ENV (PLEB_DESKTOP=$DESKTOP)"
+    echo "    + write $PLEB_ENV (PLEB_DESKTOP=$DESKTOP, PLEB_WM=$PLEB_WM, KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES)"
 else
     mkdir -p "$(dirname "$PLEB_ENV")"
     PLEB_ENV_TMP="$(mktemp /etc/pleb/.session.env.XXXXXX)"
@@ -2383,7 +2445,9 @@ else
 # Managed by plebian-os-provision — Plebian-OS Pleb session config.
 # PLEB_DESKTOP=1 starts `kilix desktop`; set it to 0 for a plain fullscreen
 # kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, command,
-# or none. pleb-session documents the other knobs.
+# or none. PLEB_WM selects the window manager (openbox, none, or a command line);
+# an explicit choice here is kept by a reprovision. pleb-session documents the
+# other knobs.
 EOF
     write_session_default GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
     write_session_default GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
@@ -2421,6 +2485,8 @@ EOF
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
     write_session_default PLEB_DESKTOP "$DESKTOP"
+    write_session_default PLEB_WM "$PLEB_WM"
+    write_session_default KILIX_RUN_ALIASES "$KILIX_RUN_ALIASES"
     write_session_default KILIX_DESKTOP_PROVIDER "$KILIX_DESKTOP_PROVIDER"
     write_session_default KILIX_DESKTOP_COMMAND "$KILIX_DESKTOP_COMMAND"
     write_session_default KILIX_DESKTOP_NAME "$KILIX_DESKTOP_NAME"

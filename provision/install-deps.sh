@@ -58,7 +58,7 @@ prepare_root_session_home() {
 # the Debian install; re-listing them here keeps this a complete, self-standing
 # dependency manifest.
 DEP_GROUPS=(
-    "X + display manager|xserver-xorg xinit lightdm x11-xserver-utils x11-utils xterm"
+    "X + display manager + window manager|xserver-xorg xinit lightdm openbox x11-xserver-utils x11-utils xterm"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"

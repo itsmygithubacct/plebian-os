@@ -9,7 +9,7 @@ a single fullscreen [kilix](https://github.com/itsmygithubacct/kilix) as the who
 session — in place of XFCE.**
 
 Plebian-OS is stock Debian in every way except the "desktop": where a normal
-Debian+XFCE install would give you a panel and a window manager, Plebian-OS logs
+Debian+XFCE install would give you a panel and a full desktop environment, Plebian-OS logs
 you into one fullscreen kilix (a Tilix-styled kitty fork: clickable pane buttons,
 splits, pages, images, and an optional desktop provider such as Kilix 95). The OS itself ships none of
 that — it **installs like a regular Debian system and then pulls its pieces from
@@ -43,7 +43,7 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
      builds the clickable-chrome fork, and verifies Kilix uses that fork engine;
    - initializes the shared clickable-chrome settings at
      `~/.local/gpu_terminal/settings.conf` and installs `kilix-settings` on
-     `PATH`;
+     `PATH`, then verifies that session logging came up enabled;
    - initializes and builds Kilix's pinned persistent PTY broker, making
      `kilix pty` and the Kilix-95 **PTY Sessions** Start-menu entry ready on the
      first boot;
@@ -63,12 +63,19 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
 3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
-**GUI apps** — the session has no window manager, so shells inside kilix alias
-the common GUI commands (`chromium`, `firefox-esr`, …) to **`kilix run <app>`**:
-the app gets a private X server and streams into a kilix tab, tiling like any
-terminal program. Set `KILIX_RUN_ALIASES=0` to opt out, or
-`KILIX_RUN_ALIAS_APPS="gimp mpv"` to extend the list (the mechanism is kilix's
-`config/kilix.bashrc`, keyed off the Pleb session markers).
+**GUI apps** — the session runs a minimal **Openbox** underneath kilix, so
+ordinary GUI commands (`chromium`, `firefox-esr`, …) open **native windows**:
+focusable, closable, and reachable with `Alt-Tab` over the fullscreen terminal.
+Openbox is deliberately bare — one desktop, no panel, no root menu, no launcher
+keys.
+
+**`kilix run <app>`** remains the explicit alternative: the app gets a private X
+server and streams into a kilix tab, tiling like any terminal program. Those
+in-tab clients are not host windows, so they intentionally do not appear in
+Alt-Tab. Plebian-OS persists `KILIX_RUN_ALIASES=0` for native windows; set it to
+`1` to send GUI commands back into kilix tabs, or use
+`KILIX_RUN_ALIAS_APPS="gimp mpv"` to extend the aliased list (the mechanism is
+kilix's `config/kilix.bashrc`, keyed off the Pleb session markers).
 
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
 pulls `~/.local/gpu_terminal/sources/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
@@ -143,6 +150,27 @@ enable **Thermal status** and remove or re-add every top-bar item and pane-title
 button. For scripts, use `kilix settings --set temperature=on`. All of those
 interfaces use
 `~/.local/gpu_terminal/settings.conf` as their single source of truth.
+
+**Session logging is on by default.** Each pane's output is recorded by the PTY
+broker to `~/.local/gpu_terminal/kilix/state/transcripts/<session>.log` — one
+bounded 8 MiB log per pane, mode `0600`, with kitty graphics payloads replaced
+by a byte-count marker so a pixel desktop cannot flood the log. Because the
+broker owns the PTY, a detached, recovered, or crashed pane is still recorded,
+including whatever it printed on its way out. Only output is captured; typed
+input appears solely where the pane echoes it, so hidden password prompts are
+not recorded.
+
+```sh
+kilix transcript                       # list recorded panes, newest first
+kilix transcript show <session>        # print one
+pleb status                            # current policy + how many logs exist
+kilix settings --set transcript=off    # turn recording off
+```
+
+The same three controls (on/off, `elide`/`keep` graphics, and a `2M`/`8M`/`32M`/
+`128M` per-pane budget) are in `kilix-settings` under **Session logging** and in
+Kilix 95's Settings under **Session logs**; all of them write the shared
+`~/.local/gpu_terminal/settings.conf`.
 
 The Kilix 95 Start menu includes **Tmux Manager**. It opens in a new tab and
 uses the pinned `tmux-tui` plus `tmux-cli` closure installed during firstboot.
