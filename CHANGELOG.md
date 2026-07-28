@@ -36,6 +36,15 @@ release since 0.1.2 and restores one version across all four repositories; see
   truth. Kitty graphics payloads are elided to a byte-count marker so a pixel
   desktop cannot flood the log; only output is captured, so hidden password
   prompts are not recorded. Disable with `kilix settings --set transcript=off`.
+  The transcript tree is bounded by two budgets rather than only a per-pane
+  cap: recent logs stay uncompressed (50 GiB by default), older ones are
+  archived with `zstd -3` into a second 50 GiB budget, and the oldest
+  archives are dropped only once both are full. Terminal output compresses
+  to roughly a sixtieth of its size, so the archive holds far more history
+  than the live tier for the same disk, and archiving is lossless. Both
+  budgets are configurable from the settings file, `kilix settings --set`,
+  the settings TUI, and Kilix 95's Settings app. `zstd` is provisioned for
+  it.
 - Install **Openbox** and select it as the Pleb session's window manager, so
   browsers and other GUI applications open real windows that can be focused,
   raised, closed and reached with `Alt-Tab`. The graphical session previously

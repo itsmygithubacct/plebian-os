@@ -67,6 +67,7 @@ DEP_GROUPS=(
     "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
     "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
     "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
+    "session-log archiving|zstd"
     "web browsers|firefox-esr chromium"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"

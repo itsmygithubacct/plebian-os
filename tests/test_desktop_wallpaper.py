@@ -20,6 +20,35 @@ PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 
 
+def wallpaper_destination_ancestors_are_root_owned() -> bool:
+    """Mirror the provisioner's own precondition for installing the wallpaper.
+
+    `install_desktop_wallpaper` refuses to touch a destination whose ancestors
+    are not root-owned and not group/world writable, and it makes that check
+    before anything these tests are about. On a developer machine where
+    something has taken ownership of /usr/local, the guard fires first and the
+    behaviour under test is unreachable — so skip rather than report a failure
+    that says nothing about the code.
+    """
+    for path in ("/", "/usr", "/usr/local", "/usr/local/share"):
+        try:
+            info = os.stat(path, follow_symlinks=False)
+        except OSError:
+            return False
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0:
+            return False
+        if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+            return False
+    return True
+
+
+REQUIRES_ROOT_OWNED_USR_LOCAL = unittest.skipUnless(
+    wallpaper_destination_ancestors_are_root_owned(),
+    "/usr/local ancestry is not root-owned here, so the provisioner refuses "
+    "before reaching the behaviour under test",
+)
+
+
 class DesktopWallpaperTests(unittest.TestCase):
     def selected_state_dir(
         self, script_path: Path, provider: str, *, external_installed: bool
@@ -186,6 +215,7 @@ seed_desktop_wallpaper_state_if_absent "$DESKTOP_DIR" "$WALLPAPER"
             (1920, 1080, 8, 2, 0, 0, 0),
         )
 
+    @REQUIRES_ROOT_OWNED_USR_LOCAL
     def test_in_repo_dry_run_validates_without_installing(self):
         result = self.run_install_dry(ROOT / "provision")
         self.assertIn("atomic replace", result.stdout)
@@ -258,6 +288,7 @@ fi
         self.assertLess(real_copy, private_validation)
         self.assertLess(private_validation, published_mode)
 
+    @REQUIRES_ROOT_OWNED_USR_LOCAL
     def test_incomplete_checkout_fails_closed_instead_of_reusing_installed_asset(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -267,6 +298,7 @@ fi
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("tracked desktop wallpaper missing or unsafe", result.stderr)
 
+    @REQUIRES_ROOT_OWNED_USR_LOCAL
     def test_deployed_provisioner_migrates_only_from_clean_owned_checkout(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
