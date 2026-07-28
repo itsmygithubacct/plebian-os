@@ -72,8 +72,8 @@ release since 0.1.2 and restores one version across all four repositories; see
 - Retain the Debian 13.5.0 archived netinst (13.6.0 has no stable
   `/cdimage/archive/` URL yet), the 0.47.4 fallback kitty engine (matching the
   pinned fork base), and `go1.26.5` (matching the fork's `src/go.mod`
-  toolchain). The coordinated pin closure `releases/0.1.5.env` is added once the
-  four component release commits are final, per RELEASING.md.
+  toolchain). See [`releases/0.1.5.env`](releases/0.1.5.env) for the
+  coordinated pin closure.
 
 ## [0.1.2] — 2026-07-15
 
