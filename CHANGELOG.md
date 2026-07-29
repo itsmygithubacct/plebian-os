@@ -6,9 +6,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.1.6] — unreleased
 
-Voice lands on top of the pending 0.1.5 coordinated release. 0.1.5's pin
-manifest is cut by [RELEASING.md](RELEASING.md) and is untouched here; the
-voice pins join the closure when 0.1.6 is cut.
+0.1.3, 0.1.4, and 0.1.5 were never stack releases. 0.1.3 and 0.1.4 appeared only
+as Kilix and Kilix-95 component `VERSION` markers for their SDK levels, and Kilix
+additionally published a `v0.1.4` tag of its own. 0.1.5 was prepared in full —
+notes, version mirroring, and a verified pin closure — but never built, accepted,
+or tagged; its work is folded into this section rather than shipped under a
+number no artifact will ever carry. 0.1.6 is therefore the first coordinated
+release since 0.1.2 and restores one version across all four repositories; see
+[RELEASING.md](RELEASING.md).
 
 ### Added
 
@@ -27,14 +32,6 @@ voice pins join the closure when 0.1.6 is cut.
   Unlike every other component, a voice closure that does not install is
   reported and provisioning continues — the microphone is click-to-talk, local
   and optional, and a machine with no sound must boot identically.
-
-## [0.1.5] — unreleased
-
-0.1.3 and 0.1.4 were never stack releases. Both numbers appeared only as Kilix
-and Kilix-95 component `VERSION` markers for their SDK levels, and Kilix
-additionally published a `v0.1.4` tag of its own. 0.1.5 is the first coordinated
-release since 0.1.2 and restores one version across all four repositories; see
-[RELEASING.md](RELEASING.md).
 
 ### Added
 
