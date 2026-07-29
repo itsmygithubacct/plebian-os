@@ -438,6 +438,7 @@ KILIX_VOICE_TTS_BIN="$HOME/.local/bin/kilix-tts"
 KILIX_VOICE_STT_BIN="$HOME/.local/bin/kilix-stt"
 KILIX_VOICE_DAEMON_BIN="$HOME/.local/bin/kilix-voiced"
 KILIX_VOICE_STAMP="$KILIX_STATE_DIRECTORY/kilix-voice-install.refs"
+KILIX_VOICE_RUNTIME_LINK="$KILIX_DATA_HOME/voice/runtime/current"
 KILIX_VOICE_LIBRARY_LINK="$KILIX_DATA_HOME/voice/lib/current"
 KILIX_VOICE_MODEL_LINK="$KILIX_DATA_HOME/voice/models/small-en-us"
 KILIX_PTY_BROKER_BUILD="$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker"
@@ -1186,6 +1187,7 @@ rollback_stack_transaction() {
     restore_stack_path "$KILIX_VOICE_TTS_BIN" kilix-voice-tts-bin file || failed=1
     restore_stack_path "$KILIX_VOICE_STT_BIN" kilix-voice-stt-bin file || failed=1
     restore_stack_path "$KILIX_VOICE_DAEMON_BIN" kilix-voice-daemon-bin file || failed=1
+    restore_stack_path "$KILIX_VOICE_RUNTIME_LINK" kilix-voice-runtime file || failed=1
     restore_stack_path "$KILIX_VOICE_STAMP" kilix-voice-stamp file || failed=1
     restore_stack_path "$KILIX_VOICE_LIBRARY_LINK" kilix-voice-library file || failed=1
     restore_stack_path "$KILIX_VOICE_MODEL_LINK" kilix-voice-model file || failed=1
@@ -1263,6 +1265,7 @@ begin_stack_transaction() {
     snapshot_stack_path "$KILIX_VOICE_TTS_BIN" kilix-voice-tts-bin
     snapshot_stack_path "$KILIX_VOICE_STT_BIN" kilix-voice-stt-bin
     snapshot_stack_path "$KILIX_VOICE_DAEMON_BIN" kilix-voice-daemon-bin
+    snapshot_stack_path "$KILIX_VOICE_RUNTIME_LINK" kilix-voice-runtime
     snapshot_stack_path "$KILIX_VOICE_STAMP" kilix-voice-stamp
     snapshot_stack_path "$KILIX_VOICE_LIBRARY_LINK" kilix-voice-library
     snapshot_stack_path "$KILIX_VOICE_MODEL_LINK" kilix-voice-model

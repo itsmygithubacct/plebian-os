@@ -290,6 +290,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
             ("KILIX_VOICE_TTS_BIN", "kilix-voice-tts-bin"),
             ("KILIX_VOICE_STT_BIN", "kilix-voice-stt-bin"),
             ("KILIX_VOICE_DAEMON_BIN", "kilix-voice-daemon-bin"),
+            ("KILIX_VOICE_RUNTIME_LINK", "kilix-voice-runtime"),
             ("KILIX_VOICE_STAMP", "kilix-voice-stamp"),
             ("KILIX_VOICE_LIBRARY_LINK", "kilix-voice-library"),
             ("KILIX_VOICE_MODEL_LINK", "kilix-voice-model"),
