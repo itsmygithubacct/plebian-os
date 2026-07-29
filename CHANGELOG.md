@@ -17,6 +17,15 @@ release since 0.1.2 and restores one version across all four repositories; see
 
 ### Added
 
+- Support **Kilix Cap desktop sessions**. `KILIX_DESKTOP_PROVIDER` gains `cap`
+  alongside `auto`, `builtin`, `external`, `command`, and `none`; it downloads
+  and locally builds the Kilix-pinned Kilix Cap source on first launch. Kilix
+  Cap reads `KILIX_CAP_*`, while external Kilix 95 keeps `KILIX95_*`, so the two
+  providers can be configured independently on one image.
+- Ship **Tmux Manager**. Firstboot installs Kilix's pinned `tmux-tui`/`tmux-cli`
+  closure and publishes Tmux Manager plus tmux-cli's `tb.py` as `tb` on `PATH`;
+  the Kilix 95 Start menu entry opens it in a new tab, and both are usable
+  directly from a shell.
 - Provision **read-aloud and dictation** for Kilix's two new top-bar widgets.
   `espeak-ng` (the default synthesizer) and `mbrola` (the runtime behind its
   optional quality tier) join both the provisioning dependency group and the
