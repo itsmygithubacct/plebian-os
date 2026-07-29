@@ -2443,11 +2443,11 @@ print('on' if settings.transcript_enabled() else 'off')
         || die "session logging was not enabled by default in $GPU_TERMINAL_SETTINGS_FILE"
     log "session logs: on by default (kilix settings --set transcript=off to disable)"
     if [ ! -x "$USER_HOME/.local/bin/kilix-temps" ] \
-            || [ ! -f "$USER_HOME/.local/lib/kilix-temps/libsoft-raster.so" ] \
+            || [ ! -x "$USER_HOME/.local/bin/kilix-memory" ] \
             || [ ! -L /usr/local/bin/kilix-temps ] \
             || [ "$(readlink /usr/local/bin/kilix-temps 2>/dev/null)" \
                  != "$USER_HOME/.local/bin/kilix-temps" ]; then
-        die "Pleb did not install and publish the pinned Kilix Temps dashboard"
+        die "Pleb did not install the unified Temps/Memory utilities and publish Temps"
     fi
     if [ ! -x "$USER_HOME/.local/bin/tmux-tui" ] \
             || [ ! -x "$USER_HOME/.local/bin/tb" ] \

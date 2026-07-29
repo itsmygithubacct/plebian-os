@@ -171,8 +171,13 @@ class ProvisionPlumbingTests(unittest.TestCase):
             update.count('/usr/local/bin/kilix-settings'), 3,
             "the settings command must be validated, snapshotted, and restored",
         )
-        self.assertIn('Pleb did not install and publish the pinned Kilix Temps',
-                      provision)
+        self.assertIn(
+            'Pleb did not install the unified Temps/Memory utilities',
+            provision)
+        self.assertIn('$USER_HOME/.local/bin/kilix-memory', provision)
+        self.assertNotIn(
+            '$USER_HOME/.local/lib/kilix-temps/libsoft-raster.so',
+            provision)
         self.assertIn('KILIX_TEMPS_LINK="${KILIX_TEMPS_LINK:-/usr/local/bin/kilix-temps}"',
                       update)
         self.assertGreaterEqual(
