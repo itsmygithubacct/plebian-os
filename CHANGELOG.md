@@ -22,6 +22,12 @@ release since 0.1.2 and restores one version across all four repositories; see
   and locally builds the Kilix-pinned Kilix Cap source on first launch. Kilix
   Cap reads `KILIX_CAP_*`, while external Kilix 95 keeps `KILIX95_*`, so the two
   providers can be configured independently on one image.
+- Support **Kilix TUI desktop sessions**. `KILIX_DESKTOP_PROVIDER=tui` selects
+  the text-native desktop, and firstboot installs Kilix’s pinned
+  `kilix-tui-utils` checkout so the provider and its unified utilities are
+  available without a developer checkout. Like Kilix Cap, Kilix TUI inherits
+  its exact commit through Kilix rather than becoming a fifth coordinated
+  release-core repository.
 - Ship **Tmux Manager**. Firstboot installs Kilix's pinned `tmux-tui`/`tmux-cli`
   closure and publishes Tmux Manager plus tmux-cli's `tb.py` as `tb` on `PATH`;
   the Kilix 95 Start menu entry opens it in a new tab, and both are usable

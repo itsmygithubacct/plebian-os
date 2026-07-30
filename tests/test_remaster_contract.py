@@ -199,7 +199,8 @@ class RemasterContractTests(unittest.TestCase):
                 "PLEBIAN_OS_DIR": "/home/builder/gpu_terminal/plebian-os",
                 "PLEB_DIR": "/home/builder/gpu_terminal/pleb",
                 "KILIX_DIR": "/home/builder/gpu_terminal/kilix",
-                "KILIX95_DIR": "/home/builder/gpu_terminal/kilix-95",
+                "KILIX95_DIR":
+                    "/home/builder/gpu_terminal/kilix-desktops/kilix-95",
                 "PLEBIAN_OS_STORAGE_HOME": "/home/builder/os-data",
                 "PLEBIAN_OS_SESSION_HOME": "/home/builder/os-session",
                 "PLEB_STORAGE_HOME": "/home/builder/pleb-data",
@@ -215,7 +216,7 @@ class RemasterContractTests(unittest.TestCase):
             "/home/operator/gpu_terminal",
             "/home/operator/gpu_terminal/pleb",
             "/home/operator/gpu_terminal/kilix",
-            "/home/operator/gpu_terminal/kilix-95",
+            "/home/operator/gpu_terminal/kilix-desktops/kilix-95",
             "/home/operator/gpu_terminal/plebian-os",
             "/home/operator/.local/gpu_terminal",
             "/home/operator/.local/gpu_terminal/pleb",

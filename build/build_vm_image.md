@@ -135,10 +135,12 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
 
 - `PLEB_DESKTOP=1` → runs `kilix desktop`; `0` → a plain fullscreen
   kilix shell (or delete the file).
-- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|cap|command|none` selects what
-  `kilix desktop` runs. `command` uses `KILIX_DESKTOP_COMMAND`; `none` disables
-  the facade. `cap` downloads and builds Kilix Cap on first launch. For a
-  Plebian-OS shell session, prefer `PLEB_DESKTOP=0`.
+- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|xp|cap|tui|command|none` selects
+  what `kilix desktop` runs. `cap` downloads and builds Kilix Cap; `tui`
+  installs the text-native Kilix TUI desktop from Kilix’s pinned
+  `kilix-tui-utils` checkout. `command` uses `KILIX_DESKTOP_COMMAND` and is the
+  current path for Kilix Land; `none` disables the facade. For a Plebian-OS
+  shell session, prefer `PLEB_DESKTOP=0`.
 - `PLEB_REF`, `KILIX_REF`, and `KILIX95_REF` can pin exact refs for release
   images. `KILIX_PREBUILT_VERSION` plus `KILIX_PREBUILT_SHA256` can also pin and
   verify the downloaded fallback kitty bundle. `KILIX95_DIR`, `KILIX95_REPO`,

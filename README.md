@@ -11,9 +11,11 @@ session — in place of XFCE.**
 Plebian-OS is stock Debian in every way except the "desktop": where a normal
 Debian+XFCE install would give you a panel and a full desktop environment, Plebian-OS logs
 you into one fullscreen kilix (a Tilix-styled kitty fork: clickable pane buttons,
-splits, pages, images, and an optional desktop provider such as Kilix 95). The OS itself ships none of
-that — it **installs like a regular Debian system and then pulls its pieces from
-GitHub**:
+splits, pages, images, and a selected desktop provider). Kilix 95 is the
+release-default desktop; Kilix Cap and Kilix TUI are Kilix-pinned optional
+desktops, and Kilix Land can currently run through the generic command-provider
+path. The OS itself ships none of that — it **installs like a regular Debian
+system and then pulls its pieces from GitHub**:
 
 ```
 regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  ─▶  Pleb session
@@ -44,6 +46,8 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    - initializes the shared clickable-chrome settings at
      `~/.local/gpu_terminal/settings.conf` and installs `kilix-settings` on
      `PATH`, then verifies that session logging came up enabled;
+   - installs Kilix’s pinned `kilix-tui-utils` checkout, including the Kilix TUI
+     desktop and the unified terminal utilities;
    - initializes and builds Kilix's pinned persistent PTY broker, making
      `kilix pty` and the Kilix-95 **PTY Sessions** Start-menu entry ready on the
      first boot;
@@ -295,11 +299,15 @@ Plebian-OS for a desktop-shaped one.
 Desktop selection is controlled by `/etc/pleb/session.env` after install, or by
 environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
 fullscreen kilix shell. With desktop mode on, `KILIX_DESKTOP_PROVIDER` can be
-`auto`, `builtin`, `external`, `cap`, `command`, or `none`; `cap` downloads
-and locally builds the Kilix-pinned Kilix Cap source on first launch. `command`
-uses `KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_FLAVOR=95|xp` selects the
-first-launch desktop flavor, and `none` behaves like a plain shell session.
-Kilix Cap uses `KILIX_CAP_*`; external Kilix 95 still uses `KILIX95_*`. Set
+`auto`, `builtin`, `external`, `xp`, `cap`, `tui`, `command`, or `none`; `cap`
+downloads and locally builds Kilix Cap, while `tui` installs the Kilix TUI
+desktop from the pinned `kilix-tui-utils` checkout. `command` uses
+`KILIX_DESKTOP_COMMAND` and is the current integration path for Kilix Land;
+`KILIX_DESKTOP_FLAVOR=95|xp` selects the first-launch Kilix 95 flavor, and
+`none` behaves like a plain shell session. Kilix Cap uses `KILIX_CAP_*`, Kilix
+TUI uses `KILIX_TUI_UTILS_*`, and external Kilix 95 uses `KILIX95_*`. The Cap
+and TUI source commits are inherited through the pinned Kilix commit rather
+than receiving independent coordinated-release keys. Set
 `PLEBIAN_OS_BUILD_KILIX_FORK=0` only when
 you deliberately want to allow the prebuilt fallback engine. Release-style
 images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,

@@ -9,7 +9,8 @@
 #   2. clones  github.com/itsmygithubacct/pleb  into ~/.local/gpu_terminal/sources/pleb
 #   3. runs    pleb install  — which itself clones github.com/itsmygithubacct/kilix
 #      into ~/.local/gpu_terminal/sources/kilix, optionally clones github.com/itsmygithubacct/kilix-95
-#      into ~/.local/gpu_terminal/sources/kilix-95, fetches a prebuilt kitty engine, and
+#      into ~/.local/gpu_terminal/sources/kilix-desktops/kilix-95, fetches a prebuilt kitty
+#      engine, and
 #      registers "Pleb" as a
 #      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb
 #      on PATH. This provisioner then builds and verifies the kilix fork so the
@@ -2178,9 +2179,21 @@ validate_target_user
 GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/gpu_terminal}"
 PLEB_DIR="${PLEB_DIR:-$GPU_TERMINAL_SOURCE_HOME/pleb}"
 KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
-KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-95}"
-KILIX_CAP_DIR="${KILIX_CAP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-cap}"
-KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-tui-utils}"
+KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95}"
+KILIX_CAP_DIR="${KILIX_CAP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-cap}"
+KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils}"
+if [ "$KILIX95_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-95" ] \
+   && [ ! -e "$KILIX95_DIR" ] && [ ! -L "$KILIX95_DIR" ]; then
+    KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95"
+fi
+if [ "$KILIX_CAP_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-cap" ] \
+   && [ ! -e "$KILIX_CAP_DIR" ] && [ ! -L "$KILIX_CAP_DIR" ]; then
+    KILIX_CAP_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-cap"
+fi
+if [ "$KILIX_TUI_UTILS_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-tui-utils" ] \
+   && [ ! -e "$KILIX_TUI_UTILS_DIR" ] && [ ! -L "$KILIX_TUI_UTILS_DIR" ]; then
+    KILIX_TUI_UTILS_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils"
+fi
 PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
 GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$USER_HOME/.local/gpu_terminal}"
 GPU_TERMINAL_SETTINGS_FILE="${GPU_TERMINAL_SETTINGS_FILE:-$GPU_TERMINAL_HOME/settings.conf}"
