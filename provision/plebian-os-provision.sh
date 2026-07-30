@@ -59,6 +59,15 @@ KILIX_TUI_UTILS_REF="${KILIX_TUI_UTILS_REF:-}"
 KILIX_TUI_UTILS_AUTO_INSTALL="${KILIX_TUI_UTILS_AUTO_INSTALL:-1}"
 KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT="${KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT:-0}"
 KILIX_TUI_UTILS_ALLOW_MUTABLE_REF="${KILIX_TUI_UTILS_ALLOW_MUTABLE_REF:-0}"
+KILIX_LAND_DESKTOP_REPO="${KILIX_LAND_DESKTOP_REPO:-https://github.com/itsmygithubacct/kilix-land-desktop.git}"
+KILIX_LAND_DESKTOP_REF="${KILIX_LAND_DESKTOP_REF:-}"
+KILIX_LAND_DESKTOP_AUTO_INSTALL="${KILIX_LAND_DESKTOP_AUTO_INSTALL:-1}"
+KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT="${KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT:-0}"
+KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF="${KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF:-0}"
+KILIX_LAND_DESKTOP_ASSETS="${KILIX_LAND_DESKTOP_ASSETS:-}"
+KILIX_LAND_DESKTOP_CONFIG_HOME="${KILIX_LAND_DESKTOP_CONFIG_HOME:-}"
+KILIX_LAND_DESKTOP_EXTERNAL_APPS="${KILIX_LAND_DESKTOP_EXTERNAL_APPS:-}"
+KILIX_LAND_DESKTOP_AUDIO="${KILIX_LAND_DESKTOP_AUDIO:-}"
 BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
 KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
@@ -88,6 +97,7 @@ KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is kn
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
 KILIX_CAP_DIR="${KILIX_CAP_DIR:-}"              # default after target user is known
 KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-}"  # default after target user is known
+KILIX_LAND_DESKTOP_DIR="${KILIX_LAND_DESKTOP_DIR:-}" # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into `kilix desktop`
@@ -1671,6 +1681,9 @@ write_source_tool_manifest() {
         provenance_kv KILIX_TUI_UTILS_DIR "$KILIX_TUI_UTILS_DIR"
         provenance_kv KILIX_TUI_UTILS_REPO "$KILIX_TUI_UTILS_REPO"
         provenance_kv KILIX_TUI_UTILS_REF "$KILIX_TUI_UTILS_REF"
+        provenance_kv KILIX_LAND_DESKTOP_DIR "$KILIX_LAND_DESKTOP_DIR"
+        provenance_kv KILIX_LAND_DESKTOP_REPO "$KILIX_LAND_DESKTOP_REPO"
+        provenance_kv KILIX_LAND_DESKTOP_REF "$KILIX_LAND_DESKTOP_REF"
         provenance_kv KILIX95_REF "$KILIX95_REF"
         provenance_kv KILIX95_DIR "$KILIX95_DIR"
         provenance_kv KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
@@ -2182,6 +2195,7 @@ KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95}"
 KILIX_CAP_DIR="${KILIX_CAP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-cap}"
 KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils}"
+KILIX_LAND_DESKTOP_DIR="${KILIX_LAND_DESKTOP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-land-desktop}"
 if [ "$KILIX95_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-95" ] \
    && [ ! -e "$KILIX95_DIR" ] && [ ! -L "$KILIX95_DIR" ]; then
     KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95"
@@ -2193,6 +2207,11 @@ fi
 if [ "$KILIX_TUI_UTILS_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-tui-utils" ] \
    && [ ! -e "$KILIX_TUI_UTILS_DIR" ] && [ ! -L "$KILIX_TUI_UTILS_DIR" ]; then
     KILIX_TUI_UTILS_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils"
+fi
+if [ "$KILIX_LAND_DESKTOP_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-land-desktop" ] \
+   && [ ! -e "$KILIX_LAND_DESKTOP_DIR" ] \
+   && [ ! -L "$KILIX_LAND_DESKTOP_DIR" ]; then
+    KILIX_LAND_DESKTOP_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-land-desktop"
 fi
 PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
 GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$USER_HOME/.local/gpu_terminal}"
@@ -2243,6 +2262,8 @@ if [ "$DESKTOP" = 1 ]; then
         log "kilix cap  : $KILIX_CAP_REPO -> $KILIX_CAP_DIR (first launch)"
     elif [ "$KILIX_DESKTOP_PROVIDER" = tui ]; then
         log "kilix tui  : $KILIX_TUI_UTILS_REPO -> $KILIX_TUI_UTILS_DIR (first launch)"
+    elif [ "$KILIX_DESKTOP_PROVIDER" = land ]; then
+        log "kilix land : $KILIX_LAND_DESKTOP_REPO -> $KILIX_LAND_DESKTOP_DIR (first launch)"
     fi
 fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
@@ -2415,6 +2436,16 @@ install_env=(
     "KILIX_TUI_UTILS_REF=$KILIX_TUI_UTILS_REF"
     "KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT=$KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT"
     "KILIX_TUI_UTILS_ALLOW_MUTABLE_REF=$KILIX_TUI_UTILS_ALLOW_MUTABLE_REF"
+    "KILIX_LAND_DESKTOP_AUTO_INSTALL=$KILIX_LAND_DESKTOP_AUTO_INSTALL"
+    "KILIX_LAND_DESKTOP_DIR=$KILIX_LAND_DESKTOP_DIR"
+    "KILIX_LAND_DESKTOP_REPO=$KILIX_LAND_DESKTOP_REPO"
+    "KILIX_LAND_DESKTOP_REF=$KILIX_LAND_DESKTOP_REF"
+    "KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT=$KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT"
+    "KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF=$KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF"
+    "KILIX_LAND_DESKTOP_ASSETS=$KILIX_LAND_DESKTOP_ASSETS"
+    "KILIX_LAND_DESKTOP_CONFIG_HOME=$KILIX_LAND_DESKTOP_CONFIG_HOME"
+    "KILIX_LAND_DESKTOP_EXTERNAL_APPS=$KILIX_LAND_DESKTOP_EXTERNAL_APPS"
+    "KILIX_LAND_DESKTOP_AUDIO=$KILIX_LAND_DESKTOP_AUDIO"
     "PLEB_DESKTOP=$DESKTOP"
     "PLEB_WM=$PLEB_WM"
     "KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES"
@@ -2532,11 +2563,10 @@ else
     cat <<'EOF'
 # Managed by plebian-os-provision — Plebian-OS Pleb session config.
 # PLEB_DESKTOP=1 starts `kilix desktop`; set it to 0 for a plain fullscreen
-# kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, cap,
-# command, or none. PLEB_WM selects the window manager (openbox, none, or a
-# command line);
-# an explicit choice here is kept by a reprovision. pleb-session documents the
-# other knobs.
+# kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, xp, cap,
+# tui, land, command, or none. PLEB_WM selects the window manager (openbox,
+# none, or a command line); an explicit choice here is kept by a reprovision.
+# pleb-session documents the other knobs.
 EOF
     write_session_default GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
     write_session_default GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
@@ -2598,6 +2628,16 @@ EOF
     write_session_default KILIX_TUI_UTILS_REF "$KILIX_TUI_UTILS_REF"
     write_session_default KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT "$KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT"
     write_session_default KILIX_TUI_UTILS_ALLOW_MUTABLE_REF "$KILIX_TUI_UTILS_ALLOW_MUTABLE_REF"
+    write_session_default KILIX_LAND_DESKTOP_AUTO_INSTALL "$KILIX_LAND_DESKTOP_AUTO_INSTALL"
+    write_session_default KILIX_LAND_DESKTOP_DIR "$KILIX_LAND_DESKTOP_DIR"
+    write_session_default KILIX_LAND_DESKTOP_REPO "$KILIX_LAND_DESKTOP_REPO"
+    write_session_default KILIX_LAND_DESKTOP_REF "$KILIX_LAND_DESKTOP_REF"
+    write_session_default KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT "$KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT"
+    write_session_default KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF "$KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF"
+    write_session_default KILIX_LAND_DESKTOP_ASSETS "$KILIX_LAND_DESKTOP_ASSETS"
+    write_session_default KILIX_LAND_DESKTOP_CONFIG_HOME "$KILIX_LAND_DESKTOP_CONFIG_HOME"
+    write_session_default KILIX_LAND_DESKTOP_EXTERNAL_APPS "$KILIX_LAND_DESKTOP_EXTERNAL_APPS"
+    write_session_default KILIX_LAND_DESKTOP_AUDIO "$KILIX_LAND_DESKTOP_AUDIO"
     write_session_default KILIX95_AUTO_INSTALL "$KILIX95_AUTO_INSTALL"
     write_session_default KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
     write_session_default KILIX95_CONFIG_HOME "$KILIX95_CONFIG_HOME"

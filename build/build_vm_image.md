@@ -160,8 +160,9 @@ At build time these come from `--session` / `--kiosk` /
 `KILIX_DESKTOP_PROVIDER`, `KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_NAME`,
 `KILIX_DESKTOP_FLAVOR`, `KILIX_CAP_AUTO_INSTALL`, `KILIX_CAP_DIR`,
 `KILIX_CAP_REPO`, `KILIX_CAP_REF`, `KILIX_CAP_TRUST_EXISTING_CHECKOUT`,
-`KILIX_CAP_ALLOW_MUTABLE_REF`, `KILIX95_AUTO_INSTALL`, `KILIX95_REPO`,
-`KILIX95_BRANCH`, and `KILIX95_REF`
+`KILIX_CAP_ALLOW_MUTABLE_REF`, the corresponding `KILIX_TUI_UTILS_*` and
+`KILIX_LAND_DESKTOP_*` provider settings, `KILIX95_AUTO_INSTALL`,
+`KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF`
 are also copied into the first-boot environment when present.
 
 Fresh guests default all coordinated checkouts to siblings under

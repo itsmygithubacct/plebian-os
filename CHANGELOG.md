@@ -28,6 +28,12 @@ release since 0.1.2 and restores one version across all four repositories; see
   available without a developer checkout. Like Kilix Cap, Kilix TUI inherits
   its exact commit through Kilix rather than becoming a fifth coordinated
   release-core repository.
+- Support **Kilix Land desktop sessions**.
+  `KILIX_DESKTOP_PROVIDER=land` selects the walkable graphical desktop, while
+  first launch clones its Kilix-pinned commit, initializes its recursive
+  dependencies, and builds the native executable. Like Cap and TUI, Land
+  inherits its immutable source revision through Kilix rather than expanding
+  the coordinated release core.
 - Ship **Tmux Manager**. Firstboot installs Kilix's pinned `tmux-tui`/`tmux-cli`
   closure and publishes Tmux Manager plus tmux-cli's `tb.py` as `tb` on `PATH`;
   the Kilix 95 Start menu entry opens it in a new tab, and both are usable

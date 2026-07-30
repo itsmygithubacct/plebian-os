@@ -6,13 +6,11 @@ Plebian-OS, [pleb](https://github.com/itsmygithubacct/pleb),
 stack. A release uses one version across all four repositories and pins every
 network-fetched build input.
 
-Kilix 95 is the release-default desktop provider. Kilix Cap and Kilix TUI are
-additional desktops whose immutable default source commits are inherited
-through whichever Kilix commit a release selects; they do not receive
-independent coordinated tags or top-level release-manifest keys. Kilix Land is
-a desktop too, but while it uses the generic `command` provider and has no
-Kilix-owned pin it is outside the release closure. Desktop status alone does not
-change the four-repository governance boundary.
+Kilix 95 is the release-default desktop provider. Kilix Cap, Kilix TUI, and
+Kilix Land are additional desktops whose immutable default source commits are
+inherited through whichever Kilix commit a release selects; they do not receive
+independent coordinated tags or top-level release-manifest keys. Adding a
+desktop does not change the four-repository governance boundary.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
