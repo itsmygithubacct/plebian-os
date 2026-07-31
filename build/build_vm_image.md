@@ -70,7 +70,8 @@ Each prompt shows a `[default]`; press Enter to accept it.
 
 Every prompt has a matching flag, so the whole thing can run non-interactively.
 With `--yes`, omitting `--password` generates a random password and prints it
-once instead of using the interactive `plebian` default.
+once; interactive VM builds require an operator-entered password because they
+enable SSH for the provisioning waiter.
 
 Release/image config may instead set `IMAGE_PASSWORD=plebian` and
 `RANDOM_PASSWORD=0`. Set `RANDOM_PASSWORD=1` to ignore `IMAGE_PASSWORD` and
