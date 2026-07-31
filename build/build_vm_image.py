@@ -280,6 +280,39 @@ def env_bool(name: str, default: bool) -> bool:
     raise AssertionError("unreachable")
 
 
+def select_image_password(*, explicit: str | None, prompter: Prompter,
+                          username: str, interactive_default: str) -> str:
+    """Resolve the installer password without putting generated secrets in config.
+
+    An explicit CLI value wins.  IMAGE_PASSWORD/RANDOM_PASSWORD are the image
+    config contract used by release manifests: RANDOM_PASSWORD=1 ignores the
+    configured default and emits a fresh one-time secret.  With neither key
+    configured, retain the builders' established behavior (random under
+    --yes, otherwise prompt with the caller's interactive default).
+    """
+    if explicit is not None:
+        return explicit
+
+    configured = "IMAGE_PASSWORD" in os.environ or "RANDOM_PASSWORD" in os.environ
+    if configured:
+        if env_bool("RANDOM_PASSWORD", False):
+            password = generated_password()
+            warn(f"RANDOM_PASSWORD=1: generated one-time password for {username}: "
+                 f"{password}")
+            return password
+        password = os.environ.get("IMAGE_PASSWORD", "plebian")
+        if not password:
+            die("IMAGE_PASSWORD must be nonempty when RANDOM_PASSWORD=0")
+        return password
+
+    if prompter.yes:
+        password = generated_password()
+        warn(f"--yes without --password: generated one-time password for {username}: "
+             f"{password}")
+        return password
+    return prompter.ask_password(interactive_default)
+
+
 def gather_config(args) -> Config:
     p = Prompter(args.yes)
     print(c("1", "\nPlebian-OS → VirtualBox image builder\n"))
@@ -289,16 +322,16 @@ def gather_config(args) -> Config:
     name     = args.name     or p.ask("VM name", "plebian")
     username = args.username or p.ask("username", "pleb")
     fullname = args.fullname or p.ask("full name", "Plebian User")
-    if args.password is not None:
-        password = args.password
-    elif args.yes:
-        password = generated_password()
-        warn(f"--yes without --password: generated one-time password for {username}: "
-             f"{password}")
-    else:
-        # VM images always enable sshd for the provisioning waiter, so unlike the
-        # offline USB default they require an operator-chosen nonempty secret.
-        password = p.ask_password("")
+    # VM images always enable sshd for the provisioning waiter. The normal
+    # interactive path therefore has no weak default; a release/other image
+    # config may still select IMAGE_PASSWORD explicitly and the SSH gate below
+    # will reject the shipped default before building.
+    password = select_image_password(
+        explicit=args.password,
+        prompter=p,
+        username=username,
+        interactive_default="",
+    )
     hostname = args.hostname or p.ask("hostname", name)
     ram_mb   = args.ram      or p.ask("RAM (MB)", default_ram_mb(),
                                       cast=int, validate=lambda v: v >= 512)
@@ -796,7 +829,10 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
 def final_summary(cfg: Config, iso: Path) -> None:
     print(c("1;32", "\n✓ Plebian-OS VirtualBox image is ready.\n"))
     print(f"  VM        : {cfg.name}")
-    print(f"  login     : {cfg.username} / (the password you set)")
+    if cfg.password == "plebian":
+        print(f"  login     : {cfg.username} / plebian (shipped default)")
+    else:
+        print(f"  login     : {cfg.username} / (configured password; generated values are printed above)")
     print(f"  session   : {'desktop provider only' if cfg.desktop else 'main Kilix instance'}"
           f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
     print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
@@ -872,7 +908,8 @@ def main() -> None:
             die("--yes --iso needs --password for SSH waiting (or pass --no-wait)")
     cfg = gather_config(args)
     if not args.iso and cfg.password == "plebian":
-        die("VM images enable sshd; choose a password other than the shipped 'plebian' default")
+        die("VM images enable sshd; use RANDOM_PASSWORD=1, IMAGE_PASSWORD=<secret>, "
+            "or --password instead of the shipped 'plebian' default")
     confirm_summary(cfg, args.yes)
 
     if args.iso:

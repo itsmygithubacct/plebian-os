@@ -44,7 +44,10 @@ class DiskSafetyTests(unittest.TestCase):
         r = _read("build", "remaster-iso.sh")
         self.assertIn("password plebian$", r)          # still detected
         # the warning block must not abort the build
-        gate = r.split("password plebian$", 1)[1].split("\nfi", 1)[0]
+        gate = r.split(
+            "# The default password is deliberate for the offline release image.",
+            1,
+        )[1].split("\n\napply_installer_snapshot()", 1)[0]
         self.assertNotIn("exit 1", gate)
         self.assertIn("default password 'plebian'", r)
 

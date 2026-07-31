@@ -208,11 +208,21 @@ named release ISO can remain at its deliberate release location. Strict release
 builds default to `plebian-os-<version>-amd64.iso`.
 
 Install it like normal Debian; the first boot pulls everything and comes up as
-Pleb. The raw template's offline login is **`pleb` / `plebian`** so the install
-is usable out of the box; it ships no ssh-server, and the desktop persistently
-prompts for the one-time transition to a new password. Python `--yes` builds
-instead generate and print a random password. Any builder path that enables SSH
-refuses the shipped password. Pass `--password` to choose your own secret.
+Pleb. The release login is **username `pleb`, password `plebian`**, so the
+offline image is usable out of the box; it ships no ssh-server, and the desktop
+persistently prompts for the one-time transition to a new password. The release
+manifest makes that policy explicit:
+
+```sh
+IMAGE_PASSWORD=plebian
+RANDOM_PASSWORD=0
+```
+
+Set `RANDOM_PASSWORD=1` in an image config to ignore `IMAGE_PASSWORD`, generate
+a strong one-time password, and print it during the build. Python builders also
+accept `--password`, which takes precedence. Their legacy `--yes` behavior still
+generates a password when neither config key is present. Any builder path that
+enables SSH refuses the shipped password.
 
 The remaster brands the shared BIOS/UEFI splash, every normal and accessible
 GRUB theme, the BIOS menu title, and both graphical-installer banners from

@@ -217,6 +217,11 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertTrue((ROOT / "RELEASING.md").exists())
         self.assertTrue((ROOT / "CHANGELOG.md").exists())
 
+    def test_release_manifest_makes_default_login_explicit(self):
+        manifest = _read("releases", "0.1.6.env")
+        self.assertIn("\nIMAGE_PASSWORD=plebian\n", manifest)
+        self.assertIn("\nRANDOM_PASSWORD=0\n", manifest)
+
     def test_acceptance_uses_exact_release_pins_without_release_only_gates(self):
         source = (ROOT / "build" / "acceptance-vm.sh").read_text()
         self.assertIn('PLEBIAN_OS_ACCEPTANCE_RAM:-4096', source)
@@ -224,6 +229,8 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn('PLEBIAN_OS_REF="$(git -C "$ROOT" rev-parse HEAD)"', source)
         self.assertIn('PLEBIAN_OS_RELEASE_MODE=0', source)
         self.assertIn('PLEBIAN_OS_RELEASE=', source)
+        self.assertIn('IMAGE_PASSWORD=', source)
+        self.assertIn('RANDOM_PASSWORD=1', source)
 
 
 if __name__ == "__main__":

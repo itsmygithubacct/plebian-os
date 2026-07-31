@@ -15,6 +15,12 @@ inherited through whichever Kilix commit a release selects; they do not receive
 independent coordinated tags or top-level release-manifest keys. Adding a
 desktop does not change the four-repository governance boundary.
 
+The publishable offline image declares `IMAGE_PASSWORD=plebian` and
+`RANDOM_PASSWORD=0`, making its initial `pleb` / `plebian` login explicit.
+`RANDOM_PASSWORD=1` is the opt-in generated-password policy for private or
+acceptance images; generated values are printed once and are never recorded in
+build provenance. Release artifacts with SSH enabled remain forbidden.
+
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
 The last published coordinated release is **0.1.2**. The next one is **0.1.6**;
@@ -94,7 +100,9 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    an old pairing and reporting green while the shipped combination is untested.
    Its advisory `pairing` job runs the same suite against Kilix's branch head; a
    red result there is the early warning that this pin — or the provider — needs
-   to move.
+   to move. Confirm the release manifest explicitly contains
+   `IMAGE_PASSWORD=plebian` and `RANDOM_PASSWORD=0`; never commit a private
+   password to the manifest.
 2. Run each repository's complete test/lint suite and integration contract
    tests. Run them in a clean environment and outside a live Kilix session:
    exported `KILIX_*` values and a user's persisted `kilix.env`

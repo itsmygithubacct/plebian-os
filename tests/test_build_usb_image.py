@@ -84,6 +84,23 @@ class UsbBuilderTests(unittest.TestCase):
             built = usb.gather_config(args(password="explicit"))
         self.assertEqual(built.password, "explicit")
 
+    def test_release_image_config_defaults_to_plebian(self):
+        with mock.patch.dict(usb.os.environ, {
+            "IMAGE_PASSWORD": "plebian",
+            "RANDOM_PASSWORD": "0",
+        }, clear=True):
+            built = usb.gather_config(args(password=None))
+        self.assertEqual(built.password, "plebian")
+
+    def test_release_image_config_can_request_random_password(self):
+        with mock.patch.dict(usb.os.environ, {
+            "IMAGE_PASSWORD": "plebian",
+            "RANDOM_PASSWORD": "yes",
+        }, clear=True), mock.patch.object(
+                usb.vm, "generated_password", return_value="random-pass"):
+            built = usb.gather_config(args(password=None))
+        self.assertEqual(built.password, "random-pass")
+
     def test_defaults_to_main_kilix_and_non_kiosk(self):
         with mock.patch.dict(usb.os.environ, {}, clear=True):
             built = usb.gather_config(args())

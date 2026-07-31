@@ -45,6 +45,27 @@ class RemasterContractTests(unittest.TestCase):
             text=True, capture_output=True, check=True,
         )
 
+    def run_password_policy(self, preseed, image_password, random_password):
+        function = self.source_section(
+            "apply_image_password_policy() {",
+            "\n\napply_image_password_policy \"$BUILD_PRESEED\"",
+        )
+        harness = (
+            "set -euo pipefail\n"
+            "PRESEED_IS_CUSTOM=0\n"
+            f"{function}\n"
+            'apply_image_password_policy "$1"\n'
+        )
+        env = {
+            **os.environ,
+            "IMAGE_PASSWORD": image_password,
+            "RANDOM_PASSWORD": random_password,
+        }
+        return subprocess.run(
+            ["bash", "-c", harness, "password-policy-test", str(preseed)],
+            text=True, capture_output=True, check=True, env=env,
+        )
+
     def make_boot_menu_tree(self, root, grub_timeout=True):
         isolinux = root / "isolinux"
         nested = isolinux / "nested"
@@ -113,6 +134,38 @@ class RemasterContractTests(unittest.TestCase):
                          f"runtime keys missing from build-info: {runtime - manifest}")
         for key in ("PLEBIAN_OS_AUTOBOOT", "PLEBIAN_OS_UNATTENDED_DISK"):
             self.assertIn(key, manifest)
+
+    def test_default_image_password_is_explicit_and_keeps_offline_preseed(self):
+        with tempfile.TemporaryDirectory() as td:
+            preseed = Path(td) / "preseed.cfg"
+            original = (
+                "d-i passwd/username string pleb\n"
+                "d-i passwd/user-password password plebian\n"
+                "d-i passwd/user-password-again password plebian\n"
+            )
+            preseed.write_text(original)
+            done = self.run_password_policy(preseed, "plebian", "0")
+            self.assertEqual(preseed.read_text(), original)
+            self.assertIn("username 'pleb', password 'plebian'", done.stdout)
+
+    def test_random_image_password_is_hashed_and_never_recorded(self):
+        with tempfile.TemporaryDirectory() as td:
+            preseed = Path(td) / "preseed.cfg"
+            preseed.write_text(
+                "d-i passwd/username string pleb\n"
+                "d-i passwd/user-password password plebian\n"
+                "d-i passwd/user-password-again password plebian\n"
+            )
+            done = self.run_password_policy(preseed, "ignored", "1")
+            transformed = preseed.read_text()
+            self.assertIn("d-i passwd/user-password-crypted password $6$", transformed)
+            self.assertNotIn("user-password-again", transformed)
+            self.assertNotIn("password plebian", transformed)
+            self.assertRegex(
+                done.stderr,
+                r"generated one-time image password for pleb: [0-9a-f]{36}",
+            )
+        self.assertNotIn("manifest_kv IMAGE_PASSWORD", self.source)
 
     def test_no_autoboot_policy_waits_forever_in_bios_and_uefi(self):
         with tempfile.TemporaryDirectory() as td:

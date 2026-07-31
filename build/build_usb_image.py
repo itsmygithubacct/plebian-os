@@ -70,14 +70,12 @@ def gather_config(args) -> Config:
     name     = args.name     or p.ask("image name", "plebian")
     username = args.username or p.ask("username", "pleb")
     fullname = args.fullname or p.ask("full name", "Plebian User")
-    if args.password is not None:
-        password = args.password
-    elif args.yes:
-        password = vm.generated_password()
-        warn(f"--yes without --password: generated one-time password for {username}: "
-             f"{password}")
-    else:
-        password = p.ask_password("plebian")
+    password = vm.select_image_password(
+        explicit=args.password,
+        prompter=p,
+        username=username,
+        interactive_default="plebian",
+    )
     hostname = args.hostname or p.ask("hostname", name)
     desktop_default = vm.env_bool("PLEBIAN_OS_DESKTOP", False)
     kiosk_default = vm.env_bool("PLEBIAN_OS_KIOSK", False)
@@ -458,7 +456,10 @@ def final_summary(cfg: Config, iso: Path, device: str, autoboot: bool,
         # don't claim a username/session the image may not actually use.
         print("  login     : whatever the prebuilt ISO's preseed defines")
     else:
-        print(f"  login     : {cfg.username} / (the password you set)")
+        if cfg.password == "plebian":
+            print(f"  login     : {cfg.username} / plebian (shipped default)")
+        else:
+            print(f"  login     : {cfg.username} / (configured password; generated values are printed above)")
         print(f"  session   : {'desktop provider only' if cfg.desktop else 'main Kilix instance'}"
               f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
         print(f"  sudo      : {'passwordless' if cfg.nopasswd_sudo else 'password required'}")

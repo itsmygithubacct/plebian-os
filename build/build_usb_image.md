@@ -69,6 +69,11 @@ Every prompt has a matching flag, so the whole thing can run non-interactively.
 With `--yes`, omitting `--password` generates a random password and prints it
 once instead of using the interactive `plebian` default.
 
+Release/image config may instead set `IMAGE_PASSWORD=plebian` and
+`RANDOM_PASSWORD=0`, which is the published offline-image policy. Set
+`RANDOM_PASSWORD=1` to ignore `IMAGE_PASSWORD` and generate a strong one-time
+password. An explicit `--password` wins over both.
+
 ```
 --name NAME            --username NAME       --fullname "Full Name"
 --hostname NAME        --password PASS

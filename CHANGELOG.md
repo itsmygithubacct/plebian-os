@@ -99,6 +99,10 @@ release since 0.1.2 and restores one version across all four repositories; see
 
 ### Fixed / hardened
 
+- Make the release credential policy explicit in its config:
+  `IMAGE_PASSWORD=plebian` and `RANDOM_PASSWORD=0` publish the usable offline
+  `pleb` / `plebian` login, while `RANDOM_PASSWORD=1` opts private images into a
+  generated one-time password without recording that secret in provenance.
 - Keep Kilix visibly identifiable at login by starting the main Pleb session
   maximized and without host decorations instead of using Kilix's content-only
   fullscreen mode. Acceptance now rejects an installed session that would hide

@@ -179,6 +179,32 @@ class VmBuilderEnvTests(unittest.TestCase):
             built = vm.gather_config(args(password="explicit"))
         self.assertEqual(built.password, "explicit")
 
+    def test_image_config_uses_documented_release_password(self):
+        with mock.patch.dict(os.environ, {
+            "IMAGE_PASSWORD": "plebian",
+            "RANDOM_PASSWORD": "0",
+        }, clear=True):
+            built = vm.gather_config(args(password=None))
+        self.assertEqual(built.password, "plebian")
+
+    def test_random_password_config_overrides_image_password(self):
+        with mock.patch.dict(os.environ, {
+            "IMAGE_PASSWORD": "plebian",
+            "RANDOM_PASSWORD": "1",
+        }, clear=True), mock.patch.object(
+                vm, "generated_password", return_value="random-pass"):
+            built = vm.gather_config(args(password=None))
+        self.assertEqual(built.password, "random-pass")
+
+    def test_explicit_password_overrides_image_config(self):
+        with mock.patch.dict(os.environ, {
+            "IMAGE_PASSWORD": "configured",
+            "RANDOM_PASSWORD": "1",
+        }, clear=True), mock.patch.object(vm, "generated_password") as generated:
+            built = vm.gather_config(args(password="explicit"))
+        self.assertEqual(built.password, "explicit")
+        generated.assert_not_called()
+
     def test_defaults_to_main_kilix_and_non_kiosk(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             built = vm.gather_config(args())

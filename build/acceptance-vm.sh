@@ -62,7 +62,13 @@ if [ -n "$PLEBIAN_OS_ACCEPTANCE_RELEASE" ]; then
     PLEBIAN_OS_REF="$(git -C "$ROOT" rev-parse HEAD)"
     PLEBIAN_OS_RELEASE=
     PLEBIAN_OS_RELEASE_MODE=0
-    export PLEBIAN_OS_REF PLEBIAN_OS_RELEASE PLEBIAN_OS_RELEASE_MODE
+    # The publishable image uses the documented offline `pleb` / `plebian`
+    # login. This acceptance derivative enables SSH for its waiter, so exercise
+    # the manifest's secure-password option instead of exposing that default.
+    IMAGE_PASSWORD=
+    RANDOM_PASSWORD=1
+    export PLEBIAN_OS_REF PLEBIAN_OS_RELEASE PLEBIAN_OS_RELEASE_MODE \
+        IMAGE_PASSWORD RANDOM_PASSWORD
     echo "acceptance-vm: testing exact $PLEBIAN_OS_ACCEPTANCE_RELEASE pins from $(basename "$manifest")"
 fi
 

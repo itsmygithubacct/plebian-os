@@ -161,6 +161,7 @@ release_preflight() {
     for key in \
         PLEBIAN_OS_REF PLEBIAN_OS_NETINST_URL PLEBIAN_OS_NETINST_SHA256 \
         PLEBIAN_OS_APT_SNAPSHOT PLEB_REF KILIX_REF KILIX95_REF \
+        IMAGE_PASSWORD RANDOM_PASSWORD \
         KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
         PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
@@ -195,6 +196,10 @@ release_preflight() {
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
         *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT" >&2; exit 1 ;;
+    esac
+    case "${RANDOM_PASSWORD,,}" in
+        0|no|false|off|1|yes|true|on) ;;
+        *) echo "invalid RANDOM_PASSWORD=$RANDOM_PASSWORD" >&2; exit 1 ;;
     esac
     actual_commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
     expected_commit="$(git -C "$HERE" rev-parse "${PLEBIAN_OS_REF}^{commit}" 2>/dev/null || true)"
@@ -252,23 +257,14 @@ mkdir -p "$(dirname "$OUT_REAL")"
 # The preseed to bake in. Defaults to the repo's; a builder (e.g.
 # build_vm_image.py) can point PLEBIAN_OS_PRESEED at a customized one to set the
 # username/password/hostname and first-boot options per image.
-PRESEED="${PLEBIAN_OS_PRESEED:-$HERE/preseed/preseed.cfg}"
-[ -f "$PRESEED" ] || { echo "no such preseed: $PRESEED" >&2; exit 1; }
-# The default password 'plebian' is a supported, deliberate default (the Kilix
-# 95 desktop prompts to change it on first run). Just note it — do NOT refuse,
-# even in release mode. If ssh-server is ALSO enabled the box would be
-# network-reachable with a weak password, so that combination warns louder.
-if grep -q '^d-i passwd/user-password password plebian$' "$PRESEED"; then
-    if grep -q '^tasksel tasksel/first multiselect .*ssh-server' "$PRESEED"; then
-        echo "WARNING: image uses the default password 'plebian' AND enables" >&2
-        echo "  ssh-server — it is network-reachable with a weak credential." >&2
-        echo "  Set a real password (builders' --password) for anything exposed." >&2
-    else
-        echo "note: image uses the default password 'plebian' (user 'pleb'); no" >&2
-        echo "  ssh-server, and the Kilix 95 desktop prompts to change it on first" >&2
-        echo "  run. Pass a real --password to the builders to override." >&2
-    fi
+if [ -n "${PLEBIAN_OS_PRESEED:-}" ]; then
+    PRESEED_IS_CUSTOM=1
+    PRESEED="$PLEBIAN_OS_PRESEED"
+else
+    PRESEED_IS_CUSTOM=0
+    PRESEED="$HERE/preseed/preseed.cfg"
 fi
+[ -f "$PRESEED" ] || { echo "no such preseed: $PRESEED" >&2; exit 1; }
 
 # Resolve the future guest's source/data layout independently from this build
 # host's cache and scratch paths. Python builders provide the same values
@@ -898,6 +894,90 @@ configure_boot_menu_policy() {
 
 BUILD_PRESEED="$WORK/preseed.cfg"
 cp "$PRESEED" "$BUILD_PRESEED"
+
+apply_image_password_policy() {
+    local seed="$1" random_raw="${RANDOM_PASSWORD:-0}"
+    local image_password="${IMAGE_PASSWORD-plebian}" username password_hash
+
+    random_raw="${random_raw,,}"
+    case "$random_raw" in
+        1|yes|true|on) random_raw=1 ;;
+        0|no|false|off|'') random_raw=0 ;;
+        *) echo "RANDOM_PASSWORD must be one of 1/0, yes/no, true/false, or on/off" >&2; exit 1 ;;
+    esac
+
+    # Python builders already produced a password-hashed custom preseed from
+    # this same config. Do not generate a second password behind their back.
+    [ "$PRESEED_IS_CUSTOM" = 0 ] || return 0
+
+    username="$(sed -n \
+        's/^d-i[[:space:]]\+passwd\/username[[:space:]]\+string[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*$/\1/p' \
+        "$seed" | tail -1)"
+    : "${username:=pleb}"
+
+    if [ "$random_raw" = 1 ]; then
+        command -v openssl >/dev/null 2>&1 || {
+            echo "openssl is required for RANDOM_PASSWORD=1" >&2
+            exit 1
+        }
+        image_password="$(openssl rand -hex 18)"
+        echo "==> generated one-time image password for $username: $image_password" >&2
+    fi
+    [ -n "$image_password" ] || {
+        echo "IMAGE_PASSWORD must be nonempty when RANDOM_PASSWORD=0" >&2
+        exit 1
+    }
+    case "$image_password" in *$'\n'*|*$'\r'*)
+        echo "IMAGE_PASSWORD must not contain a newline" >&2
+        exit 1 ;;
+    esac
+
+    if [ "$image_password" = plebian ]; then
+        grep -q '^d-i passwd/user-password password plebian$' "$seed" || {
+            echo "default IMAGE_PASSWORD does not match the base preseed" >&2
+            exit 1
+        }
+        echo "==> image login: username '$username', password 'plebian'"
+        return 0
+    fi
+
+    command -v openssl >/dev/null 2>&1 || {
+        echo "openssl is required to hash IMAGE_PASSWORD" >&2
+        exit 1
+    }
+    password_hash="$(printf '%s' "$image_password" | openssl passwd -6 -stdin)"
+    [[ "$password_hash" = \$6\$* ]] || {
+        echo "openssl did not produce a SHA-512 password hash" >&2
+        exit 1
+    }
+    grep -q '^d-i passwd/user-password password ' "$seed" || {
+        echo "base preseed has no replaceable password field" >&2
+        exit 1
+    }
+    sed -i -E \
+        -e "s|^d-i passwd/user-password password .*$|d-i passwd/user-password-crypted password $password_hash|" \
+        -e '/^d-i passwd\/user-password-again password /d' \
+        "$seed"
+    if [ "$random_raw" = 0 ]; then
+        echo "==> image login: username '$username'; password is configured by IMAGE_PASSWORD (not echoed)"
+    fi
+}
+
+apply_image_password_policy "$BUILD_PRESEED"
+
+# The default password is deliberate for the offline release image. Its Kilix
+# desktop prompts to replace it. A custom builder may include SSH, in which case
+# retaining that public credential deserves a prominent warning.
+if grep -q '^d-i passwd/user-password password plebian$' "$BUILD_PRESEED"; then
+    if grep -q '^tasksel tasksel/first multiselect .*ssh-server' "$BUILD_PRESEED"; then
+        echo "WARNING: image uses the default password 'plebian' AND enables" >&2
+        echo "  ssh-server — it is network-reachable with a weak credential." >&2
+        echo "  Use RANDOM_PASSWORD=1 or set a non-default IMAGE_PASSWORD." >&2
+    else
+        echo "note: release login is 'pleb' / 'plebian'; no ssh-server is" >&2
+        echo "  installed, and Kilix prompts to change it on first run." >&2
+    fi
+fi
 
 apply_installer_snapshot() {
     local seed="$1" ts="${PLEBIAN_OS_APT_SNAPSHOT:-}"
