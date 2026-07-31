@@ -1070,4 +1070,4 @@ mv -f "$OUT_TMP" "$OUT_ISO"
 
 echo "==> done: $OUT_ISO"
 echo "    install it like normal Debian; first boot pulls pleb + kilix and"
-echo "    comes up as the Pleb (fullscreen kilix) session."
+echo "    comes up as the Pleb (screen-filling Kilix with visible chrome) session."

@@ -59,7 +59,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | full name | `Plebian User` | GECOS field |
 | password | `plebian` | hidden entry; stored **hashed** in the preseed |
 | hostname | *image name* | |
-| session | **shell** | the main fullscreen Kilix instance; desktop-provider-only mode is opt-in |
+| session | **shell** | the main screen-filling Kilix instance with visible chrome; desktop-provider-only mode is opt-in |
 | autologin (kiosk) | **no** | boot straight into Pleb, or show a login greeter |
 | passwordless sudo | **no** | optional single-user appliance convenience |
 

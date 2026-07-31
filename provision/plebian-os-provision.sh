@@ -2,7 +2,8 @@
 # plebian-os-provision.sh — turn a stock graphical Debian into Plebian-OS.
 #
 # Plebian-OS is a regular Debian install whose desktop session is Pleb — a
-# single fullscreen kilix as the whole "desktop" — in place of XFCE/GNOME.
+# single screen-filling Kilix with visible chrome as the whole "desktop" — in
+# place of XFCE/GNOME.
 # The OS ships none of that; this script pulls it from GitHub on first boot:
 #
 #   1. apt-installs the runtime deps (Xorg, LightDM, git/curl/tar, GL, fonts)
@@ -145,7 +146,7 @@ Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--desktop|--no-desktop] [--
   --kiosk        enable autologin straight into Pleb (no greeter)
   --nopasswd-sudo grant the target user passwordless sudo
   --desktop      replace the main Kilix instance with the kilix desktop provider
-  --no-desktop   boot into the main fullscreen Kilix instance (default)
+  --no-desktop   boot into the main screen-filling Kilix instance (default)
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
   --version      print the Plebian-OS version and exit
@@ -2581,8 +2582,9 @@ else
     {
     cat <<'EOF'
 # Managed by plebian-os-provision — Plebian-OS Pleb session config.
-# PLEB_DESKTOP=1 starts `kilix desktop`; set it to 0 for a plain fullscreen
-# kilix shell. KILIX_DESKTOP_PROVIDER selects auto, builtin, external, xp, cap,
+# PLEB_DESKTOP=1 starts `kilix desktop`; set it to 0 for the main
+# screen-filling Kilix shell with visible chrome. KILIX_DESKTOP_PROVIDER selects
+# auto, builtin, external, xp, cap,
 # tui, land, command, or none. PLEB_WM selects the window manager (openbox,
 # none, or a command line); an explicit choice here is kept by a reprovision.
 # pleb-session documents the other knobs.
@@ -2737,7 +2739,7 @@ write_source_tool_manifest
 cleanup; trap - EXIT
 
 log "done. Plebian-OS is provisioned."
-log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'fullscreen kilix')."
+log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'screen-filling Kilix with visible chrome')."
 [ "$KIOSK" = 1 ] && log "  (kiosk: autologin + kilix respawn on exit; rescue console on Ctrl+Alt+F2)"
 [ "$NOPASSWD_SUDO" = 1 ] && log "  ($TARGET_USER has passwordless sudo)"
 exit 0

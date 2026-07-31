@@ -61,7 +61,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | vCPUs | **½ of host cores** | min 1 |
 | VRAM (MB) | **128** | capped to VirtualBox's 256 MB limit on this host |
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |
-| session | **shell** | the main fullscreen Kilix instance; desktop-provider-only mode is opt-in |
+| session | **shell** | the main screen-filling Kilix instance with visible chrome; desktop-provider-only mode is opt-in |
 | autologin (kiosk) | **no** | show a login greeter; kiosk mode also respawns Kilix on exit |
 | passwordless sudo | **yes** | useful for update/restart actions inside the desktop |
 | SSH host port | first free from **2222** | forwarded to the guest's port 22 |
@@ -134,7 +134,8 @@ the VM:
 The session mode is a plain config file the image owns — no rebuild needed.
 Inside the VM, edit **`/etc/pleb/session.env`**:
 
-- `PLEB_DESKTOP=0` → the main fullscreen Kilix instance (the default);
+- `PLEB_DESKTOP=0` → the main screen-filling Kilix instance with visible chrome
+  (the default);
   `1` → replace it with `kilix desktop` for a provider-only session.
 - `KILIX_DESKTOP_PROVIDER=auto|builtin|external|xp|cap|tui|command|none` selects
   what `kilix desktop` runs. `cap` downloads and builds Kilix Cap; `tui`
