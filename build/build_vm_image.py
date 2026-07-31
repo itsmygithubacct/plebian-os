@@ -692,17 +692,27 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         f'test "$KILIX_DESKTOP_PROVIDER" = {shlex.quote(expected_provider)} && '
         f'test "$KILIX_DESKTOP_FLAVOR" = {shlex.quote(expected_flavor)}'
     )
+    coordinated_checkouts = (kdir +
+        ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
+        ' p="${PLEB_DIR:-$s/pleb}";'
+        ' n="${KILIX95_DIR:-$s/kilix-desktops/kilix-95}";'
+        ' test -d "$o/.git" && test -d "$p/.git" &&'
+        ' test -d "$d/.git" && test -d "$n/.git"')
+    for ref_key, dir_var in (
+            ("PLEBIAN_OS_REF", "o"), ("PLEB_REF", "p"),
+            ("KILIX_REF", "d"), ("KILIX95_REF", "n")):
+        ref = os.environ.get(ref_key, "")
+        if re.fullmatch(r"[0-9a-fA-F]{40}", ref):
+            coordinated_checkouts += (
+                f' && test "$(git -C "${dir_var}" rev-parse HEAD)" = '
+                f'{shlex.quote(ref.lower())}'
+            )
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
-        ("source provenance",    "grep -Eq '^PLEBIAN_OS_COMMIT=[0-9a-f]{40}$' /var/lib/plebian-os/versions.env"),
-        ("coordinated checkouts", kdir +
-         ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
-         ' p="${PLEB_DIR:-$s/pleb}";'
-         ' n="${KILIX95_DIR:-$s/kilix-desktops/kilix-95}";'
-         ' test -d "$o/.git" && test -d "$p/.git" && test -d "$d/.git" &&'
-         ' test -d "$n/.git"'),
+        ("source provenance",    "for k in PLEBIAN_OS_COMMIT PLEB_COMMIT KILIX_COMMIT KILIX95_COMMIT; do grep -Eq \"^$k=[0-9a-f]{40}$\" /var/lib/plebian-os/versions.env || exit 1; done"),
+        ("coordinated checkouts", coordinated_checkouts),
         ("private storage roots", private_storage),
         ("pleb recovery guide", "test -r /usr/local/share/doc/pleb/RECOVERY.md"),
         ("pleb xsession",        "test -f /usr/share/xsessions/pleb.desktop"),

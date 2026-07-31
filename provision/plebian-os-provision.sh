@@ -1835,6 +1835,10 @@ desktop_provider_needs_kilix95() {
     esac
 }
 
+kilix95_install_required() {
+    [ "$KILIX95_AUTO_INSTALL" = 1 ] && desktop_provider_needs_kilix95
+}
+
 validate_checkout() {
     local dir="$1" repo="$2" name="$3" remote
     [ -d "$dir" ] && [ ! -L "$dir" ] \
@@ -2245,6 +2249,16 @@ export GPU_TERMINAL_SOURCE_HOME GPU_TERMINAL_HOME GPU_TERMINAL_SETTINGS_FILE
 export PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME
 resolve_session_wm_defaults
 
+# The login-session choice and the installed desktop closure are independent.
+# A main-Kilix login must still make the selected external desktop available to
+# an explicit `kilix desktop` invocation.  Pleb intentionally exposes
+# PLEB_INSTALL_KILIX95 for this distribution-policy case; honor the provider's
+# auto-install switch while keeping unrelated providers free of a K95 clone.
+PLEB_INSTALL_KILIX95=0
+if kilix95_install_required; then
+    PLEB_INSTALL_KILIX95=1
+fi
+
 # Allocate the shared private data tree before even the provision/update lock
 # is created.  This prevents the first target-user write from inheriting the
 # firstboot service's permissive umask and makes reruns repair older 0755 roots.
@@ -2258,15 +2272,16 @@ log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
 log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (cloned by pleb)"
 if [ "$DESKTOP" = 1 ]; then
     log "desktop    : provider=$KILIX_DESKTOP_PROVIDER name=$KILIX_DESKTOP_NAME"
-    if desktop_provider_needs_kilix95; then
-        log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
-    elif [ "$KILIX_DESKTOP_PROVIDER" = cap ]; then
+    if [ "$KILIX_DESKTOP_PROVIDER" = cap ]; then
         log "kilix cap  : $KILIX_CAP_REPO -> $KILIX_CAP_DIR (first launch)"
     elif [ "$KILIX_DESKTOP_PROVIDER" = tui ]; then
         log "kilix tui  : $KILIX_TUI_UTILS_REPO -> $KILIX_TUI_UTILS_DIR (first launch)"
     elif [ "$KILIX_DESKTOP_PROVIDER" = land ]; then
         log "kilix land : $KILIX_LAND_DESKTOP_REPO -> $KILIX_LAND_DESKTOP_DIR (first launch)"
     fi
+fi
+if [ "$PLEB_INSTALL_KILIX95" = 1 ]; then
+    log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
 fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
 log "session     : $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'plain kilix shell')"
@@ -2426,6 +2441,7 @@ install_env=(
     "KILIX_DESKTOP_COMMAND=$KILIX_DESKTOP_COMMAND"
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
     "KILIX_DESKTOP_FLAVOR=$KILIX_DESKTOP_FLAVOR"
+    "PLEB_INSTALL_KILIX95=$PLEB_INSTALL_KILIX95"
     "KILIX_CAP_AUTO_INSTALL=$KILIX_CAP_AUTO_INSTALL"
     "KILIX_CAP_DIR=$KILIX_CAP_DIR"
     "KILIX_CAP_REPO=$KILIX_CAP_REPO"

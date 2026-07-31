@@ -710,6 +710,10 @@ class RemasterContractTests(unittest.TestCase):
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         late = preseed.split("d-i preseed/late_command string", 1)[1]
         self.assertIn("set -e;", late)
+        self.assertIn(
+            "chmod 0644 /target/etc/plebian-os/build-info.env",
+            late,
+        )
         self.assertNotRegex(late, r";\s*\\?\s*true\s*$")
 
     def test_snapshot_generator_writes_target_apt_policy(self):

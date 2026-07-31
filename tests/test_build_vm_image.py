@@ -69,7 +69,15 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('"coordinated checkouts"', source)
         self.assertIn('"pleb recovery guide"', source)
         self.assertIn("/usr/local/share/doc/pleb/RECOVERY.md", source)
-        self.assertIn("PLEBIAN_OS_COMMIT=[0-9a-f]{40}", source)
+        for commit in (
+            "PLEBIAN_OS_COMMIT", "PLEB_COMMIT", "KILIX_COMMIT",
+            "KILIX95_COMMIT",
+        ):
+            self.assertIn(commit, source[source.index("def verify_provisioning"):])
+        self.assertIn('[0-9a-f]{40}', source[source.index("def verify_provisioning"):])
+        for ref in ("PLEBIAN_OS_REF", "PLEB_REF", "KILIX_REF", "KILIX95_REF"):
+            self.assertIn(ref, source[source.index("def verify_provisioning"):])
+        self.assertIn('git -C "${dir_var}" rev-parse HEAD', source)
         for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR", "KILIX95_DIR"):
             self.assertIn(checkout, source[source.index("def verify_provisioning"):])
 

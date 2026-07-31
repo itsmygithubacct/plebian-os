@@ -549,6 +549,23 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         self.assertNotEqual(near.returncode, 0)
         self.assertIn("expected exactly", near.stderr)
 
+    def test_main_session_still_installs_selected_kilix95_provider(self):
+        env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+        result = self._run_library(
+            "DESKTOP=0\n"
+            "KILIX_DIR=/missing-kilix-checkout\n"
+            "KILIX95_AUTO_INSTALL=1\n"
+            "KILIX_DESKTOP_PROVIDER=external\n"
+            "kilix95_install_required\n"
+            "KILIX_DESKTOP_PROVIDER=cap\n"
+            "! kilix95_install_required\n"
+            "KILIX_DESKTOP_PROVIDER=external\n"
+            "KILIX95_AUTO_INSTALL=0\n"
+            "! kilix95_install_required\n",
+            env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_explicit_root_target_is_rejected(self):
         result = subprocess.run(
             ["bash", str(PROVISION), "--dry-run", "--user", "root"],

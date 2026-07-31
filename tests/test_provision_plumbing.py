@@ -20,6 +20,9 @@ class ProvisionPlumbingTests(unittest.TestCase):
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
         self.assertIn('DESKTOP="${PLEBIAN_OS_DESKTOP:-0}"', provision)
         self.assertIn('--desktop) DESKTOP=1', provision)
+        self.assertIn('PLEB_INSTALL_KILIX95=0', provision)
+        self.assertIn('desktop_provider_needs_kilix95', provision)
+        self.assertIn('"PLEB_INSTALL_KILIX95=$PLEB_INSTALL_KILIX95"', provision)
         for source in (provision, update):
             self.assertIn('KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-95}"',
                           source)
