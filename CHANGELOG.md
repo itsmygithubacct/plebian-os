@@ -106,9 +106,12 @@ release since 0.1.2 and restores one version across all four repositories; see
   explicit CLI flag overrides them.
 - Install the pinned Kilix-95 checkout even when the login session starts the
   main Kilix instance, so an explicit `kilix desktop` opens flavor 95 without
-  falling back to XP or downloading mutable source on first use. Install the
-  non-secret build provenance as root-owned mode `0644`, allowing the normal
-  user session and acceptance tooling to verify the selected session contract.
+  falling back to XP or downloading mutable source on first use. Export that
+  provider, flavor, and exact ref into the main session so later interactive
+  launches retain the pinned contract without a false unpinned-provider
+  warning. Install the non-secret build provenance as root-owned mode `0644`,
+  allowing the normal user session and acceptance tooling to verify the
+  selected session contract.
 - Align the direct remaster, VM/USB builders, provisioner, documentation, and
   acceptance checks on the private
   `~/.local/gpu_terminal/sources` checkout root. Acceptance now verifies the

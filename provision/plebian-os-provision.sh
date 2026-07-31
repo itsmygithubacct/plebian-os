@@ -2679,10 +2679,13 @@ EOF
     write_session_default PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"
     write_session_default PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
     # Pleb versions predating these category-level names do not explicitly
-    # re-export them after sourcing session.env.  Export them here so the
-    # coordinated values still reach the Kilix launcher and Kilix 95 provider.
+    # re-export them after sourcing session.env. Export both storage and desktop
+    # selection provenance here so a main-Kilix login passes the same pinned
+    # provider contract to a later interactive `kilix desktop` invocation.
     printf '%s\n' 'export GPU_TERMINAL_SETTINGS_FILE'
     printf '%s\n' 'export KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY KILIX_CACHE_HOME KILIX_SESSION_HOME KILIX_PREBUILT_HOME'
+    printf '%s\n' 'export KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_COMMAND KILIX_DESKTOP_NAME KILIX_DESKTOP_FLAVOR'
+    printf '%s\n' 'export KILIX95_AUTO_INSTALL KILIX95_DIR KILIX95_REPO KILIX95_BRANCH KILIX95_REF'
     printf '%s\n' 'export KILIX95_CONFIG_HOME KILIX95_STATE_HOME KILIX95_CACHE_HOME KILIX95_SESSION_HOME KILIX95_DATA_HOME'
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'
     } > "$PLEB_ENV_TMP"

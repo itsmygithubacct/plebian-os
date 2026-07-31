@@ -685,6 +685,13 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         f'test "${{KILIX_DESKTOP_PROVIDER:-auto}}" = {shlex.quote(expected_provider)} && '
         f'test "${{KILIX_DESKTOP_FLAVOR:-95}}" = {shlex.quote(expected_flavor)}'
     )
+    expected_kilix95_ref = os.environ.get("KILIX95_REF", "")
+    session_exports = (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        f'env | grep -Fqx {shlex.quote("KILIX_DESKTOP_PROVIDER=" + expected_provider)} && '
+        f'env | grep -Fqx {shlex.quote("KILIX_DESKTOP_FLAVOR=" + expected_flavor)} && '
+        f'env | grep -Fqx {shlex.quote("KILIX95_REF=" + expected_kilix95_ref)}'
+    )
     build_session_contract = (
         '. /etc/plebian-os/build-info.env 2>/dev/null; '
         f'test "$PLEBIAN_OS_DESKTOP" = {shlex.quote(expected_desktop)} && '
@@ -719,6 +726,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("pleb-session binary",  "test -x /usr/local/bin/pleb-session"),
         ("session.env",          "test -f /etc/pleb/session.env"),
         ("session selection",    session_contract),
+        ("session exports",      session_exports),
         ("session provenance",   build_session_contract),
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
         ("update helper",        "test -x /usr/local/bin/plebian-os-update"),

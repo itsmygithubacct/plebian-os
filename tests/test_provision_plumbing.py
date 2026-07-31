@@ -348,6 +348,19 @@ class ProvisionPlumbingTests(unittest.TestCase):
         )
         self.assertNotIn(': "\\${KILIX_DIR:=', text)
 
+    def test_main_session_exports_pinned_desktop_selection(self):
+        text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertIn(
+            "export KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_COMMAND "
+            "KILIX_DESKTOP_NAME KILIX_DESKTOP_FLAVOR",
+            text,
+        )
+        self.assertIn(
+            "export KILIX95_AUTO_INSTALL KILIX95_DIR KILIX95_REPO "
+            "KILIX95_BRANCH KILIX95_REF",
+            text,
+        )
+
     def test_env_forwarding_uses_arrays_not_optional_word_splitting(self):
         for path in [
             ROOT / "provision" / "plebian-os-provision.sh",
