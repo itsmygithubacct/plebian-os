@@ -34,6 +34,9 @@ release since 0.1.2 and restores one version across all four repositories; see
   dependencies, and builds the native executable. Like Cap and TUI, Land
   inherits its immutable source revision through Kilix rather than expanding
   the coordinated release core.
+- Route Kilix 95 web links through Kilix's canonical URL dispatcher. Installed
+  Chrome, Chromium, or Firefox browsers are preferred; the experimental
+  in-pane renderer remains the fallback when none is available.
 - Ship **Tmux Manager**. Firstboot installs Kilix's pinned `tmux-tui`/`tmux-cli`
   closure and publishes Tmux Manager plus tmux-cli's `tb.py` as `tb` on `PATH`;
   the Kilix 95 Start menu entry opens it in a new tab, and both are usable
@@ -53,8 +56,6 @@ release since 0.1.2 and restores one version across all four repositories; see
   Unlike every other component, a voice closure that does not install is
   reported and provisioning continues — the microphone is click-to-talk, local
   and optional, and a machine with no sound must boot identically.
-
-### Added
 
 - Provision the shared clickable-chrome settings file at
   `~/.local/gpu_terminal/settings.conf` and install `kilix-settings` on `PATH`,
@@ -123,7 +124,7 @@ release since 0.1.2 and restores one version across all four repositories; see
 - Retain the Debian 13.5.0 archived netinst (13.6.0 has no stable
   `/cdimage/archive/` URL yet), the 0.47.4 fallback kitty engine (matching the
   pinned fork base), and `go1.26.5` (matching the fork's `src/go.mod`
-  toolchain). See [`releases/0.1.5.env`](releases/0.1.5.env) for the
+  toolchain). See [`releases/0.1.6.env`](releases/0.1.6.env) for the
   coordinated pin closure.
 
 ## [0.1.2] — 2026-07-15
