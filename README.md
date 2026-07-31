@@ -5,12 +5,12 @@
 </p>
 
 **A regular Debian install whose desktop is [Pleb](https://github.com/itsmygithubacct/pleb) —
-a single fullscreen [kilix](https://github.com/itsmygithubacct/kilix) as the whole
-session — in place of XFCE.**
+a single screen-filling [Kilix](https://github.com/itsmygithubacct/kilix), with
+its clickable chrome visible, as the whole session — in place of XFCE.**
 
 Plebian-OS is stock Debian in every way except the "desktop": where a normal
 Debian+XFCE install would give you a panel and a full desktop environment, Plebian-OS logs
-you into one fullscreen kilix (a Tilix-styled kitty fork: clickable pane buttons,
+you into one screen-filling Kilix (a Tilix-styled kitty fork: clickable pane buttons,
 splits, pages, images, and desktop providers that open in Kilix tabs). The
 login default is the main Kilix instance. `kilix desktop` selects Kilix 95 with
 its 95 flavor by default; Kilix Cap and Kilix TUI are Kilix-pinned optional
@@ -20,7 +20,7 @@ pulls its pieces from GitHub**:
 
 ```
 regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  ─▶  Pleb session
-   (no desktop task)          (networked)     (+ desktop provider)        (fullscreen kilix)
+   (no desktop task)          (networked)     (+ desktop provider)      (visible Kilix chrome)
 ```
 
 ## How it works
@@ -65,12 +65,13 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
      `/usr/local/share/doc/pleb/` so Kilix-95 can open it from Help;
    - pins Pleb as the default session (and, with `--kiosk`, enables autologin);
    - marks itself done and disables the service.
-3. **Every boot after** — LightDM → Pleb → fullscreen kilix. Log out to return to
+3. **Every boot after** — LightDM → Pleb → screen-filling Kilix with its page
+   and pane chrome visible. Log out to return to
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
 **GUI apps** — the session runs a minimal **Openbox** underneath kilix, so
 ordinary GUI commands (`chromium`, `firefox-esr`, …) open **native windows**:
-focusable, closable, and reachable with `Alt-Tab` over the fullscreen terminal.
+focusable, closable, and reachable with `Alt-Tab` over the main Kilix window.
 Openbox is deliberately bare — one desktop, no panel, no root menu, no launcher
 keys.
 
@@ -274,9 +275,9 @@ resolved source commits, tool/engine versions, and apt indexes actually used.
 The sibling **plebian** project is the *console-only* take: no X, no display
 manager — kilix runs on the bare virtual terminals via a per-VT cage compositor,
 `Ctrl+Alt+F1…F11` switching between independent kilix VTs. **Plebian-OS** is the
-*graphical desktop* take: a normal LightDM login whose session happens to be a
-fullscreen kilix (via pleb + Xorg). Same spirit — "a machine whose desktop is
-kilix" — reached the way a desktop distro does it (display manager + X session)
+*graphical desktop* take: a normal LightDM login whose session is a
+screen-filling Kilix with its own controls visible (via Pleb + Xorg). Same
+spirit — "a machine whose desktop is Kilix" — reached the way a desktop distro does it (display manager + X session)
 rather than by replacing the console. Pick plebian for a headless/console box,
 Plebian-OS for a desktop-shaped one.
 
@@ -301,7 +302,7 @@ Plebian-OS for a desktop-shaped one.
 Session and desktop-provider selection are controlled by `/etc/pleb/session.env`
 after install, or by environment at image-build/provision time. Fresh images
 default to `PLEBIAN_OS_DESKTOP=0` and `PLEBIAN_OS_KIOSK=0`: LightDM logs into
-the main fullscreen Kilix instance, and exiting it returns to the greeter
+the main screen-filling Kilix instance with its chrome visible, and exiting it returns to the greeter
 instead of respawning it. `kilix desktop` opens the selected provider in a
 Kilix tab; the release pins the external Kilix-95 provider and
 `KILIX_DESKTOP_FLAVOR=95`. Setting `PLEBIAN_OS_DESKTOP=1` deliberately replaces

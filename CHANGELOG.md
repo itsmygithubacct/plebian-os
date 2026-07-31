@@ -99,6 +99,10 @@ release since 0.1.2 and restores one version across all four repositories; see
 
 ### Fixed / hardened
 
+- Keep Kilix visibly identifiable at login by starting the main Pleb session
+  maximized and without host decorations instead of using Kilix's content-only
+  fullscreen mode. Acceptance now rejects an installed session that would hide
+  the page strip and pane controls and look like a plain terminal.
 - Make the installed-system and image-builder default the main Kilix instance,
   with the login greeter and hard respawn off. Pin the coordinated release's
   optional desktop provider to external Kilix-95 with the 95 flavor, and make

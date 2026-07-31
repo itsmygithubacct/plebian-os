@@ -699,6 +699,12 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         f'test "$KILIX_DESKTOP_PROVIDER" = {shlex.quote(expected_provider)} && '
         f'test "$KILIX_DESKTOP_FLAVOR" = {shlex.quote(expected_flavor)}'
     )
+    visible_kilix_chrome = (
+        "grep -Fq 'KILIX_ARGV=(--start-as=maximized -o hide_window_decorations=yes)' "
+        "/usr/local/bin/pleb-session && "
+        "! grep -Fq 'KILIX_ARGV=(--start-as=fullscreen)' "
+        "/usr/local/bin/pleb-session"
+    )
     coordinated_checkouts = (kdir +
         ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
         ' p="${PLEB_DIR:-$s/pleb}";'
@@ -728,6 +734,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("session selection",    session_contract),
         ("session exports",      session_exports),
         ("session provenance",   build_session_contract),
+        ("visible kilix chrome", visible_kilix_chrome),
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
         ("update helper",        "test -x /usr/local/bin/plebian-os-update"),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),

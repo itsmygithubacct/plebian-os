@@ -155,6 +155,13 @@ class VmBuilderEnvTests(unittest.TestCase):
         verify = source[source.index("def verify_provisioning"):]
         self.assertIn('"session selection"', verify)
         self.assertIn('"session provenance"', verify)
+        self.assertIn('"visible kilix chrome"', verify)
+        self.assertIn(
+            "KILIX_ARGV=(--start-as=maximized -o "
+            "hide_window_decorations=yes)",
+            verify,
+        )
+        self.assertIn("KILIX_ARGV=(--start-as=fullscreen)", verify)
         for key in (
             "PLEB_DESKTOP", "PLEB_RESPAWN", "PLEBIAN_OS_DESKTOP",
             "PLEBIAN_OS_KIOSK", "KILIX_DESKTOP_PROVIDER",
