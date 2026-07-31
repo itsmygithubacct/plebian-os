@@ -2,7 +2,7 @@
 
 This directory contains the editable Plebian-OS installer mark and the
 installer-ready raster exports. The build must consume these tracked files; it
-must never read artwork directly from a developer's `<workspace>` directory.
+must never read artwork directly from untracked developer files.
 
 See [ATTRIBUTION.md](ATTRIBUTION.md) for upstream credits and the asset-specific
 GPL-2.0-or-later terms. The complete license text is included at
@@ -29,9 +29,8 @@ The approved set was promoted from the 2026-07-13 authoring record:
 The matching desktop-only treatment is tracked separately as
 `../desktop/plebian-os.png`; it is not embedded into Debian Installer.
 
-The authoring paths in the table are relative to the `<workspace>/`
-archive on the preparation workstation. They document lineage only and are not
-build inputs.
+The authoring-source names in the table document lineage only and are not build
+inputs. Those source records are not part of this distribution.
 
 The upstream artwork was anchored to this exact Debian source image:
 
@@ -43,18 +42,14 @@ rootskel-gtk: 13.0.4
 
 Within that ISO, the relevant originals are `/isolinux/splash.png` and the GTK
 initrd's `usr/share/graphics/logo_debian.png` and
-`usr/share/graphics/logo_debian_dark.png`. Source notices were captured at:
-
-```text
-<workspace>/images/references/source-metadata/ceratopsian.md
-<workspace>/images/references/source-metadata/rootskel-gtk-copyright
-```
+`usr/share/graphics/logo_debian_dark.png`. Their Debian source notices were
+captured in the retained authoring record.
 
 ## Generation chain
 
 The source chain is deliberately separate from the small runtime payload:
 
-| Stage | Record relative to `<workspace>/` | SHA-256 |
+| Stage | Authoring record (not distributed) | SHA-256 |
 |---|---|---|
 | Initial splash prompt | `prompts/boot-b-terminal-p.prompt.txt` | `e9992f9b956c2cf04a0cdc372e5cadeabfbac1d3eeeb93c6a75ac0212b2be5a1` |
 | Initial banner prompt | `prompts/gtk-b-terminal-p.prompt.txt` | `b3d9abab2ab1ee53dbf4ddae5eaada2e748dd2e3967b8c4dbed817cd7888865e` |
@@ -92,7 +87,7 @@ version path; it must not rename or patch image pixels to carry the version.
    stock splash, both GTK banners, package version, and current source copyright
    metadata. Stop if paths, formats, authorship, or license terms changed.
 2. **Work outside the build tree.** Retain exact prompts, supplied references,
-   full model outputs, and selected candidates in a dated research record. Note
+   full model outputs, and selected candidates in a dated provenance record. Note
    the generation provider, model/version, date, seed when available, tool
    versions, and every deterministic conversion command.
 3. **Edit the canonical source first.** `logo.svg` is authoritative for the
