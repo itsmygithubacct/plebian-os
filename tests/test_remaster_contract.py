@@ -213,11 +213,11 @@ class RemasterContractTests(unittest.TestCase):
             )
         self.assertEqual(result.stdout.splitlines(), [
             "operator",
-            "/home/operator/gpu_terminal",
-            "/home/operator/gpu_terminal/pleb",
-            "/home/operator/gpu_terminal/kilix",
-            "/home/operator/gpu_terminal/kilix-desktops/kilix-95",
-            "/home/operator/gpu_terminal/plebian-os",
+            "/home/operator/.local/gpu_terminal/sources",
+            "/home/operator/.local/gpu_terminal/sources/pleb",
+            "/home/operator/.local/gpu_terminal/sources/kilix",
+            "/home/operator/.local/gpu_terminal/sources/kilix-desktops/kilix-95",
+            "/home/operator/.local/gpu_terminal/sources/plebian-os",
             "/home/operator/.local/gpu_terminal",
             "/home/operator/.local/gpu_terminal/pleb",
             "/home/operator/.local/gpu_terminal/kilix",

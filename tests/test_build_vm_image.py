@@ -70,7 +70,7 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('"pleb recovery guide"', source)
         self.assertIn("/usr/local/share/doc/pleb/RECOVERY.md", source)
         self.assertIn("PLEBIAN_OS_COMMIT=[0-9a-f]{40}", source)
-        for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR"):
+        for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR", "KILIX95_DIR"):
             self.assertIn(checkout, source[source.index("def verify_provisioning"):])
 
     def test_acceptance_checks_coherent_canonical_kilix_generation(self):

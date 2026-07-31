@@ -33,8 +33,9 @@ injection), so that intricate logic lives in **one** place and stays in sync wit
 Internet access is required at build time (the netinst download) and at install
 time (apt + the GitHub clones on first boot).
 
-On the installed machine, the coordinated source checkouts default to
-`~/.local/gpu_terminal/sources/{plebian-os,pleb,kilix,kilix-95}` and their runtime data lives
+On the installed machine, the core source checkouts default to
+`~/.local/gpu_terminal/sources/{plebian-os,pleb,kilix}`, Kilix-95 defaults to
+`~/.local/gpu_terminal/sources/kilix-desktops/kilix-95`, and their runtime data lives
 under `~/.local/gpu_terminal/`. These target paths are recorded in the ISO's
 firstboot configuration and build provenance.
 

@@ -294,7 +294,7 @@ resolve_target_layout() {
     # Only target-prefixed variables may transport guest roots across the
     # host/guest boundary. The unprefixed names are commonly exported by a
     # developer's live Pleb session and must never leak into installed media.
-    : "${PLEBIAN_OS_TARGET_SOURCE_HOME:=$target_home/gpu_terminal}"
+    : "${PLEBIAN_OS_TARGET_SOURCE_HOME:=$target_home/.local/gpu_terminal/sources}"
     : "${PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME:=$target_home/.local/gpu_terminal}"
     GPU_TERMINAL_SOURCE_HOME="$PLEBIAN_OS_TARGET_SOURCE_HOME"
     GPU_TERMINAL_HOME="$PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME"

@@ -105,7 +105,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
         for source, source_default in (
-            (provision, 'GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/gpu_terminal}"'),
+            (provision, 'GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/.local/gpu_terminal/sources}"'),
             (update, 'GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}"'),
         ):
             for contract in (
@@ -139,7 +139,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         env = vm.runtime_build_env(cfg)
         self.assertEqual(
             env["PLEBIAN_OS_TARGET_SOURCE_HOME"],
-            "/home/pleb/gpu_terminal",
+            "/home/pleb/.local/gpu_terminal/sources",
         )
         self.assertEqual(
             env["PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME"],

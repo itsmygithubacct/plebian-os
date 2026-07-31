@@ -169,7 +169,8 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
      existing `.state.json` (including a custom wallpaper choice) remains
      byte-for-byte unchanged across reprovisioning and update;
    - verify firstboot records
-     `~/.local/gpu_terminal/sources/{plebian-os,pleb,kilix,kilix-95}` as the coordinated
+     `~/.local/gpu_terminal/sources/{plebian-os,pleb,kilix}` plus
+     `~/.local/gpu_terminal/sources/kilix-desktops/kilix-95` as the coordinated
      source layout and `~/.local/gpu_terminal/` as the data root in build info,
      session defaults, and final provenance; confirm `external`, `builtin`, and
      both `auto` outcomes seed only Pleb's `data/desktop` state, while launching

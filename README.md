@@ -194,8 +194,9 @@ build/remaster-iso.sh                          # auto-download the netinst, buil
 build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netinst
 ```
 
-Fresh installations keep coordinated source checkouts in
-`~/.local/gpu_terminal/sources/{plebian-os,pleb,kilix,kilix-95}` and runtime data in
+Fresh installations keep the core source checkouts in
+`~/.local/gpu_terminal/sources/{plebian-os,pleb,kilix}`, Kilix-95 in
+`~/.local/gpu_terminal/sources/kilix-desktops/kilix-95`, and runtime data in
 `~/.local/gpu_terminal/{plebian-os,pleb,kilix,kilix-95}`, with shared chrome
 preferences in `~/.local/gpu_terminal/settings.conf`. No legacy checkout or
 data directories are moved automatically. Build cache, remaster work, session

@@ -432,7 +432,9 @@ def runtime_build_env(cfg: Config) -> dict[str, str]:
     """Map user choices to the single remaster/firstboot configuration path."""
     home = f"/home/{cfg.username}"
     source_root = os.environ.get(
-        "PLEBIAN_OS_TARGET_SOURCE_HOME", f"{home}/gpu_terminal")
+        "PLEBIAN_OS_TARGET_SOURCE_HOME",
+        f"{home}/.local/gpu_terminal/sources",
+    )
     data_root = os.environ.get(
         "PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME",
         f"{home}/.local/gpu_terminal",
@@ -698,7 +700,9 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("coordinated checkouts", kdir +
          ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
          ' p="${PLEB_DIR:-$s/pleb}";'
-         ' test -d "$o/.git" && test -d "$p/.git" && test -d "$d/.git"'),
+         ' n="${KILIX95_DIR:-$s/kilix-desktops/kilix-95}";'
+         ' test -d "$o/.git" && test -d "$p/.git" && test -d "$d/.git" &&'
+         ' test -d "$n/.git"'),
         ("private storage roots", private_storage),
         ("pleb recovery guide", "test -r /usr/local/share/doc/pleb/RECOVERY.md"),
         ("pleb xsession",        "test -f /usr/share/xsessions/pleb.desktop"),

@@ -2191,7 +2191,7 @@ pick_user() {
 [ -n "$TARGET_USER" ] || TARGET_USER="$(pick_user)"
 [ -n "$TARGET_USER" ] || die "no regular user found — create one, or pass --user"
 validate_target_user
-GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/gpu_terminal}"
+GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/.local/gpu_terminal/sources}"
 PLEB_DIR="${PLEB_DIR:-$GPU_TERMINAL_SOURCE_HOME/pleb}"
 KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
 KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95}"
