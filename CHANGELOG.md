@@ -99,6 +99,11 @@ release since 0.1.2 and restores one version across all four repositories; see
 
 ### Fixed / hardened
 
+- Make the installed-system and image-builder default the main Kilix instance,
+  with the login greeter and hard respawn off. Pin the coordinated release's
+  optional desktop provider to external Kilix-95 with the 95 flavor, and make
+  VM/USB builders honor manifest or environment session choices unless an
+  explicit CLI flag overrides them.
 - Track newly added Kilix submodules, and the content and presenter submodules
   specifically, in the whole-stack update rollback, so a failed update restores
   a coherent submodule state instead of a partially advanced one.

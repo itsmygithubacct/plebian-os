@@ -6,8 +6,10 @@ Plebian-OS, [pleb](https://github.com/itsmygithubacct/pleb),
 stack. A release uses one version across all four repositories and pins every
 network-fetched build input.
 
-Kilix 95 is the release-default desktop provider. Kilix Cap, Kilix TUI, and
-Kilix Land are additional desktops whose immutable default source commits are
+The release login session is the main Kilix instance, with hard-kiosk respawn
+off. Kilix 95 in its 95 flavor is the release-default provider when
+`kilix desktop` is opened in a tab. Kilix Cap, Kilix TUI, and Kilix Land are
+additional desktops whose immutable default source commits are
 inherited through whichever Kilix commit a release selects; they do not receive
 independent coordinated tags or top-level release-manifest keys. Adding a
 desktop does not change the four-repository governance boundary.
@@ -138,6 +140,9 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    text/graphical installer main menu for the same product boundary. F2 must
    list 4 GiB RAM, 20 GiB disk, and first-boot networking; F9 must distinguish
    `/cdrom/plebian-os/build-info.env` from `/etc/plebian-os/build-info.env`.
+   Log into the installed guest and confirm the initial screen is the main
+   Kilix instance, closing it returns to LightDM rather than respawning, and
+   `kilix desktop` opens Kilix-95 in a tab with the 95—not XP—flavor.
    In an installed guest, complete these distribution-asset checks:
 
    - verify the Kilix engine is one physically contained

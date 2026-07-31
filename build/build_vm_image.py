@@ -203,7 +203,7 @@ class Config:
     vram_mb: int
     accelerate_3d: bool
     disk_gb: int
-    desktop: bool          # PLEB_DESKTOP: boot into `kilix desktop`
+    desktop: bool          # PLEB_DESKTOP: replace main Kilix with `kilix desktop`
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
     nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
     ssh_port: int
@@ -266,6 +266,20 @@ class Prompter:
             print("    ↳ passwords didn't match, try again")
 
 
+def env_bool(name: str, default: bool) -> bool:
+    """Read a shell-style boolean, treating an unset/empty value as default."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in ("1", "yes", "true", "on"):
+        return True
+    if value in ("0", "no", "false", "off"):
+        return False
+    die(f"{name} must be one of 1/0, yes/no, true/false, or on/off")
+    raise AssertionError("unreachable")
+
+
 def gather_config(args) -> Config:
     p = Prompter(args.yes)
     print(c("1", "\nPlebian-OS → VirtualBox image builder\n"))
@@ -296,14 +310,22 @@ def gather_config(args) -> Config:
         vram_mb = 256
     disk_gb  = args.disk     or p.ask("disk (GB, sparse)", 200,
                                       cast=int, validate=lambda v: v >= 8)
+    desktop_default = env_bool("PLEBIAN_OS_DESKTOP", False)
+    kiosk_default = env_bool("PLEBIAN_OS_KIOSK", False)
+    nopasswd_default = env_bool("PLEBIAN_OS_NOPASSWD_SUDO", True)
     if args.session:
         desktop = args.session == "desktop"
     else:
-        desktop = p.ask_bool("boot into the configured kilix desktop (vs plain shell)", True)
+        desktop = p.ask_bool(
+            "replace the main kilix instance with the configured desktop provider",
+            desktop_default,
+        )
     kiosk    = args.kiosk if args.kiosk is not None \
-                          else p.ask_bool("autologin (kiosk) instead of a login screen", True)
+                          else p.ask_bool("autologin (kiosk) instead of a login screen",
+                                          kiosk_default)
     nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
-                          else p.ask_bool(f"passwordless sudo for {username}", True)
+                          else p.ask_bool(f"passwordless sudo for {username}",
+                                          nopasswd_default)
     ssh_port = args.port     or p.ask("SSH host port (forwarded to guest 22)", free_port(),
                                       cast=int, validate=lambda v: 1 <= v <= 65535)
 
@@ -332,7 +354,7 @@ def confirm_summary(cfg: Config, assume_yes: bool) -> None:
         ("VRAM", f"{cfg.vram_mb} MB"),
         ("3D accel", "on" if cfg.accelerate_3d else "off"),
         ("disk", f"{cfg.disk_gb} GB (sparse)"),
-        ("session", "kilix desktop" if cfg.desktop else "plain kilix shell"),
+        ("session", "desktop provider only" if cfg.desktop else "main Kilix instance"),
         ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
         ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
         ("SSH", f"ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1"),
@@ -650,6 +672,24 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         'private_dir "$n" "$nd" && private_dir "$o" "$or" && '
         'case "$w" in "$pd") true ;; "$pd"/*) private_dir "$pd" "$w" ;; '
         '*) true ;; esac')
+    expected_desktop = "1" if cfg.desktop else "0"
+    expected_kiosk = "1" if cfg.kiosk else "0"
+    expected_provider = os.environ.get("KILIX_DESKTOP_PROVIDER", "auto")
+    expected_flavor = os.environ.get("KILIX_DESKTOP_FLAVOR", "95") or "95"
+    session_contract = (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        f'test "${{PLEB_DESKTOP:-0}}" = {shlex.quote(expected_desktop)} && '
+        f'test "${{PLEB_RESPAWN:-0}}" = {shlex.quote(expected_kiosk)} && '
+        f'test "${{KILIX_DESKTOP_PROVIDER:-auto}}" = {shlex.quote(expected_provider)} && '
+        f'test "${{KILIX_DESKTOP_FLAVOR:-95}}" = {shlex.quote(expected_flavor)}'
+    )
+    build_session_contract = (
+        '. /etc/plebian-os/build-info.env 2>/dev/null; '
+        f'test "$PLEBIAN_OS_DESKTOP" = {shlex.quote(expected_desktop)} && '
+        f'test "$PLEBIAN_OS_KIOSK" = {shlex.quote(expected_kiosk)} && '
+        f'test "$KILIX_DESKTOP_PROVIDER" = {shlex.quote(expected_provider)} && '
+        f'test "$KILIX_DESKTOP_FLAVOR" = {shlex.quote(expected_flavor)}'
+    )
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
@@ -664,6 +704,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("pleb xsession",        "test -f /usr/share/xsessions/pleb.desktop"),
         ("pleb-session binary",  "test -x /usr/local/bin/pleb-session"),
         ("session.env",          "test -f /etc/pleb/session.env"),
+        ("session selection",    session_contract),
+        ("session provenance",   build_session_contract),
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
         ("update helper",        "test -x /usr/local/bin/plebian-os-update"),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
@@ -726,7 +768,7 @@ def final_summary(cfg: Config, iso: Path) -> None:
     print(c("1;32", "\n✓ Plebian-OS VirtualBox image is ready.\n"))
     print(f"  VM        : {cfg.name}")
     print(f"  login     : {cfg.username} / (the password you set)")
-    print(f"  session   : {'kilix desktop' if cfg.desktop else 'kilix shell'}"
+    print(f"  session   : {'desktop provider only' if cfg.desktop else 'main Kilix instance'}"
           f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
     print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
     print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")
@@ -748,7 +790,7 @@ def main() -> None:
     ap.add_argument("--disk", type=int, help="GB")
     ap.add_argument("--session", choices=["desktop", "shell"])
     ap.add_argument("--kiosk", dest="kiosk", action="store_true", default=None,
-                    help="autologin straight into Pleb (default)")
+                    help="autologin straight into Pleb and respawn Kilix on exit")
     ap.add_argument("--no-kiosk", dest="kiosk", action="store_false",
                     help="show the login greeter instead of autologin")
     ap.add_argument("--sudo-nopasswd", dest="nopasswd_sudo", action="store_true",

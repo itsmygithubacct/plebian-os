@@ -140,6 +140,18 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('"$pd"/*) private_dir "$pd" "$w"', verify)
         self.assertIn('= 700 ];', verify)
 
+    def test_acceptance_checks_exact_session_selection(self):
+        source = (ROOT / "build" / "build_vm_image.py").read_text()
+        verify = source[source.index("def verify_provisioning"):]
+        self.assertIn('"session selection"', verify)
+        self.assertIn('"session provenance"', verify)
+        for key in (
+            "PLEB_DESKTOP", "PLEB_RESPAWN", "PLEBIAN_OS_DESKTOP",
+            "PLEBIAN_OS_KIOSK", "KILIX_DESKTOP_PROVIDER",
+            "KILIX_DESKTOP_FLAVOR",
+        ):
+            self.assertIn(key, verify)
+
     def test_yes_mode_generates_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):
             built = vm.gather_config(args(password=None))
@@ -149,6 +161,37 @@ class VmBuilderEnvTests(unittest.TestCase):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):
             built = vm.gather_config(args(password="explicit"))
         self.assertEqual(built.password, "explicit")
+
+    def test_defaults_to_main_kilix_and_non_kiosk(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            built = vm.gather_config(args())
+        self.assertFalse(built.desktop)
+        self.assertFalse(built.kiosk)
+
+    def test_environment_session_defaults_are_honored(self):
+        with mock.patch.dict(os.environ, {
+            "PLEBIAN_OS_DESKTOP": "yes",
+            "PLEBIAN_OS_KIOSK": "on",
+            "PLEBIAN_OS_NOPASSWD_SUDO": "no",
+        }, clear=True):
+            built = vm.gather_config(args())
+        self.assertTrue(built.desktop)
+        self.assertTrue(built.kiosk)
+        self.assertFalse(built.nopasswd_sudo)
+
+    def test_explicit_session_flags_override_environment_defaults(self):
+        with mock.patch.dict(os.environ, {
+            "PLEBIAN_OS_DESKTOP": "1",
+            "PLEBIAN_OS_KIOSK": "1",
+        }, clear=True):
+            built = vm.gather_config(args(session="shell", kiosk=False))
+        self.assertFalse(built.desktop)
+        self.assertFalse(built.kiosk)
+
+    def test_invalid_environment_boolean_fails_closed(self):
+        with mock.patch.dict(os.environ, {"PLEBIAN_OS_DESKTOP": "sometimes"},
+                             clear=True), self.assertRaises(SystemExit):
+            vm.gather_config(args())
 
     def test_vram_is_capped_to_virtualbox_limit(self):
         built = vm.gather_config(args(vram=512, accelerate_3d=True))

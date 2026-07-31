@@ -84,6 +84,21 @@ class UsbBuilderTests(unittest.TestCase):
             built = usb.gather_config(args(password="explicit"))
         self.assertEqual(built.password, "explicit")
 
+    def test_defaults_to_main_kilix_and_non_kiosk(self):
+        with mock.patch.dict(usb.os.environ, {}, clear=True):
+            built = usb.gather_config(args())
+        self.assertFalse(built.desktop)
+        self.assertFalse(built.kiosk)
+
+    def test_release_environment_session_defaults_are_honored(self):
+        with mock.patch.dict(usb.os.environ, {
+            "PLEBIAN_OS_DESKTOP": "1",
+            "PLEBIAN_OS_KIOSK": "true",
+        }, clear=True):
+            built = usb.gather_config(args())
+        self.assertTrue(built.desktop)
+        self.assertTrue(built.kiosk)
+
     def test_remaster_receives_same_runtime_values_as_vm_builder(self):
         seen = {}
         with tempfile.TemporaryDirectory() as td:

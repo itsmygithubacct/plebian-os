@@ -15,6 +15,15 @@ class ProvisionPlumbingTests(unittest.TestCase):
         ]
         subprocess.run(["bash", "-n", *scripts], cwd=ROOT, check=True)
 
+    def test_fresh_provision_defaults_to_main_kilix_and_95_provider_flavor(self):
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
+        self.assertIn('DESKTOP="${PLEBIAN_OS_DESKTOP:-0}"', provision)
+        self.assertIn('--desktop) DESKTOP=1', provision)
+        for source in (provision, update):
+            self.assertIn('KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-95}"',
+                          source)
+
     def test_provision_and_update_pass_generic_desktop_knobs(self):
         required = [
             "GPU_TERMINAL_SOURCE_HOME",

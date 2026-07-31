@@ -48,7 +48,7 @@ INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-1}"
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
-KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-}"
+KILIX_DESKTOP_FLAVOR="${KILIX_DESKTOP_FLAVOR:-95}"
 KILIX_CAP_REPO="${KILIX_CAP_REPO:-https://github.com/itsmygithubacct/kilix-cap.git}"
 KILIX_CAP_REF="${KILIX_CAP_REF:-}"
 KILIX_CAP_AUTO_INSTALL="${KILIX_CAP_AUTO_INSTALL:-1}"
@@ -100,7 +100,7 @@ KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-}"  # default after target user is k
 KILIX_LAND_DESKTOP_DIR="${KILIX_LAND_DESKTOP_DIR:-}" # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
-DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = Pleb boots into `kilix desktop`
+DESKTOP="${PLEBIAN_OS_DESKTOP:-0}"             # 0 = Pleb boots into main Kilix
 PLEB_WM="${PLEB_WM:-}"                         # empty = keep an existing pin, else openbox
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 0
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
@@ -140,11 +140,12 @@ usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
     cat <<EOF
 
-Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--no-desktop] [--branch REF] [--dry-run]
+Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--desktop|--no-desktop] [--branch REF] [--dry-run]
   --user NAME    provision for this user (default: first uid>=1000 account)
   --kiosk        enable autologin straight into Pleb (no greeter)
   --nopasswd-sudo grant the target user passwordless sudo
-  --no-desktop   boot into a plain fullscreen kilix shell, not a desktop provider
+  --desktop      replace the main Kilix instance with the kilix desktop provider
+  --no-desktop   boot into the main fullscreen Kilix instance (default)
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
   --version      print the Plebian-OS version and exit
@@ -2167,6 +2168,7 @@ while [ $# -gt 0 ]; do
         --user)   TARGET_USER="${2:?}"; shift 2 ;;
         --kiosk)  KIOSK=1; shift ;;
         --nopasswd-sudo) NOPASSWD_SUDO=1; shift ;;
+        --desktop) DESKTOP=1; shift ;;
         --no-desktop) DESKTOP=0; shift ;;
         --branch) PLEB_BRANCH="${2:?}"; shift 2 ;;
         --dry-run) DRY_RUN=1; shift ;;
@@ -2545,9 +2547,10 @@ user-session=pleb
 EOF
 fi
 
-# ── 5. session mode: boot into `kilix desktop` (disablable) ─────────────────
-# pleb-session reads /etc/pleb/session.env on every login; PLEB_DESKTOP=1 brings
-# the Pleb session up as the kilix desktop instead of a bare shell, and PLEB_WM
+# ── 5. session mode: main Kilix, or an explicit desktop-provider session ────
+# pleb-session reads /etc/pleb/session.env on every login. PLEB_DESKTOP=0 starts
+# the main Kilix instance; PLEB_DESKTOP=1 replaces it with `kilix desktop`.
+# PLEB_WM
 # selects the window manager it starts (openbox, or none for the historic
 # fixed-geometry session). This is a plain root-managed config file: edit it with
 # sudo to flip either knob — no reprovision needed, and a reprovision keeps the

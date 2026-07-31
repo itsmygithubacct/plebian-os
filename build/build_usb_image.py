@@ -56,7 +56,7 @@ class Config:
     fullname: str
     password: str
     hostname: str
-    desktop: bool          # PLEBIAN_OS_DESKTOP: boot into `kilix desktop`
+    desktop: bool          # PLEBIAN_OS_DESKTOP: replace main Kilix with the provider
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
     nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
 
@@ -79,14 +79,22 @@ def gather_config(args) -> Config:
     else:
         password = p.ask_password("plebian")
     hostname = args.hostname or p.ask("hostname", name)
+    desktop_default = vm.env_bool("PLEBIAN_OS_DESKTOP", False)
+    kiosk_default = vm.env_bool("PLEBIAN_OS_KIOSK", False)
+    nopasswd_default = vm.env_bool("PLEBIAN_OS_NOPASSWD_SUDO", False)
     if args.session:
         desktop = args.session == "desktop"
     else:
-        desktop = p.ask_bool("boot into the configured kilix desktop (vs plain shell)", True)
+        desktop = p.ask_bool(
+            "replace the main kilix instance with the configured desktop provider",
+            desktop_default,
+        )
     kiosk = args.kiosk if args.kiosk is not None \
-                       else p.ask_bool("autologin (kiosk) instead of a login screen", False)
+                       else p.ask_bool("autologin (kiosk) instead of a login screen",
+                                       kiosk_default)
     nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
-                       else p.ask_bool(f"passwordless sudo for {username}", False)
+                       else p.ask_bool(f"passwordless sudo for {username}",
+                                       nopasswd_default)
 
     vm.validate_identity(name=name, username=username, fullname=fullname,
                          password=password, hostname=hostname)
@@ -100,7 +108,7 @@ def confirm_summary(cfg: Config, out_iso: Path, device: str | None,
     print(vm.c("1", "\nAbout to build:"))
     rows = [
         ("image name", cfg.name), ("username", cfg.username), ("hostname", cfg.hostname),
-        ("session", "kilix desktop" if cfg.desktop else "plain kilix shell"),
+        ("session", "desktop provider only" if cfg.desktop else "main Kilix instance"),
         ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
         ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
         ("ISO out", out_iso),
@@ -451,7 +459,7 @@ def final_summary(cfg: Config, iso: Path, device: str, autoboot: bool,
         print("  login     : whatever the prebuilt ISO's preseed defines")
     else:
         print(f"  login     : {cfg.username} / (the password you set)")
-        print(f"  session   : {'kilix desktop' if cfg.desktop else 'kilix shell'}"
+        print(f"  session   : {'desktop provider only' if cfg.desktop else 'main Kilix instance'}"
               f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
         print(f"  sudo      : {'passwordless' if cfg.nopasswd_sudo else 'password required'}")
     print(f"  ISO       : {iso}")

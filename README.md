@@ -11,8 +11,9 @@ session — in place of XFCE.**
 Plebian-OS is stock Debian in every way except the "desktop": where a normal
 Debian+XFCE install would give you a panel and a full desktop environment, Plebian-OS logs
 you into one fullscreen kilix (a Tilix-styled kitty fork: clickable pane buttons,
-splits, pages, images, and a selected desktop provider). Kilix 95 is the
-release-default desktop; Kilix Cap and Kilix TUI are Kilix-pinned optional
+splits, pages, images, and desktop providers that open in Kilix tabs). The
+login default is the main Kilix instance. `kilix desktop` selects Kilix 95 with
+its 95 flavor by default; Kilix Cap and Kilix TUI are Kilix-pinned optional
 desktops, and Kilix Land is a Kilix-pinned optional walkable desktop. The OS
 itself ships none of that — it **installs like a regular Debian system and then
 pulls its pieces from GitHub**:
@@ -296,9 +297,15 @@ Plebian-OS for a desktop-shaped one.
   compiles large generated Go packages during firstboot. Lower-memory runtime
   use remains possible after installation, but builders warn below 4 GiB.
 
-Desktop selection is controlled by `/etc/pleb/session.env` after install, or by
-environment at image-build/provision time. `PLEBIAN_OS_DESKTOP=0` gives a plain
-fullscreen kilix shell. With desktop mode on, `KILIX_DESKTOP_PROVIDER` can be
+Session and desktop-provider selection are controlled by `/etc/pleb/session.env`
+after install, or by environment at image-build/provision time. Fresh images
+default to `PLEBIAN_OS_DESKTOP=0` and `PLEBIAN_OS_KIOSK=0`: LightDM logs into
+the main fullscreen Kilix instance, and exiting it returns to the greeter
+instead of respawning it. `kilix desktop` opens the selected provider in a
+Kilix tab; the release pins the external Kilix-95 provider and
+`KILIX_DESKTOP_FLAVOR=95`. Setting `PLEBIAN_OS_DESKTOP=1` deliberately replaces
+the main instance with that provider for a desktop-only session. In that mode,
+`KILIX_DESKTOP_PROVIDER` can be
 `auto`, `builtin`, `external`, `xp`, `cap`, `tui`, `land`, `command`, or
 `none`; `cap` downloads and locally builds Kilix Cap, `tui` installs the Kilix
 TUI desktop from the pinned `kilix-tui-utils` checkout, and `land` downloads
