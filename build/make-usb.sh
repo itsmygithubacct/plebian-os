@@ -77,17 +77,19 @@ protected_device_names() {
         kname="$(block_kname "$src" 2>/dev/null || true)"
         [ -n "$kname" ] && ancestor_names "$kname"
     done
-    if command -v swapon >/dev/null 2>&1; then
-        while IFS= read -r src; do
-            case "$src" in
-                /dev/*) ;;
-                *) src="$(findmnt -no SOURCE --target "$src" 2>/dev/null || true)"; src="${src%%[*}" ;;
-            esac
-            case "$src" in /dev/*) ;; *) continue ;; esac
-            kname="$(block_kname "$src" 2>/dev/null || true)"
-            [ -n "$kname" ] && ancestor_names "$kname"
-        done < <(swapon --noheadings --raw --show=NAME 2>/dev/null || true)
-    fi
+    # Swap comes from /proc/swaps, not swapon(8): that binary sits in /usr/sbin,
+    # which regular users don't have on PATH on Debian, and swap disks must stay
+    # in the protected set (a silent skip is as unsafe as a crash).
+    while IFS= read -r src; do
+        src="${src//\\040/ }"
+        case "$src" in
+            /dev/*) ;;
+            *) src="$(findmnt -no SOURCE --target "$src" 2>/dev/null || true)"; src="${src%%[*}" ;;
+        esac
+        case "$src" in /dev/*) ;; *) continue ;; esac
+        kname="$(block_kname "$src" 2>/dev/null || true)"
+        [ -n "$kname" ] && ancestor_names "$kname"
+    done < <(awk 'NR>1 {print $1}' /proc/swaps 2>/dev/null || true)
 }
 
 mounted_targets_for_device() {

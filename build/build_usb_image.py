@@ -258,20 +258,28 @@ def _root_disks() -> set[str]:
         src = src.split("[", 1)[0]
         if src.startswith("/dev/"):
             sources.append(src)
-    swap = subprocess.run(["swapon", "--noheadings", "--raw", "--show=NAME"],
-                          capture_output=True, text=True)
-    if swap.returncode == 0:
-        for line in swap.stdout.splitlines():
-            swap_source = line.strip()
-            if swap_source.startswith("/dev/"):
-                sources.append(swap_source)
-            elif swap_source:
-                backing = subprocess.run(
-                    ["findmnt", "-no", "SOURCE", "--target", swap_source],
-                    capture_output=True, text=True,
-                ).stdout.strip().split("[", 1)[0]
-                if backing.startswith("/dev/"):
-                    sources.append(backing)
+    # Swap comes from /proc/swaps, not swapon(8): that binary sits in /usr/sbin,
+    # which regular users don't have on PATH on Debian, and swap disks must stay
+    # in the protected set (neither a crash nor a silent skip is safe here).
+    try:
+        swap_lines = Path("/proc/swaps").read_text().splitlines()[1:]
+    except OSError:
+        swap_lines = []
+    for line in swap_lines:
+        fields = line.split()
+        if not fields:
+            continue
+        # /proc/swaps octal-escapes whitespace in paths ('\040' for a space)
+        swap_source = fields[0].replace("\\040", " ").replace("\\011", "\t")
+        if swap_source.startswith("/dev/"):
+            sources.append(swap_source)
+        elif swap_source:
+            backing = subprocess.run(
+                ["findmnt", "-no", "SOURCE", "--target", swap_source],
+                capture_output=True, text=True,
+            ).stdout.strip().split("[", 1)[0]
+            if backing.startswith("/dev/"):
+                sources.append(backing)
     for src in sources:
         kname = _block_kname(src)
         if kname:

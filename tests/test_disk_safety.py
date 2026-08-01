@@ -57,8 +57,15 @@ class DiskSafetyTests(unittest.TestCase):
         for target in ("/boot/efi", "/usr", "/srv"):
             self.assertIn(target, shell)
             self.assertIn(f'"{target}"', py)
-        self.assertIn("swapon --noheadings --raw --show=NAME", shell)
-        self.assertIn('"swapon", "--noheadings", "--raw", "--show=NAME"', py)
+        # Swap enumeration must read /proc/swaps directly: swapon(8) lives in
+        # /usr/sbin, which is not on regular users' PATH on Debian, and a missing
+        # binary must neither crash validation (python) nor silently drop the
+        # swap disks from the protected set (shell).
+        self.assertIn("/proc/swaps", shell)
+        self.assertIn('Path("/proc/swaps")', py)
+        # … and the PATH-dependent swapon invocations are gone
+        self.assertNotIn("swapon --noheadings", shell)
+        self.assertNotIn('"swapon"', py)
         self.assertIn("/sys/class/block/$cur/slaves/", shell)
         self.assertIn('node / "slaves"', py)
 
