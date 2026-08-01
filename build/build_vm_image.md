@@ -61,7 +61,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | vCPUs | **½ of host cores** | min 1 |
 | VRAM (MB) | **128** | capped to VirtualBox's 256 MB limit on this host |
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |
-| session | **shell** | the main screen-filling Kilix instance with visible chrome; desktop-provider-only mode is opt-in |
+| session | **desktop** | the main screen-filling Kilix instance with Kilix-95 in page 1; `shell` is the explicit bare-page override |
 | autologin (kiosk) | **no** | show a login greeter; kiosk mode also respawns Kilix on exit |
 | passwordless sudo | **yes** | useful for update/restart actions inside the desktop |
 | SSH host port | first free from **2222** | forwarded to the guest's port 22 |
@@ -118,9 +118,10 @@ A registered VirtualBox VM configured with:
   <user>@127.0.0.1` reaches the guest.
 - **Boot**: disk first, DVD second — the empty disk falls through to the ISO for
   the install, and every boot after that comes up from disk.
-- **Session**: boots into the Pleb session — the main Kilix instance by default,
-  or the configured desktop provider when explicitly selected, with a greeter
-  or straight-in hard-kiosk mode per your answers.
+- **Session**: boots into the Pleb session — the main Kilix instance with the
+  configured desktop provider in page 1 by default, or a bare first-page shell
+  when explicitly selected, with a greeter or straight-in hard-kiosk mode per
+  your answers.
 - **sudo**: passwordless by default for the generated user, unless you pass
   `--no-sudo-nopasswd`.
 
@@ -131,7 +132,7 @@ the VM:
 ✓ Plebian-OS VirtualBox image is ready.
   VM        : plebian
   login     : pleb / (the password you set)
-  session   : main Kilix instance (greeter)
+  session   : desktop provider in Kilix page 1 (greeter)
   start GUI : VBoxManage startvm plebian --type gui
   ssh in    : ssh -p 2222 pleb@127.0.0.1
 ```
@@ -141,15 +142,15 @@ the VM:
 The session mode is a plain config file the image owns — no rebuild needed.
 Inside the VM, edit **`/etc/pleb/session.env`**:
 
-- `PLEB_DESKTOP=0` → the main screen-filling Kilix instance with visible chrome
-  (the default);
-  `1` → replace it with `kilix desktop` for a provider-only session.
+- `PLEB_DESKTOP=1` → the main screen-filling Kilix instance with visible chrome
+  and `kilix desktop` running as page 1's program (the default);
+  `0` → put a bare shell in page 1 instead.
 - `KILIX_DESKTOP_PROVIDER=auto|builtin|external|xp|cap|tui|command|none` selects
   what `kilix desktop` runs. `cap` downloads and builds Kilix Cap; `tui`
   installs the text-native Kilix TUI desktop from Kilix’s pinned
   `kilix-tui-utils` checkout. `command` uses `KILIX_DESKTOP_COMMAND` and is the
-  current path for Kilix Land; `none` disables the facade. For a Plebian-OS
-  shell session, prefer `PLEB_DESKTOP=0`.
+  current path for Kilix Land; `none` disables the facade. For an explicit
+  Plebian-OS first-page shell, use `PLEB_DESKTOP=0`.
 - `KILIX_DESKTOP_FLAVOR=95` is the default Kilix-95 appearance; `xp` remains
   an explicit opt-in.
 - `PLEB_REF`, `KILIX_REF`, and `KILIX95_REF` can pin exact refs for release

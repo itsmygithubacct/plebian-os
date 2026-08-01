@@ -203,7 +203,7 @@ class Config:
     vram_mb: int
     accelerate_3d: bool
     disk_gb: int
-    desktop: bool          # PLEB_DESKTOP: replace main Kilix with `kilix desktop`
+    desktop: bool          # PLEB_DESKTOP: run the provider in Kilix page 1
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
     nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
     ssh_port: int
@@ -343,14 +343,14 @@ def gather_config(args) -> Config:
         vram_mb = 256
     disk_gb  = args.disk     or p.ask("disk (GB, sparse)", 200,
                                       cast=int, validate=lambda v: v >= 8)
-    desktop_default = env_bool("PLEBIAN_OS_DESKTOP", False)
+    desktop_default = env_bool("PLEBIAN_OS_DESKTOP", True)
     kiosk_default = env_bool("PLEBIAN_OS_KIOSK", False)
     nopasswd_default = env_bool("PLEBIAN_OS_NOPASSWD_SUDO", True)
     if args.session:
         desktop = args.session == "desktop"
     else:
         desktop = p.ask_bool(
-            "replace the main kilix instance with the configured desktop provider",
+            "load the configured desktop provider in the first kilix page",
             desktop_default,
         )
     kiosk    = args.kiosk if args.kiosk is not None \
@@ -387,7 +387,8 @@ def confirm_summary(cfg: Config, assume_yes: bool) -> None:
         ("VRAM", f"{cfg.vram_mb} MB"),
         ("3D accel", "on" if cfg.accelerate_3d else "off"),
         ("disk", f"{cfg.disk_gb} GB (sparse)"),
-        ("session", "desktop provider only" if cfg.desktop else "main Kilix instance"),
+        ("session", "desktop provider in Kilix page 1" if cfg.desktop
+                    else "Kilix shell in page 1"),
         ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
         ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
         ("SSH", f"ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1"),
@@ -738,6 +739,11 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         "! grep -Fq 'KILIX_ARGV=(--start-as=fullscreen)' "
         "/usr/local/bin/pleb-session"
     )
+    first_page_desktop = (
+        "grep -Fq 'DESKTOP_ARGS=(env KILIX_IN_OVERLAY=1' "
+        "/usr/local/bin/pleb-session && "
+        "grep -Fq '\"$KILIX\" desktop)' /usr/local/bin/pleb-session"
+    )
     coordinated_checkouts = (kdir +
         ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
         ' p="${PLEB_DIR:-$s/pleb}";'
@@ -773,6 +779,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]
+    if cfg.desktop:
+        checks.append(("first-page Kilix desktop", first_page_desktop))
     # The clickable fork engine only exists when fork-building is on (the default);
     # with it off, provisioning ships the prebuilt engine, so check that instead.
     fork_on = os.environ.get("PLEBIAN_OS_BUILD_KILIX_FORK", "1") not in ("0", "no", "false", "off")
@@ -833,7 +841,7 @@ def final_summary(cfg: Config, iso: Path) -> None:
         print(f"  login     : {cfg.username} / plebian (shipped default)")
     else:
         print(f"  login     : {cfg.username} / (configured password; generated values are printed above)")
-    print(f"  session   : {'desktop provider only' if cfg.desktop else 'main Kilix instance'}"
+    print(f"  session   : {'desktop provider in Kilix page 1' if cfg.desktop else 'Kilix shell in page 1'}"
           f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
     print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
     print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")

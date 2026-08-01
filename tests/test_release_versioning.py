@@ -38,10 +38,10 @@ class ReleaseVersioningTests(unittest.TestCase):
         for key in ("PLEB_REF", "KILIX_REF", "KILIX95_REF"):
             self.assertRegex(m, rf"(?m)^{key}=[0-9a-f]{{40}}$")
 
-    def test_release_manifest_pins_main_kilix_and_kilix_95(self):
+    def test_release_manifest_pins_kilix_95_as_first_page(self):
         m = self.manifest
         for key, value in (
-            ("PLEBIAN_OS_DESKTOP", "0"),
+            ("PLEBIAN_OS_DESKTOP", "1"),
             ("PLEBIAN_OS_KIOSK", "0"),
             ("KILIX_DESKTOP_PROVIDER", "external"),
             ("KILIX_DESKTOP_FLAVOR", "95"),
@@ -162,7 +162,7 @@ class ReleaseVersioningTests(unittest.TestCase):
 
     def test_unpinned_remaster_defaults_match_release_session_contract(self):
         r = _read("build", "remaster-iso.sh")
-        self.assertEqual(r.count('${PLEBIAN_OS_DESKTOP:-0}'), 2)
+        self.assertEqual(r.count('${PLEBIAN_OS_DESKTOP:-1}'), 2)
         self.assertEqual(r.count('${KILIX_DESKTOP_FLAVOR:-95}'), 2)
 
     def test_release_mode_warns_on_unpinned_apt(self):

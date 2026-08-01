@@ -156,12 +156,15 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('"session selection"', verify)
         self.assertIn('"session provenance"', verify)
         self.assertIn('"visible kilix chrome"', verify)
+        self.assertIn('"first-page Kilix desktop"', verify)
         self.assertIn(
             "KILIX_ARGV=(--start-as=maximized -o "
             "hide_window_decorations=yes)",
             verify,
         )
         self.assertIn("KILIX_ARGV=(--start-as=fullscreen)", verify)
+        self.assertIn("DESKTOP_ARGS=(env KILIX_IN_OVERLAY=1", verify)
+        self.assertIn('\\"$KILIX\\" desktop)', verify)
         for key in (
             "PLEB_DESKTOP", "PLEB_RESPAWN", "PLEBIAN_OS_DESKTOP",
             "PLEBIAN_OS_KIOSK", "KILIX_DESKTOP_PROVIDER",
@@ -205,10 +208,10 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(built.password, "explicit")
         generated.assert_not_called()
 
-    def test_defaults_to_main_kilix_and_non_kiosk(self):
+    def test_defaults_to_desktop_in_first_kilix_page_and_non_kiosk(self):
         with mock.patch.dict(os.environ, {}, clear=True):
             built = vm.gather_config(args())
-        self.assertFalse(built.desktop)
+        self.assertTrue(built.desktop)
         self.assertFalse(built.kiosk)
 
     def test_environment_session_defaults_are_honored(self):

@@ -107,14 +107,14 @@ release since 0.1.2 and restores one version across all four repositories; see
   maximized and without host decorations instead of using Kilix's content-only
   fullscreen mode. Acceptance now rejects an installed session that would hide
   the page strip and pane controls and look like a plain terminal.
-- Make the installed-system and image-builder default the main Kilix instance,
-  with the login greeter and hard respawn off. Pin the coordinated release's
-  optional desktop provider to external Kilix-95 with the 95 flavor, and make
+- Make the installed-system and image-builder default the main Kilix instance
+  with external Kilix-95 loaded as page 1, the login greeter enabled, and hard
+  respawn off. Pin the coordinated release's provider to the 95 flavor, and make
   VM/USB builders honor manifest or environment session choices unless an
   explicit CLI flag overrides them.
-- Install the pinned Kilix-95 checkout even when the login session starts the
-  main Kilix instance, so an explicit `kilix desktop` opens flavor 95 without
-  falling back to XP or downloading mutable source on first use. Export that
+- Install the pinned Kilix-95 checkout before the login session starts, so page
+  1 loads flavor 95 without falling back to XP or downloading mutable source
+  on first use. Export that
   provider, flavor, and exact ref into the main session so later interactive
   launches retain the pinned contract without a false unpinned-provider
   warning. Install the non-secret build provenance as root-owned mode `0644`,

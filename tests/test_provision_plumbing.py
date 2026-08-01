@@ -15,10 +15,10 @@ class ProvisionPlumbingTests(unittest.TestCase):
         ]
         subprocess.run(["bash", "-n", *scripts], cwd=ROOT, check=True)
 
-    def test_fresh_provision_defaults_to_main_kilix_and_95_provider_flavor(self):
+    def test_fresh_provision_defaults_to_kilix_95_in_first_page(self):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
-        self.assertIn('DESKTOP="${PLEBIAN_OS_DESKTOP:-0}"', provision)
+        self.assertIn('DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"', provision)
         self.assertIn('--desktop) DESKTOP=1', provision)
         self.assertIn('PLEB_INSTALL_KILIX95=0', provision)
         self.assertIn('desktop_provider_needs_kilix95', provision)

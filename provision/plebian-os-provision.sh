@@ -101,7 +101,7 @@ KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-}"  # default after target user is k
 KILIX_LAND_DESKTOP_DIR="${KILIX_LAND_DESKTOP_DIR:-}" # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
-DESKTOP="${PLEBIAN_OS_DESKTOP:-0}"             # 0 = Pleb boots into main Kilix
+DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = desktop provider in Kilix page 1
 PLEB_WM="${PLEB_WM:-}"                         # empty = keep an existing pin, else openbox
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 0
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
@@ -145,8 +145,8 @@ Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--desktop|--no-desktop] [--
   --user NAME    provision for this user (default: first uid>=1000 account)
   --kiosk        enable autologin straight into Pleb (no greeter)
   --nopasswd-sudo grant the target user passwordless sudo
-  --desktop      replace the main Kilix instance with the kilix desktop provider
-  --no-desktop   boot into the main screen-filling Kilix instance (default)
+  --desktop      load the configured desktop provider in Kilix page 1 (default)
+  --no-desktop   load a shell in the first screen-filling Kilix page
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
   --version      print the Plebian-OS version and exit
@@ -2564,9 +2564,10 @@ user-session=pleb
 EOF
 fi
 
-# ── 5. session mode: main Kilix, or an explicit desktop-provider session ────
-# pleb-session reads /etc/pleb/session.env on every login. PLEB_DESKTOP=0 starts
-# the main Kilix instance; PLEB_DESKTOP=1 replaces it with `kilix desktop`.
+# ── 5. session mode: desktop provider or shell in the first Kilix page ────
+# pleb-session reads /etc/pleb/session.env on every login. PLEB_DESKTOP=1
+# starts the main Kilix window with `kilix desktop` as page 1's program;
+# PLEB_DESKTOP=0 starts that window with a shell instead.
 # PLEB_WM
 # selects the window manager it starts (openbox, or none for the historic
 # fixed-geometry session). This is a plain root-managed config file: edit it with
@@ -2582,8 +2583,8 @@ else
     {
     cat <<'EOF'
 # Managed by plebian-os-provision — Plebian-OS Pleb session config.
-# PLEB_DESKTOP=1 starts `kilix desktop`; set it to 0 for the main
-# screen-filling Kilix shell with visible chrome. KILIX_DESKTOP_PROVIDER selects
+# PLEB_DESKTOP=1 starts `kilix desktop` in the first screen-filling Kilix page;
+# set it to 0 for a shell there instead. KILIX_DESKTOP_PROVIDER selects
 # auto, builtin, external, xp, cap,
 # tui, land, command, or none. PLEB_WM selects the window manager (openbox,
 # none, or a command line); an explicit choice here is kept by a reprovision.

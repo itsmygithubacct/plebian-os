@@ -101,10 +101,10 @@ class UsbBuilderTests(unittest.TestCase):
             built = usb.gather_config(args(password=None))
         self.assertEqual(built.password, "random-pass")
 
-    def test_defaults_to_main_kilix_and_non_kiosk(self):
+    def test_defaults_to_desktop_in_first_kilix_page_and_non_kiosk(self):
         with mock.patch.dict(usb.os.environ, {}, clear=True):
             built = usb.gather_config(args())
-        self.assertFalse(built.desktop)
+        self.assertTrue(built.desktop)
         self.assertFalse(built.kiosk)
 
     def test_release_environment_session_defaults_are_honored(self):

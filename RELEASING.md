@@ -7,9 +7,9 @@ stack. A release uses one version across all four repositories and pins every
 network-fetched build input.
 
 The release login session is the main Kilix instance, with its clickable page
-strip and pane controls visibly present and hard-kiosk respawn off. Kilix 95 in
-its 95 flavor is the release-default provider when
-`kilix desktop` is opened in a tab. Kilix Cap, Kilix TUI, and Kilix Land are
+strip and pane controls visibly present, Kilix 95 in its 95 flavor loaded as
+page 1, and hard-kiosk respawn off. A bare first-page shell is an explicit
+`--session shell` override, not the release default. Kilix Cap, Kilix TUI, and Kilix Land are
 additional desktops whose immutable default source commits are
 inherited through whichever Kilix commit a release selects; they do not receive
 independent coordinated tags or top-level release-manifest keys. Adding a
@@ -149,11 +149,11 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    text/graphical installer main menu for the same product boundary. F2 must
    list 4 GiB RAM, 20 GiB disk, and first-boot networking; F9 must distinguish
    `/cdrom/plebian-os/build-info.env` from `/etc/plebian-os/build-info.env`.
-   Log into the installed guest and confirm the initial screen is the main
-   Kilix instance with its page strip, status widgets, and pane controls
-   visible—not a content-only terminal. Confirm closing it returns to LightDM
-   rather than respawning, and `kilix desktop` opens Kilix-95 in a tab with
-   the 95—not XP—flavor.
+   Log into the installed guest and confirm the initial screen is Kilix-95 in
+   page 1 of the main Kilix instance, with its page strip, status widgets, and
+   pane controls visible—not a shell or content-only terminal. Confirm the
+   provider is external Kilix-95 with the 95—not XP—flavor, and closing the
+   Kilix OS window returns to LightDM rather than respawning.
    In an installed guest, complete these distribution-asset checks:
 
    - verify the Kilix engine is one physically contained
