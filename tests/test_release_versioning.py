@@ -235,6 +235,34 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertTrue((ROOT / "RELEASING.md").exists())
         self.assertTrue((ROOT / "CHANGELOG.md").exists())
         self.assertTrue((ROOT / "UPGRADING.md").exists())
+        self.assertTrue(
+            (ROOT / "releases" / f"{self.version}-notes.md").exists()
+        )
+
+    def test_current_release_notes_track_the_exact_source_closure(self):
+        notes = _read("releases", f"{self.version}-notes.md")
+        manifest = self.manifest
+        for key in ("PLEB_REF", "KILIX_REF", "KILIX95_REF"):
+            match = re.search(rf"(?m)^{key}=([0-9a-f]{{40}})$", manifest)
+            self.assertIsNotNone(match, key)
+            self.assertIn(match.group(1), notes)
+        self.assertIn(f"`v{self.version}`", notes)
+        self.assertIn("fresh-install baseline", notes)
+        self.assertIn("not an artifact acceptance record", notes)
+        self.assertIn("earlier local candidate ISO", notes)
+
+        changelog = _read("CHANGELOG.md")
+        heading = re.search(
+            rf"(?m)^## \[{re.escape(self.version)}\](?: — ([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}))?$",
+            changelog,
+        )
+        self.assertIsNotNone(heading)
+        self.assertIsNotNone(heading.group(1))
+        section_end = changelog.find("\n## ", heading.end())
+        current_section = changelog[
+            heading.start():section_end if section_end != -1 else None
+        ]
+        self.assertNotRegex(current_section, r"(?i)\bunreleased\b")
 
     def test_upgrade_policy_starts_with_0_1_7_and_requires_preservation(self):
         policy = json.loads(
