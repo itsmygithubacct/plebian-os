@@ -153,6 +153,46 @@ is_hex_len() {
     [[ "$value" =~ ^[0-9a-fA-F]+$ ]] && [ "${#value}" -eq "$length" ]
 }
 
+validate_voice_release_closure() {
+    case "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}" in
+        0) return 0 ;;
+        1) ;;
+        *)
+            echo "invalid PLEBIAN_OS_INSTALL_VOICE_MODEL=${PLEBIAN_OS_INSTALL_VOICE_MODEL:-} (expected 0/1)" >&2
+            exit 1
+            ;;
+    esac
+
+    local key missing=()
+    for key in \
+        KILIX_VOICE_REF KILIX_VOICE_LIB_VERSION KILIX_VOICE_LIB_URL \
+        KILIX_VOICE_LIB_SHA256 KILIX_VOICE_MODEL_URL \
+        KILIX_VOICE_MODEL_SHA256; do
+        [ -n "${!key:-}" ] || missing+=("$key")
+    done
+    [ "${#missing[@]}" -eq 0 ] || {
+        printf 'PLEBIAN_OS_INSTALL_VOICE_MODEL=1 requires pinned values for: %s\n' \
+            "${missing[*]}" >&2
+        exit 1
+    }
+    is_hex_len "$KILIX_VOICE_REF" 40 \
+        || { echo "release mode requires KILIX_VOICE_REF to be a full 40-character commit SHA" >&2; exit 1; }
+    [[ "$KILIX_VOICE_LIB_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
+        || { echo "invalid KILIX_VOICE_LIB_VERSION=$KILIX_VOICE_LIB_VERSION" >&2; exit 1; }
+    case "$KILIX_VOICE_LIB_URL" in
+        https://*) ;;
+        *) echo "release mode requires an HTTPS KILIX_VOICE_LIB_URL" >&2; exit 1 ;;
+    esac
+    case "$KILIX_VOICE_MODEL_URL" in
+        https://*) ;;
+        *) echo "release mode requires an HTTPS KILIX_VOICE_MODEL_URL" >&2; exit 1 ;;
+    esac
+    for key in KILIX_VOICE_LIB_SHA256 KILIX_VOICE_MODEL_SHA256; do
+        is_hex_len "${!key}" 64 \
+            || { echo "release mode requires a 64-character $key" >&2; exit 1; }
+    done
+}
+
 # Run before fetch_netinst or mkdir: a release build must verify its immutable
 # closure and checkout before it causes any cache/output filesystem changes.
 release_preflight() {
@@ -176,6 +216,7 @@ release_preflight() {
         printf 'PLEBIAN_OS_RELEASE_MODE=1 requires pinned values for: %s\n' "${missing[*]}" >&2
         exit 1
     }
+    validate_voice_release_closure
     for key in PLEBIAN_OS_SSH_ENABLED PLEBIAN_OS_AUTOBOOT PLEBIAN_OS_UNATTENDED_DISK; do
         [ "${!key:-0}" != 1 ] || {
             echo "release artifacts refuse $key=1 (network/default-credential or unattended-erase risk)" >&2
@@ -379,6 +420,7 @@ release_mode_check() {
         printf 'PLEBIAN_OS_RELEASE_MODE=1 requires pinned values for: %s\n' "${missing[*]}" >&2
         exit 1
     fi
+    validate_voice_release_closure
     case "$PLEBIAN_OS_APT_SNAPSHOT" in
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
@@ -480,6 +522,7 @@ write_build_info() {
         manifest_kv KILIX_PREBUILT_SHA256 "${KILIX_PREBUILT_SHA256:-}"
         manifest_kv KILIX_VOICE_REF "${KILIX_VOICE_REF:-}"
         manifest_kv KILIX_VOICE_LIB_VERSION "${KILIX_VOICE_LIB_VERSION:-}"
+        manifest_kv KILIX_VOICE_LIB_URL "${KILIX_VOICE_LIB_URL:-}"
         manifest_kv KILIX_VOICE_LIB_SHA256 "${KILIX_VOICE_LIB_SHA256:-}"
         manifest_kv KILIX_VOICE_MODEL_URL "${KILIX_VOICE_MODEL_URL:-}"
         manifest_kv KILIX_VOICE_MODEL_SHA256 "${KILIX_VOICE_MODEL_SHA256:-}"
@@ -587,6 +630,7 @@ write_firstboot_env() {
         env_kv KILIX_PREBUILT_SHA256 "${KILIX_PREBUILT_SHA256:-}"
         env_kv KILIX_VOICE_REF "${KILIX_VOICE_REF:-}"
         env_kv KILIX_VOICE_LIB_VERSION "${KILIX_VOICE_LIB_VERSION:-}"
+        env_kv KILIX_VOICE_LIB_URL "${KILIX_VOICE_LIB_URL:-}"
         env_kv KILIX_VOICE_LIB_SHA256 "${KILIX_VOICE_LIB_SHA256:-}"
         env_kv KILIX_VOICE_MODEL_URL "${KILIX_VOICE_MODEL_URL:-}"
         env_kv KILIX_VOICE_MODEL_SHA256 "${KILIX_VOICE_MODEL_SHA256:-}"

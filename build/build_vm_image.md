@@ -114,6 +114,9 @@ A registered VirtualBox VM configured with:
   consumes real space as the guest writes.
 - **Graphics**: VMSVGA, configurable VRAM, and optional VirtualBox 3D
   acceleration.
+- **Audio**: host-backed input and output. Output carries read-aloud; input
+  exposes the host microphone for Kilix's click-to-talk dictation. The host OS
+  may still require microphone permission for VirtualBox.
 - **Network**: NAT, with a host→guest port-forward so `ssh -p <port>
   <user>@127.0.0.1` reaches the guest.
 - **Boot**: disk first, DVD second — the empty disk falls through to the ISO for
@@ -168,6 +171,9 @@ At build time these come from `--session` / `--kiosk` /
 `PLEBIAN_OS_NOPASSWD_SUDO`). Repo/source overrides such as `PLEB_REPO`,
 `PLEB_BRANCH`, `PLEB_REF`, `KILIX_REPO`, `KILIX_BRANCH`, `KILIX_REF`,
 `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`,
+`KILIX_VOICE_REF`, `KILIX_VOICE_LIB_VERSION`, `KILIX_VOICE_LIB_URL`,
+`KILIX_VOICE_LIB_SHA256`, `KILIX_VOICE_MODEL_URL`,
+`KILIX_VOICE_MODEL_SHA256`, `PLEBIAN_OS_INSTALL_VOICE_MODEL`,
 `PLEBIAN_OS_BUILD_KILIX_FORK`, `PLEBIAN_OS_KILIX_GO_MIN_VERSION`,
 `KILIX_DESKTOP_PROVIDER`, `KILIX_DESKTOP_COMMAND`, `KILIX_DESKTOP_NAME`,
 `KILIX_DESKTOP_FLAVOR`, `KILIX_CAP_AUTO_INSTALL`, `KILIX_CAP_DIR`,
@@ -200,12 +206,18 @@ guest source root without redirecting host-side build storage.
    preseed is even read. To change the language, edit the preseed's
    `debian-installer/locale` and `keyboard-configuration/xkb-keymap`.
 3. **VM creation.** Standard `VBoxManage` calls: create + register, set
-   memory/CPUs/VRAM, NAT + port-forward, a sparse VDI on a SATA controller, and
-   the disk-first boot order.
+   memory/CPUs/VRAM, enable audio input/output, configure NAT + port-forward, a
+   sparse VDI on a SATA controller, and the disk-first boot order.
 4. **Install + wait.** It starts the VM and polls over SSH until
    `/var/lib/plebian-os/provisioned` appears (or the unit reports failure, in
    which case it dumps the journal). With no SSH yet, it's still installing; once
    SSH answers, provisioning is running.
+5. **Acceptance.** It executes `kilix-tts`, `kilix-stt`, and `kilix-voiced` in
+   the installed guest. When the release enables dictation, it also requires
+   the exact pinned Vosk library/model stamp, provenance and Apache-2.0 license
+   material, and a `dictation=ready` diagnostic. Finally it synthesizes a fixed
+   phrase with real espeak and recognizes that PCM with the installed Vosk
+   library/model, exercising both engines without opening host audio devices.
 
 ## Rebuilding / cleanup
 
@@ -232,6 +244,10 @@ rm -f plebian-os-<name>.iso
   `--timeout` on a slow link.
 - **Can't SSH in** — confirm the forwarded port (`ssh -p <port> <user>@127.0.0.1`)
   and that the guest finished booting.
+- **Dictation has no microphone** — confirm VirtualBox has host microphone
+  permission and that audio input remains enabled for the VM. `kilix-stt
+  --print` reports the guest capture device and closure status without opening
+  the microphone.
 
 ## See also
 

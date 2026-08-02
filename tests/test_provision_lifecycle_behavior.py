@@ -729,6 +729,181 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         self.assertLess(source.index("pinned_go_provenance_ok \"$arch\" \"$sha\""),
                         source.index('"GO_VERSION=$KILIX_GO_VERSION"'))
 
+    def test_release_dictation_requires_the_complete_voice_closure(self):
+        ref = "a" * 40
+        digest = "b" * 64
+        env = {
+            **os.environ,
+            "PLEBIAN_OS_PROVISION_LIB_ONLY": "1",
+            "PLEBIAN_OS_RELEASE_MODE": "1",
+            "PLEBIAN_OS_REF": ref,
+            "PLEB_REF": ref,
+            "KILIX_REF": ref,
+            "KILIX95_REF": ref,
+            "KILIX_PREBUILT_SHA256": digest,
+            "PLEBIAN_OS_KILIX_GO_VERSION": "go1.26.5",
+            "PLEBIAN_OS_KILIX_GO_SHA256_AMD64": digest,
+            "PLEBIAN_OS_KILIX_GO_SHA256_ARM64": digest,
+            "PLEBIAN_OS_INSTALL_VOICE_MODEL": "1",
+            "KILIX_VOICE_REF": ref,
+            "KILIX_VOICE_LIB_VERSION": "0.3.45",
+            "KILIX_VOICE_LIB_URL": "https://example.invalid/vosk.whl",
+            "KILIX_VOICE_LIB_SHA256": digest,
+            "KILIX_VOICE_MODEL_URL": "https://example.invalid/model.zip",
+            "KILIX_VOICE_MODEL_SHA256": digest,
+        }
+        valid = self._run_library("validate_release_inputs\n", env)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+        for key in (
+            "KILIX_VOICE_REF",
+            "KILIX_VOICE_LIB_VERSION",
+            "KILIX_VOICE_LIB_URL",
+            "KILIX_VOICE_LIB_SHA256",
+            "KILIX_VOICE_MODEL_URL",
+            "KILIX_VOICE_MODEL_SHA256",
+        ):
+            with self.subTest(key=key):
+                invalid_env = {**env, key: ""}
+                refused = self._run_library(
+                    "validate_release_inputs\n", invalid_env
+                )
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn(key, refused.stderr)
+
+    def test_release_voice_verification_executes_tools_and_checks_attribution(self):
+        user = pwd.getpwuid(os.getuid())
+        voice_ref = "f05b64a7b2bc25fa9a7e2c3ae1e0b848f04a23f6"
+        library_version = "0.3.45"
+        library_url = (
+            "https://files.pythonhosted.org/packages/fc/ca/83398cfcd557360a3d7b2d732aee1c5f6999f68618d1645f38d53e14c9ff/"
+            "vosk-0.3.45-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.whl"
+        )
+        library_sha = (
+            "25e025093c4399d7278f543568ed8cc5460ac3a4bf48c23673ace1e25d26619f"
+        )
+        model_url = (
+            "https://alphacephei.com/vosk/models/"
+            "vosk-model-small-en-us-0.15.zip"
+        )
+        model_sha = (
+            "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            home = base / "home"
+            binaries = home / ".local" / "bin"
+            binaries.mkdir(parents=True)
+            for tool in ("kilix-tts", "kilix-stt", "kilix-voiced"):
+                executable = binaries / tool
+                executable.write_text(
+                    "#!/bin/sh\n"
+                    "if [ \"${1:-}\" = --version ]; then\n"
+                    f"  printf '%s\\n' '{tool} 0.1.2'\n"
+                    "elif [ \"${1:-}\" = --print ]; then\n"
+                    + (
+                        "  printf '%s\\n' 'dictation=ready'\n"
+                        if tool == "kilix-stt"
+                        else "  printf '%s\\n' 'voice=ready'\n"
+                    )
+                    + "fi\n"
+                )
+                executable.chmod(0o755)
+
+            data = base / "data"
+            library_parent = data / "voice" / "lib"
+            model_parent = data / "voice" / "models"
+            library_parent.mkdir(parents=True)
+            model_parent.mkdir(parents=True)
+            library_generation = (
+                library_parent / f"vosk-{library_version}-{library_sha}"
+            )
+            model_generation = (
+                model_parent / f"vosk-model-small-en-us-0.15-{model_sha}"
+            )
+            library_generation.mkdir()
+            model_generation.mkdir()
+            (library_parent / "current").symlink_to(library_generation.name)
+            (model_parent / "small-en-us").symlink_to(model_generation.name)
+            library = library_parent / "current"
+            model = model_parent / "small-en-us"
+            (library / "libvosk.so").write_bytes(b"fixture\n")
+            license_text = Path(
+                "/usr/share/common-licenses/Apache-2.0"
+            ).read_bytes()
+            for directory in (library, model):
+                (directory / "LICENSE.Apache-2.0").write_bytes(license_text)
+            (library / "README.kilix-provenance").write_text(
+                "Kilix Voice native speech-recognition library\n"
+                "Upstream: https://github.com/alphacep/vosk-api\n"
+                f"Version: {library_version}\n"
+                f"Wheel: {library_url}\n"
+                f"Wheel SHA-256: {library_sha}\n"
+                "Extracted member: vosk/libvosk.so\n"
+                "License: Apache-2.0 (see LICENSE.Apache-2.0)\n"
+            )
+            model_notice = model / "README.kilix-provenance"
+            model_notice.write_text(
+                "Vosk small US English acoustic model\n"
+                "Upstream catalog: https://alphacephei.com/vosk/models\n"
+                f"Archive: {model_url}\n"
+                f"Archive SHA-256: {model_sha}\n"
+                "Archive directory: vosk-model-small-en-us-0.15\n"
+                "License: Apache-2.0 (see LICENSE.Apache-2.0)\n"
+            )
+            state = base / "state"
+            state.mkdir()
+            voice_stamp = state / "kilix-voice-install.refs"
+            voice_stamp.write_text(
+                f"kilix-voice={voice_ref}\n"
+                f"libvosk={library_version}+{library_sha}\n"
+                f"model-small-en-us={model_sha}\n"
+            )
+            voice_stamp.chmod(0o600)
+            source_home = base / "sources"
+            voice_source = (
+                source_home
+                / ".kilix-voice-sources"
+                / f"kilix-voice-{voice_ref}"
+            )
+            (voice_source / ".git").mkdir(parents=True)
+            (voice_source / "VERSION").write_text("0.1.2\n")
+            env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+            body = (
+                f"TARGET_USER={user.pw_name!r}\n"
+                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
+                "DRY_RUN=0\nPLEBIAN_OS_RELEASE_MODE=1\n"
+                "INSTALL_VOICE_MODEL=1\ninstall_env=()\n"
+                "as_user() {\n"
+                "  if [ \"${1:-}\" = git ] && [ \"${4:-}\" = rev-parse ]; then\n"
+                f"    printf '%s\\n' {voice_ref!r}; return 0\n"
+                "  fi\n"
+                "  if [ \"${1:-}\" = git ] && [ \"${4:-}\" = show ]; then\n"
+                "    printf '%s\\n' 0.1.2; return 0\n"
+                "  fi\n"
+                "  \"$@\"\n"
+                "}\n"
+                "run_voice_functional_smoke() { return 0; }\n"
+                f"USER_HOME={str(home)!r}\n"
+                f"GPU_TERMINAL_SOURCE_HOME={str(source_home)!r}\n"
+                f"KILIX_DATA_HOME={str(data)!r}\n"
+                f"KILIX_STATE_DIRECTORY={str(state)!r}\n"
+                f"KILIX_VOICE_REF={voice_ref!r}\n"
+                f"KILIX_VOICE_LIB_VERSION={library_version!r}\n"
+                f"KILIX_VOICE_LIB_URL={library_url!r}\n"
+                f"KILIX_VOICE_LIB_SHA256={library_sha!r}\n"
+                f"KILIX_VOICE_MODEL_URL={model_url!r}\n"
+                f"KILIX_VOICE_MODEL_SHA256={model_sha!r}\n"
+                "verify_kilix_voice_install\n"
+            )
+            valid = self._run_library(body, env)
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+
+            model_notice.write_text("opaque model\n")
+            refused = self._run_library(body, env)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("model provenance", refused.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

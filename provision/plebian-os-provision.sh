@@ -36,12 +36,11 @@ KILIX_REF="${KILIX_REF:-}"
 KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-0.47.4}" # verified amd64 fallback
 KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
 # Read-aloud/dictation. Empty pins mean "use the ones the Kilix checkout carries"
-# — the normal case, since pinning the parent Kilix commit already makes the
-# voice closure transitively immutable. A release manifest can still override
-# them, and PLEBIAN_OS_INSTALL_VOICE_MODEL=0 provisions read-aloud without the
-# speech library and the acoustic model download.
+# outside release mode. A release with dictation enabled must state the entire
+# network-fetched closure explicitly, including both URLs and checksums.
 KILIX_VOICE_REF="${KILIX_VOICE_REF:-}"
 KILIX_VOICE_LIB_VERSION="${KILIX_VOICE_LIB_VERSION:-}"
+KILIX_VOICE_LIB_URL="${KILIX_VOICE_LIB_URL:-}"
 KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
 KILIX_VOICE_MODEL_URL="${KILIX_VOICE_MODEL_URL:-}"
 KILIX_VOICE_MODEL_SHA256="${KILIX_VOICE_MODEL_SHA256:-}"
@@ -189,6 +188,24 @@ validate_release_inputs() {
         [[ "$UV_INSTALLER_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
             || die "release mode requires a 64-character PLEBIAN_OS_UV_INSTALLER_SHA256 when uv is enabled"
     fi
+    case "$INSTALL_VOICE_MODEL" in
+        0) ;;
+        1)
+            [[ "$KILIX_VOICE_REF" =~ ^[0-9a-fA-F]{40}$ ]] \
+                || die "release mode requires KILIX_VOICE_REF to be a full 40-character commit SHA when dictation is enabled"
+            [[ "$KILIX_VOICE_LIB_VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] \
+                || die "release mode requires an exact KILIX_VOICE_LIB_VERSION when dictation is enabled"
+            [[ "$KILIX_VOICE_LIB_URL" == https://* ]] \
+                || die "release mode requires an HTTPS KILIX_VOICE_LIB_URL when dictation is enabled"
+            [[ "$KILIX_VOICE_LIB_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+                || die "release mode requires a 64-character KILIX_VOICE_LIB_SHA256 when dictation is enabled"
+            [[ "$KILIX_VOICE_MODEL_URL" == https://* ]] \
+                || die "release mode requires an HTTPS KILIX_VOICE_MODEL_URL when dictation is enabled"
+            [[ "$KILIX_VOICE_MODEL_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+                || die "release mode requires a 64-character KILIX_VOICE_MODEL_SHA256 when dictation is enabled"
+            ;;
+        *) die "invalid PLEBIAN_OS_INSTALL_VOICE_MODEL=$INSTALL_VOICE_MODEL (expected 0/1)" ;;
+    esac
 }
 
 as_user() {
@@ -1742,6 +1759,7 @@ write_source_tool_manifest() {
         provenance_kv KILIX_ENGINE_VERSION "$engine_version"
         provenance_kv KILIX_VOICE_REF "$KILIX_VOICE_REF"
         provenance_kv KILIX_VOICE_LIB_VERSION "$KILIX_VOICE_LIB_VERSION"
+        provenance_kv KILIX_VOICE_LIB_URL "$KILIX_VOICE_LIB_URL"
         provenance_kv KILIX_VOICE_LIB_SHA256 "$KILIX_VOICE_LIB_SHA256"
         provenance_kv KILIX_VOICE_MODEL_URL "$KILIX_VOICE_MODEL_URL"
         provenance_kv KILIX_VOICE_MODEL_SHA256 "$KILIX_VOICE_MODEL_SHA256"
@@ -2130,6 +2148,242 @@ probe_kilix_launcher() {
     fi
 }
 
+run_voice_tool() {
+    if command -v timeout >/dev/null 2>&1; then
+        as_user env "${install_env[@]}" timeout 15 "$@"
+    else
+        as_user env "${install_env[@]}" "$@"
+    fi
+}
+
+run_voice_functional_smoke() {
+    local runtime_lib code
+    runtime_lib="$KILIX_DATA_HOME/voice/runtime/current/lib/kilix-voice"
+    code="$(cat <<'PY'
+import os
+
+from voicelib.stt import VoskStt
+from voicelib.tts import EspeakTts
+
+pcm, rate = EspeakTts(voice="en-us", rate=135).synth(
+    "kilix voice is working"
+)
+if not pcm or rate <= 0:
+    raise SystemExit("espeak produced no PCM")
+data_home = os.environ["KILIX_DATA_HOME"]
+library_path = os.path.join(data_home, "voice/lib/current/libvosk.so")
+model_path = os.path.join(data_home, "voice/models/small-en-us")
+recognizer = VoskStt(
+    rate=rate, lib_path=library_path, model_path=model_path
+)
+try:
+    if recognizer.lib_path != os.path.abspath(library_path):
+        raise SystemExit("Vosk did not open the pinned library path")
+    if recognizer.model_path != os.path.abspath(model_path):
+        raise SystemExit("Vosk did not open the pinned model path")
+    recognizer.start_utterance()
+    for offset in range(0, len(pcm), 4096):
+        recognizer.feed(pcm[offset:offset + 4096])
+    recognized = recognizer.end_utterance().strip()
+    if not recognized:
+        raise SystemExit("Vosk recognized no text from synthesized speech")
+finally:
+    recognizer.close()
+PY
+)"
+    if command -v timeout >/dev/null 2>&1; then
+        as_user env "${install_env[@]}" "PYTHONPATH=$runtime_lib" \
+            timeout 180 python3 -c "$code"
+    else
+        as_user env "${install_env[@]}" "PYTHONPATH=$runtime_lib" \
+            python3 -c "$code"
+    fi
+}
+
+verify_kilix_voice_install() {
+    local tool path stamp stt_report="" library_root model_root
+    local library_notice library_license model_notice model_license
+    local library_target="" model_target=""
+    local voice_source="" voice_head="" voice_version="" version_report=""
+    local -a problems=()
+    stamp="$KILIX_STATE_DIRECTORY/kilix-voice-install.refs"
+    library_root="$KILIX_DATA_HOME/voice/lib/current"
+    model_root="$KILIX_DATA_HOME/voice/models/small-en-us"
+    library_notice="$library_root/README.kilix-provenance"
+    library_license="$library_root/LICENSE.Apache-2.0"
+    model_notice="$model_root/README.kilix-provenance"
+    model_license="$model_root/LICENSE.Apache-2.0"
+
+    if [ "$INSTALL_VOICE_MODEL" = 1 ] && [ -n "$KILIX_VOICE_REF" ]; then
+        voice_source="$GPU_TERMINAL_SOURCE_HOME/.kilix-voice-sources/kilix-voice-$KILIX_VOICE_REF"
+        if [ ! -d "$voice_source/.git" ] || [ -L "$voice_source" ]; then
+            problems+=("missing or unsafe pinned Kilix Voice checkout $voice_source")
+        else
+            voice_head="$(as_user git -C "$voice_source" rev-parse --verify HEAD 2>/dev/null)" \
+                || problems+=("could not resolve the installed Kilix Voice checkout")
+            [ "${voice_head,,}" = "${KILIX_VOICE_REF,,}" ] \
+                || problems+=("installed Kilix Voice checkout does not match the requested ref")
+            voice_version="$(
+                as_user git -C "$voice_source" show "${KILIX_VOICE_REF}:VERSION" 2>/dev/null
+            )" || problems+=("pinned Kilix Voice commit has no VERSION")
+            [[ "$voice_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+                || problems+=("pinned Kilix Voice VERSION is not semantic")
+            [ "$(as_user cat "$voice_source/VERSION" 2>/dev/null)" = "$voice_version" ] \
+                || problems+=("Kilix Voice working VERSION differs from its pinned commit")
+        fi
+    fi
+
+    for tool in kilix-tts kilix-stt kilix-voiced; do
+        path="$USER_HOME/.local/bin/$tool"
+        if [ ! -x "$path" ]; then
+            problems+=("missing executable $path")
+        elif ! version_report="$(run_voice_tool "$path" --version 2>/dev/null)"; then
+            problems+=("$tool --version could not execute")
+        elif ! [[ "$version_report" =~ ^${tool}\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            problems+=("$tool --version returned an invalid version")
+        elif [ -n "$voice_version" ] \
+                && [ "$version_report" != "$tool $voice_version" ]; then
+            problems+=("$tool --version does not match Kilix Voice $voice_version")
+        fi
+    done
+    if [ -x "$USER_HOME/.local/bin/kilix-tts" ]; then
+        run_voice_tool "$USER_HOME/.local/bin/kilix-tts" --print >/dev/null 2>&1 \
+            || problems+=("kilix-tts --print could not execute")
+    fi
+    if [ -x "$USER_HOME/.local/bin/kilix-stt" ]; then
+        stt_report="$(run_voice_tool "$USER_HOME/.local/bin/kilix-stt" --print 2>/dev/null)" \
+            || problems+=("kilix-stt --print could not execute")
+    fi
+
+    if [ ! -f "$stamp" ] || [ -L "$stamp" ]; then
+        problems+=("missing or unsafe install stamp $stamp")
+    elif [ "$INSTALL_VOICE_MODEL" = 1 ]; then
+        [ "$(stat -c '%u:%a:%h' -- "$stamp" 2>/dev/null)" \
+            = "$TARGET_UID:600:1" ] \
+            || problems+=("Kilix Voice install stamp has unsafe ownership, mode, or links")
+        if [ -n "$KILIX_VOICE_REF" ] \
+                && [ -n "$KILIX_VOICE_LIB_VERSION" ] \
+                && [ -n "$KILIX_VOICE_LIB_SHA256" ] \
+                && [ -n "$KILIX_VOICE_MODEL_SHA256" ]; then
+            printf '%s\n' \
+                "kilix-voice=$KILIX_VOICE_REF" \
+                "libvosk=$KILIX_VOICE_LIB_VERSION+$KILIX_VOICE_LIB_SHA256" \
+                "model-small-en-us=$KILIX_VOICE_MODEL_SHA256" \
+                | cmp -s - "$stamp" \
+                || problems+=("Kilix Voice install stamp does not exactly match the requested closure")
+        else
+            grep -Eq '^kilix-voice=[0-9a-fA-F]{40}$' "$stamp" \
+                || problems+=("Kilix Voice install stamp has no immutable source ref")
+            grep -Eq '^libvosk=[A-Za-z0-9._-]+\+[0-9a-fA-F]{64}$' "$stamp" \
+                || problems+=("Kilix Voice install stamp has no verified library pin")
+            grep -Eq '^model-small-en-us=[0-9a-fA-F]{64}$' "$stamp" \
+                || problems+=("Kilix Voice install stamp has no verified model pin")
+        fi
+    else
+        grep -Fqx -- 'libvosk=skipped' "$stamp" \
+            || problems+=("read-aloud install did not record the skipped Vosk library")
+        grep -Fqx -- 'model-small-en-us=skipped' "$stamp" \
+            || problems+=("read-aloud install did not record the skipped Vosk model")
+    fi
+
+    if [ "$INSTALL_VOICE_MODEL" = 1 ]; then
+        if [ -L "$library_root" ]; then
+            library_target="$(readlink -- "$library_root" 2>/dev/null)"
+            if [ -n "$KILIX_VOICE_LIB_VERSION" ] \
+                    && [ -n "$KILIX_VOICE_LIB_SHA256" ]; then
+                [ "$library_target" \
+                    = "vosk-$KILIX_VOICE_LIB_VERSION-${KILIX_VOICE_LIB_SHA256,,}" ] \
+                    || problems+=("Vosk library generation link does not match the requested version and digest")
+            else
+                [[ "$library_target" =~ ^vosk-[A-Za-z0-9._-]+-[0-9a-fA-F]{64}$ ]] \
+                    || problems+=("Vosk library generation link has no immutable digest")
+            fi
+            [ -d "$KILIX_DATA_HOME/voice/lib/$library_target" ] \
+                && [ ! -L "$KILIX_DATA_HOME/voice/lib/$library_target" ] \
+                || problems+=("Vosk library generation target is missing or unsafe")
+        else
+            problems+=("Vosk library current path is not a generation symlink")
+        fi
+        if [ -L "$model_root" ]; then
+            model_target="$(readlink -- "$model_root" 2>/dev/null)"
+            if [ -n "$KILIX_VOICE_MODEL_SHA256" ]; then
+                [ "$model_target" \
+                    = "vosk-model-small-en-us-0.15-${KILIX_VOICE_MODEL_SHA256,,}" ] \
+                    || problems+=("Vosk model generation link does not match small-en-us 0.15 and its digest")
+            else
+                [[ "$model_target" =~ ^vosk-model-small-en-us-0\.15-[0-9a-fA-F]{64}$ ]] \
+                    || problems+=("Vosk model generation link has no immutable digest")
+            fi
+            [ -d "$KILIX_DATA_HOME/voice/models/$model_target" ] \
+                && [ ! -L "$KILIX_DATA_HOME/voice/models/$model_target" ] \
+                || problems+=("Vosk model generation target is missing or unsafe")
+        else
+            problems+=("Vosk model small-en-us path is not a generation symlink")
+        fi
+        [ -f "$library_root/libvosk.so" ] \
+            && [ ! -L "$library_root/libvosk.so" ] \
+            || problems+=("verified Vosk library is missing")
+        [ -d "$model_root" ] \
+            || problems+=("verified Vosk small-en-us model is missing")
+        for path in "$library_notice" "$library_license" \
+                "$model_notice" "$model_license"; do
+            [ -f "$path" ] && [ ! -L "$path" ] \
+                || problems+=("missing or unsafe Vosk attribution artifact $path")
+        done
+        if [ -f /usr/share/common-licenses/Apache-2.0 ]; then
+            cmp -s -- /usr/share/common-licenses/Apache-2.0 "$library_license" \
+                || problems+=("Vosk library Apache-2.0 license is missing or altered")
+            cmp -s -- /usr/share/common-licenses/Apache-2.0 "$model_license" \
+                || problems+=("Vosk model Apache-2.0 license is missing or altered")
+        else
+            problems+=("Debian Apache-2.0 license source is missing")
+        fi
+        if [ -n "$KILIX_VOICE_REF" ] \
+                && [ -n "$KILIX_VOICE_LIB_VERSION" ] \
+                && [ -n "$KILIX_VOICE_LIB_URL" ] \
+                && [ -n "$KILIX_VOICE_LIB_SHA256" ] \
+                && [ -n "$KILIX_VOICE_MODEL_URL" ] \
+                && [ -n "$KILIX_VOICE_MODEL_SHA256" ]; then
+            printf '%s\n' \
+                'Kilix Voice native speech-recognition library' \
+                'Upstream: https://github.com/alphacep/vosk-api' \
+                "Version: $KILIX_VOICE_LIB_VERSION" \
+                "Wheel: $KILIX_VOICE_LIB_URL" \
+                "Wheel SHA-256: $KILIX_VOICE_LIB_SHA256" \
+                'Extracted member: vosk/libvosk.so' \
+                'License: Apache-2.0 (see LICENSE.Apache-2.0)' \
+                | cmp -s - "$library_notice" \
+                || problems+=("Vosk library provenance does not match the requested closure")
+            printf '%s\n' \
+                'Vosk small US English acoustic model' \
+                'Upstream catalog: https://alphacephei.com/vosk/models' \
+                "Archive: $KILIX_VOICE_MODEL_URL" \
+                "Archive SHA-256: $KILIX_VOICE_MODEL_SHA256" \
+                'Archive directory: vosk-model-small-en-us-0.15' \
+                'License: Apache-2.0 (see LICENSE.Apache-2.0)' \
+                | cmp -s - "$model_notice" \
+                || problems+=("Vosk model provenance does not match the requested closure")
+        fi
+        grep -Fqx -- 'dictation=ready' <<<"$stt_report" \
+            || problems+=("kilix-stt did not report dictation=ready")
+        run_voice_functional_smoke >/dev/null 2>&1 \
+            || problems+=("espeak/Vosk synthesis-recognition smoke test failed")
+    fi
+
+    if [ "${#problems[@]}" -gt 0 ]; then
+        if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || [ "$INSTALL_VOICE_MODEL" = 1 ]; then
+            die "Kilix Voice verification failed: ${problems[*]}"
+        fi
+        warn "Kilix Voice is unavailable: ${problems[*]} (run 'kilix voice doctor' after login)"
+        return 0
+    fi
+    if [ "$INSTALL_VOICE_MODEL" = 1 ]; then
+        log "voice: all tools execute and the verified offline-dictation closure is ready"
+    else
+        log "voice: all read-aloud tools execute; dictation assets were explicitly skipped"
+    fi
+}
+
 verify_kilix_fork_build() {
     local current target generation generation_owner build_root generation_root
     local fork kitten root head source_id_path stamp_path
@@ -2499,6 +2753,7 @@ install_env=(
     "KILIX_PREBUILT_SHA256=$KILIX_PREBUILT_SHA256"
     "KILIX_VOICE_REF=$KILIX_VOICE_REF"
     "KILIX_VOICE_LIB_VERSION=$KILIX_VOICE_LIB_VERSION"
+    "KILIX_VOICE_LIB_URL=$KILIX_VOICE_LIB_URL"
     "KILIX_VOICE_LIB_SHA256=$KILIX_VOICE_LIB_SHA256"
     "KILIX_VOICE_MODEL_URL=$KILIX_VOICE_MODEL_URL"
     "KILIX_VOICE_MODEL_SHA256=$KILIX_VOICE_MODEL_SHA256"
@@ -2597,22 +2852,10 @@ print('on' if settings.transcript_enabled() else 'off')
             || ! as_user "$_pty_broker" version >/dev/null 2>&1; then
         die "Pleb did not build Kilix's pinned persistent PTY manager"
     fi
-    # The one closure whose absence is not a provisioning failure. Voice is
-    # optional everywhere in the stack: a machine with no sound card must boot
-    # identically, dictation additionally needs a verified library and a
-    # checksum-pinned model download, and a firstboot that could not fetch them
-    # should leave a working desktop with two dimmed widgets — not a failed
-    # install. Report what is missing and continue.
-    if [ ! -x "$USER_HOME/.local/bin/kilix-tts" ] \
-            || [ ! -x "$USER_HOME/.local/bin/kilix-stt" ]; then
-        warn "the pinned Kilix Voice closure did not install; read-aloud and dictation stay unavailable (run 'kilix voice doctor' after login)"
-    elif [ "$INSTALL_VOICE_MODEL" = 1 ] \
-            && { [ ! -f "$KILIX_DATA_HOME/voice/lib/current/libvosk.so" ] \
-                 || [ -z "$(ls -A -- "$KILIX_DATA_HOME/voice/models" 2>/dev/null)" ]; }; then
-        warn "read-aloud is installed but dictation has no speech library or model; run 'kilix voice install' after login"
-    else
-        log "voice: read-aloud and dictation installed"
-    fi
+    # Import and execute every installed entrypoint. An enabled dictation
+    # policy is a required release closure, so Pleb's intentionally graceful
+    # read-aloud fallback must not let a release image pass firstboot.
+    verify_kilix_voice_install
 fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
@@ -2692,6 +2935,7 @@ EOF
     write_session_default KILIX_PREBUILT_SHA256 "$KILIX_PREBUILT_SHA256"
     write_session_default KILIX_VOICE_REF "$KILIX_VOICE_REF"
     write_session_default KILIX_VOICE_LIB_VERSION "$KILIX_VOICE_LIB_VERSION"
+    write_session_default KILIX_VOICE_LIB_URL "$KILIX_VOICE_LIB_URL"
     write_session_default KILIX_VOICE_LIB_SHA256 "$KILIX_VOICE_LIB_SHA256"
     write_session_default KILIX_VOICE_MODEL_URL "$KILIX_VOICE_MODEL_URL"
     write_session_default KILIX_VOICE_MODEL_SHA256 "$KILIX_VOICE_MODEL_SHA256"

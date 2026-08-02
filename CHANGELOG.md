@@ -4,7 +4,7 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.1.7] — unreleased
+## [0.1.7] — 2026-08-02
 
 0.1.3, 0.1.4, and 0.1.5 were never stack releases. 0.1.3 and 0.1.4 appeared only
 as Kilix and Kilix-95 component `VERSION` markers for their SDK levels, and Kilix
@@ -15,7 +15,10 @@ safety and catalog acceptance fixes landed before publication and invalidated
 that candidate's tag and artifact. Their work is folded into this section
 rather than shipped under numbers no artifact will carry. 0.1.7 is therefore
 the first coordinated release since 0.1.2 and restores one version across all
-four repositories; see [RELEASING.md](RELEASING.md).
+four repositories; see [RELEASING.md](RELEASING.md). It is the fresh-install
+upgrade baseline: older installations are reinstalled, while every later
+release must preserve data and settings from the immediately previous
+published release.
 
 ### Added
 
@@ -43,24 +46,24 @@ four repositories; see [RELEASING.md](RELEASING.md).
   closure and publishes Tmux Manager plus tmux-cli's `tb.py` as `tb` on `PATH`;
   the Kilix 95 Start menu entry opens it in a new tab, and both are usable
   directly from a shell.
-- Provision **read-aloud** for Kilix's new speaker widget. Dictation remains
-  visibly unavailable in 0.1.7 because Kilix Voice has not published a
-  checksum-pinned `libvosk` asset; the release does not claim or attempt an
-  unverifiable microphone closure.
-  `espeak-ng` (the default synthesizer) and `mbrola` (the runtime behind its
-  optional quality tier) join both the provisioning dependency group and the
-  preseed package set; capture reuses the `pulseaudio-utils` already installed
-  for the volume widget. The mbrola *voice databases* are in Debian's non-free
-  component, which this image does not enable, so they stay a deliberate opt-in
-  and read-aloud falls back to plain espeak-ng without them.
-- Install the pinned Kilix Voice closure at firstboot through `pleb install`
-  and forward its source and optional dictation pins. Read-aloud-only is the
-  default. `PLEBIAN_OS_INSTALL_VOICE_MODEL=1` becomes valid only when the
-  release manifest supplies a verified `libvosk` version/digest and a
-  checksum-pinned acoustic model URL/digest.
-  Unlike every other component, a voice closure that does not install is
-  reported and provisioning continues — the microphone is click-to-talk, local
-  and optional, and a machine with no sound must boot identically.
+- Provision the complete **Kilix Voice** closure for read-aloud and offline
+  dictation. The release pins Kilix Voice commit
+  `f05b64a7b2bc25fa9a7e2c3ae1e0b848f04a23f6` (version 0.1.2), the official
+  Vosk 0.3.45
+  x86_64 wheel from PyPI by URL and SHA-256, and Vosk's small US-English 0.15
+  acoustic model by URL and SHA-256. Firstboot executes all three installed
+  tools and requires the exact source/library/model stamp, runtime library,
+  model, provenance, license material, and `dictation=ready` diagnostic; an
+  enabled release can no longer silently fall back to read-aloud-only. Both
+  firstboot and VM acceptance also synthesize a fixed phrase with real espeak
+  and require the pinned Vosk library/model to recognize nonempty text, without
+  opening a microphone or playback device.
+  The microphone remains local and click-to-talk: no device opens until the
+  user invokes dictation. Release VirtualBox guests now expose host audio input
+  as well as output so that path is testable (subject to the host's microphone
+  permission). `espeak-ng` is the default synthesizer, while `mbrola` supplies
+  an optional quality tier; its non-free voice databases remain a deliberate
+  user opt-in and plain espeak-ng is the fallback.
 
 - Provision the shared clickable-chrome settings file at
   `~/.local/gpu_terminal/settings.conf` and install `kilix-settings` on `PATH`,
@@ -72,8 +75,6 @@ four repositories; see [RELEASING.md](RELEASING.md).
 - Build, verify, and publish Kilix's exact pinned Kilix Temps dashboard and its
   graphics closure during firstboot, so the page-strip thermometer works on a
   clean install without a developer checkout.
-- Install Kilix's pinned `tmux-tui`/`tmux-cli` source closure and publish Tmux
-  Manager plus tmux-cli's `tb.py` as `tb` on `PATH`.
 - Provision the pinned persistent PTY session manager so panes survive a Kilix
   crash and detached sessions are recovered on the next start.
 - Ship **session logging on by default**: the PTY broker that owns each pane
@@ -169,8 +170,8 @@ four repositories; see [RELEASING.md](RELEASING.md).
 - Retain the Debian 13.5.0 archived netinst (13.6.0 has no stable
   `/cdimage/archive/` URL yet), the 0.47.4 fallback kitty engine (matching the
   pinned fork's declared engine version), and `go1.26.5` (matching the fork's
-  `src/go.mod` toolchain). The 0.1.7 coordinated pin closure is finalized only
-  after all four release commits are known.
+  `src/go.mod` toolchain). The exact coordinated source closure is recorded in
+  [`releases/0.1.7.env`](releases/0.1.7.env).
 
 ## [0.1.2] — 2026-07-15
 
@@ -264,7 +265,9 @@ four repositories; see [RELEASING.md](RELEASING.md).
   runs the eleven-file manifest and installs all four new payloads; updater
   state seeding occurs only after the complete stack commits.
   Configuration-preserving reprovisioning retains a strict validated-checkout
-  recovery path without making bare sudo safe.
+  recovery path without making bare sudo safe. This records the historical
+  0.1.1-to-0.1.2 behavior only; the path is retired now that 0.1.7 is the
+  fresh-install upgrade baseline.
 
 ## [0.1.1] — 2026-07-12
 

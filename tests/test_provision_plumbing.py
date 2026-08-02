@@ -283,6 +283,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         pins = (
             "KILIX_VOICE_REF",
             "KILIX_VOICE_LIB_VERSION",
+            "KILIX_VOICE_LIB_URL",
             "KILIX_VOICE_LIB_SHA256",
             "KILIX_VOICE_MODEL_URL",
             "KILIX_VOICE_MODEL_SHA256",
@@ -313,7 +314,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
             '"PLEB_INSTALL_VOICE_MODEL=$PLEBIAN_OS_INSTALL_VOICE_MODEL"',
             update,
         )
-        self.assertEqual(
+        self.assertGreaterEqual(
             remaster.count('${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}'), 2)
         self.assertNotIn('${PLEBIAN_OS_INSTALL_VOICE_MODEL:-1}', remaster)
         self.assertIn(

@@ -21,7 +21,7 @@ class VoiceReleaseContractTests(unittest.TestCase):
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
-        self.assertEqual(
+        self.assertGreaterEqual(
             remaster.count('${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}'), 2)
         self.assertNotIn('${PLEBIAN_OS_INSTALL_VOICE_MODEL:-1}', remaster)
         self.assertIn('${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}', provision)
@@ -41,8 +41,14 @@ class VoiceReleaseContractTests(unittest.TestCase):
                 continue
             with self.subTest(manifest=path.name):
                 self.assertRegex(
+                    values.get("KILIX_VOICE_REF", ""), r"^[0-9a-f]{40}$"
+                )
+                self.assertRegex(
                     values.get("KILIX_VOICE_LIB_VERSION", ""),
                     r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                )
+                self.assertRegex(
+                    values.get("KILIX_VOICE_LIB_URL", ""), r"^https://"
                 )
                 self.assertRegex(
                     values.get("KILIX_VOICE_LIB_SHA256", ""),
@@ -54,6 +60,46 @@ class VoiceReleaseContractTests(unittest.TestCase):
                     values.get("KILIX_VOICE_MODEL_SHA256", ""),
                     r"^[0-9a-f]{64}$",
                 )
+
+    def test_0_1_7_pins_the_published_offline_dictation_closure(self):
+        values = _manifest(ROOT / "releases" / "0.1.7.env")
+        self.assertEqual(values["PLEBIAN_OS_INSTALL_VOICE_MODEL"], "1")
+        self.assertEqual(
+            values["KILIX_VOICE_REF"],
+            "f05b64a7b2bc25fa9a7e2c3ae1e0b848f04a23f6",
+        )
+        self.assertEqual(values["KILIX_VOICE_LIB_VERSION"], "0.3.45")
+        self.assertEqual(
+            values["KILIX_VOICE_LIB_URL"],
+            "https://files.pythonhosted.org/packages/fc/ca/83398cfcd557360a3d7b2d732aee1c5f6999f68618d1645f38d53e14c9ff/vosk-0.3.45-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.whl",
+        )
+        self.assertEqual(
+            values["KILIX_VOICE_LIB_SHA256"],
+            "25e025093c4399d7278f543568ed8cc5460ac3a4bf48c23673ace1e25d26619f",
+        )
+        self.assertEqual(
+            values["KILIX_VOICE_MODEL_URL"],
+            "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+        )
+        self.assertEqual(
+            values["KILIX_VOICE_MODEL_SHA256"],
+            "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
+        )
+
+    def test_firstboot_runs_a_real_synthesis_recognition_smoke(self):
+        provision = (
+            ROOT / "provision" / "plebian-os-provision.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("run_voice_functional_smoke", provision)
+        self.assertIn('EspeakTts(voice="en-us", rate=135)', provision)
+        self.assertIn("lib_path=library_path", provision)
+        self.assertIn("model_path=model_path", provision)
+        self.assertIn('os.environ["KILIX_DATA_HOME"]', provision)
+        self.assertIn("recognizer.lib_path", provision)
+        self.assertIn("recognizer.model_path", provision)
+        self.assertIn("kilix voice is working", provision)
+        self.assertIn("recognizer.start_utterance()", provision)
+        self.assertIn("recognizer.end_utterance().strip()", provision)
 
 
 if __name__ == "__main__":

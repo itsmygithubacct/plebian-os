@@ -1,0 +1,102 @@
+# Plebian-OS upgrade policy
+
+This policy starts with **Plebian-OS 0.1.7**. It is also encoded for tooling in
+[`releases/upgrade-policy.json`](releases/upgrade-policy.json).
+
+## Baseline and supported paths
+
+- Install 0.1.7 fresh when the machine runs anything older. In particular,
+  0.1.2 to 0.1.7 is not a supported in-place upgrade.
+- 0.1.3, 0.1.4, and 0.1.5 were not coordinated stack releases. 0.1.6 was an
+  unpublished candidate. None is an upgrade source or destination.
+- 0.1.7 is the first supported upgrade **source**. Each later release must
+  support an in-place upgrade from the immediately previous published release,
+  even when unused version numbers lie between the two releases.
+- A direct upgrade which skips a published release is supported only when that
+  exact start-to-target path is named in the target release notes and passes
+  the same acceptance gate. Otherwise upgrade one published release at a time.
+
+Reinstallation remains available as recovery, but it does not satisfy the
+upgrade requirement for a release after 0.1.7.
+
+## What an upgrade must preserve
+
+A successful supported upgrade changes the coordinated release-controlled
+version, refs, and immutable dependency pins together. It must preserve:
+
+- user files and home-directory data;
+- application state under `~/.local/gpu_terminal`, including desktop state,
+  game saves, transcripts, and provider data;
+- operator choices in `/etc/pleb/session.env` which are not release-controlled
+  pins, including session, provider, storage, and kiosk choices;
+- the shared `settings.conf`, including appearance, logging, thermal, audio,
+  network, and game settings; and
+- custom wallpaper and desktop layout selections.
+
+A release may deliberately migrate a setting only when its release notes name
+the old and new representation, the migration is tested, and rollback restores
+the previous representation. Unknown keys and newer-schema data must not be
+silently discarded.
+
+Release-controlled keys include the coordinated version/release mode, the four
+source refs, the Debian snapshot and installer input, the Kilix engine and Go
+pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
+one reviewed target closure; mixing old and new release pins is unsupported.
+
+## Failure and rollback contract
+
+Before its first mutation, the updater must snapshot the selected source
+commits, deployed OS/Pleb files, engine generation and stamps, release-control
+configuration, and every setting a migration will rewrite. If any fetch,
+validation, build, install, migration, health check, or restart step fails, the
+machine must select the exact previous coherent stack and configuration again.
+
+Downloaded git objects, packages, and toolchains may remain after rollback when
+they are additive and inactive. User data must never be removed as rollback
+cleanup. The updater must report recovery material it could not restore and
+must not report success until the outer transaction commits.
+
+## Release gate for every version after 0.1.7
+
+The target release is not publishable until its immediately previous published
+release has been installed from the published image in a fresh VM and upgraded
+using the documented installed-system path. That path must use the updater
+shipped by the starting release with the target's immutable release closure; it
+must not depend on an unpublished developer checkout. The acceptance run must:
+
+1. verify the starting VM against the previous release's published hashes and
+   exact coordinated commits;
+2. create sentinels in user data, game/provider state, desktop state,
+   `settings.conf`, and operator-owned session configuration;
+3. exercise one induced mid-transaction failure and prove the old version,
+   refs, runtime generation, settings, and sentinels are restored;
+4. perform the successful upgrade, then reboot and verify all coordinated
+   version commands, refs, provenance, provider launches, and sentinels;
+5. verify that release-controlled pins all moved to the target closure and that
+   non-release-controlled choices did not; and
+6. record the tested start version, target version, artifact hashes, exact
+   commits, result, and any explicitly supported skip paths in the target
+   release notes and provenance.
+
+Passing a fresh-install test does not substitute for this upgrade test. If the
+previous published image or its exact source closure cannot be reproduced, the
+new release remains blocked until an equivalent immutable fixture is recovered
+and documented.
+
+## Operator procedure
+
+Release images keep exact refs in `/etc/pleb/session.env`; running
+`plebian-os-update` without selecting a new closure intentionally revalidates
+the installed release rather than drifting to a branch head; the updater alone
+does not select a new release closure. Every future target release must ship an
+actionable release-specific mechanism or exact instructions which validate and
+atomically select all of its release-controlled keys as one closure. That
+mechanism must complete successfully before the operator runs:
+
+```sh
+plebian-os-update --restart
+```
+
+Do not assemble pins from several releases or run a bare privileged provisioner
+between closure selection and the updater. Back up irreplaceable personal data
+even though preservation and rollback are release requirements.

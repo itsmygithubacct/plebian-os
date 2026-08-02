@@ -25,6 +25,10 @@ The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
 The last published coordinated release is **0.1.2**. The next one is **0.1.7**;
 its closure is finalized only after the four final component commits are known.
+0.1.7 is the fresh-install upgrade baseline: no pre-0.1.7 in-place path is
+supported. Every release after it must pass the adjacent published-release
+upgrade gate in [UPGRADING.md](UPGRADING.md) as well as fresh-install
+acceptance.
 
 ### Tags are created only by this procedure
 
@@ -32,6 +36,28 @@ A `vX.Y.Z` tag in any of the four repositories means "this commit is part of
 published stack release X.Y.Z". Component repositories may bump their own
 `VERSION` on `main` whenever their contract level changes, but **nobody pushes a
 `vX.Y.Z` tag outside step 7 below**, and the four tags are pushed together.
+
+### Published provenance corrections
+
+If a published tag, note, manifest, or commit list disagrees with an immutable
+artifact, do not move the tag and do not replace the original artifact. Establish
+the artifact identity from its published checksum, embedded build info, and
+checksummed source archive; verify that every recorded exact commit remains
+fetchable. Then:
+
+1. add a versioned provenance-correction document which records both the exact
+   artifact closure and the conflicting public metadata;
+2. correct the historical manifest to exact full commits and explain why a tag
+   is not authoritative for that artifact;
+3. update the release note, attach the correction as a new asset, and publish
+   the correction asset's own SHA-256 without rewriting the original
+   `SHA256SUMS`; and
+4. add regression coverage for the corrected commits and correction-asset
+   hash.
+
+The correction must distinguish historical metadata from artifact identity and
+state the authority order used for verification. Replacing one provenance error
+with a moved public tag is forbidden.
 
 ### Why 0.1.3 through 0.1.6 do not exist as releases
 
@@ -85,13 +111,33 @@ actually cutting.
 - the fallback kitty bundle version and SHA-256;
 - the exact Go version and SHA-256 for every supported build architecture;
 - pinned installer versions/checksums for any optional network installers that
-  are enabled (currently `uv`).
+  are enabled (currently `uv`);
+- when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
+  library version/URL/SHA-256, and acoustic-model URL/SHA-256. Both installed
+  Vosk assets must retain readable upstream provenance and Apache-2.0 license
+  material; a checksum-matching opaque binary or model is not releasable.
 
 Release mode fails closed when a required value is empty, still a placeholder,
 malformed, dirty, or does not resolve to the checked-out Plebian-OS commit. The
 image records the transformed preseed, source ISO, refs, runtime configuration,
 and tool pins in `/etc/plebian-os/build-info.env`; final package and resolved
 source/tool manifests are written under `/var/lib/plebian-os/`.
+
+## Upgrade support
+
+[`releases/upgrade-policy.json`](releases/upgrade-policy.json) is the
+machine-readable contract and [UPGRADING.md](UPGRADING.md) is its normative
+explanation. 0.1.7 must be installed fresh from any older build. Beginning with
+the next published release, the supported default hop is from the immediately
+previous published release, regardless of unused version numbers between them.
+A skip over a published release is supported only when the exact path is named
+and accepted.
+
+An upgrade must move the complete release-controlled closure together while
+preserving user files, application/game/provider state, shared settings,
+operator session choices, and custom desktop state. An induced failure must
+restore the prior coherent runtime and configuration. Reinstalling successfully
+or passing fresh-install acceptance does not satisfy this gate.
 
 ## Cutting `<x.y.z>`
 
@@ -106,7 +152,10 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    red result there is the early warning that this pin — or the provider — needs
    to move. Confirm the release manifest explicitly contains
    `IMAGE_PASSWORD=plebian` and `RANDOM_PASSWORD=0`; never commit a private
-   password to the manifest.
+   password to the manifest. For every release after 0.1.7, name the immediately
+   previous published release as the supported upgrade source and reserve a
+   provenance section for the upgrade acceptance result. Name any supported
+   direct skip separately; silence means the skip is unsupported.
 2. Run each repository's complete test/lint suite and integration contract
    tests. Run them in a clean environment and outside a live Kilix session:
    exported `KILIX_*` values and a user's persisted `kilix.env`
@@ -160,6 +209,16 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
    Kilix OS window returns to LightDM rather than respawning.
    In an installed guest, complete these distribution-asset checks:
 
+   - confirm VirtualBox audio input and output are enabled; run
+     `kilix-tts --version`, `kilix-stt --version`, and
+     `kilix-voiced --version`, then require `kilix-stt --print` to report
+     `dictation=ready`. Require the device-free acceptance smoke to synthesize
+     a phrase with real espeak, load the pinned Vosk library/model, and
+     recognize nonempty text. Verify the installed library/model match the exact
+     release stamp and each has regular, non-symlink provenance and
+     Apache-2.0 license material. Grant VirtualBox host microphone permission
+     and perform one click-to-talk dictation turn; the microphone must remain
+     closed before that explicit action;
    - verify the Kilix engine is one physically contained
      `generations/build.*` directory selected by a relative `current`
      symlink, with regular executable `kitty` and `kitten` launchers,
@@ -205,13 +264,21 @@ source/tool manifests are written under `/var/lib/plebian-os/`.
      confirming rollback restores the prior wallpaper, LightDM greeter
      override, attribution, license, scripts, Pleb recovery guide (or removes
      newly introduced files/directories), and state;
-     separately test the documented v0.1.1 migration with two updater runs
-     (seven-file updater first, eleven-file updater second);
    - verify the installed
      `/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md` and
      `/usr/local/share/doc/plebian-os/COPYING.GPL-2` are `root:root`, mode
      `0644`, match their expected hashes, and retain the attribution's working
      relative `../COPYING.GPL-2` reference.
+
+   0.1.7 establishes the fresh-install baseline and has no supported upgrade
+   source. For every later release, also install the immediately previous
+   published ISO in a fresh VM and complete all six gates in
+   [UPGRADING.md](UPGRADING.md): verify the starting artifact/commits, create
+   preservation sentinels, prove rollback under an induced failure, complete
+   the upgrade and reboot, verify the target closure plus preserved choices,
+   and record the exact result in release notes/provenance. Perform this using
+   the path documented for installed users, not an unpublished developer
+   checkout. A failed or missing upgrade run blocks publication.
 7. Re-check that every local tag resolves to the reviewed commit and that all
    worktrees remain clean. Only then push the four tags and publish the strict
    release artifact, its checksum, and a checksummed release source archive
@@ -230,5 +297,8 @@ published, never move or reuse it; increment the patch version instead.
 Release images keep exact refs in `/etc/pleb/session.env`. Consequently
 `plebian-os-update` verifies and rechecks those same commits; it does not drift
 to branch heads. To intentionally move an installed machine to another release,
-update all coordinated refs and version together, then run
-`plebian-os-update --restart`.
+select the target release's complete coordinated closure, then run
+`plebian-os-update --restart`. Never mix pins from different releases. The
+supported source versions, preservation guarantees, rollback behavior, and
+release gate are defined in [UPGRADING.md](UPGRADING.md); anything older than
+0.1.7 requires a fresh install.

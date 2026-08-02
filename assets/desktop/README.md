@@ -35,13 +35,12 @@ state only after that transaction commits. The ISO build records the exact
 bytes as `PLEBIAN_OS_DESKTOP_WALLPAPER_SHA256` in
 `/etc/plebian-os/build-info.env`.
 
-The immutable v0.1.1 updater knows a fixed seven-file OS-layer manifest, so an
-upgrade from v0.1.1 needs two `plebian-os-update` invocations: the first deploys
-the new scripts, and the second uses their eleven-file manifest to install this
-asset, its LightDM greeter override, the attribution, and GPL text, then seed a
-new desktop. Do not substitute a bare
-`sudo plebian-os-provision` between those runs because sudo does not preserve
-the coordinated install settings. For configuration-preserving reprovisioning
-orchestration, the provisioner has a defensive fallback that accepts the asset
-only from the target user's clean, origin-checked Plebian-OS checkout, binds the
-working file to the tracked `HEAD` blob, and still enforces the exact hash.
+0.1.7 is the fresh-install upgrade baseline; older installations are not
+in-place migration sources. Every later supported upgrade must preserve an
+existing desktop state and custom wallpaper byte-for-byte, including through
+an induced failure and rollback. The previous-release VM acceptance gate in
+[`UPGRADING.md`](../../UPGRADING.md) enforces that contract. For
+configuration-preserving reprovisioning orchestration, the provisioner has a
+defensive fallback that accepts the asset only from the target user's clean,
+origin-checked Plebian-OS checkout, binds the working file to the tracked `HEAD`
+blob, and still enforces the exact hash.

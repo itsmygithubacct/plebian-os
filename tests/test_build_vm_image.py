@@ -362,6 +362,23 @@ class VmBuilderEnvTests(unittest.TestCase):
             vm.vbox_create(cfg(), Path("image.iso"), replace=True, assume_yes=True)
         self.assertIn(["VBoxManage", "unregistervm", "test", "--delete"], calls)
 
+    def test_virtualbox_exposes_host_audio_input_and_output(self):
+        calls = []
+        with mock.patch.object(vm, "vbox_exists", return_value=False), \
+                mock.patch.object(
+                    vm, "run", side_effect=lambda argv, **_kw: calls.append(argv)
+                ), \
+                mock.patch.object(
+                    vm, "vbox_info",
+                    return_value={"CfgFile": "/tmp/test/test.vbox"},
+                ):
+            vm.vbox_create(cfg(), Path("image.iso"))
+
+        modify = next(call for call in calls if call[:2] == ["VBoxManage", "modifyvm"])
+        self.assertEqual(modify[modify.index("--audio-enabled") + 1], "on")
+        self.assertEqual(modify[modify.index("--audio-in") + 1], "on")
+        self.assertEqual(modify[modify.index("--audio-out") + 1], "on")
+
     def test_openssl_failure_never_falls_back_to_plaintext(self):
         result = SimpleNamespace(returncode=1, stdout="", stderr="failed")
         with mock.patch.object(vm, "have", return_value=True), \

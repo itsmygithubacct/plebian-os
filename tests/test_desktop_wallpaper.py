@@ -673,16 +673,20 @@ desktop_wallpaper_matches_expected_hash \
             self.assertIn(directory, snapshot)
             self.assertIn(directory, restore)
 
-    def test_v011_migration_contract_is_explicit(self):
+    def test_upgrade_baseline_preserves_existing_desktop_state(self):
         readme = (ROOT / "README.md").read_text()
         asset_docs = (ROOT / "assets" / "desktop" / "README.md").read_text()
-        for text in (readme, asset_docs):
-            normalized = " ".join(text.split())
-            self.assertIn("immutable v0.1.1 updater", normalized)
-            self.assertIn("seven-file", normalized)
-            self.assertIn("second", normalized)
-            self.assertIn("eleven-file", normalized)
-            self.assertIn("bare `sudo plebian-os-provision`", normalized)
+        upgrading = (ROOT / "UPGRADING.md").read_text()
+        self.assertIn("0.1.7 fresh", " ".join(readme.split()))
+        normalized_assets = " ".join(asset_docs.split())
+        self.assertIn(
+            "0.1.7 is the fresh-install upgrade baseline", normalized_assets
+        )
+        self.assertIn("custom wallpaper byte-for-byte", normalized_assets)
+        self.assertIn("induced failure and rollback", normalized_assets)
+        self.assertIn("custom wallpaper and desktop layout", upgrading)
+        self.assertNotIn("immutable v0.1.1 updater", readme)
+        self.assertNotIn("immutable v0.1.1 updater", asset_docs)
 
 
 if __name__ == "__main__":

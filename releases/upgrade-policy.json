@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "upgrade_baseline": "0.1.7",
+  "pre_baseline_action": "fresh_install_required",
+  "default_supported_hop": "immediately_previous_published_release",
+  "published_release_skip": "explicit_path_and_acceptance_required",
+  "upgrade_entrypoint": "installed_updater_with_target_release_closure",
+  "release_controlled_keys_move_as": "one_coordinated_closure",
+  "preserve": [
+    "user_files",
+    "gpu_terminal_application_state",
+    "game_saves",
+    "desktop_and_provider_state",
+    "operator_session_choices",
+    "shared_settings",
+    "custom_wallpaper_and_layout"
+  ],
+  "failure_result": "previous_coherent_stack_and_configuration_restored",
+  "release_gate": {
+    "fresh_previous_release_vm": true,
+    "published_artifact_and_commit_verification": true,
+    "preservation_sentinels": true,
+    "injected_failure_and_rollback": true,
+    "successful_upgrade_and_reboot": true,
+    "target_release_notes_and_provenance_record": true
+  }
+}

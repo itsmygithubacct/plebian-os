@@ -550,9 +550,10 @@ def vbox_create(cfg: Config, iso: Path, *, replace: bool = False,
          "--firmware", "bios",
          "--rtcuseutc", "on", "--nic1", "nat",
          "--natpf1", f"ssh,tcp,127.0.0.1,{cfg.ssh_port},,22",
-         # audio out is OFF on a fresh VM — enable it so the desktop's system
-         # sounds / media actually reach the host speakers.
-         "--audio-driver", "default", "--audio-enabled", "on", "--audio-out", "on",
+         # Fresh VMs do not expose host audio automatically. Enable output for
+         # read-aloud and input for the click-to-talk dictation control.
+         "--audio-driver", "default", "--audio-enabled", "on",
+         "--audio-in", "on", "--audio-out", "on",
          "--boot1", "disk", "--boot2", "dvd", "--boot3", "none", "--boot4", "none"])
 
     vmdir = Path(vbox_info(cfg.name)["CfgFile"]).parent
@@ -694,10 +695,47 @@ def verify_catalog_builds(cfg: Config, askpass: str) -> None:
     info("  [ok] pinned catalog clean builds")
 
 
+def _voice_functional_smoke_script() -> str:
+    """Exercise real espeak synthesis and Vosk recognition without a device."""
+    return """\
+import os
+
+from voicelib.stt import VoskStt
+from voicelib.tts import EspeakTts
+
+pcm, rate = EspeakTts(voice="en-us", rate=135).synth("kilix voice is working")
+if not pcm or rate <= 0:
+    raise SystemExit("espeak produced no PCM")
+data_home = os.environ["KILIX_DATA_HOME"]
+library_path = os.path.join(data_home, "voice/lib/current/libvosk.so")
+model_path = os.path.join(data_home, "voice/models/small-en-us")
+recognizer = VoskStt(
+    rate=rate, lib_path=library_path, model_path=model_path
+)
+try:
+    if recognizer.lib_path != os.path.abspath(library_path):
+        raise SystemExit("Vosk did not open the pinned library path")
+    if recognizer.model_path != os.path.abspath(model_path):
+        raise SystemExit("Vosk did not open the pinned model path")
+    recognizer.start_utterance()
+    for offset in range(0, len(pcm), 4096):
+        recognizer.feed(pcm[offset:offset + 4096])
+    recognized = recognizer.end_utterance().strip()
+    if not recognized:
+        raise SystemExit("Vosk recognized no text from synthesized speech")
+finally:
+    recognizer.close()
+"""
+
+
 def _voice_acceptance_command(expected_policy: str) -> str:
     """Return a guest check for the declared read-aloud/dictation closure."""
     if expected_policy not in ("0", "1"):
         raise ValueError("voice policy must be 0 or 1")
+    functional_smoke = (
+        'PYTHONPATH="$d/voice/runtime/current/lib/kilix-voice" '
+        f'timeout 180 python3 -c {shlex.quote(_voice_functional_smoke_script())}'
+    )
     command = (
         '. /etc/pleb/session.env 2>/dev/null; '
         'g="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"; '
@@ -705,9 +743,19 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         's="${KILIX_STATE_DIRECTORY:-$k/state}"; '
         'd="${KILIX_DATA_HOME:-$k/data}"; '
         'r="$s/kilix-voice-install.refs"; '
+        'l="$d/voice/lib/current"; '
+        'm="$d/voice/models/small-en-us"; '
         f'test "${{PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}}" = {expected_policy} && '
-        'test -x "$HOME/.local/bin/kilix-tts" && '
+        'for tool in kilix-tts kilix-stt kilix-voiced; do '
+        'p="$HOME/.local/bin/$tool"; test -x "$p" || exit 1; '
+        'version="$(timeout 15 "$p" --version)" || exit 1; '
+        'printf \'%s\\n\' "$version" | '
+        'grep -Eq "^$tool [0-9]+\\.[0-9]+\\.[0-9]+$" || exit 1; '
+        'done && '
+        'timeout 15 "$HOME/.local/bin/kilix-tts" --print >/dev/null && '
+        'stt_report="$(timeout 15 "$HOME/.local/bin/kilix-stt" --print)" && '
         'test -f "$r" && test ! -L "$r" && '
+        'test "$(stat -c \'%u:%a:%h\' "$r")" = "$(id -u):600:1" && '
     )
     if expected_policy == "0":
         return command + (
@@ -715,11 +763,84 @@ def _voice_acceptance_command(expected_policy: str) -> str:
             "grep -Fqx 'model-small-en-us=skipped' \"$r\""
         )
     return command + (
-        'test -f "$d/voice/lib/current/libvosk.so" && '
-        'test -d "$d/voice/models/small-en-us" && '
-        "grep -Eq '^libvosk=[A-Za-z0-9._-]+\\+[0-9a-f]{64}$' \"$r\" && "
-        "grep -Eq '^model-small-en-us=[0-9a-f]{64}$' \"$r\""
-    )
+        'printf \'%s\\n\' "$KILIX_VOICE_REF" | grep -Eq \'^[0-9a-f]{40}$\' && '
+        'vsrc="${GPU_TERMINAL_SOURCE_HOME:-$g/sources}/.kilix-voice-sources/'
+        'kilix-voice-$KILIX_VOICE_REF"; '
+        'test -d "$vsrc/.git" && test ! -L "$vsrc" && '
+        'test "$(git -C "$vsrc" rev-parse --verify HEAD)" = '
+        '"$KILIX_VOICE_REF" && '
+        'voice_version="$(git -C "$vsrc" show '
+        '"${KILIX_VOICE_REF}:VERSION")" && '
+        'printf \'%s\\n\' "$voice_version" | '
+        "grep -Eq '^[0-9]+\\.[0-9]+\\.[0-9]+$' && "
+        'test "$(cat "$vsrc/VERSION")" = "$voice_version" && '
+        'for tool in kilix-tts kilix-stt kilix-voiced; do '
+        'test "$(timeout 15 "$HOME/.local/bin/$tool" --version)" = '
+        '"$tool $voice_version" || exit 1; done && '
+        'printf \'%s\\n\' "$KILIX_VOICE_LIB_VERSION" | '
+        "grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' && "
+        'case "$KILIX_VOICE_LIB_URL" in https://*) true ;; *) false ;; esac && '
+        'printf \'%s\\n\' "$KILIX_VOICE_LIB_SHA256" | grep -Eq \'^[0-9a-f]{64}$\' && '
+        'case "$KILIX_VOICE_MODEL_URL" in https://*) true ;; *) false ;; esac && '
+        'printf \'%s\\n\' "$KILIX_VOICE_MODEL_SHA256" | grep -Eq \'^[0-9a-f]{64}$\' && '
+        'test -L "$l" && '
+        'library_generation="vosk-$KILIX_VOICE_LIB_VERSION-'
+        '$KILIX_VOICE_LIB_SHA256" && '
+        'test "$(readlink -- "$l")" = "$library_generation" && '
+        'test -d "$d/voice/lib/$library_generation" && '
+        'test ! -L "$d/voice/lib/$library_generation" && '
+        'test -L "$m" && '
+        'model_generation="vosk-model-small-en-us-0.15-'
+        '$KILIX_VOICE_MODEL_SHA256" && '
+        'test "$(readlink -- "$m")" = "$model_generation" && '
+        'test -d "$d/voice/models/$model_generation" && '
+        'test ! -L "$d/voice/models/$model_generation" && '
+        'test -f "$l/libvosk.so" && test ! -L "$l/libvosk.so" && '
+        'test -d "$m" && '
+        'for artifact in "$l/README.kilix-provenance" '
+        '"$l/LICENSE.Apache-2.0" "$m/README.kilix-provenance" '
+        '"$m/LICENSE.Apache-2.0"; do '
+        'test -f "$artifact" && test ! -L "$artifact" || exit 1; done && '
+        'cmp -s /usr/share/common-licenses/Apache-2.0 '
+        '"$l/LICENSE.Apache-2.0" && '
+        'cmp -s /usr/share/common-licenses/Apache-2.0 '
+        '"$m/LICENSE.Apache-2.0" && '
+        "printf '%s\\n' "
+        "'Kilix Voice native speech-recognition library' "
+        "'Upstream: https://github.com/alphacep/vosk-api' "
+        '"Version: $KILIX_VOICE_LIB_VERSION" '
+        '"Wheel: $KILIX_VOICE_LIB_URL" '
+        '"Wheel SHA-256: $KILIX_VOICE_LIB_SHA256" '
+        "'Extracted member: vosk/libvosk.so' "
+        "'License: Apache-2.0 (see LICENSE.Apache-2.0)' "
+        '| cmp -s - "$l/README.kilix-provenance" && '
+        "printf '%s\\n' "
+        "'Vosk small US English acoustic model' "
+        "'Upstream catalog: https://alphacephei.com/vosk/models' "
+        '"Archive: $KILIX_VOICE_MODEL_URL" '
+        '"Archive SHA-256: $KILIX_VOICE_MODEL_SHA256" '
+        "'Archive directory: vosk-model-small-en-us-0.15' "
+        "'License: Apache-2.0 (see LICENSE.Apache-2.0)' "
+        '| cmp -s - "$m/README.kilix-provenance" && '
+        "printf '%s\\n' "
+        '"kilix-voice=$KILIX_VOICE_REF" '
+        '"libvosk=$KILIX_VOICE_LIB_VERSION+$KILIX_VOICE_LIB_SHA256" '
+        '"model-small-en-us=$KILIX_VOICE_MODEL_SHA256" '
+        '| cmp -s - "$r" && '
+        'grep -Fqx "KILIX_VOICE_REF=$KILIX_VOICE_REF" '
+        '/etc/plebian-os/build-info.env && '
+        'grep -Fqx "KILIX_VOICE_LIB_VERSION=$KILIX_VOICE_LIB_VERSION" '
+        '/etc/plebian-os/build-info.env && '
+        'grep -Fqx "KILIX_VOICE_LIB_URL=$KILIX_VOICE_LIB_URL" '
+        '/etc/plebian-os/build-info.env && '
+        'grep -Fqx "KILIX_VOICE_LIB_SHA256=$KILIX_VOICE_LIB_SHA256" '
+        '/etc/plebian-os/build-info.env && '
+        'grep -Fqx "KILIX_VOICE_MODEL_URL=$KILIX_VOICE_MODEL_URL" '
+        '/etc/plebian-os/build-info.env && '
+        'grep -Fqx "KILIX_VOICE_MODEL_SHA256=$KILIX_VOICE_MODEL_SHA256" '
+        '/etc/plebian-os/build-info.env && '
+        'printf \'%s\\n\' "$stt_report" | grep -Fqx \'dictation=ready\''
+    ) + " && " + functional_smoke
 
 
 def _transcript_acceptance_command() -> str:

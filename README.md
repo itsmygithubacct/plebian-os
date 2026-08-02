@@ -54,6 +54,10 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
      first boot;
    - installs Kilix's pinned `tmux-tui`/`tmux-cli` source closure and publishes
      Tmux Manager plus tmux-cli's `tb.py` as the `tb` command on `PATH`;
+   - installs and executes Kilix Voice's read-aloud tools; release 0.1.7 also
+     installs the URL/SHA-256-pinned Vosk library and small US-English model,
+     preserves their Apache-2.0 license and source provenance, and rejects
+     firstboot unless the offline dictation diagnostic reports ready;
    - installs the Plebian-OS wallpaper at a stable system path and selects it
      only in Pleb's persisted desktop state (existing Pleb state is preserved,
      while standalone Kilix-95 retains its XP wallpaper);
@@ -108,21 +112,14 @@ toolchain are intentionally not removed during rollback; they are additive and
 not selected by the restored runtime. A checkout created during a failed update
 is moved into the reported recovery directory instead of being deleted.
 
-**Upgrading from v0.1.1:** run `plebian-os-update` twice as the desktop user
-after moving the Plebian-OS ref/branch to this newer revision. The immutable
-v0.1.1 updater has a fixed seven-file OS-layer manifest: its first invocation
-can deploy the new updater and provisioner, but cannot deploy the newly added
-four files (the wallpaper, LightDM greeter override, attribution, and license
-text). The second invocation runs the new eleven-file transaction, installs all
-four validated payloads,
-commits the complete stack, and only then seeds the wallpaper for a Pleb session
-with no existing desktop state. Both invocations
-are required; do not run a bare `sudo plebian-os-provision` between them because
-sudo does not preserve all coordinated provider/ref/kiosk settings. The
-new provisioner's validated-checkout fallback exists only for an externally
-orchestrated, configuration-preserving reprovision. The normal upgrade contract
-is two updater runs, and neither run overwrites existing desktop state or a
-wallpaper choice.
+**Upgrade baseline:** install 0.1.7 fresh when moving from any earlier build;
+0.1.2 to 0.1.7 is deliberately not an in-place migration. Starting with 0.1.7,
+every later release must prove an in-place upgrade from the immediately previous
+published release while preserving user data, application state, settings, and
+operator choices, with rollback to the prior coherent stack on failure. Direct
+skips over a published release require their own explicit acceptance result.
+See [UPGRADING.md](UPGRADING.md) for the machine-readable release policy and
+operator contract.
 
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
 thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
@@ -275,11 +272,13 @@ to trust an existing artifact.
 | `bootstrap.sh` | run the provisioner on an already-installed Debian |
 | `VERSION` / `releases/*.env` | shared release version + coordinated pin manifests |
 | `RELEASING.md` | how to cut a coordinated pleb/kilix/kilix-95/plebian-os release |
+| `UPGRADING.md` / `releases/upgrade-policy.json` | supported upgrade paths, preservation and rollback gate |
 
 Every remastered ISO also stages `/etc/plebian-os/build-info.env` and
 `/etc/default/plebian-os` into the installed system. The manifest records the
 Plebian-OS commit/dirty state, source Debian ISO checksum, installer and desktop
-artwork checksums, and the repo/ref/provider knobs used for that image; the firstboot env is what
+artwork checksums, voice source/library/model URLs and checksums, and the
+repo/ref/provider knobs used for that image; the firstboot env is what
 `plebian-os-firstboot.service` reads when it provisions the installed system.
 After provisioning finishes, `/var/lib/plebian-os/packages.list`,
 `versions.env`, and `apt-sources.list` record the final installed packages,
@@ -341,8 +340,8 @@ images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,
 `PLEBIAN_OS_NETINST_SHA256`, `PLEBIAN_OS_APT_SNAPSHOT`, `PLEB_REF`, `KILIX_REF`,
 `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`, and the exact
 Go version/architecture checksums before building. Simpler: set
-`PLEBIAN_OS_RELEASE=0.1.2` to load the coordinated pin manifest from
-[`releases/0.1.2.env`](releases/0.1.2.env) (see
+`PLEBIAN_OS_RELEASE=0.1.7` to load the coordinated pin manifest from
+[`releases/0.1.7.env`](releases/0.1.7.env) (see
 [RELEASING.md](RELEASING.md)). The snapshot pin covers Debian Installer and
 firstboot resolution. Snapshot switching inventories and transactionally
 restores only the sources Plebian-OS disabled, preserving operator-owned files.

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -232,6 +234,94 @@ class ReleaseVersioningTests(unittest.TestCase):
     def test_release_docs_present(self):
         self.assertTrue((ROOT / "RELEASING.md").exists())
         self.assertTrue((ROOT / "CHANGELOG.md").exists())
+        self.assertTrue((ROOT / "UPGRADING.md").exists())
+
+    def test_upgrade_policy_starts_with_0_1_7_and_requires_preservation(self):
+        policy = json.loads(
+            _read("releases", "upgrade-policy.json")
+        )
+        self.assertEqual(policy["schema_version"], 1)
+        self.assertEqual(policy["upgrade_baseline"], "0.1.7")
+        self.assertEqual(
+            policy["pre_baseline_action"], "fresh_install_required"
+        )
+        self.assertEqual(
+            policy["default_supported_hop"],
+            "immediately_previous_published_release",
+        )
+        self.assertEqual(
+            policy["published_release_skip"],
+            "explicit_path_and_acceptance_required",
+        )
+        self.assertEqual(
+            policy["upgrade_entrypoint"],
+            "installed_updater_with_target_release_closure",
+        )
+        self.assertEqual(
+            policy["release_controlled_keys_move_as"],
+            "one_coordinated_closure",
+        )
+        for required in (
+            "user_files",
+            "gpu_terminal_application_state",
+            "game_saves",
+            "operator_session_choices",
+            "shared_settings",
+        ):
+            self.assertIn(required, policy["preserve"])
+        self.assertEqual(
+            policy["failure_result"],
+            "previous_coherent_stack_and_configuration_restored",
+        )
+        self.assertTrue(all(policy["release_gate"].values()))
+
+    def test_upgrade_docs_retire_the_pre_baseline_bridge(self):
+        readme = _read("README.md")
+        releasing = _read("RELEASING.md")
+        upgrading = _read("UPGRADING.md")
+        self.assertNotIn("Upgrading from v0.1.1", readme)
+        self.assertNotIn("documented v0.1.1 migration", releasing)
+        self.assertIn("0.1.2 to 0.1.7 is not a supported", upgrading)
+        self.assertIn("immediately previous published release", upgrading)
+        self.assertIn("induced mid-transaction failure", upgrading)
+
+    def test_0_1_2_historical_manifest_tracks_the_published_artifacts(self):
+        manifest = _read("releases", "0.1.2.env")
+        expected = {
+            "PLEBIAN_OS_REF":
+                "96016f0eee8b652f13c377fa84c842bed98b0f8c",
+            "PLEB_REF":
+                "20c5cff3655cf95efb96dc7a7e855257dc6ccc2e",
+            "KILIX_REF":
+                "0cf52e81e481a45b103548373f52ee5c73e0e8eb",
+            "KILIX95_REF":
+                "8ac7aa65e3df4d08cc31e020ee0517b9087c6d4c",
+        }
+        for key, commit in expected.items():
+            self.assertRegex(manifest, rf"(?m)^{key}={commit}$")
+        self.assertNotRegex(manifest, r"(?m)^PLEBIAN_OS_REF=v0\.1\.2$")
+
+        provenance_path = ROOT / "releases" / "0.1.2-provenance.md"
+        provenance = provenance_path.read_bytes()
+        provenance_hash = hashlib.sha256(provenance).hexdigest()
+        self.assertEqual(
+            provenance_hash,
+            "959797398d3f4031dae067322407ac4f959467956f586f46dce039ac3f946b5d",
+        )
+        provenance_text = provenance.decode("utf-8")
+        notes = _read("releases", "0.1.2-notes.md")
+        for commit in expected.values():
+            self.assertIn(commit, provenance_text)
+            self.assertIn(commit, notes)
+        for artifact_hash in (
+            "cedd3f933171f4ce5166f88a8cc35a08e2c12a207101b3f72a92be743844e1a4",
+            "7788ba540745f028976ba22a04620a2a5d6b71d35ca3f0182048e7d7dd38dd73",
+            "59ed4e44e0a96ccd0dec143bfe6cdc1a3941ee3d5f6655f1f763ab7775b290c4",
+        ):
+            self.assertIn(artifact_hash, provenance_text)
+            self.assertIn(artifact_hash, notes)
+        self.assertIn(provenance_hash, notes)
+        self.assertIn("The published tags are not moved", provenance_text)
 
     def test_release_manifest_makes_default_login_explicit(self):
         manifest = self.manifest
