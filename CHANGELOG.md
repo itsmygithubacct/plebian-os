@@ -4,16 +4,18 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.1.6] — unreleased
+## [0.1.7] — unreleased
 
 0.1.3, 0.1.4, and 0.1.5 were never stack releases. 0.1.3 and 0.1.4 appeared only
 as Kilix and Kilix-95 component `VERSION` markers for their SDK levels, and Kilix
 additionally published a `v0.1.4` tag of its own. 0.1.5 was prepared in full —
 notes, version mirroring, and a verified pin closure — but never built, accepted,
-or tagged; its work is folded into this section rather than shipped under a
-number no artifact will ever carry. 0.1.6 is therefore the first coordinated
-release since 0.1.2 and restores one version across all four repositories; see
-[RELEASING.md](RELEASING.md).
+or tagged. 0.1.6 then reached an unpublished local candidate, but further flash
+safety and catalog acceptance fixes landed before publication and invalidated
+that candidate's tag and artifact. Their work is folded into this section
+rather than shipped under numbers no artifact will carry. 0.1.7 is therefore
+the first coordinated release since 0.1.2 and restores one version across all
+four repositories; see [RELEASING.md](RELEASING.md).
 
 ### Added
 
@@ -41,18 +43,21 @@ release since 0.1.2 and restores one version across all four repositories; see
   closure and publishes Tmux Manager plus tmux-cli's `tb.py` as `tb` on `PATH`;
   the Kilix 95 Start menu entry opens it in a new tab, and both are usable
   directly from a shell.
-- Provision **read-aloud and dictation** for Kilix's two new top-bar widgets.
+- Provision **read-aloud** for Kilix's new speaker widget. Dictation remains
+  visibly unavailable in 0.1.7 because Kilix Voice has not published a
+  checksum-pinned `libvosk` asset; the release does not claim or attempt an
+  unverifiable microphone closure.
   `espeak-ng` (the default synthesizer) and `mbrola` (the runtime behind its
   optional quality tier) join both the provisioning dependency group and the
   preseed package set; capture reuses the `pulseaudio-utils` already installed
   for the volume widget. The mbrola *voice databases* are in Debian's non-free
   component, which this image does not enable, so they stay a deliberate opt-in
   and read-aloud falls back to plain espeak-ng without them.
-- Install the pinned Kilix Voice closure at firstboot through `pleb install`,
-  and forward `KILIX_VOICE_REF`, the verified `libvosk` pins and the
-  checksum-pinned acoustic model URL/digest into it. Empty values mean the pins
-  the Kilix checkout already carries, which the pinned Kilix commit makes
-  immutable; `PLEBIAN_OS_INSTALL_VOICE_MODEL=0` provisions read-aloud alone.
+- Install the pinned Kilix Voice closure at firstboot through `pleb install`
+  and forward its source and optional dictation pins. Read-aloud-only is the
+  default. `PLEBIAN_OS_INSTALL_VOICE_MODEL=1` becomes valid only when the
+  release manifest supplies a verified `libvosk` version/digest and a
+  checksum-pinned acoustic model URL/digest.
   Unlike every other component, a voice closure that does not install is
   reported and provisioning continues — the microphone is click-to-talk, local
   and optional, and a machine with no sound must boot identically.
@@ -80,11 +85,11 @@ release since 0.1.2 and restores one version across all four repositories; see
   desktop cannot flood the log; only output is captured, so hidden password
   prompts are not recorded. Disable with `kilix settings --set transcript=off`.
   The transcript tree is bounded by two budgets rather than only a per-pane
-  cap: recent logs stay uncompressed (50 GiB by default), older ones are
-  archived with `zstd -3` into a second 50 GiB budget, and the oldest
-  archives are dropped only once both are full. Terminal output compresses
-  to roughly a sixtieth of its size, so the archive holds far more history
-  than the live tier for the same disk, and archiving is lossless. Both
+  cap: dead-pane logs are compressed with `zstd -3` into a 5 GiB recent tier;
+  the oldest are recompressed with `zstd -9` into a separate 1 GiB tier, and
+  the oldest archives are dropped only once both are full. Terminal output compresses
+  substantially, so the archive retains more history per byte while leaving
+  headroom on the release-tested 20 GiB disk, and archiving is lossless. Both
   budgets are configurable from the settings file, `kilix settings --set`,
   the settings TUI, and Kilix 95's Settings app. `zstd` is provisioned for
   it.
@@ -99,6 +104,13 @@ release since 0.1.2 and restores one version across all four repositories; see
 
 ### Fixed / hardened
 
+- Make release acceptance clean-build every pinned optional game and app in a
+  temporary guest directory, catching broken default targets and missing final
+  executables before an image can pass acceptance. Reject a vacuous catalog and
+  re-check that each installer result is the selected runnable executable.
+- Protect swap-backed disks even when a swap-file path contains a space, tab,
+  newline, or backslash. Both USB writers decode Linux's `/proc/swaps` octal
+  escapes in one pass, preserving literal escape-looking filename fragments.
 - Make the release credential policy explicit in its config:
   `IMAGE_PASSWORD=plebian` and `RANDOM_PASSWORD=0` publish the usable offline
   `pleb` / `plebian` login, while `RANDOM_PASSWORD=1` opts private images into a
@@ -148,9 +160,9 @@ release since 0.1.2 and restores one version across all four repositories; see
   unchanged from 0.1.2's snapshot.
 - Retain the Debian 13.5.0 archived netinst (13.6.0 has no stable
   `/cdimage/archive/` URL yet), the 0.47.4 fallback kitty engine (matching the
-  pinned fork base), and `go1.26.5` (matching the fork's `src/go.mod`
-  toolchain). See [`releases/0.1.6.env`](releases/0.1.6.env) for the
-  coordinated pin closure.
+  pinned fork's declared engine version), and `go1.26.5` (matching the fork's
+  `src/go.mod` toolchain). The 0.1.7 coordinated pin closure is finalized only
+  after all four release commits are known.
 
 ## [0.1.2] — 2026-07-15
 

@@ -3,7 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -171,6 +171,69 @@ class VmBuilderEnvTests(unittest.TestCase):
             "KILIX_DESKTOP_FLAVOR",
         ):
             self.assertIn(key, verify)
+
+    def test_catalog_acceptance_builds_in_temporary_guest_roots(self):
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                mock.patch.object(vm, "info"):
+            vm.verify_catalog_builds(cfg(), "askpass")
+        command = remote.call_args.args[1]
+        self.assertIn("TemporaryDirectory", command)
+        self.assertIn("default_catalog", command)
+        self.assertIn("Installer", command)
+        self.assertIn("spec.source_type", command)
+        self.assertIn("timeout 1750 python3", command)
+        self.assertEqual(remote.call_args.kwargs["timeout"], 1800)
+
+    def test_catalog_acceptance_program_clean_builds_and_selects_every_pin(self):
+        installed = []
+        roots = []
+
+        class Installer:
+            def __init__(self, root):
+                self.root = Path(root)
+                roots.append(self.root)
+
+            def executable(self, spec):
+                return str(self.root / spec.content_id / spec.binary)
+
+            def ensure(self, spec, report):
+                installed.append(spec.content_id)
+                report(f"building {spec.content_id}")
+                executable = Path(self.executable(spec))
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_text("#!/bin/sh\n")
+                executable.chmod(0o755)
+                return str(executable)
+
+            def ready(self, spec):
+                executable = Path(self.executable(spec))
+                return str(executable) if executable.is_file() else None
+
+        specs = (
+            SimpleNamespace(
+                content_id="game", source_type="git", kind="game",
+                binary="game",
+            ),
+            SimpleNamespace(
+                content_id="app", source_type="archive", kind="app",
+                binary="bin/app",
+            ),
+            SimpleNamespace(
+                content_id="builtin", source_type="custom", kind="app",
+                binary="",
+            ),
+        )
+        module = ModuleType("kilix_content")
+        module.Installer = Installer
+        module.default_catalog = lambda: specs
+        with mock.patch.dict(sys.modules, {"kilix_content": module}), \
+                mock.patch("builtins.print"):
+            exec(vm._catalog_build_script(), {})
+
+        self.assertEqual(installed, ["game", "app"])
+        self.assertTrue(roots)
+        self.assertTrue(all(not root.exists() for root in roots))
 
     def test_yes_mode_generates_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):

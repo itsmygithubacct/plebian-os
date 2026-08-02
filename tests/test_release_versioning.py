@@ -218,7 +218,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertTrue((ROOT / "CHANGELOG.md").exists())
 
     def test_release_manifest_makes_default_login_explicit(self):
-        manifest = _read("releases", "0.1.6.env")
+        manifest = self.manifest
         self.assertIn("\nIMAGE_PASSWORD=plebian\n", manifest)
         self.assertIn("\nRANDOM_PASSWORD=0\n", manifest)
 
@@ -231,6 +231,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn('PLEBIAN_OS_RELEASE=', source)
         self.assertIn('IMAGE_PASSWORD=', source)
         self.assertIn('RANDOM_PASSWORD=1', source)
+        self.assertIn('PLEBIAN_OS_VERIFY_CATALOG_BUILDS=1', source)
 
 
 if __name__ == "__main__":

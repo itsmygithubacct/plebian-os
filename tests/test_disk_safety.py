@@ -1,3 +1,5 @@
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -68,6 +70,59 @@ class DiskSafetyTests(unittest.TestCase):
         self.assertNotIn('"swapon"', py)
         self.assertIn("/sys/class/block/$cur/slaves/", shell)
         self.assertIn('node / "slaves"', py)
+
+    def test_shell_swap_protection_decodes_kernel_paths_once(self):
+        encoded = r"/swap\040space\011tab\012line\134backslash"
+        decoded = "/swap space\ttab\nline\\backslash"
+        literal_encoded_escape = r"/swap\134040literal"
+        literal_decoded_escape = r"/swap\040literal"
+        with tempfile.TemporaryDirectory() as td:
+            swaps = Path(td) / "swaps"
+            swaps.write_text(
+                "Filename Type Size Used Priority\n"
+                f"{encoded} file 1024 0 -2\n"
+                f"{literal_encoded_escape} file 1024 0 -3\n"
+            )
+            harness = r'''
+                source "$1"
+                expected_one="$2"
+                expected_two="$3"
+                proc_swaps="$4"
+                _MAKE_USB_PROC_SWAPS="$proc_swaps"
+                findmnt() {
+                    local target=""
+                    while (($#)); do
+                        if [[ "$1" == --target ]]; then
+                            target="$2"
+                            break
+                        fi
+                        shift
+                    done
+                    case "$target" in
+                        "$expected_one") printf '%s\n' /dev/sdz1 ;;
+                        "$expected_two") printf '%s\n' /dev/sdy1 ;;
+                    esac
+                }
+                block_kname() {
+                    case "$1" in
+                        /dev/sdz1) printf '%s\n' sdz1 ;;
+                        /dev/sdy1) printf '%s\n' sdy1 ;;
+                    esac
+                }
+                ancestor_names() { printf '%s\n' "$1"; }
+                protected_device_names
+            '''
+            result = subprocess.run(
+                [
+                    "bash", "-c", harness, "bash",
+                    str(ROOT / "build" / "make-usb.sh"),
+                    decoded, literal_decoded_escape, str(swaps),
+                ],
+                text=True,
+                capture_output=True,
+                check=True,
+            )
+        self.assertEqual(result.stdout.splitlines(), ["sdz1", "sdy1"])
 
     def test_shell_flash_revalidates_after_unmount_and_immediately_before_dd(self):
         shell = _read("build", "make-usb.sh")

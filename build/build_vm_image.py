@@ -642,6 +642,98 @@ def wait_for_provisioning(cfg: Config, timeout_s: int) -> None:
         f"(the VM is still running; check it with `VBoxManage startvm {cfg.name} --type gui`).")
 
 # ── acceptance verification (post-provision, over SSH) ───────────────────────
+def _catalog_build_script() -> str:
+    """Guest-side clean-build program used by release acceptance."""
+    return "\n".join((
+        "import os",
+        "import tempfile",
+        "from pathlib import Path",
+        "from kilix_content import Installer, default_catalog",
+        "installable = tuple(spec for spec in default_catalog()",
+        "                    if spec.source_type in ('git', 'archive'))",
+        "if not installable:",
+        "    raise RuntimeError('catalog contains no pinned installable content')",
+        "with tempfile.TemporaryDirectory(prefix='plebian-content-acceptance-') as root:",
+        "    for spec in installable:",
+        "        kind = 'apps' if spec.kind == 'app' else 'games'",
+        "        destination = Path(root) / kind",
+        "        print(f'[content] {spec.content_id}', flush=True)",
+        "        installer = Installer(str(destination))",
+        "        executable = Path(installer.ensure(",
+        "            spec, lambda message: print(message, flush=True)))",
+        "        expected = Path(installer.executable(spec))",
+        "        if executable != expected or installer.ready(spec) != str(executable):",
+        "            raise RuntimeError(f'{spec.content_id}: installed executable is not selected')",
+        "        if not executable.is_file() or not os.access(executable, os.X_OK):",
+        "            raise RuntimeError(f'{spec.content_id}: final executable is not runnable')",
+        "print(f'[content] verified {len(installable)} pinned clean builds', flush=True)",
+    ))
+
+
+def verify_catalog_builds(cfg: Config, askpass: str) -> None:
+    """Clean-build every installable pinned catalog entry inside the guest."""
+    script = _catalog_build_script()
+    command = (
+        'set -eu; . /etc/pleb/session.env; '
+        's="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}"; '
+        'd="${KILIX_DIR:-$s/kilix}"; '
+        'export PYTHONPATH="$d/third_party/kilix-content/src"; '
+        f'timeout 1750 python3 -c {shlex.quote(script)}'
+    )
+    info("clean-building every pinned catalog entry …")
+    result = ssh(cfg, command, askpass, timeout=1800)
+    if result is None:
+        die("catalog clean-build verification timed out after 30 minutes")
+    if result.returncode != 0:
+        detail = "\n".join(
+            output.strip()
+            for output in (result.stdout, result.stderr)
+            if output.strip()
+        )[-6000:]
+        die("catalog clean-build verification FAILED:\n" + detail)
+    info("  [ok] pinned catalog clean builds")
+
+
+def _voice_acceptance_command(expected_policy: str) -> str:
+    """Return a guest check for the declared read-aloud/dictation closure."""
+    if expected_policy not in ("0", "1"):
+        raise ValueError("voice policy must be 0 or 1")
+    command = (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        'g="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"; '
+        'k="${KILIX_STORAGE_HOME:-$g/kilix}"; '
+        's="${KILIX_STATE_DIRECTORY:-$k/state}"; '
+        'd="${KILIX_DATA_HOME:-$k/data}"; '
+        'r="$s/kilix-voice-install.refs"; '
+        f'test "${{PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}}" = {expected_policy} && '
+        'test -x "$HOME/.local/bin/kilix-tts" && '
+        'test -f "$r" && test ! -L "$r" && '
+    )
+    if expected_policy == "0":
+        return command + (
+            "grep -Fqx 'libvosk=skipped' \"$r\" && "
+            "grep -Fqx 'model-small-en-us=skipped' \"$r\""
+        )
+    return command + (
+        'test -f "$d/voice/lib/current/libvosk.so" && '
+        'test -d "$d/voice/models/small-en-us" && '
+        "grep -Eq '^libvosk=[A-Za-z0-9._-]+\\+[0-9a-f]{64}$' \"$r\" && "
+        "grep -Eq '^model-small-en-us=[0-9a-f]{64}$' \"$r\""
+    )
+
+
+def _transcript_acceptance_command() -> str:
+    """Require the disk-safe fresh-install transcript budgets."""
+    return (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        'g="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"; '
+        'f="${GPU_TERMINAL_SETTINGS_FILE:-$g/settings.conf}"; '
+        'test -f "$f" && test ! -L "$f" && '
+        "grep -Fqx 'KILIX_TRANSCRIPT_MAX_TOTAL=5G' \"$f\" && "
+        "grep -Fqx 'KILIX_TRANSCRIPT_ARCHIVE_MAX_TOTAL=1G' \"$f\""
+    )
+
+
 def verify_provisioning(cfg: Config, askpass: str) -> None:
     """Prove the real installer→firstboot→session boundary: check the markers a
     correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
@@ -712,6 +804,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     expected_kiosk = "1" if cfg.kiosk else "0"
     expected_provider = os.environ.get("KILIX_DESKTOP_PROVIDER", "auto")
     expected_flavor = os.environ.get("KILIX_DESKTOP_FLAVOR", "95") or "95"
+    expected_voice_policy = (
+        "1" if env_bool("PLEBIAN_OS_INSTALL_VOICE_MODEL", False) else "0")
     session_contract = (
         '. /etc/pleb/session.env 2>/dev/null; '
         f'test "${{PLEB_DESKTOP:-0}}" = {shlex.quote(expected_desktop)} && '
@@ -773,6 +867,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("session selection",    session_contract),
         ("session exports",      session_exports),
         ("session provenance",   build_session_contract),
+        ("voice closure policy", _voice_acceptance_command(expected_voice_policy)),
+        ("transcript disk budget", _transcript_acceptance_command()),
         ("visible kilix chrome", visible_kilix_chrome),
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
         ("update helper",        "test -x /usr/local/bin/plebian-os-update"),
@@ -831,6 +927,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
             failed.append(name)
     if failed:
         die("acceptance verification FAILED: " + ", ".join(failed))
+    if env_bool("PLEBIAN_OS_VERIFY_CATALOG_BUILDS", False):
+        verify_catalog_builds(cfg, askpass)
     info(c("1;32", "acceptance verification passed."))
 
 # ── summary ──────────────────────────────────────────────────────────────────

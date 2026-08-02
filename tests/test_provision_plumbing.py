@@ -313,6 +313,17 @@ class ProvisionPlumbingTests(unittest.TestCase):
             '"PLEB_INSTALL_VOICE_MODEL=$PLEBIAN_OS_INSTALL_VOICE_MODEL"',
             update,
         )
+        self.assertEqual(
+            remaster.count('${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}'), 2)
+        self.assertNotIn('${PLEBIAN_OS_INSTALL_VOICE_MODEL:-1}', remaster)
+        self.assertIn(
+            'INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"',
+            provision,
+        )
+        self.assertIn(
+            'PLEBIAN_OS_INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"',
+            update,
+        )
 
         for path in (
             "/usr/local/bin/kilix-tts",

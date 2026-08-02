@@ -32,6 +32,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/lib.sh"
 NETINST="" ISO="" DEVICE="" ASSUME_YES=0 DRY_RUN=0 FORCE=0 UNATTENDED_DISK=0 ISO_EXPLICIT=0 REUSE_ISO=0
+_MAKE_USB_PROC_SWAPS=/proc/swaps
 
 usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; }
 log()  { printf '\033[1;36m[make-usb]\033[0m %s\n' "$*"; }
@@ -64,6 +65,24 @@ ancestor_names() {
     )
 }
 
+decode_proc_swaps_path() {
+    # Linux seq-file output escapes tab, newline, space, and backslash with
+    # octal sequences. Decode one input pass into REPLY so a literal "\040"
+    # filename fragment (rendered as "\134040") is not decoded a second time.
+    local encoded="${1-}" decoded="" chunk i
+    for ((i = 0; i < ${#encoded}; i++)); do
+        chunk="${encoded:i:4}"
+        case "$chunk" in
+            '\011') decoded+=$'\t'; i=$((i + 3)) ;;
+            '\012') decoded+=$'\n'; i=$((i + 3)) ;;
+            '\040') decoded+=' '; i=$((i + 3)) ;;
+            '\134') decoded+=$'\\'; i=$((i + 3)) ;;
+            *) decoded+="${encoded:i:1}" ;;
+        esac
+    done
+    REPLY="$decoded"
+}
+
 protected_device_names() {
     local target src kname
     for target in / /boot /boot/efi /home /var /usr /srv; do
@@ -81,7 +100,8 @@ protected_device_names() {
     # which regular users don't have on PATH on Debian, and swap disks must stay
     # in the protected set (a silent skip is as unsafe as a crash).
     while IFS= read -r src; do
-        src="${src//\\040/ }"
+        decode_proc_swaps_path "$src"
+        src="$REPLY"
         case "$src" in
             /dev/*) ;;
             *) src="$(findmnt -no SOURCE --target "$src" 2>/dev/null || true)"; src="${src%%[*}" ;;
@@ -89,7 +109,7 @@ protected_device_names() {
         case "$src" in /dev/*) ;; *) continue ;; esac
         kname="$(block_kname "$src" 2>/dev/null || true)"
         [ -n "$kname" ] && ancestor_names "$kname"
-    done < <(awk 'NR>1 {print $1}' /proc/swaps 2>/dev/null || true)
+    done < <(awk 'NR>1 {print $1}' "$_MAKE_USB_PROC_SWAPS" 2>/dev/null || true)
 }
 
 mounted_targets_for_device() {
@@ -101,6 +121,12 @@ mounted_targets_for_device() {
         done < <(findmnt -rn -S "/dev/$name" -o TARGET 2>/dev/null || true)
     done < <(lsblk -rno NAME "$1" 2>/dev/null || true)
 }
+
+# Keep the safety helpers sourceable for behavioral tests without starting an
+# ISO build or touching a device.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
 
 # ── list removable block devices (candidates for a USB stick) ────────────────
 list_devices() {

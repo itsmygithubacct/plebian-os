@@ -23,7 +23,7 @@ build provenance. Release artifacts with SSH enabled remain forbidden.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The last published coordinated release is **0.1.2**. The next one is **0.1.6**;
+The last published coordinated release is **0.1.2**. The next one is **0.1.7**;
 its closure is finalized only after the four final component commits are known.
 
 ### Tags are created only by this procedure
@@ -33,9 +33,9 @@ published stack release X.Y.Z". Component repositories may bump their own
 `VERSION` on `main` whenever their contract level changes, but **nobody pushes a
 `vX.Y.Z` tag outside step 7 below**, and the four tags are pushed together.
 
-### Why 0.1.3, 0.1.4, and 0.1.5 do not exist as releases
+### Why 0.1.3 through 0.1.6 do not exist as releases
 
-Both numbers were consumed by component `VERSION` bumps that marked Kilix SDK
+The first two numbers were consumed by component `VERSION` bumps that marked Kilix SDK
 levels 1.3 and 1.4 (and Kilix-95's adoption of them), without a closure, an
 acceptance run, or an image. `0.1.3` was never tagged in any repository. `0.1.4`
 was additionally pushed as a **Kilix-only** `v0.1.4` tag, before this rule
@@ -47,17 +47,21 @@ work the other three repositories depend on, or re-point a published tag.
 in full — all four `VERSION` files mirrored, release notes written, and a
 closure whose every upstream input was verified against its official source —
 and then never built, accepted, or tagged while the components kept moving.
-Preparation is not a release. Its notes and its verified pins are folded into
-0.1.6 rather than shipped under a number no artifact will ever carry, and
-`releases/0.1.5.env` was renamed rather than kept: a closure file present for
-a version with no image claims a reproducibility guarantee that does not
-exist.
+Preparation is not a release. Its notes and its verified pins were folded into
+the 0.1.6 candidate rather than shipped under a number no artifact would carry,
+and `releases/0.1.5.env` was renamed rather than kept: a closure file present
+for a version with no image claims a reproducibility guarantee that does not
+exist. 0.1.6 itself reached local candidate tags and an artifact, but neither
+was published. Further flash-safety and acceptance fixes changed the intended
+source before publication, so that candidate was retired and its work moved to
+0.1.7 instead of moving or publishing a stale tag.
 
-The next coordinated release is 0.1.6, and no closure is back-filled for
-0.1.3, 0.1.4, or 0.1.5: `releases/<x.y.z>.env` is the reproducible input
-manifest for an image that was actually built and accepted, not a changelog.
+The next coordinated release is 0.1.7. The candidate 0.1.6 closure is retired
+when the final 0.1.7 closure is assembled; no closure is back-filled for 0.1.3,
+0.1.4, or 0.1.5. `releases/<x.y.z>.env` is the reproducible input manifest for
+an image that was actually built and accepted, not a changelog.
 
-The lesson each of the three teaches is the same one: a version number is
+The lesson each of the four teaches is the same one: a version number is
 spent the moment it appears in a `VERSION` file or a heading, whether or not
 anything ships. Bump component `VERSION` files toward the release you are
 actually cutting.

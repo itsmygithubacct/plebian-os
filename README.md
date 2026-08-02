@@ -164,7 +164,12 @@ by a byte-count marker so a pixel desktop cannot flood the log. Because the
 broker owns the PTY, a detached, recovered, or crashed pane is still recorded,
 including whatever it printed on its way out. Only output is captured; typed
 input appears solely where the pane echoes it, so hidden password prompts are
-not recorded.
+not recorded. A pane's log stays plain only while that pane is live. Dead-pane
+logs are compressed with `zstd -3` into a 5 GiB recent tier; the oldest are
+recompressed losslessly with `zstd -9` into a separate 1 GiB archive tier, and
+the oldest archives are pruned once that tier is full. These defaults leave
+working headroom on the release-tested 20 GiB disk and can be changed in the
+shared settings file or either settings UI.
 
 ```sh
 kilix transcript                       # list recorded panes, newest first

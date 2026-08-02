@@ -74,6 +74,44 @@ class UsbBuilderTests(unittest.TestCase):
             {"dm-0", "md0", "sda2", "sdb2", "sda", "sdb"},
         )
 
+    def test_root_disks_decodes_every_proc_swaps_escape_once(self):
+        encoded = r"/swap\040space\011tab\012line\134backslash"
+        decoded = "/swap space\ttab\nline\\backslash"
+        literal_encoded_escape = r"/swap\134040literal"
+        literal_decoded_escape = r"/swap\040literal"
+        swaps = (
+            "Filename Type Size Used Priority\n"
+            f"{encoded} file 1024 0 -2\n"
+            f"{literal_encoded_escape} file 1024 0 -3\n"
+        )
+        swap_backings = {
+            decoded: "/dev/sdz1",
+            literal_decoded_escape: "/dev/sdy1",
+        }
+        seen_targets = []
+
+        def run(argv, **_kwargs):
+            target = argv[-1]
+            if target in swap_backings:
+                seen_targets.append(target)
+                return SimpleNamespace(
+                    returncode=0, stdout=swap_backings[target] + "\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(usb.Path, "read_text", return_value=swaps), \
+                mock.patch.object(usb, "_parent_map", return_value={}), \
+                mock.patch.object(
+                    usb, "_block_kname", side_effect=lambda path: Path(path).name
+                ), \
+                mock.patch.object(
+                    usb, "_ancestors", side_effect=lambda name, _parents: {name}
+                ), \
+                mock.patch.object(usb.subprocess, "run", side_effect=run):
+            protected = usb._root_disks()
+
+        self.assertEqual(seen_targets, [decoded, literal_decoded_escape])
+        self.assertEqual(protected, {"sdz1", "sdy1"})
+
     def test_yes_mode_generates_password(self):
         with mock.patch.object(usb.vm, "generated_password", return_value="random-pass"):
             built = usb.gather_config(args(password=None))

@@ -18,6 +18,7 @@ RAM="${PLEBIAN_OS_ACCEPTANCE_RAM:-4096}"
 CPUS="${PLEBIAN_OS_ACCEPTANCE_CPUS:-2}"
 DISK="${PLEBIAN_OS_ACCEPTANCE_DISK_GB:-20}"
 OUT="${PLEBIAN_OS_ACCEPTANCE_ISO:-$PLEBIAN_OS_ARTIFACTS/plebian-os-acceptance.iso}"
+export PLEBIAN_OS_VERIFY_CATALOG_BUILDS=1
 
 # Acceptance needs SSH, autoboot, and unattended partitioning, which a
 # publishable release image correctly forbids. Load the coordinated release

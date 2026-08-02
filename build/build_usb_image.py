@@ -239,6 +239,29 @@ def _ancestors(kname: str,
         todo.extend(lower - out)
     return out
 
+
+_PROC_SWAPS_ESCAPES = {
+    "011": "\t",
+    "012": "\n",
+    "040": " ",
+    "134": "\\",
+}
+
+
+def _decode_proc_swaps_path(encoded: str) -> str:
+    """Decode the characters escaped by Linux when it renders /proc/swaps.
+
+    Linux's seq-file output octal-escapes tab, newline, space, and backslash.
+    Decode them in one regex pass: sequential replacements can turn a literal
+    ``\\040`` filename fragment (rendered as ``\\134040``) into a space.
+    """
+    return re.sub(
+        r"\\(011|012|040|134)",
+        lambda match: _PROC_SWAPS_ESCAPES[match.group(1)],
+        encoded,
+    )
+
+
 def _root_disks() -> set[str]:
     """Block-device kernel names we must never flash.
 
@@ -262,15 +285,16 @@ def _root_disks() -> set[str]:
     # which regular users don't have on PATH on Debian, and swap disks must stay
     # in the protected set (neither a crash nor a silent skip is safe here).
     try:
-        swap_lines = Path("/proc/swaps").read_text().splitlines()[1:]
+        swap_lines = Path("/proc/swaps").read_text(
+            errors="surrogateescape",
+        ).splitlines()[1:]
     except OSError:
         swap_lines = []
     for line in swap_lines:
         fields = line.split()
         if not fields:
             continue
-        # /proc/swaps octal-escapes whitespace in paths ('\040' for a space)
-        swap_source = fields[0].replace("\\040", " ").replace("\\011", "\t")
+        swap_source = _decode_proc_swaps_path(fields[0])
         if swap_source.startswith("/dev/"):
             sources.append(swap_source)
         elif swap_source:
