@@ -60,7 +60,7 @@ prepare_root_session_home() {
 DEP_GROUPS=(
     "X + display manager + window manager|xserver-xorg xinit lightdm openbox x11-xserver-utils x11-utils xterm"
     "base system glue|sudo network-manager"
-    "repo clone + engine fetch|git curl tar ca-certificates"
+    "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
@@ -71,8 +71,9 @@ DEP_GROUPS=(
     # this image ships main/contrib/non-free-firmware only, so they are not
     # listed: one unresolvable name fails the whole group, which would take
     # espeak-ng down with it and leave the image with no speech at all.
-    # Dictation adds no package here — its library and model are pinned
-    # downloads owned by Kilix's installer.
+    # Dictation's library and model are pinned downloads owned by Kilix's
+    # installer; unzip is listed in the fetch group above to extract both
+    # verified archives.
     "voice (tts/stt)|espeak-ng mbrola"
     "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
     "session-log archiving|zstd"

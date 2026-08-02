@@ -51,8 +51,10 @@ published release.
   `f05b64a7b2bc25fa9a7e2c3ae1e0b848f04a23f6` (version 0.1.2), the official
   Vosk 0.3.45
   x86_64 wheel from PyPI by URL and SHA-256, and Vosk's small US-English 0.15
-  acoustic model by URL and SHA-256. Firstboot executes all three installed
-  tools and requires the exact source/library/model stamp, runtime library,
+  acoustic model by URL and SHA-256. The dependency manifest installs `unzip`
+  before the pinned wheel and model archives are extracted. Firstboot executes
+  all three installed tools and requires the exact source/library/model stamp,
+  runtime library,
   model, provenance, license material, and `dictation=ready` diagnostic; an
   enabled release can no longer silently fall back to read-aloud-only. Both
   firstboot and VM acceptance also synthesize a fixed phrase with real espeak

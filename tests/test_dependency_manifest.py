@@ -17,6 +17,12 @@ SHELL_LESSON_PREREQ_PACKAGES = {
     "util-linux",
 }
 
+VOICE_ARCHIVE_PREREQUISITE_PACKAGES = {
+    "coreutils",  # sha256sum
+    "curl",
+    "unzip",
+}
+
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
@@ -47,6 +53,16 @@ class DependencyManifestTests(unittest.TestCase):
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
+
+    def test_voice_archive_prerequisites_are_installed_on_both_paths(self):
+        self.assertLessEqual(
+            VOICE_ARCHIVE_PREREQUISITE_PACKAGES,
+            install_deps_packages(),
+        )
+        self.assertLessEqual(
+            VOICE_ARCHIVE_PREREQUISITE_PACKAGES,
+            preseed_packages(),
+        )
 
     def test_kilix_fork_system_build_dependencies_are_installed(self):
         required = {
