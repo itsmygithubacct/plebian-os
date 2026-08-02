@@ -806,6 +806,17 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     expected_flavor = os.environ.get("KILIX_DESKTOP_FLAVOR", "95") or "95"
     expected_voice_policy = (
         "1" if env_bool("PLEBIAN_OS_INSTALL_VOICE_MODEL", False) else "0")
+    expected_version = os.environ.get("PLEBIAN_OS_VERSION", "")
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", expected_version):
+        provision_version = (
+            'test "$(/usr/local/sbin/plebian-os-provision --version)" = '
+            + shlex.quote("plebian-os-provision " + expected_version)
+        )
+    else:
+        provision_version = (
+            "/usr/local/sbin/plebian-os-provision --version | "
+            "grep -Eq '^plebian-os-provision [0-9]+\\.[0-9]+\\.[0-9]+$'"
+        )
     session_contract = (
         '. /etc/pleb/session.env 2>/dev/null; '
         f'test "${{PLEB_DESKTOP:-0}}" = {shlex.quote(expected_desktop)} && '
@@ -856,6 +867,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
+        ("provision version",    provision_version),
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
         ("source provenance",    "for k in PLEBIAN_OS_COMMIT PLEB_COMMIT KILIX_COMMIT KILIX95_COMMIT; do grep -Eq \"^$k=[0-9a-f]{40}$\" /var/lib/plebian-os/versions.env || exit 1; done"),
         ("coordinated checkouts", coordinated_checkouts),

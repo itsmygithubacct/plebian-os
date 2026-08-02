@@ -104,6 +104,10 @@ four repositories; see [RELEASING.md](RELEASING.md).
 
 ### Fixed / hardened
 
+- Install a root-owned `0644` `/usr/local/share/plebian-os/VERSION` marker
+  before first boot and reassert it atomically during provisioning. The
+  installed `plebian-os-provision --version` now reports the exact release
+  instead of `unknown`; acceptance rejects any future image that regresses.
 - Make release acceptance clean-build every pinned optional game and app in a
   temporary guest directory, catching broken default targets and missing final
   executables before an image can pass acceptance. Reject a vacuous catalog and

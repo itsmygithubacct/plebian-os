@@ -78,6 +78,11 @@ class VmBuilderEnvTests(unittest.TestCase):
         for ref in ("PLEBIAN_OS_REF", "PLEB_REF", "KILIX_REF", "KILIX95_REF"):
             self.assertIn(ref, source[source.index("def verify_provisioning"):])
         self.assertIn('git -C "${dir_var}" rev-parse HEAD', source)
+        self.assertIn('"provision version"', source)
+        self.assertIn(
+            "/usr/local/sbin/plebian-os-provision --version",
+            source[source.index("def verify_provisioning"):],
+        )
         self.assertIn('"session exports"', source)
         self.assertIn('KILIX95_REF=', source[source.index("def verify_provisioning"):])
         for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR", "KILIX95_DIR"):

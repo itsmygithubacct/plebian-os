@@ -114,6 +114,7 @@ DRY_RUN=0
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 DESKTOP_WALLPAPER_MAX_BYTES=$((32 * 1024 * 1024))
+VERSION_MARKER_DST=/usr/local/share/plebian-os/VERSION
 LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
 LIGHTDM_GREETER_CONFIG_SHA256=985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560
 INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
@@ -134,6 +135,17 @@ if [ -z "$PLEBIAN_OS_VERSION" ]; then
     for _vf in "$SELF_DIR/../VERSION" "$SELF_DIR/VERSION" /usr/local/share/plebian-os/VERSION; do
         [ -r "$_vf" ] && { PLEBIAN_OS_VERSION="$(cat "$_vf" 2>/dev/null)"; break; }
     done
+fi
+# A failed or not-yet-completed firstboot can still leave the immutable ISO
+# provenance available before the installed VERSION marker exists. Read only
+# the version field as inert data; never source the provenance file.
+if [ -z "$PLEBIAN_OS_VERSION" ] && [ -r /etc/plebian-os/build-info.env ]; then
+    _build_info_version="$(
+        sed -n 's/^PLEBIAN_OS_VERSION=//p' /etc/plebian-os/build-info.env 2>/dev/null
+    )"
+    if [[ "$_build_info_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        PLEBIAN_OS_VERSION="$_build_info_version"
+    fi
 fi
 : "${PLEBIAN_OS_VERSION:=unknown}"
 
@@ -440,6 +452,7 @@ KILIX_PROVISION_LOCK_FD=""
 KILIX_PROVISION_LOCK_PATH=""
 DESKTOP_WALLPAPER_TMP=""
 DESKTOP_WALLPAPER_CREATED_DIRS=()
+VERSION_MARKER_TMP=""
 ARTWORK_NOTICE_TMP=""
 ARTWORK_NOTICE_CREATED_DIRS=()
 SUDOERS=/etc/sudoers.d/plebian-os-provision
@@ -449,6 +462,8 @@ cleanup() {
         rm -f "$SUDOERS"
         [ -z "${DESKTOP_WALLPAPER_TMP:-}" ] \
             || rm -f -- "$DESKTOP_WALLPAPER_TMP"
+        [ -z "${VERSION_MARKER_TMP:-}" ] \
+            || rm -f -- "$VERSION_MARKER_TMP"
         [ -z "${ARTWORK_NOTICE_TMP:-}" ] \
             || rm -f -- "$ARTWORK_NOTICE_TMP"
         local i
@@ -924,6 +939,60 @@ install_desktop_wallpaper() {
             || die "could not enforce wallpaper permissions"
     fi
     validate_desktop_wallpaper "$DESKTOP_WALLPAPER_DST"
+}
+
+install_version_marker() {
+    local dest_dir tmp path owner mode
+
+    if ! [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        [ "$PLEBIAN_OS_RELEASE_MODE" != 1 ] \
+            || die "release provisioning requires a semantic Plebian-OS version marker"
+        warn "not installing a VERSION marker for non-semantic version '$PLEBIAN_OS_VERSION'"
+        return 0
+    fi
+
+    dest_dir="$(dirname "$VERSION_MARKER_DST")"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install root:root 0644 Plebian-OS $PLEBIAN_OS_VERSION marker -> $VERSION_MARKER_DST (atomic replace)"
+        return 0
+    fi
+
+    # install_desktop_wallpaper establishes this distribution-owned directory
+    # immediately before us. Revalidate its complete fixed ancestry before
+    # writing a value later trusted by the public --version command.
+    for path in / /usr /usr/local /usr/local/share "$dest_dir"; do
+        [ -d "$path" ] && [ ! -L "$path" ] \
+            || die "VERSION marker destination ancestor is unsafe: $path"
+        owner="$(stat -c '%u' "$path" 2>/dev/null)" \
+            || die "could not inspect VERSION marker destination ancestor: $path"
+        mode="$(stat -c '%a' "$path" 2>/dev/null)" \
+            || die "could not inspect VERSION marker destination mode: $path"
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) \
+            || die "VERSION marker destination is not safely root-owned: $path"
+    done
+    [ ! -L "$VERSION_MARKER_DST" ] \
+        || die "refusing symlink VERSION marker destination: $VERSION_MARKER_DST"
+    if [ -e "$VERSION_MARKER_DST" ] && [ ! -f "$VERSION_MARKER_DST" ]; then
+        die "VERSION marker destination is not a regular file: $VERSION_MARKER_DST"
+    fi
+
+    tmp="$(mktemp "$dest_dir/.VERSION.XXXXXX")" \
+        || die "could not stage the Plebian-OS VERSION marker"
+    VERSION_MARKER_TMP="$tmp"
+    printf '%s\n' "$PLEBIAN_OS_VERSION" >"$tmp" \
+        || die "could not write the Plebian-OS VERSION marker"
+    chown root:root "$tmp" && chmod 0644 "$tmp" \
+        || die "could not secure the Plebian-OS VERSION marker"
+    if ! mv -fT -- "$tmp" "$VERSION_MARKER_DST"; then
+        rm -f -- "$tmp"
+        VERSION_MARKER_TMP=""
+        die "could not atomically install the Plebian-OS VERSION marker"
+    fi
+    VERSION_MARKER_TMP=""
+    [ -f "$VERSION_MARKER_DST" ] && [ ! -L "$VERSION_MARKER_DST" ] \
+        && [ "$(cat "$VERSION_MARKER_DST")" = "$PLEBIAN_OS_VERSION" ] \
+        && [ "$(stat -c '%u:%g:%a' "$VERSION_MARKER_DST")" = 0:0:644 ] \
+        || die "installed Plebian-OS VERSION marker failed validation"
 }
 
 validate_artwork_notice() {
@@ -2316,6 +2385,7 @@ fi
 install_no_beep_defaults
 install_quiet_console_defaults
 install_desktop_wallpaper
+install_version_marker
 install_lightdm_greeter_branding
 install_artwork_notices
 
