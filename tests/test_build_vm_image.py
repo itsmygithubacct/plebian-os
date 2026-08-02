@@ -83,6 +83,10 @@ class VmBuilderEnvTests(unittest.TestCase):
             "/usr/local/sbin/plebian-os-provision --version",
             source[source.index("def verify_provisioning"):],
         )
+        self.assertIn('"component versions"', source)
+        self.assertIn("/usr/local/bin/pleb --version", source)
+        self.assertIn('"$KILIX_DIR/kilix" --kilix-version', source)
+        self.assertIn('python3 "$KILIX95_DIR/main.py" --version', source)
         self.assertIn('"session exports"', source)
         self.assertIn('KILIX95_REF=', source[source.index("def verify_provisioning"):])
         for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR", "KILIX95_DIR"):

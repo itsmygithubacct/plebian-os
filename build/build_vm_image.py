@@ -807,16 +807,41 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     expected_voice_policy = (
         "1" if env_bool("PLEBIAN_OS_INSTALL_VOICE_MODEL", False) else "0")
     expected_version = os.environ.get("PLEBIAN_OS_VERSION", "")
+    expected_kilix95_ref = os.environ.get("KILIX95_REF", "")
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", expected_version):
         provision_version = (
             'test "$(/usr/local/sbin/plebian-os-provision --version)" = '
             + shlex.quote("plebian-os-provision " + expected_version)
         )
+        component_versions = (
+            '. /etc/pleb/session.env 2>/dev/null; '
+            'test "$(/usr/local/bin/pleb --version)" = '
+            + shlex.quote("pleb " + expected_version)
+            + ' && test "$("$KILIX_DIR/kilix" --kilix-version)" = '
+            + shlex.quote(expected_version)
+        )
+        if expected_kilix95_ref:
+            component_versions += (
+                ' && test "$(python3 "$KILIX95_DIR/main.py" --version)" = '
+                + shlex.quote("kilix-95 " + expected_version)
+            )
     else:
         provision_version = (
             "/usr/local/sbin/plebian-os-provision --version | "
             "grep -Eq '^plebian-os-provision [0-9]+\\.[0-9]+\\.[0-9]+$'"
         )
+        component_versions = (
+            '. /etc/pleb/session.env 2>/dev/null; '
+            "/usr/local/bin/pleb --version | "
+            "grep -Eq '^pleb [0-9]+\\.[0-9]+\\.[0-9]+$' && "
+            '"$KILIX_DIR/kilix" --kilix-version | '
+            "grep -Eq '^[0-9]+\\.[0-9]+\\.[0-9]+$'"
+        )
+        if expected_kilix95_ref:
+            component_versions += (
+                ' && python3 "$KILIX95_DIR/main.py" --version | '
+                "grep -Eq '^kilix-95 [0-9]+\\.[0-9]+\\.[0-9]+$'"
+            )
     session_contract = (
         '. /etc/pleb/session.env 2>/dev/null; '
         f'test "${{PLEB_DESKTOP:-0}}" = {shlex.quote(expected_desktop)} && '
@@ -824,7 +849,6 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         f'test "${{KILIX_DESKTOP_PROVIDER:-auto}}" = {shlex.quote(expected_provider)} && '
         f'test "${{KILIX_DESKTOP_FLAVOR:-95}}" = {shlex.quote(expected_flavor)}'
     )
-    expected_kilix95_ref = os.environ.get("KILIX95_REF", "")
     session_exports = (
         '. /etc/pleb/session.env 2>/dev/null; '
         f'env | grep -Fqx {shlex.quote("KILIX_DESKTOP_PROVIDER=" + expected_provider)} && '
@@ -868,6 +892,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
         ("provision version",    provision_version),
+        ("component versions",   component_versions),
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
         ("source provenance",    "for k in PLEBIAN_OS_COMMIT PLEB_COMMIT KILIX_COMMIT KILIX95_COMMIT; do grep -Eq \"^$k=[0-9a-f]{40}$\" /var/lib/plebian-os/versions.env || exit 1; done"),
         ("coordinated checkouts", coordinated_checkouts),

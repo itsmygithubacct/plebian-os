@@ -108,6 +108,10 @@ four repositories; see [RELEASING.md](RELEASING.md).
   before first boot and reassert it atomically during provisioning. The
   installed `plebian-os-provision --version` now reports the exact release
   instead of `unknown`; acceptance rejects any future image that regresses.
+- Keep Kilix-95's `--version` and `--help` paths independent of its native
+  runtime library, while retaining the fail-closed library gate for desktop
+  launches. Acceptance now runs all four documented component version commands
+  on the freshly installed system and requires the exact coordinated version.
 - Make release acceptance clean-build every pinned optional game and app in a
   temporary guest directory, catching broken default targets and missing final
   executables before an image can pass acceptance. Reject a vacuous catalog and
