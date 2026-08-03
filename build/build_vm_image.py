@@ -33,6 +33,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 PRESEED_TEMPLATE = REPO / "preseed" / "preseed.cfg"
 REMASTER = REPO / "build" / "remaster-iso.sh"
+DEFAULT_PROVISION_TIMEOUT_MINUTES = 120
 
 
 def storage_dir(kind: str) -> Path:
@@ -1139,7 +1140,10 @@ def main() -> None:
                     help="skip the post-provision acceptance checks")
     ap.add_argument("--replace", action="store_true",
                     help="delete and recreate an existing VM with the same name")
-    ap.add_argument("--timeout", type=int, default=90, help="minutes to wait for provisioning")
+    ap.add_argument(
+        "--timeout", type=int, default=DEFAULT_PROVISION_TIMEOUT_MINUTES,
+        help=("combined minutes to wait for Debian installation and firstboot "
+              f"(default: {DEFAULT_PROVISION_TIMEOUT_MINUTES})"))
     ap.add_argument("-y", "--yes", action="store_true", help="accept defaults, no prompts")
     ap.add_argument("--dry-run", action="store_true", help="show the plan; build nothing")
     args = ap.parse_args()

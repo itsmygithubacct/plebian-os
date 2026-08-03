@@ -107,6 +107,10 @@ published release.
 
 ### Fixed / hardened
 
+- Raise the VM builder's combined Debian-install and firstboot wait from 90 to
+  120 minutes. Real pinned acceptance showed that snapshot browser/development
+  packages can consume most of the old budget before firstboot begins; explicit
+  `--timeout` overrides remain available for slower hosts and mirrors.
 - Install a root-owned `0644` `/usr/local/share/plebian-os/VERSION` marker
   before first boot and reassert it atomically during provisioning. The
   installed `plebian-os-provision --version` now reports the exact release

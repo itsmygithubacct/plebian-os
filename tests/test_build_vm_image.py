@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -35,6 +36,21 @@ def cfg(**overrides):
 
 
 class VmBuilderEnvTests(unittest.TestCase):
+    def test_default_wait_budget_covers_install_and_firstboot(self):
+        self.assertEqual(vm.DEFAULT_PROVISION_TIMEOUT_MINUTES, 120)
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "build" / "build_vm_image.py"),
+             "--help"],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn(
+            "combined minutes to wait for Debian installation",
+            result.stdout,
+        )
+        self.assertIn("firstboot (default: 120)", result.stdout)
+
     def test_preseed_has_identity_but_no_second_runtime_env_writer(self):
         with mock.patch.object(vm, "crypt_password", return_value=("$6$hash", True)):
             text = vm.generate_preseed(cfg()).read_text()

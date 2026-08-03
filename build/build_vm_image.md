@@ -43,8 +43,11 @@ build/build_vm_image.py --yes      # accept every default, no prompts
 build/build_vm_image.py --dry-run  # print the plan; build nothing and write no preseed
 ```
 
-A full run takes roughly **30–60 minutes** (unattended Debian install + apt +
-the GitHub clones + the Kilix fork build). It streams progress the whole time.
+A full run commonly takes roughly **45–100 minutes** (unattended Debian
+install + apt, the GitHub clones, voice assets, and the Kilix fork build).
+Snapshot-pinned browser and development packages can keep the Debian installer
+busy for most of that time. The builder streams progress throughout and uses a
+120-minute combined install + firstboot ceiling by default.
 
 ## What it asks
 
@@ -95,7 +98,7 @@ acceptance wrapper automatically opts into a random password.
 --replace              explicitly allow deleting an existing same-name VM
 --gui                  start the VM with a window instead of headless
 --no-wait              create + start the VM, but don't block on provisioning
---timeout MIN          how long to wait for provisioning (default 90)
+--timeout MIN          combined install + firstboot wait (default 120)
 -y, --yes              accept defaults / skip confirmations
 --dry-run              show the plan; build nothing
 -h, --help             usage

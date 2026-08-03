@@ -188,6 +188,8 @@ or passing fresh-install acceptance does not satisfy this gate.
 6. Run the operator acceptance install (`build/acceptance-vm.sh --replace`). It
    creates a clearly non-publishable SSH/autoboot derivative while loading the
    exact release-manifest source, media, snapshot, toolchain, and provider pins.
+   The wrapper inherits the builder's 120-minute combined Debian-install and
+   firstboot ceiling; pass a larger `--timeout` on a slower host or mirror.
    Verify firstboot, provider, update/status, provenance, kiosk-off/on, and
    restart paths. Also boot the strict release artifact on both BIOS and UEFI
    firmware before publication. Check the versioned Plebian-OS titles in the
