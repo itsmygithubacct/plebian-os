@@ -734,6 +734,7 @@ def _voice_acceptance_command(expected_policy: str) -> str:
     if expected_policy not in ("0", "1"):
         raise ValueError("voice policy must be 0 or 1")
     functional_smoke = (
+        'KILIX_DATA_HOME="$d" '
         'PYTHONPATH="$d/voice/runtime/current/lib/kilix-voice" '
         f'timeout 180 python3 -c {shlex.quote(_voice_functional_smoke_script())}'
     )

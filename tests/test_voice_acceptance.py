@@ -67,6 +67,7 @@ class VoiceAcceptanceTests(unittest.TestCase):
         self.assertIn("start_utterance", command)
         self.assertIn("end_utterance", command)
         self.assertIn("recognized", command)
+        self.assertIn('KILIX_DATA_HOME="$d" PYTHONPATH=', command)
         self.assertNotIn("libvosk=skipped", command)
 
     def test_unknown_voice_policy_is_rejected(self):
@@ -78,7 +79,10 @@ class VoiceAcceptanceTests(unittest.TestCase):
         self.assertEqual(command.count("dictation=ready"), 1)
         self.assertIn("= 1 && for tool", command)
         self.assertIn("done && timeout", command)
-        self.assertIn("dictation=ready' && PYTHONPATH=", command)
+        self.assertIn(
+            "dictation=ready' && KILIX_DATA_HOME=\"$d\" PYTHONPATH=",
+            command,
+        )
         syntax = subprocess.run(
             ["bash", "-n", "-c", command],
             text=True,

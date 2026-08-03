@@ -107,6 +107,10 @@ published release.
 
 ### Fixed / hardened
 
+- Pass the resolved Kilix voice data root into the acceptance smoke process.
+  Session defaults are sourced as shell variables rather than exported
+  environment entries; the old harness therefore raised `KeyError` before its
+  real espeak-to-Vosk check even though the installed voice closure was ready.
 - Raise the VM builder's combined Debian-install and firstboot wait from 90 to
   120 minutes. Real pinned acceptance showed that snapshot browser/development
   packages can consume most of the old budget before firstboot begins; explicit
