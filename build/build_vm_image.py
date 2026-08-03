@@ -927,6 +927,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     expected_kiosk = "1" if cfg.kiosk else "0"
     expected_provider = os.environ.get("KILIX_DESKTOP_PROVIDER", "auto")
     expected_flavor = os.environ.get("KILIX_DESKTOP_FLAVOR", "95") or "95"
+    expected_run_aliases = (
+        "1" if env_bool("KILIX_RUN_ALIASES", True) else "0")
     expected_voice_policy = (
         "1" if env_bool("PLEBIAN_OS_INSTALL_VOICE_MODEL", False) else "0")
     expected_version = os.environ.get("PLEBIAN_OS_VERSION", "")
@@ -970,20 +972,35 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         f'test "${{PLEB_DESKTOP:-0}}" = {shlex.quote(expected_desktop)} && '
         f'test "${{PLEB_RESPAWN:-0}}" = {shlex.quote(expected_kiosk)} && '
         f'test "${{KILIX_DESKTOP_PROVIDER:-auto}}" = {shlex.quote(expected_provider)} && '
-        f'test "${{KILIX_DESKTOP_FLAVOR:-95}}" = {shlex.quote(expected_flavor)}'
+        f'test "${{KILIX_DESKTOP_FLAVOR:-95}}" = {shlex.quote(expected_flavor)} && '
+        f'test "${{KILIX_RUN_ALIASES:-1}}" = {shlex.quote(expected_run_aliases)}'
     )
     session_exports = (
         '. /etc/pleb/session.env 2>/dev/null; '
         f'env | grep -Fqx {shlex.quote("KILIX_DESKTOP_PROVIDER=" + expected_provider)} && '
         f'env | grep -Fqx {shlex.quote("KILIX_DESKTOP_FLAVOR=" + expected_flavor)} && '
-        f'env | grep -Fqx {shlex.quote("KILIX95_REF=" + expected_kilix95_ref)}'
+        f'env | grep -Fqx {shlex.quote("KILIX95_REF=" + expected_kilix95_ref)} && '
+        f'env | grep -Fqx {shlex.quote("KILIX_RUN_ALIASES=" + expected_run_aliases)}'
     )
     build_session_contract = (
         '. /etc/plebian-os/build-info.env 2>/dev/null; '
         f'test "$PLEBIAN_OS_DESKTOP" = {shlex.quote(expected_desktop)} && '
         f'test "$PLEBIAN_OS_KIOSK" = {shlex.quote(expected_kiosk)} && '
         f'test "$KILIX_DESKTOP_PROVIDER" = {shlex.quote(expected_provider)} && '
-        f'test "$KILIX_DESKTOP_FLAVOR" = {shlex.quote(expected_flavor)}'
+        f'test "$KILIX_DESKTOP_FLAVOR" = {shlex.quote(expected_flavor)} && '
+        f'test "$KILIX_RUN_ALIASES" = {shlex.quote(expected_run_aliases)}'
+    )
+    chromium_alias_script = (
+        'test "$(type -t chromium)" = alias && '
+        "alias chromium | grep -Fq ' run chromium'")
+    gui_routing_contract = (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        'export KILIX_RUN_ALIASES XDG_SESSION_DESKTOP=pleb; '
+        'bash --rcfile "$KILIX_DIR/config/kilix.bashrc" -ic '
+        + shlex.quote(chromium_alias_script) + ' && '
+        'python3 "$KILIX_DIR/tests/test_kilix_bashrc.py" && '
+        'python3 "$KILIX_DIR/desktop/tests/test_shell_xpane.py" && '
+        'python3 "$KILIX95_DIR/tests/test_shell_xpane.py"'
     )
     visible_kilix_chrome = (
         "grep -Fq 'KILIX_ARGV=(--start-as=maximized -o hide_window_decorations=yes)' "
@@ -1027,6 +1044,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("session selection",    session_contract),
         ("session exports",      session_exports),
         ("session provenance",   build_session_contract),
+        ("GUI routes in Kilix", gui_routing_contract),
         ("voice closure policy", _voice_acceptance_command(expected_voice_policy)),
         ("transcript disk budget", _transcript_acceptance_command()),
         ("visible kilix chrome", visible_kilix_chrome),

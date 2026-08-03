@@ -47,6 +47,7 @@ class ReleaseVersioningTests(unittest.TestCase):
             ("PLEBIAN_OS_KIOSK", "0"),
             ("KILIX_DESKTOP_PROVIDER", "external"),
             ("KILIX_DESKTOP_FLAVOR", "95"),
+            ("KILIX_RUN_ALIASES", "1"),
         ):
             self.assertRegex(m, rf"(?m)^{key}={value}$")
 
@@ -182,6 +183,29 @@ class ReleaseVersioningTests(unittest.TestCase):
         r = _read("build", "remaster-iso.sh")
         self.assertEqual(r.count('${PLEBIAN_OS_DESKTOP:-1}'), 2)
         self.assertEqual(r.count('${KILIX_DESKTOP_FLAVOR:-95}'), 2)
+        self.assertEqual(r.count('${KILIX_RUN_ALIASES:-1}'), 2)
+
+    def test_gui_routing_defaults_inside_kilix_and_preserves_opt_out(self):
+        provision = _read("provision", "plebian-os-provision.sh")
+        updater = _read("provision", "plebian-os-update.sh")
+        acceptance = _read("build", "build_vm_image.py")
+        self.assertIn(
+            'KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"', provision)
+        self.assertIn(
+            'KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"', updater)
+        self.assertRegex(
+            updater,
+            r'if \[\[ ! "\$config_text" =~ .*KILIX_RUN_ALIASES.*\]\]; then\n'
+            r'\s+names\+=\(KILIX_RUN_ALIASES\)\n\s+values\+=\(1\)',
+        )
+        self.assertIn('"GUI routes in Kilix"', acceptance)
+        self.assertIn("alias chromium | grep -Fq ' run chromium'", acceptance)
+        for path in (
+            '$KILIX_DIR/tests/test_kilix_bashrc.py',
+            '$KILIX_DIR/desktop/tests/test_shell_xpane.py',
+            '$KILIX95_DIR/tests/test_shell_xpane.py',
+        ):
+            self.assertIn(path, acceptance)
 
     def test_release_mode_warns_on_unpinned_apt(self):
         r = _read("build", "remaster-iso.sh")

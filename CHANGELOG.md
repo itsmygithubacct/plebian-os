@@ -96,14 +96,12 @@ published release.
   budgets are configurable from the settings file, `kilix settings --set`,
   the settings TUI, and Kilix 95's Settings app. `zstd` is provisioned for
   it.
-- Install **Openbox** and select it as the Pleb session's window manager, so
-  browsers and other GUI applications open real windows that can be focused,
-  raised, closed and reached with `Alt-Tab`. The graphical session previously
-  ran no window manager at all, which meant a fullscreen Kilix permanently
-  covered every other client. `openbox` is added to both the provisioning
-  dependency list and the preseed package set, and `/etc/pleb/session.env` now
-  persists `PLEB_WM=openbox` and `KILIX_RUN_ALIASES=0`. `kilix run <app>`
-  remains the explicit way to render an application inside a Kilix tab.
+- Install **Openbox** as a safety net under Kilix, while routing installed GUI
+  applications through `kilix run` so Chromium and other clients remain inside
+  Kilix tabs and panes. The graphical session previously had no manager for
+  unavoidable native clients. `openbox` is added to both dependency paths and
+  `/etc/pleb/session.env` persists `PLEB_WM=openbox` plus
+  `KILIX_RUN_ALIASES=1`; `0` remains an explicit native-window opt-out.
 
 ### Fixed / hardened
 

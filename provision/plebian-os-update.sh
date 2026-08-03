@@ -443,7 +443,7 @@ KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
 PLEB_DESKTOP="${PLEB_DESKTOP:-1}"
 PLEB_WM="${PLEB_WM:-openbox}"
-KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-0}"
+KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
@@ -1408,7 +1408,7 @@ if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])PLEB_WM[=+] ]]; then
 fi
 if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])KILIX_RUN_ALIASES[=+] ]]; then
     names+=(KILIX_RUN_ALIASES)
-    values+=(0)
+    values+=(1)
 fi
 [ "${#names[@]}" -gt 0 ] || exit 0
 tmp="$(mktemp /etc/pleb/.session.env.XXXXXX)"

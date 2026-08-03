@@ -73,19 +73,19 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    and pane chrome visible. Log out to return to
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
-**GUI apps** — the session runs a minimal **Openbox** underneath kilix, so
-ordinary GUI commands (`chromium`, `firefox-esr`, …) open **native windows**:
-focusable, closable, and reachable with `Alt-Tab` over the main Kilix window.
-Openbox is deliberately bare — one desktop, no panel, no root menu, no launcher
-keys.
+**GUI apps** — ordinary graphical commands (`chromium`, `firefox-esr`, …) are
+routed through `kilix run`, so their windows remain controlled inside Kilix
+tabs and panes. The session still runs a deliberately bare **Openbox** safety
+net underneath Kilix — one desktop, no panel, no root menu, no launcher keys —
+for unavoidable native dialogs and an explicit native-window opt-out.
 
-**`kilix run <app>`** remains the explicit alternative: the app gets a private X
-server and streams into a kilix tab, tiling like any terminal program. Those
-in-tab clients are not host windows, so they intentionally do not appear in
-Alt-Tab. Plebian-OS persists `KILIX_RUN_ALIASES=0` for native windows; set it to
-`1` to send GUI commands back into kilix tabs, or use
-`KILIX_RUN_ALIAS_APPS="gimp mpv"` to extend the aliased list (the mechanism is
-kilix's `config/kilix.bashrc`, keyed off the Pleb session markers).
+**`kilix run <app>`** is the explicit spelling: the app gets a private X server
+and streams into a Kilix tab, tiling like any terminal program. Plebian-OS
+persists `KILIX_RUN_ALIASES=1`; Kilix combines common Debian GUI commands with
+visible, non-terminal entries in the installed XDG application catalogue. Set
+the policy to `0` for native Openbox windows, extend it with
+`KILIX_RUN_ALIAS_APPS="gimp mpv"`, or exempt a command with
+`KILIX_RUN_ALIAS_EXCLUDE_APPS="gimp"`.
 
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
 pulls `~/.local/gpu_terminal/sources/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,

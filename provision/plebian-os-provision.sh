@@ -102,7 +102,7 @@ KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Ple
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = desktop provider in Kilix page 1
 PLEB_WM="${PLEB_WM:-}"                         # empty = keep an existing pin, else openbox
-KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 0
+KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 1
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
 
@@ -628,8 +628,8 @@ session_env_pin() {
 # Step 5 rewrites /etc/pleb/session.env wholesale, so a window-manager choice an
 # operator pinned there by hand would silently revert on a reprovision. Explicit
 # environment wins, then that existing pin (an operator who set PLEB_WM=none
-# keeps a no-WM session), then the distribution defaults: Openbox, with kilix's
-# GUI-command aliases off because a managed window can be raised natively.
+# keeps a no-WM session), then the distribution defaults: Openbox as a safety
+# net, with GUI applications kept inside Kilix pages and panes.
 resolve_session_wm_defaults() {
     local env=/etc/pleb/session.env pinned
     if [ -z "$PLEB_WM" ] && pinned="$(session_env_pin PLEB_WM "$env")"; then
@@ -640,7 +640,7 @@ resolve_session_wm_defaults() {
         KILIX_RUN_ALIASES="$pinned"
     fi
     PLEB_WM="${PLEB_WM:-openbox}"
-    KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-0}"
+    KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"
 }
 
 install_no_beep_defaults() {
@@ -3001,7 +3001,7 @@ EOF
     # provider contract to a later interactive `kilix desktop` invocation.
     printf '%s\n' 'export GPU_TERMINAL_SETTINGS_FILE'
     printf '%s\n' 'export KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY KILIX_CACHE_HOME KILIX_SESSION_HOME KILIX_PREBUILT_HOME'
-    printf '%s\n' 'export KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_COMMAND KILIX_DESKTOP_NAME KILIX_DESKTOP_FLAVOR'
+    printf '%s\n' 'export KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_COMMAND KILIX_DESKTOP_NAME KILIX_DESKTOP_FLAVOR KILIX_RUN_ALIASES'
     printf '%s\n' 'export KILIX95_AUTO_INSTALL KILIX95_DIR KILIX95_REPO KILIX95_BRANCH KILIX95_REF'
     printf '%s\n' 'export KILIX95_CONFIG_HOME KILIX95_STATE_HOME KILIX95_CACHE_HOME KILIX95_SESSION_HOME KILIX95_DATA_HOME'
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'

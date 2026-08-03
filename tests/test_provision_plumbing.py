@@ -364,7 +364,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn(
             "export KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_COMMAND "
-            "KILIX_DESKTOP_NAME KILIX_DESKTOP_FLAVOR",
+            "KILIX_DESKTOP_NAME KILIX_DESKTOP_FLAVOR KILIX_RUN_ALIASES",
             text,
         )
         self.assertIn(
