@@ -75,9 +75,21 @@ DEP_GROUPS=(
     # installer; unzip is listed in the fetch group above to extract both
     # verified archives.
     "voice (tts/stt)|espeak-ng mbrola"
-    "media + nested-X auth + X dialogs|ffmpeg xauth zenity"
+    # mpv is the image's general media player: ffmpeg above is the codec and
+    # capture toolchain rather than something a user opens, and kilix-amp
+    # covers music only. Video, and anything else a file manager or desktop
+    # link hands off, needs a player that is present on a fresh install.
+    "media + nested-X auth + X dialogs|ffmpeg mpv xauth zenity"
     "session-log archiving|zstd"
-    "web browsers|firefox-esr chromium"
+    # firefox-esr and chromium are the graphical browsers. The text browser
+    # (Chawan, via `kilix chawan`) is built from source on first use rather
+    # than packaged, so what it needs from apt is headers, not a program:
+    # libssh2 is what gives it sftp://, and brotli is what lets it decode the
+    # encoding most of the web now serves. Kilix's installer can build libssh2
+    # itself and can drop SFTP entirely when it is missing, but both are
+    # fallbacks — listing them here is what makes the ordinary install
+    # complete.
+    "web browsers|firefox-esr chromium libssh2-1-dev libbrotli-dev"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     "build toolchain|build-essential pkg-config golang-go python3-dev zlib1g-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libpng-dev liblcms2-dev libcairo2-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
