@@ -40,8 +40,26 @@ published release.
   inherits its immutable source revision through Kilix rather than expanding
   the coordinated release core.
 - Route Kilix 95 web links through Kilix's canonical URL dispatcher. Installed
-  Chrome, Chromium, or Firefox browsers are preferred; the experimental
-  in-pane renderer remains the fallback when none is available.
+  Chrome, Chromium, or Firefox browsers are preferred; an already-built Chawan
+  answers next; the experimental in-pane renderer remains the fallback when
+  none is available. Chawan enters that chain only once it exists, because
+  this dispatcher is called by other programs and must not block on a
+  first-run build.
+- Ship the **Chawan text browser**. `kilix chawan` installs it on first use,
+  and every desktop offers it: Kilix 95 and Kilix TUI list it, Kilix Cap's
+  Study computer starts it when no graphical browser is installed, and Kilix
+  Land hangs it on the study monitor. It renders pages as terminal cells and
+  draws images with the same Kitty graphics protocol Kilix itself renders
+  with, so it works where the in-pane renderer cannot run at all — over SSH,
+  on a headless machine, and on hardware with no GPU. The release pins Kilix's
+  Chawan fork at commit `b2b2932453b1348be1ca841aaefd9258acdda0c1` and, because
+  Chawan requires Nim 2.0 or newer while Debian ships 1.6.10, a Nim 2.2.10
+  toolchain by URL and SHA-256; both are verified against the checksums
+  upstream publishes, and neither needs root. The dependency manifest adds
+  `libssh2-1-dev` and `libbrotli-dev`. Brotli is the encoding most of the web
+  now serves; libssh2 buys `sftp://` and nothing else, so an image missing it
+  still gets every other protocol — the installer builds libssh2 on request
+  and otherwise compiles SFTP out rather than failing.
 - Ship **Tmux Manager**. Firstboot installs Kilix's pinned `tmux-tui`/`tmux-cli`
   closure and publishes Tmux Manager plus tmux-cli's `tb.py` as `tb` on `PATH`;
   the Kilix 95 Start menu entry opens it in a new tab, and both are usable
