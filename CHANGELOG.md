@@ -80,9 +80,9 @@ published release.
 - Ship a **headless Media Player backend**. Kilix Amp gains `--headless` and a
   versioned control socket, and the Music terminal utility drives that backend
   instead of shipping a second decoder that would drift from the windowed
-  player. `pleb install` now verifies the Music command the pinned checkout
-  produces; the player binary itself still arrives with the Media Player, built
-  from the pinned content catalog on first use.
+  player. `pleb install` builds the pinned player and verifies the Music
+  command, so neither one waits for a compile on first use, and the new
+  `kilix amp` builds it on demand wherever it is still missing.
 - Provision the pinned persistent PTY session manager so panes survive a Kilix
   crash and detached sessions are recovered on the next start.
 - Ship **session logging on by default**: the PTY broker that owns each pane
