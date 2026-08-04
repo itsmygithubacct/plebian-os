@@ -32,7 +32,7 @@ https://github.com/user-attachments/assets/af5c8cf1-f336-42c2-bbec-e78fdc9ce64d
 providers, the shared libraries, and the OS lifecycle (1920×1080, 31m22s, 134 MB, chaptered;
 published as a [media release](https://github.com/itsmygithubacct/plebian-os/releases/tag/media-v1)
 so a clone stays small). Also playing at [plebian-os.com](https://plebian-os.com/#watch).
-Part one plays above; the table links every part's full-quality file.
+Part one plays above, every part plays below, and the table links every part's full-quality file.
 
 | # | Part | Covers |
 |---|---|---|
@@ -47,8 +47,37 @@ Part one plays above; the table links every part's full-quality file.
 | 09 | [Shared Libraries and the Application Ecosystem](https://github.com/itsmygithubacct/plebian-os/releases/download/media-v1/09-libraries-and-apps.mp4) | the reusable boundaries behind the visible behavior |
 | 10 | [Plebian-OS: Installation, Updates, and the Complete System](https://github.com/itsmygithubacct/plebian-os/releases/download/media-v1/10-plebian-os-lifecycle.mp4) | install, updates, provenance, rollback, scope |
 
-Parts two–eight are media releases on the repos they cover. Inline players for parts over
-GitHub's attachment limit are 720p previews — the linked files are full quality.
+Parts two–eight are media releases on the repos they cover. Inline players for the parts
+over GitHub's attachment limit (four, five, six, nine, ten) are 720p previews — the table
+links are full quality.
+
+**Part two — Kilix: pages, panes, and clickable chrome:**
+
+https://github.com/user-attachments/assets/b4d35ed1-4eb3-4184-92f3-34b50cc385bf
+
+**Part three — Pleb: turning Kilix into a login session:**
+
+https://github.com/user-attachments/assets/c7fb031d-92be-4683-9730-106e65f71a70
+
+**Part four — how applications stay inside Kilix** (720p preview):
+
+https://github.com/user-attachments/assets/4cdd423e-4958-477d-8a85-b78049c46610
+
+**Part five — Desktop One: Kilix 95 and XP** (720p preview):
+
+https://github.com/user-attachments/assets/fe477615-845b-4d53-b568-e1eca849a8d8
+
+**Part six — Desktop Two: Kilix Cap** (720p preview):
+
+https://github.com/user-attachments/assets/473b28b3-2e7a-4062-83b0-06c3a349112e
+
+**Part seven — Desktop Three: Kilix TUI:**
+
+https://github.com/user-attachments/assets/be594a53-03b3-466f-8d8e-f1687c92ca0e
+
+**Part eight — Desktop Four: Kilix Land:**
+
+https://github.com/user-attachments/assets/66a1619d-0b16-4d7f-b4c9-8f860546f263
 
 **Part nine — shared libraries and the application ecosystem** (720p preview):
 
