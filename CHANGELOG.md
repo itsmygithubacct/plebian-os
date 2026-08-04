@@ -77,6 +77,12 @@ published release.
 - Build, verify, and publish Kilix's exact pinned Kilix Temps dashboard and its
   graphics closure during firstboot, so the page-strip thermometer works on a
   clean install without a developer checkout.
+- Ship a **headless Media Player backend**. Kilix Amp gains `--headless` and a
+  versioned control socket, and the Music terminal utility drives that backend
+  instead of shipping a second decoder that would drift from the windowed
+  player. `pleb install` now verifies the Music command the pinned checkout
+  produces; the player binary itself still arrives with the Media Player, built
+  from the pinned content catalog on first use.
 - Provision the pinned persistent PTY session manager so panes survive a Kilix
   crash and detached sessions are recovered on the next start.
 - Ship **session logging on by default**: the PTY broker that owns each pane
