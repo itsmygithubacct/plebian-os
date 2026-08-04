@@ -203,9 +203,12 @@ class ReleaseVersioningTests(unittest.TestCase):
         for path in (
             '$KILIX_DIR/tests/test_kilix_bashrc.py',
             '$KILIX_DIR/desktop/tests/test_shell_xpane.py',
-            '$KILIX95_DIR/tests/test_shell_xpane.py',
+            '$KILIX95_DIR/tests/run.py',
         ):
             self.assertIn(path, acceptance)
+        self.assertIn('"Kilix-95 GUI routing tests"', acceptance)
+        self.assertIn('shell_xpane', acceptance)
+        self.assertIn('timeout=check_timeouts.get(name, 15)', acceptance)
 
     def test_release_mode_warns_on_unpinned_apt(self):
         r = _read("build", "remaster-iso.sh")

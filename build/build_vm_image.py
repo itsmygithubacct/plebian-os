@@ -993,15 +993,25 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     chromium_alias_script = (
         'test "$(type -t chromium)" = alias && '
         "alias chromium | grep -Fq ' run chromium'")
-    gui_routing_contract = (
+    gui_routing_environment = (
         '. /etc/pleb/session.env 2>/dev/null; '
-        'export KILIX_RUN_ALIASES XDG_SESSION_DESKTOP=pleb; '
+        'export KILIX_RUN_ALIASES XDG_SESSION_DESKTOP=pleb; ')
+    gui_routing_contract = (
+        gui_routing_environment +
         'bash --rcfile "$KILIX_DIR/config/kilix.bashrc" -ic '
-        + shlex.quote(chromium_alias_script) + ' && '
-        'python3 "$KILIX_DIR/tests/test_kilix_bashrc.py" && '
-        'python3 "$KILIX_DIR/desktop/tests/test_shell_xpane.py" && '
-        'python3 "$KILIX95_DIR/tests/test_shell_xpane.py"'
-    )
+        + shlex.quote(chromium_alias_script))
+    kilix_bashrc_routing_contract = (
+        gui_routing_environment +
+        'python3 "$KILIX_DIR/tests/test_kilix_bashrc.py"')
+    kilix_desktop_routing_contract = (
+        gui_routing_environment +
+        'python3 "$KILIX_DIR/desktop/tests/test_shell_xpane.py"')
+    kilix95_routing_contract = (
+        gui_routing_environment +
+        # Use the provider's supported isolated runner. It prepares a pinned
+        # temporary libkilix-state exactly as a direct test launch requires;
+        # the raw test module only inherits that library inside `kilix desktop`.
+        'python3 "$KILIX95_DIR/tests/run.py" shell_xpane')
     visible_kilix_chrome = (
         "grep -Fq 'KILIX_ARGV=(--start-as=maximized -o hide_window_decorations=yes)' "
         "/usr/local/bin/pleb-session && "
@@ -1045,6 +1055,9 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("session exports",      session_exports),
         ("session provenance",   build_session_contract),
         ("GUI routes in Kilix", gui_routing_contract),
+        ("Kilix shell GUI routing tests", kilix_bashrc_routing_contract),
+        ("Kilix desktop GUI routing tests", kilix_desktop_routing_contract),
+        ("Kilix-95 GUI routing tests", kilix95_routing_contract),
         ("voice closure policy", _voice_acceptance_command(expected_voice_policy)),
         ("transcript disk budget", _transcript_acceptance_command()),
         ("visible kilix chrome", visible_kilix_chrome),
@@ -1097,8 +1110,10 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     else:
         checks.append(("kilix engine", kdir + ' test -x "$d/kilix"'))
     failed = []
+    check_timeouts = {"Kilix-95 GUI routing tests": 60}
     for name, cmd in checks:
-        r = ssh(cfg, cmd + " && echo OK || echo NO", askpass)
+        r = ssh(cfg, cmd + " && echo OK || echo NO", askpass,
+                timeout=check_timeouts.get(name, 15))
         ok = r is not None and r.returncode == 0 and "OK" in (r.stdout or "")
         info(f"  [{'ok' if ok else '!!'}] {name}")
         if not ok:
