@@ -163,6 +163,22 @@ class RemasterContractTests(unittest.TestCase):
                          "tasksel", "grub-installer"):
             self.assertIn(answered, preseed, f"{answered} must stay preseeded")
 
+    def test_the_questions_that_only_appear_below_critical_are_answered(self):
+        """The ones raising the priority actually exposed.
+
+        Listing keys that were already answered proves nothing: they were
+        answered before the change too. These are the questions that were
+        invisible at priority=critical and that a real unattended install
+        stopped on once it ran at high — apt-setup's "Scan extra installation
+        media?" halted the acceptance install dead. Wireless is deliberately
+        absent, because that one *should* be asked.
+        """
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        for answered in ("apt-setup/cdrom/set-first", "apt-setup/another",
+                         "apt-setup/use_mirror"):
+            self.assertIn(answered, preseed,
+                          f"{answered} halts an unattended install at high")
+
     def test_firstboot_environment_is_a_subset_of_build_provenance(self):
         manifest = set(re.findall(r"manifest_kv ([A-Z0-9_]+)", self.source))
         runtime = set(re.findall(r"env_kv ([A-Z0-9_]+)", self.source))
