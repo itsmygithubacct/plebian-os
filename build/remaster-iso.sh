@@ -1122,7 +1122,16 @@ write_firstboot_env "$EXTRACT/plebian-os/firstboot.env"
 LOCALE="$(sed -n 's/^d-i debian-installer\/locale string //p'          "$PRESEED" | head -1)"
 KEYMAP="$(sed -n 's/^d-i keyboard-configuration\/xkb-keymap select //p' "$PRESEED" | head -1)"
 : "${LOCALE:=en_US.UTF-8}"; : "${KEYMAP:=us}"
-BOOTARGS="auto=true priority=critical locale=$LOCALE keymap=$KEYMAP file=/cdrom/preseed.cfg"
+# priority=high, not critical. Everything the preseed answers stays silent
+# either way — debconf never asks a question it already has an answer for — but
+# netcfg asks for the wireless network list and its passphrase at *high*
+# priority. At critical those two are skipped, so a machine with no Ethernet
+# auto-selected its wireless interface, was never shown the available networks,
+# and went straight to a passphrase prompt for an empty ESSID, reporting
+# "invalid passphrase" with no way to choose a network. An installer that
+# cannot reach the network cannot run firstboot, which is where the whole stack
+# is fetched from.
+BOOTARGS="auto=true priority=high locale=$LOCALE keymap=$KEYMAP file=/cdrom/preseed.cfg"
 echo "    boot args: $BOOTARGS"
 
 # Patch both the BIOS (isolinux) and UEFI (grub) boot configs where present.

@@ -126,6 +126,43 @@ class RemasterContractTests(unittest.TestCase):
         self.assertEqual(pattern.findall(help_prompt), ["prompt 1"])
         self.assertIn("display f1.txt", help_prompt)
 
+    def test_installer_still_offers_a_wireless_network_to_pick(self):
+        """A machine with no Ethernet must be shown the network list.
+
+        netcfg asks for the wireless network and its passphrase at *high*
+        priority. Under priority=critical both are skipped, so an Ethernet-less
+        machine auto-selected its wireless interface, was never offered the
+        available networks, and went straight to a passphrase prompt for an
+        empty ESSID — reporting "invalid passphrase" with no way to choose.
+        An installer that cannot reach a network cannot run firstboot, which is
+        where the entire stack is fetched.
+        """
+        script = (ROOT / "build" / "remaster-iso.sh").read_text()
+        bootargs = [l for l in script.splitlines() if l.startswith("BOOTARGS=")]
+        self.assertEqual(len(bootargs), 1, "one place defines the boot args")
+        self.assertIn("priority=high", bootargs[0])
+        self.assertNotIn("priority=critical", bootargs[0])
+
+    def test_the_wireless_questions_are_left_unanswered_on_purpose(self):
+        """Preseeding an ESSID would skip the picker just as critical did."""
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        for question in ("netcfg/wireless_essid", "netcfg/wireless_wpa",
+                         "netcfg/wireless_security_type"):
+            self.assertNotIn(question, preseed)
+
+    def test_everything_else_stays_unattended_at_the_higher_priority(self):
+        """Raising the priority must not turn the install into a questionnaire.
+
+        debconf never asks what it already has an answer for, so the preseed
+        has to keep covering the other high-priority questions.
+        """
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        for answered in ("partman-auto/method", "partman/confirm",
+                         "time/zone", "clock-setup/utc",
+                         "netcfg/get_hostname", "passwd/", "mirror/",
+                         "tasksel", "grub-installer"):
+            self.assertIn(answered, preseed, f"{answered} must stay preseeded")
+
     def test_firstboot_environment_is_a_subset_of_build_provenance(self):
         manifest = set(re.findall(r"manifest_kv ([A-Z0-9_]+)", self.source))
         runtime = set(re.findall(r"env_kv ([A-Z0-9_]+)", self.source))
