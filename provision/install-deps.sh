@@ -67,10 +67,11 @@ DEP_GROUPS=(
     "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
     "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
     # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
-    # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free and
-    # this image ships main/contrib/non-free-firmware only, so they are not
-    # listed: one unresolvable name fails the whole group, which would take
-    # espeak-ng down with it and leave the image with no speech at all.
+    # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free. The
+    # image now enables the non-free component, so they are installable — but
+    # they stay off this list deliberately: the quality tier is a user opt-in,
+    # and plain espeak-ng remains the fallback. Enabling a component only makes
+    # a package reachable; it does not oblige the image to ship it.
     # Dictation's library and model are pinned downloads owned by Kilix's
     # installer; unzip is listed in the fetch group above to extract both
     # verified archives.

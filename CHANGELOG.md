@@ -20,6 +20,13 @@ publication; no direct skip from an earlier release is supported.
   that one command rather than keeping catalogues of their own.
 - Prerequisites for the coding agents: `nodejs`, `npm`, and `ripgrep`. None of
   the three agents bundles ripgrep, and all of them search a tree constantly.
+- Debian's `non-free` component, enabled by default in the installer preseed and
+  in both the snapshot-pinned and live apt sources. `contrib` and
+  `non-free-firmware` were already on and neither carries it, so hardware that
+  needs a non-free driver — an NVIDIA GPU above all — had nothing installable to
+  offer. Enabling a component only makes such packages reachable: the image
+  still installs nothing from `non-free` by default, and the mbrola voice
+  databases behind read-aloud's quality tier remain a user opt-in.
 
 ### Fixed
 - Kilix 95 Start menu: an opened submenu stays open when the pointer leaves the

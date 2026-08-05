@@ -1508,13 +1508,13 @@ restore_live_apt_sources() {
 Types: deb
 URIs: https://deb.debian.org/debian
 Suites: $codename ${codename}-updates
-Components: main contrib non-free-firmware
+Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
 Types: deb
 URIs: https://security.debian.org/debian-security
 Suites: ${codename}-security
-Components: main contrib non-free-firmware
+Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
         chmod 0644 "$live_tmp"
@@ -1583,13 +1583,13 @@ configure_apt_snapshot() {
 Types: deb
 URIs: https://snapshot.debian.org/archive/debian/$ts
 Suites: trixie trixie-updates
-Components: main contrib non-free-firmware
+Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 
 Types: deb
 URIs: https://snapshot.debian.org/archive/debian-security/$ts
 Suites: trixie-security
-Components: main contrib non-free-firmware
+Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
     # snapshot archives carry an old Valid-Until, which apt would otherwise reject.
