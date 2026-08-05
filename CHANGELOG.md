@@ -20,6 +20,18 @@ publication; no direct skip from an earlier release is supported.
   that one command rather than keeping catalogues of their own.
 - Prerequisites for the coding agents: `nodejs`, `npm`, and `ripgrep`. None of
   the three agents bundles ripgrep, and all of them search a tree constantly.
+- `plebian-os-nvidia-driver` — an optional installer for NVIDIA's proprietary
+  driver, put on `PATH` by the provisioner and never run by it. The image stays
+  on nouveau, which drives a display on any supported card; this is for machines
+  that need CUDA, NVENC/NVDEC, or the full clocks nouveau cannot reach on recent
+  silicon. It installs the Debian way — `non-free` package, `nvidia-detect`
+  choosing by PCI ID, DKMS so the module survives kernel upgrades, nouveau
+  blacklisted by the driver's own maintainer scripts — and never touches the
+  `.run` installer from nvidia.com. It **refuses when the hardware is too old**:
+  a card steered to a retired legacy series, or reported unsupported, stops the
+  run before anything is installed rather than producing a machine whose X
+  server will not start. `--check` and `--status` are read-only and need no
+  root; `--rollback` returns the machine to nouveau.
 - Debian's `non-free` component, enabled by default in the installer preseed and
   in both the snapshot-pinned and live apt sources. `contrib` and
   `non-free-firmware` were already on and neither carries it, so hardware that

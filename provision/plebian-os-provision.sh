@@ -2665,6 +2665,29 @@ else
     warn "update helper not found; continuing without plebian-os-update"
 fi
 
+# Optional NVIDIA driver helper. Installed onto PATH so it is discoverable, and
+# never run: the image ships nouveau, which drives a display on any supported
+# card. Only a machine that needs CUDA, NVENC/NVDEC or full clocks has a reason
+# to run this, and that is the owner's call, not the provisioner's.
+NVIDIA_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-nvidia-driver" \
+    "$SELF_DIR/plebian-os-nvidia-driver.sh"; do
+    [ -r "$cand" ] && NVIDIA_SRC="$cand" && break
+done
+if [ -n "$NVIDIA_SRC" ]; then
+    log "installing optional NVIDIA driver helper -> /usr/local/bin/plebian-os-nvidia-driver"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -m 0755 $NVIDIA_SRC /usr/local/bin/plebian-os-nvidia-driver"
+    else
+        install -m 0755 "$NVIDIA_SRC" /usr/local/bin/plebian-os-nvidia-driver
+    fi
+elif [ -x /usr/local/bin/plebian-os-nvidia-driver ]; then
+    log "NVIDIA driver helper already present at /usr/local/bin/plebian-os-nvidia-driver"
+else
+    warn "NVIDIA driver helper not found; continuing without plebian-os-nvidia-driver"
+fi
+
 # Password-change helper + scoped sudoers (the default-password desktop nag).
 install_passwd_nag
 
