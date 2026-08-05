@@ -1248,6 +1248,24 @@ selected_desktop_wallpaper_state_dir() {
     esac
 }
 
+record_default_desktop() {
+    # Persist the image's desktop choice where every desktop reads and writes
+    # it. Firstboot knew which provider it was provisioning and kept that in
+    # its own environment, so the running system had no record a user could
+    # see or change: choosing another desktop meant editing a file the
+    # installer had written and nothing offered.
+    local provider="${KILIX_DESKTOP_PROVIDER:-auto}"
+    [ -x "$KILIX_DIR/kilix" ] || return 0
+    if as_user env "${install_env[@]}" "$KILIX_DIR/kilix" \
+            default-desktop set "$provider" >/dev/null 2>&1; then
+        log "desktop    : default recorded as $provider"
+    else
+        # Not fatal: the session still starts with the provisioned provider,
+        # and the desktops can set it later.
+        log "desktop    : could not record the default ($provider)"
+    fi
+}
+
 seed_selected_desktop_wallpaper_state() {
     local state_dir
     state_dir="$(selected_desktop_wallpaper_state_dir)" || {
@@ -2882,6 +2900,7 @@ print('on' if settings.transcript_enabled() else 'off')
 fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
+record_default_desktop
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
 # With no other desktop task installed, Pleb is the only /usr/share/xsessions
