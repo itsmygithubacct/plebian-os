@@ -4,6 +4,28 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.1.8] — 2026-08-04
+
+Prepared 2026-08-04; nothing is published for 0.1.8 yet — see
+[`releases/0.1.8-notes.md`](releases/0.1.8-notes.md) for publication status.
+Supported upgrade source: **0.1.7**, the immediately previous published
+release. The upgrade acceptance result required by
+[UPGRADING.md](UPGRADING.md) is reserved and must be recorded here before
+publication; no direct skip from an earlier release is supported.
+
+### Added
+- `kilix install` — one list of everything installable, the pinned content
+  catalog and the coding agents together, with `--update` and `--json`. Reached
+  from the Kilix TUI desktop and from the Kilix 95 Start menu, which both drive
+  that one command rather than keeping catalogues of their own.
+- Prerequisites for the coding agents: `nodejs`, `npm`, and `ripgrep`. None of
+  the three agents bundles ripgrep, and all of them search a tree constantly.
+
+### Fixed
+- Kilix 95 Start menu: an opened submenu stays open when the pointer leaves the
+  row that opened it. It closes on a click outside every menu, or when another
+  cascade entry replaces it.
+
 ## [0.1.7] — 2026-08-02
 
 0.1.3, 0.1.4, and 0.1.5 were never stack releases. 0.1.3 and 0.1.4 appeared only
