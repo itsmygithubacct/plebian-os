@@ -63,6 +63,11 @@ DEP_GROUPS=(
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
+    # The session runs with TERM=xterm-kitty. Kilix installs the engine's own
+    # entry into the user's ~/.terminfo, but root, sudo and any other account
+    # resolve through the system database, so a strict ncurses program run
+    # there would see an unknown terminal without this.
+    "terminfo for the engine|kitty-terminfo"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
     "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
     "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"

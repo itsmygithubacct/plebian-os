@@ -32,6 +32,12 @@ LOCAL_BUILD_PREREQUISITE_PACKAGES = {
     "cmake",
 }
 
+# The session's TERM is xterm-kitty. Kilix installs the engine's own entry
+# into the session user's ~/.terminfo, but root, sudo and every other account
+# read the system database, so the packaged entry is what keeps a strict
+# ncurses program from meeting an unknown terminal there.
+TERMINFO_PACKAGES = {"kitty-terminfo"}
+
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
@@ -59,6 +65,9 @@ def install_deps_packages():
 class DependencyManifestTests(unittest.TestCase):
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
+
+    def test_the_engines_terminal_type_is_in_the_system_database(self):
+        self.assertLessEqual(TERMINFO_PACKAGES, install_deps_packages())
 
     def test_local_build_prerequisites_are_installed(self):
         self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,
