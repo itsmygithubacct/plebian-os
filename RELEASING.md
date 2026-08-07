@@ -179,16 +179,11 @@ are release-controlled.
    password to the manifest. For every release after 0.1.7, name the immediately
    previous published release as the supported upgrade source and reserve a
    provenance section for the upgrade acceptance result. Name any supported
-   direct skip separately; silence means the skip is unsupported. Then prove the
-   finished manifest is selectable and write the operator's exact command into
-   the release notes: on a machine installed from the previous release run this
-   release's own `provision/plebian-os-select-closure.sh <x.y.z> --dry-run` (via
-   the fetched-tag block in [UPGRADING.md](UPGRADING.md); the tag is local-only
-   until step 7, so dry-run against the candidate tag) and confirm it validates
-   the closure and lists the release-controlled keys that move. A release whose
-   own selector refuses its manifest is not cuttable, and
-   a release whose notes do not carry that command block has not shipped the
-   mechanism UPGRADING.md requires.
+   direct skip separately; silence means the skip is unsupported. Write the
+   operator's exact closure-selection command into the release notes — the
+   fetched-tag block in [UPGRADING.md](UPGRADING.md), with this version
+   substituted throughout. A release whose notes do not carry that block has not
+   shipped the mechanism UPGRADING.md requires; step 4 is where it gets proven.
 2. Run each repository's complete test/lint suite and integration contract
    tests. Run them in a clean environment and outside a live Kilix session:
    exported `KILIX_*` values and a user's persisted `kilix.env`
@@ -209,7 +204,14 @@ are release-controlled.
    immutable release ref has been published at this point.
 4. Create **local, annotated** `v<x.y.z>` candidate tags on the reviewed
    commits. Do not push the tags yet. This lets `PLEBIAN_OS_REF=v<x.y.z>` resolve
-   while the strict release-image checkout guard is active.
+   while the strict release-image checkout guard is active. The candidate tag is
+   also the first point at which this release's closure can be *selected*, so
+   prove it now: on a machine installed from the previous release, run this
+   release's own `provision/plebian-os-select-closure.sh <x.y.z> --dry-run` out
+   of the candidate tag and confirm it validates the closure and lists the
+   release-controlled keys that move. A release whose own selector refuses its
+   manifest is not cuttable — fix the manifest and retag rather than carrying an
+   unselectable closure into the acceptance run.
 5. Build the pinned artifact from the tagged Plebian-OS checkout:
 
    ```sh
