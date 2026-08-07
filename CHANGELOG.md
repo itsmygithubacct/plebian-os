@@ -4,9 +4,9 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.1.8] — 2026-08-04
+## [0.1.8] — 2026-08-07
 
-Prepared 2026-08-04; nothing is published for 0.1.8 yet — see
+Prepared 2026-08-07; nothing is published for 0.1.8 yet — see
 [`releases/0.1.8-notes.md`](releases/0.1.8-notes.md) for publication status.
 Supported upgrade source: **0.1.7**, the immediately previous published
 release. The upgrade acceptance result required by
@@ -39,11 +39,80 @@ publication; no direct skip from an earlier release is supported.
   offer. Enabling a component only makes such packages reachable: the image
   still installs nothing from `non-free` by default, and the mbrola voice
   databases behind read-aloud's quality tier remain a user opt-in.
+- `cmake` in the image's build toolchain, on both the preseed and the
+  provisioning package paths, which the CPU model runtime needs to build.
+- The `kitty-terminfo` package, so `TERM=xterm-kitty` — which every Kilix pane
+  advertises — resolves from the system terminfo database and not only from a
+  promoted engine build tree.
+- The installed system's default desktop is recorded at first boot. Firstboot
+  knew which provider it was provisioning and kept that in its own environment;
+  the installed system had nothing a user could see or change, so a machine
+  came up in whatever desktop the image chose and offered no way to say "start
+  in a different one from now on". Provisioning writes that choice through
+  `kilix default-desktop`, the same single writer the desktops use. Failing to
+  record it is logged and not fatal.
 
 ### Fixed
+
+Most of this section came out of a manual review of the released 0.1.7 image on
+two machines rather than from a failing test. Each item is fixed in the
+component named, and reaches this release through the coordinated pins in
+[`releases/0.1.8.env`](releases/0.1.8.env).
+
 - Kilix 95 Start menu: an opened submenu stays open when the pointer leaves the
   row that opened it. It closes on a click outside every menu, or when another
   cascade entry replaces it.
+- **Dictation refused every ordinary shell prompt** (Kilix engine). The
+  hidden-prompt guard read "echo off" alone as a password prompt, so the
+  microphone was refused in any readline-style shell both at click time and at
+  delivery. Only canonical mode with echo off — a real hidden prompt — is
+  refused now.
+- **`TERM=xterm-kitty` resolved nowhere** (Kilix, and this repository).
+  Promoting an engine build installs that build's compiled terminfo entry into
+  `~/.terminfo` as part of the same transaction, and the image now also
+  installs Debian's `kitty-terminfo`, so strict ncurses programs stop
+  reporting an unknown terminal.
+- **The voice tooling contradicted itself** (Kilix). `kilix voice doctor`
+  printed "kilix-voiced: not found" one line under "daemon: running" whenever
+  `~/.local/bin` was off `PATH`; the lazy daemon reinstalled the pinned closure
+  on every start from a `PATH`-less context; and a read-aloud-only run treated
+  a full install's stamp as stale and reinstalled forever.
+- **Nothing in the stack's execution paths carried `~/.local/bin`** (Kilix).
+  Panes run non-login bash, so a tool installed at the user prefix was
+  "command not found" in the terminal that installed it, and a launcher verb
+  trusting `PATH` spawned a tab that died with no message. Every pane shell now
+  gets that guarantee, `rollout-resume` became a real resolved launcher verb,
+  and a missing tool fails with the path named.
+- **Coding agents read as absent from where their own installers put them**
+  (Kilix, Kilix 95, kilix-tui-utils). Resolution checks the vendors' landing
+  spots after `PATH`, a vendor install must leave something that resolves
+  before success is claimed, and a Start-menu launch resolves its program
+  before the terminal spawns it — the 0.1.7 review's dead `rollout-resume`
+  tab.
+- **Two games in every desktop's menu died wordlessly** (Kilix). Minesweeper
+  and Solitaire are windows of the bundled desktop rather than catalog
+  content, and fell into the games backend's unknown-game exit.
+- **A moved component pin reached only fresh machines** (Kilix, Pleb). The
+  component installers downloaded to the resolved ref on first use but
+  reinstalled an existing checkout from whatever it held; `pleb update` moved
+  every component except the one it runs from; and an installed Kilix Voice
+  closure was never refreshed. All three now move, report each pinned move
+  with both ends and the file or variable that decided it, and say `DOWNGRADE`
+  when a move walks an installed component backwards.
+- **`plebian-os --version` crashed, then lied** (kilix-tui-utils). It needed a
+  curses screen to answer, so it raised over an ssh command or in a pipe; and
+  once it answered it read only a development workspace, reporting a
+  provisioned machine's components as "not present" or at the wrong version.
+  It answers without a screen now and names the directory each answer came
+  from.
+- **Transcript index labels lost the part that told panes apart**
+  (kilix-tui-utils). Commands were clipped at a blind 48 columns from the
+  right; labels now spend the terminal's real width and shrink from the head.
+- **An accepted CPU build offer did not build** (Kilix Bonsai). The model store
+  preflights the toolchain, prices the missing packages into the confirm, and
+  reopens chat after a successful build.
+- **A microphone test showed a flat bar and said nothing** (Kilix Voice). A
+  suspended source is now explained over the level meter.
 
 ## [0.1.7] — 2026-08-02
 
