@@ -23,6 +23,15 @@ VOICE_ARCHIVE_PREREQUISITE_PACKAGES = {
     "unzip",
 }
 
+# The model store compiles its CPU inference runtime on the machine that runs
+# it, and that build is CMake's. Shipping the toolchain without CMake left the
+# store offering a build it could not finish, so this belongs in the image
+# rather than in an apt prompt the first time somebody opens a chat.
+LOCAL_BUILD_PREREQUISITE_PACKAGES = {
+    "build-essential",
+    "cmake",
+}
+
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
@@ -50,6 +59,10 @@ def install_deps_packages():
 class DependencyManifestTests(unittest.TestCase):
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
+
+    def test_local_build_prerequisites_are_installed(self):
+        self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,
+                             install_deps_packages())
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
