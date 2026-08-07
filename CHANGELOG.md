@@ -14,6 +14,26 @@ release. The upgrade acceptance result required by
 publication; no direct skip from an earlier release is supported.
 
 ### Added
+- `plebian-os-select-closure` — the closure-selection mechanism
+  [UPGRADING.md](UPGRADING.md) requires of every release after 0.1.7, and the
+  reason gate 4 of the upgrade acceptance was not executable. `plebian-os-update`
+  revalidates the release a machine already has, on purpose; nothing selected a
+  new one. This does: it reads `releases/<x.y.z>.env` out of the published
+  `v<x.y.z>` tag — so the pins are the immutable ones that release was accepted
+  with, and a 0.1.7 machine can run 0.1.8's selector out of the tag it is moving
+  to — validates the closure whole, and moves every release-controlled key into
+  `/etc/pleb/session.env` with one rename. A manifest that is incomplete,
+  malformed, still holds a placeholder, pins a branch instead of a commit,
+  half-pins the optional Kilix Voice closure, or declares a version disagreeing
+  with the release identifier or the release commit's `VERSION`, is refused with
+  the reason named. Operator choices — session, provider, storage, kiosk,
+  appearance, logging, thermal, audio, network, games, wallpaper, layout — are
+  copied through and proven unchanged before anything is written. A selection
+  that walks the machine backwards is announced as a `DOWNGRADE`, a write that
+  fails part way leaves the previous closure selected and says so, and the
+  configuration it replaced is kept under `/var/lib/plebian-os/closure-rollback.*`
+  for `--rollback`. RELEASING.md now makes shipping one part of cutting a
+  release, so 0.1.9 does not rediscover this.
 - `kilix install` — one list of everything installable, the pinned content
   catalog and the coding agents together, with `--update` and `--json`. Reached
   from the Kilix TUI desktop and from the Kilix 95 Start menu, which both drive

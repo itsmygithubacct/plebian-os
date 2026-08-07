@@ -139,6 +139,30 @@ operator session choices, and custom desktop state. An induced failure must
 restore the prior coherent runtime and configuration. Reinstalling successfully
 or passing fresh-install acceptance does not satisfy this gate.
 
+### Every release ships its own closure selector
+
+`plebian-os-update` revalidates the release the machine already has; it never
+selects a new one. The mechanism that does is
+[`provision/plebian-os-select-closure.sh`](provision/plebian-os-select-closure.sh),
+and the release which ships it to an operator is the **target**, not the source:
+it reads `releases/<x.y.z>.env` out of the published `v<x.y.z>` tag. A machine
+running the previous release therefore fetches that tag and runs the selector out
+of it, which is why the exact command block belongs in the target's release
+notes.
+
+`releases/<x.y.z>.env` is the closure; the selector is what makes it selectable.
+So a release is only shippable when the selector accepts its manifest —
+completeness, exact 40-character component commits, empty branch keys, a Debian
+snapshot timestamp, engine and Go pins, an all-or-nothing optional closure such
+as Kilix Voice, and a `PLEBIAN_OS_VERSION` that agrees with both the release
+identifier and the release commit's `VERSION`. Selecting is the same discipline
+`load_release_manifest` applies at build time, one step earlier in the operator's
+hands. If a release introduces a new release-controlled key, add it to
+`RELEASE_CONTROLLED_KEYS` in the selector (and to the required lists if the
+release cannot build without it) in the same commit that adds it to the manifest;
+the selector adds keys the installed release never had, but only ones it knows
+are release-controlled.
+
 ## Cutting `<x.y.z>`
 
 1. Update `VERSION` and each repository's release notes
@@ -155,7 +179,16 @@ or passing fresh-install acceptance does not satisfy this gate.
    password to the manifest. For every release after 0.1.7, name the immediately
    previous published release as the supported upgrade source and reserve a
    provenance section for the upgrade acceptance result. Name any supported
-   direct skip separately; silence means the skip is unsupported.
+   direct skip separately; silence means the skip is unsupported. Then prove the
+   finished manifest is selectable and write the operator's exact command into
+   the release notes: on a machine installed from the previous release run this
+   release's own `provision/plebian-os-select-closure.sh <x.y.z> --dry-run` (via
+   the fetched-tag block in [UPGRADING.md](UPGRADING.md); the tag is local-only
+   until step 7, so dry-run against the candidate tag) and confirm it validates
+   the closure and lists the release-controlled keys that move. A release whose
+   own selector refuses its manifest is not cuttable, and
+   a release whose notes do not carry that command block has not shipped the
+   mechanism UPGRADING.md requires.
 2. Run each repository's complete test/lint suite and integration contract
    tests. Run them in a clean environment and outside a live Kilix session:
    exported `KILIX_*` values and a user's persisted `kilix.env`
@@ -276,11 +309,15 @@ or passing fresh-install acceptance does not satisfy this gate.
    source. For every later release, also install the immediately previous
    published ISO in a fresh VM and complete all six gates in
    [UPGRADING.md](UPGRADING.md): verify the starting artifact/commits, create
-   preservation sentinels, prove rollback under an induced failure, complete
-   the upgrade and reboot, verify the target closure plus preserved choices,
-   and record the exact result in release notes/provenance. Perform this using
-   the path documented for installed users, not an unpublished developer
-   checkout. A failed or missing upgrade run blocks publication.
+   preservation sentinels, prove rollback under an induced failure, select the
+   target closure with this release's own
+   `provision/plebian-os-select-closure.sh` and then
+   complete the upgrade and reboot, verify the target closure plus preserved
+   choices, and record the exact result in release notes/provenance. Gate 4 runs
+   the selector and the updater in that order and nothing privileged between
+   them. Perform this using the path documented for installed users, not an
+   unpublished developer checkout. A failed or missing upgrade run blocks
+   publication.
 7. Re-check that every local tag resolves to the reviewed commit and that all
    worktrees remain clean. Only then push the four tags and publish the strict
    release artifact, its checksum, and a checksummed release source archive

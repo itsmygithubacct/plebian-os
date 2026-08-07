@@ -70,8 +70,13 @@ must not depend on an unpublished developer checkout. The acceptance run must:
    `settings.conf`, and operator-owned session configuration;
 3. exercise one induced mid-transaction failure and prove the old version,
    refs, runtime generation, settings, and sentinels are restored;
-4. perform the successful upgrade, then reboot and verify all coordinated
-   version commands, refs, provenance, provider launches, and sentinels;
+4. select the target closure with the target release's own
+   `provision/plebian-os-select-closure.sh <x.y.z>`, run exactly as
+   "Selecting a target closure" below documents, and confirm it reports every
+   release-controlled key it moved; then perform the successful upgrade with
+   `plebian-os-update --restart` — nothing privileged in between — reboot, and
+   verify all coordinated version commands, refs, provenance, provider launches,
+   and sentinels;
 5. verify that release-controlled pins all moved to the target closure and that
    non-release-controlled choices did not; and
 6. record the tested start version, target version, artifact hashes, exact
@@ -96,6 +101,68 @@ mechanism must complete successfully before the operator runs:
 ```sh
 plebian-os-update --restart
 ```
+
+The mechanism is `provision/plebian-os-select-closure.sh`, and the release which
+ships it is the **target** release, not the installed one: it reads
+`releases/<x.y.z>.env` out of the published `v<x.y.z>` tag, so the pins are the
+immutable ones that release was accepted with, whatever the machine is running
+now.
+
+### Selecting a target closure
+
+Run this as the Pleb user on the installed machine — never through `sudo`; the
+selector elevates the two bounded writes it needs and refuses to run as root, as
+`plebian-os-update` does. `$SRC` is the Plebian-OS source checkout the installed
+system already uses; only its object store is read, so its working tree and HEAD
+stay exactly where the updater expects them.
+
+```sh
+SRC="$HOME/.local/gpu_terminal/sources/plebian-os"
+SEL="$(mktemp)"
+git -C "$SRC" fetch --force origin 'refs/tags/v0.1.8:refs/tags/v0.1.8'
+git -C "$SRC" show v0.1.8:provision/plebian-os-select-closure.sh >"$SEL"
+bash "$SEL" 0.1.8
+```
+
+Substitute the target version throughout. On a machine already running 0.1.8 or
+newer the selector is present in that checkout, so later hops are one command:
+
+```sh
+~/.local/gpu_terminal/sources/plebian-os/provision/plebian-os-select-closure.sh 0.1.9
+```
+
+The selector is deliberately **not** on `PATH`. What the updater redeploys is a
+fixed eleven-file OS layer describing the release a machine is on, and the
+selector that matters is always the one belonging to the release it is moving
+*to*. Running it from the target's own tree is what keeps those two facts from
+disagreeing.
+
+It validates the whole closure before it writes anything: a manifest which is
+incomplete, malformed, still holds a placeholder, pins a branch instead of a
+commit, half-pins an optional closure such as Kilix Voice, or declares a version
+which disagrees with the release identifier or with the release commit's
+`VERSION`, is refused and the refusal names what was wrong. It then reports every
+release-controlled key it will move — announcing `DOWNGRADE` when the selection
+walks the machine backwards — proves the rendered configuration changes nothing
+else, and swaps the new `/etc/pleb/session.env` in with a single rename. Either
+every release-controlled key moves or none does; a write that fails part way
+leaves the previous closure selected and says so.
+
+Useful before and after — `SEL` being whichever copy of the selector the block
+above put in your hands:
+
+```sh
+bash "$SEL" 0.1.8 --dry-run   # validate and report, write nothing
+bash "$SEL" --show            # the closure this machine has now
+bash "$SEL" --rollback        # put the previous closure back
+```
+
+The previous `/etc/pleb/session.env` is saved under
+`/var/lib/plebian-os/closure-rollback.<timestamp>.*` with a record of the closure
+that replaced it, so `--rollback` is available until the upgrade is committed and
+afterwards. Keep `$SEL` until the upgrade has succeeded — the extracted copy is
+the only one on the machine until the updater moves the source checkout to the
+target commit — then `rm -f "$SEL"`.
 
 Do not assemble pins from several releases or run a bare privileged provisioner
 between closure selection and the updater. Back up irreplaceable personal data

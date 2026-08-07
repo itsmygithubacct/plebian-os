@@ -161,7 +161,12 @@ installed systems too — pinned
 by `PLEBIAN_OS_REF` and disablable with
 `PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
 `KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, the update helper keeps using
-those exact refs instead of drifting to branch heads. Updates are serialized;
+those exact refs instead of drifting to branch heads. Moving an installed machine
+to another release is therefore a separate, deliberate step: the target release's
+own `provision/plebian-os-select-closure.sh <x.y.z>` validates that release's
+complete closure and selects every release-controlled pin at once, leaving
+operator choices alone, and runs **before** `plebian-os-update --restart` — see
+[UPGRADING.md](UPGRADING.md) for the exact commands. Updates are serialized;
 participating checkouts with local changes are refused. Before the first change,
 the updater snapshots the deployed OS/Pleb files, checkout positions, and engine
 artifacts. A failure after the OS refresh, Pleb refresh, install, or component
