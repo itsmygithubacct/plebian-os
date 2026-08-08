@@ -114,6 +114,14 @@ component named, and reaches this release through the coordinated pins in
   the file it writes itself and the updater already reads — for every component
   whose checkout it positions, not just pleb, and says which pin is missing
   instead of relaying git's message when there is genuinely nothing to resolve.
+  It also reads the **install policy** back from `/etc/default/plebian-os`, the
+  file firstboot itself read: the session mode, the passwordless-sudo grant, the
+  apt snapshot and the optional components are reconciled on every run, and a
+  run that saw none of them reconciled all of them to the defaults. That was
+  invisible only because the run always died first; once it completes, a plain
+  re-provision of a kiosk image would have dropped its autologin and revoked its
+  passwordless sudo at the very end. An explicit environment value or
+  command-line flag still wins — that is how policy is meant to change.
 - **Waiting for the Kilix build/update lock was silent.** Both updaters block
   on it deliberately, but printed nothing while doing so; 45 seconds of silence
   reads as a hung command. A contended lock now announces the wait first.

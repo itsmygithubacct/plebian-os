@@ -45,6 +45,7 @@ KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
 KILIX_VOICE_MODEL_URL="${KILIX_VOICE_MODEL_URL:-}"
 KILIX_VOICE_MODEL_SHA256="${KILIX_VOICE_MODEL_SHA256:-}"
 INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
+INSTALL_VOICE_MODEL_EXPLICIT="${PLEBIAN_OS_INSTALL_VOICE_MODEL:+1}"
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
@@ -86,7 +87,9 @@ PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file 
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
 PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}" # snapshot.debian.org ts = reproducible apt
+PLEBIAN_OS_APT_SNAPSHOT_EXPLICIT="${PLEBIAN_OS_APT_SNAPSHOT:+1}"
 INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
+INSTALL_UV_EXPLICIT="${PLEBIAN_OS_INSTALL_UV:+1}"
 UV_VERSION_PIN="${PLEBIAN_OS_UV_VERSION:-}"
 UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
 # The apt root is overridable only to exercise snapshot transactions in an
@@ -99,11 +102,15 @@ KILIX_CAP_DIR="${KILIX_CAP_DIR:-}"              # default after target user is k
 KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-}"  # default after target user is known
 KILIX_LAND_DESKTOP_DIR="${KILIX_LAND_DESKTOP_DIR:-}" # default after target user is known
 KIOSK="${PLEBIAN_OS_KIOSK:-0}"                 # 1 = autologin straight into Pleb
+KIOSK_EXPLICIT="${PLEBIAN_OS_KIOSK:+1}"
 NOPASSWD_SUDO="${PLEBIAN_OS_NOPASSWD_SUDO:-0}" # 1 = passwordless sudo for the user
+NOPASSWD_SUDO_EXPLICIT="${PLEBIAN_OS_NOPASSWD_SUDO:+1}"
 DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = desktop provider in Kilix page 1
+DESKTOP_EXPLICIT="${PLEBIAN_OS_DESKTOP:+1}"
 PLEB_WM="${PLEB_WM:-}"                         # empty = keep an existing pin, else openbox
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 1
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
+TARGET_USER_EXPLICIT="${PLEBIAN_OS_USER:+1}"
 DRY_RUN=0
 PLEB_BRANCH_EXPLICIT=0                         # 1 = --branch given on the command line
 
@@ -256,6 +263,64 @@ restore_persisted_pins() {
     )
     [ "${#restored[@]}" -gt 0 ] || return 0
     log "restored pins from $PLEBIAN_OS_SESSION_ENV: ${restored[*]}"
+}
+
+# ── persisted install policy ─────────────────────────────────────────────────
+# The session mode, sudo grant and optional components a machine was installed
+# with. These are not refs and updates never move them, so they do not belong
+# in session.env; they live where firstboot read them —
+# EnvironmentFile=/etc/default/plebian-os, written by the image builder.
+#
+# This script reconciles all of them on every run, and a run that saw none of
+# them reconciled to the defaults: a kiosk image re-provisioned with a plain
+# `sudo plebian-os-provision` lost its autologin and had its passwordless sudo
+# revoked, silently, at the very end. That never surfaced only because the run
+# died earlier, on the detached checkout. Read them back so a re-run reproduces
+# the install, which is what "idempotent" is supposed to mean here.
+#
+# Values are matched against a strict pattern and taken as inert data; this
+# file is never sourced. An explicit environment value or command-line flag
+# still wins — those are how you deliberately change policy.
+PLEBIAN_OS_FIRSTBOOT_ENV="${PLEBIAN_OS_FIRSTBOOT_ENV:-/etc/default/plebian-os}"
+
+# key, the variable it feeds, and the only values accepted for it.
+PERSISTED_POLICY=(
+    "PLEBIAN_OS_USER"               "TARGET_USER"            '^[a-z_][a-z0-9_-]{0,31}$'
+    "PLEBIAN_OS_KIOSK"              "KIOSK"                  '^[01]$'
+    "PLEBIAN_OS_NOPASSWD_SUDO"      "NOPASSWD_SUDO"          '^[01]$'
+    "PLEBIAN_OS_DESKTOP"            "DESKTOP"                '^[01]$'
+    "PLEBIAN_OS_INSTALL_UV"         "INSTALL_UV"             '^[01]$'
+    "PLEBIAN_OS_INSTALL_VOICE_MODEL" "INSTALL_VOICE_MODEL"   '^[01]$'
+    "PLEBIAN_OS_APT_SNAPSHOT"       "PLEBIAN_OS_APT_SNAPSHOT" '^[0-9]{8}(T[0-9]{6}Z)?$'
+)
+
+read_firstboot_env_value() {
+    local key="$1" value
+    value="$(sed -n "s/^[[:space:]]*$key=//p" "$PLEBIAN_OS_FIRSTBOOT_ENV" \
+        2>/dev/null | tail -1)" || return 1
+    value="${value%\"}"; value="${value#\"}"
+    value="${value%\'}"; value="${value#\'}"
+    [ -n "$value" ] || return 1
+    printf '%s\n' "$value"
+}
+
+restore_persisted_policy() {
+    local i key var pattern value explicit restored=()
+    [ -r "$PLEBIAN_OS_FIRSTBOOT_ENV" ] || return 0
+    for ((i = 0; i < ${#PERSISTED_POLICY[@]}; i += 3)); do
+        key="${PERSISTED_POLICY[i]}"
+        var="${PERSISTED_POLICY[i + 1]}"
+        pattern="${PERSISTED_POLICY[i + 2]}"
+        explicit="${var}_EXPLICIT"
+        [ "${!explicit:-0}" != 1 ] || continue
+        value="$(read_firstboot_env_value "$key")" || continue
+        [[ "$value" =~ $pattern ]] || continue
+        [ "$value" != "${!var}" ] || continue
+        declare -g "$var=$value"
+        restored+=("$key=$value")
+    done
+    [ "${#restored[@]}" -gt 0 ] || return 0
+    log "restored install policy from $PLEBIAN_OS_FIRSTBOOT_ENV: ${restored[*]}"
 }
 
 validate_release_inputs() {
@@ -2605,11 +2670,11 @@ fi
 # ── args ─────────────────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
     case "$1" in
-        --user)   TARGET_USER="${2:?}"; shift 2 ;;
-        --kiosk)  KIOSK=1; shift ;;
-        --nopasswd-sudo) NOPASSWD_SUDO=1; shift ;;
-        --desktop) DESKTOP=1; shift ;;
-        --no-desktop) DESKTOP=0; shift ;;
+        --user)   TARGET_USER="${2:?}"; shift 2; TARGET_USER_EXPLICIT=1 ;;
+        --kiosk)  KIOSK=1; shift; KIOSK_EXPLICIT=1 ;;
+        --nopasswd-sudo) NOPASSWD_SUDO=1; shift; NOPASSWD_SUDO_EXPLICIT=1 ;;
+        --desktop) DESKTOP=1; shift; DESKTOP_EXPLICIT=1 ;;
+        --no-desktop) DESKTOP=0; shift; DESKTOP_EXPLICIT=1 ;;
         --branch) PLEB_BRANCH="${2:?}"; shift 2; PLEB_BRANCH_EXPLICIT=1 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --version) echo "plebian-os-provision $PLEBIAN_OS_VERSION"; exit 0 ;;
@@ -2626,6 +2691,7 @@ if [ "$PLEB_BRANCH_EXPLICIT" = 1 ]; then
 else
     restore_persisted_pins
 fi
+restore_persisted_policy
 
 validate_release_inputs
 
