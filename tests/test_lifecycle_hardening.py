@@ -1,7 +1,10 @@
+import fcntl
 import re
 import os
+import selectors
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -536,6 +539,222 @@ class ProvisioningLifecycleTests(unittest.TestCase):
             self.assertIn(f"write_session_default {key}", PROVISION)
         self.assertIn('"GO_VERSION=$KILIX_GO_VERSION"', PROVISION)
         self.assertIn('"GO_SHA256=$sha"', PROVISION)
+
+
+class KilixEngineParkTests(unittest.TestCase):
+    """The shape this updater parks the outgoing Kilix generation in.
+
+    It is a contract with the engine's generation collector, which reclaims
+    every generation it cannot see a reference to. kilix build.sh recognizes a
+    parked generation only as
+
+        $KILIX_BUILD_DIRECTORY/.update-rollback.<suffix>/<name>.entry
+
+    (kilix tests/test_build_behavior.py pins that side). Park anywhere else and
+    the nested `kilix --build` this updater runs deletes the generation the
+    transaction is holding for its own rollback; the rollback then restores
+    `previous` onto a deleted target, and every update path — `pleb update`
+    and `plebian-os-update` alike — refuses to run against the result. These
+    tests pin this side of the same literal shape, so neither side can move
+    alone without a red test.
+    """
+
+    HARNESS = r'''
+set -euo pipefail
+script="$1"
+work="$2"
+previous_target="$3"
+export HOME="$work/home"
+export PLEB_STATE_HOME="$work/state"
+export KILIX_STORAGE_HOME="$work/kilix-storage"
+export KILIX_STATE_DIRECTORY="$KILIX_STORAGE_HOME/state"
+export KILIX_BUILD_DIRECTORY="$KILIX_STORAGE_HOME/build"
+export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
+mkdir -p "$HOME" "$PLEB_STATE_HOME" "$KILIX_STATE_DIRECTORY" \
+    "$KILIX_BUILD_DIRECTORY/generations/build.OldCurrent" \
+    "$KILIX_BUILD_DIRECTORY/generations/build.OldPrevious"
+chmod 0700 "$KILIX_STORAGE_HOME" "$KILIX_STATE_DIRECTORY" \
+    "$KILIX_BUILD_DIRECTORY"
+ln -s generations/build.OldCurrent "$KILIX_BUILD_DIRECTORY/current"
+ln -s "$previous_target" "$KILIX_BUILD_DIRECTORY/previous"
+set --
+. "$script"
+_STACK_TXN_DIR="$(mktemp -d "$PLEB_STATE_HOME/stack-rollback.XXXXXX")"
+'''
+
+    def _run(self, work: str, body: str,
+             previous_target: str = "generations/build.OldPrevious"):
+        return subprocess.run(
+            ["bash", "-c", self.HARNESS + body, "harness", str(UPDATE_PATH),
+             work, previous_target],
+            text=True, capture_output=True, check=False,
+        )
+
+    def test_outgoing_generation_parks_in_the_collector_contract_shape(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = self._run(td, '''
+snapshot_kilix_engine_generation
+begin_kilix_engine_mutation
+printf 'PARK=%s\\n' "$(cat "$_STACK_TXN_DIR/kilix-engine.park")"
+''')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            park = Path([
+                line.split("=", 1)[1] for line in result.stdout.splitlines()
+                if line.startswith("PARK=")
+            ][0])
+            build = Path(td) / "kilix-storage" / "build"
+
+            # The literal shape kilix build.sh protects.
+            self.assertEqual(park.parent, build)
+            self.assertRegex(park.name, r"^\.update-rollback\.[A-Za-z0-9]+$")
+            parked = list(park.iterdir())
+            self.assertEqual(len(parked), 1, parked)
+            self.assertTrue(parked[0].name.endswith(".entry"), parked[0].name)
+            self.assertEqual(
+                os.readlink(parked[0]), "generations/build.OldPrevious")
+            self.assertFalse((build / "previous").is_symlink())
+
+    def test_parked_generation_is_restored_from_that_shape(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = self._run(td, '''
+snapshot_kilix_engine_generation
+begin_kilix_engine_mutation
+restore_kilix_engine_generation
+printf 'RESTORED\\n'
+''')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("RESTORED", result.stdout)
+            build = Path(td) / "kilix-storage" / "build"
+            self.assertEqual(
+                os.readlink(build / "previous"),
+                "generations/build.OldPrevious")
+            self.assertEqual(list(build.glob(".update-rollback.*")), [],
+                             "the park must not outlive the transaction")
+
+    def test_parked_generation_is_retired_on_commit(self):
+        with tempfile.TemporaryDirectory() as td:
+            # Exactly what kilix build.sh does when it promotes: `current` is
+            # *moved* onto `previous`, so the recorded identity still matches.
+            result = self._run(td, '''
+snapshot_kilix_engine_generation
+begin_kilix_engine_mutation
+mkdir -p "$KILIX_BUILD_DIRECTORY/generations/build.New"
+mv "$KILIX_BUILD_DIRECTORY/current" "$KILIX_BUILD_DIRECTORY/previous"
+ln -s generations/build.New "$KILIX_BUILD_DIRECTORY/current"
+commit_kilix_engine_generation
+printf 'COMMITTED\\n'
+''')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("COMMITTED", result.stdout)
+            build = Path(td) / "kilix-storage" / "build"
+            self.assertEqual(
+                os.readlink(build / "previous"),
+                "generations/build.OldCurrent")
+            self.assertEqual(list(build.glob(".update-rollback.*")), [])
+            self.assertFalse(
+                (build / "generations" / "build.OldPrevious").exists())
+
+    def test_a_previous_entry_with_no_generation_left_is_repaired(self):
+        # What a pre-fix updater left behind: the collector reclaimed the parked
+        # generation, so rollback restored `previous` onto nothing. Every update
+        # path refused to start against that, with no way out but hand surgery.
+        with tempfile.TemporaryDirectory() as td:
+            result = self._run(td, '''
+snapshot_kilix_engine_generation
+printf 'IDENTITY=%s\\n' \\
+    "$(cat "$_STACK_TXN_DIR/kilix-engine.previous.identity")"
+''', previous_target="generations/build.Reclaimed")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("refusing unsafe Kilix previous", result.stderr)
+            self.assertIn("is gone; retiring the stale entry", result.stderr)
+            self.assertIn("IDENTITY=absent", result.stdout)
+            build = Path(td) / "kilix-storage" / "build"
+            self.assertFalse((build / "previous").is_symlink())
+
+    def test_a_previous_entry_outside_the_build_directory_is_still_refused(self):
+        # The repair is scoped to entries naming a missing generation of this
+        # build directory; anything else is still a refusal, not a deletion.
+        with tempfile.TemporaryDirectory() as td:
+            result = self._run(td, '''
+snapshot_kilix_engine_generation
+''', previous_target="../../../etc")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "refusing unsafe Kilix previous generation entry",
+                result.stderr)
+            build = Path(td) / "kilix-storage" / "build"
+            self.assertTrue((build / "previous").is_symlink())
+
+
+class KilixTransactionLockWaitTests(unittest.TestCase):
+    HARNESS = r'''
+set -euo pipefail
+script="$1"
+work="$2"
+export HOME="$work/home"
+export PLEB_STATE_HOME="$work/state"
+export KILIX_STORAGE_HOME="$work/kilix-storage"
+export KILIX_STATE_DIRECTORY="$KILIX_STORAGE_HOME/state"
+export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
+mkdir -p "$HOME" "$PLEB_STATE_HOME" "$KILIX_STATE_DIRECTORY"
+chmod 0700 "$KILIX_STORAGE_HOME" "$KILIX_STATE_DIRECTORY"
+set --
+. "$script"
+acquire_kilix_transaction_lock
+printf 'ACQUIRED\n'
+'''
+
+    def _argv(self, work: str):
+        return ["bash", "-c", self.HARNESS, "harness", str(UPDATE_PATH), work]
+
+    def test_blocking_on_a_held_kilix_lock_says_so_first(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = Path(td) / "kilix-storage" / "state"
+            state.mkdir(parents=True)
+            state.chmod(0o700)
+            lock_path = state / "build-update.lock"
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            waiter = subprocess.Popen(
+                self._argv(td), text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            try:
+                # The announcement must land *while* the lock is still held:
+                # blocking in silence is what reads as a hung command. Poll for
+                # it rather than reading, so an unannounced block fails on the
+                # deadline instead of hanging the suite.
+                selector = selectors.DefaultSelector()
+                selector.register(waiter.stdout, selectors.EVENT_READ)
+                announced = ""
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    if selector.select(0.25):
+                        announced = waiter.stdout.readline()
+                        break
+                    if waiter.poll() is not None:
+                        break
+                selector.close()
+                self.assertIn("waiting for the Kilix build/update lock",
+                              announced)
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                out, err = waiter.communicate(timeout=30)
+            finally:
+                if waiter.poll() is None:
+                    waiter.kill()
+                    waiter.communicate(timeout=30)
+                os.close(lock_fd)
+            self.assertEqual(waiter.returncode, 0, err)
+            self.assertIn("ACQUIRED", out)
+
+    def test_an_uncontended_kilix_lock_is_taken_without_a_notice(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = subprocess.run(
+                self._argv(td), text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("ACQUIRED", result.stdout)
+            self.assertNotIn("waiting for the Kilix build/update lock",
+                             result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

@@ -576,7 +576,13 @@ acquire_kilix_transaction_lock() {
         || die "could not inspect the inherited Kilix transaction-lock descriptor"
     [ "$fd_identity" = "$path_identity" ] \
         || die "KILIX_TRANSACTION_LOCK_FD does not refer to $lock_path"
-    flock -x "$fd" || die "could not acquire the Kilix transaction lock"
+    # Blocking is correct here — a concurrent build or update must finish before
+    # this one starts — but blocking in silence looks like a hang, so say so
+    # first. Only announce when the lock is actually contended.
+    if ! flock -n -x "$fd"; then
+        log "waiting for the Kilix build/update lock ($lock_path)..."
+        flock -x "$fd" || die "could not acquire the Kilix transaction lock"
+    fi
     KILIX_TRANSACTION_LOCK_FD="$fd"
     KILIX_TRANSACTION_LOCK_PATH="$lock_path"
     export KILIX_TRANSACTION_LOCK_FD KILIX_TRANSACTION_LOCK_PATH
@@ -1035,18 +1041,49 @@ collect_unreferenced_kilix_generation() {
     rm -rf -- "$path"
 }
 
+# Where the outgoing Kilix generation waits while this transaction is in
+# flight. The shape is a contract with the engine's generation collector
+# (kilix build.sh, generation_target_is_referenced): a `.update-rollback.*`
+# directory below the build directory holding entries named `*.entry`. A
+# nested `kilix --build` reclaims every generation it cannot see a reference
+# to, so parking anywhere else has the collector delete the generation this
+# transaction is holding for its own rollback — which then restores `previous`
+# onto a deleted target and leaves the machine unable to update at all.
+# Changing either half of this without the other reintroduces exactly that.
+KILIX_ENGINE_PARK_TEMPLATE=".update-rollback.XXXXXX"
+KILIX_ENGINE_PARK_ENTRY="previous.entry"
+
 kilix_engine_park_path() {
     local park
     park="$(cat "$_STACK_TXN_DIR/kilix-engine.park" 2>/dev/null || true)"
     [ -n "$park" ] || return 1
     [ "$(dirname "$park")" = "$KILIX_BUILD_DIRECTORY" ] || return 1
-    [[ "$(basename "$park")" =~ ^\.plebian-os-update\.[A-Za-z0-9]+$ ]] || return 1
+    [[ "$(basename "$park")" =~ ^\.update-rollback\.[A-Za-z0-9]+$ ]] || return 1
     printf '%s\n' "$park"
+}
+
+# A `previous` entry naming a generation that is no longer on disk references
+# nothing: there is no state left to roll back to, only an entry that fails
+# every safety check and stops all three update paths. Plebian-OS releases up
+# to 0.1.8 parked outside the collector's contract, so a failed update that had
+# rebuilt the engine could leave exactly that behind. Retire the stale entry
+# instead of refusing, so the machine repairs itself on the next update rather
+# than needing hand surgery in the build directory.
+repair_dangling_kilix_previous_entry() {
+    local previous="$KILIX_BUILD_DIRECTORY/previous" target
+    [ -L "$previous" ] || return 0
+    target="$(readlink -- "$previous")" || return 0
+    [[ "$target" =~ ^generations/build\.[A-Za-z0-9]+$ ]] || return 0
+    [ -e "$KILIX_BUILD_DIRECTORY/$target" ] && return 0
+    warn "previous Kilix generation $target is gone; retiring the stale entry"
+    rm -f -- "$previous" \
+        || die "could not retire the stale Kilix previous generation entry: $previous"
 }
 
 snapshot_kilix_engine_generation() {
     local current="$KILIX_BUILD_DIRECTORY/current"
     local previous="$KILIX_BUILD_DIRECTORY/previous"
+    repair_dangling_kilix_previous_entry
     kilix_generation_entry_identity "$current" \
         "$_STACK_TXN_DIR/kilix-engine.current.identity" \
         || die "refusing unsafe Kilix current generation entry: $current"
@@ -1063,12 +1100,12 @@ snapshot_kilix_engine_generation() {
 begin_kilix_engine_mutation() {
     local previous="$KILIX_BUILD_DIRECTORY/previous" park
     if [ -e "$previous" ] || [ -L "$previous" ]; then
-        park="$(mktemp -d "$KILIX_BUILD_DIRECTORY/.plebian-os-update.XXXXXX")" \
+        park="$(mktemp -d "$KILIX_BUILD_DIRECTORY/$KILIX_ENGINE_PARK_TEMPLATE")" \
             || die "could not create Kilix generation rollback state"
         chmod 0700 -- "$park" \
             || die "could not protect Kilix generation rollback state"
         printf '%s\n' "$park" >"$_STACK_TXN_DIR/kilix-engine.park"
-        mv -- "$previous" "$park/previous" \
+        mv -- "$previous" "$park/$KILIX_ENGINE_PARK_ENTRY" \
             || die "could not park the previous Kilix generation"
         printf '%s\n' 1 >"$_STACK_TXN_DIR/kilix-engine.previous.parked"
     fi
@@ -1086,7 +1123,8 @@ remove_kilix_generation_entry() {
 restore_kilix_engine_generation() {
     local current="$KILIX_BUILD_DIRECTORY/current"
     local previous="$KILIX_BUILD_DIRECTORY/previous"
-    local old_current current_after previous_after park parked new_target=""
+    local old_current current_after previous_after park parked_entry parked
+    local new_target=""
     old_current="$(cat "$_STACK_TXN_DIR/kilix-engine.current.identity")" \
         || return 1
     kilix_generation_entry_identity "$current" \
@@ -1117,9 +1155,10 @@ restore_kilix_engine_generation() {
     parked="$(cat "$_STACK_TXN_DIR/kilix-engine.previous.parked" 2>/dev/null || echo 0)"
     if [ "$parked" = 1 ]; then
         park="$(kilix_engine_park_path)" || return 1
-        [ -e "$park/previous" ] || [ -L "$park/previous" ] || return 1
+        parked_entry="$park/$KILIX_ENGINE_PARK_ENTRY"
+        [ -e "$parked_entry" ] || [ -L "$parked_entry" ] || return 1
         [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
-        mv -- "$park/previous" "$previous" || return 1
+        mv -- "$parked_entry" "$previous" || return 1
         rmdir -- "$park" || return 1
     else
         [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
@@ -1131,7 +1170,8 @@ restore_kilix_engine_generation() {
 commit_kilix_engine_generation() {
     local current="$KILIX_BUILD_DIRECTORY/current"
     local previous="$KILIX_BUILD_DIRECTORY/previous"
-    local old_current current_after previous_after park parked retired_target=""
+    local old_current current_after previous_after park parked_entry parked
+    local retired_target=""
     old_current="$(cat "$_STACK_TXN_DIR/kilix-engine.current.identity")" \
         || return 1
     kilix_generation_entry_identity "$current" \
@@ -1143,7 +1183,8 @@ commit_kilix_engine_generation() {
         if [ "$parked" = 1 ]; then
             park="$(kilix_engine_park_path)" || return 1
             [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
-            mv -- "$park/previous" "$previous" || return 1
+            mv -- "$park/$KILIX_ENGINE_PARK_ENTRY" "$previous" \
+                || return 1
             rmdir -- "$park" || return 1
         else
             [ ! -e "$previous" ] && [ ! -L "$previous" ] || return 1
@@ -1161,8 +1202,10 @@ commit_kilix_engine_generation() {
     fi
     if [ "$parked" = 1 ]; then
         park="$(kilix_engine_park_path)" || return 1
-        retired_target="$(kilix_generation_target "$park/previous" 2>/dev/null || true)"
-        if ! remove_kilix_generation_entry "$park/previous" \
+        parked_entry="$park/$KILIX_ENGINE_PARK_ENTRY"
+        retired_target="$(kilix_generation_target "$parked_entry" \
+            2>/dev/null || true)"
+        if ! remove_kilix_generation_entry "$parked_entry" \
             || ! rmdir -- "$park"; then
             warn "stack committed, but old Kilix generation recovery data remains at $park"
             return 0

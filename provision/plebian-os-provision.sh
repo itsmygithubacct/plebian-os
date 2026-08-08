@@ -105,6 +105,7 @@ PLEB_WM="${PLEB_WM:-}"                         # empty = keep an existing pin, e
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 1
 TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
 DRY_RUN=0
+PLEB_BRANCH_EXPLICIT=0                         # 1 = --branch given on the command line
 
 # Stable, distribution-owned wallpaper path shared by the builtin Kilix desktop
 # and the external Kilix 95 provider.  Keep this checksum in sync with the
@@ -168,6 +169,94 @@ log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
+
+# ── persisted component pins ─────────────────────────────────────────────────
+# The refs this machine is provisioned from live in /etc/pleb/session.env — the
+# same file pleb-session, `pleb`, plebian-os-update and plebian-os-select-closure
+# read, and the one this script rewrites at the end of every successful run, so
+# it tracks the installed closure rather than the image the disk shipped with.
+#
+# Nothing fed those refs back into a *re-run* of this provisioner. It received
+# them only from its environment, and the only thing that ever set that
+# environment was plebian-os-firstboot.service via
+# EnvironmentFile=/etc/default/plebian-os — a unit gated on
+# ConditionPathExists=!/var/lib/plebian-os/provisioned, so it never runs twice.
+# A later `sudo plebian-os-provision` — which plebian-os-update recommends for
+# OS-layer changes — therefore started with no pins at all and fell through to
+# `git pull --ff-only`, which cannot work on the detached HEAD every pinned
+# install has. Read the pins back so a re-run reproduces the installed closure.
+PLEBIAN_OS_SESSION_ENV="${PLEBIAN_OS_SESSION_ENV:-/etc/pleb/session.env}"
+
+# Refuse to source root configuration that a non-root account could have
+# written. Mirrors plebian-os-update.sh; both run as root.
+root_config_safe_to_source() {
+    local cfg="$1" owner mode dir
+    [ "$(id -u)" = 0 ] || return 0
+    [ -f "$cfg" ] && [ ! -L "$cfg" ] || return 1
+    owner="$(stat -c '%u' "$cfg" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' "$cfg" 2>/dev/null)" || return 1
+    [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || return 1
+    dir="$(dirname "$cfg")"
+    while [ "$dir" != / ]; do
+        owner="$(stat -c '%u' "$dir" 2>/dev/null)" || return 1
+        mode="$(stat -c '%a' "$dir" 2>/dev/null)" || return 1
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || return 1
+        dir="$(dirname "$dir")"
+    done
+}
+
+# Every component whose checkout this script positions by ref or branch. Fixing
+# only pleb would leave kilix, kilix 95 and the desktop providers drifting off
+# the pinned closure on the same re-run.
+PERSISTED_PIN_KEYS=(
+    PLEBIAN_OS_REF PLEBIAN_OS_BRANCH
+    PLEB_REF PLEB_BRANCH
+    KILIX_REF KILIX_BRANCH
+    KILIX95_REF KILIX95_BRANCH
+    KILIX_VOICE_REF
+    KILIX_CAP_REF
+    KILIX_TUI_UTILS_REF
+    KILIX_LAND_DESKTOP_REF
+)
+
+restore_persisted_pins() {
+    local key value line skip="${1:-}"
+    local -a candidates=() restored=()
+    [ -r "$PLEBIAN_OS_SESSION_ENV" ] || return 0
+    root_config_safe_to_source "$PLEBIAN_OS_SESSION_ENV" \
+        || die "refusing to source unsafe $PLEBIAN_OS_SESSION_ENV as root"
+    # An explicit pin from the environment or the command line always wins, so
+    # only pins this run left empty are candidates.
+    for key in "${PERSISTED_PIN_KEYS[@]}"; do
+        [ "$key" != "$skip" ] || continue
+        [ -z "${!key}" ] || continue
+        candidates+=("$key")
+    done
+    [ "${#candidates[@]}" -gt 0 ] || return 0
+    # session.env assigns only what the environment leaves unset
+    # (`if [ -z "${NAME+x}" ]`), and the config block above already set every
+    # pin to at least the empty string. Unset the candidates and source the file
+    # in a subshell, so it can fill them without any of its other assignments
+    # reaching this run: paths, kiosk and sudo policy and the desktop selection
+    # stay exactly as resolved here.
+    while IFS= read -r line; do
+        key="${line%%=*}"
+        value="${line#*=}"
+        case " ${candidates[*]} " in *" $key "*) ;; *) continue ;; esac
+        [ -n "$value" ] || continue
+        declare -g "$key=$value"
+        restored+=("$key=$value")
+    done < <(
+        for key in "${candidates[@]}"; do unset "$key"; done
+        # shellcheck source=/dev/null
+        . "$PLEBIAN_OS_SESSION_ENV" >/dev/null 2>&1 || exit 0
+        for key in "${candidates[@]}"; do
+            printf '%s=%s\n' "$key" "${!key-}"
+        done
+    )
+    [ "${#restored[@]}" -gt 0 ] || return 0
+    log "restored pins from $PLEBIAN_OS_SESSION_ENV: ${restored[*]}"
+}
 
 validate_release_inputs() {
     [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
@@ -2043,6 +2132,11 @@ update_pleb_checkout() {
         return
     fi
 
+    # Nothing left to position the checkout by. A detached HEAD is what every
+    # pinned install has, and `git pull --ff-only` can only report that in git's
+    # own words; say which pin is missing instead.
+    as_target_readonly git -C "$PLEB_DIR" symbolic-ref --quiet HEAD >/dev/null \
+        || die "pleb checkout at $PLEB_DIR is not on a branch and no PLEB_REF/PLEB_BRANCH is set (expected a pin in $PLEBIAN_OS_SESSION_ENV)"
     as_user git -C "$PLEB_DIR" pull --ff-only || die "pleb pull failed"
 }
 
@@ -2516,13 +2610,22 @@ while [ $# -gt 0 ]; do
         --nopasswd-sudo) NOPASSWD_SUDO=1; shift ;;
         --desktop) DESKTOP=1; shift ;;
         --no-desktop) DESKTOP=0; shift ;;
-        --branch) PLEB_BRANCH="${2:?}"; shift 2 ;;
+        --branch) PLEB_BRANCH="${2:?}"; shift 2; PLEB_BRANCH_EXPLICIT=1 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --version) echo "plebian-os-provision $PLEBIAN_OS_VERSION"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
     esac
 done
+
+# `--branch` asks to track a branch, so it must not be overruled by a persisted
+# exact pleb ref; every other component still resolves from the installed
+# closure.
+if [ "$PLEB_BRANCH_EXPLICIT" = 1 ]; then
+    restore_persisted_pins PLEB_REF
+else
+    restore_persisted_pins
+fi
 
 validate_release_inputs
 

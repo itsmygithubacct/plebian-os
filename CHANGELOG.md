@@ -85,6 +85,38 @@ two machines rather than from a failing test. Each item is fixed in the
 component named, and reaches this release through the coordinated pins in
 [`releases/0.1.8.env`](releases/0.1.8.env).
 
+- **A failed update that had rebuilt the engine left a machine permanently
+  un-updatable** (Kilix, Pleb and this repository). Where an updater parks the
+  outgoing Kilix generation while its transaction is in flight is a contract
+  with the engine's generation collector, and the three components disagreed
+  about it: `kilix --build` recognized a parked generation only under
+  `.update-rollback.*/*.entry`, while both updaters parked at
+  `.pleb-update.*/previous` and `.plebian-os-update.*/previous`. The nested
+  build a transaction runs therefore reclaimed the very generation being held
+  for rollback, and the rollback restored `previous` onto a deleted directory.
+  Both `pleb update` and `plebian-os-update` then refused to start —
+  `refusing unsafe Kilix previous generation entry` — with no way out but hand
+  surgery in the build directory. Both updaters now park in the shape the
+  collector already anticipates; the collector still honors the two superseded
+  shapes so a machine carrying a pre-fix updater survives the update that
+  replaces it; and a `previous` entry naming a generation that is gone is
+  retired with a warning instead of refused, so an already-wedged machine
+  repairs itself on the next update.
+- **`sudo plebian-os-provision` always failed on a pinned install** — the
+  command `plebian-os-update` recommends for OS-layer changes. The provisioner
+  read `PLEB_REF`/`PLEB_BRANCH` from its environment only, and the only thing
+  that ever set that environment was `plebian-os-firstboot.service`, which is
+  gated on `ConditionPathExists=!/var/lib/plebian-os/provisioned` and never
+  runs twice. A re-run therefore fell through to `git pull --ff-only` on the
+  detached HEAD every pinned install has, failing after it had already
+  rewritten the wallpaper, greeter branding, licence, attribution and the
+  password helper. It now reads the pins back from `/etc/pleb/session.env` —
+  the file it writes itself and the updater already reads — for every component
+  whose checkout it positions, not just pleb, and says which pin is missing
+  instead of relaying git's message when there is genuinely nothing to resolve.
+- **Waiting for the Kilix build/update lock was silent.** Both updaters block
+  on it deliberately, but printed nothing while doing so; 45 seconds of silence
+  reads as a hung command. A contended lock now announces the wait first.
 - Kilix 95 Start menu: an opened submenu stays open when the pointer leaves the
   row that opened it. It closes on a click outside every menu, or when another
   cascade entry replaces it.

@@ -905,5 +905,176 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertIn("model provenance", refused.stderr)
 
 
+class PersistedPinTests(unittest.TestCase):
+    """A re-run of the provisioner must reproduce the installed closure.
+
+    Every pinned install has detached checkouts. The refs that put them there
+    live in /etc/pleb/session.env — written by this provisioner, read by
+    pleb-session, `pleb` and plebian-os-update. Nothing fed them back into a
+    *re-run* of the provisioner: it saw them only through the environment, and
+    only plebian-os-firstboot.service ever set that, once. So
+    `sudo plebian-os-provision` — the command plebian-os-update recommends for
+    OS-layer changes — fell through to `git pull --ff-only` and failed on the
+    detached HEAD every pinned install has.
+    """
+
+    PINS = (
+        "PLEBIAN_OS_REF", "PLEBIAN_OS_BRANCH",
+        "PLEB_REF", "PLEB_BRANCH",
+        "KILIX_REF", "KILIX_BRANCH",
+        "KILIX95_REF", "KILIX95_BRANCH",
+        "KILIX_VOICE_REF", "KILIX_CAP_REF",
+        "KILIX_TUI_UTILS_REF", "KILIX_LAND_DESKTOP_REF",
+    )
+
+    @staticmethod
+    def _session_env(path: Path, values: dict[str, str]) -> None:
+        # Exactly what write_session_default emits.
+        path.write_text("".join(
+            'if [ -z "${%s+x}" ]; then %s=%s; fi\n' % (key, key, value)
+            for key, value in values.items()
+        ))
+
+    @staticmethod
+    def _origin_with_two_commits(path: Path) -> tuple[str, str]:
+        subprocess.run(["git", "init", "-q", "-b", "main", str(path)],
+                       check=True)
+        for key, value in (("user.name", "test"),
+                           ("user.email", "test@example.invalid")):
+            subprocess.run(["git", "-C", str(path), "config", key, value],
+                           check=True)
+        (path / "tracked").write_text("first\n")
+        subprocess.run(["git", "-C", str(path), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "first"],
+                       check=True)
+        first = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+        (path / "tracked").write_text("second\n")
+        subprocess.run(["git", "-C", str(path), "commit", "-qam", "second"],
+                       check=True)
+        second = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"], text=True).strip()
+        return first, second
+
+    def _run(self, session_env: Path, body: str, extra: str = ""):
+        # as_user/as_target_readonly exist to drop root privilege; replace them
+        # so the checkout logic under test runs as the invoking user, the same
+        # way the transactional suites replace their privileged primitives.
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_PROVISION_LIB_ONLY=1\n"
+            f"export PLEBIAN_OS_SESSION_ENV={str(session_env)!r}\n"
+            f"{extra}"
+            f'. "{PROVISION}"\n'
+            "as_user() { \"$@\"; }\n"
+            "as_target_readonly() { \"$@\"; }\n"
+            "DRY_RUN=0\n"
+            f"{body}"
+        )
+        return subprocess.run(
+            ["bash", "-c", script], text=True, capture_output=True, check=False)
+
+    def test_every_component_pin_is_restored_from_the_session_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            session_env = Path(td) / "session.env"
+            values = {key: f"{key.lower()}-value" for key in self.PINS}
+            self._session_env(session_env, values)
+            result = self._run(
+                session_env,
+                "restore_persisted_pins\n"
+                + "".join(f'printf "%s=%s\\n" {key} "${key}"\n'
+                          for key in self.PINS),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for key in self.PINS:
+                with self.subTest(pin=key):
+                    self.assertIn(f"{key}={values[key]}", result.stdout)
+
+    def test_an_explicit_pin_is_not_overwritten_by_the_session_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            session_env = Path(td) / "session.env"
+            self._session_env(session_env, {"PLEB_REF": "persisted",
+                                            "KILIX_REF": "persisted"})
+            result = self._run(
+                session_env,
+                "restore_persisted_pins\n"
+                'printf "PLEB_REF=%s\\n" "$PLEB_REF"\n'
+                'printf "KILIX_REF=%s\\n" "$KILIX_REF"\n',
+                extra="export PLEB_REF=explicit\n",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("PLEB_REF=explicit", result.stdout)
+            self.assertIn("KILIX_REF=persisted", result.stdout)
+
+    def test_restoring_pins_leaves_unrelated_session_settings_alone(self):
+        with tempfile.TemporaryDirectory() as td:
+            session_env = Path(td) / "session.env"
+            self._session_env(session_env, {
+                "PLEB_REF": "persisted",
+                # Policy this run already resolved; the file must not reach it.
+                "PLEBIAN_OS_KIOSK": "1",
+                "PLEB_DIR": "/somewhere/else",
+            })
+            result = self._run(
+                session_env,
+                "restore_persisted_pins\n"
+                'printf "PLEB_REF=%s\\n" "$PLEB_REF"\n'
+                'printf "KIOSK=%s\\n" "$KIOSK"\n'
+                'printf "PLEB_DIR=%s\\n" "$PLEB_DIR"\n',
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("PLEB_REF=persisted", result.stdout)
+            self.assertIn("KIOSK=0", result.stdout)
+            self.assertIn("PLEB_DIR=\n", result.stdout)
+
+    def test_a_pinned_detached_checkout_is_updated_from_the_persisted_ref(self):
+        with tempfile.TemporaryDirectory() as td:
+            work = Path(td)
+            origin = work / "origin"
+            first, second = self._origin_with_two_commits(origin)
+            checkout = work / "pleb"
+            subprocess.run(["git", "clone", "-q", str(origin), str(checkout)],
+                           check=True)
+            # What a pinned install looks like: no branch, just a commit.
+            subprocess.run(
+                ["git", "-C", str(checkout), "checkout", "-q", "--detach",
+                 first], check=True)
+            session_env = work / "session.env"
+            self._session_env(session_env, {"PLEB_REF": second})
+
+            common = (
+                f"PLEB_DIR={str(checkout)!r}\n"
+                f"PLEB_REPO={str(origin)!r}\n"
+                "update_pleb_checkout\n"
+                'git -C "$PLEB_DIR" rev-parse HEAD\n'
+            )
+            result = self._run(session_env,
+                               "restore_persisted_pins\n" + common)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(second, result.stdout)
+            self.assertNotIn(
+                "not currently on a branch", result.stdout + result.stderr)
+            self.assertEqual(
+                subprocess.check_output(
+                    ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                    text=True).strip(),
+                second)
+
+            # Without the pin there is nothing to position the checkout by, and
+            # `git pull --ff-only` can only report that in git's own words.
+            subprocess.run(
+                ["git", "-C", str(checkout), "checkout", "-q", "--detach",
+                 first], check=True)
+            unpinned = self._run(work / "missing.env", common)
+            self.assertNotEqual(unpinned.returncode, 0)
+            self.assertIn("is not on a branch and no PLEB_REF/PLEB_BRANCH",
+                          unpinned.stderr)
+            self.assertEqual(
+                subprocess.check_output(
+                    ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+                    text=True).strip(),
+                first)
+
+
 if __name__ == "__main__":
     unittest.main()
