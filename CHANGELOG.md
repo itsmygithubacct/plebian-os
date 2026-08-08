@@ -127,6 +127,30 @@ component named, and reaches this release through the coordinated pins in
   re-provision of a kiosk image would have dropped its autologin and revoked its
   passwordless sudo at the very end. An explicit environment value or
   command-line flag still wins — that is how policy is meant to change.
+- **A re-provision reset every pin it was not handed explicitly.** The two
+  fixes above are what exposed this one: a run that reaches its end rewrites
+  `/etc/pleb/session.env` — where an installed machine keeps its release
+  closure — wholesale, and only the component refs and the install policy were
+  read back first. Nothing read back the rest of the closure. A plain
+  `sudo plebian-os-provision` on a fresh 0.1.8 candidate install therefore
+  dropped `KILIX_DESKTOP_PROVIDER` from `external` to `auto` and blanked eight
+  more keys — the pinned Kilix Voice library version, both URLs and both
+  checksums, and the Go toolchain version with both architecture hashes — in a
+  run that reported success. Nothing broke: the session still came up and the
+  next update still exited 0, on a machine whose session defaults now
+  contradicted its own `build-info.env` and whose voice media and Go toolchain
+  were pinned to nothing at all. The provisioner now restores every
+  release-controlled key from the installed configuration, classified by
+  `plebian-os-select-closure`'s own list of what a release controls rather than
+  by a third hand-maintained one, together with the desktop selection that tool
+  preserves as operator-controlled for the same reason. A key the machine
+  records no value for is named on the way past instead of silently defaulted,
+  and a restored `PLEBIAN_OS_RELEASE_MODE=1` is validated like any other release
+  run rather than merely written back. An explicit environment value or
+  `--branch` still wins. Where a key is both release-controlled and install
+  policy — the apt snapshot, the dictation closure —
+  `/etc/pleb/session.env` now outranks `/etc/default/plebian-os`: the latter
+  records the install, and selecting a new closure never rewrites it.
 - **Waiting for the Kilix build/update lock was silent.** Both updaters block
   on it deliberately, but printed nothing while doing so; 45 seconds of silence
   reads as a hung command. A contended lock now announces the wait first.

@@ -981,7 +981,7 @@ class PersistedPinTests(unittest.TestCase):
             self._session_env(session_env, values)
             result = self._run(
                 session_env,
-                "restore_persisted_pins\n"
+                "restore_installed_closure\n"
                 + "".join(f'printf "%s=%s\\n" {key} "${key}"\n'
                           for key in self.PINS),
             )
@@ -997,7 +997,7 @@ class PersistedPinTests(unittest.TestCase):
                                             "KILIX_REF": "persisted"})
             result = self._run(
                 session_env,
-                "restore_persisted_pins\n"
+                "restore_installed_closure\n"
                 'printf "PLEB_REF=%s\\n" "$PLEB_REF"\n'
                 'printf "KILIX_REF=%s\\n" "$KILIX_REF"\n',
                 extra="export PLEB_REF=explicit\n",
@@ -1017,7 +1017,7 @@ class PersistedPinTests(unittest.TestCase):
             })
             result = self._run(
                 session_env,
-                "restore_persisted_pins\n"
+                "restore_installed_closure\n"
                 'printf "PLEB_REF=%s\\n" "$PLEB_REF"\n'
                 'printf "KIOSK=%s\\n" "$KIOSK"\n'
                 'printf "PLEB_DIR=%s\\n" "$PLEB_DIR"\n',
@@ -1107,7 +1107,7 @@ class PersistedPinTests(unittest.TestCase):
                 'git -C "$PLEB_DIR" rev-parse HEAD\n'
             )
             result = self._run(session_env,
-                               "restore_persisted_pins\n" + common)
+                               "restore_installed_closure\n" + common)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(second, result.stdout)
             self.assertNotIn(

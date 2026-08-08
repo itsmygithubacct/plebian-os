@@ -25,6 +25,114 @@
 # plan without touching anything.
 set -euo pipefail
 
+# ── what a release closure controls ──────────────────────────────────────────
+# This list is plebian-os-select-closure.sh's RELEASE_CONTROLLED_KEYS, which
+# UPGRADING.md defines: "the coordinated version/release mode, the four source
+# refs, the Debian snapshot and installer input, the Kilix engine and Go pins,
+# and enabled optional-closure pins such as Kilix Voice". That tool moves all of
+# them as one unit; this one must not move a single one of them by accident,
+# because step 5 below rewrites /etc/pleb/session.env — where an installed
+# machine keeps them — wholesale on every run.
+#
+# Both scripts declare the set, and neither can read the other's copy at the
+# moment it needs it: this provisioner is installed as one file in
+# /usr/local/sbin (the preseed's late_command and the updater's OS layer both
+# copy exactly this file, with no siblings to source), and UPGRADING.md has the
+# operator run the selector as a standalone file extracted straight out of the
+# target release's tag. tests/test_provision_pin_integrity.py reads both
+# declarations and refuses to pass unless they are identical, so neither side
+# can move alone. Add a key in one place and that test names the other.
+RELEASE_CONTROLLED_KEYS=(
+    PLEBIAN_OS_VERSION
+    PLEBIAN_OS_RELEASE
+    PLEBIAN_OS_RELEASE_MODE
+    PLEBIAN_OS_REPO
+    PLEBIAN_OS_BRANCH
+    PLEBIAN_OS_REF
+    PLEB_REPO
+    PLEB_BRANCH
+    PLEB_REF
+    KILIX_REPO
+    KILIX_BRANCH
+    KILIX_REF
+    KILIX95_REPO
+    KILIX95_BRANCH
+    KILIX95_REF
+    PLEBIAN_OS_APT_SNAPSHOT
+    KILIX_PREBUILT_VERSION
+    KILIX_PREBUILT_SHA256
+    PLEBIAN_OS_BUILD_KILIX_FORK
+    PLEBIAN_OS_KILIX_GO_MIN_VERSION
+    PLEBIAN_OS_KILIX_GO_VERSION
+    PLEBIAN_OS_KILIX_GO_SHA256_AMD64
+    PLEBIAN_OS_KILIX_GO_SHA256_ARM64
+    PLEBIAN_OS_INSTALL_VOICE_MODEL
+    KILIX_VOICE_REF
+    KILIX_VOICE_LIB_VERSION
+    KILIX_VOICE_LIB_URL
+    KILIX_VOICE_LIB_SHA256
+    KILIX_VOICE_MODEL_URL
+    KILIX_VOICE_MODEL_SHA256
+)
+
+# Optional desktop-provider checkouts this script also positions by ref. A
+# release closure does not pin them, but a re-run that dropped them would move
+# those checkouts off whatever the machine was installed with just the same.
+PROVIDER_PIN_KEYS=(
+    KILIX_CAP_REF
+    KILIX_TUI_UTILS_REF
+    KILIX_LAND_DESKTOP_REF
+)
+
+# The desktop selection. plebian-os-select-closure classifies these as
+# operator-controlled and copies them through byte for byte; the reason they
+# must survive a re-provision is the same one, and the release image pins them
+# too (the 0.1.8 closure ships KILIX_DESKTOP_PROVIDER=external). PLEB_WM and
+# KILIX_RUN_ALIASES are the same family and already have
+# resolve_session_wm_defaults.
+SESSION_SELECTION_KEYS=(
+    KILIX_DESKTOP_PROVIDER
+    KILIX_DESKTOP_COMMAND
+    KILIX_DESKTOP_NAME
+    KILIX_DESKTOP_FLAVOR
+)
+
+# Release-controlled, but this run is its authority rather than its reader: the
+# installed version comes from the VERSION marker deployed beside this script,
+# and plebian-os-update replaces the two together. Reading it back out of
+# session.env would pin a machine to the version it already had and no update
+# could ever move it.
+PROVISION_OWNED_KEYS=(
+    PLEBIAN_OS_VERSION
+)
+
+# session.env key -> the variable this script keeps its value in, where the two
+# names differ. Everything else is stored under its own name.
+declare -A PERSISTED_KEY_VARS=(
+    [PLEBIAN_OS_BUILD_KILIX_FORK]=BUILD_KILIX_FORK
+    [PLEBIAN_OS_KILIX_GO_MIN_VERSION]=KILIX_GO_MIN_VERSION
+    [PLEBIAN_OS_KILIX_GO_VERSION]=KILIX_GO_VERSION
+    [PLEBIAN_OS_KILIX_GO_SHA256_AMD64]=KILIX_GO_SHA256_AMD64
+    [PLEBIAN_OS_KILIX_GO_SHA256_ARM64]=KILIX_GO_SHA256_ARM64
+    [PLEBIAN_OS_INSTALL_VOICE_MODEL]=INSTALL_VOICE_MODEL
+)
+
+# Everything a re-run must reproduce from the machine it is re-running on, and
+# which of those this run was told about explicitly. Explicitness has to be read
+# here, before the defaults below fill the same names in: afterwards a built-in
+# default (KILIX_DESKTOP_PROVIDER=auto, the fallback engine version, the Go
+# minimum) is indistinguishable from a value an operator passed.
+PERSISTED_SESSION_KEYS=()
+declare -A PERSISTED_KEY_EXPLICIT=()
+declare -A PERSISTED_KEY_RESTORED=()
+for _persisted_key in "${RELEASE_CONTROLLED_KEYS[@]}" "${PROVIDER_PIN_KEYS[@]}" \
+                      "${SESSION_SELECTION_KEYS[@]}"; do
+    case " ${PROVISION_OWNED_KEYS[*]} " in *" $_persisted_key "*) continue ;; esac
+    PERSISTED_SESSION_KEYS+=("$_persisted_key")
+    [ -z "${!_persisted_key:-}" ] || PERSISTED_KEY_EXPLICIT["$_persisted_key"]=1
+done
+unset _persisted_key
+
 # ── config (env-overridable) ─────────────────────────────────────────────────
 PLEB_REPO="${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
 KILIX_REPO="${KILIX_REPO:-https://github.com/itsmygithubacct/kilix.git}"
@@ -177,7 +285,7 @@ warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
 
-# ── persisted component pins ─────────────────────────────────────────────────
+# ── the installed closure ────────────────────────────────────────────────────
 # The refs this machine is provisioned from live in /etc/pleb/session.env — the
 # same file pleb-session, `pleb`, plebian-os-update and plebian-os-select-closure
 # read, and the one this script rewrites at the end of every successful run, so
@@ -212,57 +320,58 @@ root_config_safe_to_source() {
     done
 }
 
-# Every component whose checkout this script positions by ref or branch. Fixing
-# only pleb would leave kilix, kilix 95 and the desktop providers drifting off
-# the pinned closure on the same re-run.
-PERSISTED_PIN_KEYS=(
-    PLEBIAN_OS_REF PLEBIAN_OS_BRANCH
-    PLEB_REF PLEB_BRANCH
-    KILIX_REF KILIX_BRANCH
-    KILIX95_REF KILIX95_BRANCH
-    KILIX_VOICE_REF
-    KILIX_CAP_REF
-    KILIX_TUI_UTILS_REF
-    KILIX_LAND_DESKTOP_REF
-)
-
-restore_persisted_pins() {
-    local key value line skip="${1:-}"
-    local -a candidates=() restored=()
+restore_installed_closure() {
+    local key var value state skip="${1:-}"
+    local -a candidates=() restored=() missing=()
     [ -r "$PLEBIAN_OS_SESSION_ENV" ] || return 0
     root_config_safe_to_source "$PLEBIAN_OS_SESSION_ENV" \
         || die "refusing to source unsafe $PLEBIAN_OS_SESSION_ENV as root"
-    # An explicit pin from the environment or the command line always wins, so
-    # only pins this run left empty are candidates.
-    for key in "${PERSISTED_PIN_KEYS[@]}"; do
+    # An explicit value from the environment or the command line always wins —
+    # that is how a pin is deliberately changed — so only the keys this run was
+    # not told about are candidates.
+    for key in "${PERSISTED_SESSION_KEYS[@]}"; do
         [ "$key" != "$skip" ] || continue
-        [ -z "${!key}" ] || continue
+        [ -z "${PERSISTED_KEY_EXPLICIT[$key]:-}" ] || continue
         candidates+=("$key")
     done
     [ "${#candidates[@]}" -gt 0 ] || return 0
     # session.env assigns only what the environment leaves unset
-    # (`if [ -z "${NAME+x}" ]`), and the config block above already set every
-    # pin to at least the empty string. Unset the candidates and source the file
-    # in a subshell, so it can fill them without any of its other assignments
-    # reaching this run: paths, kiosk and sudo policy and the desktop selection
-    # stay exactly as resolved here.
-    while IFS= read -r line; do
-        key="${line%%=*}"
-        value="${line#*=}"
+    # (`if [ -z "${NAME+x}" ]`), and the config block above already set every one
+    # of these names to at least the empty string. Unset the candidates and
+    # source the file in a subshell, so it can fill them without any of its other
+    # assignments reaching this run: the storage paths, the install policy and
+    # the window-manager choice stay exactly as resolved here.
+    while IFS=$'\t' read -r key state value; do
         case " ${candidates[*]} " in *" $key "*) ;; *) continue ;; esac
+        if [ "$state" != set ]; then
+            missing+=("$key")
+            continue
+        fi
         [ -n "$value" ] || continue
-        declare -g "$key=$value"
+        # The machine answered for this key, so /etc/default must not answer for
+        # it again below, even where the value matches what this run already had.
+        PERSISTED_KEY_RESTORED["$key"]=1
+        var="${PERSISTED_KEY_VARS[$key]:-$key}"
+        [ "${!var-}" != "$value" ] || continue
+        declare -g "$var=$value"
         restored+=("$key=$value")
     done < <(
         for key in "${candidates[@]}"; do unset "$key"; done
         # shellcheck source=/dev/null
         . "$PLEBIAN_OS_SESSION_ENV" >/dev/null 2>&1 || exit 0
         for key in "${candidates[@]}"; do
-            printf '%s=%s\n' "$key" "${!key-}"
+            printf '%s\t%s\t%s\n' "$key" "${!key+set}" "${!key-}"
         done
     )
-    [ "${#restored[@]}" -gt 0 ] || return 0
-    log "restored pins from $PLEBIAN_OS_SESSION_ENV: ${restored[*]}"
+    if [ "${#restored[@]}" -gt 0 ]; then
+        log "restored the installed closure from $PLEBIAN_OS_SESSION_ENV: ${restored[*]}"
+    fi
+    # A key the machine has no answer for is not a key to quietly default: the
+    # built-in fallback would be written back over the pin as if it were one.
+    if [ "${#missing[@]}" -gt 0 ]; then
+        warn "$PLEBIAN_OS_SESSION_ENV records no value for ${#missing[@]} key(s) this run must otherwise default: ${missing[*]}"
+        warn "this run will use its built-in defaults for them; select the release closure again to restore the pins"
+    fi
 }
 
 # ── persisted install policy ─────────────────────────────────────────────────
@@ -281,6 +390,11 @@ restore_persisted_pins() {
 # Values are matched against a strict pattern and taken as inert data; this
 # file is never sourced. An explicit environment value or command-line flag
 # still wins — those are how you deliberately change policy.
+#
+# Two of these keys are release-controlled as well, and for those this file is
+# the older witness: it records the install, while a closure selection moves the
+# same key in session.env and never touches /etc/default. So a value the
+# installed closure already answered for is left alone below.
 PLEBIAN_OS_FIRSTBOOT_ENV="${PLEBIAN_OS_FIRSTBOOT_ENV:-/etc/default/plebian-os}"
 
 # key, the variable it feeds, and the only values accepted for it.
@@ -313,6 +427,7 @@ restore_persisted_policy() {
         pattern="${PERSISTED_POLICY[i + 2]}"
         explicit="${var}_EXPLICIT"
         [ "${!explicit:-0}" != 1 ] || continue
+        [ -z "${PERSISTED_KEY_RESTORED[$key]:-}" ] || continue
         value="$(read_firstboot_env_value "$key")" || continue
         [[ "$value" =~ $pattern ]] || continue
         [ "$value" != "${!var}" ] || continue
@@ -2675,7 +2790,9 @@ while [ $# -gt 0 ]; do
         --nopasswd-sudo) NOPASSWD_SUDO=1; shift; NOPASSWD_SUDO_EXPLICIT=1 ;;
         --desktop) DESKTOP=1; shift; DESKTOP_EXPLICIT=1 ;;
         --no-desktop) DESKTOP=0; shift; DESKTOP_EXPLICIT=1 ;;
-        --branch) PLEB_BRANCH="${2:?}"; shift 2; PLEB_BRANCH_EXPLICIT=1 ;;
+        --branch)
+            PLEB_BRANCH="${2:?}"; shift 2
+            PLEB_BRANCH_EXPLICIT=1; PERSISTED_KEY_EXPLICIT[PLEB_BRANCH]=1 ;;
         --dry-run) DRY_RUN=1; shift ;;
         --version) echo "plebian-os-provision $PLEBIAN_OS_VERSION"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
@@ -2684,12 +2801,11 @@ while [ $# -gt 0 ]; do
 done
 
 # `--branch` asks to track a branch, so it must not be overruled by a persisted
-# exact pleb ref; every other component still resolves from the installed
-# closure.
+# exact pleb ref; every other key still resolves from the installed closure.
 if [ "$PLEB_BRANCH_EXPLICIT" = 1 ]; then
-    restore_persisted_pins PLEB_REF
+    restore_installed_closure PLEB_REF
 else
-    restore_persisted_pins
+    restore_installed_closure
 fi
 restore_persisted_policy
 
