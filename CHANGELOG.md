@@ -12,8 +12,16 @@ Supported upgrade source: **0.1.7**, the immediately previous published
 release. The upgrade acceptance required by [UPGRADING.md](UPGRADING.md) has
 passed against the closure this release ships: all six gates, in order, on
 2026-08-08, upgrading a machine installed fresh from the published 0.1.7 image
-(`ec8aa810…`). An earlier run passed against the previous closure but was
-discarded, because acceptance then found a blocker in it — a mid-transaction
+(`ec8aa810…`). Plebian-OS then moved on — for that record and for the
+provisioner pin-integrity fix below — so **gates 3 and 4, the two that execute
+the target release's own code, were re-run against the final release commit
+`2f399e8`** and this record names the commit that ships; gates 1, 2, 5 and 6 are
+carried from the run against `c7c907d`, which tested the same four component
+pins and the same `releases/0.1.8.env`; they cover the starting machine, the
+sentinels planted on it, the seven release-controlled keys the closure moves and
+this record itself, none of which a Plebian-OS-only change can invalidate. An
+earlier run passed against the previous closure but was discarded, because
+acceptance then found a blocker in it — a mid-transaction
 failure that had rebuilt the engine left `build/previous` naming a collected
 generation and both update paths refused the machine — and fixing it moved the
 pleb and Kilix pins. The re-run reproduces that exact case: the updater was
