@@ -9,18 +9,21 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 Prepared 2026-08-07; nothing is published for 0.1.8 yet — see
 [`releases/0.1.8-notes.md`](releases/0.1.8-notes.md) for publication status.
 Supported upgrade source: **0.1.7**, the immediately previous published
-release. The upgrade acceptance required by [UPGRADING.md](UPGRADING.md)
-**must be re-run before publication**: all six gates passed on 2026-08-08
-against the previous closure, but acceptance then found a blocker in it (a
-mid-transaction failure that had rebuilt the engine left `build/previous`
-naming a collected generation and both update paths refused the machine).
-Fixing it moved the pleb and Kilix pins, so that result no longer describes
-this closure. What was demonstrated then, and must be demonstrated again:
-upgrading a machine installed fresh from the published 0.1.7 image
-(`ec8aa810…`) — induced mid-transaction failure rolled back completely, the real upgrade and reboot
-moved all five version commands, every coordinated ref and the runtime engine
-to 0.1.8, and every sentinel, shared setting and operator session choice
-survived byte for byte; full record in
+release. The upgrade acceptance required by [UPGRADING.md](UPGRADING.md) has
+passed against the closure this release ships: all six gates, in order, on
+2026-08-08, upgrading a machine installed fresh from the published 0.1.7 image
+(`ec8aa810…`). An earlier run passed against the previous closure but was
+discarded, because acceptance then found a blocker in it — a mid-transaction
+failure that had rebuilt the engine left `build/previous` naming a collected
+generation and both update paths refused the machine — and fixing it moved the
+pleb and Kilix pins. The re-run reproduces that exact case: the updater was
+failed after a complete engine rebuild, rollback restored the version, refs,
+runtime generation, settings and every sentinel byte for byte, no stale
+`previous` entry was left behind, and both `pleb update` and `plebian-os-update`
+still ran to completion afterwards. The real upgrade and reboot then moved all
+five version commands, every coordinated ref and the runtime engine to 0.1.8,
+and every sentinel, shared setting and operator session choice survived byte for
+byte; full record in
 [`releases/0.1.8-notes.md`](releases/0.1.8-notes.md). No direct skip from an
 earlier release is supported.
 
