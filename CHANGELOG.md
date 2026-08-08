@@ -10,9 +10,14 @@ Prepared 2026-08-07; nothing is published for 0.1.8 yet — see
 [`releases/0.1.8-notes.md`](releases/0.1.8-notes.md) for publication status.
 Supported upgrade source: **0.1.7**, the immediately previous published
 release. The upgrade acceptance required by [UPGRADING.md](UPGRADING.md)
-**passed** on 2026-08-08: all six gates, in order, upgrading a machine installed
-fresh from the published 0.1.7 image (`ec8aa810…`) to this closure — induced
-mid-transaction failure rolled back completely, the real upgrade and reboot
+**must be re-run before publication**: all six gates passed on 2026-08-08
+against the previous closure, but acceptance then found a blocker in it (a
+mid-transaction failure that had rebuilt the engine left `build/previous`
+naming a collected generation and both update paths refused the machine).
+Fixing it moved the pleb and Kilix pins, so that result no longer describes
+this closure. What was demonstrated then, and must be demonstrated again:
+upgrading a machine installed fresh from the published 0.1.7 image
+(`ec8aa810…`) — induced mid-transaction failure rolled back completely, the real upgrade and reboot
 moved all five version commands, every coordinated ref and the runtime engine
 to 0.1.8, and every sentinel, shared setting and operator session choice
 survived byte for byte; full record in
