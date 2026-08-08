@@ -9,9 +9,15 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 Prepared 2026-08-07; nothing is published for 0.1.8 yet — see
 [`releases/0.1.8-notes.md`](releases/0.1.8-notes.md) for publication status.
 Supported upgrade source: **0.1.7**, the immediately previous published
-release. The upgrade acceptance result required by
-[UPGRADING.md](UPGRADING.md) is reserved and must be recorded here before
-publication; no direct skip from an earlier release is supported.
+release. The upgrade acceptance required by [UPGRADING.md](UPGRADING.md)
+**passed** on 2026-08-08: all six gates, in order, upgrading a machine installed
+fresh from the published 0.1.7 image (`ec8aa810…`) to this closure — induced
+mid-transaction failure rolled back completely, the real upgrade and reboot
+moved all five version commands, every coordinated ref and the runtime engine
+to 0.1.8, and every sentinel, shared setting and operator session choice
+survived byte for byte; full record in
+[`releases/0.1.8-notes.md`](releases/0.1.8-notes.md). No direct skip from an
+earlier release is supported.
 
 ### Added
 - `plebian-os-select-closure` — the closure-selection mechanism
