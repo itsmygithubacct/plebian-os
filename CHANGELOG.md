@@ -162,6 +162,30 @@ component named, and reaches this release through the coordinated pins in
   policy — the apt snapshot, the dictation closure —
   `/etc/pleb/session.env` now outranks `/etc/default/plebian-os`: the latter
   records the install, and selecting a new closure never rewrites it.
+- **A re-provision threw away the operator's half of the same file.** The fix
+  above kept every release-controlled key across the wholesale rewrite of
+  `/etc/pleb/session.env`; nothing kept the rest of the file. On a machine
+  carrying operator customizations, a plain `sudo plebian-os-provision` still
+  turned `KILIX_CAP_AUTO_INSTALL`, `KILIX_TUI_UTILS_AUTO_INSTALL` and
+  `KILIX_LAND_DESKTOP_AUTO_INSTALL` back on over the `0` an operator had set,
+  and dropped everything the template does not emit — an appended `PLEB_RESPAWN`,
+  a key no component here has ever heard of, and the comment written above them
+  — in a run that reported success. No list of operator keys could have fixed
+  that, because an operator may put anything in that file. So the render is now
+  **merged** into the file the machine already has instead of replacing it: the
+  keys this run owns are rewritten, and every other line is carried through
+  exactly as it stands, in the order it was already in, so a re-provision that
+  resolves what the machine already records leaves the file byte-identical.
+  What this run owns is the storage layout it just created (which `--user`
+  moves as one unit), the version marker, and anything named explicitly in the
+  environment or on the command line; a key nobody classified belongs to
+  whoever put it there. A hand-written `NAME=value` outside the shape this
+  script writes is left exactly where it is — that is what a login shell
+  resolves — and no competing line is written under it. The merged file is
+  proved by reading it back before anything is swapped in, the way
+  `plebian-os-select-closure` proves its own: if a key would move that this run
+  does not own, or the installed file cannot be parsed at all, nothing is
+  written and the file stays as it was.
 - **Waiting for the Kilix build/update lock was silent.** Both updaters block
   on it deliberately, but printed nothing while doing so; 45 seconds of silence
   reads as a hung command. A contended lock now announces the wait first.

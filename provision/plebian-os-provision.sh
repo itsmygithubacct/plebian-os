@@ -133,6 +133,79 @@ for _persisted_key in "${RELEASE_CONTROLLED_KEYS[@]}" "${PROVIDER_PIN_KEYS[@]}" 
 done
 unset _persisted_key
 
+# ── what this run owns in /etc/pleb/session.env ─────────────────────────────
+# The storage layout this run resolves from the target account and then creates
+# on disk, plus the marker it stamps into every managed install. These are the
+# only keys whose value a re-provision decides for itself: it just built those
+# directories, so the file it leaves behind has to describe the ones that are
+# there. `--user` changes all of them at once, and nothing else does.
+#
+# Everything NOT named here — and not named in PROVISION_OWNED_KEYS, and not
+# handed to this run explicitly — belongs to whoever put it in the file. That
+# includes the release closure (restored above), the desktop selection, the
+# optional-component switches, and keys this script has never heard of. Which
+# way an unclassified key falls is the whole point: it is preserved.
+SESSION_LAYOUT_KEYS=(
+    GPU_TERMINAL_SOURCE_HOME
+    GPU_TERMINAL_HOME
+    GPU_TERMINAL_SETTINGS_FILE
+    PLEBIAN_OS_MANAGED_INSTALL
+    PLEB_DIR
+    PLEB_STORAGE_HOME
+    PLEB_CONFIG_HOME
+    PLEB_STATE_HOME
+    PLEB_CACHE_HOME
+    PLEB_SESSION_HOME
+    PLEB_DATA_HOME
+    KILIX
+    KILIX_DIR
+    KILIX_STORAGE_HOME
+    KILIX_CONFIG_HOME
+    KILIX_STATE_DIRECTORY
+    KILIX_CACHE_HOME
+    KILIX_SESSION_HOME
+    KILIX_BUILD_DIRECTORY
+    KILIX_DATA_HOME
+    KILIX_DESKTOP_DIR
+    KILIX_PREBUILT_HOME
+    KILIX_CAP_DIR
+    KILIX_TUI_UTILS_DIR
+    KILIX_LAND_DESKTOP_DIR
+    KILIX95_DIR
+    KILIX95_STORAGE_HOME
+    KILIX95_CONFIG_HOME
+    KILIX95_STATE_HOME
+    KILIX95_CACHE_HOME
+    KILIX95_SESSION_HOME
+    KILIX95_DATA_HOME
+    PLEBIAN_OS_DIR
+    PLEBIAN_OS_STORAGE_HOME
+    PLEBIAN_OS_SESSION_HOME
+)
+
+# session.env key -> the flag that records "an operator asked for this on this
+# run", where the operator does not set the key by its own name. Everything
+# else is explicit exactly when the environment carried it, which is what
+# SESSION_ENV_EXPLICIT captures immediately below.
+declare -A SESSION_KEY_EXPLICIT_FLAG=(
+    [PLEB_DESKTOP]=DESKTOP_EXPLICIT
+    [PLEB_RESPAWN]=KIOSK_EXPLICIT
+)
+
+# Which session.env keys this run was handed in its environment. Read here for
+# the same reason PERSISTED_KEY_EXPLICIT is: once the config block below runs,
+# a built-in default is indistinguishable from an operator's value. `sudo`
+# resets the environment, so a bare `sudo plebian-os-provision` records nothing
+# and every key in the installed file stays the machine's own.
+declare -A SESSION_ENV_EXPLICIT=()
+_session_explicit_names=()
+mapfile -t _session_explicit_names < <(compgen -e)
+for _session_explicit_name in "${_session_explicit_names[@]}"; do
+    [ -n "${!_session_explicit_name:-}" ] || continue
+    SESSION_ENV_EXPLICIT["$_session_explicit_name"]=1
+done
+unset _session_explicit_name _session_explicit_names
+
 # ── config (env-overridable) ─────────────────────────────────────────────────
 PLEB_REPO="${PLEB_REPO:-https://github.com/itsmygithubacct/pleb.git}"
 KILIX_REPO="${KILIX_REPO:-https://github.com/itsmygithubacct/kilix.git}"
@@ -871,6 +944,256 @@ acquire_kilix_provision_lock() {
 write_session_default() {
     local name="$1" value="$2"
     printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
+}
+
+# ── merging the rendered session config into the installed one ───────────────
+# Step 5 renders every value this run resolved and then wrote the whole of
+# /etc/pleb/session.env from that render. Anything the render did not contain
+# was therefore dropped: a key this script has never emitted, the comment an
+# operator wrote above it, the block they appended at the end. And every key the
+# render defaulted — the three optional-desktop `*_AUTO_INSTALL` switches among
+# them — was reset on top of the operator's answer. That is the defect eaca706
+# fixed for the release closure, on the half a release does not control, and it
+# cannot be fixed the same way: there is no list of operator keys to read back,
+# because an operator may add keys nothing here has ever heard of.
+#
+# So the render is merged into the file the machine already has instead of
+# replacing it. plebian-os-select-closure does exactly this to move a closure
+# without disturbing anything else, and it classifies by the same rule: what a
+# release controls is enumerated, and everything else in the file is somebody
+# else's. The shape both tools rewrite in place is the one write_session_default
+# emits; keep this regex in step with that tool's MANAGED_LINE_RE.
+SESSION_MANAGED_LINE_RE='^if \[ -z "\$\{([A-Za-z_][A-Za-z0-9_]*)\+x\}" \]; then ([A-Za-z_][A-Za-z0-9_]*)=(.*); fi$'
+# A line that opens like a managed one but is not one any more — the selector
+# refuses to rewrite these; here they count as a hand edit of that same key, so
+# nothing is appended underneath them to argue with.
+SESSION_MANAGED_PREFIX_RE='^if \[ -z "\$\{([A-Za-z_][A-Za-z0-9_]*)\+x\}" \]; then '
+# Any other assignment of a name at the start of a line: a hand edit.
+SESSION_ASSIGNMENT_RE='^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)='
+
+# The key one session.env line assigns, and how. Prints "<key>\t<managed|bare>"
+# for an assignment and nothing for anything else (comments, exports, blanks).
+session_env_line_assignment() {
+    local line="$1"
+    if [[ $line =~ $SESSION_MANAGED_LINE_RE ]] \
+            && [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ]; then
+        printf '%s\tmanaged\n' "${BASH_REMATCH[1]}"
+    elif [[ $line =~ $SESSION_MANAGED_PREFIX_RE ]]; then
+        printf '%s\tbare\n' "${BASH_REMATCH[1]}"
+    elif [[ $line =~ $SESSION_ASSIGNMENT_RE ]]; then
+        printf '%s\tbare\n' "${BASH_REMATCH[1]}"
+    fi
+}
+
+# Whether this run — rather than the machine it is re-running on — is the
+# authority for one key. Explicit environment or command line first, because
+# that is how a value is deliberately changed; then the two sets this script
+# owns by definition. Everything else answers "no", including every key nobody
+# ever classified, which is the safe direction for a file operators are invited
+# to edit by hand.
+session_key_is_run_owned() {
+    local key="$1" flag
+    [ -z "${PERSISTED_KEY_EXPLICIT[$key]:-}" ] || return 0
+    [ -z "${SESSION_ENV_EXPLICIT[$key]:-}" ] || return 0
+    flag="${SESSION_KEY_EXPLICIT_FLAG[$key]:-}"
+    if [ -n "$flag" ] && [ "${!flag:-0}" = 1 ]; then
+        return 0
+    fi
+    case " ${SESSION_LAYOUT_KEYS[*]} ${PROVISION_OWNED_KEYS[*]} " in
+        *" $key "*) return 0 ;;
+    esac
+    return 1
+}
+
+# Merge the rendered file into the installed one, writing the result to a third
+# path. Line for line:
+#
+#   * a managed line for a key this run owns  -> the rendered line
+#   * any other managed line                  -> kept exactly as it stands
+#   * a hand-written `NAME=value`             -> kept exactly as it stands, and
+#     the render adds no competing line for that key: the operator's assignment
+#     is what a login shell already resolves, so a guarded default underneath it
+#     would be dead text
+#   * comments, exports, blanks, anything else -> kept exactly as it stands
+#
+# then keys the render has and the file does not (a release can introduce one,
+# and `--kiosk` introduces PLEB_RESPAWN) are appended under a comment naming who
+# added them, and the rendered lines that assign nothing — the export block — are
+# appended only if the file does not already carry them. Comments the template
+# carries are decoration and are never appended: the file keeps its own.
+# Ordering follows the installed file, so a run that resolves what the machine
+# already records rewrites every line to itself and the file comes out
+# byte-identical.
+merge_session_env() {
+    local rendered="$1" installed="$2" out="$3"
+    local line key form assignment
+    local -A rendered_managed=() rendered_seen=() installed_lines=()
+    local -a rendered_keys=() rendered_literals=() appended=() unmanaged=()
+
+    if ! bash -n "$installed" 2>/dev/null; then
+        warn "$installed does not parse as shell, so nothing here can tell what it means"
+        return 1
+    fi
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        assignment="$(session_env_line_assignment "$line")"
+        if [ -n "$assignment" ]; then
+            key="${assignment%%$'\t'*}"
+            rendered_managed["$key"]="$line"
+            rendered_keys+=("$key")
+        elif [ -n "$line" ] && [ "${line#\#}" = "$line" ]; then
+            rendered_literals+=("$line")
+        fi
+    done <"$rendered"
+
+    : >"$out"
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -z "$line" ] || installed_lines["$line"]=1
+        assignment="$(session_env_line_assignment "$line")"
+        if [ -n "$assignment" ]; then
+            key="${assignment%%$'\t'*}"
+            form="${assignment#*$'\t'}"
+            if [ -n "${rendered_managed[$key]+x}" ] && [ -z "${rendered_seen[$key]:-}" ]; then
+                rendered_seen["$key"]=1
+                if session_key_is_run_owned "$key"; then
+                    if [ "$form" = managed ]; then
+                        printf '%s\n' "${rendered_managed[$key]}" >>"$out"
+                        continue
+                    fi
+                    [ "$line" = "${rendered_managed[$key]}" ] || unmanaged+=("$key")
+                fi
+            fi
+        fi
+        printf '%s\n' "$line" >>"$out"
+    done <"$installed"
+
+    for key in "${rendered_keys[@]}"; do
+        [ -z "${rendered_seen[$key]:-}" ] || continue
+        rendered_seen["$key"]=1
+        appended+=("$key")
+    done
+    if [ "${#appended[@]}" -gt 0 ]; then
+        printf '%s\n' "# Added by plebian-os-provision $PLEBIAN_OS_VERSION." >>"$out"
+        for key in "${appended[@]}"; do
+            printf '%s\n' "${rendered_managed[$key]}" >>"$out"
+        done
+        log "session config gains ${#appended[@]} key(s) this release introduces: ${appended[*]}"
+    fi
+    for line in "${rendered_literals[@]}"; do
+        [ -z "${installed_lines[$line]:-}" ] || continue
+        printf '%s\n' "$line" >>"$out"
+    done
+    if [ "${#unmanaged[@]}" -gt 0 ]; then
+        warn "$installed assigns ${#unmanaged[@]} key(s) this run resolves for itself outside the managed form: ${unmanaged[*]}"
+        warn "those lines were left exactly as they are; they win over anything written here"
+    fi
+}
+
+# Every key one session config assigns, in first-assignment order.
+session_env_assigned_keys() {
+    local line key assignment
+    local -A seen=()
+    while IFS= read -r line || [ -n "$line" ]; do
+        assignment="$(session_env_line_assignment "$line")"
+        [ -n "$assignment" ] || continue
+        key="${assignment%%$'\t'*}"
+        [ -z "${seen[$key]:-}" ] || continue
+        seen["$key"]=1
+        printf '%s\n' "$key"
+    done <"$1"
+}
+
+# What a login shell would read out of one session config for a given set of
+# names: "<key>\t<set|unset>\t<value>", resolved by sourcing in a subshell with
+# all of them unset first, so guarded defaults, bare operator edits and later
+# overrides all land where they really land. The caller passes the same names
+# for every file it compares, so a key one file assigns in a shape nothing here
+# recognizes is still read out of it rather than counted as absent.
+session_env_resolved_values() {
+    local file="$1"
+    shift
+    [ "$#" -gt 0 ] || return 0
+    (
+        for _name in "$@"; do unset "$_name"; done
+        # shellcheck source=/dev/null
+        . "$file" >/dev/null 2>&1 || exit 1
+        for _name in "$@"; do
+            printf '%s\t%s\t%s\n' "$_name" "${!_name+set}" "${!_name-}"
+        done
+    )
+}
+
+# Prove the merged candidate before anything is swapped in, the way the closure
+# selector proves its own: read all three files back the way a login shell would
+# and refuse unless every key resolves to the value the merge promised — this
+# run's for the keys it owns, the machine's for every other key it already had,
+# and no key lost on the way. A candidate that cannot be read at all is refused
+# for the same reason.
+verify_merged_session_env() {
+    local rendered="$1" installed="$2" candidate="$3"
+    local key state value expected line
+    local -A rendered_set=() rendered_values=()
+    local -A installed_set=() installed_values=()
+    local -A candidate_set=() candidate_values=()
+    local -A installed_forms=() union=()
+    local -a names=()
+
+    if ! bash -n "$candidate" 2>/dev/null; then
+        warn "the merged session config does not parse as shell"
+        return 1
+    fi
+    while IFS= read -r key; do union["$key"]=1; done < <(
+        session_env_assigned_keys "$rendered"
+        session_env_assigned_keys "$installed"
+        session_env_assigned_keys "$candidate"
+    )
+    names=("${!union[@]}")
+    [ "${#names[@]}" -gt 0 ] || return 0
+    while IFS=$'\t' read -r key state value; do
+        rendered_set["$key"]="$state"; rendered_values["$key"]="$value"
+    done < <(session_env_resolved_values "$rendered" "${names[@]}")
+    while IFS=$'\t' read -r key state value; do
+        installed_set["$key"]="$state"; installed_values["$key"]="$value"
+    done < <(session_env_resolved_values "$installed" "${names[@]}")
+    while IFS=$'\t' read -r key state value; do
+        candidate_set["$key"]="$state"; candidate_values["$key"]="$value"
+    done < <(session_env_resolved_values "$candidate" "${names[@]}")
+    if [ "${#candidate_set[@]}" -eq 0 ]; then
+        warn "the merged session config could not be read back"
+        return 1
+    fi
+    while IFS=$'\t' read -r key state; do
+        [ -n "${installed_forms[$key]:-}" ] || installed_forms["$key"]="$state"
+    done < <(
+        while IFS= read -r line || [ -n "$line" ]; do
+            session_env_line_assignment "$line"
+        done <"$installed"
+    )
+
+    for key in "${names[@]}"; do
+        if [ "${installed_set[$key]:-}" = set ] && [ "${candidate_set[$key]:-}" != set ]; then
+            warn "the merged session config would drop $key"
+            return 1
+        fi
+        # The machine answers for every key it already had, unless this run owns
+        # it and answered in the shape this script writes.
+        if [ "${installed_set[$key]:-}" = set ] \
+                && { [ "${installed_forms[$key]:-}" != managed ] \
+                     || ! session_key_is_run_owned "$key"; }; then
+            expected="${installed_values[$key]}"
+        elif [ "${rendered_set[$key]:-}" = set ]; then
+            expected="${rendered_values[$key]}"
+        elif [ "${installed_set[$key]:-}" = set ]; then
+            expected="${installed_values[$key]}"
+        else
+            continue
+        fi
+        if [ "${candidate_set[$key]:-}" != set ] \
+                || [ "${candidate_values[$key]}" != "$expected" ]; then
+            warn "the merged session config would read $key='${candidate_values[$key]-}' instead of '$expected'"
+            return 1
+        fi
+    done
 }
 
 # Read one knob back out of the session config the way a login shell would see
@@ -3213,6 +3536,12 @@ fi
 # fixed-geometry session). This is a plain root-managed config file: edit it with
 # sudo to flip either knob — no reprovision needed, and a reprovision keeps the
 # window-manager choice it finds here.
+#
+# A machine that already has this file gets the render merged into it rather
+# than written over it (merge_session_env above): a re-provision rewrites the
+# keys it owns and leaves every other line — the operator's values, their
+# unknown keys, their comments, whatever they appended — exactly where it found
+# them. A first-ever provision has nothing to merge and gets the whole template.
 PLEB_ENV=/etc/pleb/session.env
 log "writing session config -> $PLEB_ENV (PLEB_DESKTOP=$DESKTOP, PLEB_WM=$PLEB_WM, KILIX_RUN_ALIASES=$KILIX_RUN_ALIASES)"
 if [ "$DRY_RUN" = 1 ]; then
@@ -3333,6 +3662,21 @@ EOF
     printf '%s\n' 'export KILIX95_CONFIG_HOME KILIX95_STATE_HOME KILIX95_CACHE_HOME KILIX95_SESSION_HOME KILIX95_DATA_HOME'
     [ "$KIOSK" = 1 ] && printf '%s\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'
     } > "$PLEB_ENV_TMP"
+    # Only a root-owned regular file is merged from: content carried out of a
+    # file a non-root account could have written would be content this script
+    # signs off on as root. restore_installed_closure has already refused to run
+    # at all in that case, so this is the second lock on the same door.
+    if [ -f "$PLEB_ENV" ] && [ ! -L "$PLEB_ENV" ] && root_config_safe_to_source "$PLEB_ENV"; then
+        PLEB_ENV_MERGED="$(mktemp /etc/pleb/.session.env.XXXXXX)"
+        if ! merge_session_env "$PLEB_ENV_TMP" "$PLEB_ENV" "$PLEB_ENV_MERGED" \
+                || ! verify_merged_session_env "$PLEB_ENV_TMP" "$PLEB_ENV" "$PLEB_ENV_MERGED"; then
+            rm -f "$PLEB_ENV_MERGED" "$PLEB_ENV_TMP"
+            die "refusing to rewrite $PLEB_ENV over configuration this run cannot account for; nothing was written. Resolve the reported line by hand, or move the file aside to have this run write a fresh one."
+        fi
+        mv -fT "$PLEB_ENV_MERGED" "$PLEB_ENV_TMP"
+    elif [ -e "$PLEB_ENV" ] || [ -L "$PLEB_ENV" ]; then
+        warn "$PLEB_ENV is not a plain root-owned file; writing a fresh session config over it"
+    fi
     chmod 0644 "$PLEB_ENV_TMP"
     mv -fT "$PLEB_ENV_TMP" "$PLEB_ENV"
 fi

@@ -438,7 +438,13 @@ Plebian-OS for a desktop-shaped one.
   use remains possible after installation, but builders warn below 4 GiB.
 
 Session and desktop-provider selection are controlled by `/etc/pleb/session.env`
-after install, or by environment at image-build/provision time. Fresh images
+after install, or by environment at image-build/provision time. That file is
+yours to edit: a later `sudo plebian-os-provision` merges its own values into
+it rather than writing over it, rewriting only the keys that run owns — the
+storage layout it creates, the version marker, and anything you name explicitly
+in its environment or on its command line — and leaving every other line where
+it found it, including your comments, your appended blocks, and keys nothing
+here has ever heard of. Fresh images
 default to `PLEBIAN_OS_DESKTOP=1` and `PLEBIAN_OS_KIOSK=0`: LightDM logs into
 the main screen-filling Kilix instance with its chrome visible and the external
 Kilix-95 provider already running as page 1. Exiting Kilix returns to the greeter
