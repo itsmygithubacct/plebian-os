@@ -1,0 +1,14 @@
+# Plebian-OS 0.1.9 release requirements.
+#
+# These are not a partial release manifest. The final releases/0.1.9.env must
+# declare these exact values in addition to the complete coordinated closure.
+# Both the release-image loader and closure selector reject a mismatch.
+#
+# uv 0.12.3 was released by Astral on 2026-08-07. The installer checksum was
+# independently derived from both official versioned installer endpoints:
+#   https://astral.sh/uv/0.12.3/install.sh
+#   https://releases.astral.sh/github/uv/releases/download/0.12.3/uv-installer.sh
+
+PLEBIAN_OS_INSTALL_UV=1
+PLEBIAN_OS_UV_VERSION=0.12.3
+PLEBIAN_OS_UV_INSTALLER_SHA256=a7e3924ea1cd06bf1518c577d635c624ae2e2db030e0fc8ff8cf426224384e17

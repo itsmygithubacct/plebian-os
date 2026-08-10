@@ -126,6 +126,8 @@ BUILD_ONLY_RELEASE_KEYS=(
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
     PLEBIAN_OS_INSTALL_UV
+    PLEBIAN_OS_UV_VERSION
+    PLEBIAN_OS_UV_INSTALLER_SHA256
 )
 
 # Must be present in the manifest and non-empty.
@@ -143,6 +145,7 @@ REQUIRED_VALUE_KEYS=(
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
+    PLEBIAN_OS_INSTALL_UV
     KILIX_PREBUILT_VERSION
     KILIX_PREBUILT_SHA256
     PLEBIAN_OS_BUILD_KILIX_FORK
@@ -171,6 +174,7 @@ VOICE_CLOSURE_KEYS=(
 )
 
 declare -A MANIFEST=()
+declare -A REQUIREMENTS=()
 declare -A CLOSURE=()
 declare -A BEFORE=()
 declare -A AFTER=()
@@ -259,6 +263,42 @@ parse_release_manifest() {
     done <"$manifest"
 }
 
+parse_release_requirements() {
+    local requirements="$1" line key val
+    local -A seen=()
+    REQUIREMENTS=()
+    [ -f "$requirements" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|\#*) continue ;; esac
+        case "$line" in
+            *=*) ;;
+            *) closure_reject "invalid requirements line: $line" ;;
+        esac
+        key="${line%%=*}"
+        val="${line#*=}"
+        val="${val%\"}"; val="${val#\"}"
+        case "$key" in
+            ''|[0-9]*|*[!A-Za-z0-9_]*) closure_reject "invalid requirements key: $key" ;;
+        esac
+        [ -z "${seen[$key]:-}" ] \
+            || closure_reject "duplicate requirements key: $key"
+        seen[$key]=1
+        [ "$val" != REPLACE_ME ] \
+            || closure_reject "requirement $key is still REPLACE_ME"
+        REQUIREMENTS["$key"]="$val"
+    done <"$requirements"
+}
+
+validate_release_requirements() {
+    local key
+    for key in "${!REQUIREMENTS[@]}"; do
+        [ -n "${MANIFEST[$key]+x}" ] \
+            || closure_reject "manifest must declare required key $key"
+        [ "${MANIFEST[$key]}" = "${REQUIREMENTS[$key]}" ] \
+            || closure_reject "release requirements demand $key=${REQUIREMENTS[$key]} (manifest has ${MANIFEST[$key]})"
+    done
+}
+
 require_manifest_format() {
     local key="$1" pattern="$2" description="$3"
     local value="${MANIFEST[$key]:-}"
@@ -278,6 +318,7 @@ validate_release_closure() {
         || closure_reject "PLEBIAN_OS_VERSION is '${MANIFEST[PLEBIAN_OS_VERSION]:-unset}', not $TARGET"
     [ "$SOURCE_VERSION" = "$TARGET" ] \
         || closure_reject "the release commit's VERSION reads '$SOURCE_VERSION', not $TARGET"
+    validate_release_requirements
 
     for key in "${REQUIRED_VALUE_KEYS[@]}"; do
         [ -n "${MANIFEST[$key]:-}" ] || missing+=("$key")
@@ -321,6 +362,22 @@ validate_release_closure() {
         require_manifest_format "$key" '^[0-9a-f]{64}$' \
             "a 64-character lowercase SHA-256"
     done
+
+    value="${MANIFEST[PLEBIAN_OS_INSTALL_UV]:-}"
+    case "$value" in
+        0) ;;
+        1)
+            for key in PLEBIAN_OS_UV_VERSION PLEBIAN_OS_UV_INSTALLER_SHA256; do
+                [ -n "${MANIFEST[$key]:-}" ] \
+                    || closure_reject "PLEBIAN_OS_INSTALL_UV=1 needs a pinned $key"
+            done
+            require_manifest_format PLEBIAN_OS_UV_VERSION \
+                '^[0-9]+\.[0-9]+\.[0-9]+$' "an exact semantic version"
+            require_manifest_format PLEBIAN_OS_UV_INSTALLER_SHA256 \
+                '^[0-9a-f]{64}$' "a 64-character lowercase SHA-256"
+            ;;
+        *) closure_reject "PLEBIAN_OS_INSTALL_UV must be 0 or 1 (got '$value')" ;;
+    esac
 
     # The Kilix Voice closure is optional, but "enabled" and "complete" are the
     # only two acceptable states; a half-pinned optional closure is the mixture
@@ -415,6 +472,13 @@ resolve_closure_source() {
     SOURCE_VERSION="${SOURCE_VERSION%$'\n'}"
     git -C "$SOURCE_DIR" show "$OS_COMMIT:releases/$TARGET.env" >"$STAGE/manifest.env" 2>/dev/null \
         || closure_reject "the release commit $OS_COMMIT has no releases/$TARGET.env"
+    if git -C "$SOURCE_DIR" cat-file -e \
+            "$OS_COMMIT:releases/$TARGET.requirements" 2>/dev/null; then
+        git -C "$SOURCE_DIR" show \
+            "$OS_COMMIT:releases/$TARGET.requirements" >"$STAGE/requirements"
+    elif [ "$TARGET" = 0.1.9 ]; then
+        closure_reject "the release commit $OS_COMMIT has no releases/$TARGET.requirements"
+    fi
 }
 
 # ── proving every component's direction ────────────────────────────────────
@@ -820,6 +884,7 @@ select_closure() {
     fi
     resolve_closure_source
     parse_release_manifest "$STAGE/manifest.env"
+    parse_release_requirements "$STAGE/requirements"
     validate_release_closure
     build_selected_closure
     prepare_component_ancestry_checks

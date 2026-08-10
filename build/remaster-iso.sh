@@ -105,6 +105,7 @@ PY
 load_release_manifest() {
     local rel="$1"
     local manifest="$HERE/releases/$rel.env"
+    local requirements="$HERE/releases/$rel.requirements"
     [[ "$rel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
         || { echo "invalid release identifier: $rel" >&2; exit 1; }
     [ -f "$manifest" ] || { echo "no release manifest: releases/$rel.env" >&2; exit 1; }
@@ -128,6 +129,39 @@ load_release_manifest() {
         fi
         export "$key=$val"
     done < "$manifest"
+    if [ "$rel" = 0.1.9 ] && [ ! -f "$requirements" ]; then
+        echo "release $rel is missing releases/$rel.requirements" >&2
+        exit 1
+    fi
+    if [ -f "$requirements" ]; then
+        local -A required_seen=()
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in ''|\#*) continue ;; esac
+            case "$line" in
+                *=*) ;;
+                *) echo "invalid release requirements line: $line" >&2; exit 1 ;;
+            esac
+            key="${line%%=*}"; val="${line#*=}"
+            val="${val%\"}"; val="${val#\"}"
+            case "$key" in
+                ''|[0-9]*|*[!A-Za-z0-9_]*) echo "invalid release requirements key: $key" >&2; exit 1 ;;
+            esac
+            [ -z "${required_seen[$key]:-}" ] \
+                || { echo "duplicate release requirements key: $key" >&2; exit 1; }
+            required_seen[$key]=1
+            [ "$val" != REPLACE_ME ] \
+                || { echo "release $rel requirement $key is still REPLACE_ME" >&2; exit 1; }
+            [ -n "${seen[$key]:-}" ] || {
+                echo "release $rel manifest must declare required key $key" >&2
+                exit 1
+            }
+            [ "${!key}" = "$val" ] || {
+                echo "release $rel requires $key=$val (manifest has ${!key})" >&2
+                exit 1
+            }
+        done < "$requirements"
+        echo "==> release $rel: validated releases/$rel.requirements"
+    fi
     [ "${PLEBIAN_OS_RELEASE_MODE:-}" = 1 ] \
         || { echo "release $rel manifest must set PLEBIAN_OS_RELEASE_MODE=1" >&2; exit 1; }
     [ "${PLEBIAN_OS_VERSION:-}" = "$rel" ] \
@@ -193,6 +227,21 @@ validate_voice_release_closure() {
     done
 }
 
+validate_uv_release_closure() {
+    case "${PLEBIAN_OS_INSTALL_UV:-0}" in
+        0) return 0 ;;
+        1) ;;
+        *)
+            echo "invalid PLEBIAN_OS_INSTALL_UV=${PLEBIAN_OS_INSTALL_UV:-} (expected 0/1)" >&2
+            exit 1
+            ;;
+    esac
+    [[ "${PLEBIAN_OS_UV_VERSION:-}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || { echo "release mode requires an exact PLEBIAN_OS_UV_VERSION when uv is enabled" >&2; exit 1; }
+    is_hex_len "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}" 64 \
+        || { echo "release mode requires a 64-character PLEBIAN_OS_UV_INSTALLER_SHA256 when uv is enabled" >&2; exit 1; }
+}
+
 # Run before fetch_netinst or mkdir: a release build must verify its immutable
 # closure and checkout before it causes any cache/output filesystem changes.
 release_preflight() {
@@ -216,6 +265,7 @@ release_preflight() {
         printf 'PLEBIAN_OS_RELEASE_MODE=1 requires pinned values for: %s\n' "${missing[*]}" >&2
         exit 1
     }
+    validate_uv_release_closure
     validate_voice_release_closure
     for key in PLEBIAN_OS_SSH_ENABLED PLEBIAN_OS_AUTOBOOT PLEBIAN_OS_UNATTENDED_DISK; do
         [ "${!key:-0}" != 1 ] || {
@@ -420,6 +470,7 @@ release_mode_check() {
         printf 'PLEBIAN_OS_RELEASE_MODE=1 requires pinned values for: %s\n' "${missing[*]}" >&2
         exit 1
     fi
+    validate_uv_release_closure
     validate_voice_release_closure
     case "$PLEBIAN_OS_APT_SNAPSHOT" in
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\

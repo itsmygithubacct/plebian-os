@@ -135,10 +135,10 @@ for entry in "${DEP_GROUPS[@]}"; do
     fi
 done
 
-# uv is useful for development but is not a runtime prerequisite for Kilix's
+# uv is useful system tooling but is not a runtime prerequisite for Kilix's
 # Python apps: their release installers use Debian's python3-venv and locked
-# dependencies. Do not execute mutable remote installer code as root by
-# default; make the tradeoff explicit for local images.
+# dependencies. Release images can opt in with an immutable version + installer
+# checksum; unpinned local images retain the conservative opt-in default.
 if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     # Pin the uv version via the versioned installer URL, download to a file (not
     # a pipe), and verify its sha256 before executing it as root. Set
@@ -159,7 +159,7 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
         fi
     fi
     uv_url="https://astral.sh/uv/${uv_ver:+$uv_ver/}install.sh"
-    log "installing uv (operator-requested; $uv_url -> /usr/local/bin)"
+    log "installing uv (image policy enabled; $uv_url -> /usr/local/bin)"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + stage the uv installer under $PLEBIAN_OS_ROOT_SESSION_HOME (root:root 0700)"
         echo "    + curl -LsSf $uv_url -o <tmp>"

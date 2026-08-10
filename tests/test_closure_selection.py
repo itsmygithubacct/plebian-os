@@ -127,13 +127,17 @@ class ClosureSelectionTests(unittest.TestCase):
         return "\n".join(out) + "\n"
 
     def _source(self, base: Path, manifest_text=None, version="0.1.8",
-                release="0.1.8", tag="v0.1.8") -> str:
+                release="0.1.8", tag="v0.1.8",
+                requirements_text=None) -> str:
         """A Plebian-OS checkout carrying the published release tag."""
         src = base / "src"
         (src / "releases").mkdir(parents=True)
         (src / "VERSION").write_text(version + "\n")
         (src / "releases" / f"{release}.env").write_text(
             self._manifest_text() if manifest_text is None else manifest_text)
+        if requirements_text is not None:
+            (src / "releases" / f"{release}.requirements").write_text(
+                requirements_text)
         git = ["git", "-C", str(src)]
         subprocess.run(git + ["init", "-q"], check=True)
         subprocess.run(git + ["config", "user.email", "t@example.invalid"], check=True)
@@ -338,6 +342,32 @@ class ClosureSelectionTests(unittest.TestCase):
             self._machine(base)
             self._source(base, self._manifest_text(drop=("KILIX_VOICE_MODEL_SHA256",)))
             self._refuses(base, "PLEBIAN_OS_INSTALL_VOICE_MODEL=1 needs pinned values for")
+
+    def test_enabled_uv_requires_exact_version_and_checksum_pins(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            self._source(
+                base,
+                self._manifest_text(PLEBIAN_OS_INSTALL_UV="1"),
+            )
+            self._refuses(
+                base,
+                "PLEBIAN_OS_INSTALL_UV=1 needs a pinned PLEBIAN_OS_UV_VERSION",
+            )
+
+    def test_release_requirements_cannot_be_overridden_by_the_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            self._source(
+                base,
+                requirements_text="PLEBIAN_OS_INSTALL_UV=1\n",
+            )
+            self._refuses(
+                base,
+                "release requirements demand PLEBIAN_OS_INSTALL_UV=1",
+            )
 
     # ── a closure whose version disagrees with the artifact is refused ──────
     def test_manifest_version_disagreeing_with_the_release_is_refused(self):
