@@ -161,7 +161,10 @@ hands. If a release introduces a new release-controlled key, add it to
 `RELEASE_CONTROLLED_KEYS` in the selector (and to the required lists if the
 release cannot build without it) in the same commit that adds it to the manifest;
 the selector adds keys the installed release never had, but only ones it knows
-are release-controlled.
+are release-controlled. The selector must fetch and compare all four exact Git
+component refs before rendering the new configuration, so a higher coordinated
+version cannot hide a component downgrade. It is installed on PATH as part of
+the twelve-file transactional OS layer beginning with 0.1.9.
 
 ## Cutting `<x.y.z>`
 
@@ -297,7 +300,7 @@ are release-controlled.
      under a conventional umask, confirm its categories remain private, verify
      an external desktop override is not chmodded, and confirm a root invocation
      of `plebian-os-update` fails immediately with “run without sudo” guidance;
-   - exercise a successful eleven-file OS-layer update and an induced failure,
+   - exercise a successful twelve-file OS-layer update and an induced failure,
      confirming rollback restores the prior wallpaper, LightDM greeter
      override, attribution, license, scripts, Pleb recovery guide (or removes
      newly introduced files/directories), and state;

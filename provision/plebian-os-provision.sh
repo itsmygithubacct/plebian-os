@@ -3291,6 +3291,28 @@ else
     warn "update helper not found; continuing without plebian-os-update"
 fi
 
+# Starting with 0.1.9 the target-release closure selector is part of the
+# installed OS layer too. This makes every later adjacent release hop available
+# from PATH while retaining the target tag as the authority for its manifest.
+SELECTOR_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-select-closure.sh" \
+    "$SELF_DIR/plebian-os-select-closure"; do
+    [ -r "$cand" ] && SELECTOR_SRC="$cand" && break
+done
+if [ -n "$SELECTOR_SRC" ]; then
+    log "installing closure selector -> /usr/local/bin/plebian-os-select-closure"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -m 0755 $SELECTOR_SRC /usr/local/bin/plebian-os-select-closure"
+    else
+        install -m 0755 "$SELECTOR_SRC" /usr/local/bin/plebian-os-select-closure
+    fi
+elif [ -x /usr/local/bin/plebian-os-select-closure ]; then
+    log "closure selector already present at /usr/local/bin/plebian-os-select-closure"
+else
+    warn "closure selector not found; continuing without plebian-os-select-closure"
+fi
+
 # Optional NVIDIA driver helper. Installed onto PATH so it is discoverable, and
 # never run: the image ships nouveau, which drives a display on any supported
 # card. Only a machine that needs CUDA, NVENC/NVDEC or full clocks has a reason

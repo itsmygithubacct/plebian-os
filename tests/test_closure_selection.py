@@ -95,6 +95,7 @@ class ClosureSelectionTests(unittest.TestCase):
         lines.append(guarded("PLEBIAN_OS_DIR", str(base / "src")))
         lines.append(guarded("PLEB_DIR", str(home / "pleb")))
         lines.append(guarded("KILIX_DIR", str(home / "kilix")))
+        lines.append(guarded("KILIX95_DIR", str(home / "kilix-desktops" / "kilix-95")))
         for name, value in release:
             lines.append(guarded(name, value))
         for name, value in operator:
@@ -147,17 +148,37 @@ class ClosureSelectionTests(unittest.TestCase):
             git + ["rev-parse", f"{tag}^{{commit}}"],
             capture_output=True, text=True, check=True).stdout.strip()
 
-    def _run(self, base: Path, *args, fail_after=None):
+    def _run(self, base: Path, *args, fail_after=None, check_ancestry=False):
         env = {
             "HOME": str(base / "home"),
             "PATH": os.environ["PATH"],
             "LANG": "C",
             "PLEBIAN_OS_CLOSURE_TEST_ROOT": str(base / "root"),
         }
+        if not check_ancestry:
+            env["PLEBIAN_OS_SELECT_TEST_SKIP_COMPONENT_ANCESTRY"] = "1"
         if fail_after is not None:
             env["PLEBIAN_OS_SELECT_TEST_FAIL_AFTER"] = fail_after
         return subprocess.run([str(SELECT), *args], env=env, text=True,
                               capture_output=True, check=False)
+
+    @staticmethod
+    def _component_history(path: Path, count=2):
+        path.mkdir(parents=True)
+        git = ["git", "-C", str(path)]
+        subprocess.run(git + ["init", "-q"], check=True)
+        subprocess.run(git + ["config", "user.email", "t@example.invalid"], check=True)
+        subprocess.run(git + ["config", "user.name", "t"], check=True)
+        commits = []
+        for index in range(count):
+            (path / "state").write_text(f"{index}\n")
+            subprocess.run(git + ["add", "state"], check=True)
+            subprocess.run(git + ["commit", "-qm", f"state {index}"], check=True)
+            commits.append(subprocess.run(
+                git + ["rev-parse", "HEAD"], capture_output=True,
+                text=True, check=True,
+            ).stdout.strip())
+        return commits
 
     @staticmethod
     def _values(env_path: Path) -> dict:
@@ -433,6 +454,78 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("closure: 0.1.7 -> 0.1.8 (pinned by releases/0.1.8.env@",
                           result.stdout)
 
+    def test_component_downgrade_is_detected_while_release_moves_forward(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sources = base / "home" / ".local" / "gpu_terminal" / "sources"
+            pleb = self._component_history(sources / "pleb")
+            kilix = self._component_history(sources / "kilix")
+            kilix95 = self._component_history(
+                sources / "kilix-desktops" / "kilix-95", count=1)
+            manifest = self._manifest_text(
+                PLEB_REF=pleb[0],
+                KILIX_REF=kilix[1],
+                KILIX95_REF=kilix95[0],
+            )
+            os_commit = self._source(base, manifest)
+            installed = dict(INSTALLED_RELEASE_VALUES)
+            installed.update({
+                "PLEBIAN_OS_REF": os_commit,
+                "PLEB_REF": pleb[1],
+                "KILIX_REF": kilix[0],
+                "KILIX95_REF": kilix95[0],
+            })
+            self._machine(base, release=list(installed.items()))
+
+            result = self._run(
+                base, "0.1.8", "--offline", "--dry-run", check_ancestry=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("closure: 0.1.7 -> 0.1.8", result.stdout)
+            self.assertIn(
+                f"component Pleb: {pleb[1][:12]} -> {pleb[0][:12]} (DOWNGRADE;",
+                result.stderr,
+            )
+            self.assertIn(
+                f"component Kilix: {kilix[0][:12]} -> {kilix[1][:12]} (forward;",
+                result.stdout,
+            )
+
+    def test_offline_selection_refuses_missing_component_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sources = base / "home" / ".local" / "gpu_terminal" / "sources"
+            pleb = self._component_history(sources / "pleb", count=1)
+            kilix = self._component_history(sources / "kilix", count=1)
+            kilix95 = self._component_history(
+                sources / "kilix-desktops" / "kilix-95", count=1)
+            missing = "f" * 40
+            manifest = self._manifest_text(
+                PLEB_REF=missing,
+                KILIX_REF=kilix[0],
+                KILIX95_REF=kilix95[0],
+            )
+            os_commit = self._source(base, manifest)
+            installed = dict(INSTALLED_RELEASE_VALUES)
+            installed.update({
+                "PLEBIAN_OS_REF": os_commit,
+                "PLEB_REF": pleb[0],
+                "KILIX_REF": kilix[0],
+                "KILIX95_REF": kilix95[0],
+            })
+            env = self._machine(base, release=list(installed.items()))
+            before = env.read_bytes()
+
+            result = self._run(
+                base, "0.1.8", "--offline", check_ancestry=True)
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn(
+                f"Pleb target PLEB_REF={missing} is not in", result.stderr)
+            self.assertIn("--offline forbids fetching it", result.stderr)
+            self.assertEqual(env.read_bytes(), before)
+            self.assertEqual(self._recovery_records(base), [])
+
     # ── the previous closure is recoverable ─────────────────────────────────
     def test_rollback_restores_the_previous_closure_byte_for_byte(self):
         with tempfile.TemporaryDirectory() as td:
@@ -502,6 +595,17 @@ class ClosureSelectionContractTests(unittest.TestCase):
         self.assertLess(source.index("verify_candidate_closure "),
                         source.index("apply_selected_closure\n"))
 
+    def test_every_component_is_fetched_and_compared_before_rendering(self):
+        source = SELECT.read_text()
+        self.assertIn("prepare_component_ancestry_checks", source)
+        self.assertIn("--no-tags --no-recurse-submodules", source)
+        self.assertIn('merge-base --is-ancestor "$installed" "$target"', source)
+        self.assertIn('merge-base --is-ancestor "$target" "$installed"', source)
+        self.assertLess(
+            source.index("prepare_component_ancestry_checks\n"),
+            source.index("render_candidate_session_env "),
+        )
+
     def test_upgrade_policy_names_the_concrete_command(self):
         text = UPGRADING.read_text()
         self.assertIn("plebian-os-select-closure", text)
@@ -516,6 +620,17 @@ class ClosureSelectionContractTests(unittest.TestCase):
         text = NOTES.read_text()
         self.assertIn("plebian-os-select-closure", text)
         self.assertIn("provision/plebian-os-select-closure.sh", text)
+
+    def test_selector_is_installed_by_every_os_delivery_path(self):
+        destination = "/usr/local/bin/plebian-os-select-closure"
+        update = UPDATE.read_text()
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        for text in (update, provision, preseed):
+            self.assertIn(destination, text)
+        self.assertIn("plebian-os-select-closure.sh", remaster)
+        self.assertIn('[ "${#expected_hashes[@]}" -eq 12 ]', update)
 
 
 if __name__ == "__main__":

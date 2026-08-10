@@ -682,6 +682,7 @@ paths=(
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-passwd
     /usr/local/bin/plebian-os-update
+    /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
@@ -780,6 +781,7 @@ paths=(
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-passwd
     /usr/local/bin/plebian-os-update
+    /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
@@ -1595,6 +1597,7 @@ stage_and_validate_os_layer() {
         "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md"
         "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2"
         "$prov/lightdm-gtk-greeter.conf"
+        "$prov/plebian-os-select-closure.sh"
     )
     for file in "${required[@]}"; do
         [ -f "$file" ] || die "OS-layer checkout is incomplete; required file missing: $file"
@@ -1619,9 +1622,11 @@ stage_and_validate_os_layer() {
     install -m 0644 "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md" "$stage/ATTRIBUTION.md"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" "$stage/COPYING.GPL-2"
     install -m 0644 "$prov/lightdm-gtk-greeter.conf" "$stage/lightdm-gtk-greeter.conf"
+    install -m 0755 "$prov/plebian-os-select-closure.sh" "$stage/plebian-os-select-closure"
 
     bash -n "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
+        "$stage/plebian-os-select-closure" \
         || die "staged OS-layer shell validation failed"
     python3 - "$stage/plebian-os-passwd" <<'PY' \
         || die "staged password helper Python validation failed"
@@ -1738,7 +1743,7 @@ deploy_staged_os_layer() {
     shift
     local -a expected_hashes=("$@")
     local -a root_command
-    [ "${#expected_hashes[@]}" -eq 11 ] \
+    [ "${#expected_hashes[@]}" -eq 12 ] \
         || die "OS-layer deployment requires one expected hash per staged file"
     if [ "$EUID" = 0 ]; then
         # A root-run updater stages root-owned files. Clear inherited sudo
@@ -1776,6 +1781,7 @@ names=(
     ATTRIBUTION.md
     COPYING.GPL-2
     lightdm-gtk-greeter.conf
+    plebian-os-select-closure
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -1789,9 +1795,10 @@ dests=(
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
+    /usr/local/bin/plebian-os-select-closure
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -1959,7 +1966,8 @@ for i in "${!new_paths[@]}"; do
         false
     }
 done
-bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" "${new_paths[5]}"
+bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
+    "${new_paths[5]}" "${new_paths[11]}"
 python3 - "${new_paths[2]}" <<'PY'
 import pathlib
 import sys
@@ -2070,6 +2078,7 @@ self_update_os_layer() {
         ATTRIBUTION.md
         COPYING.GPL-2
         lightdm-gtk-greeter.conf
+        plebian-os-select-closure
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"

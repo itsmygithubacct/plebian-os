@@ -24,7 +24,8 @@
 #                 system already uses). Only its object store is read; the
 #                 working tree and HEAD are left exactly where they were, so
 #                 the updater's clean-pinned-checkout contract still holds.
-#   --offline     require the tag to be present locally already; do not fetch.
+#   --offline     require the tag, component commits, and complete ancestry to
+#                 be present locally already; do not fetch.
 #   --dry-run     validate, compare, and report; write nothing.
 #   --show        print the release-controlled keys this machine currently has.
 #   --rollback    put the previous closure back (the most recent one this tool
@@ -173,6 +174,9 @@ declare -A MANIFEST=()
 declare -A CLOSURE=()
 declare -A BEFORE=()
 declare -A AFTER=()
+declare -A COMPONENT_INSTALLED=()
+declare -A COMPONENT_TARGET=()
+declare -A COMPONENT_DIRECTION=()
 
 TARGET=""
 SOURCE_DIR=""
@@ -413,6 +417,84 @@ resolve_closure_source() {
         || closure_reject "the release commit $OS_COMMIT has no releases/$TARGET.env"
 }
 
+# ── proving every component's direction ────────────────────────────────────
+# A release number can rise while one hand-built component pin falls. Fetch the
+# exact target commit into the installed checkout's object store, without moving
+# HEAD or any branch, then compare the two commits rather than inferring every
+# component's direction from PLEBIAN_OS_VERSION.
+prepare_component_ancestry() {
+    local label="$1" ref_key="$2" repo_key="$3" dir="$4"
+    local installed="${BEFORE[$ref_key]:-}" target="${CLOSURE[$ref_key]:-}"
+    local repo="${CLOSURE[$repo_key]:-}" resolved shallow
+    local -a deepen=()
+
+    [[ "$installed" =~ ^[0-9a-f]{40}$ ]] \
+        || closure_reject "installed $ref_key must be a full 40-character commit before $label ancestry can be checked (got '$installed')"
+    [[ "$target" =~ ^[0-9a-f]{40}$ ]] \
+        || closure_reject "selected $ref_key is not a full 40-character commit"
+    case "$dir" in
+        /*) ;;
+        *) closure_reject "$label checkout path must be absolute before ancestry can be checked (got '$dir')" ;;
+    esac
+    git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 \
+        || closure_reject "no $label git checkout at $dir; cannot compare $installed with $target"
+    resolved="$(git -C "$dir" rev-parse --verify "$installed^{commit}" 2>/dev/null || true)"
+    [ "$resolved" = "$installed" ] \
+        || closure_reject "$label checkout at $dir does not contain installed $ref_key=$installed"
+
+    shallow="$(git -C "$dir" rev-parse --is-shallow-repository 2>/dev/null || true)"
+    case "$shallow" in true|false) ;; *) closure_reject "could not inspect $label checkout history at $dir" ;; esac
+    if [ "$OFFLINE" = 1 ]; then
+        [ "$shallow" = false ] \
+            || closure_reject "$label checkout at $dir is shallow; --offline cannot prove component ancestry"
+        resolved="$(git -C "$dir" rev-parse --verify "$target^{commit}" 2>/dev/null || true)"
+        [ "$resolved" = "$target" ] \
+            || closure_reject "$label target $ref_key=$target is not in $dir and --offline forbids fetching it"
+    else
+        [ "$shallow" = false ] || deepen=(--unshallow)
+        log "fetching $label target ${target:0:12} for component ancestry"
+        git -C "$dir" -c fetch.recurseSubmodules=false fetch \
+            --no-tags --no-recurse-submodules "${deepen[@]}" "$repo" "$target" \
+            || closure_reject "could not fetch $label target $ref_key=$target from $repo"
+        resolved="$(git -C "$dir" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null || true)"
+        [ "$resolved" = "$target" ] \
+            || closure_reject "$label fetch resolved to '$resolved', not selected $ref_key=$target"
+        [ "$(git -C "$dir" rev-parse --is-shallow-repository 2>/dev/null || true)" = false ] \
+            || closure_reject "$label history remains shallow after fetching; component ancestry is not provable"
+    fi
+
+    COMPONENT_INSTALLED["$ref_key"]="$installed"
+    COMPONENT_TARGET["$ref_key"]="$target"
+    if [ "$installed" = "$target" ]; then
+        COMPONENT_DIRECTION["$ref_key"]=unchanged
+    elif git -C "$dir" merge-base --is-ancestor "$installed" "$target"; then
+        COMPONENT_DIRECTION["$ref_key"]=forward
+    elif git -C "$dir" merge-base --is-ancestor "$target" "$installed"; then
+        COMPONENT_DIRECTION["$ref_key"]=downgrade
+    else
+        COMPONENT_DIRECTION["$ref_key"]=diverged
+    fi
+}
+
+prepare_component_ancestry_checks() {
+    # The existing closure-fixture suite reroots /etc and tests rendering/write
+    # behavior without component repositories. The explicit test-only bypass is
+    # impossible for the live root; dedicated ancestry fixtures exercise this
+    # path without it.
+    if [ -n "$CLOSURE_ROOT" ] \
+            && [ "${PLEBIAN_OS_SELECT_TEST_SKIP_COMPONENT_ANCESTRY:-0}" = 1 ]; then
+        return 0
+    fi
+    prepare_component_ancestry \
+        "Plebian-OS" PLEBIAN_OS_REF PLEBIAN_OS_REPO "$SOURCE_DIR"
+    prepare_component_ancestry \
+        "Pleb" PLEB_REF PLEB_REPO "${BEFORE[PLEB_DIR]:-}"
+    prepare_component_ancestry \
+        "Kilix" KILIX_REF KILIX_REPO "${BEFORE[KILIX_DIR]:-}"
+    prepare_component_ancestry \
+        "Kilix 95" KILIX95_REF KILIX95_REPO "${BEFORE[KILIX95_DIR]:-}"
+}
+
 # ── rendering /etc/pleb/session.env ─────────────────────────────────────────
 # The provisioner writes every managed value in one exact shape:
 #     if [ -z "${NAME+x}" ]; then NAME=value; fi
@@ -521,8 +603,39 @@ short_value() {
 
 # Same discipline as pleb's announce_component_move: name both ends and the
 # thing that decided them, and say "DOWNGRADE" out loud when the machine is
-# being walked backwards. A coordinated closure moves as one unit, so the
-# release version is the honest place to judge direction.
+# being walked backwards. The coordinated release and every Git component are
+# judged independently; a rising release number cannot hide a falling pin.
+announce_component_moves() {
+    local ref_key label installed target direction pinned_by
+    for ref_key in PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF; do
+        case "$ref_key" in
+            PLEBIAN_OS_REF) label="Plebian-OS" ;;
+            PLEB_REF) label="Pleb" ;;
+            KILIX_REF) label="Kilix" ;;
+            KILIX95_REF) label="Kilix 95" ;;
+        esac
+        installed="${COMPONENT_INSTALLED[$ref_key]:-}"
+        target="${COMPONENT_TARGET[$ref_key]:-}"
+        direction="${COMPONENT_DIRECTION[$ref_key]:-unchecked}"
+        [ "$direction" != unchecked ] || continue
+        pinned_by="$ref_key in releases/$TARGET.env@${OS_COMMIT:0:12}"
+        case "$direction" in
+            unchanged)
+                log "component $label: ${installed:0:12} -> ${target:0:12} (unchanged; $pinned_by)"
+                ;;
+            forward)
+                log "component $label: ${installed:0:12} -> ${target:0:12} (forward; $pinned_by)"
+                ;;
+            downgrade)
+                warn "component $label: ${installed:0:12} -> ${target:0:12} (DOWNGRADE; $pinned_by)"
+                ;;
+            diverged)
+                warn "component $label: ${installed:0:12} -> ${target:0:12} (DIVERGED, neither commit is an ancestor; $pinned_by)"
+                ;;
+        esac
+    done
+}
+
 announce_closure_move() {
     local installed="${BEFORE[PLEBIAN_OS_VERSION]:-}" pinned_by key moved=0 unchanged=0
     pinned_by="releases/$TARGET.env@${OS_COMMIT:0:12}"
@@ -536,6 +649,7 @@ announce_closure_move() {
     else
         log "closure: $installed -> $TARGET (pinned by $pinned_by)"
     fi
+    announce_component_moves
     for key in "${RELEASE_CONTROLLED_KEYS[@]}"; do
         [ -n "${CLOSURE[$key]+x}" ] || continue
         if [ "${BEFORE[$key]:-}" = "${CLOSURE[$key]}" ] && [ -n "${BEFORE[$key]+x}" ]; then
@@ -708,6 +822,7 @@ select_closure() {
     parse_release_manifest "$STAGE/manifest.env"
     validate_release_closure
     build_selected_closure
+    prepare_component_ancestry_checks
     log "release $TARGET closure validated from ${SOURCE_DIR}: releases/$TARGET.env @ $OS_COMMIT"
     scan_for_unmanaged_release_keys "$SESSION_ENV"
     announce_closure_move

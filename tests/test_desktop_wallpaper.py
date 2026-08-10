@@ -612,7 +612,7 @@ desktop_wallpaper_matches_expected_hash \
         self.assertIn('wallpaper_actual" = "$wallpaper_expected', update)
         self.assertIn('wallpaper_actual" = "$wallpaper_update_expected', update)
         self.assertGreaterEqual(update.count(destination), 3)
-        self.assertIn('[ "${#expected_hashes[@]}" -eq 11 ]', update)
+        self.assertIn('[ "${#expected_hashes[@]}" -eq 12 ]', update)
         for source, installed in (
             (
                 "assets/installer/ATTRIBUTION.md",
@@ -643,10 +643,12 @@ desktop_wallpaper_matches_expected_hash \
             "ATTRIBUTION.md",
             "COPYING.GPL-2",
             "lightdm-gtk-greeter.conf",
-            "modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644)",
-            "1048576 1048576 1048576)",
+            "plebian-os-select-closure",
+            "modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755)",
+            "1048576 1048576 1048576 33554432)",
             'python3 - "${new_paths[8]}" "${new_paths[9]}"',
             'python3 - "${new_paths[10]}"',
+            '"${new_paths[5]}" "${new_paths[11]}"',
         ):
             self.assertIn(marker, root_deploy)
 

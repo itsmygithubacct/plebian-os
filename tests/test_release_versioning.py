@@ -237,6 +237,8 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("/usr/local/sbin/plebian-os-provision", u)
         # the password-nag helper is an OS-layer script too — it must redeploy
         self.assertIn("/usr/local/sbin/plebian-os-passwd", u)
+        # the target-closure selector is the twelfth transactional payload
+        self.assertIn("/usr/local/bin/plebian-os-select-closure", u)
         # Exact pins are resolved from the object returned by origin rather
         # than a potentially poisoned local tag, then deployed transactionally.
         self.assertIn(

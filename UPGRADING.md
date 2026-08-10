@@ -124,29 +124,40 @@ git -C "$SRC" show v0.1.8:provision/plebian-os-select-closure.sh >"$SEL"
 bash "$SEL" 0.1.8
 ```
 
-Substitute the target version throughout. On a machine already running 0.1.8 or
-newer the selector is present in that checkout, so later hops are one command:
+Substitute the target version throughout. On a machine already running 0.1.8,
+the selector is present in that checkout, so the 0.1.8 → 0.1.9 hop is one
+command with no `git show` bootstrap:
 
 ```sh
 ~/.local/gpu_terminal/sources/plebian-os/provision/plebian-os-select-closure.sh 0.1.9
 ```
 
-The selector is deliberately **not** on `PATH`. What the updater redeploys is a
-fixed eleven-file OS layer describing the release a machine is on, and the
-selector that matters is always the one belonging to the release it is moving
-*to*. Running it from the target's own tree is what keeps those two facts from
-disagreeing.
+Beginning with 0.1.9, the selector is also the twelfth payload in the validated,
+rollback-safe OS layer and is installed as `/usr/local/bin/plebian-os-select-closure`.
+Once that release is installed, subsequent adjacent hops use the PATH command:
+
+```sh
+plebian-os-select-closure 0.1.10
+```
+
+The selector still reads the target manifest from the target's published tag;
+putting the program on PATH does not make the installed release's working tree
+or manifest authoritative for the release being selected.
 
 It validates the whole closure before it writes anything: a manifest which is
 incomplete, malformed, still holds a placeholder, pins a branch instead of a
 commit, half-pins an optional closure such as Kilix Voice, or declares a version
 which disagrees with the release identifier or with the release commit's
 `VERSION`, is refused and the refusal names what was wrong. It then reports every
-release-controlled key it will move — announcing `DOWNGRADE` when the selection
-walks the machine backwards — proves the rendered configuration changes nothing
-else, and swaps the new `/etc/pleb/session.env` in with a single rename. Either
-every release-controlled key moves or none does; a write that fails part way
-leaves the previous closure selected and says so.
+release-controlled key it will move. It fetches each exact Plebian-OS, Pleb,
+Kilix, and Kilix-95 target commit without moving a checkout, compares it with
+the installed commit, and announces `DOWNGRADE` or `DIVERGED` per component;
+a rising release number cannot hide a falling pin. It then proves the rendered
+configuration changes nothing else and swaps the new `/etc/pleb/session.env`
+in with a single rename. Either every release-controlled key moves or none
+does; a write that fails part way leaves the previous closure selected and says
+so. `--offline` performs the same proof only when every target object and the
+complete histories are already present locally.
 
 Useful before and after — `SEL` being whichever copy of the selector the block
 above put in your hands:

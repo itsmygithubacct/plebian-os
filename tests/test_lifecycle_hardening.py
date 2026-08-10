@@ -72,6 +72,7 @@ class UpdateLifecycleTests(unittest.TestCase):
             "plebian-os-install-deps",
             "plebian-os-passwd",
             "plebian-os-update",
+            "plebian-os-select-closure",
             "plebian-os-firstboot.service",
             "plebian-os-firstboot-attempt",
             "VERSION",

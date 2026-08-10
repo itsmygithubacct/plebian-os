@@ -6,11 +6,21 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased] — 0.1.9 work
 
+### Added
+- Install `plebian-os-select-closure` on PATH for fresh systems, standalone
+  provisioning, and transactional self-update. It is the twelfth hash-bound OS
+  layer payload and participates in both the inner deployment rollback and the
+  outer whole-stack rollback.
+
 ### Fixed
 - Admit real USB sticks whose controllers report fixed media (`RM=0`) when the
   kernel independently reports `TRAN=usb` or `HOTPLUG=1`. Both USB builders and
   `--list` use the same rule, fixed disks still require `--force` plus typed
   confirmation, and refusals now report transport, hotplug, model, and size.
+- Fetch every exact target Git commit during closure selection and compare it
+  with the installed Plebian-OS, Pleb, Kilix, and Kilix-95 commit. Component
+  downgrades and divergent histories are now reported independently of the
+  coordinated release version; `--offline` refuses when that proof is absent.
 
 ## [0.1.8] — 2026-08-07
 
