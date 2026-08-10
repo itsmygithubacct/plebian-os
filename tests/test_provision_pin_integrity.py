@@ -84,6 +84,12 @@ INSTALLED_PROVIDER_PINS = {
     "KILIX_LAND_DESKTOP_REF": "",
 }
 
+INSTALLED_OPTIONAL_DESKTOP_POLICY = {
+    "KILIX_CAP_AUTO_INSTALL": "0",
+    "KILIX_TUI_UTILS_AUTO_INSTALL": "0",
+    "KILIX_LAND_DESKTOP_AUTO_INSTALL": "0",
+}
+
 # Storage paths and install policy, which a re-provision resolves for itself
 # from the target user and /etc/default/plebian-os. They are in the fixture to
 # prove the restore does not drag them in.
@@ -183,7 +189,8 @@ class ReprovisionPinIntegrityTests(unittest.TestCase):
         session_env = directory / "session.env"
         session_env.write_text(session_env_text(
             {**INSTALLED_CLOSURE, **INSTALLED_SELECTION,
-             **INSTALLED_PROVIDER_PINS, **UNRELATED}))
+             **INSTALLED_PROVIDER_PINS, **INSTALLED_OPTIONAL_DESKTOP_POLICY,
+             **UNRELATED}))
         return session_env
 
     def test_every_release_controlled_key_survives_a_reprovision(self):
@@ -216,6 +223,43 @@ class ReprovisionPinIntegrityTests(unittest.TestCase):
                 with self.subTest(key=key):
                     self.assertIn(f"{key}={INSTALLED_SELECTION[key]}",
                                   result.stdout)
+
+    def test_optional_desktop_switches_drive_the_reprovision_run(self):
+        keys = bash_array(PROVISION, "OPTIONAL_DESKTOP_AUTO_INSTALL_KEYS")
+        self.assertEqual(keys, [
+            "KILIX_CAP_AUTO_INSTALL",
+            "KILIX_TUI_UTILS_AUTO_INSTALL",
+            "KILIX_LAND_DESKTOP_AUTO_INSTALL",
+        ])
+        provision = PROVISION.read_text()
+        for key in keys:
+            self.assertIn(f'"{key}=${key}"', provision)
+            for installed in ("0", "1"):
+                with self.subTest(key=key, installed=installed):
+                    with tempfile.TemporaryDirectory() as td:
+                        session_env = Path(td) / "session.env"
+                        session_env.write_text(session_env_text({key: installed}))
+                        result = self._run(
+                            session_env,
+                            "restore_installed_closure\n"
+                            f'printf "{key}=%s\\n" "${key}"\n')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"{key}={installed}\n", result.stdout)
+
+    def test_explicit_optional_desktop_switch_outranks_the_installed_value(self):
+        keys = bash_array(PROVISION, "OPTIONAL_DESKTOP_AUTO_INSTALL_KEYS")
+        for key in keys:
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as td:
+                    session_env = Path(td) / "session.env"
+                    session_env.write_text(session_env_text({key: "0"}))
+                    result = self._run(
+                        session_env,
+                        "restore_installed_closure\n"
+                        f'printf "{key}=%s\\n" "${key}"\n',
+                        extra=f"export {key}=1\n")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"{key}=1\n", result.stdout)
 
     def test_the_restore_leaves_paths_and_policy_to_the_run_itself(self):
         with tempfile.TemporaryDirectory() as td:
@@ -259,7 +303,8 @@ class ReprovisionPinIntegrityTests(unittest.TestCase):
     def test_a_key_the_machine_does_not_record_is_named_not_defaulted(self):
         with tempfile.TemporaryDirectory() as td:
             values = {**INSTALLED_CLOSURE, **INSTALLED_SELECTION,
-                      **INSTALLED_PROVIDER_PINS}
+                      **INSTALLED_PROVIDER_PINS,
+                      **INSTALLED_OPTIONAL_DESKTOP_POLICY}
             del values["PLEBIAN_OS_KILIX_GO_VERSION"]
             del values["KILIX_VOICE_MODEL_SHA256"]
             session_env = Path(td) / "session.env"
@@ -292,7 +337,8 @@ class ReprovisionPinIntegrityTests(unittest.TestCase):
             # And a release machine that no longer records its Go pin is a
             # release machine that cannot be re-provisioned as one.
             values = {**INSTALLED_CLOSURE, **INSTALLED_SELECTION,
-                      **INSTALLED_PROVIDER_PINS}
+                      **INSTALLED_PROVIDER_PINS,
+                      **INSTALLED_OPTIONAL_DESKTOP_POLICY}
             del values["PLEBIAN_OS_KILIX_GO_VERSION"]
             depinned = Path(td) / "depinned.env"
             depinned.write_text(session_env_text(values))

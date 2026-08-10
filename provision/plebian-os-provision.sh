@@ -97,6 +97,16 @@ SESSION_SELECTION_KEYS=(
     KILIX_DESKTOP_FLAVOR
 )
 
+# These switches are operator policy stored in session.env. Merging that file
+# preserves their written values, but the values also have to be restored before
+# `pleb install` runs; otherwise a bare re-provision acts on the built-in `1`
+# while leaving an honest-looking `0` in the file.
+OPTIONAL_DESKTOP_AUTO_INSTALL_KEYS=(
+    KILIX_CAP_AUTO_INSTALL
+    KILIX_TUI_UTILS_AUTO_INSTALL
+    KILIX_LAND_DESKTOP_AUTO_INSTALL
+)
+
 # Release-controlled, but this run is its authority rather than its reader: the
 # installed version comes from the VERSION marker deployed beside this script,
 # and plebian-os-update replaces the two together. Reading it back out of
@@ -126,7 +136,8 @@ PERSISTED_SESSION_KEYS=()
 declare -A PERSISTED_KEY_EXPLICIT=()
 declare -A PERSISTED_KEY_RESTORED=()
 for _persisted_key in "${RELEASE_CONTROLLED_KEYS[@]}" "${PROVIDER_PIN_KEYS[@]}" \
-                      "${SESSION_SELECTION_KEYS[@]}"; do
+                      "${SESSION_SELECTION_KEYS[@]}" \
+                      "${OPTIONAL_DESKTOP_AUTO_INSTALL_KEYS[@]}"; do
     case " ${PROVISION_OWNED_KEYS[*]} " in *" $_persisted_key "*) continue ;; esac
     PERSISTED_SESSION_KEYS+=("$_persisted_key")
     [ -z "${!_persisted_key:-}" ] || PERSISTED_KEY_EXPLICIT["$_persisted_key"]=1

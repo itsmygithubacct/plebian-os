@@ -13,6 +13,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   outer whole-stack rollback.
 
 ### Fixed
+- Make a bare `sudo plebian-os-provision` act on the installed values of
+  `KILIX_CAP_AUTO_INSTALL`, `KILIX_TUI_UTILS_AUTO_INSTALL`, and
+  `KILIX_LAND_DESKTOP_AUTO_INSTALL`. The session merge already preserved an
+  operator's `0`; the provisioning run now restores it before invoking
+  `pleb install` instead of installing the disabled provider behind the file's
+  back. An explicit environment value still wins.
 - Admit real USB sticks whose controllers report fixed media (`RM=0`) when the
   kernel independently reports `TRAN=usb` or `HOTPLUG=1`. Both USB builders and
   `--list` use the same rule, fixed disks still require `--force` plus typed
