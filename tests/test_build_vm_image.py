@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -17,8 +19,9 @@ def args(**overrides):
     values = dict(
         yes=True, name=None, username=None, fullname=None, password="explicit",
         hostname=None, ram=None, cpus=None, vram=None, accelerate_3d=False,
+        firmware=None,
         disk=None, session=None, kiosk=None, nopasswd_sudo=None, port=None,
-        gui=False, no_wait=True,
+        gui=False, no_wait=True, iso=None, no_verify=False,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -28,7 +31,7 @@ def cfg(**overrides):
     values = dict(
         name="test", username="pleb", fullname="Plebian User",
         password="strong-secret", hostname="plebian", ram_mb=1024, cpus=1,
-        vram_mb=128, accelerate_3d=False, disk_gb=8, desktop=True,
+        vram_mb=128, accelerate_3d=False, firmware="bios", disk_gb=8, desktop=True,
         kiosk=True, nopasswd_sudo=False, ssh_port=2222, gui=False, wait=False,
     )
     values.update(overrides)
@@ -210,6 +213,27 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn("timeout 1750 python3", command)
         self.assertEqual(remote.call_args.kwargs["timeout"], 1800)
 
+    def test_acceptance_treats_exit_status_as_authoritative(self):
+        # A failed guest command that happens to print "OK" must never pass.
+        result = SimpleNamespace(returncode=1, stdout="OK\n", stderr="")
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                mock.patch.object(vm, "info"), self.assertRaises(SystemExit):
+            vm.verify_provisioning(cfg(), "askpass")
+        self.assertGreater(remote.call_count, 1)
+
+    def test_update_rollback_gate_uses_real_installed_updater(self):
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                mock.patch.object(vm, "info"):
+            vm.verify_update_rollback(cfg(), "askpass")
+        command = remote.call_args.args[1]
+        self.assertIn("PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER=os-layer", command)
+        self.assertIn("/usr/local/bin/plebian-os-update", command)
+        self.assertIn("snapshot_acceptance_update", command)
+        self.assertIn('cmp -s "$before" "$after"', command)
+        self.assertIn("/usr/local/bin/plebian-os-select-closure", command)
+
     def test_catalog_acceptance_program_clean_builds_and_selects_every_pin(self):
         installed = []
         roots = []
@@ -332,6 +356,24 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(built.vram_mb, 256)
         self.assertTrue(built.accelerate_3d)
 
+    def test_firmware_defaults_to_bios_and_accepts_efi(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(vm.gather_config(args()).firmware, "bios")
+            self.assertEqual(
+                vm.gather_config(args(firmware="efi")).firmware,
+                "efi",
+            )
+
+    def test_default_hostname_sanitizes_versioned_vm_name(self):
+        built = vm.gather_config(args(
+            name="plebian-acceptance-0.1.9-deadbeef",
+            hostname=None,
+        ))
+        self.assertEqual(
+            built.hostname,
+            "plebian-acceptance-0-1-9-deadbeef",
+        )
+
     def test_default_ram_uses_release_tested_floor(self):
         with mock.patch.object(vm, "host_ram_mb", return_value=8192):
             self.assertEqual(vm.default_ram_mb(), 4096)
@@ -394,6 +436,47 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(modify[modify.index("--audio-enabled") + 1], "on")
         self.assertEqual(modify[modify.index("--audio-in") + 1], "on")
         self.assertEqual(modify[modify.index("--audio-out") + 1], "on")
+        self.assertEqual(modify[modify.index("--firmware") + 1], "bios")
+
+    def test_iso_detach_failure_is_fatal(self):
+        failed = SimpleNamespace(returncode=1, stdout="", stderr="busy")
+        with mock.patch.object(vm.subprocess, "run", return_value=failed), \
+                self.assertRaises(SystemExit):
+            vm.vbox_detach_iso(cfg())
+
+    def test_acceptance_report_is_nonsecret_and_checksummed(self):
+        git_results = [
+            SimpleNamespace(stdout="a" * 40 + "\n"),
+            SimpleNamespace(stdout=""),
+        ]
+        with mock.patch.object(
+                vm, "run", return_value=SimpleNamespace(stdout="7.1.0\n")), \
+                mock.patch.object(
+                    vm.subprocess, "run", side_effect=git_results):
+            initial = vm.acceptance_report_initial(cfg(), args())
+        serialized = json.dumps(initial)
+        self.assertNotIn("strong-secret", serialized)
+        self.assertNotIn(str(vm.REPO), serialized)
+
+        with tempfile.TemporaryDirectory() as td:
+            report = Path(td) / "acceptance.json"
+            iso = Path(td) / "candidate.iso"
+            iso.write_bytes(b"candidate bytes")
+            recorder = vm.AcceptanceRecorder(report, initial)
+            recorder.stage("preflight")
+            recorder.set_iso(iso)
+            recorder.check("guest check", True)
+            recorder.complete()
+            parsed = json.loads(report.read_text())
+            self.assertEqual(parsed["status"], "passed")
+            self.assertEqual(parsed["stages"][0]["name"], "preflight")
+            self.assertEqual(parsed["iso"]["filename"], "candidate.iso")
+            self.assertNotIn(td, json.dumps(parsed))
+            checksum = hashlib.sha256(report.read_bytes()).hexdigest()
+            self.assertEqual(
+                (Path(str(report) + ".sha256")).read_text(),
+                f"{checksum}  {report.name}\n",
+            )
 
     def test_openssl_failure_never_falls_back_to_plaintext(self):
         result = SimpleNamespace(returncode=1, stdout="", stderr="failed")

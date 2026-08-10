@@ -351,7 +351,8 @@ or `--reuse-iso` is required to trust an existing artifact.
 | `assets/installer/` | editable logo, installer-ready artwork, provenance, and licensing |
 | `assets/desktop/` | matching desktop wallpaper, installed at `/usr/local/share/plebian-os/wallpapers/plebian-os.png` |
 | `build/make-usb.sh` | build the ISO and flash it to a USB stick (with safety guards) |
-| `build/acceptance-vm.sh` | operator-run VirtualBox acceptance: build ISO, install, wait for firstboot |
+| `build/acceptance-vm.sh` | automated VirtualBox release gate: clean candidate binding, instrumented install, lifecycle checks, checksummed report |
+| `build/acceptance-release-iso.sh` | validate the exact strict ISO closure and prepare operator-driven BIOS and EFI installs |
 | `build/install-vm-from-usb-iso.sh` | build a USB-style ISO, then install it in a 4 GB / 4-core VirtualBox VM |
 | `bootstrap.sh` | run the provisioner on an already-installed Debian |
 | `VERSION` / `releases/*.env` | shared release version + coordinated pin manifests |

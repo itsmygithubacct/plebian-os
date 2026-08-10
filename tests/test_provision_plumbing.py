@@ -135,7 +135,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
         cfg = vm.Config(
             name="fresh", username="pleb", fullname="Plebian User",
             password="unused", hostname="fresh", ram_mb=4096, cpus=2,
-            vram_mb=128, accelerate_3d=False, disk_gb=20, desktop=True,
+            vram_mb=128, accelerate_3d=False, firmware="bios", disk_gb=20,
+            desktop=True,
             kiosk=False, nopasswd_sudo=False, ssh_port=2222, gui=False,
             wait=False,
         )

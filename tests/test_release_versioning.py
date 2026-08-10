@@ -385,16 +385,55 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("\nIMAGE_PASSWORD=plebian\n", manifest)
         self.assertIn("\nRANDOM_PASSWORD=0\n", manifest)
 
-    def test_acceptance_uses_exact_release_pins_without_release_only_gates(self):
+    def test_acceptance_binds_instrumented_image_to_clean_candidate(self):
         source = (ROOT / "build" / "acceptance-vm.sh").read_text()
         self.assertIn('PLEBIAN_OS_ACCEPTANCE_RAM:-4096', source)
         self.assertIn('releases/$PLEBIAN_OS_ACCEPTANCE_RELEASE.env', source)
-        self.assertIn('PLEBIAN_OS_REF="$(git -C "$ROOT" rev-parse HEAD)"', source)
+        self.assertIn("rev-parse --verify 'HEAD^{commit}'", source)
+        self.assertIn('rev-parse --verify "${manifest_os_ref}^{commit}"', source)
+        self.assertIn('cat-file -t "refs/tags/$manifest_os_ref"', source)
+        self.assertIn('[ "$candidate_commit" = "$manifest_commit" ]', source)
+        self.assertIn('status --porcelain --untracked-files=normal', source)
+        self.assertIn('PLEBIAN_OS_REF="$candidate_commit"', source)
         self.assertIn('PLEBIAN_OS_RELEASE_MODE=0', source)
         self.assertIn('PLEBIAN_OS_RELEASE=', source)
         self.assertIn('IMAGE_PASSWORD=', source)
         self.assertIn('RANDOM_PASSWORD=1', source)
         self.assertIn('PLEBIAN_OS_VERIFY_CATALOG_BUILDS=1', source)
+        self.assertIn('PLEBIAN_OS_VERIFY_UPDATE_ROLLBACK=1', source)
+        self.assertIn('PLEBIAN_OS_VERIFY_SUCCESSFUL_UPDATE=1', source)
+        self.assertIn('plebian-acceptance-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}', source)
+        self.assertIn('plebian-os-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}-acceptance.json', source)
+        self.assertIn('--report "$REPORT"', source)
+        self.assertNotIn('--replace', source)
+
+    def test_exact_release_iso_lane_validates_and_covers_bios_and_efi(self):
+        path = ROOT / "build" / "acceptance-release-iso.sh"
+        source = path.read_text()
+        self.assertTrue(path.stat().st_mode & 0o111)
+        for key in (
+            "PLEBIAN_OS_VERSION",
+            "PLEBIAN_OS_RELEASE",
+            "PLEBIAN_OS_RELEASE_MODE",
+            "PLEBIAN_OS_DIRTY",
+            "PLEBIAN_OS_COMMIT",
+            "PLEBIAN_OS_SSH_ENABLED",
+            "PLEBIAN_OS_AUTOBOOT",
+            "PLEBIAN_OS_UNATTENDED_DISK",
+        ):
+            self.assertIn(key, source)
+        self.assertIn("El Torito boot img.*BIOS", source)
+        self.assertIn("El Torito boot img.*UEFI", source)
+        self.assertIn('PLEBIAN-OS $RELEASE AMD64', source)
+        self.assertIn('cat-file -t "refs/tags/v$RELEASE"', source)
+        self.assertIn('read_kv_file "$stage/build-info.env"', source)
+        self.assertIn('read_kv_file "$manifest"', source)
+        self.assertIn('for key in "${!release_manifest[@]}"', source)
+        self.assertNotIn('. "$1"', source)
+        self.assertIn("firmwares=(bios efi)", source)
+        self.assertIn('--firmware "$firmware"', source)
+        self.assertIn("--no-wait --no-verify", source)
+        self.assertIn('--report "$report"', source)
 
 
 if __name__ == "__main__":

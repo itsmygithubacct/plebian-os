@@ -223,14 +223,54 @@ the twelve-file transactional OS layer beginning with 0.1.9.
    sha256sum "plebian-os-<x.y.z>-amd64.iso"
    ```
 
-6. Run the operator acceptance install (`build/acceptance-vm.sh --replace`). It
-   creates a clearly non-publishable SSH/autoboot derivative while loading the
-   exact release-manifest source, media, snapshot, toolchain, and provider pins.
-   The wrapper inherits the builder's 120-minute combined Debian-install and
-   firstboot ceiling; pass a larger `--timeout` on a slower host or mirror.
-   Verify firstboot, provider, update/status, provenance, kiosk-off/on, and
-   restart paths. Also boot the strict release artifact on both BIOS and UEFI
-   firmware before publication. Check the versioned Plebian-OS titles in the
+6. Run both VM acceptance lanes from the clean, tagged Plebian-OS candidate
+   checkout. First run the instrumented automated lane:
+
+   ```sh
+   build/acceptance-vm.sh
+   ```
+
+   The wrapper refuses unless `HEAD`, `VERSION`, the manifest's OS ref, and the
+   local candidate tag all identify the same clean commit. Only after proving
+   that identity does it create a clearly non-publishable SSH/autoboot
+   derivative while retaining the exact release-manifest media, snapshot,
+   toolchain, component, voice, and provider pins. VM, ISO, and report names
+   include the release and candidate commit; an older candidate or unrelated
+   `plebian-acceptance` VM is never deleted implicitly. Do not use `--replace`
+   for an ordinary run. If a same-candidate rerun must replace evidence, inspect
+   it first and opt in explicitly (or select new name/output/report overrides).
+
+   The automated gate checks exact embedded build provenance, firstboot,
+   component/session/storage contracts, the installed closure selector, voice,
+   a real induced OS-layer update failure with byte-exact rollback, a successful
+   whole-stack update/restart, and clean builds of every installable catalog
+   pin. Guest exit status—not output text—decides each check. The wrapper
+   inherits the builder's 120-minute combined Debian-install and firstboot
+   ceiling; pass a larger `--timeout` on a slower host or mirror. Retain the
+   generated JSON and `.sha256`; only `status: "passed"` satisfies this lane.
+   `--no-wait` or `--no-verify` is diagnostic and cannot satisfy release
+   acceptance.
+
+   Then validate and boot the exact, publishable bytes produced in step 5:
+
+   ```sh
+   build/acceptance-release-iso.sh \
+       --iso "plebian-os-<x.y.z>-amd64.iso"
+   ```
+
+   This second wrapper parses (never sources) the ISO's embedded build info,
+   compares its complete recorded closure with `releases/<x.y.z>.env`, requires
+   the candidate-tag commit, clean/release-mode provenance, disabled
+   SSH/autoboot/unattended-disk flags, the release volume ID, and both BIOS and
+   UEFI El Torito entries. It then starts distinct BIOS and EFI VMs using that
+   exact ISO without remastering it. Use `--dry-run` to perform every artifact
+   validation and print both VM plans without creating anything. These strict
+   installs are interactive by design; their JSON reports say
+   `vm-started-no-verification` and are provenance/start records, not passing
+   acceptance results.
+
+   Complete the installer and the remaining operator checks in both strict ISO
+   VMs before publication. Check the versioned Plebian-OS titles in the
    default, advanced, and accessible-dark menus, then enter the graphical
    installer and verify both banner variants. The angular-P mark must retain
    one eye, two hair strokes, and the complete orange `>_` cursor.

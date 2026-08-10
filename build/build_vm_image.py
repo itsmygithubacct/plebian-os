@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import hashlib
+import json
 import os
 import re
 import secrets
@@ -34,6 +36,111 @@ REPO = Path(__file__).resolve().parent.parent
 PRESEED_TEMPLATE = REPO / "preseed" / "preseed.cfg"
 REMASTER = REPO / "build" / "remaster-iso.sh"
 DEFAULT_PROVISION_TIMEOUT_MINUTES = 120
+
+
+def utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class AcceptanceRecorder:
+    """Persist a password-free, checksummed account of one VM acceptance run."""
+
+    def __init__(self, path: Path, initial: dict) -> None:
+        self.path = path
+        self.data = {
+            "schema_version": 1,
+            "status": "running",
+            "started_utc": utc_now(),
+            "completed_utc": None,
+            "failure": None,
+            "stages": [],
+            "checks": [],
+            **initial,
+        }
+        self.write()
+
+    def write(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        fd, raw_tmp = tempfile.mkstemp(
+            prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent
+        )
+        tmp = Path(raw_tmp)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(self.data, fh, indent=2, sort_keys=True)
+                fh.write("\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, self.path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+        checksum = sha256_file(self.path)
+        checksum_path = Path(str(self.path) + ".sha256")
+        checksum_fd, raw_checksum_tmp = tempfile.mkstemp(
+            prefix=f".{checksum_path.name}.", suffix=".tmp", dir=self.path.parent
+        )
+        checksum_tmp = Path(raw_checksum_tmp)
+        try:
+            with os.fdopen(checksum_fd, "w", encoding="utf-8") as fh:
+                fh.write(f"{checksum}  {self.path.name}\n")
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.chmod(checksum_tmp, 0o644)
+            os.replace(checksum_tmp, checksum_path)
+        finally:
+            checksum_tmp.unlink(missing_ok=True)
+
+    def stage(self, name: str, status: str = "passed", detail: str = "") -> None:
+        item = {"name": name, "status": status, "at_utc": utc_now()}
+        if detail:
+            item["detail"] = detail
+        self.data["stages"].append(item)
+        self.write()
+
+    def check(self, name: str, passed: bool, detail: str = "") -> None:
+        item = {
+            "name": name,
+            "status": "passed" if passed else "failed",
+            "at_utc": utc_now(),
+        }
+        if detail:
+            item["detail"] = detail[-6000:]
+        self.data["checks"].append(item)
+        self.write()
+
+    def set_iso(self, path: Path) -> None:
+        self.data["iso"] = {
+            "filename": path.name,
+            "size": path.stat().st_size,
+            "sha256": sha256_file(path),
+        }
+        self.write()
+
+    def complete(self, status: str = "passed") -> None:
+        self.data["status"] = status
+        self.data["completed_utc"] = utc_now()
+        self.write()
+
+    def fail(self, reason: str) -> None:
+        if self.data.get("status") == "passed":
+            return
+        self.data["status"] = "failed"
+        self.data["failure"] = reason
+        self.data["completed_utc"] = utc_now()
+        self.write()
+
+
+_RECORDER: AcceptanceRecorder | None = None
 
 
 def storage_dir(kind: str) -> Path:
@@ -118,6 +225,8 @@ def c(code: str, s: str) -> str:
 def info(s: str) -> None: print(c("1;36", "[build-vm]"), s)
 def warn(s: str) -> None: print(c("1;33", "[build-vm]"), s, file=sys.stderr)
 def die(s: str) -> None:
+    if _RECORDER is not None:
+        _RECORDER.fail(s)
     print(c("1;31", "[build-vm] " + s), file=sys.stderr)
     sys.exit(1)
 
@@ -167,6 +276,13 @@ def generated_password() -> str:
     return secrets.token_urlsafe(18)
 
 
+def default_hostname(name: str) -> str:
+    """Turn a VirtualBox-friendly name into one valid DNS hostname label."""
+    hostname = re.sub(r"[^A-Za-z0-9-]+", "-", name).strip("-")
+    hostname = hostname[:63].rstrip("-")
+    return hostname or "plebian"
+
+
 def validate_identity(*, name: str, username: str, fullname: str,
                       password: str, hostname: str) -> None:
     """Reject values that Debian preseed or VirtualBox would reinterpret."""
@@ -203,6 +319,7 @@ class Config:
     cpus: int
     vram_mb: int
     accelerate_3d: bool
+    firmware: str
     disk_gb: int
     desktop: bool          # PLEB_DESKTOP: run the provider in Kilix page 1
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
@@ -333,7 +450,7 @@ def gather_config(args) -> Config:
         username=username,
         interactive_default="",
     )
-    hostname = args.hostname or p.ask("hostname", name)
+    hostname = args.hostname or p.ask("hostname", default_hostname(name))
     ram_mb   = args.ram      or p.ask("RAM (MB)", default_ram_mb(),
                                       cast=int, validate=lambda v: v >= 512)
     cpus     = args.cpus     or p.ask("vCPUs", default_cpus(),
@@ -342,6 +459,7 @@ def gather_config(args) -> Config:
     if vram_mb > 256:
         warn(f"VirtualBox rejects VRAM above 256 MB on this host; requested {vram_mb}, using 256")
         vram_mb = 256
+    firmware = args.firmware or os.environ.get("PLEBIAN_OS_VM_FIRMWARE", "bios")
     disk_gb  = args.disk     or p.ask("disk (GB, sparse)", 200,
                                       cast=int, validate=lambda v: v >= 8)
     desktop_default = env_bool("PLEBIAN_OS_DESKTOP", True)
@@ -365,6 +483,8 @@ def gather_config(args) -> Config:
 
     validate_identity(name=name, username=username, fullname=fullname,
                       password=password, hostname=hostname)
+    if firmware not in ("bios", "efi"):
+        die("firmware must be bios or efi")
     if ram_mb < 512 or cpus < 1 or vram_mb < 1 or disk_gb < 8:
         die("resources must be RAM >= 512 MB, CPUs >= 1, VRAM >= 1 MB, disk >= 8 GB")
     if ram_mb < 4096:
@@ -375,6 +495,7 @@ def gather_config(args) -> Config:
     return Config(name=name, username=username, fullname=fullname, password=password,
                   hostname=hostname, ram_mb=ram_mb, cpus=cpus,
                   vram_mb=vram_mb, accelerate_3d=args.accelerate_3d,
+                  firmware=firmware,
                   disk_gb=disk_gb,
                   desktop=desktop, kiosk=kiosk, nopasswd_sudo=nopasswd, ssh_port=ssh_port,
                   gui=args.gui, wait=not args.no_wait)
@@ -387,6 +508,7 @@ def confirm_summary(cfg: Config, assume_yes: bool) -> None:
         ("RAM", f"{cfg.ram_mb} MB"), ("vCPUs", cfg.cpus),
         ("VRAM", f"{cfg.vram_mb} MB"),
         ("3D accel", "on" if cfg.accelerate_3d else "off"),
+        ("firmware", cfg.firmware.upper()),
         ("disk", f"{cfg.disk_gb} GB (sparse)"),
         ("session", "desktop provider in Kilix page 1" if cfg.desktop
                     else "Kilix shell in page 1"),
@@ -548,7 +670,7 @@ def vbox_create(cfg: Config, iso: Path, *, replace: bool = False,
          "--memory", cfg.ram_mb, "--cpus", cfg.cpus, "--ioapic", "on",
          "--vram", cfg.vram_mb, "--graphicscontroller", "vmsvga",
          "--accelerate-3d", "on" if cfg.accelerate_3d else "off",
-         "--firmware", "bios",
+         "--firmware", cfg.firmware,
          "--rtcuseutc", "on", "--nic1", "nat",
          "--natpf1", f"ssh,tcp,127.0.0.1,{cfg.ssh_port},,22",
          # Fresh VMs do not expose host audio automatically. Enable output for
@@ -573,9 +695,15 @@ def vbox_start(cfg: Config) -> None:
          "--type", "gui" if cfg.gui else "headless"])
 
 def vbox_detach_iso(cfg: Config) -> None:
-    subprocess.run(["VBoxManage", "storageattach", cfg.name, "--storagectl", "SATA",
-                   "--port", "1", "--device", "0", "--type", "dvddrive", "--medium", "none"],
-                  capture_output=True)
+    result = subprocess.run(
+        ["VBoxManage", "storageattach", cfg.name, "--storagectl", "SATA",
+         "--port", "1", "--device", "0", "--type", "dvddrive",
+         "--medium", "none"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "unknown VirtualBox error").strip()
+        die(f"could not detach the installer ISO: {detail}")
 
 # ── SSH into the guest (password auth via SSH_ASKPASS; no sshpass needed) ─────
 def _askpass_for(pw: str) -> str:
@@ -685,6 +813,9 @@ def verify_catalog_builds(cfg: Config, askpass: str) -> None:
     info("clean-building every pinned catalog entry …")
     result = ssh(cfg, command, askpass, timeout=1800)
     if result is None:
+        if _RECORDER is not None:
+            _RECORDER.check("pinned catalog clean builds", False,
+                            "timed out after 30 minutes")
         die("catalog clean-build verification timed out after 30 minutes")
     if result.returncode != 0:
         detail = "\n".join(
@@ -692,8 +823,137 @@ def verify_catalog_builds(cfg: Config, askpass: str) -> None:
             for output in (result.stdout, result.stderr)
             if output.strip()
         )[-6000:]
+        if _RECORDER is not None:
+            _RECORDER.check("pinned catalog clean builds", False, detail)
         die("catalog clean-build verification FAILED:\n" + detail)
+    if _RECORDER is not None:
+        _RECORDER.check("pinned catalog clean builds", True)
     info("  [ok] pinned catalog clean builds")
+
+
+def verify_update_rollback(cfg: Config, askpass: str) -> None:
+    """Induce a real OS-layer update failure and prove byte-exact rollback."""
+    managed_paths = (
+        "/usr/local/sbin/plebian-os-provision",
+        "/usr/local/sbin/plebian-os-install-deps",
+        "/usr/local/sbin/plebian-os-passwd",
+        "/usr/local/bin/plebian-os-update",
+        "/etc/systemd/system/plebian-os-firstboot.service",
+        "/usr/local/sbin/plebian-os-firstboot-attempt",
+        "/usr/local/share/plebian-os/VERSION",
+        "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+        "/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
+        "/usr/local/share/doc/plebian-os/COPYING.GPL-2",
+        "/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf",
+        "/usr/local/bin/plebian-os-select-closure",
+        "/etc/pleb/session.env",
+        "/var/lib/plebian-os/packages.list",
+        "/var/lib/plebian-os/versions.env",
+    )
+    quoted_paths = " ".join(shlex.quote(path) for path in managed_paths)
+    command = f"""set -eu
+. /etc/pleb/session.env
+before="$(mktemp)"
+after="$(mktemp)"
+update_log="$(mktemp)"
+cleanup_acceptance_update() {{ rm -f -- "$before" "$after" "$update_log"; }}
+trap cleanup_acceptance_update EXIT HUP INT TERM
+snapshot_acceptance_update() {{
+    for path in {quoted_paths}; do
+        if [ -L "$path" ]; then
+            printf 'L\\t%s\\t%s\\t%s\\n' "$path" "$(readlink -- "$path")" "$(stat -c '%u:%g:%a:%h' -- "$path")"
+        elif [ -f "$path" ]; then
+            printf 'F\\t%s\\t%s\\t%s\\n' "$path" "$(sha256sum -- "$path" | awk '{{print $1}}')" "$(stat -c '%u:%g:%a:%h' -- "$path")"
+        elif [ -e "$path" ]; then
+            printf 'unexpected non-file acceptance path: %s\\n' "$path" >&2
+            return 1
+        else
+            printf 'M\\t%s\\n' "$path"
+        fi
+    done
+}}
+snapshot_acceptance_update >"$before"
+set +e
+PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER=os-layer timeout 900 /usr/local/bin/plebian-os-update >"$update_log" 2>&1
+update_rc=$?
+set -e
+if [ "$update_rc" -eq 0 ] || [ "$update_rc" -eq 124 ] \
+        || ! grep -Fq 'injected stack update failure after os-layer' "$update_log"; then
+    cat "$update_log" >&2
+    exit 1
+fi
+snapshot_acceptance_update >"$after"
+if ! cmp -s "$before" "$after"; then
+    diff -u "$before" "$after" >&2 || true
+    cat "$update_log" >&2
+    exit 1
+fi
+test -z "$(find /var/lib/plebian-os -maxdepth 1 -type d -name 'update-rollback.*' -print -quit)"
+pleb_state="${{PLEB_STATE_HOME:-$HOME/.local/gpu_terminal/pleb/state}}"
+test -z "$(find "$pleb_state" -maxdepth 1 -type d -name 'stack-rollback.*' -print -quit)"
+"""
+    info("inducing an OS-layer update failure and verifying rollback …")
+    result = ssh(cfg, command, askpass, timeout=930)
+    ok = result is not None and result.returncode == 0
+    if result is None:
+        detail = "update rollback verification timed out"
+    elif ok:
+        detail = ""
+    else:
+        detail = "\n".join(
+            output.strip()
+            for output in (result.stdout, result.stderr)
+            if output.strip()
+        ) or f"guest command exited {result.returncode}"
+    if _RECORDER is not None:
+        _RECORDER.check("induced OS-layer update rollback", ok, detail)
+    if not ok:
+        die("induced OS-layer update rollback FAILED:\n" + detail)
+    info("  [ok] induced OS-layer update rollback")
+
+
+def verify_successful_update(cfg: Config, askpass: str) -> None:
+    """Run the installed same-closure updater and its LightDM restart path."""
+    info("running the installed whole-stack updater and restart path …")
+    command = "timeout 3500 /usr/local/bin/plebian-os-update --restart"
+    result = ssh(cfg, command, askpass, timeout=3600)
+    ok = result is not None and result.returncode == 0
+    if result is None:
+        detail = "whole-stack update timed out after 60 minutes"
+    elif ok:
+        detail = ""
+    else:
+        detail = "\n".join(
+            output.strip()
+            for output in (result.stdout, result.stderr)
+            if output.strip()
+        )[-6000:] or f"guest command exited {result.returncode}"
+    if ok:
+        post = ssh(
+            cfg,
+            "test -f /var/lib/plebian-os/provisioned && "
+            "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1 && "
+            "systemctl is-active lightdm.service >/dev/null && "
+            "test -z \"$(find /var/lib/plebian-os -maxdepth 1 -type d "
+            "-name 'update-rollback.*' -print -quit)\"",
+            askpass,
+            timeout=30,
+        )
+        ok = post is not None and post.returncode == 0
+        if not ok:
+            if post is None:
+                detail = "post-update health check timed out"
+            else:
+                detail = "\n".join(
+                    output.strip()
+                    for output in (post.stdout, post.stderr)
+                    if output.strip()
+                ) or f"post-update health check exited {post.returncode}"
+    if _RECORDER is not None:
+        _RECORDER.check("successful whole-stack update and restart", ok, detail)
+    if not ok:
+        die("whole-stack update/restart verification FAILED:\n" + detail)
+    info("  [ok] whole-stack update and restart")
 
 
 def _voice_functional_smoke_script() -> str:
@@ -933,6 +1193,35 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         "1" if env_bool("PLEBIAN_OS_INSTALL_VOICE_MODEL", False) else "0")
     expected_version = os.environ.get("PLEBIAN_OS_VERSION", "")
     expected_kilix95_ref = os.environ.get("KILIX95_REF", "")
+    expected_os_commit = os.environ.get(
+        "PLEBIAN_OS_ACCEPTANCE_COMMIT", os.environ.get("PLEBIAN_OS_REF", ""))
+    build_values = {
+        "PLEBIAN_OS_VERSION": expected_version,
+        "PLEBIAN_OS_COMMIT": expected_os_commit,
+        "PLEBIAN_OS_DIRTY": "0",
+        "PLEBIAN_OS_RELEASE_MODE": os.environ.get("PLEBIAN_OS_RELEASE_MODE", "0"),
+        "PLEBIAN_OS_NETINST_SHA256": os.environ.get("PLEBIAN_OS_NETINST_SHA256", ""),
+        "PLEBIAN_OS_APT_SNAPSHOT": os.environ.get("PLEBIAN_OS_APT_SNAPSHOT", ""),
+        "PLEBIAN_OS_REF": os.environ.get("PLEBIAN_OS_REF", ""),
+        "PLEB_REF": os.environ.get("PLEB_REF", ""),
+        "KILIX_REF": os.environ.get("KILIX_REF", ""),
+        "KILIX95_REF": expected_kilix95_ref,
+        "PLEBIAN_OS_SSH_ENABLED": "1",
+        "PLEBIAN_OS_AUTOBOOT": "1",
+        "PLEBIAN_OS_UNATTENDED_DISK": "1",
+    }
+    exact_build_provenance = ". /etc/plebian-os/build-info.env; " + " && ".join(
+        f'test "${key}" = {shlex.quote(value)}'
+        for key, value in build_values.items()
+    )
+    selector_contract = (
+        'test -x /usr/local/bin/plebian-os-select-closure && '
+        'selected="$(timeout 30 /usr/local/bin/plebian-os-select-closure --show)" && '
+        f'printf \'%s\\n\' "$selected" | grep -Fqx '
+        f'{shlex.quote("  PLEBIAN_OS_VERSION=" + expected_version)} && '
+        f'printf \'%s\\n\' "$selected" | grep -Fqx '
+        f'{shlex.quote("  PLEBIAN_OS_REF=" + expected_os_commit)}'
+    )
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", expected_version):
         provision_version = (
             'test "$(/usr/local/sbin/plebian-os-provision --version)" = '
@@ -1040,7 +1329,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
             )
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
-        ("build provenance",     "test -s /etc/plebian-os/build-info.env"),
+        ("exact build provenance", exact_build_provenance),
         ("provision version",    provision_version),
         ("component versions",   component_versions),
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
@@ -1063,6 +1352,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("visible kilix chrome", visible_kilix_chrome),
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
         ("update helper",        "test -x /usr/local/bin/plebian-os-update"),
+        ("closure selector",     selector_contract),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]
@@ -1112,14 +1402,30 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     failed = []
     check_timeouts = {"Kilix-95 GUI routing tests": 60}
     for name, cmd in checks:
-        r = ssh(cfg, cmd + " && echo OK || echo NO", askpass,
+        r = ssh(cfg, cmd, askpass,
                 timeout=check_timeouts.get(name, 15))
-        ok = r is not None and r.returncode == 0 and "OK" in (r.stdout or "")
+        ok = r is not None and r.returncode == 0
+        detail = ""
+        if not ok:
+            if r is None:
+                detail = "SSH check timed out"
+            else:
+                detail = "\n".join(
+                    output.strip()
+                    for output in (r.stdout, r.stderr)
+                    if output.strip()
+                ) or f"guest command exited {r.returncode}"
+        if _RECORDER is not None:
+            _RECORDER.check(name, ok, detail)
         info(f"  [{'ok' if ok else '!!'}] {name}")
         if not ok:
             failed.append(name)
     if failed:
         die("acceptance verification FAILED: " + ", ".join(failed))
+    if env_bool("PLEBIAN_OS_VERIFY_UPDATE_ROLLBACK", False):
+        verify_update_rollback(cfg, askpass)
+    if env_bool("PLEBIAN_OS_VERIFY_SUCCESSFUL_UPDATE", False):
+        verify_successful_update(cfg, askpass)
     if env_bool("PLEBIAN_OS_VERIFY_CATALOG_BUILDS", False):
         verify_catalog_builds(cfg, askpass)
     info(c("1;32", "acceptance verification passed."))
@@ -1134,13 +1440,95 @@ def final_summary(cfg: Config, iso: Path) -> None:
         print(f"  login     : {cfg.username} / (configured password; generated values are printed above)")
     print(f"  session   : {'desktop provider in Kilix page 1' if cfg.desktop else 'Kilix shell in page 1'}"
           f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
+    print(f"  firmware  : {cfg.firmware.upper()}")
     print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
     print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")
     print(f"  ISO       : {iso}")
+    if _RECORDER is not None:
+        print(f"  report    : {_RECORDER.path}")
+        print(f"  report sha: {_RECORDER.path}.sha256")
     print()
+
+
+def acceptance_report_initial(cfg: Config, args) -> dict:
+    pin_keys = (
+        "PLEBIAN_OS_ACCEPTANCE_RELEASE",
+        "PLEBIAN_OS_ACCEPTANCE_COMMIT",
+        "PLEBIAN_OS_ACCEPTANCE_MANIFEST_SHA256",
+        "PLEBIAN_OS_VERSION",
+        "PLEBIAN_OS_RELEASE",
+        "PLEBIAN_OS_RELEASE_MODE",
+        "PLEBIAN_OS_REF",
+        "PLEB_REF",
+        "KILIX_REF",
+        "KILIX95_REF",
+        "PLEBIAN_OS_NETINST_URL",
+        "PLEBIAN_OS_NETINST_SHA256",
+        "PLEBIAN_OS_APT_SNAPSHOT",
+        "KILIX_PREBUILT_VERSION",
+        "KILIX_PREBUILT_SHA256",
+        "PLEBIAN_OS_KILIX_GO_VERSION",
+        "PLEBIAN_OS_KILIX_GO_SHA256_AMD64",
+        "PLEBIAN_OS_KILIX_GO_SHA256_ARM64",
+        "KILIX_VOICE_REF",
+        "KILIX_VOICE_LIB_VERSION",
+        "KILIX_VOICE_LIB_SHA256",
+        "KILIX_VOICE_MODEL_SHA256",
+    )
+    vbox_version = run(["VBoxManage", "--version"], capture=True).stdout.strip()
+    try:
+        repo_commit = subprocess.run(
+            ["git", "-C", str(REPO), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        repo_dirty = bool(subprocess.run(
+            ["git", "-C", str(REPO), "status", "--porcelain",
+             "--untracked-files=normal"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip())
+    except subprocess.CalledProcessError:
+        repo_commit, repo_dirty = "", None
+    return {
+        "kind": "prebuilt-iso" if args.iso else "instrumented-acceptance-derivative",
+        "repository": {"commit": repo_commit, "dirty": repo_dirty},
+        "release_inputs": {
+            key: os.environ.get(key, "") for key in pin_keys
+        },
+        "host": {
+            "virtualbox_version": vbox_version,
+            "python_version": sys.version.split()[0],
+        },
+        "vm": {
+            "name": cfg.name,
+            "username": cfg.username,
+            "hostname": cfg.hostname,
+            "ram_mb": cfg.ram_mb,
+            "cpus": cfg.cpus,
+            "vram_mb": cfg.vram_mb,
+            "accelerate_3d": cfg.accelerate_3d,
+            "firmware": cfg.firmware,
+            "disk_gb": cfg.disk_gb,
+            "desktop": cfg.desktop,
+            "kiosk": cfg.kiosk,
+            "nopasswd_sudo": cfg.nopasswd_sudo,
+            "ssh_host_port": cfg.ssh_port,
+            "headless": not cfg.gui,
+            "wait": cfg.wait,
+        },
+        "enabled_gates": {
+            "post_provision": not args.no_verify,
+            "catalog_clean_builds": env_bool(
+                "PLEBIAN_OS_VERIFY_CATALOG_BUILDS", False),
+            "induced_update_rollback": env_bool(
+                "PLEBIAN_OS_VERIFY_UPDATE_ROLLBACK", False),
+            "successful_update_restart": env_bool(
+                "PLEBIAN_OS_VERIFY_SUCCESSFUL_UPDATE", False),
+        },
+    }
 
 # ── main ─────────────────────────────────────────────────────────────────────
 def main() -> None:
+    global _RECORDER
     ap = argparse.ArgumentParser(description="Build a Plebian-OS VM image from scratch.")
     ap.add_argument("--target", choices=["virtualbox", "vbox", "qemu", "docker"],
                     default="virtualbox", help="image type (only virtualbox today)")
@@ -1151,6 +1539,8 @@ def main() -> None:
                     help="video RAM in MB (VirtualBox caps this at 256 on this host)")
     ap.add_argument("--accelerate-3d", action="store_true",
                     help="enable VirtualBox 3D acceleration")
+    ap.add_argument("--firmware", choices=["bios", "efi"], default=None,
+                    help="guest firmware (default: bios)")
     ap.add_argument("--disk", type=int, help="GB")
     ap.add_argument("--session", choices=["desktop", "shell"])
     ap.add_argument("--kiosk", dest="kiosk", action="store_true", default=None,
@@ -1173,7 +1563,9 @@ def main() -> None:
     ap.add_argument("--no-verify", action="store_true",
                     help="skip the post-provision acceptance checks")
     ap.add_argument("--replace", action="store_true",
-                    help="delete and recreate an existing VM with the same name")
+                    help="replace an existing VM and generated ISO/report outputs")
+    ap.add_argument("--report", type=Path,
+                    help="write a checksummed JSON acceptance report")
     ap.add_argument(
         "--timeout", type=int, default=DEFAULT_PROVISION_TIMEOUT_MINUTES,
         help=("combined minutes to wait for Debian installation and firstboot "
@@ -1214,6 +1606,10 @@ def main() -> None:
             "or --password instead of the shipped 'plebian' default")
     confirm_summary(cfg, args.yes)
 
+    if args.timeout <= 0:
+        die("--timeout must be greater than zero")
+
+    out: Path | None = None
     if args.iso:
         iso = args.iso.resolve()
         if not iso.exists() and not args.dry_run:
@@ -1221,25 +1617,71 @@ def main() -> None:
     else:
         out = (args.out or (storage_dir("artifacts") /
                             default_iso_filename(cfg.name))).resolve()
-        preseed = None if args.dry_run else generate_preseed(cfg, enable_ssh=True)
-        iso = build_iso(cfg, preseed, out, args.dry_run)
+        iso = out
 
     if args.dry_run:
+        if not args.iso:
+            build_iso(cfg, None, iso, True)
         info("dry run: would now create + boot the VM and wait for provisioning.")
         return
 
+    # Refuse before spending an hour rebuilding an ISO. Replacement is one
+    # explicit operation covering the VM and generated evidence for this run.
+    if vbox_exists(cfg.name) and not args.replace:
+        die(f"a VM named {cfg.name!r} already exists; pass --replace explicitly")
+    if out is not None and out.exists() and not args.replace:
+        die(f"ISO output already exists: {out}; pass --replace explicitly")
+    report_path = args.report.resolve() if args.report else None
+    if report_path is not None and not args.replace:
+        existing_report_outputs = [
+            path for path in (report_path, Path(str(report_path) + ".sha256"))
+            if path.exists()
+        ]
+        if existing_report_outputs:
+            die("acceptance report output already exists: "
+                f"{existing_report_outputs[0]}; pass --replace explicitly")
+
+    if report_path is not None:
+        _RECORDER = AcceptanceRecorder(
+            report_path, acceptance_report_initial(cfg, args))
+        _RECORDER.stage("preflight")
+
+    if out is not None:
+        preseed = generate_preseed(cfg, enable_ssh=True)
+        iso = build_iso(cfg, preseed, out, False)
+        if _RECORDER is not None:
+            _RECORDER.stage("instrumented ISO built")
+    if _RECORDER is not None:
+        _RECORDER.set_iso(iso)
+
     vbox_create(cfg, iso, replace=args.replace, assume_yes=args.yes)
+    if _RECORDER is not None:
+        _RECORDER.stage("VirtualBox VM created")
     vbox_start(cfg)
+    if _RECORDER is not None:
+        _RECORDER.stage("VirtualBox VM started")
 
     if not cfg.wait:
         info(f"VM {cfg.name!r} started; not waiting (--no-wait).")
+        if _RECORDER is not None:
+            _RECORDER.complete("vm-started-no-verification")
         final_summary(cfg, iso)
         return
 
     wait_for_provisioning(cfg, args.timeout * 60)
+    if _RECORDER is not None:
+        _RECORDER.stage("installer and firstboot completed")
     vbox_detach_iso(cfg)
+    if _RECORDER is not None:
+        _RECORDER.stage("installer ISO detached")
     if not args.no_verify:
         verify_provisioning(cfg, _askpass_for(cfg.password))
+        if _RECORDER is not None:
+            _RECORDER.stage("post-provision acceptance completed")
+    if _RECORDER is not None:
+        _RECORDER.complete(
+            "passed" if not args.no_verify else "completed-without-verification"
+        )
     final_summary(cfg, iso)
 
 
@@ -1248,3 +1690,10 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         die("interrupted.")
+    except subprocess.CalledProcessError as exc:
+        command = " ".join(shlex.quote(str(part)) for part in exc.cmd)
+        die(f"command failed with status {exc.returncode}: {command}")
+    except Exception as exc:
+        if _RECORDER is not None:
+            _RECORDER.fail(f"unexpected {type(exc).__name__}: {exc}")
+        raise

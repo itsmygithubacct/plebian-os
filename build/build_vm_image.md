@@ -63,6 +63,7 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | RAM (MB) | **¼ of host RAM** | rounded to 256 MB, min 4096; lower explicit values are allowed with a warning |
 | vCPUs | **½ of host cores** | min 1 |
 | VRAM (MB) | **128** | capped to VirtualBox's 256 MB limit on this host |
+| firmware | **BIOS** | select BIOS or EFI with `--firmware` |
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |
 | session | **desktop** | the main screen-filling Kilix instance with Kilix-95 in page 1; `shell` is the explicit bare-page override |
 | autologin (kiosk) | **no** | show a login greeter; kiosk mode also respawns Kilix on exit |
@@ -86,6 +87,7 @@ acceptance wrapper automatically opts into a random password.
 --name NAME            --username NAME       --fullname "Full Name"
 --hostname NAME        --password PASS        --ram MB
 --cpus N               --vram MB              --accelerate-3d
+--firmware bios|efi
 --disk GB              --port HOSTPORT
 --session desktop|shell --kiosk / --no-kiosk
 --sudo-nopasswd / --no-sudo-nopasswd
@@ -95,7 +97,9 @@ acceptance wrapper automatically opts into a random password.
 --out PATH             ISO output path (release default:
                        plebian-os-<version>-amd64.iso; otherwise
                        plebian-os-<name>.iso)
---replace              explicitly allow deleting an existing same-name VM
+--replace              explicitly replace an existing same-name VM and any
+                       same-path generated ISO/report outputs
+--report PATH          write JSON results plus PATH.sha256 (no password)
 --gui                  start the VM with a window instead of headless
 --no-wait              create + start the VM, but don't block on provisioning
 --timeout MIN          combined install + firstboot wait (default 120)
@@ -124,6 +128,7 @@ A registered VirtualBox VM configured with:
   <user>@127.0.0.1` reaches the guest.
 - **Boot**: disk first, DVD second — the empty disk falls through to the ISO for
   the install, and every boot after that comes up from disk.
+- **Firmware**: BIOS by default, or VirtualBox EFI with `--firmware efi`.
 - **Session**: boots into the Pleb session — the main Kilix instance with the
   configured desktop provider in page 1 by default, or a bare first-page shell
   when explicitly selected, with a greeter or straight-in hard-kiosk mode per
@@ -139,9 +144,19 @@ the VM:
   VM        : plebian
   login     : pleb / (the password you set)
   session   : desktop provider in Kilix page 1 (greeter)
+  firmware  : BIOS
   start GUI : VBoxManage startvm plebian --type gui
   ssh in    : ssh -p 2222 pleb@127.0.0.1
+  report    : /path/to/acceptance.json
+  report sha: /path/to/acceptance.json.sha256
 ```
+
+With `--report`, the builder records the candidate inputs, VM configuration,
+VirtualBox/Python versions, ISO filename/size/SHA-256, each stage, and every guest
+check. Passwords are deliberately omitted. A fully verified run ends with
+`status: "passed"`; `--no-wait` and `--no-verify` use explicit non-passing
+statuses instead. The report and checksum sidecar are updated after each stage,
+so an interrupted run remains identifiable as failed or incomplete.
 
 ## Changing the session later
 
@@ -215,19 +230,27 @@ guest source root without redirecting host-side build storage.
    `/var/lib/plebian-os/provisioned` appears (or the unit reports failure, in
    which case it dumps the journal). With no SSH yet, it's still installing; once
    SSH answers, provisioning is running.
-5. **Acceptance.** It executes `kilix-tts`, `kilix-stt`, and `kilix-voiced` in
-   the installed guest. When the release enables dictation, it also requires
-   the exact pinned Vosk library/model stamp, provenance and Apache-2.0 license
-   material, and a `dictation=ready` diagnostic. Finally it synthesizes a fixed
-   phrase with real espeak and recognizes that PCM with the installed Vosk
-   library/model, exercising both engines without opening host audio devices.
+5. **Acceptance.** Guest command exit status is authoritative. The verifier
+   checks the exact embedded build provenance and coordinated commits, the
+   installed closure selector, session/storage/runtime contracts, update
+   helper, branding, and voice closure. It executes `kilix-tts`, `kilix-stt`,
+   and `kilix-voiced`; when dictation is enabled it also requires the exact
+   pinned Vosk library/model stamp, provenance and Apache-2.0 license material,
+   then synthesizes and recognizes a fixed phrase without opening host audio
+   devices. Release acceptance additionally enables a real induced OS-layer
+   update failure with byte-exact rollback, a successful whole-stack
+   update/restart, and clean builds of every installable pinned catalog entry.
+6. **Evidence.** When `--report` is supplied, each completed stage and guest
+   check is persisted immediately, followed by a SHA-256 sidecar.
 
 ## Rebuilding / cleanup
 
-Re-running with the same `--name` refuses to touch the existing VM unless
-`--replace` is present. Interactive replacement requires typing the exact VM
-name; automation requires the explicit pair `--replace --yes`. To remove one by
-hand:
+Re-running with the same `--name`, generated `--out`, or `--report` path refuses
+to touch existing state unless `--replace` is present. Interactive VM
+replacement requires typing the exact VM name; automation requires the explicit
+pair `--replace --yes`. The release wrappers use version-and-commit-specific
+names by default so separate candidates do not erase one another. To remove one
+by hand:
 
 ```sh
 VBoxManage controlvm <name> poweroff
@@ -256,6 +279,9 @@ rm -f plebian-os-<name>.iso
 
 - [`../README.md`](../README.md) — what Plebian-OS is
 - [`remaster-iso.sh`](remaster-iso.sh) — the ISO builder this drives
+- [`acceptance-vm.sh`](acceptance-vm.sh) — instrumented, automated release lane
+- [`acceptance-release-iso.sh`](acceptance-release-iso.sh) — exact strict ISO,
+  BIOS/EFI operator lane
 - [`../preseed/preseed.cfg`](../preseed/preseed.cfg) — the install answers
 - [`../provision/plebian-os-provision.sh`](../provision/plebian-os-provision.sh)
   — the first-boot provisioner

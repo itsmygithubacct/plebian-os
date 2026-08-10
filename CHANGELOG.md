@@ -11,6 +11,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   provisioning, and transactional self-update. It is the twelfth hash-bound OS
   layer payload and participates in both the inner deployment rollback and the
   outer whole-stack rollback.
+- Split release VM acceptance into two explicit lanes. The automated derivative
+  now binds to a clean candidate commit, uses candidate-specific VM/artifact
+  names, verifies exact build provenance plus failed/successful update paths,
+  and emits a checksummed JSON result. A second wrapper validates the strict
+  ISO's embedded closure and BIOS/UEFI boot entries before preparing exact-byte,
+  operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
 - Make firstboot and `sudo plebian-os-provision` transactional for the

@@ -14,7 +14,8 @@ def _read(*p):
 def _cfg():
     return vm.Config(name="t", username="pleb", fullname="Plebian User",
                      password="s3cret-pw", hostname="t", ram_mb=1024, cpus=1,
-                     vram_mb=64, accelerate_3d=False, disk_gb=20, desktop=True,
+                     vram_mb=64, accelerate_3d=False, firmware="bios",
+                     disk_gb=20, desktop=True,
                      kiosk=True, nopasswd_sudo=True, ssh_port=2222, gui=False, wait=False)
 
 

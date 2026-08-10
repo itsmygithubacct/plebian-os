@@ -237,6 +237,8 @@ KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
 KILIX_VOICE_MODEL_URL="${KILIX_VOICE_MODEL_URL:-}"
 KILIX_VOICE_MODEL_SHA256="${KILIX_VOICE_MODEL_SHA256:-}"
 INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
+# Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
+# shellcheck disable=SC2034
 INSTALL_VOICE_MODEL_EXPLICIT="${PLEBIAN_OS_INSTALL_VOICE_MODEL:+1}"
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
@@ -279,8 +281,12 @@ PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file 
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
 PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}" # snapshot.debian.org ts = reproducible apt
+# Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
+# shellcheck disable=SC2034
 PLEBIAN_OS_APT_SNAPSHOT_EXPLICIT="${PLEBIAN_OS_APT_SNAPSHOT:+1}"
 INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
+# Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
+# shellcheck disable=SC2034
 INSTALL_UV_EXPLICIT="${PLEBIAN_OS_INSTALL_UV:+1}"
 UV_VERSION_PIN="${PLEBIAN_OS_UV_VERSION:-}"
 UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
@@ -3543,6 +3549,8 @@ if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then
 fi
 
 # ── args ─────────────────────────────────────────────────────────────────────
+# The *_EXPLICIT flags are consumed indirectly by restore_persisted_policy.
+# shellcheck disable=SC2034
 while [ $# -gt 0 ]; do
     case "$1" in
         --user)   TARGET_USER="${2:?}"; shift 2; TARGET_USER_EXPLICIT=1 ;;
