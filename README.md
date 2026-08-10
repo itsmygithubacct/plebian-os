@@ -177,10 +177,21 @@ replaced; success is reported only after the entire outer transaction commits.
 Pass `--restart` to restart the graphical session after a successful update.
 Firstboot and manual reprovisioning hold the same target-user Pleb state lock,
 so their checkout, engine, and provider mutations cannot race a direct update.
+They also snapshot the provisioner-owned OS/Pleb runtime and configuration
+outputs before the first such file is rewritten — branding and notices,
+installed helpers and launchers, LightDM and session configuration, sudoers
+policy, and final provenance — and commit that filesystem transaction only
+after provisioning is complete. A failure or
+signal restores the previous files, links, modes, and absences. If an
+unexpected path makes automatic restoration unsafe, the command exits 70 and
+retains the private `/var/lib/plebian-os/provision-rollback.*` tree for manual
+inspection rather than deleting the unexpected data.
 Downloaded git objects, package-manager additions, and a newly installed Go
-toolchain are intentionally not removed during rollback; they are additive and
-not selected by the restored runtime. A checkout created during a failed update
-is moved into the reported recovery directory instead of being deleted.
+toolchain are intentionally not removed by either rollback; they are additive
+and not selected by the restored runtime. Provisioning checkout/build and user
+data changes are likewise resumable rather than destructively rewound. During
+an update, a checkout created by the failed run is moved into the reported
+recovery directory instead of being deleted.
 
 **Upgrade baseline:** install 0.1.7 fresh when moving from any earlier build;
 0.1.2 to 0.1.7 is deliberately not an in-place migration. Starting with 0.1.7,

@@ -170,8 +170,10 @@ class DiskSafetyTests(unittest.TestCase):
 
     def test_temp_sudoers_cleaned_on_signals_and_before_retry(self):
         p = _read("provision", "plebian-os-provision.sh")
-        self.assertIn("trap cleanup EXIT", p)
-        self.assertIn("INT TERM HUP", p)
+        self.assertIn("trap provision_exit_cleanup EXIT", p)
+        self.assertIn("trap 'exit 130' INT", p)
+        self.assertIn("trap 'exit 143' TERM", p)
+        self.assertIn('rm -f "$SUDOERS"', p)
         svc = _read("provision", "plebian-os-firstboot.service")
         self.assertIn(
             "ExecStartPre=-/bin/rm -f /etc/sudoers.d/plebian-os-provision", svc)

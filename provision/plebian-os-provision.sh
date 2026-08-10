@@ -827,9 +827,402 @@ ARTWORK_NOTICE_TMP=""
 ARTWORK_NOTICE_CREATED_DIRS=()
 SUDOERS=/etc/sudoers.d/plebian-os-provision
 
+# Everything below is a root-managed file that this provisioner may replace.
+# Keep the list explicit: rollback must never accept a caller-provided path or
+# recursively restore a broad system directory. The temporary all-sudo grant is
+# deliberately absent; cleanup always removes it, including after rollback.
+PROVISION_ROOT_TRANSACTION_BASE_DEFAULT=/var/lib/plebian-os
+PROVISION_ROOT_TRANSACTION_BASE="$PROVISION_ROOT_TRANSACTION_BASE_DEFAULT"
+PROVISION_ROOT_TRANSACTION_DIR=""
+PROVISION_ROOT_TRANSACTION_ACTIVE=0
+PROVISION_ROOT_TRANSACTION_COMMITTED=0
+PROVISION_ROOT_TRANSACTION_BUILDING=0
+PROVISION_ROOT_TRANSACTION_PATHS=(
+    /etc/modprobe.d/plebian-os-no-beep.conf
+    /etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
+    "$DESKTOP_WALLPAPER_DST"
+    "$VERSION_MARKER_DST"
+    "$LIGHTDM_GREETER_CONFIG_DST"
+    "$GPL2_LICENSE_DST"
+    "$INSTALLER_ATTRIBUTION_DST"
+    /usr/local/bin/plebian-os-update
+    /usr/local/bin/plebian-os-select-closure
+    /usr/local/bin/plebian-os-nvidia-driver
+    /usr/local/sbin/plebian-os-passwd
+    /etc/sudoers.d/plebian-os-passwd
+    /usr/local/bin/pleb-session
+    /usr/share/xsessions/pleb.desktop
+    /usr/local/bin/kilix
+    /usr/local/bin/kilix-settings
+    /usr/local/bin/kilix-temps
+    /usr/local/bin/tmux-tui
+    /usr/local/bin/tb
+    /usr/local/bin/kilix-tts
+    /usr/local/bin/kilix-stt
+    /usr/local/bin/pleb
+    /usr/local/share/doc/pleb/RECOVERY.md
+    /usr/local/share/pleb/openbox/rc.xml
+    /etc/lightdm/lightdm.conf.d/50-plebian-os.conf
+    /etc/lightdm/lightdm.conf.d/50-pleb-autologin.conf
+    /etc/pleb/session.env
+    /etc/sudoers.d/plebian-os-nopasswd
+    /var/lib/plebian-os/packages.list
+    /var/lib/plebian-os/versions.env
+    /var/lib/plebian-os/apt-sources.list
+)
+
+# These fixed ancestors must already be safe. They are never removed by a
+# rollback. Tests that source this file replace the arrays with an isolated
+# tree; normal execution cannot redirect the transaction away from /var/lib.
+PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
+    /
+    /etc
+    /etc/systemd
+    /etc/lightdm
+    /etc/sudoers.d
+    /usr
+    /usr/local
+    /usr/local/bin
+    /usr/local/sbin
+    /usr/local/share
+    /usr/share
+    /var
+    /var/lib
+)
+
+# A directory absent at snapshot time is removed leaf-first after its managed
+# files are removed. rmdir is intentional: unexpected contents are retained
+# and turn the rollback into a reported, inspectable failure.
+PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
+    /etc/modprobe.d
+    /etc/systemd/system.conf.d
+    /etc/lightdm/lightdm-gtk-greeter.conf.d
+    /etc/lightdm/lightdm.conf.d
+    /etc/pleb
+    /usr/share/xsessions
+    /usr/local/share/plebian-os
+    /usr/local/share/plebian-os/wallpapers
+    /usr/local/share/doc
+    /usr/local/share/doc/plebian-os
+    /usr/local/share/doc/plebian-os/installer
+    /usr/local/share/doc/pleb
+    /usr/local/share/pleb
+    /usr/local/share/pleb/openbox
+    /var/lib/AccountsService
+    /var/lib/AccountsService/users
+)
+
+validate_provision_transaction_directory() {
+    local path="$1" required="${2:-1}" owner mode
+    if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+        [ "$required" = 0 ] && return 0
+        return 1
+    fi
+    [ -d "$path" ] && [ ! -L "$path" ] || return 1
+    owner="$(stat -c '%u' -- "$path" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' -- "$path" 2>/dev/null)" || return 1
+    [ "$owner" = "$(id -u)" ] \
+        && (( (8#$mode & 8#022) == 0 )) \
+        && (( (8#$mode & 8#100) != 0 ))
+}
+
+prepare_provision_root_transaction_paths() {
+    local account_path path
+    [ -n "${TARGET_USER:-}" ] || return 0
+    case "$TARGET_USER" in
+        */*|*$'\n'*|*$'\r'*|*$'\t'*)
+            die "unsafe target user in root transaction: $TARGET_USER" ;;
+    esac
+    account_path="/var/lib/AccountsService/users/$TARGET_USER"
+    for path in "${PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+        [ "$path" != "$account_path" ] || return 0
+    done
+    PROVISION_ROOT_TRANSACTION_PATHS+=("$account_path")
+}
+
+validate_provision_root_transaction_layout() {
+    local path parent allowed
+    local -A seen=()
+
+    [ "$PROVISION_ROOT_TRANSACTION_BASE" = "$PROVISION_ROOT_TRANSACTION_BASE_DEFAULT" ] \
+        || [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+        || die "the provisioning transaction base is fixed at $PROVISION_ROOT_TRANSACTION_BASE_DEFAULT"
+    case "$PROVISION_ROOT_TRANSACTION_BASE" in
+        /*) ;;
+        *) die "provisioning transaction base must be absolute" ;;
+    esac
+    [ "$PROVISION_ROOT_TRANSACTION_BASE" != / ] \
+        || die "refusing the filesystem root as a provisioning transaction base"
+
+    for path in "${PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS[@]}"; do
+        validate_provision_transaction_directory "$path" 1 \
+            || die "unsafe provisioning transaction ancestor: $path"
+    done
+    for path in "${PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[@]}"; do
+        validate_provision_transaction_directory "$path" 0 \
+            || die "unsafe provisioning transaction directory: $path"
+    done
+
+    for path in "${PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+        case "$path" in
+            /*) ;;
+            *) die "provisioning transaction path must be absolute: $path" ;;
+        esac
+        case "$path" in
+            /|*//*|*/./*|*/../*|*/.|*/..|*$'\n'*|*$'\r'*|*$'\t'*)
+                die "unsafe provisioning transaction path: $path" ;;
+        esac
+        [ -z "${seen[$path]+x}" ] \
+            || die "duplicate provisioning transaction path: $path"
+        seen[$path]=1
+        if [ -d "$path" ] && [ ! -L "$path" ]; then
+            die "managed provisioning file path is a directory: $path"
+        fi
+        parent="$(dirname -- "$path")"
+        allowed=0
+        for candidate in \
+            "${PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS[@]}" \
+            "${PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[@]}" \
+            "$PROVISION_ROOT_TRANSACTION_BASE"; do
+            if [ "$parent" = "$candidate" ]; then
+                allowed=1
+                break
+            fi
+        done
+        [ "$allowed" = 1 ] \
+            || die "unaccounted provisioning transaction parent: $parent"
+    done
+}
+
+validate_provision_root_transaction_dir() {
+    local txn="$1" name owner mode
+    [ -n "$txn" ] && [ "${txn%/*}" = "$PROVISION_ROOT_TRANSACTION_BASE" ] \
+        || return 1
+    name="${txn##*/}"
+    [[ "$name" =~ ^provision-rollback\.[A-Za-z0-9]{6}$ ]] || return 1
+    [ -d "$txn" ] && [ ! -L "$txn" ] || return 1
+    owner="$(stat -c '%u' -- "$txn" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' -- "$txn" 2>/dev/null)" || return 1
+    [ "$owner" = "$(id -u)" ] && [ "$mode" = 700 ]
+}
+
+write_provision_root_transaction_inventory() {
+    local txn="$1" i
+    : >"$txn/paths.list"
+    for i in "${!PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+        printf '%s\t%s\n' "$i" "${PROVISION_ROOT_TRANSACTION_PATHS[$i]}" \
+            >>"$txn/paths.list"
+    done
+    : >"$txn/dirs.list"
+    for i in "${!PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[@]}"; do
+        printf '%s\t%s\n' "$i" "${PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[$i]}" \
+            >>"$txn/dirs.list"
+    done
+}
+
+provision_root_transaction_inventory_matches() {
+    local txn="$1" i
+    {
+        for i in "${!PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+            printf '%s\t%s\n' "$i" "${PROVISION_ROOT_TRANSACTION_PATHS[$i]}"
+        done
+    } | cmp -s - "$txn/paths.list" || return 1
+    {
+        for i in "${!PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[@]}"; do
+            printf '%s\t%s\n' "$i" "${PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[$i]}"
+        done
+    } | cmp -s - "$txn/dirs.list"
+}
+
+begin_provision_root_transaction() {
+    local txn i path old_umask base_created=0
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would snapshot the installed OS/Pleb files before provisioning"
+        return 0
+    fi
+    [ "$(id -u)" = 0 ] || [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+        || die "the provisioning root transaction requires root"
+    prepare_provision_root_transaction_paths
+
+    old_umask="$(umask)"
+    umask 077
+    validate_provision_root_transaction_layout
+    if [ ! -e "$PROVISION_ROOT_TRANSACTION_BASE" ] \
+            && [ ! -L "$PROVISION_ROOT_TRANSACTION_BASE" ]; then
+        mkdir -p -- "$PROVISION_ROOT_TRANSACTION_BASE" \
+            || die "could not create provisioning transaction base"
+        chmod 0755 -- "$PROVISION_ROOT_TRANSACTION_BASE" \
+            || die "could not secure provisioning transaction base"
+        base_created=1
+    fi
+    validate_provision_transaction_directory "$PROVISION_ROOT_TRANSACTION_BASE" 1 \
+        || die "unsafe provisioning transaction base: $PROVISION_ROOT_TRANSACTION_BASE"
+
+    txn="$(mktemp -d "$PROVISION_ROOT_TRANSACTION_BASE/provision-rollback.XXXXXX")" \
+        || die "could not create provisioning rollback state"
+    PROVISION_ROOT_TRANSACTION_DIR="$txn"
+    PROVISION_ROOT_TRANSACTION_BUILDING=1
+    arm_provision_cleanup_traps
+    chmod 0700 -- "$txn" || die "could not secure provisioning rollback state"
+    mkdir -- "$txn/items" || die "could not initialize provisioning rollback state"
+    chmod 0700 -- "$txn/items"
+    write_provision_root_transaction_inventory "$txn" \
+        || die "could not record provisioning rollback inventory"
+
+    for i in "${!PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[@]}"; do
+        path="${PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[$i]}"
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            : >"$txn/dir.$i.present"
+        fi
+    done
+    for i in "${!PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+        path="${PROVISION_ROOT_TRANSACTION_PATHS[$i]}"
+        if [ -e "$path" ] || [ -L "$path" ]; then
+            cp -a -- "$path" "$txn/items/$i" \
+                || die "could not snapshot provisioning-managed path: $path"
+            : >"$txn/$i.present"
+        fi
+    done
+
+    PROVISION_ROOT_TRANSACTION_BUILDING=0
+    PROVISION_ROOT_TRANSACTION_ACTIVE=1
+    umask "$old_umask"
+    log "root filesystem transaction ready -> $txn"
+    [ "$base_created" = 0 ] \
+        || log "created provisioning state directory -> $PROVISION_ROOT_TRANSACTION_BASE"
+}
+
+cleanup_provision_restore_stages() {
+    local -n stage_objects_ref="$1"
+    local -n stage_dirs_ref="$2"
+    local i failed=0
+    for i in "${!stage_dirs_ref[@]}"; do
+        [ -z "${stage_objects_ref[$i]:-}" ] \
+            || rm -f -- "${stage_objects_ref[$i]}" || failed=1
+        [ -z "${stage_dirs_ref[$i]:-}" ] \
+            || rmdir -- "${stage_dirs_ref[$i]}" 2>/dev/null || failed=1
+    done
+    return "$failed"
+}
+
+restore_provision_root_transaction() {
+    local txn="$PROVISION_ROOT_TRANSACTION_DIR" i path parent stage failed=0
+    local -a stage_objects=() stage_dirs=()
+    validate_provision_root_transaction_dir "$txn" || return 1
+    provision_root_transaction_inventory_matches "$txn" || return 1
+
+    # Reject a path-type or parent substitution before replacing any live file.
+    for i in "${!PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+        path="${PROVISION_ROOT_TRANSACTION_PATHS[$i]}"
+        if [ -d "$path" ] && [ ! -L "$path" ]; then
+            return 1
+        fi
+        parent="$(dirname -- "$path")"
+        if [ -e "$parent" ] || [ -L "$parent" ]; then
+            validate_provision_transaction_directory "$parent" 1 || return 1
+        elif [ -f "$txn/$i.present" ]; then
+            # An object that existed at snapshot time cannot be restored
+            # safely if its trusted parent vanished during provisioning.
+            return 1
+        fi
+    done
+
+    # Prepare every old object beside its destination before changing one.
+    for i in "${!PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+        [ -f "$txn/$i.present" ] || continue
+        path="${PROVISION_ROOT_TRANSACTION_PATHS[$i]}"
+        parent="$(dirname -- "$path")"
+        stage="$(mktemp -d "$parent/.plebian-os-restore.XXXXXX")" \
+            || { failed=1; break; }
+        stage_dirs[i]="$stage"
+        chmod 0700 -- "$stage" || { failed=1; break; }
+        stage_objects[i]="$stage/object"
+        cp -a -- "$txn/items/$i" "${stage_objects[$i]}" \
+            || { failed=1; break; }
+    done
+    if [ "$failed" != 0 ]; then
+        cleanup_provision_restore_stages stage_objects stage_dirs || true
+        return 1
+    fi
+
+    for i in "${!PROVISION_ROOT_TRANSACTION_PATHS[@]}"; do
+        path="${PROVISION_ROOT_TRANSACTION_PATHS[$i]}"
+        if [ -f "$txn/$i.present" ]; then
+            if mv -fT -- "${stage_objects[$i]}" "$path"; then
+                stage_objects[i]=""
+                rmdir -- "${stage_dirs[$i]}" || failed=1
+                stage_dirs[i]=""
+            else
+                failed=1
+            fi
+        elif ! rm -f -- "$path"; then
+            failed=1
+        fi
+    done
+    cleanup_provision_restore_stages stage_objects stage_dirs || failed=1
+
+    for ((i=${#PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[@]}-1; i>=0; i--)); do
+        [ -f "$txn/dir.$i.present" ] && continue
+        path="${PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[$i]}"
+        if [ -d "$path" ] && [ ! -L "$path" ]; then
+            if ! rmdir -- "$path" 2>/dev/null; then
+                warn "rollback retained nonempty provisioning directory: $path"
+                failed=1
+            fi
+        elif [ -e "$path" ] || [ -L "$path" ]; then
+            failed=1
+        fi
+    done
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] \
+            && command -v systemctl >/dev/null 2>&1 \
+            && command -v timeout >/dev/null 2>&1; then
+        timeout 15s systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    [ "$failed" = 0 ]
+}
+
+remove_provision_root_transaction() {
+    local txn="${1:-$PROVISION_ROOT_TRANSACTION_DIR}"
+    validate_provision_root_transaction_dir "$txn" || return 1
+    rm -rf -- "$txn"
+}
+
+rollback_provision_root_transaction() {
+    local txn="$PROVISION_ROOT_TRANSACTION_DIR"
+    warn "provisioning failed; restoring the previous root-managed OS/Pleb files"
+    if restore_provision_root_transaction \
+            && remove_provision_root_transaction "$txn"; then
+        PROVISION_ROOT_TRANSACTION_ACTIVE=0
+        PROVISION_ROOT_TRANSACTION_DIR=""
+        log "restored the pre-provision root-managed OS/Pleb files"
+        return 0
+    fi
+    warn "automatic provisioning rollback was incomplete; recovery data retained at $txn"
+    return 1
+}
+
+commit_provision_root_transaction() {
+    local txn="$PROVISION_ROOT_TRANSACTION_DIR"
+    [ "$DRY_RUN" != 1 ] || return 0
+    [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
+        || die "no active provisioning root transaction to commit"
+    PROVISION_ROOT_TRANSACTION_COMMITTED=1
+    PROVISION_ROOT_TRANSACTION_ACTIVE=0
+    if remove_provision_root_transaction "$txn"; then
+        PROVISION_ROOT_TRANSACTION_DIR=""
+        log "committed the root filesystem transaction"
+    else
+        warn "provisioning is coherent, but recovery data could not be removed: $txn"
+    fi
+}
+
 cleanup() {
+    local cleanup_failed=0
     if [ "$DRY_RUN" != 1 ]; then
-        rm -f "$SUDOERS"
+        if ! rm -f "$SUDOERS"; then
+            warn "could not remove temporary provisioning sudoers rule: $SUDOERS"
+            cleanup_failed=1
+        fi
         [ -z "${DESKTOP_WALLPAPER_TMP:-}" ] \
             || rm -f -- "$DESKTOP_WALLPAPER_TMP"
         [ -z "${VERSION_MARKER_TMP:-}" ] \
@@ -843,21 +1236,56 @@ cleanup() {
         for ((i=${#ARTWORK_NOTICE_CREATED_DIRS[@]}-1; i>=0; i--)); do
             rmdir -- "${ARTWORK_NOTICE_CREATED_DIRS[$i]}" 2>/dev/null || true
         done
+        if [ "$PROVISION_ROOT_TRANSACTION_BUILDING" = 1 ]; then
+            remove_provision_root_transaction \
+                || cleanup_failed=1
+            PROVISION_ROOT_TRANSACTION_BUILDING=0
+        elif [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
+                && [ "$PROVISION_ROOT_TRANSACTION_COMMITTED" != 1 ]; then
+            rollback_provision_root_transaction || cleanup_failed=1
+        fi
         if [ -n "${PROVISION_LOCK_FD:-}" ]; then
             flock -u "$PROVISION_LOCK_FD" 2>/dev/null || true
             exec {PROVISION_LOCK_FD}>&-
+            PROVISION_LOCK_FD=""
         fi
         if [ -n "${KILIX_PROVISION_LOCK_FD:-}" ]; then
             flock -u "$KILIX_PROVISION_LOCK_FD" 2>/dev/null || true
             exec {KILIX_PROVISION_LOCK_FD}>&-
+            KILIX_PROVISION_LOCK_FD=""
         fi
     fi
+    [ "$cleanup_failed" = 0 ] || return 70
+}
+
+provision_exit_cleanup() {
+    local rc=$? cleanup_rc=0
+    trap - EXIT INT TERM HUP
+    set +e
+    if { [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
+            && [ "$PROVISION_ROOT_TRANSACTION_COMMITTED" != 1 ]; } \
+            || [ "$PROVISION_ROOT_TRANSACTION_BUILDING" = 1 ]; then
+        [ "$rc" -ne 0 ] || rc=1
+    fi
+    cleanup
+    cleanup_rc=$?
+    [ "$cleanup_rc" = 0 ] || rc="$cleanup_rc"
+    exit "$rc"
+}
+
+arm_provision_cleanup_traps() {
+    trap provision_exit_cleanup EXIT
+    restore_provision_signal_traps
 }
 
 restore_provision_signal_traps() {
     if [ -n "${PROVISION_LOCK_FD:-}" ] \
-        || [ -n "${KILIX_PROVISION_LOCK_FD:-}" ]; then
-        trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
+        || [ -n "${KILIX_PROVISION_LOCK_FD:-}" ] \
+        || [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
+        || [ "$PROVISION_ROOT_TRANSACTION_BUILDING" = 1 ]; then
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        trap 'exit 129' HUP
     else
         trap - INT TERM HUP
     fi
@@ -894,8 +1322,7 @@ acquire_provision_lock() {
     exec {PROVISION_LOCK_FD}>>"$lock"
     flock -n "$PROVISION_LOCK_FD" \
         || die "another Pleb update or provisioning run is active (lock: $lock)"
-    trap cleanup EXIT
-    trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
+    arm_provision_cleanup_traps
 }
 
 acquire_kilix_provision_lock() {
@@ -948,8 +1375,7 @@ acquire_kilix_provision_lock() {
     flock -n "$KILIX_PROVISION_LOCK_FD" \
         || die "another Kilix build/update is active (lock: $lock)"
     KILIX_PROVISION_LOCK_PATH="$(cd "$KILIX_STATE_DIRECTORY" && pwd -P)/build-update.lock"
-    trap cleanup EXIT
-    trap 'cleanup; trap - EXIT; exit 143' INT TERM HUP
+    arm_provision_cleanup_traps
 }
 
 write_session_default() {
@@ -3273,6 +3699,7 @@ if [ "$DRY_RUN" = 1 ]; then
 else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
+begin_provision_root_transaction
 install_no_beep_defaults
 install_quiet_console_defaults
 install_desktop_wallpaper
@@ -3755,7 +4182,9 @@ fi
 write_package_manifest
 write_source_tool_manifest
 
-cleanup; trap - EXIT
+commit_provision_root_transaction
+cleanup
+trap - EXIT INT TERM HUP
 
 log "done. Plebian-OS is provisioned."
 log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'screen-filling Kilix with visible chrome')."

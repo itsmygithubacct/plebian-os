@@ -13,6 +13,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   outer whole-stack rollback.
 
 ### Fixed
+- Make firstboot and `sudo plebian-os-provision` transactional for the
+  provisioner-owned OS/Pleb runtime and configuration files they replace. It
+  snapshots branding,
+  notices, helpers, Pleb launchers/session files, LightDM configuration,
+  sudoers policy, and final provenance before its first such rewrite; an EXIT
+  failure or signal restores the prior bytes, links, modes, and absences. An
+  unsafe or incomplete rollback exits with status 70 and retains its private
+  recovery tree for inspection instead of deleting unexpected data.
 - Make a bare `sudo plebian-os-provision` act on the installed values of
   `KILIX_CAP_AUTO_INSTALL`, `KILIX_TUI_UTILS_AUTO_INSTALL`, and
   `KILIX_LAND_DESKTOP_AUTO_INSTALL`. The session merge already preserved an
