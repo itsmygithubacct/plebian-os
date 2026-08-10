@@ -69,7 +69,9 @@ DEP_GROUPS=(
     # there would see an unknown terminal without this.
     "terminfo for the engine|kitty-terminfo"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
-    "kilix desktop provider (python)|python3-pil python3-xlib python3-websockets"
+    # PDF Conversion uses this standard-library venv support with a
+    # hash-locked pip install. It does not require the optional uv tool below.
+    "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
     "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
     # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
     # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free. The
@@ -133,8 +135,10 @@ for entry in "${DEP_GROUPS[@]}"; do
     fi
 done
 
-# uv is useful but not core to booting Plebian-OS. Do not execute mutable remote
-# installer code as root by default; make the tradeoff explicit for local images.
+# uv is useful for development but is not a runtime prerequisite for Kilix's
+# Python apps: their release installers use Debian's python3-venv and locked
+# dependencies. Do not execute mutable remote installer code as root by
+# default; make the tradeoff explicit for local images.
 if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     # Pin the uv version via the versioned installer URL, download to a file (not
     # a pipe), and verify its sha256 before executing it as root. Set
@@ -230,7 +234,7 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
         fi
     fi
 else
-    log "skipping uv installer (set PLEBIAN_OS_INSTALL_UV=1 to opt in)"
+    log "skipping optional uv installer; python3-venv runtimes remain available (set PLEBIAN_OS_INSTALL_UV=1 to opt in)"
 fi
 
 if [ "${#failed[@]}" -gt 0 ]; then

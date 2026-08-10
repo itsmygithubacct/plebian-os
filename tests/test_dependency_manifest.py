@@ -38,6 +38,10 @@ LOCAL_BUILD_PREREQUISITE_PACKAGES = {
 # ncurses program from meeting an unknown terminal there.
 TERMINFO_PACKAGES = {"kitty-terminfo"}
 
+# Catalog-pinned PDF Conversion builds a hash-locked standard venv. The release
+# intentionally leaves uv disabled, so both install paths must provide this.
+PDF_RUNTIME_PREREQUISITE_PACKAGES = {"python3", "python3-venv"}
+
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
@@ -72,6 +76,14 @@ class DependencyManifestTests(unittest.TestCase):
     def test_local_build_prerequisites_are_installed(self):
         self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,
                              install_deps_packages())
+
+    def test_pdf_runtime_does_not_depend_on_optional_uv(self):
+        self.assertLessEqual(PDF_RUNTIME_PREREQUISITE_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(PDF_RUNTIME_PREREQUISITE_PACKAGES,
+                             preseed_packages())
+        install = (ROOT / "provision" / "install-deps.sh").read_text()
+        self.assertIn("python3-venv runtimes remain available", install)
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
