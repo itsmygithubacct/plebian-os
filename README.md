@@ -318,10 +318,12 @@ selection to the Debian installer on physical USB boots. The shell/remaster path
 does the same unless `--unattended-disk` or `PLEBIAN_OS_UNATTENDED_DISK=1` is
 set. Both flashers refuse partitions and every disk beneath critical filesystems
 or active swap (including multi-disk RAID/device-mapper stacks), show what they
-will erase, and make you retype the device path. `--yes` skips that gate only for
-a genuinely removable device; `--force` overrides only the removable flag. The
-shell builder makes a fresh ISO by default; `--iso` or `--reuse-iso` is required
-to trust an existing artifact.
+will erase, and make you retype the device path. A target is admitted normally
+when the kernel reports `RM=1`, `TRAN=usb`, or `HOTPLUG=1`, covering USB sticks
+whose controllers expose fixed media. `--yes` skips the typed gate only with one
+of those signals; `--force` overrides only that evidence check and still requires
+the exact device path. The shell builder makes a fresh ISO by default; `--iso`
+or `--reuse-iso` is required to trust an existing artifact.
 
 ## Layout
 

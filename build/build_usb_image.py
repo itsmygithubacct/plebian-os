@@ -9,7 +9,7 @@ stick.
 
     build/build_usb_image.py --device /dev/sdX   # build + flash a stick
     build/build_usb_image.py                      # build the ISO only, no flash
-    build/build_usb_image.py --list               # show removable devices
+    build/build_usb_image.py --list               # show removable/USB/hotplug candidates
     build/build_usb_image.py --device /dev/sdX --dry-run   # print the plan only
 
 By default the finished stick boots to the Debian installer MENU with its normal
@@ -323,24 +323,45 @@ def _is_partition(base: str) -> bool:
         return True
     return bool(base) and base[-1].isdigit()
 
+
+def _device_is_flash_candidate(removable: str, transport: str, hotplug: str) -> bool:
+    """Whether kernel metadata identifies an inserted/removable target.
+
+    USB controllers commonly expose real sticks as fixed media (RM=0), so RM,
+    transport, and hotplug are independent evidence for the admission check.
+    """
+    return (removable.strip() == "1" or transport.strip().lower() == "usb"
+            or hotplug.strip() == "1")
+
+
+def _device_characteristics(base: str, device: str) -> tuple[str, str, str, str, str]:
+    try:
+        removable = Path(f"/sys/block/{base}/removable").read_text().strip()
+    except OSError:
+        removable = "0"
+    transport = _lsblk(["-dnro", "TRAN", device]) or "?"
+    hotplug = _lsblk(["-dnro", "HOTPLUG", device]) or "?"
+    size = _lsblk(["-dno", "SIZE", device]) or "?"
+    try:
+        model = " ".join(Path(f"/sys/block/{base}/device/model").read_text().split()) or "?"
+    except OSError:
+        model = "?"
+    return removable, transport, hotplug, size, model
+
+
 def list_devices() -> None:
-    info("removable block devices:")
+    info("removable, USB, or hotplug block devices:")
     any_found = False
     for d in sorted(Path("/sys/block").glob("*")):
         name = d.name
         if name.startswith(("loop", "ram", "sr", "dm-", "md", "zram")):
             continue
-        try:
-            if (d / "removable").read_text().strip() != "1":
-                continue
-        except OSError:
+        removable, transport, hotplug, size, model = _device_characteristics(
+            name, f"/dev/{name}")
+        if not _device_is_flash_candidate(removable, transport, hotplug):
             continue
-        size = _lsblk(["-dno", "SIZE", f"/dev/{name}"]) or "?"
-        try:
-            model = " ".join((d / "device" / "model").read_text().split()) or "?"
-        except OSError:
-            model = "?"
-        print(f"    /dev/{name:<8} {size:>8}  {model}")
+        print(f"    /dev/{name:<8} {size:>8}  RM={removable} TRAN={transport} "
+              f"HOTPLUG={hotplug}  {model}")
         any_found = True
     if not any_found:
         print("    (none found — plug in a USB stick, or pass --force for a fixed disk)")
@@ -368,22 +389,18 @@ def validate_device(device: str, force: bool) -> tuple[str, str, bool, tuple[int
     # never the disk backing '/' (this refusal is NOT bypassed by --force)
     if base and base in _root_disks():
         die(f"{device} backs the running root filesystem — refusing")
-    # never a non-removable disk unless --force (which bypasses ONLY this check)
-    try:
-        removable = Path(f"/sys/block/{base}/removable").read_text().strip()
-    except OSError:
-        removable = "0"
-    if removable != "1" and not force:
-        die(f"{device} is not marked removable — refusing (pass --force if certain)")
-    try:
-        model = " ".join(Path(f"/sys/block/{base}/device/model").read_text().split()) or "?"
-    except OSError:
-        model = "?"
-    size = _lsblk(["-dno", "SIZE", device]) or "?"
+    # Require removable/USB/hotplug evidence unless --force. This is the only
+    # refusal --force bypasses; protected live disks above remain forbidden.
+    removable, transport, hotplug, size, model = _device_characteristics(base, device)
+    flash_candidate = _device_is_flash_candidate(removable, transport, hotplug)
+    if not flash_candidate and not force:
+        die(f"{device} is not marked removable (RM={removable}, TRAN={transport}, "
+            f"HOTPLUG={hotplug}, MODEL={model}, SIZE={size}) — pass --force if "
+            "this is the device you intend to erase")
     identity = _device_identity(device)
     if identity is None:
         die(f"could not capture a stable device identity for {device}")
-    return size, model, removable == "1", identity
+    return size, model, flash_candidate, identity
 
 
 def validate_image_fits(device: str, iso: Path, base: str | None = None) -> None:
@@ -535,9 +552,11 @@ def main() -> None:
                          "target disk without another installer prompt")
     ap.add_argument("--with-ssh", action="store_true",
                     help="install ssh-server (off by default; protect the chosen password)")
-    ap.add_argument("--list", action="store_true", help="list removable devices and exit")
+    ap.add_argument("--list", action="store_true",
+                    help="list removable/USB/hotplug candidates and exit")
     ap.add_argument("--force", action="store_true",
-                    help="allow a non-removable disk (never the system/root disk)")
+                    help="allow a disk without removable/USB/hotplug evidence "
+                         "(never the system/root disk)")
     ap.add_argument("-y", "--yes", action="store_true", help="accept defaults, no prompts")
     ap.add_argument("--dry-run", action="store_true", help="show the plan; write nothing")
     args = ap.parse_args()
@@ -604,13 +623,13 @@ def main() -> None:
     # A dry-run against a placeholder (non-existent) device just prints the plan;
     # the safety gating only makes sense against a real block device.
     if args.dry_run and not Path(args.device).is_block_device():
-        info(f"(dry-run) would validate {args.device} is a removable non-system disk, "
-             "confirm, then:")
+        info(f"(dry-run) would validate {args.device} has removable/USB/hotplug "
+             "evidence and is not a system disk, confirm, then:")
         info(f"    + umount <all mountpoints on {args.device}> ; dd if={iso} of={args.device} bs=4M "
              "status=progress oflag=sync conv=fsync ; sync")
         return
 
-    size, model, removable, identity = validate_device(args.device, args.force)
+    size, model, flash_candidate, identity = validate_device(args.device, args.force)
     if not args.dry_run:
         validate_image_fits(args.device, iso)
     if args.dry_run:
@@ -619,12 +638,12 @@ def main() -> None:
              "status=progress oflag=sync conv=fsync ; sync")
         return
 
-    # A forced (non-removable) fixed disk always requires the typed confirmation,
-    # even with --yes; only a genuinely removable stick may be flashed unattended.
-    if args.yes and not removable:
-        warn(f"{args.device} is a non-removable disk (--force); requiring typed "
-             "confirmation despite --yes")
-    confirm_device(args.device, iso, size, model, args.yes and removable)
+    # A target admitted only by --force always requires typed confirmation,
+    # even with --yes. Kernel-identified removable/USB/hotplug targets may skip it.
+    if args.yes and not flash_candidate:
+        warn(f"{args.device} lacks removable/USB/hotplug evidence (--force); "
+             "requiring typed confirmation despite --yes")
+    confirm_device(args.device, iso, size, model, args.yes and flash_candidate)
     flash(args.device, iso, identity)
     final_summary(cfg, iso, args.device, args.autoboot, from_iso=args.iso is not None)
 

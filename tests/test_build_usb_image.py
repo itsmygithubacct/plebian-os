@@ -29,6 +29,54 @@ def cfg(**overrides):
 
 
 class UsbBuilderTests(unittest.TestCase):
+    def test_flash_candidate_accepts_each_kernel_signal_independently(self):
+        cases = (
+            ("1", "sata", "0", True),
+            ("0", "usb", "0", True),
+            ("0", "USB", "0", True),
+            ("0", "sata", "1", True),
+            ("0", "sata", "0", False),
+            ("0", "?", "?", False),
+        )
+        for removable, transport, hotplug, accepted in cases:
+            with self.subTest(
+                    removable=removable, transport=transport, hotplug=hotplug):
+                self.assertEqual(
+                    usb._device_is_flash_candidate(removable, transport, hotplug),
+                    accepted,
+                )
+
+    def test_validate_device_accepts_rm_zero_usb_transport(self):
+        with mock.patch.object(usb.Path, "is_block_device", return_value=True), \
+                mock.patch.object(usb, "_block_kname", return_value="sdz"), \
+                mock.patch.object(usb, "_root_disks", return_value=set()), \
+                mock.patch.object(usb, "_lsblk", side_effect=["disk", "0"]), \
+                mock.patch.object(
+                    usb, "_device_characteristics",
+                    return_value=("0", "usb", "1", "7.5G", "Cruzer Fit"),
+                ), \
+                mock.patch.object(usb, "_device_identity", return_value=(8, 16)):
+            validated = usb.validate_device("/dev/sdz", force=False)
+        self.assertEqual(validated, ("7.5G", "Cruzer Fit", True, (8, 16)))
+
+    def test_validate_device_refusal_names_observed_evidence(self):
+        with mock.patch.object(usb.Path, "is_block_device", return_value=True), \
+                mock.patch.object(usb, "_block_kname", return_value="sdz"), \
+                mock.patch.object(usb, "_root_disks", return_value=set()), \
+                mock.patch.object(usb, "_lsblk", side_effect=["disk", "0"]), \
+                mock.patch.object(
+                    usb, "_device_characteristics",
+                    return_value=("0", "sata", "0", "931.5G", "Fixed Disk"),
+                ), \
+                mock.patch.object(usb, "die", side_effect=RuntimeError) as die:
+            with self.assertRaises(RuntimeError):
+                usb.validate_device("/dev/sdz", force=False)
+        die.assert_called_once_with(
+            "/dev/sdz is not marked removable (RM=0, TRAN=sata, HOTPLUG=0, "
+            "MODEL=Fixed Disk, SIZE=931.5G) — pass --force if this is the "
+            "device you intend to erase"
+        )
+
     def test_interactive_usb_preseed_removes_unattended_partitioning(self):
         with tempfile.TemporaryDirectory() as td:
             preseed = Path(td) / "preseed.cfg"

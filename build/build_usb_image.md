@@ -44,7 +44,7 @@ firstboot configuration and build provenance.
 ```sh
 build/build_usb_image.py --device /dev/sdX   # build the ISO and flash the stick
 build/build_usb_image.py                      # build the ISO only; print how to flash
-build/build_usb_image.py --list               # list removable devices
+build/build_usb_image.py --list               # list removable/USB/hotplug candidates
 build/build_usb_image.py --device /dev/sdX --dry-run   # print the plan; write nothing
 ```
 
@@ -88,8 +88,8 @@ password. An explicit `--password` wins over both.
 --autoboot             build a hands-off stick that auto-selects the install (see warning)
 --unattended-disk      preseed partitioning too; choosing install erases without another prompt
 --with-ssh             install ssh-server (off by default; refuses password `plebian`)
---list                 list removable devices and exit
---force                allow a non-removable disk (never the system/root disk)
+--list                 list removable/USB/hotplug candidates and exit
+--force                allow a disk with none of that evidence (never the system/root disk)
 -y, --yes              accept defaults / skip the typed confirmation
 --dry-run              show the plan; write nothing (no ISO build, no dd)
 -h, --help             usage
@@ -126,19 +126,24 @@ Writing to the wrong device destroys data, so the flasher refuses anything unsaf
 - **Never a partition** — it wants the whole disk (e.g. `/dev/sdb`, not `/dev/sdb1`).
   Whole-disk NVMe/eMMC names that end in a digit (`/dev/nvme0n1`, `/dev/mmcblk0`)
   are recognized as disks, not partitions.
-- **Never a non-removable disk** unless you pass `--force`.
+- **Require kernel evidence for an inserted target**: `RM=1`, `TRAN=usb`, or
+  `HOTPLUG=1`. Some genuine USB sticks expose fixed media (`RM=0`), so transport
+  and hotplug are accepted independently. A disk with none of those signals
+  requires `--force`.
 - **Never a disk backing a critical live filesystem or active swap** — `/`,
   `/boot`, EFI, `/home`, `/var`, `/usr`, and `/srv` are protected. Every
   physical member below LVM, encryption, RAID, or device-mapper is included;
   this refusal is **not** bypassed by `--force`.
 - It shows the device size + model + `lsblk` tree and makes you **type the device
-  path** to confirm. `--yes` skips that only for a genuinely removable device;
-  a fixed disk admitted by `--force` still requires typed confirmation.
+  path** to confirm. `--yes` skips that only when the kernel reports removable,
+  USB, or hotplug evidence; a disk admitted only by `--force` still requires
+  typed confirmation.
 - It **unmounts** every mounted filesystem on the device before writing and aborts
   if any unmount fails, then
   `dd … oflag=sync conv=fsync` and `sync`.
 
-Use `--list` to see the candidate removable devices first.
+Use `--list` to see the removable/USB/hotplug candidates and their `RM`, `TRAN`,
+and `HOTPLUG` values first.
 
 ## Rebuilding / cleanup
 
@@ -158,8 +163,10 @@ filesystem).
   (no build, no xorriso).
 - **`ISO has no MBR boot signature`** — the image isn't isohybrid and likely won't
   boot from USB; rebuild it with this tool (or `remaster-iso.sh`).
-- **`… is not marked removable — refusing`** — you targeted a fixed disk; double-check
-  with `--list`, and pass `--force` only if you are certain.
+- **`… is not marked removable (RM=…, TRAN=…, HOTPLUG=…, …)`** — no kernel
+  signal identifies the target as an inserted/removable device. Double-check
+  the reported transport, hotplug flag, model, and size with `--list`; pass
+  `--force` only if you intend to erase that exact disk.
 - **`… backs the running root filesystem`** — you targeted the system disk; that is
   always refused. Pick the USB stick instead.
 - **`need root to write …`** — run under `sudo`, or install `sudo`.

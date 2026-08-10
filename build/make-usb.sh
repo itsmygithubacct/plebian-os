@@ -4,8 +4,8 @@
 # The Plebian-OS ISO (build/remaster-iso.sh) is an isohybrid image, so a USB
 # installer is just that ISO written byte-for-byte to a USB device. This script
 # ties the two steps together and — most importantly — writes to the device
-# *safely*: it refuses system/non-removable disks, shows you what it's about to
-# erase, and makes you confirm.
+# *safely*: it refuses system disks and targets without removable, USB, or
+# hotplug evidence, shows you what it's about to erase, and makes you confirm.
 #
 #   # build a USB stick end-to-end (downloads the Debian netinst for you):
 #   build/make-usb.sh --device /dev/sdX
@@ -21,7 +21,7 @@
 #   # just build the ISO (it *is* the USB image — dd it yourself later):
 #   build/make-usb.sh                       # no --device
 #
-#   build/make-usb.sh --list        # show candidate removable devices
+#   build/make-usb.sh --list        # show removable/USB/hotplug candidates
 #   build/make-usb.sh ... --dry-run # print the plan; write nothing
 #   build/make-usb.sh ... --unattended-disk # installer erases after boot-menu selection
 #
@@ -122,24 +122,40 @@ mounted_targets_for_device() {
     done < <(lsblk -rno NAME "$1" 2>/dev/null || true)
 }
 
+device_is_flash_candidate() {
+    # Some genuine USB sticks report RM=0 because their controller presents
+    # fixed media.  The kernel's transport and hotplug flags are independent
+    # evidence that the target is the inserted device rather than a fixed disk.
+    local removable="${1:-0}" transport="${2:-}" hotplug="${3:-0}"
+    [ "$removable" = 1 ] || [ "${transport,,}" = usb ] || [ "$hotplug" = 1 ]
+}
+
 # Keep the safety helpers sourceable for behavioral tests without starting an
 # ISO build or touching a device.
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     return 0
 fi
 
-# ── list removable block devices (candidates for a USB stick) ────────────────
+# ── list removable/USB/hotplug block devices (USB-stick candidates) ─────────
 list_devices() {
-    log "removable block devices:"
-    local any=0 d name rm size model
+    log "removable, USB, or hotplug block devices:"
+    local any=0 d name rm transport hotplug size model
     for d in /sys/block/*; do
         name="$(basename "$d")"
         case "$name" in loop*|ram*|sr*|dm-*|md*|zram*) continue ;; esac
         rm="$(cat "$d/removable" 2>/dev/null || echo 0)"
-        [ "$rm" = 1 ] || continue
+        [ -n "$rm" ] || rm=0
+        transport="$(lsblk -dnro TRAN "/dev/$name" 2>/dev/null | head -1 || true)"
+        hotplug="$(lsblk -dnro HOTPLUG "/dev/$name" 2>/dev/null | head -1 || true)"
+        [ -n "$transport" ] || transport='?'
+        [ -n "$hotplug" ] || hotplug='?'
+        device_is_flash_candidate "$rm" "$transport" "$hotplug" || continue
         size="$(lsblk -dno SIZE "/dev/$name" 2>/dev/null || echo '?')"
+        [ -n "$size" ] || size='?'
         model="$(cat "$d/device/model" 2>/dev/null | tr -s ' ' || echo '?')"
-        printf '    /dev/%-8s %8s  %s\n' "$name" "$size" "$model"
+        [ -n "$model" ] || model='?'
+        printf '    /dev/%-8s %8s  RM=%s TRAN=%s HOTPLUG=%s  %s\n' \
+            "$name" "$size" "$rm" "$transport" "$hotplug" "$model"
         any=1
     done
     [ "$any" = 1 ] || echo "    (none found — plug in a USB stick, or pass --force for a fixed disk)"
@@ -246,7 +262,7 @@ fi
 # In a dry-run against a placeholder (non-existent) device, just print the plan;
 # the safety gating below only makes sense against a real block device.
 if [ "$DRY_RUN" = 1 ] && [ ! -b "$DEVICE" ]; then
-    log "(dry-run) would validate $DEVICE is a removable non-system disk, confirm, then:"
+    log "(dry-run) would validate $DEVICE has removable/USB/hotplug evidence and is not a system disk, confirm, then:"
     echo "    + umount <all mountpoints on $DEVICE> ; dd if=$ISO of=$DEVICE bs=4M status=progress oflag=sync conv=fsync ; sync"
     exit 0
 fi
@@ -262,19 +278,28 @@ readonly="$(lsblk -dnro RO "$DEVICE" 2>/dev/null | head -1 || true)"
 device_identity="$(lsblk -dnro MAJ:MIN "$DEVICE" 2>/dev/null | head -1 || true)"
 [ -n "$device_identity" ] || die "could not capture a stable identity for $DEVICE"
 
-removable="$(cat "/sys/block/$base/removable" 2>/dev/null || echo 0)"
 # find the disk backing '/' so we never offer to flash the system drive
 while read -r rootdev; do
     [ -n "$rootdev" ] || continue
     [ "$base" = "$rootdev" ] && die "$DEVICE backs the running root filesystem — refusing"
 done < <(protected_device_names | sort -u)
 
-if [ "$removable" != 1 ] && [ "$FORCE" != 1 ]; then
-    die "$DEVICE is not marked removable — refusing (pass --force if you are certain)"
+removable="$(cat "/sys/block/$base/removable" 2>/dev/null || echo 0)"
+[ -n "$removable" ] || removable=0
+transport="$(lsblk -dnro TRAN "$DEVICE" 2>/dev/null | head -1 || true)"
+hotplug="$(lsblk -dnro HOTPLUG "$DEVICE" 2>/dev/null | head -1 || true)"
+[ -n "$transport" ] || transport='?'
+[ -n "$hotplug" ] || hotplug='?'
+model="$(cat "/sys/block/$base/device/model" 2>/dev/null | tr -s ' ' || echo '?')"
+[ -n "$model" ] || model='?'
+size="$(lsblk -dno SIZE "$DEVICE" 2>/dev/null || echo '?')"
+[ -n "$size" ] || size='?'
+flash_candidate=0
+device_is_flash_candidate "$removable" "$transport" "$hotplug" && flash_candidate=1
+if [ "$flash_candidate" != 1 ] && [ "$FORCE" != 1 ]; then
+    die "$DEVICE is not marked removable (RM=$removable, TRAN=$transport, HOTPLUG=$hotplug, MODEL=$model, SIZE=$size) — pass --force if this is the device you intend to erase"
 fi
 
-model="$(cat "/sys/block/$base/device/model" 2>/dev/null | tr -s ' ' || echo '?')"
-size="$(lsblk -dno SIZE "$DEVICE" 2>/dev/null || echo '?')"
 iso_bytes="$(stat -c '%s' "$ISO" 2>/dev/null || true)"
 device_sectors="$(cat "/sys/class/block/$base/size" 2>/dev/null || true)"
 case "$device_sectors" in ''|*[!0-9]*) device_bytes="" ;; *) device_bytes=$((device_sectors * 512)) ;; esac
@@ -285,12 +310,12 @@ case "$device_sectors" in ''|*[!0-9]*) device_bytes="" ;; *) device_bytes=$((dev
 warn "about to ERASE $DEVICE  ($size, $model) and write $ISO"
 lsblk "$DEVICE" 2>/dev/null | sed 's/^/    /' || true
 
-# A forced (non-removable) target is a fixed disk — never let --yes skip the
-# typed confirmation for one. Only a genuinely removable stick may be flashed
-# unattended; forcing a fixed disk always requires you to retype its path.
-if [ "$DRY_RUN" != 1 ] && { [ "$ASSUME_YES" != 1 ] || [ "$removable" != 1 ]; }; then
-    if [ "$ASSUME_YES" = 1 ] && [ "$removable" != 1 ]; then
-        warn "$DEVICE is a non-removable disk (--force); requiring typed confirmation despite --yes"
+# A target admitted only by --force is a fixed disk — never let --yes skip the
+# typed confirmation for one. Kernel-identified removable/USB/hotplug targets
+# may be flashed unattended; forcing any other disk requires its path retyped.
+if [ "$DRY_RUN" != 1 ] && { [ "$ASSUME_YES" != 1 ] || [ "$flash_candidate" != 1 ]; }; then
+    if [ "$ASSUME_YES" = 1 ] && [ "$flash_candidate" != 1 ]; then
+        warn "$DEVICE lacks removable/USB/hotplug evidence (--force); requiring typed confirmation despite --yes"
     fi
     printf '\033[1;31mType the device path to confirm (%s): \033[0m' "$DEVICE"
     read -r confirm

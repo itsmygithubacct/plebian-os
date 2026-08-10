@@ -4,6 +4,14 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [Unreleased] — 0.1.9 work
+
+### Fixed
+- Admit real USB sticks whose controllers report fixed media (`RM=0`) when the
+  kernel independently reports `TRAN=usb` or `HOTPLUG=1`. Both USB builders and
+  `--list` use the same rule, fixed disks still require `--force` plus typed
+  confirmation, and refusals now report transport, hotplug, model, and size.
+
 ## [0.1.8] — 2026-08-07
 
 Prepared 2026-08-07; nothing is published for 0.1.8 yet — see

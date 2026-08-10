@@ -20,15 +20,49 @@ class DiskSafetyTests(unittest.TestCase):
         self.assertIn('src.split("[", 1)[0]', _read("build", "build_usb_image.py"))
 
     def test_make_usb_forces_confirmation_on_fixed_disk(self):
-        # A forced (non-removable) target must require the typed confirmation even
-        # with --yes; only a genuinely removable stick may be flashed unattended.
+        # A target admitted only by --force must require typed confirmation even
+        # with --yes; kernel removable/USB/hotplug evidence can skip it.
         s = _read("build", "make-usb.sh")
-        self.assertIn('[ "$removable" != 1 ]', s)
+        self.assertIn('[ "$flash_candidate" != 1 ]', s)
 
     def test_build_usb_py_forces_confirmation_on_fixed_disk(self):
         s = _read("build", "build_usb_image.py")
-        self.assertIn("args.yes and removable", s)
-        self.assertIn('return size, model, removable == "1"', s)
+        self.assertIn("args.yes and flash_candidate", s)
+        self.assertIn("return size, model, flash_candidate", s)
+
+    def test_shell_admits_each_kernel_usb_signal_independently(self):
+        harness = r'''
+            source "$1"
+            device_is_flash_candidate "$2" "$3" "$4"
+        '''
+        cases = (
+            ("1", "sata", "0", True),
+            ("0", "usb", "0", True),
+            ("0", "USB", "0", True),
+            ("0", "sata", "1", True),
+            ("0", "sata", "0", False),
+            ("0", "?", "?", False),
+        )
+        for removable, transport, hotplug, accepted in cases:
+            with self.subTest(
+                    removable=removable, transport=transport, hotplug=hotplug):
+                result = subprocess.run(
+                    [
+                        "bash", "-c", harness, "bash",
+                        str(ROOT / "build" / "make-usb.sh"),
+                        removable, transport, hotplug,
+                    ],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+
+    def test_both_flashers_report_all_fixed_disk_evidence(self):
+        shell = _read("build", "make-usb.sh")
+        py = _read("build", "build_usb_image.py")
+        for field in ("RM=", "TRAN=", "HOTPLUG=", "MODEL=", "SIZE="):
+            self.assertIn(field, shell)
+            self.assertIn(field, py)
 
     def test_partman_strip_is_namespace_wide(self):
         remaster = _read("build", "remaster-iso.sh")
