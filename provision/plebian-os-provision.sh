@@ -3261,37 +3261,76 @@ PY
 validate_voice_model_catalog() {
     python3 -c '
 import json
+import os
 import sys
 
 document = json.load(sys.stdin)
 expected = [
-    ("small-en-us", "vosk", True),
-    ("lgraph-en-us", "vosk", True),
-    ("vibevoice-asr-bitnet", "vibevoice", False),
+    (
+        "small-en-us", "vosk", True, 41205931, "39.3 MiB",
+        ("conf/model.conf", "am/final.mdl"),
+    ),
+    (
+        "lgraph-en-us", "vosk", True, 130557655, "124.5 MiB",
+        ("conf/model.conf", "am/final.mdl"),
+    ),
+    (
+        "vibevoice-asr-bitnet", "vibevoice", False, 1705771590, "1.6 GiB",
+        (
+            "vibeasr-lm-i2_s-embed-q6_k.gguf",
+            "vibeasr-vae-encoder-i8_s.gguf",
+        ),
+    ),
 ]
-records = document.get("models")
-if document.get("schema") != "kilix.speech.models/v1" or not isinstance(records, list):
+if type(document) is not dict:
     raise SystemExit("unknown speech-model catalog schema")
-actual = [
-    (record.get("id"), record.get("engine"), record.get("runtime_supported"))
-    for record in records
-]
-if actual != expected:
-    raise SystemExit("speech-model catalog entries differ from the release contract")
-default = document.get("default_model")
-selected = [record.get("id") for record in records if record.get("selected") is True]
-if default not in {item[0] for item in expected} or selected != [default]:
-    raise SystemExit("speech-model default and selected record disagree")
-for record in records:
-    model = record["id"]
-    if type(record.get("download_bytes")) is not int or record["download_bytes"] <= 0:
-        raise SystemExit("speech-model download size is invalid")
+records = document.get("models")
+if (document.get("schema") != "kilix.speech.models/v1"
+        or type(records) is not list or len(records) != len(expected)):
+    raise SystemExit("unknown speech-model catalog schema")
+selected = []
+for record, contract in zip(records, expected):
+    if type(record) is not dict:
+        raise SystemExit("speech-model catalog record is invalid")
+    model, engine, supported, size, human_size, required_files = contract
+    if record.get("id") != model or record.get("engine") != engine:
+        raise SystemExit("speech-model catalog entries differ from the release contract")
+    if (type(record.get("runtime_supported")) is not bool
+            or record["runtime_supported"] is not supported):
+        raise SystemExit("speech-model runtime support differs from the release contract")
+    if type(record.get("download_bytes")) is not int or record["download_bytes"] != size:
+        raise SystemExit("speech-model download size differs from the release contract")
+    if record.get("download_size") != human_size:
+        raise SystemExit("speech-model human download size differs from the release contract")
     if type(record.get("installed")) is not bool:
         raise SystemExit("speech-model installed state is invalid")
+    if type(record.get("selected")) is not bool:
+        raise SystemExit("speech-model selected state is invalid")
+    if record["selected"]:
+        selected.append(model)
+    path = record.get("path")
+    if type(path) is not str or not os.path.isabs(path):
+        raise SystemExit("speech-model path is invalid")
+    try:
+        present = os.path.isdir(path) and all(
+            os.path.isfile(os.path.join(path, relative))
+            and os.path.getsize(os.path.join(path, relative)) > 0
+            for relative in required_files
+        )
+    except OSError:
+        present = False
+    if record["installed"] is not present:
+        raise SystemExit("speech-model installed state disagrees with its files")
+    summary = record.get("summary")
+    if type(summary) is not str or not summary.strip():
+        raise SystemExit("speech-model summary is invalid")
     if record.get("install_and_default_argv") != [
         "kilix", "stt", "--install", model, "--default", model
     ]:
         raise SystemExit("speech-model install action differs from the shared contract")
+default = document.get("default_model")
+if default not in {item[0] for item in expected} or selected != [default]:
+    raise SystemExit("speech-model default and selected record disagree")
 '
 }
 

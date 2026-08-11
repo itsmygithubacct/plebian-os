@@ -1,3 +1,4 @@
+import json
 import os
 import pwd
 import stat
@@ -777,6 +778,74 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 self.assertNotEqual(refused.returncode, 0)
                 self.assertIn(key, refused.stderr)
 
+    def test_provision_voice_catalog_rejects_false_release_metadata(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            records = []
+            for model, engine, supported, size, human_size in (
+                ("small-en-us", "vosk", True, 41205931, "39.3 MiB"),
+                ("lgraph-en-us", "vosk", True, 130557655, "124.5 MiB"),
+                (
+                    "vibevoice-asr-bitnet", "vibevoice", False,
+                    1705771590, "1.6 GiB",
+                ),
+            ):
+                records.append({
+                    "id": model,
+                    "engine": engine,
+                    "runtime_supported": supported,
+                    "download_bytes": size,
+                    "download_size": human_size,
+                    "installed": False,
+                    "selected": model == "small-en-us",
+                    "path": str(root / model),
+                    "summary": f"{model} fixture summary",
+                    "install_and_default_argv": [
+                        "kilix", "stt", "--install", model,
+                        "--default", model,
+                    ],
+                })
+            document = {
+                "schema": "kilix.speech.models/v1",
+                "default_model": "small-en-us",
+                "models": records,
+            }
+            environment = {
+                **os.environ,
+                "PLEBIAN_OS_PROVISION_LIB_ONLY": "1",
+            }
+
+            def validate(candidate):
+                return subprocess.run(
+                    [
+                        "bash", "-c",
+                        f'. "{PROVISION}"\nvalidate_voice_model_catalog',
+                    ],
+                    env=environment,
+                    input=json.dumps(candidate),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+            accepted = validate(document)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+            invalid_documents = []
+            invalid = json.loads(json.dumps(document))
+            invalid["models"][1]["download_bytes"] = 1
+            invalid_documents.append(("exact bytes", invalid))
+            invalid = json.loads(json.dumps(document))
+            invalid["models"][1]["runtime_supported"] = 1
+            invalid_documents.append(("boolean support", invalid))
+            invalid = json.loads(json.dumps(document))
+            invalid["models"][1]["installed"] = True
+            invalid_documents.append(("filesystem state", invalid))
+            for label, invalid in invalid_documents:
+                with self.subTest(label=label):
+                    refused = validate(invalid)
+                    self.assertNotEqual(refused.returncode, 0)
+
     def test_release_voice_verification_executes_tools_and_checks_attribution(self):
         user = pwd.getpwuid(os.getuid())
         voice_ref = "f05b64a7b2bc25fa9a7e2c3ae1e0b848f04a23f6"
@@ -798,28 +867,38 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             home = base / "home"
+            data = base / "data"
             binaries = home / ".local" / "bin"
             binaries.mkdir(parents=True)
-            catalog = (
-                '{"schema":"kilix.speech.models/v1",'
-                '"default_model":"small-en-us","models":['
-                '{"id":"small-en-us","engine":"vosk",'
-                '"runtime_supported":true,"download_bytes":41205931,'
-                '"installed":true,"selected":true,'
-                '"install_and_default_argv":["kilix","stt","--install",'
-                '"small-en-us","--default","small-en-us"]},'
-                '{"id":"lgraph-en-us","engine":"vosk",'
-                '"runtime_supported":true,"download_bytes":130557655,'
-                '"installed":false,"selected":false,'
-                '"install_and_default_argv":["kilix","stt","--install",'
-                '"lgraph-en-us","--default","lgraph-en-us"]},'
-                '{"id":"vibevoice-asr-bitnet","engine":"vibevoice",'
-                '"runtime_supported":false,"download_bytes":1705771590,'
-                '"installed":false,"selected":false,'
-                '"install_and_default_argv":["kilix","stt","--install",'
-                '"vibevoice-asr-bitnet","--default",'
-                '"vibevoice-asr-bitnet"]}]}'
-            )
+            catalog_records = []
+            for model, engine, supported, size, human_size in (
+                ("small-en-us", "vosk", True, 41205931, "39.3 MiB"),
+                ("lgraph-en-us", "vosk", True, 130557655, "124.5 MiB"),
+                (
+                    "vibevoice-asr-bitnet", "vibevoice", False,
+                    1705771590, "1.6 GiB",
+                ),
+            ):
+                catalog_records.append({
+                    "id": model,
+                    "engine": engine,
+                    "runtime_supported": supported,
+                    "download_bytes": size,
+                    "download_size": human_size,
+                    "installed": model == "small-en-us",
+                    "selected": model == "small-en-us",
+                    "path": str(data / "voice" / "models" / model),
+                    "summary": f"{model} release fixture",
+                    "install_and_default_argv": [
+                        "kilix", "stt", "--install", model,
+                        "--default", model,
+                    ],
+                })
+            catalog = json.dumps({
+                "schema": "kilix.speech.models/v1",
+                "default_model": "small-en-us",
+                "models": catalog_records,
+            }, separators=(",", ":"))
             for tool in ("kilix-tts", "kilix-stt", "kilix-voiced"):
                 executable = binaries / tool
                 executable.write_text(
@@ -843,7 +922,6 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 )
                 executable.chmod(0o755)
 
-            data = base / "data"
             library_parent = data / "voice" / "lib"
             model_parent = data / "voice" / "models"
             library_parent.mkdir(parents=True)
@@ -861,6 +939,14 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             library = library_parent / "current"
             model = model_parent / "small-en-us"
             (library / "libvosk.so").write_bytes(b"fixture\n")
+            (model_generation / "conf").mkdir()
+            (model_generation / "am").mkdir()
+            (model_generation / "conf" / "model.conf").write_text(
+                "fixture\n"
+            )
+            (model_generation / "am" / "final.mdl").write_bytes(
+                b"fixture\n"
+            )
             license_text = Path(
                 "/usr/share/common-licenses/Apache-2.0"
             ).read_bytes()

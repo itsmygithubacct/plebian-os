@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -80,48 +81,98 @@ class VoiceAcceptanceTests(unittest.TestCase):
             vm._voice_acceptance_command("yes")
 
     def test_model_catalog_validation_is_versioned_and_fail_closed(self):
-        records = []
-        for model, engine, supported in (
-            ("small-en-us", "vosk", True),
-            ("lgraph-en-us", "vosk", True),
-            ("vibevoice-asr-bitnet", "vibevoice", False),
-        ):
-            records.append({
-                "id": model,
-                "engine": engine,
-                "runtime_supported": supported,
-                "download_bytes": 1,
-                "installed": False,
-                "selected": model == "small-en-us",
-                "install_and_default_argv": [
-                    "kilix", "stt", "--install", model, "--default", model,
-                ],
-            })
-        document = {
-            "schema": "kilix.speech.models/v1",
-            "default_model": "small-en-us",
-            "models": records,
-        }
         script = vm._voice_model_catalog_validation_script()
-        accepted = subprocess.run(
-            [sys.executable, "-c", script],
-            input=json.dumps(document),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
-        document["schema"] = "kilix.speech.models/v2"
-        refused = subprocess.run(
-            [sys.executable, "-c", script],
-            input=json.dumps(document),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertNotEqual(refused.returncode, 0)
-        self.assertIn("unknown speech-model catalog schema", refused.stderr)
+        def validate(document):
+            return subprocess.run(
+                [sys.executable, "-c", script],
+                input=json.dumps(document),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            records = []
+            for model, engine, supported, size, human_size in (
+                ("small-en-us", "vosk", True, 41205931, "39.3 MiB"),
+                ("lgraph-en-us", "vosk", True, 130557655, "124.5 MiB"),
+                (
+                    "vibevoice-asr-bitnet", "vibevoice", False,
+                    1705771590, "1.6 GiB",
+                ),
+            ):
+                records.append({
+                    "id": model,
+                    "engine": engine,
+                    "runtime_supported": supported,
+                    "download_bytes": size,
+                    "download_size": human_size,
+                    "installed": False,
+                    "selected": model == "small-en-us",
+                    "path": str(root / model),
+                    "summary": f"{model} fixture summary",
+                    "install_and_default_argv": [
+                        "kilix", "stt", "--install", model,
+                        "--default", model,
+                    ],
+                })
+            document = {
+                "schema": "kilix.speech.models/v1",
+                "default_model": "small-en-us",
+                "models": records,
+            }
+            accepted = validate(document)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+            def clone():
+                return json.loads(json.dumps(document))
+
+            invalid_documents = []
+            invalid = clone()
+            invalid["schema"] = "kilix.speech.models/v2"
+            invalid_documents.append((
+                "schema", invalid, "unknown speech-model catalog schema",
+            ))
+            invalid = clone()
+            invalid["models"][0]["download_bytes"] += 1
+            invalid_documents.append((
+                "exact bytes", invalid, "download size differs",
+            ))
+            invalid = clone()
+            invalid["models"][0]["runtime_supported"] = 1
+            invalid_documents.append((
+                "boolean runtime support", invalid, "runtime support differs",
+            ))
+            invalid = clone()
+            invalid["models"][0]["selected"] = 1
+            invalid_documents.append((
+                "boolean selected state", invalid, "selected state is invalid",
+            ))
+            invalid = clone()
+            invalid["models"][0]["installed"] = True
+            invalid_documents.append((
+                "missing files", invalid, "installed state disagrees",
+            ))
+            for label, invalid, message in invalid_documents:
+                with self.subTest(label=label):
+                    refused = validate(invalid)
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn(message, refused.stderr)
+
+            small = Path(records[0]["path"])
+            (small / "conf").mkdir(parents=True)
+            (small / "am").mkdir()
+            (small / "conf" / "model.conf").write_text("fixture\n")
+            (small / "am" / "final.mdl").write_bytes(b"fixture\n")
+            refused = validate(document)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("installed state disagrees", refused.stderr)
+
+            document["models"][0]["installed"] = True
+            accepted = validate(document)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
     def test_dictation_acceptance_is_one_valid_fail_closed_shell_chain(self):
         command = vm._voice_acceptance_command("1")
