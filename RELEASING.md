@@ -115,7 +115,10 @@ actually cutting.
 - when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
   library version/URL/SHA-256, and acoustic-model URL/SHA-256. Both installed
   Vosk assets must retain readable upstream provenance and Apache-2.0 license
-  material; a checksum-matching opaque binary or model is not releasable.
+  material; a checksum-matching opaque binary or model is not releasable. The
+  pinned Voice source must expose the exact `kilix.speech.models/v1` document
+  through download-free `kilix-stt --models --json`; a consumer-specific
+  copied catalog is not a release substitute.
 
 Release mode fails closed when a required value is empty, still a placeholder,
 malformed, dirty, or does not resolve to the checked-out Plebian-OS commit. The
@@ -292,13 +295,31 @@ the twelve-file transactional OS layer beginning with 0.1.9.
    - confirm VirtualBox audio input and output are enabled; run
      `kilix-tts --version`, `kilix-stt --version`, and
      `kilix-voiced --version`, then require `kilix-stt --print` to report
-     `dictation=ready`. Require the device-free acceptance smoke to synthesize
+     `dictation=ready`. Require `kilix-stt --models --json` to pass the
+     `kilix.speech.models/v1` schema gate with all three 0.1.9 models, exactly
+     one selected default, truthful runtime-support flags, positive exact byte
+     sizes, and the shared explicit install-and-default argv. This listing must
+     not open the network or change installed/default state. Require the
+     device-free acceptance smoke to synthesize
      a phrase with real espeak, load the pinned Vosk library/model, and
      recognize nonempty text. Verify the installed library/model match the exact
      release stamp and each has regular, non-symlink provenance and
      Apache-2.0 license material. Grant VirtualBox host microphone permission
      and perform one click-to-talk dictation turn; the microphone must remain
      closed before that explicit action;
+   - on the pristine guest, exercise all five model-management surfaces against
+     the same catalog. `kilix stt --models` and the Models tab must show the two
+     runnable Vosk models plus the installable-but-not-yet-runnable VibeVoice
+     weights. `kilix settings --section voice`, built-in WM Settings, and Kilix
+     95 Settings must each offer **Install + use** for the selected model. Before
+     installing `lgraph-en-us`, make it the pending default, click the terminal
+     microphone, require the 124.5 MiB lazy-install confirmation, cancel it, and
+     prove no model directory appeared. Then install it through one settings
+     surface, require checksum verification and coherent Vosk/model defaulting,
+     and use the other surfaces to verify the same installed/default state.
+     Restore the release default before recording acceptance. Do not download
+     the 1.6 GiB VibeVoice weights solely for this check; require the truthful
+     unsupported-runtime label and its explicit install/default action instead;
    - verify the Kilix engine is one physically contained
      `generations/build.*` directory selected by a relative `current`
      symlink, with regular executable `kitty` and `kitten` launchers,

@@ -3258,8 +3258,45 @@ PY
     fi
 }
 
+validate_voice_model_catalog() {
+    python3 -c '
+import json
+import sys
+
+document = json.load(sys.stdin)
+expected = [
+    ("small-en-us", "vosk", True),
+    ("lgraph-en-us", "vosk", True),
+    ("vibevoice-asr-bitnet", "vibevoice", False),
+]
+records = document.get("models")
+if document.get("schema") != "kilix.speech.models/v1" or not isinstance(records, list):
+    raise SystemExit("unknown speech-model catalog schema")
+actual = [
+    (record.get("id"), record.get("engine"), record.get("runtime_supported"))
+    for record in records
+]
+if actual != expected:
+    raise SystemExit("speech-model catalog entries differ from the release contract")
+default = document.get("default_model")
+selected = [record.get("id") for record in records if record.get("selected") is True]
+if default not in {item[0] for item in expected} or selected != [default]:
+    raise SystemExit("speech-model default and selected record disagree")
+for record in records:
+    model = record["id"]
+    if type(record.get("download_bytes")) is not int or record["download_bytes"] <= 0:
+        raise SystemExit("speech-model download size is invalid")
+    if type(record.get("installed")) is not bool:
+        raise SystemExit("speech-model installed state is invalid")
+    if record.get("install_and_default_argv") != [
+        "kilix", "stt", "--install", model, "--default", model
+    ]:
+        raise SystemExit("speech-model install action differs from the shared contract")
+'
+}
+
 verify_kilix_voice_install() {
-    local tool path stamp stt_report="" library_root model_root
+    local tool path stamp stt_report="" model_catalog="" library_root model_root
     local library_notice library_license model_notice model_license
     local library_target="" model_target=""
     local voice_source="" voice_head="" voice_version="" version_report=""
@@ -3311,6 +3348,16 @@ verify_kilix_voice_install() {
     if [ -x "$USER_HOME/.local/bin/kilix-stt" ]; then
         stt_report="$(run_voice_tool "$USER_HOME/.local/bin/kilix-stt" --print 2>/dev/null)" \
             || problems+=("kilix-stt --print could not execute")
+        model_catalog="$(
+            run_voice_tool "$USER_HOME/.local/bin/kilix-stt" --models --json 2>/dev/null
+        )" || problems+=("kilix-stt --models --json could not execute")
+        if [ -n "$model_catalog" ]; then
+            printf '%s\n' "$model_catalog" \
+                | validate_voice_model_catalog >/dev/null 2>&1 \
+                || problems+=("kilix-stt model catalog does not match kilix.speech.models/v1")
+        else
+            problems+=("kilix-stt returned an empty speech-model catalog")
+        fi
     fi
 
     if [ ! -f "$stamp" ] || [ -L "$stamp" ]; then

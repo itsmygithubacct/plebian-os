@@ -14,6 +14,12 @@ upgrade run recorded in
 [`releases/0.1.9-notes.md`](releases/0.1.9-notes.md).
 
 ### Added
+- Make Kilix Voice's model registry a shared, versioned control-plane contract.
+  `kilix-stt --models --json` reports the complete local catalog,
+  installed/default state, runtime support, exact download sizes, and the
+  common explicit install-and-default action without fetching anything.
+  Provisioning and installed-VM acceptance reject a missing, malformed, or
+  drifted `kilix.speech.models/v1` document.
 - Evince as the image's dedicated PDF viewer. Fresh installs through either the
   Debian Installer preseed or the standalone provisioner now include the same
   native handler for PDF file associations, printing, forms, and annotations.

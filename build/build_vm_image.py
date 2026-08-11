@@ -989,6 +989,44 @@ finally:
 """
 
 
+def _voice_model_catalog_validation_script() -> str:
+    """Validate the download-free speech control-plane document in the guest."""
+    return """\
+import json
+import sys
+
+document = json.load(sys.stdin)
+expected = [
+    ("small-en-us", "vosk", True),
+    ("lgraph-en-us", "vosk", True),
+    ("vibevoice-asr-bitnet", "vibevoice", False),
+]
+records = document.get("models")
+if document.get("schema") != "kilix.speech.models/v1" or not isinstance(records, list):
+    raise SystemExit("unknown speech-model catalog schema")
+actual = [
+    (record.get("id"), record.get("engine"), record.get("runtime_supported"))
+    for record in records
+]
+if actual != expected:
+    raise SystemExit("speech-model catalog entries differ from the release contract")
+default = document.get("default_model")
+selected = [record.get("id") for record in records if record.get("selected") is True]
+if default not in {item[0] for item in expected} or selected != [default]:
+    raise SystemExit("speech-model default and selected record disagree")
+for record in records:
+    model = record["id"]
+    if type(record.get("download_bytes")) is not int or record["download_bytes"] <= 0:
+        raise SystemExit("speech-model download size is invalid")
+    if type(record.get("installed")) is not bool:
+        raise SystemExit("speech-model installed state is invalid")
+    if record.get("install_and_default_argv") != [
+        "kilix", "stt", "--install", model, "--default", model
+    ]:
+        raise SystemExit("speech-model install action differs from the shared contract")
+"""
+
+
 def _voice_acceptance_command(expected_policy: str) -> str:
     """Return a guest check for the declared read-aloud/dictation closure."""
     if expected_policy not in ("0", "1"):
@@ -998,6 +1036,8 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         'PYTHONPATH="$d/voice/runtime/current/lib/kilix-voice" '
         f'timeout 180 python3 -c {shlex.quote(_voice_functional_smoke_script())}'
     )
+    catalog_validation = shlex.quote(
+        _voice_model_catalog_validation_script())
     command = (
         '. /etc/pleb/session.env 2>/dev/null; '
         'g="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"; '
@@ -1016,6 +1056,10 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         'done && '
         'timeout 15 "$HOME/.local/bin/kilix-tts" --print >/dev/null && '
         'stt_report="$(timeout 15 "$HOME/.local/bin/kilix-stt" --print)" && '
+        'model_catalog="$(timeout 15 "$HOME/.local/bin/kilix-stt" '
+        '--models --json)" && '
+        'printf \'%s\\n\' "$model_catalog" | timeout 15 python3 -c '
+        f'{catalog_validation} && '
         'test -f "$r" && test ! -L "$r" && '
         'test "$(stat -c \'%u:%a:%h\' "$r")" = "$(id -u):600:1" && '
     )

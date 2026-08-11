@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import unittest
@@ -18,6 +19,8 @@ class VoiceAcceptanceTests(unittest.TestCase):
         self.assertIn('--version', command)
         self.assertIn('kilix-tts" --print', command)
         self.assertIn('kilix-stt" --print', command)
+        self.assertIn('kilix-stt" --models --json', command)
+        self.assertIn("kilix.speech.models/v1", command)
         self.assertIn("libvosk=skipped", command)
         self.assertIn("model-small-en-us=skipped", command)
         self.assertNotIn("lib/current/libvosk.so", command)
@@ -67,12 +70,58 @@ class VoiceAcceptanceTests(unittest.TestCase):
         self.assertIn("start_utterance", command)
         self.assertIn("end_utterance", command)
         self.assertIn("recognized", command)
+        self.assertIn('kilix-stt" --models --json', command)
+        self.assertIn("install_and_default_argv", command)
         self.assertIn('KILIX_DATA_HOME="$d" PYTHONPATH=', command)
         self.assertNotIn("libvosk=skipped", command)
 
     def test_unknown_voice_policy_is_rejected(self):
         with self.assertRaises(ValueError):
             vm._voice_acceptance_command("yes")
+
+    def test_model_catalog_validation_is_versioned_and_fail_closed(self):
+        records = []
+        for model, engine, supported in (
+            ("small-en-us", "vosk", True),
+            ("lgraph-en-us", "vosk", True),
+            ("vibevoice-asr-bitnet", "vibevoice", False),
+        ):
+            records.append({
+                "id": model,
+                "engine": engine,
+                "runtime_supported": supported,
+                "download_bytes": 1,
+                "installed": False,
+                "selected": model == "small-en-us",
+                "install_and_default_argv": [
+                    "kilix", "stt", "--install", model, "--default", model,
+                ],
+            })
+        document = {
+            "schema": "kilix.speech.models/v1",
+            "default_model": "small-en-us",
+            "models": records,
+        }
+        script = vm._voice_model_catalog_validation_script()
+        accepted = subprocess.run(
+            [sys.executable, "-c", script],
+            input=json.dumps(document),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+        document["schema"] = "kilix.speech.models/v2"
+        refused = subprocess.run(
+            [sys.executable, "-c", script],
+            input=json.dumps(document),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("unknown speech-model catalog schema", refused.stderr)
 
     def test_dictation_acceptance_is_one_valid_fail_closed_shell_chain(self):
         command = vm._voice_acceptance_command("1")

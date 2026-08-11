@@ -800,17 +800,44 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             home = base / "home"
             binaries = home / ".local" / "bin"
             binaries.mkdir(parents=True)
+            catalog = (
+                '{"schema":"kilix.speech.models/v1",'
+                '"default_model":"small-en-us","models":['
+                '{"id":"small-en-us","engine":"vosk",'
+                '"runtime_supported":true,"download_bytes":41205931,'
+                '"installed":true,"selected":true,'
+                '"install_and_default_argv":["kilix","stt","--install",'
+                '"small-en-us","--default","small-en-us"]},'
+                '{"id":"lgraph-en-us","engine":"vosk",'
+                '"runtime_supported":true,"download_bytes":130557655,'
+                '"installed":false,"selected":false,'
+                '"install_and_default_argv":["kilix","stt","--install",'
+                '"lgraph-en-us","--default","lgraph-en-us"]},'
+                '{"id":"vibevoice-asr-bitnet","engine":"vibevoice",'
+                '"runtime_supported":false,"download_bytes":1705771590,'
+                '"installed":false,"selected":false,'
+                '"install_and_default_argv":["kilix","stt","--install",'
+                '"vibevoice-asr-bitnet","--default",'
+                '"vibevoice-asr-bitnet"]}]}'
+            )
             for tool in ("kilix-tts", "kilix-stt", "kilix-voiced"):
                 executable = binaries / tool
                 executable.write_text(
                     "#!/bin/sh\n"
                     "if [ \"${1:-}\" = --version ]; then\n"
-                    f"  printf '%s\\n' '{tool} 0.1.2'\n"
+                    f"  printf '%s\\n' '{tool} 0.1.3'\n"
                     "elif [ \"${1:-}\" = --print ]; then\n"
                     + (
                         "  printf '%s\\n' 'dictation=ready'\n"
                         if tool == "kilix-stt"
                         else "  printf '%s\\n' 'voice=ready'\n"
+                    )
+                    + (
+                        "elif [ \"${1:-}\" = --models ] "
+                        "&& [ \"${2:-}\" = --json ]; then\n"
+                        f"  printf '%s\\n' '{catalog}'\n"
+                        if tool == "kilix-stt"
+                        else ""
                     )
                     + "fi\n"
                 )
@@ -873,7 +900,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 / f"kilix-voice-{voice_ref}"
             )
             (voice_source / ".git").mkdir(parents=True)
-            (voice_source / "VERSION").write_text("0.1.2\n")
+            (voice_source / "VERSION").write_text("0.1.3\n")
             env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
             body = (
                 f"TARGET_USER={user.pw_name!r}\n"
@@ -885,7 +912,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 f"    printf '%s\\n' {voice_ref!r}; return 0\n"
                 "  fi\n"
                 "  if [ \"${1:-}\" = git ] && [ \"${4:-}\" = show ]; then\n"
-                "    printf '%s\\n' 0.1.2; return 0\n"
+                "    printf '%s\\n' 0.1.3; return 0\n"
                 "  fi\n"
                 "  \"$@\"\n"
                 "}\n"
