@@ -615,7 +615,10 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(valid.returncode, 0, valid.stderr)
-        self.assertIn("verify staged uv --version reports exactly uv 0.9.0", valid.stdout)
+        self.assertIn(
+            "verify staged uv --version reports pinned uv 0.9.0",
+            valid.stdout,
+        )
 
     def test_verified_kilix_build_requires_one_coherent_canonical_identity(self):
         with tempfile.TemporaryDirectory() as td:

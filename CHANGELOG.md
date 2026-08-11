@@ -42,6 +42,10 @@ upgrade run recorded in
   operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
+- Accept uv's current `uv VERSION (TARGET)` version output while still binding
+  both installation and release provenance to the exact 0.1.9 semantic pin.
+  The verified uv 0.12.3 binary now reaches `/usr/local/bin` instead of being
+  rejected after its checksum-verified installer succeeds.
 - Make firstboot and `sudo plebian-os-provision` transactional for the
   provisioner-owned OS/Pleb runtime and configuration files they replace. It
   snapshots branding,

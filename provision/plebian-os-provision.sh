@@ -373,6 +373,25 @@ EOF
 log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Modern uv binaries append their Rust target triple to `uv --version` (for
+# example, `uv 0.12.3 (x86_64-unknown-linux-gnu)`). Keep release provenance
+# bound to the exact semantic pin while accepting only that structured suffix.
+uv_version_matches_pin() {
+    local actual="$1" expected="$2" prefix target
+    [ -n "$actual" ] && [ -n "$expected" ] || return 1
+    [ "$actual" != "uv $expected" ] || return 0
+    prefix="uv $expected ("
+    case "$actual" in
+        "$prefix"*) target="${actual#"$prefix"}" ;;
+        *) return 1 ;;
+    esac
+    case "$target" in
+        *')') target="${target%)}" ;;
+        *) return 1 ;;
+    esac
+    [ -n "$target" ] && [[ "$target" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+}
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
 
 # ── the installed closure ────────────────────────────────────────────────────
@@ -2869,7 +2888,7 @@ write_source_tool_manifest() {
             || die "resolved kilix 95 commit $kilix95_commit does not match KILIX95_REF=$KILIX95_REF"
         validate_component_versions "$pleb_version" "$kilix_version" "$kilix95_version"
         if [ "$INSTALL_UV" = 1 ]; then
-            [ "$uv_version" = "uv $UV_VERSION_PIN" ] \
+            uv_version_matches_pin "$uv_version" "$UV_VERSION_PIN" \
                 || die "release uv provenance mismatch: expected 'uv $UV_VERSION_PIN', got '${uv_version:-<missing>}'"
         fi
     fi

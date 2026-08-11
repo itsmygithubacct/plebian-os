@@ -53,6 +53,26 @@ prepare_root_session_home() {
         || { warn "privileged staging directory must be root:root mode 0700"; return 1; }
 }
 
+# uv 0.12.3 adds its Rust target triple to `uv --version` while retaining the
+# pinned semantic version as the second field. Accept that documented shape,
+# but reject arbitrary suffix text so the release check still proves the exact
+# requested binary version.
+uv_version_matches_pin() {
+    local actual="$1" expected="$2" prefix target
+    [ -n "$actual" ] && [ -n "$expected" ] || return 1
+    [ "$actual" != "uv $expected" ] || return 0
+    prefix="uv $expected ("
+    case "$actual" in
+        "$prefix"*) target="${actual#"$prefix"}" ;;
+        *) return 1 ;;
+    esac
+    case "$target" in
+        *')') target="${target%)}" ;;
+        *) return 1 ;;
+    esac
+    [ -n "$target" ] && [[ "$target" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+}
+
 # "group label|space-separated packages" — grouped so a failure is easy to
 # locate. The base graphical stack + git/curl are usually already present from
 # the Debian install; re-listing them here keeps this a complete, self-standing
@@ -172,7 +192,7 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
         if [ -n "$uv_sha" ]; then echo "    + verify sha256=$uv_sha"
         else echo "    + (WARNING: PLEBIAN_OS_UV_INSTALLER_SHA256 unset — installer unverified)"; fi
         echo "    + UV_INSTALL_DIR=<staging> UV_NO_MODIFY_PATH=1 sh <tmp>"
-        echo "    + verify staged uv --version reports exactly uv $uv_ver, then install it into /usr/local/bin"
+        echo "    + verify staged uv --version reports pinned uv $uv_ver (optional target triple accepted), then install it into /usr/local/bin"
     else
         uv_tmp=""; uv_stage=""
         if [ "$uv_ok" = 1 ]; then
@@ -205,7 +225,7 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
         fi
         if [ "$uv_ok" = 1 ]; then
             uv_actual="$("$uv_stage/uv" --version 2>/dev/null || true)"
-            if [ -n "$uv_ver" ] && [ "$uv_actual" != "uv $uv_ver" ]; then
+            if [ -n "$uv_ver" ] && ! uv_version_matches_pin "$uv_actual" "$uv_ver"; then
                 warn "uv version verification failed (expected 'uv $uv_ver', got '${uv_actual:-<missing>}')"
                 uv_ok=0
             elif [ -z "$uv_actual" ]; then
@@ -219,7 +239,7 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
                 if [ "$uv_ok" = 1 ]; then
                     uv_actual="$(/usr/local/bin/uv --version 2>/dev/null || true)"
                     if [ -n "$uv_ver" ]; then
-                        [ "$uv_actual" = "uv $uv_ver" ] || uv_ok=0
+                        uv_version_matches_pin "$uv_actual" "$uv_ver" || uv_ok=0
                     else
                         [ -n "$uv_actual" ] || uv_ok=0
                     fi
