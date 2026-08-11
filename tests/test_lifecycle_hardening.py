@@ -234,7 +234,11 @@ work="$2"
 boundary="$3"
 previous_mode="$4"
 shift 4
+# The update helper sources an installed /etc/pleb/session.env. Override every
+# writable root this fixture exercises before sourcing it, so an installed
+# machine cannot redirect rollback into its real per-user data.
 export HOME="$work/home"
+export GPU_TERMINAL_HOME="$work/gpu-terminal"
 export PLEB_STATE_HOME="$work/state"
 export PLEB_DIR="$work/pleb"
 export PLEBIAN_OS_DIR="$work/os"
@@ -242,6 +246,7 @@ export KILIX_DIR="$work/kilix"
 export KILIX_STORAGE_HOME="$work/kilix-storage"
 export KILIX_STATE_DIRECTORY="$KILIX_STORAGE_HOME/state"
 export KILIX_BUILD_DIRECTORY="$KILIX_STORAGE_HOME/build"
+export KILIX_DATA_HOME="$KILIX_STORAGE_HOME/data"
 export KILIX_PREBUILT_HOME="$KILIX_STORAGE_HOME/prebuilt/kitty.app"
 export KILIX95_DIR="$work/kilix95"
 export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
@@ -269,6 +274,10 @@ printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 mkdir -p "$KILIX_STATE_DIRECTORY" \
     "$KILIX_BUILD_DIRECTORY/generations/build.OldCurrent" \
     "$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker"
+mkdir -p "$HOME/.local/bin" \
+    "$KILIX_DATA_HOME/voice/runtime/generations/runtime.Old/bin" \
+    "$KILIX_DATA_HOME/voice/lib/library.Old" \
+    "$KILIX_DATA_HOME/voice/models/model.Old"
 chmod 0700 "$KILIX_STORAGE_HOME" "$KILIX_STATE_DIRECTORY" \
     "$KILIX_BUILD_DIRECTORY"
 ln -s generations/build.OldCurrent "$KILIX_BUILD_DIRECTORY/current"
@@ -284,6 +293,18 @@ printf '%s\n' old-source >"$KILIX_BUILD_DIRECTORY/current/source-id"
 printf '%s\n' old-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
 printf '%s\n' old-broker \
     >"$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker/marker"
+for tool in kilix-tts kilix-stt kilix-voiced; do
+    printf 'old-%s\n' "$tool" \
+        >"$KILIX_DATA_HOME/voice/runtime/generations/runtime.Old/bin/$tool"
+    ln -s "$KILIX_DATA_HOME/voice/runtime/current/bin/$tool" \
+        "$HOME/.local/bin/$tool"
+done
+printf '%s\n' old-voice-stamp \
+    >"$KILIX_STATE_DIRECTORY/kilix-voice-install.refs"
+ln -s generations/runtime.Old \
+    "$KILIX_DATA_HOME/voice/runtime/current"
+ln -s library.Old "$KILIX_DATA_HOME/voice/lib/current"
+ln -s model.Old "$KILIX_DATA_HOME/voice/models/small-en-us"
 printf '%s\n' old-root >"$work/root-output"
 cp "$work/root-output" "$work/root-backup"
 git -C "$PLEB_DIR" rev-parse HEAD >"$work/old-head"
@@ -313,6 +334,13 @@ snapshot_kilix_engine_generation
 snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp
 snapshot_stack_path "$PLEB_STATE_HOME/kilix-fork-built-ref" legacy-fork-stamp
 snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
+snapshot_stack_path "$KILIX_VOICE_TTS_BIN" kilix-voice-tts-bin
+snapshot_stack_path "$KILIX_VOICE_STT_BIN" kilix-voice-stt-bin
+snapshot_stack_path "$KILIX_VOICE_DAEMON_BIN" kilix-voice-daemon-bin
+snapshot_stack_path "$KILIX_VOICE_RUNTIME_LINK" kilix-voice-runtime
+snapshot_stack_path "$KILIX_VOICE_STAMP" kilix-voice-stamp
+snapshot_stack_path "$KILIX_VOICE_LIBRARY_LINK" kilix-voice-library
+snapshot_stack_path "$KILIX_VOICE_MODEL_LINK" kilix-voice-model
 _STACK_ROOT_TXN_DIR=/var/lib/plebian-os/update-rollback.test
 _STACK_TXN_ACTIVE=1
 _STACK_TXN_COMMITTED=0
@@ -331,6 +359,19 @@ printf '%s\n' new-built-engine >"$KILIX_BUILD_DIRECTORY/current/engine"
 printf '%s\n' new-stamp >"$KILIX_STATE_DIRECTORY/fork-built-ref"
 printf '%s\n' new-broker \
     >"$KILIX_BUILD_DIRECTORY/libraries/kitty-pty-broker/marker"
+for tool in kilix-tts kilix-stt kilix-voiced; do
+    rm -f -- "$HOME/.local/bin/$tool"
+    printf 'new-%s\n' "$tool" >"$HOME/.local/bin/$tool"
+done
+printf '%s\n' new-voice-stamp \
+    >"$KILIX_STATE_DIRECTORY/kilix-voice-install.refs"
+mkdir -p "$KILIX_DATA_HOME/voice/runtime/generations/runtime.New" \
+    "$KILIX_DATA_HOME/voice/lib/library.New" \
+    "$KILIX_DATA_HOME/voice/models/model.New"
+ln -sfn generations/runtime.New \
+    "$KILIX_DATA_HOME/voice/runtime/current"
+ln -sfn library.New "$KILIX_DATA_HOME/voice/lib/current"
+ln -sfn model.New "$KILIX_DATA_HOME/voice/models/small-en-us"
 printf '%s\n' new-root >"$work/root-output"
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/presenter-source" third_party/kitty-frame-presenter >/dev/null
@@ -353,9 +394,11 @@ test_fail_after_boundary "$boundary"
 
     def _assert_injected_boundary_rollback(
             self, harness, td, boundary, previous_mode):
+        # A caller/session-provided data root must lose to the fixture's root.
         result = subprocess.run(
             ["bash", "-c", harness, "harness", str(UPDATE_PATH), td,
              boundary, previous_mode],
+            env={**os.environ, "KILIX_DATA_HOME": str(Path(td) / "ambient")},
             text=True,
             capture_output=True,
             check=False,
@@ -398,6 +441,28 @@ test_fail_after_boundary "$boundary"
             .read_text().strip(),
             "old-broker",
         )
+        voice_data = work / "kilix-storage" / "data" / "voice"
+        for name in ("kilix-tts", "kilix-stt", "kilix-voiced"):
+            self.assertEqual(
+                os.readlink(work / "home" / ".local" / "bin" / name),
+                str(voice_data / "runtime" / "current" / "bin" / name),
+            )
+            self.assertEqual(
+                (voice_data / "runtime" / "generations" / "runtime.Old" /
+                 "bin" / name).read_text().strip(),
+                f"old-{name}",
+            )
+        self.assertEqual(
+            (work / "kilix-storage" / "state" /
+             "kilix-voice-install.refs").read_text().strip(),
+            "old-voice-stamp",
+        )
+        for link, expected in (
+                (voice_data / "runtime" / "current",
+                 "generations/runtime.Old"),
+                (voice_data / "lib" / "current", "library.Old"),
+                (voice_data / "models" / "small-en-us", "model.Old")):
+            self.assertEqual(os.readlink(link), expected)
         self.assertEqual(
             (work / "kilix-storage" / "prebuilt" / "kitty.app" /
              "bin" / "kitty").read_text().strip(),
