@@ -38,9 +38,26 @@ LOCAL_BUILD_PREREQUISITE_PACKAGES = {
 # ncurses program from meeting an unknown terminal there.
 TERMINFO_PACKAGES = {"kitty-terminfo"}
 
-# Catalog-pinned PDF Conversion builds a hash-locked standard venv. The release
-# intentionally leaves uv disabled, so both install paths must provide this.
+# Catalog-pinned PDF Conversion builds a hash-locked standard venv independently
+# of uv. The 0.1.9 release also installs verified uv as system tooling, but both
+# package paths retain the converter's complete standard-Python runtime.
 PDF_RUNTIME_PREREQUISITE_PACKAGES = {"python3", "python3-venv"}
+
+# Browsers remain useful fallbacks, but the desktop release promises a native
+# PDF file handler with printing, forms, and annotation support.
+DEFAULT_PDF_VIEWER_PACKAGES = {"evince"}
+
+# Pleb preinstalls the catalog-pinned terminal viewer. These packages let its
+# native Poppler/Cairo core build during provisioning; the wrapper retains
+# Evince and CPU-rendering fallbacks if GPU presentation is unavailable.
+PDF_VIEWER_BUILD_PACKAGES = {
+    "build-essential",
+    "pkg-config",
+    "zlib1g-dev",
+    "libcairo2-dev",
+    "libglib2.0-dev",
+    "libpoppler-glib-dev",
+}
 
 
 def preseed_packages():
@@ -77,13 +94,25 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,
                              install_deps_packages())
 
-    def test_pdf_runtime_does_not_depend_on_optional_uv(self):
+    def test_pdf_runtime_remains_available_independently_of_uv(self):
         self.assertLessEqual(PDF_RUNTIME_PREREQUISITE_PACKAGES,
                              install_deps_packages())
         self.assertLessEqual(PDF_RUNTIME_PREREQUISITE_PACKAGES,
                              preseed_packages())
         install = (ROOT / "provision" / "install-deps.sh").read_text()
         self.assertIn("python3-venv runtimes remain available", install)
+
+    def test_default_pdf_viewer_is_installed_on_both_paths(self):
+        self.assertLessEqual(DEFAULT_PDF_VIEWER_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(DEFAULT_PDF_VIEWER_PACKAGES,
+                             preseed_packages())
+
+    def test_native_pdf_viewer_builds_on_both_paths(self):
+        self.assertLessEqual(PDF_VIEWER_BUILD_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(PDF_VIEWER_BUILD_PACKAGES,
+                             preseed_packages())
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())

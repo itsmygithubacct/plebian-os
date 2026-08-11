@@ -70,7 +70,8 @@ DEP_GROUPS=(
     "terminfo for the engine|kitty-terminfo"
     "fonts|fonts-jetbrains-mono fonts-noto-color-emoji"
     # PDF Conversion uses this standard-library venv support with a
-    # hash-locked pip install. It does not require the optional uv tool below.
+    # hash-locked pip install independently of uv. The coordinated 0.1.9
+    # release also installs its required, verified uv pin as system tooling.
     "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
     "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
     # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
@@ -88,6 +89,10 @@ DEP_GROUPS=(
     # covers music only. Video, and anything else a file manager or desktop
     # link hands off, needs a player that is present on a fresh install.
     "media + nested-X auth + X dialogs|ffmpeg mpv xauth zenity"
+    # Browsers can render a PDF, but a desktop install still needs a dedicated
+    # local-document handler for file associations, printing, forms, and
+    # annotations. Evince is the GTK viewer shipped by the image from 0.1.9.
+    "documents|evince"
     "session-log archiving|zstd"
     # firefox-esr and chromium are the graphical browsers. The text browser
     # (Chawan, via `kilix chawan`) is built from source on first use rather
@@ -101,7 +106,7 @@ DEP_GROUPS=(
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     "disk management|gparted"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
-    "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
+    "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
     # ripgrep is what the coding agents reach for to search a tree. None of
     # the three bundles a copy, so without it here they fall back to
     # something slower or search nothing at all.
@@ -137,8 +142,9 @@ done
 
 # uv is useful system tooling but is not a runtime prerequisite for Kilix's
 # Python apps: their release installers use Debian's python3-venv and locked
-# dependencies. Release images can opt in with an immutable version + installer
-# checksum; unpinned local images retain the conservative opt-in default.
+# dependencies. Uncoordinated local builds retain a conservative opt-in
+# default; the 0.1.9 release policy requires an immutable version and installer
+# checksum and the release loader rejects any different setting.
 if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     # Pin the uv version via the versioned installer URL, download to a file (not
     # a pipe), and verify its sha256 before executing it as root. Set

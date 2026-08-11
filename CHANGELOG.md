@@ -7,6 +7,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 ## [Unreleased] — 0.1.9 work
 
 ### Added
+- Evince as the image's dedicated PDF viewer. Fresh installs through either the
+  Debian Installer preseed or the standalone provisioner now include the same
+  native handler for PDF file associations, printing, forms, and annotations.
+- Poppler GLib and GLib development files on both install paths, allowing
+  `pleb install` to build Kilix's catalog-pinned terminal PDF viewer during
+  provisioning. Poppler/Cairo remains its complete CPU raster path when GPU
+  presentation is absent, with Evince retained as the application fallback.
+- Require the exact checksum-verified `uv` 0.12.3 installer in the 0.1.9
+  release manifest. Release loading rejects disabling or changing that policy,
+  and provisioning verifies the installed binary before accepting the image.
 - Install `plebian-os-select-closure` on PATH for fresh systems, standalone
   provisioning, and transactional self-update. It is the twelfth hash-bound OS
   layer payload and participates in both the inner deployment rollback and the

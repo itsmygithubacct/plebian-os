@@ -98,7 +98,8 @@ https://github.com/user-attachments/assets/4c3f0796-6023-41ad-975e-853ade4125af
    [`provision/plebian-os-provision.sh`](provision/plebian-os-provision.sh) once,
    after the network is up. It:
    - apt-installs the runtime deps (Xorg, LightDM, GL, fonts, tmux,
-     NetworkManager's `nmtui`, and the `pulsemixer` volume control);
+     NetworkManager's `nmtui`, the `pulsemixer` volume control, the Evince PDF
+     viewer, and the Poppler/GLib/Cairo headers for Kilix's native PDF viewer);
    - creates the shared source root `~/.local/gpu_terminal/sources`, clones/pins the
      Plebian-OS source at `~/.local/gpu_terminal/sources/plebian-os`, and clones `pleb` beside
      it at `~/.local/gpu_terminal/sources/pleb`;
@@ -137,7 +138,8 @@ https://github.com/user-attachments/assets/4c3f0796-6023-41ad-975e-853ade4125af
    and pane chrome visible. Log out to return to
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
-**GUI apps** — ordinary graphical commands (`chromium`, `firefox-esr`, …) are
+**GUI apps** — ordinary graphical commands (`chromium`, `firefox-esr`,
+`evince`, …) are
 routed through `kilix run`, so their windows remain controlled inside Kilix
 tabs and panes. The session still runs a deliberately bare **Openbox** safety
 net underneath Kilix — one desktop, no panel, no root menu, no launcher keys —
@@ -491,8 +493,9 @@ Go version/architecture checksums before building. Simpler: set
 firstboot resolution. Snapshot switching inventories and transactionally
 restores only the sources Plebian-OS disabled, preserving operator-owned files.
 Enabled release-mode `uv` installs require exact version/checksum pins and are
-verified after installation. Installed package/source/tool manifests make the
-resolved result auditable.
+verified after installation. The 0.1.9 policy requires `uv` 0.12.3 and rejects
+a final manifest that disables it or changes its verified installer checksum.
+Installed package/source/tool manifests make the resolved result auditable.
 
 ## License
 
