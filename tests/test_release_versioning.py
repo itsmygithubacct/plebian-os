@@ -33,6 +33,18 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertRegex((ROOT / "VERSION").read_text().strip(), r"^\d+\.\d+\.\d+$")
         self.assertIn(f"## [{self.version}]", _read("CHANGELOG.md"))
 
+    def test_0_1_9_release_notes_document_the_upgrade_path(self):
+        notes_path = ROOT / "releases" / "0.1.9-notes.md"
+        self.assertTrue(notes_path.is_file())
+        notes = notes_path.read_text()
+        self.assertIn("Supported upgrade source: **0.1.8**", notes)
+        self.assertIn("No direct skip from an earlier release is supported", notes)
+        self.assertIn(
+            'plebian-os-select-closure.sh" 0.1.9 --dry-run', notes)
+        self.assertIn('plebian-os-select-closure.sh" 0.1.9', notes)
+        self.assertIn("plebian-os-update --restart", notes)
+        self.assertIn("### Upgrade acceptance result", notes)
+
     def test_release_manifest_pins_refs(self):
         m = self.manifest
         self.assertIn("PLEBIAN_OS_RELEASE_MODE=1", m)

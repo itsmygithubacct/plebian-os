@@ -6,6 +6,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased] — 0.1.9 work
 
+Prepared 2026-08-11; not published. Supported upgrade source: **0.1.8**, the
+immediately previous coordinated release. No direct skip from an earlier
+release is supported. Publication remains blocked on the final four-component
+closure, strict ISO and fresh-install acceptance, and the six-gate preserving
+upgrade run recorded in
+[`releases/0.1.9-notes.md`](releases/0.1.9-notes.md).
+
 ### Added
 - Evince as the image's dedicated PDF viewer. Fresh installs through either the
   Debian Installer preseed or the standalone provisioner now include the same
@@ -52,10 +59,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   downgrades and divergent histories are now reported independently of the
   coordinated release version; `--offline` refuses when that proof is absent.
 
-## [0.1.8] — 2026-08-07
+## [0.1.8] — 2026-08-09
 
-Prepared 2026-08-07; nothing is published for 0.1.8 yet — see
-[`releases/0.1.8-notes.md`](releases/0.1.8-notes.md) for publication status.
+Prepared 2026-08-07 and published 2026-08-09 — see
+[`releases/0.1.8-notes.md`](releases/0.1.8-notes.md) and the
+[public release](https://github.com/itsmygithubacct/plebian-os/releases/tag/v0.1.8)
+for its acceptance record and checksummed artifacts.
 Supported upgrade source: **0.1.7**, the immediately previous published
 release. The upgrade acceptance required by [UPGRADING.md](UPGRADING.md) has
 passed against the closure this release ships: all six gates, in order, on
