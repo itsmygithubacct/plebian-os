@@ -140,6 +140,7 @@ seed_desktop_wallpaper_state "$DESKTOP_DIR" "$WALLPAPER"
         os_dir: Path | None = None,
         repo: str = "https://github.com/itsmygithubacct/plebian-os.git",
         os_ref: str = "",
+        wallpaper_dst: Path | None = None,
         check: bool = True,
     ):
         script = r'''
@@ -154,6 +155,7 @@ USER_HOME="$TEST_HOME"
 PLEBIAN_OS_DIR="$TEST_OS_DIR"
 PLEBIAN_OS_REPO="$TEST_OS_REPO"
 PLEBIAN_OS_REF="$TEST_OS_REF"
+[ -z "$TEST_WALLPAPER_DST" ] || DESKTOP_WALLPAPER_DST="$TEST_WALLPAPER_DST"
 DRY_RUN=1
 install_desktop_wallpaper
 '''
@@ -168,6 +170,7 @@ install_desktop_wallpaper
                 "TEST_OS_DIR": str(os_dir or ""),
                 "TEST_OS_REPO": repo,
                 "TEST_OS_REF": os_ref,
+                "TEST_WALLPAPER_DST": str(wallpaper_dst or ""),
             },
             text=True,
             capture_output=True,
@@ -306,6 +309,11 @@ fi
             checkout = home / "plebian-os"
             asset = checkout / "assets" / "desktop" / "plebian-os.png"
             deployed = root / "deployed"
+            # The migration bridge is reachable only when no installed asset
+            # exists. Point this library-mode run at an absent fixture path so
+            # a developer machine or installed Plebian-OS VM cannot answer
+            # with its real /usr/local wallpaper first.
+            wallpaper_dst = root / "not-installed" / "plebian-os.png"
             asset.parent.mkdir(parents=True)
             deployed.mkdir()
             shutil.copyfile(ASSET, asset)
@@ -322,7 +330,11 @@ fi
             subprocess.run(["git", "-C", checkout, "commit", "-q", "-m", "asset"], check=True)
 
             result = self.run_install_dry(
-                deployed, home=home, os_dir=checkout, repo=repo
+                deployed,
+                home=home,
+                os_dir=checkout,
+                repo=repo,
+                wallpaper_dst=wallpaper_dst,
             )
             self.assertIn(str(asset), result.stdout)
             self.assertIn("atomic replace", result.stdout)
@@ -337,13 +349,23 @@ fi
                 f"{head}\t\ttag '{pinned}' of {repo}\n"
             )
             tagged = self.run_install_dry(
-                deployed, home=home, os_dir=checkout, repo=repo, os_ref=pinned
+                deployed,
+                home=home,
+                os_dir=checkout,
+                repo=repo,
+                os_ref=pinned,
+                wallpaper_dst=wallpaper_dst,
             )
             self.assertIn("atomic replace", tagged.stdout)
 
             (checkout / "VERSION").write_text("dirty\n")
             refused = self.run_install_dry(
-                deployed, home=home, os_dir=checkout, repo=repo, check=False
+                deployed,
+                home=home,
+                os_dir=checkout,
+                repo=repo,
+                wallpaper_dst=wallpaper_dst,
+                check=False,
             )
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn("local changes", refused.stderr)
