@@ -44,6 +44,9 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn('plebian-os-select-closure.sh" 0.1.9', notes)
         self.assertIn("plebian-os-update --restart", notes)
         self.assertIn("### Upgrade acceptance result", notes)
+        releasing = _read("RELEASING.md")
+        self.assertIn("last published coordinated release is **0.1.8**", releasing)
+        self.assertIn("next one is **0.1.9**", releasing)
 
     def test_release_manifest_pins_refs(self):
         m = self.manifest

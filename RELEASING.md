@@ -23,7 +23,7 @@ build provenance. Release artifacts with SSH enabled remain forbidden.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The last published coordinated release is **0.1.2**. The next one is **0.1.7**;
+The last published coordinated release is **0.1.8**. The next one is **0.1.9**;
 its closure is finalized only after the four final component commits are known.
 0.1.7 is the fresh-install upgrade baseline: no pre-0.1.7 in-place path is
 supported. Every release after it must pass the adjacent published-release
@@ -82,10 +82,10 @@ was published. Further flash-safety and acceptance fixes changed the intended
 source before publication, so that candidate was retired and its work moved to
 0.1.7 instead of moving or publishing a stale tag.
 
-The next coordinated release is 0.1.7. The candidate 0.1.6 closure is retired
-when the final 0.1.7 closure is assembled; no closure is back-filled for 0.1.3,
-0.1.4, or 0.1.5. `releases/<x.y.z>.env` is the reproducible input manifest for
-an image that was actually built and accepted, not a changelog.
+0.1.7 subsequently retired the candidate 0.1.6 closure and became the published
+fresh-install baseline; no closure was back-filled for 0.1.3, 0.1.4, or 0.1.5.
+`releases/<x.y.z>.env` is the reproducible input manifest for an image that was
+actually built and accepted, not a changelog.
 
 The lesson each of the four teaches is the same one: a version number is
 spent the moment it appears in a `VERSION` file or a heading, whether or not
