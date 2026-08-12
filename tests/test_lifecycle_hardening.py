@@ -202,6 +202,60 @@ class UpdateLifecycleTests(unittest.TestCase):
         self.assertLess(UPDATE.index("commit_stack_transaction\n"),
                         UPDATE.index('log "Plebian-OS stack updated."'))
 
+    def test_closed_output_pipe_runs_outer_rollback_to_completion(self):
+        """A lost SSH/output pipe is a failure boundary, not an untrapped kill."""
+        harness = r'''
+set -euo pipefail
+script="$1"
+work="$2"
+export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
+set --
+. "$script"
+rollback_stack_transaction() {
+    printf '%s\n' rolled-back >"$work/rollback-marker"
+}
+remove_root_stack_snapshot() { :; }
+release_kilix_transaction_lock() { :; }
+_OS_LAYER_STAGE=""
+_STACK_TXN_DIR="$(mktemp -d "$work/stack-rollback.XXXXXX")"
+_STACK_ROOT_TXN_DIR=""
+_STACK_TXN_ACTIVE=1
+_STACK_TXN_COMMITTED=0
+_STACK_TXN_RETAIN=0
+trap stack_transaction_cleanup EXIT
+trap 'exit 141' PIPE
+printf 'READY\n'
+read -r _
+printf 'closed-pipe-trigger\n'
+printf 'UNREACHABLE\n'
+'''
+        with tempfile.TemporaryDirectory() as td:
+            process = subprocess.Popen(
+                ["bash", "-c", harness, "harness", str(UPDATE_PATH), td],
+                text=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            try:
+                self.assertEqual(process.stdout.readline(), "READY\n")
+                process.stdout.close()
+                process.stdin.write("continue\n")
+                process.stdin.close()
+                returncode = process.wait(timeout=30)
+                stderr = process.stderr.read()
+                process.stderr.close()
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=30)
+            self.assertEqual(returncode, 141, stderr)
+            self.assertEqual(
+                (Path(td) / "rollback-marker").read_text().strip(),
+                "rolled-back",
+            )
+            self.assertEqual(list(Path(td).glob("stack-rollback.*")), [])
+
     def test_outer_transaction_rejects_multiply_linked_canonical_stamp(self):
         with tempfile.TemporaryDirectory() as td:
             state = Path(td) / "kilix" / "state"

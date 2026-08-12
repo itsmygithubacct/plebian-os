@@ -40,8 +40,17 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("Supported upgrade source: **0.1.8**", notes)
         self.assertIn("No direct skip from an earlier release is supported", notes)
         self.assertIn(
-            'plebian-os-select-closure.sh" 0.1.9 --dry-run', notes)
-        self.assertIn('plebian-os-select-closure.sh" 0.1.9', notes)
+            "fetch --force origin 'refs/tags/v0.1.9:refs/tags/v0.1.9'",
+            notes,
+        )
+        self.assertIn(
+            'show v0.1.9:provision/plebian-os-select-closure.sh >"$SEL"',
+            notes,
+        )
+        self.assertIn('bash "$SEL" 0.1.9 --source "$SRC" --dry-run', notes)
+        self.assertIn('bash "$SEL" 0.1.9 --source "$SRC"', notes)
+        self.assertNotIn(
+            '"$SRC/provision/plebian-os-select-closure.sh" 0.1.9', notes)
         self.assertIn("plebian-os-update --restart", notes)
         self.assertIn("### Upgrade acceptance result", notes)
         self.assertIn("kilix.speech.models/v1", notes)

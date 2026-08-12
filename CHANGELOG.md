@@ -42,6 +42,14 @@ upgrade run recorded in
   operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
+- Treat a closed terminal or SSH output pipe as an updater transaction failure.
+  SIGPIPE is converted into a normal failing exit while the transaction is
+  active, so the EXIT handler restores the OS/Pleb layer, checkout positions,
+  engine generation, and install outputs instead of leaving a partial stack.
+- Require every upgrade hop to execute the selector extracted from its target
+  release tag. An installed older selector may not understand new manifest
+  requirements; in particular, 0.1.8 predates 0.1.9's uv-pin and component-
+  ancestry checks.
 - Accept uv's current `uv VERSION (TARGET)` version output while still binding
   both installation and release provenance to the exact 0.1.9 semantic pin.
   The verified uv 0.12.3 binary now reaches `/usr/local/bin` instead of being

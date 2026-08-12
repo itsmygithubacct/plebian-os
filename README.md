@@ -164,8 +164,8 @@ by `PLEBIAN_OS_REF` and disablable with
 `PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
 `KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, the update helper keeps using
 those exact refs instead of drifting to branch heads. Moving an installed machine
-to another release is therefore a separate, deliberate step: the target release's
-`plebian-os-select-closure <x.y.z>` validates that release's complete closure,
+to another release is therefore a separate, deliberate step: the selector
+extracted from the target release's immutable tag validates that release's complete closure,
 fetches every exact target component commit, reports each component's ancestry
 direction, and selects every release-controlled pin at once while leaving
 operator choices alone. It runs **before** `plebian-os-update --restart` — see

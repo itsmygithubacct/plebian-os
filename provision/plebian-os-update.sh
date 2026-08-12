@@ -1284,7 +1284,13 @@ rollback_stack_transaction() {
 
 stack_transaction_cleanup() {
     local rc=$? rollback_ok=1
-    trap - EXIT INT TERM HUP
+    # A disconnected terminal or SSH client closes the update's output pipe.
+    # Bash does not run EXIT traps when the default SIGPIPE action kills it, so
+    # convert that signal into a normal exit while the transaction is active.
+    # Once cleanup starts, ignore further SIGPIPE: its own diagnostic writes
+    # may target the same closed descriptor, but rollback must keep running.
+    trap - EXIT INT TERM HUP PIPE
+    trap '' PIPE
     set +e
     [ -z "${_OS_LAYER_STAGE:-}" ] || rm -rf -- "$_OS_LAYER_STAGE"
     if [ "${_STACK_TXN_ACTIVE:-0}" = 1 ] \
@@ -1319,6 +1325,7 @@ begin_stack_transaction() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     trap 'exit 129' HUP
+    trap 'exit 141' PIPE
 
     record_stack_checkout "$PLEB_DIR" pleb pleb
     case "$PLEBIAN_OS_SELF_UPDATE" in
@@ -1371,7 +1378,7 @@ commit_stack_transaction() {
     fi
     rm -rf -- "$_STACK_TXN_DIR"
     _STACK_TXN_DIR=""
-    trap - EXIT INT TERM HUP
+    trap - EXIT INT TERM HUP PIPE
     release_kilix_transaction_lock
 }
 
@@ -1821,7 +1828,8 @@ cleanup_transaction_files() {
 rollback() {
     local rc=$? i rollback_ok=1
     [ "$rc" -ne 0 ] || rc=1
-    trap - ERR INT TERM HUP
+    trap - ERR INT TERM HUP PIPE
+    trap '' PIPE
     set +e
     for ((i=${#dests[@]}-1; i>=0; i--)); do
         [ "${changed[$i]:-0}" = 1 ] || continue
@@ -1846,7 +1854,7 @@ rollback() {
     fi
     exit "$rc"
 }
-trap rollback ERR INT TERM HUP
+trap rollback ERR INT TERM HUP PIPE
 
 # Distribution assets live below fixed root-owned directories. Reject any
 # symlink or user-writable fixed ancestor before root stages bytes beneath it.
@@ -2047,7 +2055,7 @@ for i in "${!dests[@]}"; do
     new_paths[$i]=""
 done
 systemctl daemon-reload
-trap - ERR INT TERM HUP
+trap - ERR INT TERM HUP PIPE
 cleanup_transaction_files
 ROOT_DEPLOY
 }

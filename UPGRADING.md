@@ -124,25 +124,17 @@ git -C "$SRC" show v0.1.8:provision/plebian-os-select-closure.sh >"$SEL"
 bash "$SEL" 0.1.8
 ```
 
-Substitute the target version throughout. On a machine already running 0.1.8,
-the selector is present in that checkout, so the 0.1.8 → 0.1.9 hop is one
-command with no `git show` bootstrap:
-
-```sh
-~/.local/gpu_terminal/sources/plebian-os/provision/plebian-os-select-closure.sh 0.1.9
-```
+Substitute the target version throughout, including the fetch and `git show`.
+Always execute the selector extracted from the **target** tag. The installed
+release's copy may not know validation rules introduced by a newer manifest;
+for example, 0.1.8's selector predates 0.1.9's exact uv pins and per-component
+ancestry proof.
 
 Beginning with 0.1.9, the selector is also the twelfth payload in the validated,
 rollback-safe OS layer and is installed as `/usr/local/bin/plebian-os-select-closure`.
-Once that release is installed, subsequent adjacent hops use the PATH command:
-
-```sh
-plebian-os-select-closure 0.1.10
-```
-
-The selector still reads the target manifest from the target's published tag;
-putting the program on PATH does not make the installed release's working tree
-or manifest authoritative for the release being selected.
+That installed copy provides `--show`, `--rollback`, and same-release
+reselection. It is not a substitute for extracting a later target release's
+own selector from that target's immutable tag.
 
 It validates the whole closure before it writes anything: a manifest which is
 incomplete, malformed, still holds a placeholder, pins a branch instead of a
@@ -163,7 +155,7 @@ Useful before and after — `SEL` being whichever copy of the selector the block
 above put in your hands:
 
 ```sh
-bash "$SEL" 0.1.8 --dry-run   # validate and report, write nothing
+bash "$SEL" 0.1.8 --dry-run   # substitute the target version
 bash "$SEL" --show            # the closure this machine has now
 bash "$SEL" --rollback        # put the previous closure back
 ```
