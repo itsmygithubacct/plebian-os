@@ -4,12 +4,12 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [Unreleased] — 0.1.9 work
+## [0.1.9] — 2026-08-12
 
-Prepared 2026-08-11; not published. Supported upgrade source: **0.1.8**, the
+Prepared 2026-08-12; publication pending acceptance. Supported upgrade source: **0.1.8**, the
 immediately previous coordinated release. No direct skip from an earlier
 release is supported. Publication remains blocked on the final four-component
-closure, strict ISO and fresh-install acceptance, and the six-gate preserving
+closure's strict ISO and fresh-install acceptance, and the six-gate preserving
 upgrade run recorded in
 [`releases/0.1.9-notes.md`](releases/0.1.9-notes.md).
 
