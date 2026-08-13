@@ -13,6 +13,11 @@ closure's strict ISO and fresh-install acceptance, and the six-gate preserving
 upgrade run recorded in
 [`releases/0.1.9-notes.md`](releases/0.1.9-notes.md).
 
+- Brand every BIOS installer-menu level with the exact release version,
+  including the top-level Advanced and accessible-dark menus and the nested
+  dark Advanced menu. The remaster now fails closed if Debian's expected
+  submenu-title set drifts, matching the strict-media operator gate.
+
 ### Added
 - Make Kilix Voice's model registry a shared, versioned control-plane contract.
   `kilix-stt --models --json` reports the complete local catalog,

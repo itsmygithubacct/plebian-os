@@ -41,6 +41,8 @@ THEME_NAMES = frozenset(
 )
 
 BIOS_TITLE = b"menu title \x07Debian GNU/Linux installer menu (BIOS mode)"
+BIOS_ADVANCED_TITLE = b"menu title Advanced options"
+BIOS_DARK_TITLE = b"menu title Accessible dark contrast option"
 UEFI_TITLE = b'title-text: "Debian GNU/Linux 13.5.0"'
 UEFI_HEADING = b'text = "Debian GNU/Linux UEFI Installer menu"'
 
@@ -293,7 +295,21 @@ def brand_boot_text(root: Path | str, version: str) -> None:
                     + version_b
                     + b" installer menu (BIOS mode)",
                     1,
-                )
+                ),
+                (
+                    BIOS_ADVANCED_TITLE,
+                    b"menu title Plebian-OS "
+                    + version_b
+                    + b" advanced installer options",
+                    2,
+                ),
+                (
+                    BIOS_DARK_TITLE,
+                    b"menu title Plebian-OS "
+                    + version_b
+                    + b" accessible dark contrast installer menu",
+                    1,
+                ),
             ],
         ),
         _prepare_document_replacement(

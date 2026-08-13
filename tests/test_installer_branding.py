@@ -103,7 +103,13 @@ def write_text_fixture(root):
     menu.write_bytes(
         b"include stdmenu.cfg\n"
         + brand_installer.BIOS_TITLE
-        + b"\nlabel install\n"
+        + b"\nmenu begin advanced\n    "
+        + brand_installer.BIOS_ADVANCED_TITLE
+        + b"\nmenu end\nmenu begin dark\n    "
+        + brand_installer.BIOS_DARK_TITLE
+        + b"\n    menu begin advanced\n        "
+        + brand_installer.BIOS_ADVANCED_TITLE
+        + b"\n    menu end\nmenu end\nlabel install\n"
     )
 
     theme_root = root / "boot" / "grub" / "theme"
@@ -390,6 +396,19 @@ class TextBrandingTests(unittest.TestCase):
                 menu_bytes,
             )
             self.assertNotIn(brand_installer.BIOS_TITLE, menu_bytes)
+            self.assertEqual(
+                menu_bytes.count(
+                    b"menu title Plebian-OS 9.8.7 advanced installer options"
+                ),
+                2,
+            )
+            self.assertIn(
+                b"menu title Plebian-OS 9.8.7 accessible dark contrast "
+                b"installer menu",
+                menu_bytes,
+            )
+            self.assertNotIn(brand_installer.BIOS_ADVANCED_TITLE, menu_bytes)
+            self.assertNotIn(brand_installer.BIOS_DARK_TITLE, menu_bytes)
             self.assertEqual(menu_bytes.count(b"\x07"), 1)
 
             readme_text = (root / "README.txt").read_bytes()
@@ -468,6 +487,16 @@ class TextBrandingTests(unittest.TestCase):
         def duplicate_bios(root, menu, theme_root):
             menu.write_bytes(menu.read_bytes() + brand_installer.BIOS_TITLE)
 
+        def missing_bios_advanced(root, menu, theme_root):
+            menu.write_bytes(
+                menu.read_bytes().replace(
+                    brand_installer.BIOS_ADVANCED_TITLE, b"upstream drift", 1
+                )
+            )
+
+        def duplicate_bios_dark(root, menu, theme_root):
+            menu.write_bytes(menu.read_bytes() + brand_installer.BIOS_DARK_TITLE)
+
         def missing_theme_title(root, menu, theme_root):
             path = theme_root / "dark-1-2"
             path.write_bytes(path.read_bytes().replace(brand_installer.UEFI_TITLE, b""))
@@ -493,6 +522,8 @@ class TextBrandingTests(unittest.TestCase):
         cases = {
             "missing BIOS title": missing_bios,
             "duplicate BIOS title": duplicate_bios,
+            "missing BIOS advanced title": missing_bios_advanced,
+            "duplicate BIOS dark title": duplicate_bios_dark,
             "missing UEFI title": missing_theme_title,
             "duplicate UEFI heading": duplicate_theme_heading,
             "missing theme": missing_theme,
