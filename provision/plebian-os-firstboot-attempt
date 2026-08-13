@@ -6,8 +6,17 @@ set -eu
 state_dir="${PLEBIAN_OS_STATE_DIR:-/var/lib/plebian-os}"
 attempt_file="$state_dir/firstboot-attempts"
 max="${PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS:-3}"
+attempt_timeout="${PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT:-3600}"
+retry_delay="${PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY:-60}"
+temporary_sudoers="${PLEBIAN_OS_TEMP_SUDOERS:-/etc/sudoers.d/plebian-os-provision}"
 
 case "$max" in ''|*[!0-9]*|0) echo "invalid firstboot attempt limit: $max" >&2; exit 2 ;; esac
+case "$attempt_timeout" in ''|*[!0-9]*|0) echo "invalid firstboot attempt timeout: $attempt_timeout" >&2; exit 2 ;; esac
+case "$retry_delay" in *[!0-9]*|'') echo "invalid firstboot retry delay: $retry_delay" >&2; exit 2 ;; esac
+case "$temporary_sudoers" in
+    /*) ;;
+    *) echo "temporary sudoers path must be absolute: $temporary_sudoers" >&2; exit 2 ;;
+esac
 
 read_attempts() {
     n=0
@@ -44,8 +53,45 @@ case "${1:-}" in
     success)
         rm -f "$attempt_file"
         ;;
+    run)
+        shift
+        [ "$#" -gt 0 ] || {
+            echo "usage: $0 run COMMAND [ARG ...]" >&2
+            exit 2
+        }
+        command -v timeout >/dev/null 2>&1 || {
+            echo "firstboot retry runner requires timeout" >&2
+            exit 2
+        }
+        while :; do
+            read_attempts || exit 1
+            if [ "$n" -ge "$max" ]; then
+                echo "firstboot provisioning exhausted $n/$max attempts; remove $attempt_file after fixing the cause" >&2
+                exit 1
+            fi
+
+            "$0" begin
+            rm -f "$temporary_sudoers"
+            echo "firstboot provisioning command has ${attempt_timeout}s to complete" >&2
+            if timeout --signal=TERM --kill-after=30s \
+                    "${attempt_timeout}s" "$@"; then
+                exit 0
+            else
+                status=$?
+            fi
+            rm -f "$temporary_sudoers"
+
+            read_attempts || exit 1
+            if [ "$n" -ge "$max" ]; then
+                echo "firstboot provisioning exhausted $n/$max attempts (last exit $status)" >&2
+                exit "$status"
+            fi
+            echo "firstboot provisioning attempt $n/$max failed (exit $status); retrying in ${retry_delay}s" >&2
+            sleep "$retry_delay"
+        done
+        ;;
     *)
-        echo "usage: $0 check|begin|success" >&2
+        echo "usage: $0 check|begin|success|run COMMAND [ARG ...]" >&2
         exit 2
         ;;
 esac

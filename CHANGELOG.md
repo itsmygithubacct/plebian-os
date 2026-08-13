@@ -53,6 +53,11 @@ upgrade run recorded in
   operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
+- Keep LightDM ordered behind the complete bounded first-boot retry sequence.
+  A one-hour provisioning timeout no longer releases the greeter between
+  attempts, where it could cache Debian's fallback session before Pleb is
+  installed; all three attempts now run inside one continuously activating
+  service and the greeter appears only after success or final exhaustion.
 - Make the documented first 0.1.8-to-0.1.9 hop install the closure selector and
   target updater it needs. The two exact tagged tools and session closure now
   move as one recovery unit; an interrupted selection or explicit `--rollback`

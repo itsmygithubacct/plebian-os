@@ -681,13 +681,20 @@ test_fail_after_boundary "$boundary"
 
 
 class FirstbootBoundTests(unittest.TestCase):
-    def test_timeout_attempts_fit_inside_start_limit_window(self):
-        self.assertIn("StartLimitIntervalSec=4h", FIRSTBOOT)
-        self.assertIn("StartLimitBurst=3", FIRSTBOOT)
-        self.assertIn("RestartSec=60s", FIRSTBOOT)
-        self.assertIn("TimeoutStartSec=3600", FIRSTBOOT)
+    def test_timeout_attempts_fit_inside_one_ordered_start_job(self):
+        self.assertIn("TimeoutStartSec=4h", FIRSTBOOT)
+        self.assertNotIn("Restart=", FIRSTBOOT)
+        self.assertIn(
+            "ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run "
+            "/usr/local/sbin/plebian-os-provision",
+            FIRSTBOOT,
+        )
+        runner = ATTEMPT.read_text()
+        self.assertIn("PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT:-3600", runner)
+        self.assertIn("PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY:-60", runner)
+        self.assertIn("timeout --signal=TERM --kill-after=30s", runner)
         # Three maximum-length attempts plus the two intervening delays remain
-        # inside the four-hour start-limit window, so a fourth cannot escape it.
+        # inside the four-hour outer service timeout.
         self.assertGreater(4 * 3600, 3 * 3600 + 2 * 60)
         self.assertIn("ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision",
                       FIRSTBOOT)
@@ -698,6 +705,76 @@ class FirstbootBoundTests(unittest.TestCase):
         clear = FIRSTBOOT.index(
             "ExecStartPost=/usr/local/sbin/plebian-os-firstboot-attempt success")
         self.assertLess(marker, clear, "attempt state must not clear before the success marker")
+
+    def test_retry_runner_stays_in_one_invocation_until_success(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            counter = root / "counter"
+            command = root / "eventual-success"
+            command.write_text(
+                "#!/bin/sh\n"
+                "n=$(cat \"$1\" 2>/dev/null || echo 0)\n"
+                "n=$((n + 1))\n"
+                "printf '%s\\n' \"$n\" >\"$1\"\n"
+                "test \"$n\" -ge 3\n"
+            )
+            command.chmod(0o755)
+            env = {
+                **os.environ,
+                "PLEBIAN_OS_STATE_DIR": str(root / "state"),
+                "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "3",
+                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
+                "PLEBIAN_OS_TEMP_SUDOERS": str(root / "temporary-sudoers"),
+            }
+            result = subprocess.run(
+                ["sh", str(ATTEMPT), "run", str(command), str(counter)],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(counter.read_text().strip(), "3")
+            self.assertEqual(
+                (root / "state" / "firstboot-attempts").read_text().strip(),
+                "3",
+            )
+
+    def test_retry_runner_stops_at_the_bound_and_cleans_temporary_sudoers(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            counter = root / "counter"
+            temporary_sudoers = root / "temporary-sudoers"
+            command = root / "always-fails"
+            command.write_text(
+                "#!/bin/sh\n"
+                "n=$(cat \"$1\" 2>/dev/null || echo 0)\n"
+                "printf '%s\\n' \"$((n + 1))\" >\"$1\"\n"
+                "printf 'temporary grant\\n' >\"$2\"\n"
+                "exit 9\n"
+            )
+            command.chmod(0o755)
+            env = {
+                **os.environ,
+                "PLEBIAN_OS_STATE_DIR": str(root / "state"),
+                "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "3",
+                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
+                "PLEBIAN_OS_TEMP_SUDOERS": str(temporary_sudoers),
+            }
+            result = subprocess.run(
+                [
+                    "sh", str(ATTEMPT), "run", str(command), str(counter),
+                    str(temporary_sudoers),
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 9, result.stderr)
+            self.assertEqual(counter.read_text().strip(), "3")
+            self.assertFalse(temporary_sudoers.exists())
+            self.assertIn("exhausted 3/3", result.stderr)
 
     def test_attempt_bound_persists_until_success(self):
         with tempfile.TemporaryDirectory() as td:

@@ -18,12 +18,11 @@ Wants=network-online.target
 Before=display-manager.service
 # Don't run if provisioning already completed.
 ConditionPathExists=!/var/lib/plebian-os/provisioned
-# First boot depends on network, mirrors, and GitHub. Three one-hour attempts,
-# separated by one minute, all fit inside this four-hour accounting window. A
-# fourth start is therefore refused even when every attempt reaches its timeout;
-# unlike a window shorter than TimeoutStartSec, retries are genuinely bounded.
-StartLimitIntervalSec=4h
-StartLimitBurst=3
+# First boot depends on network, mirrors, and GitHub. The attempt runner keeps
+# this one start job activating across three bounded one-hour attempts. Keeping
+# one continuous start job matters: Before=display-manager.service then holds
+# LightDM until either provisioning succeeds or every retry is exhausted, so a
+# timeout cannot expose and cache Debian's fallback session between attempts.
 
 [Service]
 Type=oneshot
@@ -37,11 +36,10 @@ EnvironmentFile=-/etc/default/plebian-os
 # is exhausted ExecCondition skips the unit without marking success; the display
 # manager can start, and an operator can inspect the journal/fix the network.
 ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check
-ExecStartPre=/usr/local/sbin/plebian-os-firstboot-attempt begin
 # Clear any temporary sudoers grant a previously killed attempt may have left
 # behind (SIGKILL can't run the provisioner's own cleanup trap).
 ExecStartPre=-/bin/rm -f /etc/sudoers.d/plebian-os-provision
-ExecStart=/usr/local/sbin/plebian-os-provision
+ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision
 # Defense in depth: cleanup runs after success, ordinary failure, timeout, and
 # signal-driven stops even if the shell's own EXIT/signal trap is bypassed.
 ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision
@@ -49,12 +47,10 @@ ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision
 ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned
 ExecStartPost=/usr/local/sbin/plebian-os-firstboot-attempt success
 ExecStartPost=/bin/systemctl disable plebian-os-firstboot.service
-Restart=on-failure
-RestartSec=60s
-# Provisioning can take a while on a slow link, especially now that the kilix
-# clickable-chrome fork is built during first boot instead of accepting the
-# prebuilt fallback engine as final.
-TimeoutStartSec=3600
+# Three one-hour attempts, two one-minute delays, and bounded TERM cleanup fit
+# inside four hours. The per-attempt timeout lives in the runner; this outer
+# timeout is only a final guard on the complete, continuously ordered job.
+TimeoutStartSec=4h
 StandardOutput=journal
 StandardError=journal
 
