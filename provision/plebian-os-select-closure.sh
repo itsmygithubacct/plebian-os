@@ -32,13 +32,17 @@
 #                 replaced), atomically.
 #
 # The release-controlled keys move as one unit or not at all: the whole file is
-# rendered, verified by sourcing it, and then swapped in with a single rename.
+# rendered and verified by sourcing it before the transaction begins. The exact
+# selector from the target release is deployed in the same transaction. This
+# bootstraps payloads introduced after the starting release without asking its
+# already-running updater process to know the future OS-layer file list.
 # Operator-controlled choices — session, provider, storage, kiosk, appearance,
 # logging, thermal, audio, network, games, wallpaper, and layout — are copied
-# through byte for byte and are proven unchanged before the swap.
+# through byte for byte and are proven unchanged before the swap. Rollback also
+# restores the selector bytes which preceded the selection, or its absence.
 #
-# Run as the Pleb user; the two bounded writes under /etc and /var/lib elevate
-# through sudo.
+# Run as the Pleb user; the bounded writes under /etc, /var/lib, and
+# /usr/local/bin elevate through sudo.
 set -euo pipefail
 
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
@@ -65,6 +69,7 @@ case "$CLOSURE_ROOT" in
 esac
 SESSION_ENV="$CLOSURE_ROOT/etc/pleb/session.env"
 RECOVERY_BASE="$CLOSURE_ROOT/var/lib/plebian-os"
+SELECTOR_DST="$CLOSURE_ROOT/usr/local/bin/plebian-os-select-closure"
 
 closure_elevate() {
     if [ -n "$CLOSURE_ROOT" ] || [ "$(id -u)" = 0 ]; then
@@ -481,6 +486,30 @@ resolve_closure_source() {
     fi
 }
 
+# Stage the selector from the exact target commit, not from its mutable working
+# tree. Requiring the running bytes to match that object enforces the documented
+# rule that an upgrade executes the target release's own selector. The staged
+# hash is rechecked again inside the privileged transaction.
+stage_target_selector() {
+    local self
+    git -C "$SOURCE_DIR" show \
+        "$OS_COMMIT:provision/plebian-os-select-closure.sh" \
+        >"$STAGE/plebian-os-select-closure" 2>/dev/null \
+        || closure_reject "the release commit $OS_COMMIT has no target selector"
+    [ -s "$STAGE/plebian-os-select-closure" ] \
+        || closure_reject "the release commit $OS_COMMIT has an empty target selector"
+    bash -n "$STAGE/plebian-os-select-closure" \
+        || closure_reject "the release commit $OS_COMMIT has an invalid target selector"
+    self="$(readlink -f -- "$0" 2>/dev/null || true)"
+    [ -n "$self" ] && [ -f "$self" ] \
+        || closure_reject "could not resolve the running target selector"
+    cmp -s -- "$self" "$STAGE/plebian-os-select-closure" \
+        || closure_reject "the running selector does not match provision/plebian-os-select-closure.sh in target commit $OS_COMMIT"
+    chmod 0700 "$STAGE/plebian-os-select-closure"
+    sha256sum "$STAGE/plebian-os-select-closure" | awk '{print $1}' \
+        >"$STAGE/selector.sha256"
+}
+
 # ── proving every component's direction ────────────────────────────────────
 # A release number can rise while one hand-built component pin falls. Fetch the
 # exact target commit into the installed checkout's object store, without moving
@@ -731,27 +760,45 @@ announce_closure_move() {
 }
 
 # ── applying it ─────────────────────────────────────────────────────────────
-# One rename, after a full backup: either every release-controlled key moves or
-# none does. Same shape as the updater's root transaction — validate the
-# destination under root, snapshot into /var/lib/plebian-os, prepare the new
-# object beside its destination, then swap.
+# The selector binary and session configuration form one rollback unit. This is
+# what lets a target release add the selector to an older installed image whose
+# already-running updater cannot know that new payload. Both replacements are
+# prepared beside their destinations before either is moved; any later failure
+# restores the prior bytes (or prior selector absence).
+selector_fingerprint() {
+    local path="$1"
+    if [ -L "$path" ]; then
+        printf 'symlink:%s:%s\n' "$(stat -c '%u:%g:%a' -- "$path")" "$(readlink -- "$path")"
+    elif [ -f "$path" ]; then
+        printf 'file:%s:%s\n' "$(stat -c '%u:%g:%a' -- "$path")" \
+            "$(sha256sum -- "$path" | awk '{print $1}')"
+    elif [ -e "$path" ]; then
+        printf 'other:%s\n' "$(stat -c '%F:%u:%g:%a' -- "$path")"
+    else
+        printf '%s\n' absent
+    fi
+}
+
 apply_selected_closure() {
-    local pre_sha post_sha rc=0 record
+    local pre_sha post_sha selector_pre selector_post selector_expected rc=0 record
     pre_sha="$(sha256sum "$SESSION_ENV" | awk '{print $1}')"
+    selector_pre="$(selector_fingerprint "$SELECTOR_DST")"
     sha256sum "$STAGE/session.env.new" | awk '{print $1}' >"$STAGE/candidate.sha256"
+    selector_expected="$(cat "$STAGE/selector.sha256")"
     # The record path comes back on stdout into a file this user owns: a root
     # shell writing into the stage would leave something root cannot hand back.
     closure_elevate bash -s -- \
-        "$SESSION_ENV" "$STAGE" "$RECOVERY_BASE" \
+        "$SESSION_ENV" "$SELECTOR_DST" "$STAGE" "$RECOVERY_BASE" \
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" <<'ROOT_APPLY' || rc=$?
 set -euo pipefail
 umask 077
-env_path="$1"; stage="$2"; base="$3"; fail_after="$4"
+env_path="$1"; selector_path="$2"; stage="$3"; base="$4"; fail_after="$5"
 case "$env_path" in */etc/pleb/session.env) ;; *) exit 2 ;; esac
+case "$selector_path" in */usr/local/bin/plebian-os-select-closure) ;; *) exit 2 ;; esac
 [ -d "$stage" ] && [ ! -L "$stage" ] || exit 2
 if [ "$EUID" = 0 ]; then
     [ "$(stat -c '%u' -- "$stage")" = "${SUDO_UID:-0}" ] || exit 2
-    for dir in / /etc /etc/pleb /var /var/lib; do
+    for dir in / /etc /etc/pleb /var /var/lib /usr /usr/local /usr/local/bin; do
         [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' -- "$dir")" = 0 ] \
             || exit 2
         dir_mode="$(stat -c '%a' -- "$dir")"
@@ -759,46 +806,115 @@ if [ "$EUID" = 0 ]; then
     done
 fi
 [ -f "$env_path" ] && [ ! -L "$env_path" ] || exit 2
+[ -d "$(dirname -- "$selector_path")" ] \
+    && [ ! -L "$(dirname -- "$selector_path")" ] || exit 2
+if [ -e "$selector_path" ] || [ -L "$selector_path" ]; then
+    [ -f "$selector_path" ] && [ ! -L "$selector_path" ] || exit 2
+    if [ "$EUID" = 0 ]; then
+        [ "$(stat -c '%u:%g' -- "$selector_path")" = 0:0 ] || exit 2
+        selector_mode="$(stat -c '%a' -- "$selector_path")"
+        (( (8#$selector_mode & 8#22) == 0 )) || exit 2
+    fi
+fi
 expected="$(cat -- "$stage/candidate.sha256")"
-[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || exit 2
+selector_expected="$(cat -- "$stage/selector.sha256")"
+[[ "$expected" =~ ^[0-9a-f]{64}$ ]] \
+    && [[ "$selector_expected" =~ ^[0-9a-f]{64}$ ]] || exit 2
+[ -f "$stage/session.env.new" ] && [ ! -L "$stage/session.env.new" ] || exit 2
+[ -f "$stage/plebian-os-select-closure" ] \
+    && [ ! -L "$stage/plebian-os-select-closure" ] || exit 2
 [ "$(sha256sum -- "$stage/session.env.new" | awk '{print $1}')" = "$expected" ] || exit 3
+[ "$(sha256sum -- "$stage/plebian-os-select-closure" | awk '{print $1}')" = "$selector_expected" ] || exit 3
+bash -n "$stage/plebian-os-select-closure" || exit 3
 mkdir -p -- "$base"
 [ -d "$base" ] && [ ! -L "$base" ] || exit 2
+if [ "$EUID" = 0 ]; then
+    [ "$(stat -c '%u' -- "$base")" = 0 ] || exit 2
+    base_mode="$(stat -c '%a' -- "$base")"
+    (( (8#$base_mode & 8#22) == 0 )) || exit 2
+fi
 record="$(mktemp -d "$base/closure-rollback.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
-tmp=""
+env_tmp="" selector_tmp="" env_moved=0 selector_moved=0
+restore_copy() {
+    local src="$1" dst="$2" tmp
+    tmp="$(mktemp "$(dirname -- "$dst")/.plebian-os-restore.XXXXXX")" || return 1
+    rm -f -- "$tmp" || return 1
+    cp -a -- "$src" "$tmp" && mv -fT -- "$tmp" "$dst"
+}
 cleanup() {
     rc=$?
     trap - EXIT
-    [ -z "$tmp" ] || rm -f -- "$tmp"
-    [ "$rc" -eq 0 ] || rm -rf -- "$record"
+    [ -z "$env_tmp" ] || rm -f -- "$env_tmp"
+    [ -z "$selector_tmp" ] || rm -f -- "$selector_tmp"
+    if [ "$rc" -ne 0 ]; then
+        set +e
+        rollback_ok=1
+        if [ "$env_moved" = 1 ]; then
+            restore_copy "$record/session.env" "$env_path" || rollback_ok=0
+        fi
+        if [ "$selector_moved" = 1 ]; then
+            if [ "$(cat "$record/selector.existed" 2>/dev/null)" = 1 ]; then
+                restore_copy "$record/plebian-os-select-closure" "$selector_path" \
+                    || rollback_ok=0
+            else
+                rm -f -- "$selector_path" || rollback_ok=0
+            fi
+        fi
+        if [ "$rollback_ok" = 1 ]; then
+            rm -rf -- "$record"
+        else
+            rc=10
+        fi
+    fi
     exit "$rc"
 }
 trap cleanup EXIT
 cp -a -- "$env_path" "$record/session.env"
+if [ -e "$selector_path" ]; then
+    printf '%s\n' 1 >"$record/selector.existed"
+    cp -a -- "$selector_path" "$record/plebian-os-select-closure"
+else
+    printf '%s\n' 0 >"$record/selector.existed"
+fi
 cp -- "$stage/closure.env" "$record/closure.env"
 cp -- "$stage/meta" "$record/meta"
 [ "$fail_after" != backup ] || exit 9
-tmp="$(mktemp "$(dirname -- "$env_path")/.session.env.XXXXXX")"
-cat -- "$stage/session.env.new" >"$tmp"
-[ "$(sha256sum -- "$tmp" | awk '{print $1}')" = "$expected" ] || exit 3
-chmod 0644 -- "$tmp"
+env_tmp="$(mktemp "$(dirname -- "$env_path")/.session.env.XXXXXX")"
+cat -- "$stage/session.env.new" >"$env_tmp"
+[ "$(sha256sum -- "$env_tmp" | awk '{print $1}')" = "$expected" ] || exit 3
+chmod 0644 -- "$env_tmp"
+selector_tmp="$(mktemp "$(dirname -- "$selector_path")/.plebian-os-select-closure.XXXXXX")"
+install -m 0755 -- "$stage/plebian-os-select-closure" "$selector_tmp"
+[ "$(sha256sum -- "$selector_tmp" | awk '{print $1}')" = "$selector_expected" ] || exit 3
 [ "$fail_after" != stage ] || exit 9
-mv -fT -- "$tmp" "$env_path"
-tmp=""
+mv -fT -- "$selector_tmp" "$selector_path"
+selector_tmp=""
+selector_moved=1
+[ "$fail_after" != selector ] || exit 9
+mv -fT -- "$env_tmp" "$env_path"
+env_tmp=""
+env_moved=1
 printf '%s\n' "$record"
 ROOT_APPLY
     if [ "$rc" -ne 0 ]; then
         post_sha="$(sha256sum "$SESSION_ENV" 2>/dev/null | awk '{print $1}')" || post_sha=""
-        if [ "$post_sha" = "$pre_sha" ]; then
+        selector_post="$(selector_fingerprint "$SELECTOR_DST")"
+        if [ "$post_sha" = "$pre_sha" ] && [ "$selector_post" = "$selector_pre" ]; then
             case "$rc" in
-                9) die "injected closure write failure; $SESSION_ENV is unchanged and the previous closure is still selected" ;;
-                *) die "could not write $SESSION_ENV (status $rc); the previous closure is intact and still selected" ;;
+                9) die "injected closure write failure; the session and installed selector are unchanged and the previous closure is still selected" ;;
+                *) die "could not select the closure (status $rc); the previous session and installed selector are intact" ;;
             esac
         fi
-        die "could not write $SESSION_ENV (status $rc) AND it no longer matches the previous closure; restore it with 'plebian-os-select-closure --rollback' before running plebian-os-update"
+        die "could not select the closure (status $rc) AND the session or installed selector no longer matches its previous state; recover from $RECOVERY_BASE before running plebian-os-update"
     fi
     record="$(cat "$STAGE/record")"
     log "previous closure saved for recovery: $record"
+    selector_post="$(selector_fingerprint "$SELECTOR_DST")"
+    case "$selector_pre" in
+        absent) log "installed the target selector -> $SELECTOR_DST ($selector_expected)" ;;
+        "$selector_post") log "target selector already matched -> $SELECTOR_DST ($selector_expected)" ;;
+        *) log "updated the installed target selector -> $SELECTOR_DST ($selector_expected)" ;;
+    esac
 }
 
 write_closure_record() {
@@ -835,13 +951,23 @@ show_installed_closure() {
 
 rollback_previous_closure() {
     local rc=0 record
-    closure_elevate bash -s -- "$SESSION_ENV" "$RECOVERY_BASE" \
+    closure_elevate bash -s -- "$SESSION_ENV" "$SELECTOR_DST" "$RECOVERY_BASE" \
+        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
         >"$STAGE/record" <<'ROOT_ROLLBACK' || rc=$?
 set -euo pipefail
 umask 077
-env_path="$1"; base="$2"
+env_path="$1"; selector_path="$2"; base="$3"; fail_after="$4"
 case "$env_path" in */etc/pleb/session.env) ;; *) exit 2 ;; esac
+case "$selector_path" in */usr/local/bin/plebian-os-select-closure) ;; *) exit 2 ;; esac
 [ -d "$base" ] && [ ! -L "$base" ] || exit 4
+if [ "$EUID" = 0 ]; then
+    for dir in / /etc /etc/pleb /var /var/lib /usr /usr/local /usr/local/bin "$base"; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' -- "$dir")" = 0 ] \
+            || exit 2
+        dir_mode="$(stat -c '%a' -- "$dir")"
+        (( (8#$dir_mode & 8#22) == 0 )) || exit 2
+    done
+fi
 record=""
 for candidate in "$base"/closure-rollback.*; do
     [ -d "$candidate" ] && [ ! -L "$candidate" ] || continue
@@ -850,27 +976,117 @@ for candidate in "$base"/closure-rollback.*; do
     record="$candidate"                    # timestamped names sort oldest first
 done
 [ -n "$record" ] || exit 4
-new="$(dirname -- "$env_path")/.session.env.plebian-os-restore.$$"
+if [ "$EUID" = 0 ]; then
+    [ "$(stat -c '%u' -- "$record")" = 0 ] || exit 2
+    record_mode="$(stat -c '%a' -- "$record")"
+    (( (8#$record_mode & 8#22) == 0 )) || exit 2
+fi
+manage_selector=0
+selector_before_selection=""
+if [ -f "$record/selector.existed" ] && [ ! -L "$record/selector.existed" ]; then
+    selector_before_selection="$(cat "$record/selector.existed")"
+    case "$selector_before_selection" in
+        0) ;;
+        1)
+            [ -f "$record/plebian-os-select-closure" ] \
+                && [ ! -L "$record/plebian-os-select-closure" ] || exit 2
+            bash -n "$record/plebian-os-select-closure" || exit 2
+            ;;
+        *) exit 2 ;;
+    esac
+    manage_selector=1
+fi
+[ -f "$env_path" ] && [ ! -L "$env_path" ] || exit 2
+[ -f "$record/session.env" ] && [ ! -L "$record/session.env" ] || exit 2
+if [ -e "$selector_path" ] || [ -L "$selector_path" ]; then
+    [ -f "$selector_path" ] && [ ! -L "$selector_path" ] || exit 2
+    if [ "$EUID" = 0 ]; then
+        [ "$(stat -c '%u:%g' -- "$selector_path")" = 0:0 ] || exit 2
+        selector_mode="$(stat -c '%a' -- "$selector_path")"
+        (( (8#$selector_mode & 8#22) == 0 )) || exit 2
+    fi
+fi
+env_new="$(mktemp "$(dirname -- "$env_path")/.session.env.plebian-os-restore.XXXXXX")"
+env_current="$(mktemp "$(dirname -- "$env_path")/.session.env.plebian-os-current.XXXXXX")"
+selector_new="" selector_current="" selector_current_existed=0
+env_moved=0 selector_moved=0 restored_marked=0
+rm -f -- "$env_new" "$env_current"
+cp -a -- "$record/session.env" "$env_new"
+cp -a -- "$env_path" "$env_current"
+chmod 0644 -- "$env_new"
+if [ "$manage_selector" = 1 ]; then
+    if [ -e "$selector_path" ]; then
+        selector_current_existed=1
+        selector_current="$(mktemp "$(dirname -- "$selector_path")/.plebian-os-selector-current.XXXXXX")"
+        rm -f -- "$selector_current"
+        cp -a -- "$selector_path" "$selector_current"
+    fi
+    if [ "$selector_before_selection" = 1 ]; then
+        selector_new="$(mktemp "$(dirname -- "$selector_path")/.plebian-os-selector-restore.XXXXXX")"
+        rm -f -- "$selector_new"
+        cp -a -- "$record/plebian-os-select-closure" "$selector_new"
+    fi
+fi
+restore_copy() {
+    local src="$1" dst="$2" tmp
+    tmp="$(mktemp "$(dirname -- "$dst")/.plebian-os-rollback-undo.XXXXXX")" || return 1
+    rm -f -- "$tmp" || return 1
+    cp -a -- "$src" "$tmp" && mv -fT -- "$tmp" "$dst"
+}
 cleanup() {
     rc=$?
     trap - EXIT
-    [ "$rc" -eq 0 ] || rm -f -- "$new"
+    if [ "$rc" -ne 0 ]; then
+        set +e
+        undo_ok=1
+        if [ "$env_moved" = 1 ]; then
+            restore_copy "$env_current" "$env_path" || undo_ok=0
+        fi
+        if [ "$selector_moved" = 1 ]; then
+            if [ "$selector_current_existed" = 1 ]; then
+                restore_copy "$selector_current" "$selector_path" || undo_ok=0
+            else
+                rm -f -- "$selector_path" || undo_ok=0
+            fi
+        fi
+        if [ "$restored_marked" = 1 ]; then
+            rm -f -- "$record/restored" || undo_ok=0
+        fi
+        [ "$undo_ok" = 1 ] || rc=10
+    fi
+    [ -z "$env_new" ] || rm -f -- "$env_new"
+    [ -z "$env_current" ] || rm -f -- "$env_current"
+    [ -z "$selector_new" ] || rm -f -- "$selector_new"
+    [ -z "$selector_current" ] || rm -f -- "$selector_current"
     exit "$rc"
 }
 trap cleanup EXIT
-cp -a -- "$record/session.env" "$new"
-chmod 0644 -- "$new"
-mv -fT -- "$new" "$env_path"
+if [ "$manage_selector" = 1 ]; then
+    if [ "$selector_before_selection" = 1 ]; then
+        mv -fT -- "$selector_new" "$selector_path"
+        selector_new=""
+    else
+        rm -f -- "$selector_path"
+    fi
+    selector_moved=1
+fi
+[ "$fail_after" != rollback-selector ] || exit 9
+mv -fT -- "$env_new" "$env_path"
+env_new=""
+env_moved=1
+[ "$fail_after" != rollback-session ] || exit 9
 : >"$record/restored"
+restored_marked=1
 printf '%s\n' "$record"
 ROOT_ROLLBACK
     case "$rc" in
         0) ;;
         4) die "no closure to roll back to under $RECOVERY_BASE — this tool has not replaced a closure on this machine" ;;
-        *) die "could not restore the previous closure (status $rc); $SESSION_ENV was not changed" ;;
+        *) die "could not restore the previous closure (status $rc); the selected session and installed selector were retained" ;;
     esac
     record="$(cat "$STAGE/record")"
     log "previous closure restored into $SESSION_ENV from $record"
+    log "the installed selector was restored to its pre-selection state"
     log "run 'plebian-os-update --restart' to put the machine back on it"
     log "Do not run plebian-os-provision or any other privileged provisioner in between."
 }
@@ -888,6 +1104,7 @@ select_closure() {
     validate_release_closure
     build_selected_closure
     prepare_component_ancestry_checks
+    stage_target_selector
     log "release $TARGET closure validated from ${SOURCE_DIR}: releases/$TARGET.env @ $OS_COMMIT"
     scan_for_unmanaged_release_keys "$SESSION_ENV"
     announce_closure_move

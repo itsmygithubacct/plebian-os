@@ -136,6 +136,15 @@ That installed copy provides `--show`, `--rollback`, and same-release
 reselection. It is not a substitute for extracting a later target release's
 own selector from that target's immutable tag.
 
+The target selector verifies that its running bytes match that exact target
+commit, then deploys that copy transactionally while it selects the closure.
+This is the first-hop bootstrap: an updater process from the previous release
+cannot know a system payload introduced by its successor merely because it
+updates its checkout and its on-disk replacement. The recovery record therefore
+backs up both `/etc/pleb/session.env` and the installed selector. A failed
+selection restores both immediately; `--rollback` restores the prior selector
+bytes or removes it when the starting image had none.
+
 It validates the whole closure before it writes anything: a manifest which is
 incomplete, malformed, still holds a placeholder, pins a branch instead of a
 commit, half-pins an optional closure such as Kilix Voice, or declares a version
@@ -145,11 +154,12 @@ release-controlled key it will move. It fetches each exact Plebian-OS, Pleb,
 Kilix, and Kilix-95 target commit without moving a checkout, compares it with
 the installed commit, and announces `DOWNGRADE` or `DIVERGED` per component;
 a rising release number cannot hide a falling pin. It then proves the rendered
-configuration changes nothing else and swaps the new `/etc/pleb/session.env`
-in with a single rename. Either every release-controlled key moves or none
-does; a write that fails part way leaves the previous closure selected and says
-so. `--offline` performs the same proof only when every target object and the
-complete histories are already present locally.
+configuration changes nothing else. It prepares the exact target selector and
+new `/etc/pleb/session.env` beside their destinations before replacing either.
+Either the complete selected pair moves or neither does; a write that fails
+part way restores the previous session and selector and says so. `--offline`
+performs the same proof only when every target object and the complete histories
+are already present locally.
 
 Useful before and after — `SEL` being whichever copy of the selector the block
 above put in your hands:

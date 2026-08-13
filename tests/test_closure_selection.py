@@ -89,6 +89,7 @@ class ClosureSelectionTests(unittest.TestCase):
         etc = base / "root" / "etc" / "pleb"
         etc.mkdir(parents=True)
         (base / "root" / "var" / "lib").mkdir(parents=True)
+        (base / "root" / "usr" / "local" / "bin").mkdir(parents=True)
         home = base / "home" / ".local" / "gpu_terminal" / "sources"
         lines = ["# Managed by plebian-os-provision — Plebian-OS Pleb session config."]
         lines.append(guarded("GPU_TERMINAL_SOURCE_HOME", str(home)))
@@ -128,11 +129,14 @@ class ClosureSelectionTests(unittest.TestCase):
 
     def _source(self, base: Path, manifest_text=None, version="0.1.8",
                 release="0.1.8", tag="v0.1.8",
-                requirements_text=None) -> str:
+                requirements_text=None, selector_bytes=None) -> str:
         """A Plebian-OS checkout carrying the published release tag."""
         src = base / "src"
         (src / "releases").mkdir(parents=True)
+        (src / "provision").mkdir(parents=True)
         (src / "VERSION").write_text(version + "\n")
+        (src / "provision" / "plebian-os-select-closure.sh").write_bytes(
+            SELECT.read_bytes() if selector_bytes is None else selector_bytes)
         (src / "releases" / f"{release}.env").write_text(
             self._manifest_text() if manifest_text is None else manifest_text)
         if requirements_text is not None:
@@ -417,11 +421,18 @@ class ClosureSelectionTests(unittest.TestCase):
     # ── a failure mid-write leaves the previous closure intact ──────────────
     def _fails_intact(self, base: Path, boundary: str, expected: str):
         env = base / "root" / "etc" / "pleb" / "session.env"
+        selector = (base / "root" / "usr" / "local" / "bin" /
+                    "plebian-os-select-closure")
         before = env.read_bytes()
+        selector_before = selector.read_bytes() if selector.exists() else None
         result = self._run(base, "0.1.8", "--offline", fail_after=boundary)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(expected, result.stderr)
         self.assertEqual(env.read_bytes(), before)
+        if selector_before is None:
+            self.assertFalse(selector.exists())
+        else:
+            self.assertEqual(selector.read_bytes(), selector_before)
         leftovers = list((base / "root" / "etc" / "pleb").glob(".session.env.*"))
         self.assertEqual(leftovers, [])
         return result
@@ -438,7 +449,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertEqual(self._recovery_records(base), [])
 
     def test_failure_mid_write_leaves_the_previous_closure_intact(self):
-        for boundary in ("backup", "stage"):
+        for boundary in ("backup", "stage", "selector"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
                 base = Path(td)
                 self._machine(base)
@@ -561,32 +572,117 @@ class ClosureSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
+            selector = (base / "root" / "usr" / "local" / "bin" /
+                        "plebian-os-select-closure")
             before = env.read_bytes()
             self._source(base)
+            self.assertFalse(selector.exists())
             self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
             self.assertNotEqual(env.read_bytes(), before)
+            self.assertEqual(selector.read_bytes(), SELECT.read_bytes())
+            self.assertEqual(selector.stat().st_mode & 0o777, 0o755)
             records = self._recovery_records(base)
             self.assertEqual(len(records), 1)
             self.assertEqual((records[0] / "session.env").read_bytes(), before)
+            self.assertEqual((records[0] / "selector.existed").read_text(), "0\n")
             self.assertIn("to=0.1.8", (records[0] / "meta").read_text())
             result = self._run(base, "--rollback")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(env.read_bytes(), before)
+            self.assertFalse(selector.exists())
             # One record is one undo; a second call has nothing left to restore.
             again = self._run(base, "--rollback")
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("no closure to roll back to", again.stderr)
 
+    def test_selection_replaces_and_rollback_restores_an_older_selector(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            selector = (base / "root" / "usr" / "local" / "bin" /
+                        "plebian-os-select-closure")
+            old_selector = b"#!/usr/bin/env bash\nprintf 'legacy selector\\n'\n"
+            selector.write_bytes(old_selector)
+            selector.chmod(0o700)
+            before = env.read_bytes()
+            self._source(base)
+
+            selected = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertEqual(selector.read_bytes(), SELECT.read_bytes())
+            self.assertEqual(selector.stat().st_mode & 0o777, 0o755)
+            records = self._recovery_records(base)
+            self.assertEqual((records[0] / "selector.existed").read_text(), "1\n")
+            self.assertEqual(
+                (records[0] / "plebian-os-select-closure").read_bytes(),
+                old_selector,
+            )
+            self.assertEqual(
+                (records[0] / "plebian-os-select-closure").stat().st_mode & 0o777,
+                0o700,
+            )
+
+            rolled_back = self._run(base, "--rollback")
+            self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
+            self.assertEqual(env.read_bytes(), before)
+            self.assertEqual(selector.read_bytes(), old_selector)
+            self.assertEqual(selector.stat().st_mode & 0o777, 0o700)
+
+    def test_failed_rollback_retains_the_selected_session_and_selector(self):
+        for boundary in ("rollback-selector", "rollback-session"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base)
+                selector = (base / "root" / "usr" / "local" / "bin" /
+                            "plebian-os-select-closure")
+                self._source(base)
+                selected = self._run(base, "0.1.8", "--offline")
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                selected_env = env.read_bytes()
+                selected_selector = selector.read_bytes()
+
+                failed = self._run(base, "--rollback", fail_after=boundary)
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertIn("selected session and installed selector were retained",
+                              failed.stderr)
+                self.assertEqual(env.read_bytes(), selected_env)
+                self.assertEqual(selector.read_bytes(), selected_selector)
+                records = self._recovery_records(base)
+                self.assertEqual(len(records), 1)
+                self.assertFalse((records[0] / "restored").exists())
+
+                retried = self._run(base, "--rollback")
+                self.assertEqual(retried.returncode, 0, retried.stderr)
+                self.assertFalse(selector.exists())
+
+    def test_selector_must_match_the_exact_target_commit(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            self._source(
+                base,
+                selector_bytes=b"#!/usr/bin/env bash\necho different-target-selector\n",
+            )
+            result = self._run(base, "0.1.8", "--offline")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("running selector does not match", result.stderr)
+            self.assertEqual(env.read_bytes(), before)
+            self.assertEqual(self._recovery_records(base), [])
+
     def test_dry_run_writes_nothing(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
+            selector = (base / "root" / "usr" / "local" / "bin" /
+                        "plebian-os-select-closure")
             before = env.read_bytes()
             self._source(base)
             result = self._run(base, "0.1.8", "--offline", "--dry-run")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("nothing was written", result.stdout)
             self.assertEqual(env.read_bytes(), before)
+            self.assertFalse(selector.exists())
             self.assertEqual(self._recovery_records(base), [])
 
     def test_show_reports_the_installed_closure(self):
@@ -615,12 +711,15 @@ class ClosureSelectionContractTests(unittest.TestCase):
             "run plebian-os-update without sudo (it elevates only bounded system steps)",
             UPDATE.read_text())
 
-    def test_the_write_is_one_rename_after_a_backup(self):
+    def test_session_and_selector_are_replaced_only_after_both_backups(self):
         source = SELECT.read_text()
-        self.assertIn("mv -fT -- \"$tmp\" \"$env_path\"", source)
+        self.assertIn('mv -fT -- "$selector_tmp" "$selector_path"', source)
+        self.assertIn('mv -fT -- "$env_tmp" "$env_path"', source)
         self.assertIn('cp -a -- "$env_path" "$record/session.env"', source)
         self.assertLess(source.index('cp -a -- "$env_path" "$record/session.env"'),
-                        source.index('mv -fT -- "$tmp" "$env_path"'))
+                        source.index('mv -fT -- "$selector_tmp" "$selector_path"'))
+        self.assertLess(source.index('printf \'%s\\n\' 0 >"$record/selector.existed"'),
+                        source.index('mv -fT -- "$selector_tmp" "$selector_path"'))
         # Nothing is written before the rendered file has been verified.
         self.assertLess(source.index("verify_candidate_closure "),
                         source.index("apply_selected_closure\n"))
