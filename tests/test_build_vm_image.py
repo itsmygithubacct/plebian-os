@@ -234,6 +234,36 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('cmp -s "$before" "$after"', command)
         self.assertIn("/usr/local/bin/plebian-os-select-closure", command)
 
+    def test_successful_update_waits_for_a_new_lightdm_invocation(self):
+        before = SimpleNamespace(
+            returncode=0,
+            stdout="0123456789abcdef0123456789abcdef\n",
+            stderr="",
+        )
+        success = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.object(
+                vm, "ssh", side_effect=(before, success, success)) as remote, \
+                mock.patch.object(vm, "info"):
+            vm.verify_successful_update(cfg(), "askpass")
+
+        self.assertEqual(remote.call_count, 3)
+        self.assertIn("InvocationID", remote.call_args_list[0].args[1])
+        self.assertIn("plebian-os-update --restart", remote.call_args_list[1].args[1])
+        health = remote.call_args_list[2].args[1]
+        self.assertIn("timeout 45", health)
+        self.assertIn("0123456789abcdef0123456789abcdef", health)
+        self.assertIn('"$current" != "$1"', health)
+        self.assertIn("systemctl is-active --quiet lightdm.service", health)
+        self.assertIn("systemctl is-failed --quiet lightdm.service", health)
+        self.assertEqual(remote.call_args_list[2].kwargs["timeout"], 60)
+
+    def test_successful_update_refuses_missing_lightdm_identity(self):
+        missing = SimpleNamespace(returncode=0, stdout="\n", stderr="")
+        with mock.patch.object(vm, "ssh", return_value=missing) as remote, \
+                mock.patch.object(vm, "info"), self.assertRaises(SystemExit):
+            vm.verify_successful_update(cfg(), "askpass")
+        self.assertEqual(remote.call_count, 1)
+
     def test_catalog_acceptance_program_clean_builds_and_selects_every_pin(self):
         installed = []
         roots = []

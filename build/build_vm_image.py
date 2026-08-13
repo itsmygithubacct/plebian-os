@@ -926,6 +926,18 @@ test -z "$(find "$pleb_state" -maxdepth 1 -type d -name 'stack-rollback.*' -prin
 def verify_successful_update(cfg: Config, askpass: str) -> None:
     """Run the installed same-closure updater and its LightDM restart path."""
     info("running the installed whole-stack updater and restart path …")
+    before = ssh(
+        cfg,
+        "systemctl show -p InvocationID --value lightdm.service",
+        askpass,
+        timeout=30,
+    )
+    before_invocation = "" if before is None else before.stdout.strip()
+    if before is None or before.returncode != 0 or not before_invocation:
+        detail = "could not record the pre-update LightDM invocation"
+        if _RECORDER is not None:
+            _RECORDER.check("successful whole-stack update and restart", False, detail)
+        die("whole-stack update/restart verification FAILED:\n" + detail)
     command = "timeout 3500 /usr/local/bin/plebian-os-update --restart"
     result = ssh(cfg, command, askpass, timeout=3600)
     ok = result is not None and result.returncode == 0
@@ -940,15 +952,31 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
             if output.strip()
         )[-6000:] or f"guest command exited {result.returncode}"
     if ok:
+        # --restart deliberately schedules a detached transient unit: a GUI
+        # terminal may disappear while LightDM is stopped, but the committed
+        # update must still finish restarting the display manager.  Therefore
+        # the updater can return while LightDM is briefly inactive.  Require a
+        # new service invocation and wait boundedly for it to become active;
+        # merely observing the old still-active invocation would be a false
+        # positive, while sampling the restart gap once is a false negative.
+        old = shlex.quote(before_invocation)
         post = ssh(
             cfg,
+            f"old={old}; "
+            "timeout 45 sh -c '"
+            "while :; do "
+            "current=\"$(systemctl show -p InvocationID --value "
+            "lightdm.service 2>/dev/null || true)\"; "
+            "if [ -n \"$current\" ] && [ \"$current\" != \"$1\" ] && "
+            "systemctl is-active --quiet lightdm.service; then exit 0; fi; "
+            "if systemctl is-failed --quiet lightdm.service; then exit 1; fi; "
+            "sleep 1; done' sh \"$old\" && "
             "test -f /var/lib/plebian-os/provisioned && "
             "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1 && "
-            "systemctl is-active lightdm.service >/dev/null && "
             "test -z \"$(find /var/lib/plebian-os -maxdepth 1 -type d "
             "-name 'update-rollback.*' -print -quit)\"",
             askpass,
-            timeout=30,
+            timeout=60,
         )
         ok = post is not None and post.returncode == 0
         if not ok:

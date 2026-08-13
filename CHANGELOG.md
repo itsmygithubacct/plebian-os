@@ -42,6 +42,11 @@ upgrade run recorded in
   operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
+- Make automated release acceptance synchronize with the detached LightDM
+  restart performed by `plebian-os-update --restart`. The gate records the
+  prior service invocation, waits boundedly for a distinct active invocation,
+  and fails immediately if LightDM enters the failed state, avoiding both a
+  false failure during the restart gap and a false pass before it begins.
 - Make whole-stack rollback cover Kilix's entire recursive submodule graph.
   Existing modules return to their recorded commits, target-only top-level and
   nested modules are deinitialized before their metadata disappears, and prior
