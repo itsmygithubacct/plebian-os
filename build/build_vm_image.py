@@ -688,13 +688,24 @@ def vbox_create(cfg: Config, iso: Path, *, replace: bool = False,
     run(["VBoxManage", "storageattach", cfg.name, "--storagectl", "SATA",
          "--port", 0, "--device", 0, "--type", "hdd", "--medium", str(vdi)])
     run(["VBoxManage", "storageattach", cfg.name, "--storagectl", "SATA",
-         "--port", 1, "--device", 0, "--type", "dvddrive", "--medium", str(iso)])
+         "--port", 1, "--device", 0, "--type", "dvddrive", "--medium", str(iso),
+         "--hotpluggable", "on"])
 
 def vbox_start(cfg: Config) -> None:
     run(["VBoxManage", "startvm", cfg.name,
          "--type", "gui" if cfg.gui else "headless"])
 
 def vbox_detach_iso(cfg: Config) -> None:
+    # Debian's installer normally ejects the medium before it reboots.  In that
+    # state VirtualBox reports an existing, empty DVD drive; asking it to
+    # detach the drive itself is a hot-plug operation, not a second eject, and
+    # older VM definitions reject it.  Treat an already empty drive as the
+    # successful end state and only issue storageattach when a medium is still
+    # present.  Newly created acceptance VMs also mark this slot hot-pluggable
+    # so the fallback path works when an installer leaves its medium mounted.
+    if vbox_info(cfg.name).get("SATA-1-0") == "emptydrive":
+        info("installer ISO is already ejected")
+        return
     result = subprocess.run(
         ["VBoxManage", "storageattach", cfg.name, "--storagectl", "SATA",
          "--port", "1", "--device", "0", "--type", "dvddrive",

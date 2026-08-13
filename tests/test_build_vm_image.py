@@ -420,7 +420,7 @@ class VmBuilderEnvTests(unittest.TestCase):
             vm.vbox_create(cfg(), Path("image.iso"), replace=True, assume_yes=True)
         self.assertIn(["VBoxManage", "unregistervm", "test", "--delete"], calls)
 
-    def test_virtualbox_exposes_host_audio_input_and_output(self):
+    def test_virtualbox_exposes_audio_and_hotpluggable_install_media(self):
         calls = []
         with mock.patch.object(vm, "vbox_exists", return_value=False), \
                 mock.patch.object(
@@ -437,12 +437,26 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(modify[modify.index("--audio-in") + 1], "on")
         self.assertEqual(modify[modify.index("--audio-out") + 1], "on")
         self.assertEqual(modify[modify.index("--firmware") + 1], "bios")
+        dvd = next(call for call in calls if
+                   call[:2] == ["VBoxManage", "storageattach"] and
+                   "dvddrive" in call)
+        self.assertEqual(dvd[dvd.index("--hotpluggable") + 1], "on")
 
     def test_iso_detach_failure_is_fatal(self):
         failed = SimpleNamespace(returncode=1, stdout="", stderr="busy")
-        with mock.patch.object(vm.subprocess, "run", return_value=failed), \
+        with mock.patch.object(vm, "vbox_info", return_value={
+                "SATA-1-0": "/tmp/installer.iso",
+        }), mock.patch.object(vm.subprocess, "run", return_value=failed), \
                 self.assertRaises(SystemExit):
             vm.vbox_detach_iso(cfg())
+
+    def test_iso_detach_is_idempotent_after_guest_eject(self):
+        with mock.patch.object(vm, "vbox_info", return_value={
+                "SATA-1-0": "emptydrive",
+                "SATA-IsEjected-1-0": "on",
+        }), mock.patch.object(vm.subprocess, "run") as detach:
+            vm.vbox_detach_iso(cfg())
+        detach.assert_not_called()
 
     def test_acceptance_report_is_nonsecret_and_checksummed(self):
         git_results = [
