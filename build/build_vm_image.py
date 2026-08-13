@@ -1573,7 +1573,14 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     else:
         checks.append(("kilix engine", kdir + ' test -x "$d/kilix"'))
     failed = []
-    check_timeouts = {"Kilix-95 GUI routing tests": 60}
+    # Voice includes a device-free Vosk recognition smoke with its own
+    # 180-second guest bound.  The host SSH timeout must outlive that bound;
+    # the generic 15-second check timeout otherwise reports a false failure on
+    # a busy acceptance host while leaving the guest-side process to finish.
+    check_timeouts = {
+        "Kilix-95 GUI routing tests": 60,
+        "voice closure policy": 195,
+    }
     for name, cmd in checks:
         r = ssh(cfg, cmd, askpass,
                 timeout=check_timeouts.get(name, 15))

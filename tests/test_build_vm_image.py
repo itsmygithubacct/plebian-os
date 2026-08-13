@@ -225,6 +225,23 @@ class VmBuilderEnvTests(unittest.TestCase):
             vm.verify_provisioning(cfg(), "askpass")
         self.assertGreater(remote.call_count, 1)
 
+    def test_voice_acceptance_host_timeout_outlives_guest_smoke(self):
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.dict(
+                os.environ, {"PLEBIAN_OS_INSTALL_VOICE_MODEL": "1"},
+                clear=True), \
+                mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                mock.patch.object(vm, "info"):
+            vm.verify_provisioning(cfg(), "askpass")
+
+        voice_calls = [
+            call for call in remote.call_args_list
+            if "kilix.speech.models/v1" in call.args[1]
+        ]
+        self.assertEqual(len(voice_calls), 1)
+        self.assertIn("timeout 180 python3", voice_calls[0].args[1])
+        self.assertEqual(voice_calls[0].kwargs["timeout"], 195)
+
     def test_update_rollback_gate_uses_real_installed_updater(self):
         result = SimpleNamespace(returncode=0, stdout="", stderr="")
         with mock.patch.object(vm, "ssh", return_value=result) as remote, \

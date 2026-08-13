@@ -80,6 +80,9 @@ upgrade run recorded in
   prior service invocation, waits boundedly for a distinct active invocation,
   and fails immediately if LightDM enters the failed state, avoiding both a
   false failure during the restart gap and a false pass before it begins.
+- Give the automated voice-closure check a host SSH timeout that outlives its
+  bounded 180-second Vosk recognition smoke. A busy acceptance host can no
+  longer report a false timeout while that guest-side check is still running.
 - Make whole-stack rollback cover Kilix's entire recursive submodule graph.
   Existing modules return to their recorded commits, target-only top-level and
   nested modules are deinitialized before their metadata disappears, and prior
