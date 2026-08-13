@@ -1,6 +1,6 @@
 #!/bin/sh
-# Persistently bound firstboot provisioning attempts across service restarts and
-# reboots. Used by ExecCondition/ExecStartPre/ExecStartPost in the firstboot unit.
+# Persistently bound firstboot provisioning attempts across retries and reboots.
+# Used by ExecCondition/ExecStart/ExecStartPost in the firstboot unit.
 set -eu
 
 state_dir="${PLEBIAN_OS_STATE_DIR:-/var/lib/plebian-os}"

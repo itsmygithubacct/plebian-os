@@ -1894,7 +1894,7 @@ compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
 PY
     if ! grep -q '^\[Unit\]$' "$stage/plebian-os-firstboot.service" \
         || ! grep -q '^\[Service\]$' "$stage/plebian-os-firstboot.service" \
-        || ! grep -q '^ExecStart=/usr/local/sbin/plebian-os-provision$' "$stage/plebian-os-firstboot.service" \
+        || ! grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "$stage/plebian-os-firstboot.service" \
         || ! grep -q '^ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision$' "$stage/plebian-os-firstboot.service" \
         || ! grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "$stage/plebian-os-firstboot.service"; then
         die "staged firstboot unit is missing required lifecycle directives"
@@ -2234,7 +2234,7 @@ compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
 PY
 grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^\[Service\]$' "${new_paths[4]}" \
-    && grep -q '^ExecStart=/usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
+    && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
     && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' "${new_paths[6]}"
 python3 - "${new_paths[7]}" <<'PY'

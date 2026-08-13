@@ -57,7 +57,9 @@ upgrade run recorded in
   A one-hour provisioning timeout no longer releases the greeter between
   attempts, where it could cache Debian's fallback session before Pleb is
   installed; all three attempts now run inside one continuously activating
-  service and the greeter appears only after success or final exhaustion.
+  service and the greeter appears only after success or final exhaustion. The
+  transactional OS-layer updater validates and deploys that same runner-based
+  lifecycle contract.
 - Make the documented first 0.1.8-to-0.1.9 hop install the closure selector and
   target updater it needs. The two exact tagged tools and session closure now
   move as one recovery unit; an interrupted selection or explicit `--rollback`

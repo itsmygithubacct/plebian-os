@@ -81,6 +81,15 @@ class UpdateLifecycleTests(unittest.TestCase):
         self.assertIn("bash -n", UPDATE)
         self.assertIn("compile(pathlib.Path", UPDATE)
         self.assertIn("staged firstboot unit", UPDATE)
+        expected_start = (
+            "ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run "
+            "/usr/local/sbin/plebian-os-provision"
+        )
+        self.assertEqual(UPDATE.count(expected_start), 2)
+        self.assertNotIn(
+            "ExecStart=/usr/local/sbin/plebian-os-provision$",
+            UPDATE,
+        )
         self.assertIn("systemd-analyze verify", UPDATE)
         self.assertIn("backup_paths", UPDATE)
         self.assertIn("rollback()", UPDATE)
