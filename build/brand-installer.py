@@ -43,6 +43,7 @@ THEME_NAMES = frozenset(
 BIOS_TITLE = b"menu title \x07Debian GNU/Linux installer menu (BIOS mode)"
 BIOS_ADVANCED_TITLE = b"menu title Advanced options"
 BIOS_DARK_TITLE = b"menu title Accessible dark contrast option"
+BIOS_SUBMENU_TITLE_COLUMNS = 36
 UEFI_TITLE = b'title-text: "Debian GNU/Linux 13.5.0"'
 UEFI_HEADING = b'text = "Debian GNU/Linux UEFI Installer menu"'
 
@@ -266,6 +267,15 @@ def brand_boot_text(root: Path | str, version: str) -> None:
     root = Path(root)
     version_b = _version_bytes(version)
     theme_root = root / "boot/grub/theme"
+    bios_advanced_title = b"Plebian-OS " + version_b + b" advanced options"
+    bios_dark_title = b"Plebian-OS " + version_b + b" accessible-dark"
+    if (
+        max(len(bios_advanced_title), len(bios_dark_title))
+        > BIOS_SUBMENU_TITLE_COLUMNS
+    ):
+        raise BrandingError(
+            "PLEBIAN_OS_VERSION is too long for the BIOS submenu title field"
+        )
 
     try:
         entries = list(theme_root.iterdir())
@@ -298,16 +308,12 @@ def brand_boot_text(root: Path | str, version: str) -> None:
                 ),
                 (
                     BIOS_ADVANCED_TITLE,
-                    b"menu title Plebian-OS "
-                    + version_b
-                    + b" advanced installer options",
+                    b"menu title " + bios_advanced_title,
                     2,
                 ),
                 (
                     BIOS_DARK_TITLE,
-                    b"menu title Plebian-OS "
-                    + version_b
-                    + b" accessible dark contrast installer menu",
+                    b"menu title " + bios_dark_title,
                     1,
                 ),
             ],

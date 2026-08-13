@@ -398,15 +398,22 @@ class TextBrandingTests(unittest.TestCase):
             self.assertNotIn(brand_installer.BIOS_TITLE, menu_bytes)
             self.assertEqual(
                 menu_bytes.count(
-                    b"menu title Plebian-OS 9.8.7 advanced installer options"
+                    b"menu title Plebian-OS 9.8.7 advanced options"
                 ),
                 2,
             )
             self.assertIn(
-                b"menu title Plebian-OS 9.8.7 accessible dark contrast "
-                b"installer menu",
+                b"menu title Plebian-OS 9.8.7 accessible-dark",
                 menu_bytes,
             )
+            submenu_titles = (
+                b"Plebian-OS 9.8.7 advanced options",
+                b"Plebian-OS 9.8.7 accessible-dark",
+            )
+            for title in submenu_titles:
+                self.assertLessEqual(
+                    len(title), brand_installer.BIOS_SUBMENU_TITLE_COLUMNS
+                )
             self.assertNotIn(brand_installer.BIOS_ADVANCED_TITLE, menu_bytes)
             self.assertNotIn(brand_installer.BIOS_DARK_TITLE, menu_bytes)
             self.assertEqual(menu_bytes.count(b"\x07"), 1)
@@ -467,8 +474,19 @@ class TextBrandingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             menu, _ = write_text_fixture(root)
-            brand_installer.brand_boot_text(root, "v1.2+git~rc-1")
-            self.assertIn(b"Plebian-OS v1.2+git~rc-1", menu.read_bytes())
+            brand_installer.brand_boot_text(root, "1.2+rc-1")
+            self.assertIn(b"Plebian-OS 1.2+rc-1", menu.read_bytes())
+
+    def test_rejects_version_that_would_clip_bios_submenu_titles(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            write_text_fixture(root)
+            before = tree_bytes(root)
+            with self.assertRaises(brand_installer.BrandingError):
+                brand_installer.brand_boot_text(
+                    root, "1.2.3+long-release-candidate"
+                )
+            self.assertEqual(tree_bytes(root), before)
 
     def test_rejects_unsafe_versions_without_modifying_tree(self):
         for version in ("", ".1", "-1", "1 2", "1/2", "1\n2", "é"):
