@@ -59,6 +59,11 @@ PDF_VIEWER_BUILD_PACKAGES = {
     "libpoppler-glib-dev",
 }
 
+# Kilix NVR is catalog-pinned and built on the target. Its database is linked
+# through SQLite's C interface, so the release image must ship the development
+# header and linker input rather than relying on a host's incidental package.
+NVR_BUILD_PACKAGES = {"libsqlite3-dev", "zlib1g-dev"}
+
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
@@ -113,6 +118,10 @@ class DependencyManifestTests(unittest.TestCase):
                              install_deps_packages())
         self.assertLessEqual(PDF_VIEWER_BUILD_PACKAGES,
                              preseed_packages())
+
+    def test_nvr_builds_on_both_paths(self):
+        self.assertLessEqual(NVR_BUILD_PACKAGES, install_deps_packages())
+        self.assertLessEqual(NVR_BUILD_PACKAGES, preseed_packages())
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())

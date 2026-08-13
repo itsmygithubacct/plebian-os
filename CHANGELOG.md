@@ -42,6 +42,10 @@ upgrade run recorded in
   operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
+- Install `libsqlite3-dev` through both image dependency paths so the
+  catalog-pinned Kilix NVR can compile its SQLite-backed configuration and
+  recording index on a fresh system. Release acceptance now proves this with a
+  clean target-side build instead of inheriting a developer host's headers.
 - Make automated release acceptance synchronize with the detached LightDM
   restart performed by `plebian-os-update --restart`. The gate records the
   prior service invocation, waits boundedly for a distinct active invocation,
