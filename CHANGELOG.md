@@ -42,6 +42,12 @@ upgrade run recorded in
   operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
+- Make whole-stack rollback cover Kilix's entire recursive submodule graph.
+  Existing modules return to their recorded commits, target-only top-level and
+  nested modules are deinitialized before their metadata disappears, and prior
+  initialized, empty, and absent worktree states are restored. Kilix leaves
+  recursive checkout enabled after updating so the installed 0.1.8 updater can
+  coherently unwind the first hop to this release.
 - Treat a closed terminal or SSH output pipe as an updater transaction failure.
   SIGPIPE is converted into a normal failing exit while the transaction is
   active, so the EXIT handler restores the OS/Pleb layer, checkout positions,

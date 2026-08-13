@@ -251,10 +251,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
             self.assertIn(
                 f'restore_stack_path "${variable}" {key} file', update
             )
-        self.assertIn(
-            'record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker"',
-            update,
-        )
+        self.assertIn("record_kilix_submodule_tree", update)
+        self.assertIn("restore_recorded_kilix_submodules", update)
         self.assertIn(
             'snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" '
             "kilix-pty-broker-build",

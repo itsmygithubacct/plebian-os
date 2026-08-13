@@ -598,6 +598,7 @@ _STACK_ROOT_TXN_DIR=""
 _STACK_TXN_ACTIVE=0
 _STACK_TXN_COMMITTED=0
 _STACK_TXN_RETAIN=0
+_STACK_KILIX_ROLLBACK_CONTROLLED=0
 _OS_LAYER_STAGE=""
 
 require_standard_install_destinations() {
@@ -619,7 +620,8 @@ require_standard_install_destinations() {
 
 require_clean_transaction_checkout() {
     local dir="$1" label="$2" dirty
-    dirty="$(git -C "$dir" status --porcelain --untracked-files=normal 2>/dev/null)" \
+    dirty="$(git -C "$dir" status --porcelain --untracked-files=normal \
+        --ignore-submodules=none 2>/dev/null)" \
         || die "could not inspect $label checkout at $dir"
     [ -z "$dirty" ] \
         || die "$label checkout at $dir has local changes; refusing a whole-stack update whose rollback could overwrite them"
@@ -645,6 +647,7 @@ record_kilix_submodule() {
     local dir="$1" key="$2" label="$3" entry
     if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
         record_stack_checkout "$dir" "$key" "$label"
+        printf '%s\n' initialized >"$_STACK_TXN_DIR/$key.worktree"
     elif [ -e "$dir" ] || [ -L "$dir" ]; then
         [ -d "$dir" ] && [ ! -L "$dir" ] \
             || die "$label path at $dir is not a safe uninitialized submodule"
@@ -652,9 +655,60 @@ record_kilix_submodule() {
         [ -z "$entry" ] \
             || die "$label path at $dir is nonempty but is not a git checkout"
         printf '%s\n' 0 >"$_STACK_TXN_DIR/$key.existed"
+        printf '%s\n' empty >"$_STACK_TXN_DIR/$key.worktree"
     else
         printf '%s\n' 0 >"$_STACK_TXN_DIR/$key.existed"
+        printf '%s\n' absent >"$_STACK_TXN_DIR/$key.worktree"
     fi
+}
+
+kilix_submodule_path_is_safe() {
+    local path="$1" root resolved
+    case "$path" in
+        ''|/*|.|..|../*|*/../*|*/..|*$'\n'*|*$'\r'*|*$'\t'*) return 1 ;;
+    esac
+    root="$(cd "$KILIX_DIR" && pwd -P)" || return 1
+    resolved="$(readlink -m -- "$KILIX_DIR/$path" 2>/dev/null)" || return 1
+    case "$resolved" in "$root"/*) ;; *) return 1 ;; esac
+}
+
+record_kilix_submodules_in_repo() {
+    local repo="$1" prefix="$2" entry metadata mode path full index key
+    git -C "$repo" ls-files --stage >/dev/null \
+        || die "could not enumerate Kilix submodules below ${prefix:-<root>}"
+    while IFS= read -r -d '' entry; do
+        case "$entry" in *$'\t'*) ;; *) die "invalid Kilix index entry" ;; esac
+        metadata="${entry%%$'\t'*}"
+        mode="${metadata%% *}"
+        [ "$mode" = 160000 ] || continue
+        path="${entry#*$'\t'}"
+        if [ -n "$prefix" ]; then
+            full="$prefix/$path"
+        else
+            full="$path"
+        fi
+        kilix_submodule_path_is_safe "$full" \
+            || die "unsafe Kilix submodule path in the pre-update checkout"
+        index="$(cat "$_STACK_TXN_DIR/kilix-submodule.count")"
+        [[ "$index" =~ ^[0-9]+$ ]] \
+            || die "invalid Kilix submodule transaction count"
+        key="$(printf 'kilix-submodule-%06d' "$index")"
+        printf '%s\n' "$full" >"$_STACK_TXN_DIR/$key.path"
+        printf '%s\n' "$prefix" >"$_STACK_TXN_DIR/$key.parent"
+        printf '%s\n' "$path" >"$_STACK_TXN_DIR/$key.name"
+        record_kilix_submodule "$KILIX_DIR/$full" "$key" \
+            "Kilix submodule $full"
+        printf '%s\n' "$((index + 1))" \
+            >"$_STACK_TXN_DIR/kilix-submodule.count"
+        if [ "$(cat "$_STACK_TXN_DIR/$key.existed")" = 1 ]; then
+            record_kilix_submodules_in_repo "$KILIX_DIR/$full" "$full"
+        fi
+    done < <(git -C "$repo" ls-files --stage -z)
+}
+
+record_kilix_submodule_tree() {
+    printf '%s\n' 0 >"$_STACK_TXN_DIR/kilix-submodule.count"
+    record_kilix_submodules_in_repo "$KILIX_DIR" ""
 }
 
 snapshot_stack_path() {
@@ -910,7 +964,16 @@ ROOT_CLEAN
 }
 
 restore_stack_checkout() {
-    local dir="$1" key="$2" label="$3" existed head ref branch dirty
+    local dir="$1" key="$2" label="$3" cleanliness="${4:-strict}"
+    local existed head ref branch dirty
+    case "$cleanliness" in
+        strict) ;;
+        transaction-controlled)
+            [ "${_STACK_KILIX_ROLLBACK_CONTROLLED:-0}" = 1 ] || return 1
+            case "$dir" in "$KILIX_DIR"|"$KILIX_DIR"/*) ;; *) return 1 ;; esac
+            ;;
+        *) return 1 ;;
+    esac
     existed="$(cat "$_STACK_TXN_DIR/$key.existed" 2>/dev/null || echo 0)"
     if [ "$existed" = 0 ]; then
         if [ -e "$dir" ] || [ -L "$dir" ]; then
@@ -924,9 +987,10 @@ restore_stack_checkout() {
         return 0
     fi
     [ -d "$dir/.git" ] || [ -f "$dir/.git" ] || return 1
-    dirty="$(git -C "$dir" status --porcelain --untracked-files=normal 2>/dev/null)" \
+    dirty="$(git -C "$dir" status --porcelain --untracked-files=normal \
+        --ignore-submodules=none 2>/dev/null)" \
         || return 1
-    if [ -n "$dirty" ]; then
+    if [ -n "$dirty" ] && [ "$cleanliness" = strict ]; then
         warn "$label acquired local changes while the updater was running; preserving them and retaining recovery state"
         return 1
     fi
@@ -942,23 +1006,140 @@ restore_stack_checkout() {
     fi
 }
 
-deinit_new_kilix_submodule() {
-    local path="$1" key="$2" label="$3" existed mode dirty
-    existed="$(cat "$_STACK_TXN_DIR/$key.existed" 2>/dev/null || echo 0)"
-    [ "$existed" = 0 ] || return 0
-    mode="$(git -C "$KILIX_DIR" ls-files --stage -- "$path" 2>/dev/null \
-        | awk 'NR == 1 { print $1 }')"
-    [ -n "$mode" ] || return 0
-    [ "$mode" = 160000 ] || return 1
-    if [ -d "$KILIX_DIR/$path/.git" ] || [ -f "$KILIX_DIR/$path/.git" ]; then
-        dirty="$(git -C "$KILIX_DIR/$path" status --porcelain \
-            --untracked-files=normal 2>/dev/null)" || return 1
-        if [ -n "$dirty" ]; then
-            warn "$label acquired local changes while the updater was running; refusing to deinitialize it"
+kilix_submodule_was_recorded() {
+    local wanted="$1" count index key recorded
+    count="$(cat "$_STACK_TXN_DIR/kilix-submodule.count" 2>/dev/null)" \
+        || return 2
+    [[ "$count" =~ ^[0-9]+$ ]] || return 2
+    for ((index=0; index<count; index++)); do
+        key="$(printf 'kilix-submodule-%06d' "$index")"
+        recorded="$(cat "$_STACK_TXN_DIR/$key.path" 2>/dev/null)" \
+            || return 2
+        [ "$recorded" = "$wanted" ] && return 0
+    done
+    return 1
+}
+
+deinit_new_kilix_submodules_in_repo() {
+    local repo="$1" prefix="$2" entry metadata mode path full dirty child
+    local recorded_rc
+    git -C "$repo" ls-files --stage >/dev/null || return 1
+    while IFS= read -r -d '' entry; do
+        case "$entry" in *$'\t'*) ;; *) return 1 ;; esac
+        metadata="${entry%%$'\t'*}"
+        mode="${metadata%% *}"
+        [ "$mode" = 160000 ] || continue
+        path="${entry#*$'\t'}"
+        if [ -n "$prefix" ]; then
+            full="$prefix/$path"
+        else
+            full="$path"
+        fi
+        kilix_submodule_path_is_safe "$full" || return 1
+        child="$KILIX_DIR/$full"
+        if [ -d "$child/.git" ] || [ -f "$child/.git" ]; then
+            deinit_new_kilix_submodules_in_repo "$child" "$full" || return 1
+        fi
+        if kilix_submodule_was_recorded "$full"; then
+            continue
+        else
+            recorded_rc=$?
+            [ "$recorded_rc" = 1 ] || return 1
+        fi
+        if [ -d "$child/.git" ] || [ -f "$child/.git" ]; then
+            dirty="$(git -C "$child" status --porcelain \
+                --untracked-files=normal --ignore-submodules=none \
+                2>/dev/null)" || return 1
+            if [ -n "$dirty" ]; then
+                warn "new Kilix submodule $full acquired local changes; refusing to deinitialize it"
+                return 1
+            fi
+        elif [ -e "$child" ] || [ -L "$child" ]; then
+            [ -d "$child" ] && [ ! -L "$child" ] \
+                && [ -z "$(find "$child" -mindepth 1 -maxdepth 1 -print -quit)" ] \
+                || return 1
+        fi
+        git -C "$repo" submodule deinit -f -- "$path" >/dev/null 2>&1 \
+            || return 1
+        if [ -d "$child" ] && [ ! -L "$child" ]; then
+            rmdir -- "$child" || return 1
+        elif [ -e "$child" ] || [ -L "$child" ]; then
             return 1
         fi
+    done < <(git -C "$repo" ls-files --stage -z)
+}
+
+deinit_new_kilix_submodules() {
+    local dirty
+    dirty="$(git -C "$KILIX_DIR" status --porcelain \
+        --untracked-files=normal --ignore-submodules=none \
+        2>/dev/null)" || return 1
+    if [ -n "$dirty" ]; then
+        warn "Kilix acquired local changes while the updater was running; refusing to deinitialize submodules"
+        return 1
     fi
-    git -C "$KILIX_DIR" submodule deinit -f -- "$path" >/dev/null 2>&1
+    deinit_new_kilix_submodules_in_repo "$KILIX_DIR" ""
+}
+
+restore_recorded_kilix_submodules() {
+    local count index key path parent name state repo dir mode dirty
+    count="$(cat "$_STACK_TXN_DIR/kilix-submodule.count" 2>/dev/null)" \
+        || return 1
+    [[ "$count" =~ ^[0-9]+$ ]] || return 1
+    for ((index=0; index<count; index++)); do
+        key="$(printf 'kilix-submodule-%06d' "$index")"
+        path="$(cat "$_STACK_TXN_DIR/$key.path")" || return 1
+        parent="$(cat "$_STACK_TXN_DIR/$key.parent")" || return 1
+        name="$(cat "$_STACK_TXN_DIR/$key.name")" || return 1
+        state="$(cat "$_STACK_TXN_DIR/$key.worktree")" || return 1
+        kilix_submodule_path_is_safe "$path" || return 1
+        if [ -n "$parent" ]; then
+            repo="$KILIX_DIR/$parent"
+        else
+            repo="$KILIX_DIR"
+        fi
+        [ -d "$repo/.git" ] || [ -f "$repo/.git" ] || return 1
+        mode="$(git -C "$repo" ls-files --stage -- "$name" 2>/dev/null \
+            | awk 'NR == 1 { print $1 }')"
+        [ "$mode" = 160000 ] || return 1
+        dir="$KILIX_DIR/$path"
+        case "$state" in
+            initialized)
+                git -C "$repo" submodule sync -- "$name" >/dev/null 2>&1 \
+                    || return 1
+                git -C "$repo" -c submodule.recurse=false \
+                    submodule update --init -- "$name" >/dev/null 2>&1 \
+                    || return 1
+                restore_stack_checkout "$dir" "$key" \
+                    "Kilix submodule $path" transaction-controlled || return 1
+                ;;
+            absent|empty)
+                if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+                    dirty="$(git -C "$dir" status --porcelain \
+                        --untracked-files=normal --ignore-submodules=none \
+                        2>/dev/null)" || return 1
+                    [ -z "$dirty" ] || return 1
+                    git -C "$repo" submodule deinit -f -- "$name" \
+                        >/dev/null 2>&1 || return 1
+                fi
+                if [ "$state" = absent ]; then
+                    if [ -d "$dir" ] && [ ! -L "$dir" ]; then
+                        rmdir -- "$dir" || return 1
+                    elif [ -e "$dir" ] || [ -L "$dir" ]; then
+                        return 1
+                    fi
+                else
+                    if [ ! -e "$dir" ]; then
+                        mkdir -p -- "$dir" || return 1
+                    fi
+                    [ -d "$dir" ] && [ ! -L "$dir" ] \
+                        && [ -z "$(find "$dir" -mindepth 1 -maxdepth 1 -print -quit)" ] \
+                        || return 1
+                fi
+                ;;
+            *) return 1 ;;
+        esac
+    done
 }
 
 restore_stack_path() {
@@ -1254,39 +1435,34 @@ commit_kilix_engine_generation() {
 }
 
 rollback_stack_transaction() {
-    local failed=0
+    local failed=0 kilix_rollback_ready=0
     warn "stack update failed; restoring the previous coherent installation"
 
-    # Deinitialize submodules introduced by the failed parent update while the
-    # new .gitmodules entry still exists. Restoring the parent first would
-    # strand their worktrees/config when the old commit did not know the path.
-    deinit_new_kilix_submodule src kilix-src "kilix source" || failed=1
-    deinit_new_kilix_submodule third_party/kitty-frame-presenter \
-        kilix-presenter "kilix frame presenter" || failed=1
-    deinit_new_kilix_submodule third_party/kilix-content \
-        kilix-content "kilix content catalog" || failed=1
-    deinit_new_kilix_submodule third_party/kitty-pty-broker \
-        kilix-pty-broker "Kilix PTY broker" || failed=1
+    # Deinitialize every submodule introduced by the failed parent update while
+    # the new index still names it.  The snapshot is recursive and path-driven,
+    # so additions below any existing submodule cannot escape rollback.
+    if deinit_new_kilix_submodules; then
+        # The full tree was clean immediately before the controlled deinit.
+        # From here until the recorded heads are restored, apparent dirtiness
+        # can only be the deleted gitlinks created by that operation. Permit
+        # checkout/reset to consume precisely this Kilix-only rollback state.
+        _STACK_KILIX_ROLLBACK_CONTROLLED=1
+        kilix_rollback_ready=1
+    else
+        failed=1
+    fi
     # Restore parent repositories before their pre-existing submodule checkout.
     restore_stack_checkout "$PLEB_DIR" pleb pleb || failed=1
     if [ ! -f "$_STACK_TXN_DIR/os.skipped" ]; then
         restore_stack_checkout "$PLEBIAN_OS_DIR" os plebian-os || failed=1
     fi
-    restore_stack_checkout "$KILIX_DIR" kilix kilix || failed=1
-    if [ "$(cat "$_STACK_TXN_DIR/kilix-src.existed" 2>/dev/null || echo 0)" = 1 ]; then
-        restore_stack_checkout "$KILIX_DIR/src" kilix-src "kilix source" || failed=1
-    fi
-    if [ "$(cat "$_STACK_TXN_DIR/kilix-presenter.existed" 2>/dev/null || echo 0)" = 1 ]; then
-        restore_stack_checkout "$KILIX_DIR/third_party/kitty-frame-presenter" \
-            kilix-presenter "kilix frame presenter" || failed=1
-    fi
-    if [ "$(cat "$_STACK_TXN_DIR/kilix-content.existed" 2>/dev/null || echo 0)" = 1 ]; then
-        restore_stack_checkout "$KILIX_DIR/third_party/kilix-content" \
-            kilix-content "kilix content catalog" || failed=1
-    fi
-    if [ "$(cat "$_STACK_TXN_DIR/kilix-pty-broker.existed" 2>/dev/null || echo 0)" = 1 ]; then
-        restore_stack_checkout "$KILIX_DIR/third_party/kitty-pty-broker" \
-            kilix-pty-broker "Kilix PTY broker" || failed=1
+    if [ "$kilix_rollback_ready" = 1 ]; then
+        if restore_stack_checkout "$KILIX_DIR" kilix kilix \
+            transaction-controlled; then
+            restore_recorded_kilix_submodules || failed=1
+        else
+            failed=1
+        fi
     fi
     restore_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95" || failed=1
 
@@ -1348,6 +1524,7 @@ stack_transaction_cleanup() {
 }
 
 begin_stack_transaction() {
+    _STACK_KILIX_ROLLBACK_CONTROLLED=0
     require_standard_install_destinations
     acquire_kilix_transaction_lock
     validate_kilix_fork_stamp_path
@@ -1370,13 +1547,7 @@ begin_stack_transaction() {
         *) : >"$_STACK_TXN_DIR/os.skipped" ;;
     esac
     record_stack_checkout "$KILIX_DIR" kilix kilix
-    record_kilix_submodule "$KILIX_DIR/src" kilix-src "kilix source"
-    record_kilix_submodule "$KILIX_DIR/third_party/kitty-frame-presenter" \
-        kilix-presenter "kilix frame presenter"
-    record_kilix_submodule "$KILIX_DIR/third_party/kilix-content" \
-        kilix-content "kilix content catalog"
-    record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker" \
-        kilix-pty-broker "Kilix PTY broker"
+    record_kilix_submodule_tree
     record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
     snapshot_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings
     snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt

@@ -175,6 +175,9 @@ class UpdateLifecycleTests(unittest.TestCase):
             "rollback_stack_transaction",
             "restore_root_stack_snapshot",
             'record_stack_checkout "$PLEB_DIR" pleb pleb',
+            "record_kilix_submodule_tree",
+            "deinit_new_kilix_submodules",
+            "restore_recorded_kilix_submodules",
             'snapshot_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings',
             'restore_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings file',
             "validate_shared_settings_snapshot_path",
@@ -330,6 +333,15 @@ init_repo "$KILIX95_DIR"
 init_repo "$work/presenter-source"
 init_repo "$work/content-source"
 init_repo "$work/broker-source"
+init_repo "$work/multiplexer-source"
+init_repo "$work/state-source"
+init_repo "$work/telemetry-source"
+init_repo "$work/nested-source"
+git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
+    "$work/multiplexer-source" third_party/kilix-multiplexer >/dev/null
+git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
+    "$work/state-source" third_party/kilix-state >/dev/null
+git -C "$KILIX_DIR" commit -q -m old-submodules
 mkdir -p "$KILIX_PREBUILT_HOME/bin"
 printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 mkdir -p "$KILIX_STATE_DIRECTORY" \
@@ -370,6 +382,10 @@ printf '%s\n' old-root >"$work/root-output"
 cp "$work/root-output" "$work/root-backup"
 git -C "$PLEB_DIR" rev-parse HEAD >"$work/old-head"
 git -C "$KILIX_DIR" rev-parse HEAD >"$work/old-kilix-head"
+git -C "$KILIX_DIR/third_party/kilix-multiplexer" rev-parse HEAD \
+    >"$work/old-multiplexer-head"
+git -C "$KILIX_DIR/third_party/kilix-state" rev-parse HEAD \
+    >"$work/old-state-head"
 . "$script"
 
 # Replace only the privileged snapshot functions: checkout/path rollback is the
@@ -382,13 +398,7 @@ _STACK_TXN_DIR="$(mktemp -d "$PLEB_STATE_HOME/stack-rollback.XXXXXX")"
 record_stack_checkout "$PLEB_DIR" pleb pleb
 record_stack_checkout "$PLEBIAN_OS_DIR" os plebian-os
 record_stack_checkout "$KILIX_DIR" kilix kilix
-record_kilix_submodule "$KILIX_DIR/src" kilix-src "kilix source"
-record_kilix_submodule "$KILIX_DIR/third_party/kitty-frame-presenter" \
-    kilix-presenter "kilix frame presenter"
-record_kilix_submodule "$KILIX_DIR/third_party/kilix-content" \
-    kilix-content "kilix content catalog"
-record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker" \
-    kilix-pty-broker "Kilix PTY broker"
+record_kilix_submodule_tree
 record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
 validate_shared_settings_snapshot_path
 snapshot_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings
@@ -437,12 +447,29 @@ ln -sfn generations/runtime.New \
 ln -sfn library.New "$KILIX_DATA_HOME/voice/lib/current"
 ln -sfn model.New "$KILIX_DATA_HOME/voice/models/small-en-us"
 printf '%s\n' new-root >"$work/root-output"
+for module in kilix-multiplexer kilix-state; do
+    checkout="$KILIX_DIR/third_party/$module"
+    git -C "$checkout" config user.name test
+    git -C "$checkout" config user.email test@example.invalid
+    printf '%s\n' new >"$checkout/tracked"
+    git -C "$checkout" add tracked
+    git -C "$checkout" commit -q -m new
+    git -C "$KILIX_DIR" add "third_party/$module"
+done
+git -c protocol.file.allow=always \
+    -C "$KILIX_DIR/third_party/kilix-multiplexer" submodule add \
+    "$work/nested-source" extensions/new-nested-module >/dev/null
+git -C "$KILIX_DIR/third_party/kilix-multiplexer" commit -q \
+    -m new-nested-submodule
+git -C "$KILIX_DIR" add third_party/kilix-multiplexer
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/presenter-source" third_party/kitty-frame-presenter >/dev/null
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/content-source" third_party/kilix-content >/dev/null
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/broker-source" third_party/kitty-pty-broker >/dev/null
+git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
+    "$work/telemetry-source" third_party/kilix-telemetry >/dev/null
 git -C "$KILIX_DIR" commit -q -m submodules
 export PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER="$boundary"
 test_fail_after_boundary "$boundary"
@@ -500,6 +527,24 @@ test_fail_after_boundary "$boundary"
         self.assertFalse(
             (work / "kilix/third_party/kitty-pty-broker/tracked").exists()
         )
+        self.assertFalse(
+            (work / "kilix/third_party/kilix-telemetry/tracked").exists()
+        )
+        self.assertFalse(
+            (work / "kilix/third_party/kilix-multiplexer/extensions" /
+             "new-nested-module").exists()
+        )
+        for module, snapshot in (
+                ("kilix-multiplexer", "old-multiplexer-head"),
+                ("kilix-state", "old-state-head")):
+            self.assertEqual(
+                subprocess.check_output(
+                    ["git", "-C", str(work / "kilix/third_party" / module),
+                     "rev-parse", "HEAD"],
+                    text=True,
+                ).strip(),
+                (work / snapshot).read_text().strip(),
+            )
         self.assertEqual(
             (work / "kilix-storage/build/libraries/kitty-pty-broker/marker")
             .read_text().strip(),
