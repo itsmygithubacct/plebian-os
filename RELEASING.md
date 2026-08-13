@@ -167,7 +167,12 @@ the selector adds keys the installed release never had, but only ones it knows
 are release-controlled. The selector must fetch and compare all four exact Git
 component refs before rendering the new configuration, so a higher coordinated
 version cannot hide a component downgrade. It is installed on PATH as part of
-the twelve-file transactional OS layer beginning with 0.1.9.
+the twelve-file transactional OS layer beginning with 0.1.9. The selection
+transaction also installs the exact target updater and backs up the prior
+updater, selector, and session together. This is required whenever the target
+changes the updater's payload set, dependency policy, validation, or final
+provenance contract: replacing an already-running source-release updater later
+cannot change the process which is performing that hop.
 
 ## Cutting `<x.y.z>`
 

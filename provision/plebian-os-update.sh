@@ -62,6 +62,28 @@ desktop_wallpaper_matches_expected_hash() {
     [ "$actual" = "$expected" ]
 }
 
+# Keep release provenance bound to the exact semantic uv pin while accepting
+# the structured Rust target suffix emitted by current uv binaries.
+uv_version_matches_pin() {
+    local actual="$1" expected="$2" prefix target
+    [ -n "$actual" ] && [ -n "$expected" ] || return 1
+    [ "$actual" != "uv $expected" ] || return 0
+    prefix="uv $expected ("
+    case "$actual" in
+        "$prefix"*) target="${actual#"$prefix"}" ;;
+        *) return 1 ;;
+    esac
+    case "$target" in
+        *')') target="${target%)}" ;;
+        *) return 1 ;;
+    esac
+    [ -n "$target" ] && [[ "$target" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]*$ ]]
+}
+
+provenance_kv() {
+    printf '%s=%q\n' "$1" "$2"
+}
+
 ensure_private_update_dir() {
     local path="$1" anchor="$2" label="$3"
     local secure_intermediates="${4:-0}"
@@ -488,6 +510,12 @@ PLEBIAN_OS_REF="${PLEBIAN_OS_REF:-}"
 PLEBIAN_OS_SELF_UPDATE="${PLEBIAN_OS_SELF_UPDATE:-1}"
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"
 [ -n "$PLEBIAN_OS_VERSION" ] || PLEBIAN_OS_VERSION="$(cat "$PLEBIAN_OS_DIR/VERSION" 2>/dev/null || echo unknown)"
+PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
+PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
+PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}"
+PLEBIAN_OS_INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
+PLEBIAN_OS_UV_VERSION="${PLEBIAN_OS_UV_VERSION:-}"
+PLEBIAN_OS_UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
 
 restart_arg=--no-restart
 [ "$#" -le 1 ] || die "expected at most one option (try --help)"
@@ -600,6 +628,7 @@ _STACK_TXN_COMMITTED=0
 _STACK_TXN_RETAIN=0
 _STACK_KILIX_ROLLBACK_CONTROLLED=0
 _OS_LAYER_STAGE=""
+_PROVENANCE_STAGE=""
 
 require_standard_install_destinations() {
     if [ "$SESSION_BIN_DST" != /usr/local/bin/pleb-session ] \
@@ -791,6 +820,11 @@ paths=(
     /usr/local/share/doc/pleb/RECOVERY.md
     /usr/local/share/pleb/openbox/rc.xml
     /etc/pleb/session.env
+    /usr/local/bin/uv
+    /usr/local/bin/uvx
+    /var/lib/plebian-os/packages.list
+    /var/lib/plebian-os/versions.env
+    /var/lib/plebian-os/apt-sources.list
 )
 managed_dirs=(
     /usr/local/share/plebian-os
@@ -812,7 +846,8 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir "$txn/items"
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm; do
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
+    /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
     dir_mode="$(stat -c '%a' "$dir")"
@@ -858,7 +893,8 @@ case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
 [ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
 mode="$(stat -c '%a' "$txn")"
 (( (8#$mode & 8#077) == 0 )) || exit 2
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm; do
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
+    /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
     dir_mode="$(stat -c '%a' "$dir")"
@@ -890,6 +926,11 @@ paths=(
     /usr/local/share/doc/pleb/RECOVERY.md
     /usr/local/share/pleb/openbox/rc.xml
     /etc/pleb/session.env
+    /usr/local/bin/uv
+    /usr/local/bin/uvx
+    /var/lib/plebian-os/packages.list
+    /var/lib/plebian-os/versions.env
+    /var/lib/plebian-os/apt-sources.list
 )
 managed_dirs=(
     /usr/local/share/plebian-os
@@ -1505,6 +1546,7 @@ stack_transaction_cleanup() {
     trap '' PIPE
     set +e
     [ -z "${_OS_LAYER_STAGE:-}" ] || rm -rf -- "$_OS_LAYER_STAGE"
+    [ -z "${_PROVENANCE_STAGE:-}" ] || rm -rf -- "$_PROVENANCE_STAGE"
     if [ "${_STACK_TXN_ACTIVE:-0}" = 1 ] \
         && [ "${_STACK_TXN_COMMITTED:-0}" != 1 ]; then
         [ "$rc" -ne 0 ] || rc=1
@@ -2311,7 +2353,30 @@ self_update_os_layer() {
     rm -rf "$stage"
     _OS_LAYER_STAGE=""
     log "OS layer refreshed to $(cat "$PLEBIAN_OS_DIR/VERSION" 2>/dev/null || echo unknown)"
-    log "  (a full 'sudo plebian-os-provision' re-run applies deeper OS-layer changes, e.g. new deps)"
+    log "  (the selected dependency policy is reconciled next; full reprovisioning is not required)"
+}
+
+# Apply the dependency policy shipped by the selected target. The selector
+# installs the target updater before this command starts, and the OS-layer
+# refresh deploys the matching dependency helper before it is invoked here. Apt package
+# additions are permitted rollback residue; the two system uv binaries are
+# included in the root snapshot because they are directly selected on PATH.
+refresh_os_dependencies() {
+    local helper=/usr/local/sbin/plebian-os-install-deps
+    local -a elevate=()
+    if [ ! -x "$helper" ] || [ -L "$helper" ]; then
+        die "selected OS dependency helper is missing or unsafe: $helper"
+    fi
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    log "reconciling the selected OS dependency closure (needs root)"
+    "${elevate[@]}" env \
+        "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE" \
+        "PLEBIAN_OS_INSTALL_UV=$PLEBIAN_OS_INSTALL_UV" \
+        "PLEBIAN_OS_UV_VERSION=$PLEBIAN_OS_UV_VERSION" \
+        "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256" \
+        PLEBIAN_OS_ROOT_SESSION_HOME=/var/lib/plebian-os/session \
+        "$helper" \
+        || die "selected OS dependency closure could not be installed"
 }
 
 stack_env=(
@@ -2322,6 +2387,13 @@ stack_env=(
     "PLEBIAN_OS_DIR=$PLEBIAN_OS_DIR"
     "PLEBIAN_OS_STORAGE_HOME=$PLEBIAN_OS_STORAGE_HOME"
     "PLEBIAN_OS_SESSION_HOME=$PLEBIAN_OS_SESSION_HOME"
+    "PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
+    "PLEBIAN_OS_RELEASE=$PLEBIAN_OS_RELEASE"
+    "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"
+    "PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT"
+    "PLEBIAN_OS_INSTALL_UV=$PLEBIAN_OS_INSTALL_UV"
+    "PLEBIAN_OS_UV_VERSION=$PLEBIAN_OS_UV_VERSION"
+    "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256"
     "PLEB_DIR=$PLEB_DIR"
     "PLEB_STORAGE_HOME=$PLEB_STORAGE_HOME"
     "PLEB_CONFIG_HOME=$PLEB_CONFIG_HOME"
@@ -2401,6 +2473,353 @@ stack_env=(
     "KILIX95_REF=$KILIX95_REF"
 )
 
+# Build the same final source/tool manifest as the provisioner, but only after
+# every checkout, build, dependency, install, and session migration has
+# succeeded. The files remain user-owned private staging inputs until a bounded
+# root transaction verifies their hashes and atomically replaces the installed
+# provenance set. The outer root snapshot restores the old set after any later
+# failure.
+stage_final_provenance() {
+    local stage="$1"
+    local plebian_os_commit pleb_commit kilix_commit kilix_source_commit
+    local kilix95_commit pleb_version kilix_version kilix95_version
+    local go_version engine engine_version uv_version
+
+    command -v dpkg-query >/dev/null 2>&1 \
+        || die "dpkg-query is unavailable; cannot record final package provenance"
+    LC_ALL=C dpkg-query -W -f='${Package}=${Version}\n' 2>/dev/null \
+        | LC_ALL=C sort >"$stage/packages.list" \
+        || die "could not record final installed package set"
+    [ -s "$stage/packages.list" ] \
+        || die "final installed package provenance is empty"
+
+    plebian_os_commit="$(git -C "$PLEBIAN_OS_DIR" rev-parse HEAD 2>/dev/null || true)"
+    pleb_commit="$(git -C "$PLEB_DIR" rev-parse HEAD 2>/dev/null || true)"
+    kilix_commit="$(git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
+    kilix_source_commit="$(git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
+    kilix95_commit="$(git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
+    pleb_version="$(env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
+    kilix_version="$(env "${stack_env[@]}" "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
+    if [ -f "$KILIX95_DIR/main.py" ]; then
+        kilix95_version="$(env "${stack_env[@]}" python3 "$KILIX95_DIR/main.py" --version 2>/dev/null || true)"
+    else
+        kilix95_version=""
+    fi
+    go_version="$(bash -lc 'go version' 2>/dev/null || true)"
+    uv_version="$(/usr/local/bin/uv --version 2>/dev/null || true)"
+    engine="$(env "${stack_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
+    if [ -n "$engine" ] && [ -x "$engine" ]; then
+        engine_version="$(env "${stack_env[@]}" "$engine" --version 2>/dev/null | head -1 || true)"
+    else
+        engine_version=""
+    fi
+
+    {
+        echo "# Final resolved Plebian-OS source/tool provenance."
+        provenance_kv PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
+        provenance_kv PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
+        provenance_kv PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
+        provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
+        provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
+        provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
+        provenance_kv GPU_TERMINAL_SETTINGS_FILE "$GPU_TERMINAL_SETTINGS_FILE"
+        provenance_kv PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
+        provenance_kv PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
+        provenance_kv PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
+        provenance_kv PLEBIAN_OS_COMMIT "$plebian_os_commit"
+        provenance_kv PLEBIAN_OS_DIR "$PLEBIAN_OS_DIR"
+        provenance_kv PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
+        provenance_kv PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"
+        provenance_kv PLEB_DIR "$PLEB_DIR"
+        provenance_kv PLEB_STORAGE_HOME "$PLEB_STORAGE_HOME"
+        provenance_kv PLEB_CONFIG_HOME "$PLEB_CONFIG_HOME"
+        provenance_kv PLEB_STATE_HOME "$PLEB_STATE_HOME"
+        provenance_kv PLEB_CACHE_HOME "$PLEB_CACHE_HOME"
+        provenance_kv PLEB_SESSION_HOME "$PLEB_SESSION_HOME"
+        provenance_kv PLEB_DATA_HOME "$PLEB_DATA_HOME"
+        provenance_kv PLEB_REF "$PLEB_REF"
+        provenance_kv PLEB_COMMIT "$pleb_commit"
+        provenance_kv PLEB_VERSION "$pleb_version"
+        provenance_kv KILIX_REF "$KILIX_REF"
+        provenance_kv KILIX_DIR "$KILIX_DIR"
+        provenance_kv KILIX_STORAGE_HOME "$KILIX_STORAGE_HOME"
+        provenance_kv KILIX_CONFIG_HOME "$KILIX_CONFIG_HOME"
+        provenance_kv KILIX_STATE_DIRECTORY "$KILIX_STATE_DIRECTORY"
+        provenance_kv KILIX_CACHE_HOME "$KILIX_CACHE_HOME"
+        provenance_kv KILIX_SESSION_HOME "$KILIX_SESSION_HOME"
+        provenance_kv KILIX_BUILD_DIRECTORY "$KILIX_BUILD_DIRECTORY"
+        provenance_kv KILIX_DATA_HOME "$KILIX_DATA_HOME"
+        provenance_kv KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
+        provenance_kv KILIX_PREBUILT_HOME "$KILIX_PREBUILT_HOME"
+        provenance_kv KILIX_COMMIT "$kilix_commit"
+        provenance_kv KILIX_SOURCE_COMMIT "$kilix_source_commit"
+        provenance_kv KILIX_VERSION "$kilix_version"
+        provenance_kv KILIX_ENGINE "$engine"
+        provenance_kv KILIX_ENGINE_VERSION "$engine_version"
+        provenance_kv KILIX_VOICE_REF "$KILIX_VOICE_REF"
+        provenance_kv KILIX_VOICE_LIB_VERSION "$KILIX_VOICE_LIB_VERSION"
+        provenance_kv KILIX_VOICE_LIB_URL "$KILIX_VOICE_LIB_URL"
+        provenance_kv KILIX_VOICE_LIB_SHA256 "$KILIX_VOICE_LIB_SHA256"
+        provenance_kv KILIX_VOICE_MODEL_URL "$KILIX_VOICE_MODEL_URL"
+        provenance_kv KILIX_VOICE_MODEL_SHA256 "$KILIX_VOICE_MODEL_SHA256"
+        provenance_kv PLEBIAN_OS_INSTALL_VOICE_MODEL "$PLEBIAN_OS_INSTALL_VOICE_MODEL"
+        provenance_kv KILIX_CAP_DIR "$KILIX_CAP_DIR"
+        provenance_kv KILIX_CAP_REPO "$KILIX_CAP_REPO"
+        provenance_kv KILIX_CAP_REF "$KILIX_CAP_REF"
+        provenance_kv KILIX_TUI_UTILS_DIR "$KILIX_TUI_UTILS_DIR"
+        provenance_kv KILIX_TUI_UTILS_REPO "$KILIX_TUI_UTILS_REPO"
+        provenance_kv KILIX_TUI_UTILS_REF "$KILIX_TUI_UTILS_REF"
+        provenance_kv KILIX_LAND_DESKTOP_DIR "$KILIX_LAND_DESKTOP_DIR"
+        provenance_kv KILIX_LAND_DESKTOP_REPO "$KILIX_LAND_DESKTOP_REPO"
+        provenance_kv KILIX_LAND_DESKTOP_REF "$KILIX_LAND_DESKTOP_REF"
+        provenance_kv KILIX95_REF "$KILIX95_REF"
+        provenance_kv KILIX95_DIR "$KILIX95_DIR"
+        provenance_kv KILIX95_STORAGE_HOME "$KILIX95_STORAGE_HOME"
+        provenance_kv KILIX95_CONFIG_HOME "$KILIX95_CONFIG_HOME"
+        provenance_kv KILIX95_STATE_HOME "$KILIX95_STATE_HOME"
+        provenance_kv KILIX95_CACHE_HOME "$KILIX95_CACHE_HOME"
+        provenance_kv KILIX95_SESSION_HOME "$KILIX95_SESSION_HOME"
+        provenance_kv KILIX95_DATA_HOME "$KILIX95_DATA_HOME"
+        provenance_kv KILIX95_COMMIT "$kilix95_commit"
+        provenance_kv KILIX95_VERSION "$kilix95_version"
+        provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$PLEBIAN_OS_KILIX_GO_VERSION"
+        provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$PLEBIAN_OS_KILIX_GO_SHA256_AMD64"
+        provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$PLEBIAN_OS_KILIX_GO_SHA256_ARM64"
+        provenance_kv GO_VERSION "$go_version"
+        provenance_kv PLEBIAN_OS_INSTALL_UV "$PLEBIAN_OS_INSTALL_UV"
+        provenance_kv PLEBIAN_OS_UV_VERSION "$PLEBIAN_OS_UV_VERSION"
+        provenance_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "$PLEBIAN_OS_UV_INSTALLER_SHA256"
+        provenance_kv UV_VERSION "$uv_version"
+        provenance_kv GIT_VERSION "$(git --version 2>/dev/null || true)"
+        provenance_kv PYTHON3_VERSION "$(python3 --version 2>&1 || true)"
+        provenance_kv KERNEL_VERSION "$(uname -srmo 2>/dev/null || true)"
+    } >"$stage/versions.env"
+
+    apt-get indextargets \
+        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
+        | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u \
+        >"$stage/apt-sources.list" \
+        || die "could not record final apt source indexes"
+
+    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
+        [ -s "$stage/apt-sources.list" ] \
+            || die "release apt index provenance is empty"
+        if grep -v 'snapshot\.debian\.org' "$stage/apt-sources.list" | grep -q .; then
+            die "release apt provenance contains a non-snapshot index"
+        fi
+        [ "$plebian_os_commit" = "${PLEBIAN_OS_REF,,}" ] \
+            || die "resolved plebian-os commit $plebian_os_commit does not match PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
+        [ "$pleb_commit" = "${PLEB_REF,,}" ] \
+            || die "resolved pleb commit $pleb_commit does not match PLEB_REF=$PLEB_REF"
+        [ "$kilix_commit" = "${KILIX_REF,,}" ] \
+            || die "resolved kilix commit $kilix_commit does not match KILIX_REF=$KILIX_REF"
+        [ "$kilix95_commit" = "${KILIX95_REF,,}" ] \
+            || die "resolved kilix 95 commit $kilix95_commit does not match KILIX95_REF=$KILIX95_REF"
+        [ "$pleb_version" = "pleb $PLEBIAN_OS_VERSION" ] \
+            || die "pleb reports '$pleb_version', expected exactly 'pleb $PLEBIAN_OS_VERSION'"
+        [ "$kilix_version" = "$PLEBIAN_OS_VERSION" ] \
+            || die "kilix reports '$kilix_version', expected exactly '$PLEBIAN_OS_VERSION'"
+        [ "$kilix95_version" = "kilix-95 $PLEBIAN_OS_VERSION" ] \
+            || die "kilix 95 reports '$kilix95_version', expected exactly 'kilix-95 $PLEBIAN_OS_VERSION'"
+        if [ "$PLEBIAN_OS_INSTALL_UV" = 1 ]; then
+            uv_version_matches_pin "$uv_version" "$PLEBIAN_OS_UV_VERSION" \
+                || die "release uv provenance mismatch: expected 'uv $PLEBIAN_OS_UV_VERSION', got '${uv_version:-<missing>}'"
+        fi
+    fi
+    chmod 0600 "$stage/packages.list" "$stage/versions.env" \
+        "$stage/apt-sources.list"
+}
+
+deploy_staged_provenance() {
+    local stage="$1"
+    shift
+    local -a expected_hashes=("$@") root_command
+    [ "${#expected_hashes[@]}" -eq 3 ] \
+        || die "provenance deployment requires one expected hash per staged file"
+    if [ "$EUID" = 0 ]; then
+        root_command=(env -u SUDO_UID -u SUDO_GID -u SUDO_USER)
+    else
+        root_command=(sudo)
+    fi
+    "${root_command[@]}" bash -s -- "$stage" "${expected_hashes[@]}" <<'ROOT_PROVENANCE'
+set -euo pipefail
+stage="$1"; shift; expected_hashes=("$@")
+caller_uid="${SUDO_UID:-0}"
+[[ "$caller_uid" =~ ^[0-9]+$ ]] || exit 2
+[ "$EUID" = 0 ] || exit 2
+if [ -n "${SUDO_UID:-}" ]; then
+    [ "$caller_uid" -gt 0 ] || exit 2
+else
+    [ "$caller_uid" = 0 ] || exit 2
+fi
+[ -d "$stage" ] && [ ! -L "$stage" ] \
+    && [ "$(stat -c '%u:%a' -- "$stage")" = "$caller_uid:700" ] || exit 2
+names=(packages.list versions.env apt-sources.list)
+dests=(
+    /var/lib/plebian-os/packages.list
+    /var/lib/plebian-os/versions.env
+    /var/lib/plebian-os/apt-sources.list
+)
+max_sizes=(67108864 2097152 8388608)
+new_paths=() backup_paths=() existed=() changed=()
+[ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
+for hash in "${expected_hashes[@]}"; do
+    [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || exit 2
+done
+for dir in / /var /var/lib /var/lib/plebian-os; do
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' -- "$dir")" = 0 ] \
+        || exit 2
+    mode="$(stat -c '%a' -- "$dir")"
+    (( (8#$mode & 8#22) == 0 )) || exit 2
+done
+
+cleanup_transaction_files() {
+    local path
+    for path in "${new_paths[@]:-}" "${backup_paths[@]:-}"; do
+        [ -n "$path" ] && rm -f -- "$path"
+    done
+}
+rollback() {
+    local rc=$? i rollback_ok=1
+    [ "$rc" -ne 0 ] || rc=1
+    trap - ERR INT TERM HUP PIPE
+    trap '' PIPE
+    set +e
+    for ((i=${#dests[@]}-1; i>=0; i--)); do
+        [ "${changed[$i]:-0}" = 1 ] || continue
+        if [ "${existed[$i]:-0}" = 1 ]; then
+            if mv -fT -- "${backup_paths[$i]}" "${dests[$i]}"; then
+                backup_paths[$i]=""
+            else
+                rollback_ok=0
+            fi
+        else
+            rm -f -- "${dests[$i]}" || rollback_ok=0
+        fi
+    done
+    if [ "$rollback_ok" = 1 ]; then
+        cleanup_transaction_files
+    else
+        printf '%s\n' 'plebian-os-update: final provenance rollback was incomplete' >&2
+        rc=70
+    fi
+    exit "$rc"
+}
+trap rollback ERR INT TERM HUP PIPE
+
+for i in "${!dests[@]}"; do
+    dest="${dests[$i]}"
+    new="$(dirname -- "$dest")/.$(basename -- "$dest").plebian-os-new.$$"
+    new_paths[$i]="$new"
+    python3 - "$stage/${names[$i]}" "$new" "$caller_uid" "${max_sizes[$i]}" <<'PY'
+import os
+import stat
+import sys
+
+source, destination, caller_uid_text, limit_text = sys.argv[1:]
+caller_uid = int(caller_uid_text)
+limit = int(limit_text)
+source_fd = os.open(
+    source, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW)
+destination_fd = None
+try:
+    source_stat = os.fstat(source_fd)
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise RuntimeError("provenance source is not a regular file")
+    if source_stat.st_uid != caller_uid or source_stat.st_nlink != 1:
+        raise RuntimeError("provenance source identity is unsafe")
+    if source_stat.st_mode & 0o022 or source_stat.st_size > limit:
+        raise RuntimeError("provenance source mode or size is unsafe")
+    destination_fd = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+    )
+    os.fchown(destination_fd, 0, 0)
+    total = 0
+    while True:
+        chunk = os.read(source_fd, min(1024 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise RuntimeError("provenance source grew beyond its copy limit")
+        view = memoryview(chunk)
+        while view:
+            view = view[os.write(destination_fd, view):]
+    os.fsync(destination_fd)
+except BaseException:
+    if destination_fd is not None:
+        os.close(destination_fd)
+        destination_fd = None
+    try:
+        os.unlink(destination)
+    except FileNotFoundError:
+        pass
+    raise
+finally:
+    os.close(source_fd)
+    if destination_fd is not None:
+        os.close(destination_fd)
+PY
+    [ "$(sha256sum -- "$new" | awk '{print $1}')" = "${expected_hashes[$i]}" ] \
+        || exit 3
+    [ "$(stat -c '%u:%g:%a' -- "$new")" = 0:0:600 ] || exit 2
+done
+[ -s "${new_paths[0]}" ] && [ -s "${new_paths[1]}" ] || exit 3
+python3 - "${new_paths[1]}" <<'PY'
+import pathlib
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+if not data.endswith(b"\n") or b"\0" in data:
+    raise SystemExit(1)
+text = data.decode("utf-8")
+if not text.startswith("# Final resolved Plebian-OS source/tool provenance.\n"):
+    raise SystemExit(1)
+PY
+for i in "${!dests[@]}"; do
+    dest="${dests[$i]}"
+    backup="$(dirname -- "$dest")/.$(basename -- "$dest").plebian-os-old.$$"
+    backup_paths[$i]="$backup"
+    if [ -e "$dest" ] || [ -L "$dest" ]; then
+        [ -f "$dest" ] && [ ! -L "$dest" ] || exit 2
+        cp -a -- "$dest" "$backup"
+        existed[$i]=1
+    else
+        existed[$i]=0
+    fi
+done
+for i in "${!dests[@]}"; do
+    chmod 0644 -- "${new_paths[$i]}"
+    changed[$i]=1
+    mv -fT -- "${new_paths[$i]}" "${dests[$i]}"
+    new_paths[$i]=""
+done
+trap - ERR INT TERM HUP PIPE
+cleanup_transaction_files
+ROOT_PROVENANCE
+}
+
+write_final_provenance() {
+    local stage file
+    local -a names=(packages.list versions.env apt-sources.list) hashes=()
+    mkdir -p -- "$PLEBIAN_OS_SESSION_HOME"
+    stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/provenance.XXXXXX")" \
+        || die "could not allocate final provenance staging"
+    chmod 0700 -- "$stage"
+    _PROVENANCE_STAGE="$stage"
+    stage_final_provenance "$stage"
+    for file in "${names[@]}"; do
+        hashes+=("$(sha256sum "$stage/$file" | awk '{print $1}')")
+    done
+    log "atomically recording final package, source, and tool provenance (needs root)"
+    deploy_staged_provenance "$stage" "${hashes[@]}" \
+        || die "final provenance deployment failed and was rolled back"
+    rm -rf -- "$stage"
+    _PROVENANCE_STAGE=""
+}
+
 # Focused regression harnesses source the transaction functions without
 # executing an update. This hook is deliberately test-namespaced and checked
 # only after all production functions have been parsed.
@@ -2428,6 +2847,8 @@ begin_stack_transaction
 # Refresh the OS layer itself (provisioner/deps/update helper) first, then pleb.
 self_update_os_layer
 test_fail_after_boundary os-layer
+refresh_os_dependencies
+test_fail_after_boundary dependencies
 
 log "updating pleb   ($PLEB_DIR)"
 update_pleb_checkout
@@ -2453,6 +2874,8 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     migrate_pleb_session_env \
         || die "could not apply the window manager session defaults to /etc/pleb/session.env"
     test_fail_after_boundary session-env
+    write_final_provenance
+    test_fail_after_boundary provenance
 else
     warn "no pleb at $PLEB_DIR/bin/pleb — cannot run 'pleb install'"
     exit 1

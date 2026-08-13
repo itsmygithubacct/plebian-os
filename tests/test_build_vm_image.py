@@ -93,7 +93,10 @@ class VmBuilderEnvTests(unittest.TestCase):
             "KILIX95_COMMIT",
         ):
             self.assertIn(commit, source[source.index("def verify_provisioning"):])
-        self.assertIn('[0-9a-f]{40}', source[source.index("def verify_provisioning"):])
+        self.assertIn(
+            're.fullmatch(r"[0-9a-fA-F]{40}"',
+            source[source.index("def verify_provisioning"):],
+        )
         for ref in ("PLEBIAN_OS_REF", "PLEB_REF", "KILIX_REF", "KILIX95_REF"):
             self.assertIn(ref, source[source.index("def verify_provisioning"):])
         self.assertIn('git -C "${dir_var}" rev-parse HEAD', source)
@@ -233,6 +236,14 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn("snapshot_acceptance_update", command)
         self.assertIn('cmp -s "$before" "$after"', command)
         self.assertIn("/usr/local/bin/plebian-os-select-closure", command)
+        for path in (
+            "/usr/local/bin/uv",
+            "/usr/local/bin/uvx",
+            "/var/lib/plebian-os/packages.list",
+            "/var/lib/plebian-os/versions.env",
+            "/var/lib/plebian-os/apt-sources.list",
+        ):
+            self.assertIn(path, command)
 
     def test_successful_update_waits_for_a_new_lightdm_invocation(self):
         before = SimpleNamespace(
@@ -255,6 +266,9 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('"$current" != "$1"', health)
         self.assertIn("systemctl is-active --quiet lightdm.service", health)
         self.assertIn("systemctl is-failed --quiet lightdm.service", health)
+        self.assertIn("/var/lib/plebian-os/versions.env", health)
+        self.assertIn('test "$PLEBIAN_OS_COMMIT" = "$selected_os"', health)
+        self.assertIn("/usr/local/bin/uv --version", health)
         self.assertEqual(remote.call_args_list[2].kwargs["timeout"], 60)
 
     def test_successful_update_refuses_missing_lightdm_identity(self):

@@ -166,9 +166,50 @@ class UpdateLifecycleTests(unittest.TestCase):
                     restore_items.group(1).splitlines(),
                 )
 
+    def test_selected_dependencies_and_final_provenance_are_transactional(self):
+        production = UPDATE[UPDATE.rindex(
+            "# Capture the complete old runtime boundary") :]
+        self.assertLess(production.index("begin_stack_transaction\n"),
+                        production.index("refresh_os_dependencies\n"))
+        self.assertLess(production.index("refresh_os_dependencies\n"),
+                        production.index('log "updating pleb'))
+        self.assertLess(production.index("write_final_provenance\n"),
+                        production.index("commit_stack_transaction\n"))
+        for path in (
+            "/usr/local/bin/uv",
+            "/usr/local/bin/uvx",
+            "/var/lib/plebian-os/packages.list",
+            "/var/lib/plebian-os/versions.env",
+            "/var/lib/plebian-os/apt-sources.list",
+        ):
+            self.assertGreaterEqual(UPDATE.count(path), 2, path)
+        for key in (
+            "PLEBIAN_OS_INSTALL_UV",
+            "PLEBIAN_OS_UV_VERSION",
+            "PLEBIAN_OS_UV_INSTALLER_SHA256",
+        ):
+            self.assertIn(f'"{key}=${key}"', UPDATE)
+
+    def test_update_and_provisioner_emit_the_same_provenance_schema(self):
+        provision_manifest = PROVISION[
+            PROVISION.index("write_source_tool_manifest() {"):
+            PROVISION.index("\n}\n", PROVISION.index(
+                "write_source_tool_manifest() {")) + 3
+        ]
+        update_manifest = UPDATE[
+            UPDATE.index("stage_final_provenance() {"):
+            UPDATE.index("\n}\n", UPDATE.index(
+                "stage_final_provenance() {")) + 3
+        ]
+        key_pattern = r"(?m)^\s*provenance_kv ([A-Z0-9_]+) "
+        self.assertEqual(
+            re.findall(key_pattern, update_manifest),
+            re.findall(key_pattern, provision_manifest),
+        )
+
     def test_outer_transaction_covers_every_stack_boundary(self):
-        for marker in ("os-layer", "pleb-checkout", "pleb-install",
-                       "component-update"):
+        for marker in ("os-layer", "dependencies", "pleb-checkout",
+                       "pleb-install", "component-update", "provenance"):
             self.assertIn(f"test_fail_after_boundary {marker}", UPDATE)
         for primitive in (
             "begin_stack_transaction",

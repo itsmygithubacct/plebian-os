@@ -59,6 +59,9 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX95_BRANCH
     KILIX95_REF
     PLEBIAN_OS_APT_SNAPSHOT
+    PLEBIAN_OS_INSTALL_UV
+    PLEBIAN_OS_UV_VERSION
+    PLEBIAN_OS_UV_INSTALLER_SHA256
     KILIX_PREBUILT_VERSION
     KILIX_PREBUILT_SHA256
     PLEBIAN_OS_BUILD_KILIX_FORK
@@ -125,6 +128,9 @@ declare -A PERSISTED_KEY_VARS=(
     [PLEBIAN_OS_KILIX_GO_SHA256_AMD64]=KILIX_GO_SHA256_AMD64
     [PLEBIAN_OS_KILIX_GO_SHA256_ARM64]=KILIX_GO_SHA256_ARM64
     [PLEBIAN_OS_INSTALL_VOICE_MODEL]=INSTALL_VOICE_MODEL
+    [PLEBIAN_OS_INSTALL_UV]=INSTALL_UV
+    [PLEBIAN_OS_UV_VERSION]=UV_VERSION_PIN
+    [PLEBIAN_OS_UV_INSTALLER_SHA256]=UV_INSTALLER_SHA256
 )
 
 # Everything a re-run must reproduce from the machine it is re-running on, and
@@ -4224,6 +4230,9 @@ EOF
     write_session_default PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
     write_session_default PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"
     write_session_default PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
+    write_session_default PLEBIAN_OS_INSTALL_UV "$INSTALL_UV"
+    write_session_default PLEBIAN_OS_UV_VERSION "$UV_VERSION_PIN"
+    write_session_default PLEBIAN_OS_UV_INSTALLER_SHA256 "$UV_INSTALLER_SHA256"
     # Pleb versions predating these category-level names do not explicitly
     # re-export them after sourcing session.env. Export both storage and desktop
     # selection provenance here so a main-Kilix login passes the same pinned

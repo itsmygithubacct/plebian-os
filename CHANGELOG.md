@@ -30,13 +30,16 @@ upgrade run recorded in
 - Require the exact checksum-verified `uv` 0.12.3 installer in the 0.1.9
   release manifest. Release loading rejects disabling or changing that policy,
   and provisioning verifies the installed binary before accepting the image.
+  The enable flag, version, and installer checksum are now installed closure
+  keys too, so an adjacent upgrade applies and records the same uv policy as a
+  fresh image.
 - Install `plebian-os-select-closure` on PATH for fresh systems, standalone
   provisioning, and transactional self-update. It is the twelfth hash-bound OS
   layer payload and participates in both the inner deployment rollback and the
   outer whole-stack rollback. Target selection also verifies and deploys the
-  exact tagged selector transactionally, bootstrapping that new payload when
-  the starting release's already-running updater knows only the older payload
-  set.
+  exact tagged selector and updater transactionally, bootstrapping new payloads
+  and target update behavior when the starting release knows only its older
+  transaction.
 - Split release VM acceptance into two explicit lanes. The automated derivative
   now binds to a clean candidate commit, uses candidate-specific VM/artifact
   names, verifies exact build provenance plus failed/successful update paths,
@@ -45,10 +48,17 @@ upgrade run recorded in
   operator-driven installs under both VirtualBox firmware modes.
 
 ### Fixed
-- Make the documented first 0.1.8-to-0.1.9 hop install the closure selector it
-  introduces. The target selector and session closure now move as one recovery
-  unit; an interrupted selection or explicit `--rollback` restores the previous
-  selector bytes or its prior absence along with the previous session file.
+- Make the documented first 0.1.8-to-0.1.9 hop install the closure selector and
+  target updater it needs. The two exact tagged tools and session closure now
+  move as one recovery unit; an interrupted selection or explicit `--rollback`
+  restores each tool's previous bytes or absence along with the previous
+  session file.
+- Reconcile the selected target's dependency policy during a whole-stack
+  update, including Evince and checksum-verified system uv, then atomically
+  rewrite `packages.list`, `versions.env`, and `apt-sources.list` only after the
+  final checkouts, component versions, engine, and apt indexes validate. The
+  outer transaction restores the previous provenance and uv binaries after any
+  later failure.
 - Install `libsqlite3-dev` through both image dependency paths so the
   catalog-pinned Kilix NVR can compile its SQLite-backed configuration and
   recording index on a fresh system. Release acceptance now proves this with a

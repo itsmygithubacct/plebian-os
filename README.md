@@ -168,12 +168,18 @@ to another release is therefore a separate, deliberate step: the selector
 extracted from the target release's immutable tag validates that release's complete closure,
 fetches every exact target component commit, reports each component's ancestry
 direction, and selects every release-controlled pin at once while leaving
-operator choices alone. It runs **before** `plebian-os-update --restart` — see
+operator choices alone. It also installs the exact target selector and updater
+as part of that same recoverable selection. It runs **before**
+`plebian-os-update --restart` — see
 [UPGRADING.md](UPGRADING.md) for the exact commands. Updates are serialized;
 participating checkouts with local changes are refused. Before the first change,
-the updater snapshots the deployed OS/Pleb files, checkout positions, and engine
-artifacts. A failure after the OS refresh, Pleb refresh, install, or component
-update restores that previous coherent stack. The OS-layer stage is also bound
+the updater snapshots the deployed OS/Pleb files, checkout positions, engine
+artifacts, system uv binaries, and final provenance. It reconciles the selected
+target dependency policy, including any required uv pin, and rewrites
+`packages.list`, `versions.env`, and `apt-sources.list` only after the completed
+stack validates. A failure after the OS/dependency refresh, Pleb refresh,
+install, component update, or provenance write restores that previous coherent
+stack. Apt package additions may remain installed but inactive. The OS-layer stage is also bound
 to pre-sudo SHA-256 values and revalidated as root before any destination is
 replaced; success is reported only after the entire outer transaction commits.
 Pass `--restart` to restart the graphical session after a successful update.

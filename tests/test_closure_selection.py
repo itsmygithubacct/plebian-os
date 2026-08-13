@@ -129,7 +129,8 @@ class ClosureSelectionTests(unittest.TestCase):
 
     def _source(self, base: Path, manifest_text=None, version="0.1.8",
                 release="0.1.8", tag="v0.1.8",
-                requirements_text=None, selector_bytes=None) -> str:
+                requirements_text=None, selector_bytes=None,
+                updater_bytes=None) -> str:
         """A Plebian-OS checkout carrying the published release tag."""
         src = base / "src"
         (src / "releases").mkdir(parents=True)
@@ -137,6 +138,8 @@ class ClosureSelectionTests(unittest.TestCase):
         (src / "VERSION").write_text(version + "\n")
         (src / "provision" / "plebian-os-select-closure.sh").write_bytes(
             SELECT.read_bytes() if selector_bytes is None else selector_bytes)
+        (src / "provision" / "plebian-os-update.sh").write_bytes(
+            UPDATE.read_bytes() if updater_bytes is None else updater_bytes)
         (src / "releases" / f"{release}.env").write_text(
             self._manifest_text() if manifest_text is None else manifest_text)
         if requirements_text is not None:
@@ -254,7 +257,7 @@ class ClosureSelectionTests(unittest.TestCase):
             after = self._values(env)
             self.assertEqual(after["KILIX_VOICE_REF"],
                              "eda9ca90eed677fa4fca383e7b8ad2fc85e54b0e")
-            self.assertIn("closure adds 6 key(s) this release introduces", result.stdout)
+            self.assertIn("closure adds 7 key(s) this release introduces", result.stdout)
 
     # ── operator-controlled keys survive ────────────────────────────────────
     def test_operator_controlled_choices_survive_selection(self):
@@ -269,11 +272,18 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertEqual(after[name], value, name)
             after_lines = env.read_text().splitlines()
             release_names = {name for name, _ in INSTALLED_RELEASE_VALUES}
-            release_names |= {"PLEBIAN_OS_RELEASE"}
+            release_names |= {
+                "PLEBIAN_OS_RELEASE",
+                "PLEBIAN_OS_INSTALL_UV",
+                "PLEBIAN_OS_UV_VERSION",
+                "PLEBIAN_OS_UV_INSTALLER_SHA256",
+            }
             kept_before = [line for line in before_lines
                            if not any(f"${{{n}+x}}" in line for n in release_names)]
             kept_after = [line for line in after_lines
-                          if not any(f"${{{n}+x}}" in line for n in release_names)]
+                          if not any(f"${{{n}+x}}" in line for n in release_names)
+                          and not line.startswith(
+                              "# Added by plebian-os-select-closure")]
             self.assertEqual(kept_before, kept_after)
             self.assertIn("PLEB_RESPAWN=0   # operator note, deliberately unguarded",
                           after_lines)
@@ -423,8 +433,10 @@ class ClosureSelectionTests(unittest.TestCase):
         env = base / "root" / "etc" / "pleb" / "session.env"
         selector = (base / "root" / "usr" / "local" / "bin" /
                     "plebian-os-select-closure")
+        updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
         before = env.read_bytes()
         selector_before = selector.read_bytes() if selector.exists() else None
+        updater_before = updater.read_bytes() if updater.exists() else None
         result = self._run(base, "0.1.8", "--offline", fail_after=boundary)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(expected, result.stderr)
@@ -433,6 +445,10 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertFalse(selector.exists())
         else:
             self.assertEqual(selector.read_bytes(), selector_before)
+        if updater_before is None:
+            self.assertFalse(updater.exists())
+        else:
+            self.assertEqual(updater.read_bytes(), updater_before)
         leftovers = list((base / "root" / "etc" / "pleb").glob(".session.env.*"))
         self.assertEqual(leftovers, [])
         return result
@@ -449,7 +465,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertEqual(self._recovery_records(base), [])
 
     def test_failure_mid_write_leaves_the_previous_closure_intact(self):
-        for boundary in ("backup", "stage", "selector"):
+        for boundary in ("backup", "stage", "selector", "updater"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
                 base = Path(td)
                 self._machine(base)
@@ -574,6 +590,7 @@ class ClosureSelectionTests(unittest.TestCase):
             env = self._machine(base)
             selector = (base / "root" / "usr" / "local" / "bin" /
                         "plebian-os-select-closure")
+            updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
             before = env.read_bytes()
             self._source(base)
             self.assertFalse(selector.exists())
@@ -581,29 +598,37 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertNotEqual(env.read_bytes(), before)
             self.assertEqual(selector.read_bytes(), SELECT.read_bytes())
             self.assertEqual(selector.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(updater.read_bytes(), UPDATE.read_bytes())
+            self.assertEqual(updater.stat().st_mode & 0o777, 0o755)
             records = self._recovery_records(base)
             self.assertEqual(len(records), 1)
             self.assertEqual((records[0] / "session.env").read_bytes(), before)
             self.assertEqual((records[0] / "selector.existed").read_text(), "0\n")
+            self.assertEqual((records[0] / "updater.existed").read_text(), "0\n")
             self.assertIn("to=0.1.8", (records[0] / "meta").read_text())
             result = self._run(base, "--rollback")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(env.read_bytes(), before)
             self.assertFalse(selector.exists())
+            self.assertFalse(updater.exists())
             # One record is one undo; a second call has nothing left to restore.
             again = self._run(base, "--rollback")
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("no closure to roll back to", again.stderr)
 
-    def test_selection_replaces_and_rollback_restores_an_older_selector(self):
+    def test_selection_replaces_and_rollback_restores_older_tools(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
             selector = (base / "root" / "usr" / "local" / "bin" /
                         "plebian-os-select-closure")
+            updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
             old_selector = b"#!/usr/bin/env bash\nprintf 'legacy selector\\n'\n"
+            old_updater = b"#!/usr/bin/env bash\nprintf 'legacy updater\\n'\n"
             selector.write_bytes(old_selector)
             selector.chmod(0o700)
+            updater.write_bytes(old_updater)
+            updater.chmod(0o710)
             before = env.read_bytes()
             self._source(base)
 
@@ -611,6 +636,8 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(selected.returncode, 0, selected.stderr)
             self.assertEqual(selector.read_bytes(), SELECT.read_bytes())
             self.assertEqual(selector.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(updater.read_bytes(), UPDATE.read_bytes())
+            self.assertEqual(updater.stat().st_mode & 0o777, 0o755)
             records = self._recovery_records(base)
             self.assertEqual((records[0] / "selector.existed").read_text(), "1\n")
             self.assertEqual(
@@ -621,32 +648,56 @@ class ClosureSelectionTests(unittest.TestCase):
                 (records[0] / "plebian-os-select-closure").stat().st_mode & 0o777,
                 0o700,
             )
+            self.assertEqual((records[0] / "updater.existed").read_text(), "1\n")
+            self.assertEqual(
+                (records[0] / "plebian-os-update").read_bytes(), old_updater)
+            self.assertEqual(
+                (records[0] / "plebian-os-update").stat().st_mode & 0o777,
+                0o710,
+            )
 
             rolled_back = self._run(base, "--rollback")
             self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
             self.assertEqual(env.read_bytes(), before)
             self.assertEqual(selector.read_bytes(), old_selector)
             self.assertEqual(selector.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(updater.read_bytes(), old_updater)
+            self.assertEqual(updater.stat().st_mode & 0o777, 0o710)
+
+    def test_target_updater_must_be_valid_shell(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            self._source(base, updater_bytes=b"#!/usr/bin/env bash\nif then\n")
+            result = self._run(base, "0.1.8", "--offline")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid target updater", result.stderr)
+            self.assertEqual(env.read_bytes(), before)
+            self.assertEqual(self._recovery_records(base), [])
 
     def test_failed_rollback_retains_the_selected_session_and_selector(self):
-        for boundary in ("rollback-selector", "rollback-session"):
+        for boundary in ("rollback-selector", "rollback-updater", "rollback-session"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
                 base = Path(td)
                 env = self._machine(base)
                 selector = (base / "root" / "usr" / "local" / "bin" /
                             "plebian-os-select-closure")
+                updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
                 self._source(base)
                 selected = self._run(base, "0.1.8", "--offline")
                 self.assertEqual(selected.returncode, 0, selected.stderr)
                 selected_env = env.read_bytes()
                 selected_selector = selector.read_bytes()
+                selected_updater = updater.read_bytes()
 
                 failed = self._run(base, "--rollback", fail_after=boundary)
                 self.assertNotEqual(failed.returncode, 0)
-                self.assertIn("selected session and installed selector were retained",
+                self.assertIn("selected session and installed tools were retained",
                               failed.stderr)
                 self.assertEqual(env.read_bytes(), selected_env)
                 self.assertEqual(selector.read_bytes(), selected_selector)
+                self.assertEqual(updater.read_bytes(), selected_updater)
                 records = self._recovery_records(base)
                 self.assertEqual(len(records), 1)
                 self.assertFalse((records[0] / "restored").exists())
@@ -654,6 +705,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 retried = self._run(base, "--rollback")
                 self.assertEqual(retried.returncode, 0, retried.stderr)
                 self.assertFalse(selector.exists())
+                self.assertFalse(updater.exists())
 
     def test_selector_must_match_the_exact_target_commit(self):
         with tempfile.TemporaryDirectory() as td:
@@ -676,6 +728,7 @@ class ClosureSelectionTests(unittest.TestCase):
             env = self._machine(base)
             selector = (base / "root" / "usr" / "local" / "bin" /
                         "plebian-os-select-closure")
+            updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
             before = env.read_bytes()
             self._source(base)
             result = self._run(base, "0.1.8", "--offline", "--dry-run")
@@ -683,6 +736,7 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("nothing was written", result.stdout)
             self.assertEqual(env.read_bytes(), before)
             self.assertFalse(selector.exists())
+            self.assertFalse(updater.exists())
             self.assertEqual(self._recovery_records(base), [])
 
     def test_show_reports_the_installed_closure(self):
@@ -711,15 +765,17 @@ class ClosureSelectionContractTests(unittest.TestCase):
             "run plebian-os-update without sudo (it elevates only bounded system steps)",
             UPDATE.read_text())
 
-    def test_session_and_selector_are_replaced_only_after_both_backups(self):
+    def test_session_and_tools_are_replaced_only_after_all_backups(self):
         source = SELECT.read_text()
-        self.assertIn('mv -fT -- "$selector_tmp" "$selector_path"', source)
+        self.assertIn('mv -fT -- "${tool_tmp[0]}" "${tool_paths[0]}"', source)
+        self.assertIn('mv -fT -- "${tool_tmp[1]}" "${tool_paths[1]}"', source)
         self.assertIn('mv -fT -- "$env_tmp" "$env_path"', source)
         self.assertIn('cp -a -- "$env_path" "$record/session.env"', source)
         self.assertLess(source.index('cp -a -- "$env_path" "$record/session.env"'),
-                        source.index('mv -fT -- "$selector_tmp" "$selector_path"'))
-        self.assertLess(source.index('printf \'%s\\n\' 0 >"$record/selector.existed"'),
-                        source.index('mv -fT -- "$selector_tmp" "$selector_path"'))
+                        source.index('mv -fT -- "${tool_tmp[0]}" "${tool_paths[0]}"'))
+        self.assertIn('tool_record_keys=(selector updater)', source)
+        self.assertLess(source.index('cp -a -- "${tool_paths[$i]}" "$record/$name"'),
+                        source.index('mv -fT -- "${tool_tmp[0]}" "${tool_paths[0]}"'))
         # Nothing is written before the rendered file has been verified.
         self.assertLess(source.index("verify_candidate_closure "),
                         source.index("apply_selected_closure\n"))

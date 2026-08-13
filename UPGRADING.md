@@ -111,7 +111,7 @@ now.
 ### Selecting a target closure
 
 Run this as the Pleb user on the installed machine — never through `sudo`; the
-selector elevates the two bounded writes it needs and refuses to run as root, as
+selector elevates the bounded installed-file writes it needs and refuses to run as root, as
 `plebian-os-update` does. `$SRC` is the Plebian-OS source checkout the installed
 system already uses; only its object store is read, so its working tree and HEAD
 stay exactly where the updater expects them.
@@ -137,13 +137,14 @@ reselection. It is not a substitute for extracting a later target release's
 own selector from that target's immutable tag.
 
 The target selector verifies that its running bytes match that exact target
-commit, then deploys that copy transactionally while it selects the closure.
-This is the first-hop bootstrap: an updater process from the previous release
-cannot know a system payload introduced by its successor merely because it
-updates its checkout and its on-disk replacement. The recovery record therefore
-backs up both `/etc/pleb/session.env` and the installed selector. A failed
-selection restores both immediately; `--rollback` restores the prior selector
-bytes or removes it when the starting image had none.
+commit, then deploys both that selector and the target commit's updater while
+it selects the closure. This is the first-hop bootstrap: an updater from the
+previous release cannot know a system payload or final-provenance rule
+introduced by its successor merely because it later replaces its own on-disk
+inode. The recovery record therefore backs up `/etc/pleb/session.env`, the
+installed selector, and the installed updater. A failed selection restores all
+three immediately; `--rollback` restores each prior tool or removes it when the
+starting image had none.
 
 It validates the whole closure before it writes anything: a manifest which is
 incomplete, malformed, still holds a placeholder, pins a branch instead of a
@@ -154,10 +155,11 @@ release-controlled key it will move. It fetches each exact Plebian-OS, Pleb,
 Kilix, and Kilix-95 target commit without moving a checkout, compares it with
 the installed commit, and announces `DOWNGRADE` or `DIVERGED` per component;
 a rising release number cannot hide a falling pin. It then proves the rendered
-configuration changes nothing else. It prepares the exact target selector and
-new `/etc/pleb/session.env` beside their destinations before replacing either.
-Either the complete selected pair moves or neither does; a write that fails
-part way restores the previous session and selector and says so. `--offline`
+configuration changes nothing else. It prepares the exact target selector,
+target updater, and new `/etc/pleb/session.env` beside their destinations before
+replacing any of them. Either the complete selected set moves or none does; a
+write that fails part way restores the previous session and both tools and says
+so. `--offline`
 performs the same proof only when every target object and the complete histories
 are already present locally.
 
@@ -173,9 +175,8 @@ bash "$SEL" --rollback        # put the previous closure back
 The previous `/etc/pleb/session.env` is saved under
 `/var/lib/plebian-os/closure-rollback.<timestamp>.*` with a record of the closure
 that replaced it, so `--rollback` is available until the upgrade is committed and
-afterwards. Keep `$SEL` until the upgrade has succeeded — the extracted copy is
-the only one on the machine until the updater moves the source checkout to the
-target commit — then `rm -f "$SEL"`.
+afterwards. Keep `$SEL` until the upgrade has succeeded as an independent
+recovery entrypoint, then `rm -f "$SEL"`.
 
 Do not assemble pins from several releases or run a bare privileged provisioner
 between closure selection and the updater. Back up irreplaceable personal data

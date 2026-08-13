@@ -860,6 +860,9 @@ def verify_update_rollback(cfg: Config, askpass: str) -> None:
         "/etc/pleb/session.env",
         "/var/lib/plebian-os/packages.list",
         "/var/lib/plebian-os/versions.env",
+        "/var/lib/plebian-os/apt-sources.list",
+        "/usr/local/bin/uv",
+        "/usr/local/bin/uvx",
     )
     quoted_paths = " ".join(shlex.quote(path) for path in managed_paths)
     command = f"""set -eu
@@ -974,7 +977,28 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
             "test -f /var/lib/plebian-os/provisioned && "
             "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1 && "
             "test -z \"$(find /var/lib/plebian-os -maxdepth 1 -type d "
-            "-name 'update-rollback.*' -print -quit)\"",
+            "-name 'update-rollback.*' -print -quit)\" && "
+            "test -s /var/lib/plebian-os/packages.list && "
+            "test -s /var/lib/plebian-os/apt-sources.list && "
+            ". /etc/pleb/session.env && "
+            "selected_version=\"$PLEBIAN_OS_VERSION\" && "
+            "selected_os=\"$PLEBIAN_OS_REF\" && selected_pleb=\"$PLEB_REF\" && "
+            "selected_kilix=\"$KILIX_REF\" && selected_kilix95=\"$KILIX95_REF\" && "
+            "selected_uv=\"${PLEBIAN_OS_INSTALL_UV:-0}\" && "
+            "selected_uv_version=\"${PLEBIAN_OS_UV_VERSION:-}\" && "
+            ". /var/lib/plebian-os/versions.env && "
+            "test \"$PLEBIAN_OS_VERSION\" = \"$selected_version\" && "
+            "test \"$PLEBIAN_OS_COMMIT\" = \"$selected_os\" && "
+            "test \"$PLEB_COMMIT\" = \"$selected_pleb\" && "
+            "test \"$KILIX_COMMIT\" = \"$selected_kilix\" && "
+            "test \"$KILIX95_COMMIT\" = \"$selected_kilix95\" && "
+            "test \"$PLEBIAN_OS_INSTALL_UV\" = \"$selected_uv\" && "
+            "test \"$PLEBIAN_OS_UV_VERSION\" = \"$selected_uv_version\" && "
+            "if [ \"$selected_uv\" = 1 ]; then "
+            "test -x /usr/local/bin/uv && test -x /usr/local/bin/uvx && "
+            "case \"$(/usr/local/bin/uv --version)\" in "
+            "\"uv $selected_uv_version\"|\"uv $selected_uv_version (\"*\)) true ;; "
+            "*) false ;; esac; fi",
             askpass,
             timeout=60,
         )
@@ -1313,6 +1337,9 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         "1" if env_bool("KILIX_RUN_ALIASES", True) else "0")
     expected_voice_policy = (
         "1" if env_bool("PLEBIAN_OS_INSTALL_VOICE_MODEL", False) else "0")
+    expected_uv_policy = (
+        "1" if env_bool("PLEBIAN_OS_INSTALL_UV", False) else "0")
+    expected_uv_version = os.environ.get("PLEBIAN_OS_UV_VERSION", "")
     expected_version = os.environ.get("PLEBIAN_OS_VERSION", "")
     expected_kilix95_ref = os.environ.get("KILIX95_REF", "")
     expected_os_commit = os.environ.get(
@@ -1449,13 +1476,37 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
                 f' && test "$(git -C "${dir_var}" rev-parse HEAD)" = '
                 f'{shlex.quote(ref.lower())}'
             )
+    provenance_values = {
+        "PLEBIAN_OS_VERSION": expected_version,
+        "PLEBIAN_OS_COMMIT": expected_os_commit,
+        "PLEB_COMMIT": os.environ.get("PLEB_REF", ""),
+        "KILIX_COMMIT": os.environ.get("KILIX_REF", ""),
+        "KILIX95_COMMIT": expected_kilix95_ref,
+        "PLEBIAN_OS_INSTALL_UV": expected_uv_policy,
+        "PLEBIAN_OS_UV_VERSION": expected_uv_version,
+    }
+    exact_source_provenance = " && ".join(
+        f"grep -Fqx {shlex.quote(key + '=' + value)} "
+        "/var/lib/plebian-os/versions.env"
+        for key, value in provenance_values.items()
+    )
+    uv_contract = (
+        f'test {shlex.quote(expected_uv_policy)} = 0 || ('
+        'test -x /usr/local/bin/uv && test -x /usr/local/bin/uvx && '
+        f'case "$(/usr/local/bin/uv --version)" in '
+        f'{shlex.quote("uv " + expected_uv_version)}|'
+        f'{shlex.quote("uv " + expected_uv_version + " (")}*\)) true ;; '
+        '*) false ;; esac)'
+    )
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("exact build provenance", exact_build_provenance),
         ("provision version",    provision_version),
         ("component versions",   component_versions),
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
-        ("source provenance",    "for k in PLEBIAN_OS_COMMIT PLEB_COMMIT KILIX_COMMIT KILIX95_COMMIT; do grep -Eq \"^$k=[0-9a-f]{40}$\" /var/lib/plebian-os/versions.env || exit 1; done"),
+        ("source provenance",    exact_source_provenance),
+        ("apt provenance",       "test -s /var/lib/plebian-os/apt-sources.list"),
+        ("uv closure",           uv_contract),
         ("coordinated checkouts", coordinated_checkouts),
         ("private storage roots", private_storage),
         ("pleb recovery guide", "test -r /usr/local/share/doc/pleb/RECOVERY.md"),
@@ -1587,6 +1638,9 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "PLEBIAN_OS_NETINST_URL",
         "PLEBIAN_OS_NETINST_SHA256",
         "PLEBIAN_OS_APT_SNAPSHOT",
+        "PLEBIAN_OS_INSTALL_UV",
+        "PLEBIAN_OS_UV_VERSION",
+        "PLEBIAN_OS_UV_INSTALLER_SHA256",
         "KILIX_PREBUILT_VERSION",
         "KILIX_PREBUILT_SHA256",
         "PLEBIAN_OS_KILIX_GO_VERSION",
