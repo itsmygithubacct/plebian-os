@@ -776,6 +776,37 @@ class FirstbootBoundTests(unittest.TestCase):
             self.assertFalse(temporary_sudoers.exists())
             self.assertIn("exhausted 3/3", result.stderr)
 
+    def test_retry_runner_enforces_each_attempt_timeout(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            counter = root / "counter"
+            command = root / "hangs"
+            command.write_text(
+                "#!/bin/sh\n"
+                "n=$(cat \"$1\" 2>/dev/null || echo 0)\n"
+                "printf '%s\\n' \"$((n + 1))\" >\"$1\"\n"
+                "sleep 30\n"
+            )
+            command.chmod(0o755)
+            env = {
+                **os.environ,
+                "PLEBIAN_OS_STATE_DIR": str(root / "state"),
+                "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "2",
+                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "1",
+                "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
+                "PLEBIAN_OS_TEMP_SUDOERS": str(root / "temporary-sudoers"),
+            }
+            result = subprocess.run(
+                ["sh", str(ATTEMPT), "run", str(command), str(counter)],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            self.assertEqual(result.returncode, 124, result.stderr)
+            self.assertEqual(counter.read_text().strip(), "2")
+            self.assertIn("exhausted 2/2", result.stderr)
+
     def test_attempt_bound_persists_until_success(self):
         with tempfile.TemporaryDirectory() as td:
             env = {**os.environ, "PLEBIAN_OS_STATE_DIR": td,
