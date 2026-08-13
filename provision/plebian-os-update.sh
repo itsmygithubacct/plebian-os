@@ -12,7 +12,8 @@
 # checkout. Updates are
 # serialized; participating checkouts must be clean and pinned refs resolve to
 # the fetched commit. One outer recovery transaction covers the deployed OS
-# layer, checkout positions, engine artifacts, and `pleb install` outputs.
+# layer, checkout positions, engine artifacts, shared settings, and `pleb
+# install` outputs.
 # Disable OS-layer refresh with PLEBIAN_OS_SELF_UPDATE=0.
 #
 # Usage: plebian-os-update [--restart]
@@ -665,6 +666,39 @@ snapshot_stack_path() {
     fi
 }
 
+validate_shared_settings_snapshot_path() {
+    local path="$GPU_TERMINAL_SETTINGS_FILE" resolved parent owner mode links
+    case "$path" in
+        /*) ;;
+        *) die "GPU_TERMINAL_SETTINGS_FILE must be absolute: $path" ;;
+    esac
+    resolved="$(readlink -m -- "$path" 2>/dev/null)" \
+        || die "could not resolve shared Kilix settings: $path"
+    [ "$resolved" = "$path" ] \
+        || die "shared Kilix settings must not contain symlinks or non-normal components: $path"
+    parent="$(dirname "$path")"
+    [ -d "$parent" ] && [ ! -L "$parent" ] \
+        || die "shared Kilix settings parent is not a safe directory: $parent"
+    owner="$(stat -c '%u' -- "$parent" 2>/dev/null)" \
+        || die "could not inspect shared Kilix settings parent: $parent"
+    mode="$(stat -c '%a' -- "$parent" 2>/dev/null)" \
+        || die "could not inspect shared Kilix settings parent mode: $parent"
+    [ "$owner" = "$EUID" ] && (( (8#$mode & 8#22) == 0 )) \
+        || die "shared Kilix settings parent must be user-owned and not group/world writable: $parent"
+    if [ -e "$path" ] || [ -L "$path" ]; then
+        [ -f "$path" ] && [ ! -L "$path" ] \
+            || die "shared Kilix settings are not a regular file: $path"
+        owner="$(stat -c '%u' -- "$path" 2>/dev/null)" \
+            || die "could not inspect shared Kilix settings ownership: $path"
+        mode="$(stat -c '%a' -- "$path" 2>/dev/null)" \
+            || die "could not inspect shared Kilix settings mode: $path"
+        links="$(stat -c '%h' -- "$path" 2>/dev/null)" \
+            || die "could not inspect shared Kilix settings links: $path"
+        [ "$owner" = "$EUID" ] && [ "$mode" = 600 ] && [ "$links" = 1 ] \
+            || die "shared Kilix settings must be user-owned, mode 0600, with one hard link: $path"
+    fi
+}
+
 begin_root_stack_snapshot() {
     local -a elevate=()
     [ "$(id -u)" = 0 ] || elevate=(sudo)
@@ -1256,6 +1290,8 @@ rollback_stack_transaction() {
     fi
     restore_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95" || failed=1
 
+    restore_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings file \
+        || failed=1
     restore_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt || failed=1
     restore_kilix_engine_generation || failed=1
     restore_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp file || failed=1
@@ -1275,7 +1311,7 @@ rollback_stack_transaction() {
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
     if [ "$failed" = 0 ]; then
-        log "restored the pre-update OS layer, checkout positions, engine, and Pleb install outputs"
+        log "restored the pre-update OS layer, checkout positions, engine, shared settings, and Pleb install outputs"
     else
         warn "automatic stack rollback was incomplete; recovery data retained at $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
     fi
@@ -1316,6 +1352,7 @@ begin_stack_transaction() {
     acquire_kilix_transaction_lock
     validate_kilix_fork_stamp_path
     validate_legacy_kilix_fork_stamp_path
+    validate_shared_settings_snapshot_path
     mkdir -p "$PLEB_STATE_HOME"
     chmod 0700 "$PLEB_STATE_HOME" 2>/dev/null || true
     _STACK_TXN_DIR="$(mktemp -d "$PLEB_STATE_HOME/stack-rollback.XXXXXX")" \
@@ -1341,6 +1378,7 @@ begin_stack_transaction() {
     record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker" \
         kilix-pty-broker "Kilix PTY broker"
     record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
+    snapshot_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings
     snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
     snapshot_kilix_engine_generation
     snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp

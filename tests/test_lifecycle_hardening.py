@@ -175,6 +175,9 @@ class UpdateLifecycleTests(unittest.TestCase):
             "rollback_stack_transaction",
             "restore_root_stack_snapshot",
             'record_stack_checkout "$PLEB_DIR" pleb pleb',
+            'snapshot_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings',
+            'restore_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings file',
+            "validate_shared_settings_snapshot_path",
             'snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt',
             'snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp',
             'restore_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp file',
@@ -293,6 +296,7 @@ shift 4
 # machine cannot redirect rollback into its real per-user data.
 export HOME="$work/home"
 export GPU_TERMINAL_HOME="$work/gpu-terminal"
+export GPU_TERMINAL_SETTINGS_FILE="$GPU_TERMINAL_HOME/settings.conf"
 export PLEB_STATE_HOME="$work/state"
 export PLEB_DIR="$work/pleb"
 export PLEBIAN_OS_DIR="$work/os"
@@ -304,7 +308,10 @@ export KILIX_DATA_HOME="$KILIX_STORAGE_HOME/data"
 export KILIX_PREBUILT_HOME="$KILIX_STORAGE_HOME/prebuilt/kitty.app"
 export KILIX95_DIR="$work/kilix95"
 export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
-mkdir -p "$HOME" "$PLEB_STATE_HOME"
+mkdir -p "$HOME" "$GPU_TERMINAL_HOME" "$PLEB_STATE_HOME"
+chmod 0700 "$GPU_TERMINAL_HOME"
+printf '%s\n' old-settings >"$GPU_TERMINAL_SETTINGS_FILE"
+chmod 0600 "$GPU_TERMINAL_SETTINGS_FILE"
 printf '%s\n' legacy-stamp >"$PLEB_STATE_HOME/kilix-fork-built-ref"
 init_repo() {
     dir="$1"
@@ -383,6 +390,8 @@ record_kilix_submodule "$KILIX_DIR/third_party/kilix-content" \
 record_kilix_submodule "$KILIX_DIR/third_party/kitty-pty-broker" \
     kilix-pty-broker "Kilix PTY broker"
 record_stack_checkout "$KILIX95_DIR" kilix95 "kilix 95"
+validate_shared_settings_snapshot_path
+snapshot_stack_path "$GPU_TERMINAL_SETTINGS_FILE" shared-settings
 snapshot_stack_path "$KILIX_PREBUILT_HOME" kilix-prebuilt
 snapshot_kilix_engine_generation
 snapshot_stack_path "$KILIX_STATE_DIRECTORY/fork-built-ref" fork-stamp
@@ -405,6 +414,7 @@ printf '%s\n' new >"$PLEB_DIR/tracked"
 git -C "$PLEB_DIR" add tracked
 git -C "$PLEB_DIR" commit -q -m new
 printf '%s\n' new-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
+printf '%s\n' new-managed-default >>"$GPU_TERMINAL_SETTINGS_FILE"
 mv "$KILIX_BUILD_DIRECTORY/current" "$KILIX_BUILD_DIRECTORY/previous"
 mkdir -p "$KILIX_BUILD_DIRECTORY/generations/build.NewFailed"
 ln -s generations/build.NewFailed "$KILIX_BUILD_DIRECTORY/current"
@@ -524,6 +534,10 @@ test_fail_after_boundary "$boundary"
         )
         self.assertEqual((work / "root-output").read_text().strip(),
                          "old-root")
+        self.assertEqual(
+            (work / "gpu-terminal" / "settings.conf").read_text().strip(),
+            "old-settings",
+        )
         self.assertEqual(
             (work / "kilix-storage" / "build" / "current" /
              "source-id").read_text().strip(),
