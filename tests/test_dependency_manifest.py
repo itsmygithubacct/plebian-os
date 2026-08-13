@@ -64,6 +64,26 @@ PDF_VIEWER_BUILD_PACKAGES = {
 # header and linker input rather than relying on a host's incidental package.
 NVR_BUILD_PACKAGES = {"libsqlite3-dev", "zlib1g-dev"}
 
+# Kilix IceWM is built on first selection. Plebian-OS 0.2.0 must provide the
+# complete, explicit pkg-config closure used by the pinned IceWM configuration
+# on both fresh-install paths; transitive dependencies are not this contract.
+ICEWM_BUILD_PACKAGES = {
+    "build-essential",
+    "cmake",
+    "pkg-config",
+    "libx11-dev",
+    "libxext-dev",
+    "libxrandr-dev",
+    "libxft-dev",
+    "libfontconfig-dev",
+    "libxrender-dev",
+    "libxcomposite-dev",
+    "libxcursor-dev",
+    "libxdamage-dev",
+    "libxfixes-dev",
+    "libimlib2-dev",
+}
+
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
@@ -122,6 +142,10 @@ class DependencyManifestTests(unittest.TestCase):
     def test_nvr_builds_on_both_paths(self):
         self.assertLessEqual(NVR_BUILD_PACKAGES, install_deps_packages())
         self.assertLessEqual(NVR_BUILD_PACKAGES, preseed_packages())
+
+    def test_kilix_icewm_builds_on_both_paths(self):
+        self.assertLessEqual(ICEWM_BUILD_PACKAGES, install_deps_packages())
+        self.assertLessEqual(ICEWM_BUILD_PACKAGES, preseed_packages())
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
