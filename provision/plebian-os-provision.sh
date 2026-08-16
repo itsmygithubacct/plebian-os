@@ -2993,6 +2993,65 @@ install_passwd_nag() {
         || { warn "passwd-helper sudoers invalid — removing $rule"; rm -f "$rule"; }
 }
 
+# Seed the target user's ~/.bash_aliases with a `tb` alias for tmux-cli's
+# tb.py. The alias points at $HOME/.local/bin/tb — the same per-user command
+# directory this run verifies every other installed tool through — so it
+# reaches the delivered entrypoint no matter where a machine keeps its source
+# checkouts. Debian's stock ~/.bashrc sources ~/.bash_aliases into interactive
+# shells, so the alias is live from the first login after provisioning.
+#
+# No-clobber: when `tb` already resolves to anything in the target user's
+# interactive shell — a command on PATH, an alias, a function — note it and
+# change nothing. A ~/.bash_aliases the user turned into a symlink (a dotfiles
+# setup) is likewise left alone with a note rather than rewritten.
+install_tb_shell_alias() {
+    local aliases="$USER_HOME/.bash_aliases"
+    local resolved status=0
+    log "seeding the tb shell alias (tmux-cli tb.py) for $TARGET_USER"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) skip if tb already resolves, else append alias tb=\"\$HOME/.local/bin/tb\" -> $aliases"
+        return 0
+    fi
+    if resolved="$(as_user bash -ic 'command -v tb' 2>/dev/null)" \
+            && [ -n "$resolved" ]; then
+        log "tb already resolves for $TARGET_USER ($resolved); leaving it in place"
+        return 0
+    fi
+    # $USER_HOME is controlled by the target user: same rules as ~/.dmrc above.
+    # Write as the user, carry any existing alias lines forward with their file
+    # mode, and atomically replace the entry with `mv -T` so nothing here ever
+    # follows a pre-created symlink.
+    as_user bash -c '
+set -euo pipefail
+aliases="$1"
+if [ -e "$aliases" ] || [ -L "$aliases" ]; then
+    if [ ! -f "$aliases" ] || [ -L "$aliases" ]; then
+        exit 3
+    fi
+fi
+mode=644
+tmp="$(mktemp "${aliases}.tmp.XXXXXX")"
+trap '\''rm -f "$tmp"'\'' EXIT
+if [ -f "$aliases" ]; then
+    mode="$(stat -c %a -- "$aliases")"
+    cat -- "$aliases" > "$tmp"
+fi
+printf '\''%s\n'\'' \
+    '\''# tb: tmux-cli tb.py from ~/.local/bin (added by plebian-os-provision)'\'' \
+    '\''alias tb="$HOME/.local/bin/tb"'\'' >> "$tmp"
+chmod "$mode" -- "$tmp"
+mv -fT -- "$tmp" "$aliases"
+trap - EXIT
+' plebian-os-tb-alias-writer "$aliases" || status=$?
+    if [ "$status" = 3 ]; then
+        warn "$aliases is not a plain file; leaving it alone — add the tb alias there yourself if you want it"
+        return 0
+    fi
+    [ "$status" = 0 ] \
+        || die "could not write the tb alias to $aliases as $TARGET_USER"
+    log "tb alias installed -> $aliases (tb runs \$HOME/.local/bin/tb)"
+}
+
 desktop_provider_needs_kilix95() {
     case "$KILIX_DESKTOP_PROVIDER" in
         external|xp|kilix-xp) return 0 ;;
@@ -3895,6 +3954,11 @@ fi
 
 # Password-change helper + scoped sudoers (the default-password desktop nag).
 install_passwd_nag
+
+# Interactive-shell convenience: a `tb` alias in the owner's ~/.bash_aliases,
+# resolved through the per-user command directory Pleb publishes tmux-cli's
+# tb.py into. Skipped with a note when `tb` already resolves to anything.
+install_tb_shell_alias
 
 # ── 2. allocate all coordinated source checkouts under the shared root ───────
 case "$GPU_TERMINAL_SOURCE_HOME" in
