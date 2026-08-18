@@ -1093,8 +1093,12 @@ class PersistedPinTests(unittest.TestCase):
             "DRY_RUN=0\n"
             f"{body}"
         )
+        env = os.environ.copy()
+        for key in self.PINS:
+            env.pop(key, None)
         return subprocess.run(
-            ["bash", "-c", script], text=True, capture_output=True, check=False)
+            ["bash", "-c", script], text=True, capture_output=True,
+            check=False, env=env)
 
     def test_every_component_pin_is_restored_from_the_session_env(self):
         with tempfile.TemporaryDirectory() as td:
