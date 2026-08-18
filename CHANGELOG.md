@@ -4,14 +4,16 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.1.9] — 2026-08-12
+## [0.1.9] — 2026-08-14
 
-Prepared 2026-08-12; publication pending acceptance. Supported upgrade source: **0.1.8**, the
-immediately previous coordinated release. No direct skip from an earlier
-release is supported. Publication remains blocked on the final four-component
-closure's strict ISO and fresh-install acceptance, and the six-gate preserving
-upgrade run recorded in
-[`releases/0.1.9-notes.md`](releases/0.1.9-notes.md).
+Prepared 2026-08-12 and
+[published 2026-08-14](https://github.com/itsmygithubacct/plebian-os/releases/tag/v0.1.9).
+Supported upgrade source: **0.1.8**, the immediately previous coordinated
+release. No direct skip from an earlier release is supported. The final
+four-component closure, strict ISO and fresh-install acceptance, BIOS/UEFI
+installs, and six-gate preserving upgrade are recorded in
+[`releases/0.1.9-notes.md`](releases/0.1.9-notes.md) and the release's attached
+provenance record.
 
 - Brand every BIOS installer-menu level with the exact release version,
   including the top-level Advanced and accessible-dark menus and the nested

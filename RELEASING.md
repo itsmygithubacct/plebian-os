@@ -23,8 +23,9 @@ build provenance. Release artifacts with SSH enabled remain forbidden.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The last published coordinated release is **0.1.8**. The next one is **0.1.9**;
-its closure is finalized only after the four final component commits are known.
+The last published coordinated release is **0.1.9**. The next planned release
+is **0.2.0**; its closure is finalized only after the four final component
+commits are known.
 0.1.7 is the fresh-install upgrade baseline: no pre-0.1.7 in-place path is
 supported. Every release after it must pass the adjacent published-release
 upgrade gate in [UPGRADING.md](UPGRADING.md) as well as fresh-install
