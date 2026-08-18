@@ -227,6 +227,27 @@ validate_voice_release_closure() {
     done
 }
 
+validate_waydroid_release_closure() {
+    local enabled="${PLEBIAN_OS_INSTALL_WAYDROID:-0}"
+    case "$enabled" in
+        0)
+            [ -z "${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}" ] \
+                || { echo "Waydroid closure hash is set while installation is disabled" >&2; exit 1; }
+            ;;
+        1)
+            [[ "${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+                || { echo "PLEBIAN_OS_INSTALL_WAYDROID=1 requires a lowercase PLEBIAN_OS_WAYDROID_CLOSURE_SHA256" >&2; exit 1; }
+            local closure="$HERE/provision/waydroid-closure.env" actual
+            [ -f "$closure" ] && [ ! -L "$closure" ] \
+                || { echo "Waydroid runtime closure is missing or unsafe" >&2; exit 1; }
+            actual="$(sha256sum "$closure" | awk '{print $1}')"
+            [ "$actual" = "$PLEBIAN_OS_WAYDROID_CLOSURE_SHA256" ] \
+                || { echo "Waydroid runtime closure checksum mismatch" >&2; exit 1; }
+            ;;
+        *) echo "invalid PLEBIAN_OS_INSTALL_WAYDROID=$enabled (expected 0/1)" >&2; exit 1 ;;
+    esac
+}
+
 validate_uv_release_closure() {
     case "${PLEBIAN_OS_INSTALL_UV:-0}" in
         0) return 0 ;;
@@ -267,6 +288,7 @@ release_preflight() {
     }
     validate_uv_release_closure
     validate_voice_release_closure
+    validate_waydroid_release_closure
     for key in PLEBIAN_OS_SSH_ENABLED PLEBIAN_OS_AUTOBOOT PLEBIAN_OS_UNATTENDED_DISK; do
         [ "${!key:-0}" != 1 ] || {
             echo "release artifacts refuse $key=1 (network/default-credential or unattended-erase risk)" >&2
@@ -541,6 +563,8 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_VOICE_MODEL "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
+        manifest_kv PLEBIAN_OS_INSTALL_WAYDROID "${PLEBIAN_OS_INSTALL_WAYDROID:-0}"
+        manifest_kv PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 "${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}"
         manifest_kv PLEBIAN_OS_SSH_ENABLED "${PLEBIAN_OS_SSH_ENABLED:-0}"
         manifest_kv PLEBIAN_OS_AUTOBOOT "${PLEBIAN_OS_AUTOBOOT:-0}"
         manifest_kv PLEBIAN_OS_UNATTENDED_DISK "${PLEBIAN_OS_UNATTENDED_DISK:-0}"
@@ -647,6 +671,8 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
         env_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
         env_kv PLEBIAN_OS_INSTALL_VOICE_MODEL "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
+        env_kv PLEBIAN_OS_INSTALL_WAYDROID "${PLEBIAN_OS_INSTALL_WAYDROID:-0}"
+        env_kv PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 "${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}"
         env_kv PLEBIAN_OS_SSH_ENABLED "${PLEBIAN_OS_SSH_ENABLED:-0}"
         env_kv PLEBIAN_OS_UV_VERSION "${PLEBIAN_OS_UV_VERSION:-}"
         env_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"

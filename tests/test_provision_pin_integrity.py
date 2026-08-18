@@ -33,8 +33,8 @@ SELECT = ROOT / "provision" / "plebian-os-select-closure.sh"
 # A machine pinned to a complete closure. Shapes match a real installed
 # session.env: exact commits, exact archive checksums, exact URLs.
 INSTALLED_CLOSURE = {
-    "PLEBIAN_OS_VERSION": "0.1.8",
-    "PLEBIAN_OS_RELEASE": "0.1.8",
+    "PLEBIAN_OS_VERSION": "0.2.0",
+    "PLEBIAN_OS_RELEASE": "0.2.0",
     "PLEBIAN_OS_RELEASE_MODE": "1",
     "PLEBIAN_OS_REPO": "https://github.com/itsmygithubacct/plebian-os.git",
     "PLEBIAN_OS_BRANCH": "",
@@ -67,6 +67,8 @@ INSTALLED_CLOSURE = {
     "KILIX_VOICE_MODEL_URL":
         "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
     "KILIX_VOICE_MODEL_SHA256": "a" * 64,
+    "PLEBIAN_OS_INSTALL_WAYDROID": "1",
+    "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256": "b" * 64,
 }
 
 # The desktop selection. The selector preserves these as operator-controlled;
