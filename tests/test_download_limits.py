@@ -1,5 +1,6 @@
 import os
 import shlex
+import re
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,17 @@ INSTALL_DEPS = ROOT / "provision" / "install-deps.sh"
 
 
 class DownloadLimitTests(unittest.TestCase):
+    @staticmethod
+    def _executable_curl_lines(path):
+        command = re.compile(
+            r"(?:^|[;&|()]|\b(?:if|then|elif|while|until|do)|!)\s*curl\s"
+        )
+        return [
+            line.strip()
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if command.search(line) and not line.lstrip().startswith("#")
+        ]
+
     def test_build_download_passes_time_and_size_limits_to_curl(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -76,9 +88,15 @@ class DownloadLimitTests(unittest.TestCase):
     def test_every_release_download_uses_the_bounded_helpers(self):
         build = BUILD_LIB.read_text(encoding="utf-8")
         deps = INSTALL_DEPS.read_text(encoding="utf-8")
-        self.assertEqual(build.count("\n    curl "), 1)
-        self.assertIn("curl --connect-timeout", build)
-        self.assertNotIn("! curl -LsSf", deps)
+        self.assertEqual(
+            self._executable_curl_lines(BUILD_LIB),
+            ['curl --connect-timeout "$connect_time" --max-time "$max_time" \\'],
+        )
+        self.assertEqual(
+            self._executable_curl_lines(INSTALL_DEPS),
+            ['curl --connect-timeout "$connect_time" --max-time "$max_time" \\'],
+        )
+        self.assertIn("_bounded_download", build)
         self.assertIn("bounded_curl \"$uv_tmp\"", deps)
         self.assertIn("PLEBIAN_OS_UV_INSTALLER_MAX_BYTES", deps)
 
