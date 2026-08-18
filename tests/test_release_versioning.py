@@ -73,6 +73,9 @@ class ReleaseVersioningTests(unittest.TestCase):
             "4a331173caf36b3235679715e153e4154b85651f", notes
         )
         self.assertIn(
+            "f61337589bb130e796ead18fd9fca4a8850fae25", notes
+        )
+        self.assertIn(
             "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175",
             notes,
         )
