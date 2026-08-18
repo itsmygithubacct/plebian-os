@@ -56,8 +56,8 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("kilix.speech.models/v1", notes)
         self.assertIn("PLEBIAN_OS_INSTALL_VOICE_MODEL=1", notes)
         releasing = _read("RELEASING.md")
-        self.assertIn("last published coordinated release is **0.1.8**", releasing)
-        self.assertIn("next one is **0.1.9**", releasing)
+        self.assertIn("last published coordinated release is **0.1.9**", releasing)
+        self.assertIn("next planned release\nis **0.2.0**", releasing)
 
     def test_release_manifest_pins_refs(self):
         m = self.manifest
@@ -303,7 +303,7 @@ class ReleaseVersioningTests(unittest.TestCase):
             self.assertIn(match.group(1), notes)
         self.assertIn(f"`v{self.version}`", notes)
         self.assertIn("fresh-install baseline", notes)
-        self.assertIn("not an artifact acceptance record", notes)
+        self.assertIn("attached provenance record is the final artifact\nacceptance record", notes)
         self.assertIn("earlier local candidate ISO", notes)
 
         changelog = _read("CHANGELOG.md")
