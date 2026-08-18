@@ -4,10 +4,10 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.2.0] — unreleased
+## [0.2.0] — Unreleased
 
-This work is isolated from the pending 0.1.9 closure. It must not be folded
-into, selected by, or used to rebuild a 0.1.9 candidate.
+Selected for the coordinated 0.2.0 candidate. The exact component and external
+closure is finalized in `releases/0.2.0.env` before qualification.
 
 ### Added
 
@@ -16,6 +16,9 @@ into, selected by, or used to rebuild a 0.1.9 candidate.
   The first Kilix Waydroid launch requests this one OS-owned helper through the
   shared Kilix SDK, and Weston 14.0.2-1 is installed in the same serialized
   transaction as the exact Android runtime and images.
+- Bound release downloads by connection time, total time and byte ceilings,
+  clean up oversized partial output, and enumerate executable curl callsites so
+  a future unbounded download cannot bypass the focused regression gate.
 
 ## [0.1.9] — 2026-08-14
 

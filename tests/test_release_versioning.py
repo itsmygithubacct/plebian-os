@@ -59,6 +59,30 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("last published coordinated release is **0.1.9**", releasing)
         self.assertIn("next planned release\nis **0.2.0**", releasing)
 
+    def test_0_2_0_release_notes_define_the_candidate_contract(self):
+        notes = _read("releases", "0.2.0-notes.md")
+        self.assertIn("Supported upgrade source: **0.1.9**", notes)
+        self.assertIn("No direct skip from an earlier release is supported", notes)
+        for heading in (
+            "## User-visible changes", "## Compatibility and migration",
+            "## Third-party closure", "## Support limits",
+            "## Known deferrals", "## Upgrade acceptance result",
+        ):
+            self.assertIn(heading, notes)
+        self.assertIn(
+            "4a331173caf36b3235679715e153e4154b85651f", notes
+        )
+        self.assertIn(
+            "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175",
+            notes,
+        )
+        self.assertIn(
+            "fetch --force origin 'refs/tags/v0.2.0:refs/tags/v0.2.0'",
+            notes,
+        )
+        self.assertIn('bash "$SEL" 0.2.0 --source "$SRC" --dry-run', notes)
+        self.assertIn('bash "$SEL" 0.2.0 --source "$SRC"', notes)
+
     def test_release_manifest_pins_refs(self):
         m = self.manifest
         self.assertIn("PLEBIAN_OS_RELEASE_MODE=1", m)
