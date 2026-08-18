@@ -35,6 +35,12 @@ class WaydroidReleaseTests(unittest.TestCase):
         self.assertEqual(
             requirements["PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"], digest
         )
+        self.assertEqual(
+            requirements["PLEBIAN_OS_NETINST_MAX_BYTES"], "791674880"
+        )
+        self.assertEqual(
+            requirements["PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"], "71225"
+        )
         self.assertEqual(PIN.read_text(encoding="utf-8"), digest + "\n")
         self.assertEqual(closure["WAYDROID_WESTON_VERSION"], "14.0.2-1")
         self.assertEqual(closure["WAYDROID_PACKAGE_VERSION"], "1.6.2")
