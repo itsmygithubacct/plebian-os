@@ -23,6 +23,39 @@ export PLEBIAN_OS_BUILD_HOME PLEBIAN_OS_SESSION_HOME PLEBIAN_OS_ARTIFACTS
 _lib_log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*" >&2; }
 _lib_die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Download into a caller-owned staging file with both time and byte ceilings.
+# curl's size check rejects a declared oversized response; the local check also
+# catches chunked responses and prevents repeated resume attempts from growing
+# an existing partial file beyond the closure's limit.
+_bounded_download() {
+    local max_bytes="$1" max_time="$2" output="$3"
+    shift 3
+    local connect_time="${PLEBIAN_OS_DOWNLOAD_CONNECT_TIMEOUT:-20}"
+    local size=0 rc=0
+    case "$max_bytes:$max_time:$connect_time" in
+        *[!0-9:]*|0:*|*:0:*|*:0) _lib_die "download limits must be positive integers" ;;
+    esac
+    if [ -e "$output" ]; then
+        size="$(wc -c < "$output")" || return 1
+        if [ "$size" -gt "$max_bytes" ]; then
+            rm -f -- "$output"
+            _lib_log "refusing oversized partial download: $output"
+            return 63
+        fi
+    fi
+    curl --connect-timeout "$connect_time" --max-time "$max_time" \
+        --max-filesize "$max_bytes" "$@" -o "$output" || rc=$?
+    if [ -e "$output" ]; then
+        size="$(wc -c < "$output")" || return 1
+        if [ "$size" -gt "$max_bytes" ]; then
+            rm -f -- "$output"
+            _lib_log "download exceeded $max_bytes bytes: $output"
+            return 63
+        fi
+    fi
+    return "$rc"
+}
+
 # Refuse to run without xorriso — the ISO (un)packer both build steps need.
 require_xorriso() {
     command -v xorriso >/dev/null 2>&1 || _lib_die \
@@ -87,9 +120,11 @@ fetch_netinst() {
             pinned_attempts="${PLEBIAN_OS_DOWNLOAD_RETRIES:-5}"
             pinned_n=1
             while :; do
-                curl -fL --progress-bar --retry 3 --retry-delay 2 \
+                _bounded_download "${PLEBIAN_OS_NETINST_MAX_BYTES:-2147483648}" \
+                    "${PLEBIAN_OS_NETINST_MAX_TIME:-7200}" "$pinned_iso.part" \
+                    -fL --progress-bar --retry 3 --retry-delay 2 \
                     --retry-connrefused -C - "$PLEBIAN_OS_NETINST_URL" \
-                    -o "$pinned_iso.part" && break
+                    && break
                 printf '%s  %s\n' "$PLEBIAN_OS_NETINST_SHA256" "$pinned_iso.part" \
                     | sha256sum -c --status 2>/dev/null && break
                 if [ "$pinned_n" -ge "$pinned_attempts" ]; then
@@ -121,9 +156,13 @@ fetch_netinst() {
             curl_args+=(-H "Cache-Control: no-cache" -H "Pragma: no-cache")
         fi
         _lib_log "fetching Debian netinst checksums ($PLEBIAN_OS_CDIMAGE/SHA256SUMS)"
-        curl "${curl_args[@]}" "$PLEBIAN_OS_CDIMAGE/SHA256SUMS" -o "$sums.tmp" \
+        _bounded_download "${PLEBIAN_OS_METADATA_MAX_BYTES:-4194304}" \
+            "${PLEBIAN_OS_METADATA_MAX_TIME:-120}" "$sums.tmp" \
+            "${curl_args[@]}" "$PLEBIAN_OS_CDIMAGE/SHA256SUMS" \
             || _lib_die "could not fetch SHA256SUMS (no network? mirror down?)"
-        curl "${curl_args[@]}" "$PLEBIAN_OS_CDIMAGE/SHA256SUMS.sign" -o "$sig.tmp" \
+        _bounded_download "${PLEBIAN_OS_METADATA_MAX_BYTES:-4194304}" \
+            "${PLEBIAN_OS_METADATA_MAX_TIME:-120}" "$sig.tmp" \
+            "${curl_args[@]}" "$PLEBIAN_OS_CDIMAGE/SHA256SUMS.sign" \
             || _lib_die "could not fetch SHA256SUMS.sign (no network? mirror down?)"
         mv "$sums.tmp" "$sums"
         mv "$sig.tmp" "$sig"
@@ -134,7 +173,9 @@ fetch_netinst() {
         local keyring="$PLEBIAN_OS_CACHE/debian-cd-signing-key.gpg"
         command -v gpg >/dev/null 2>&1 || return 1
         _lib_log "fetching Debian CD signing key ($PLEBIAN_OS_DEBIAN_CD_KEY_URL)"
-        curl -fsSL "$PLEBIAN_OS_DEBIAN_CD_KEY_URL" -o "$key_txt.tmp" \
+        _bounded_download "${PLEBIAN_OS_KEY_MAX_BYTES:-1048576}" \
+            "${PLEBIAN_OS_METADATA_MAX_TIME:-120}" "$key_txt.tmp" \
+            -fsSL "$PLEBIAN_OS_DEBIAN_CD_KEY_URL" \
             || return 1
         local fingerprint
         fingerprint="$(gpg --batch --show-keys --with-colons "$key_txt.tmp" 2>/dev/null \
@@ -206,9 +247,11 @@ fetch_netinst() {
         # satisfiable") — accept it when the checksum already matches.
         local attempts="${PLEBIAN_OS_DOWNLOAD_RETRIES:-5}" n=1
         while :; do
-            curl -fL --progress-bar --retry 3 --retry-delay 2 \
+            _bounded_download "${PLEBIAN_OS_NETINST_MAX_BYTES:-2147483648}" \
+                "${PLEBIAN_OS_NETINST_MAX_TIME:-7200}" "$iso.part" \
+                -fL --progress-bar --retry 3 --retry-delay 2 \
                 --retry-connrefused -C - "$PLEBIAN_OS_CDIMAGE/$name" \
-                -o "$iso.part" && break
+                && break
             printf '%s  %s\n' "$sum" "$iso.part" | sha256sum -c --status 2>/dev/null \
                 && break                      # .part is actually complete
             if [ "$n" -ge "$attempts" ]; then

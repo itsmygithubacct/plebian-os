@@ -22,6 +22,28 @@ PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-o
 log()  { printf '\033[1;36m[deps]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[deps]\033[0m %s\n' "$*" >&2; }
 
+bounded_curl() {
+    local output="$1" max_bytes="$2"
+    shift 2
+    local connect_time="${PLEBIAN_OS_DOWNLOAD_CONNECT_TIMEOUT:-20}"
+    local max_time="${PLEBIAN_OS_UV_DOWNLOAD_MAX_TIME:-120}"
+    local size=0 rc=0
+    case "$max_bytes:$max_time:$connect_time" in
+        *[!0-9:]*|0:*|*:0:*|*:0) warn "download limits must be positive integers"; return 2 ;;
+    esac
+    curl --connect-timeout "$connect_time" --max-time "$max_time" \
+        --max-filesize "$max_bytes" "$@" -o "$output" || rc=$?
+    if [ -e "$output" ]; then
+        size="$(wc -c < "$output")" || return 1
+        if [ "$size" -gt "$max_bytes" ]; then
+            rm -f -- "$output"
+            warn "download exceeded $max_bytes bytes"
+            return 63
+        fi
+    fi
+    return "$rc"
+}
+
 prepare_root_session_home() {
     local resolved metadata
     case "$PLEBIAN_OS_ROOT_SESSION_HOME" in
@@ -194,7 +216,7 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
     log "installing uv (image policy enabled; $uv_url -> /usr/local/bin)"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + stage the uv installer under $PLEBIAN_OS_ROOT_SESSION_HOME (root:root 0700)"
-        echo "    + curl -LsSf $uv_url -o <tmp>"
+        echo "    + bounded curl -LsSf $uv_url -o <tmp>"
         if [ -n "$uv_sha" ]; then echo "    + verify sha256=$uv_sha"
         else echo "    + (WARNING: PLEBIAN_OS_UV_INSTALLER_SHA256 unset — installer unverified)"; fi
         echo "    + UV_INSTALL_DIR=<staging> UV_NO_MODIFY_PATH=1 sh <tmp>"
@@ -212,7 +234,9 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
                 uv_ok=0
             fi
         fi
-        if [ "$uv_ok" = 1 ] && ! curl -LsSf "$uv_url" -o "$uv_tmp"; then
+        if [ "$uv_ok" = 1 ] \
+            && ! bounded_curl "$uv_tmp" "${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-4194304}" \
+                -LsSf "$uv_url"; then
             warn "uv installer download failed"
             uv_ok=0
         fi
