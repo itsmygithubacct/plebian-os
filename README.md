@@ -14,9 +14,10 @@ you into one screen-filling Kilix (a Tilix-styled kitty fork: clickable pane but
 splits, pages, images, and desktop providers that open in Kilix tabs). The
 login default is the main Kilix instance with Kilix 95 loaded as its first
 page. Its 95 flavor is explicit; Kilix Cap and Kilix TUI are Kilix-pinned optional
-desktops, and Kilix Land is a Kilix-pinned optional walkable desktop. The OS
-itself ships none of that — it **installs like a regular Debian system and then
-pulls its pieces from GitHub**:
+desktops, Kilix Land is a Kilix-pinned optional walkable desktop, and Kilix
+IceWM provides a conventional window-manager desktop inside Kilix's private X
+session. The OS itself ships none of that — it **installs like a regular Debian
+system and then pulls its pieces from GitHub**:
 
 ```
 regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  ─▶  Pleb session
