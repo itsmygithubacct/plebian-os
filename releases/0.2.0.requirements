@@ -1,0 +1,7 @@
+# Plebian-OS 0.2.0 release requirements fixed by the Waydroid feature.
+#
+# This is not a partial release manifest. The final releases/0.2.0.env must
+# repeat these values alongside the complete coordinated stack closure.
+
+PLEBIAN_OS_INSTALL_WAYDROID=1
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175

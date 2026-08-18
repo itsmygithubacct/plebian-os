@@ -201,6 +201,9 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             "/usr/local/share/doc/plebian-os/COPYING.GPL-2",
             "/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
             "/usr/local/sbin/plebian-os-passwd",
+            "/usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup",
+            "/usr/lib/plebian-os/waydroid/waydroid-closure.env",
+            "/usr/lib/plebian-os/waydroid/waydroid-closure.sha256",
             "/etc/sudoers.d/plebian-os-passwd",
             "/usr/local/bin/pleb-session",
             "/usr/share/xsessions/pleb.desktop",
@@ -217,6 +220,7 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         self.assertTrue(required_paths <= paths, required_paths - paths)
         self.assertNotIn("/etc/sudoers.d/plebian-os-provision", paths)
         self.assertIn("/usr/local/share/doc/plebian-os/installer", dirs)
+        self.assertIn("/usr/lib/plebian-os/waydroid", dirs)
         self.assertIn("/etc/pleb", dirs)
 
         account = self._run(

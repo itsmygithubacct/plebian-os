@@ -38,6 +38,11 @@ LOCAL_BUILD_PREREQUISITE_PACKAGES = {
 # ncurses program from meeting an unknown terminal there.
 TERMINFO_PACKAGES = {"kitty-terminfo"}
 
+# Native Wayland clients are presented through Kilix's shared nested
+# compositor layer. Weston is deliberately absent from the base image because
+# Kilix Waydroid installs its exact version with the Android first-use closure.
+NESTED_WAYLAND_PACKAGES = {"weston"}
+
 # Catalog-pinned PDF Conversion builds a hash-locked standard venv independently
 # of uv. The 0.1.9 release also installs verified uv as system tooling, but both
 # package paths retain the converter's complete standard-Python runtime.
@@ -114,6 +119,12 @@ class DependencyManifestTests(unittest.TestCase):
 
     def test_the_engines_terminal_type_is_in_the_system_database(self):
         self.assertLessEqual(TERMINFO_PACKAGES, install_deps_packages())
+
+    def test_nested_wayland_bridge_is_deferred_to_first_use(self):
+        self.assertTrue(NESTED_WAYLAND_PACKAGES.isdisjoint(install_deps_packages()))
+        self.assertTrue(NESTED_WAYLAND_PACKAGES.isdisjoint(preseed_packages()))
+        setup = (ROOT / "provision" / "plebian-os-waydroid-setup").read_text()
+        self.assertIn('"weston=${VALUES[WAYDROID_WESTON_VERSION]}"', setup)
 
     def test_local_build_prerequisites_are_installed(self):
         self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,

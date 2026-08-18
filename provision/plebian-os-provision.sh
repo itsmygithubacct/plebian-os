@@ -76,6 +76,8 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_VOICE_LIB_SHA256
     KILIX_VOICE_MODEL_URL
     KILIX_VOICE_MODEL_SHA256
+    PLEBIAN_OS_INSTALL_WAYDROID
+    PLEBIAN_OS_WAYDROID_CLOSURE_SHA256
 )
 
 # Optional desktop-provider checkouts this script also positions by ref. A
@@ -131,6 +133,8 @@ declare -A PERSISTED_KEY_VARS=(
     [PLEBIAN_OS_INSTALL_UV]=INSTALL_UV
     [PLEBIAN_OS_UV_VERSION]=UV_VERSION_PIN
     [PLEBIAN_OS_UV_INSTALLER_SHA256]=UV_INSTALLER_SHA256
+    [PLEBIAN_OS_INSTALL_WAYDROID]=INSTALL_WAYDROID
+    [PLEBIAN_OS_WAYDROID_CLOSURE_SHA256]=WAYDROID_CLOSURE_SHA256
 )
 
 # Everything a re-run must reproduce from the machine it is re-running on, and
@@ -246,6 +250,14 @@ INSTALL_VOICE_MODEL="${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
 # Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
 # shellcheck disable=SC2034
 INSTALL_VOICE_MODEL_EXPLICIT="${PLEBIAN_OS_INSTALL_VOICE_MODEL:+1}"
+# Android is an explicit release feature because its verified images are large.
+# The 0.2.0 release requirements enable it; uncoordinated provisioning stays
+# opt-in instead of silently downloading roughly a gigabyte.
+INSTALL_WAYDROID="${PLEBIAN_OS_INSTALL_WAYDROID:-0}"
+WAYDROID_CLOSURE_SHA256="${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}"
+# Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
+# shellcheck disable=SC2034
+INSTALL_WAYDROID_EXPLICIT="${PLEBIAN_OS_INSTALL_WAYDROID:+1}"
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
@@ -520,6 +532,7 @@ PERSISTED_POLICY=(
     "PLEBIAN_OS_DESKTOP"            "DESKTOP"                '^[01]$'
     "PLEBIAN_OS_INSTALL_UV"         "INSTALL_UV"             '^[01]$'
     "PLEBIAN_OS_INSTALL_VOICE_MODEL" "INSTALL_VOICE_MODEL"   '^[01]$'
+    "PLEBIAN_OS_INSTALL_WAYDROID"   "INSTALL_WAYDROID"      '^[01]$'
     "PLEBIAN_OS_APT_SNAPSHOT"       "PLEBIAN_OS_APT_SNAPSHOT" '^[0-9]{8}(T[0-9]{6}Z)?$'
 )
 
@@ -589,6 +602,17 @@ validate_release_inputs() {
                 || die "release mode requires a 64-character KILIX_VOICE_MODEL_SHA256 when dictation is enabled"
             ;;
         *) die "invalid PLEBIAN_OS_INSTALL_VOICE_MODEL=$INSTALL_VOICE_MODEL (expected 0/1)" ;;
+    esac
+    case "$INSTALL_WAYDROID" in
+        0)
+            [ -z "$WAYDROID_CLOSURE_SHA256" ] \
+                || die "release mode refuses a Waydroid closure hash when installation is disabled"
+            ;;
+        1)
+            [[ "$WAYDROID_CLOSURE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+                || die "release mode requires PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 when Waydroid is enabled"
+            ;;
+        *) die "invalid PLEBIAN_OS_INSTALL_WAYDROID=$INSTALL_WAYDROID (expected 0/1)" ;;
     esac
 }
 
@@ -879,6 +903,9 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /usr/local/bin/plebian-os-nvidia-driver
+    /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
+    /usr/lib/plebian-os/waydroid/waydroid-closure.env
+    /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
     /usr/local/sbin/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
     /usr/local/bin/pleb-session
@@ -939,6 +966,8 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /usr/local/share/doc/pleb
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
+    /usr/lib/plebian-os
+    /usr/lib/plebian-os/waydroid
     /var/lib/AccountsService
     /var/lib/AccountsService/users
 )
@@ -2842,6 +2871,8 @@ write_source_tool_manifest() {
         provenance_kv KILIX_VOICE_MODEL_URL "$KILIX_VOICE_MODEL_URL"
         provenance_kv KILIX_VOICE_MODEL_SHA256 "$KILIX_VOICE_MODEL_SHA256"
         provenance_kv PLEBIAN_OS_INSTALL_VOICE_MODEL "$INSTALL_VOICE_MODEL"
+        provenance_kv PLEBIAN_OS_INSTALL_WAYDROID "$INSTALL_WAYDROID"
+        provenance_kv PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 "$WAYDROID_CLOSURE_SHA256"
         provenance_kv KILIX_CAP_DIR "$KILIX_CAP_DIR"
         provenance_kv KILIX_CAP_REPO "$KILIX_CAP_REPO"
         provenance_kv KILIX_CAP_REF "$KILIX_CAP_REF"
@@ -3688,6 +3719,14 @@ else
 fi
 restore_persisted_policy
 
+case "$INSTALL_WAYDROID" in
+    0|1) ;;
+    *) die "invalid PLEBIAN_OS_INSTALL_WAYDROID=$INSTALL_WAYDROID (expected 0/1)" ;;
+esac
+if [ -n "$WAYDROID_CLOSURE_SHA256" ] \
+        && ! [[ "$WAYDROID_CLOSURE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    die "invalid PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"
+fi
 validate_release_inputs
 
 [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "must run as root (try: sudo $0)"
@@ -3912,6 +3951,48 @@ else
         || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
 fi
 ensure_plebian_os_checkout
+
+# Stage the fixed, root-owned first-use helper from the exact Plebian-OS
+# checkout. INSTALL_WAYDROID means the feature is present in this release; the
+# large runtime and image closure is deliberately not downloaded here.
+if [ "$INSTALL_WAYDROID" = 1 ]; then
+    WAYDROID_SETUP="$PLEBIAN_OS_DIR/provision/plebian-os-waydroid-setup"
+    WAYDROID_CLOSURE="$PLEBIAN_OS_DIR/provision/waydroid-closure.env"
+    WAYDROID_PIN="$PLEBIAN_OS_DIR/provision/waydroid-closure.sha256"
+    if [ ! -x "$WAYDROID_SETUP" ] || [ -L "$WAYDROID_SETUP" ] \
+            || [ ! -f "$WAYDROID_CLOSURE" ] || [ -L "$WAYDROID_CLOSURE" ] \
+            || [ ! -f "$WAYDROID_PIN" ] || [ -L "$WAYDROID_PIN" ]; then
+        die "pinned Plebian-OS checkout has no Waydroid setup closure"
+    fi
+    WAYDROID_ACTUAL_SHA256="$(sha256sum -- "$WAYDROID_CLOSURE" | awk '{print $1}')"
+    IFS= read -r WAYDROID_PINNED_SHA256 <"$WAYDROID_PIN" \
+        || die "could not read the Waydroid closure pin"
+    printf '%s\n' "$WAYDROID_PINNED_SHA256" | cmp -s - "$WAYDROID_PIN" \
+        || die "Waydroid closure pin has trailing data"
+    if ! [[ "$WAYDROID_PINNED_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            || [ "$WAYDROID_ACTUAL_SHA256" != "$WAYDROID_PINNED_SHA256" ]; then
+        die "pinned Plebian-OS checkout has a mismatched Waydroid closure"
+    fi
+    if [ -n "$WAYDROID_CLOSURE_SHA256" ]; then
+        [ "$WAYDROID_ACTUAL_SHA256" = "$WAYDROID_CLOSURE_SHA256" ] \
+            || die "release Waydroid closure differs from the pinned checkout"
+    fi
+    WAYDROID_INSTALL_DIR=/usr/lib/plebian-os/waydroid
+    log "staging the Plebian-OS Waydroid first-use closure"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install root-owned first-use helper + closure -> $WAYDROID_INSTALL_DIR"
+        env PLEBIAN_OS_WAYDROID_CLOSURE_SHA256="$WAYDROID_ACTUAL_SHA256" \
+            "$WAYDROID_SETUP" --dry-run
+    else
+        install -d -o root -g root -m 0755 "$WAYDROID_INSTALL_DIR"
+        install -o root -g root -m 0755 "$WAYDROID_SETUP" \
+            "$WAYDROID_INSTALL_DIR/plebian-os-waydroid-setup"
+        install -o root -g root -m 0644 "$WAYDROID_CLOSURE" \
+            "$WAYDROID_INSTALL_DIR/waydroid-closure.env"
+        install -o root -g root -m 0644 "$WAYDROID_PIN" \
+            "$WAYDROID_INSTALL_DIR/waydroid-closure.sha256"
+    fi
+fi
 if [ -d "$PLEB_DIR/.git" ]; then
     log "pleb present at $PLEB_DIR — updating"
     update_pleb_checkout
@@ -4175,6 +4256,8 @@ EOF
     write_session_default KILIX_VOICE_MODEL_URL "$KILIX_VOICE_MODEL_URL"
     write_session_default KILIX_VOICE_MODEL_SHA256 "$KILIX_VOICE_MODEL_SHA256"
     write_session_default PLEBIAN_OS_INSTALL_VOICE_MODEL "$INSTALL_VOICE_MODEL"
+    write_session_default PLEBIAN_OS_INSTALL_WAYDROID "$INSTALL_WAYDROID"
+    write_session_default PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 "$WAYDROID_CLOSURE_SHA256"
     write_session_default PLEBIAN_OS_BUILD_KILIX_FORK "$BUILD_KILIX_FORK"
     write_session_default PLEBIAN_OS_KILIX_GO_MIN_VERSION "$KILIX_GO_MIN_VERSION"
     write_session_default PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"

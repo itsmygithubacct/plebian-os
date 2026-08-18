@@ -126,6 +126,9 @@ DEP_GROUPS=(
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     "disk management|gparted"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
+    # Native Wayland applications reuse Kilix's existing X surfaces through a
+    # supervised Weston X11 backend. Waydroid itself is a separately pinned
+    # third-party closure and must not be pulled from an ambient apt index.
     # The catalog's completed Kilix NVR pin is built locally and links SQLite;
     # libsqlite3-dev supplies both sqlite3.h and the unversioned linker input.
     # Plebian-OS 0.2.0 offers Kilix IceWM as an on-demand program. Keep every

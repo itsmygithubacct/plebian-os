@@ -1,0 +1,706 @@
+#!/usr/bin/env bash
+# Install and initialize Plebian-OS's exact Waydroid runtime closure.
+#
+# This is deliberately an OS helper rather than part of kilix-waydroid. The
+# application may request this fixed helper on first use, but package choice,
+# downloads, verification, initialization, and service changes stay here.
+set -euo pipefail
+
+SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+PINNED_CLOSURE_SHA256="$SELF_DIR/waydroid-closure.sha256"
+BINDER_MODPROBE_CONF=/etc/modprobe.d/plebian-os-waydroid.conf
+BINDER_MODULES_CONF=/etc/modules-load.d/plebian-os-waydroid.conf
+BINDER_MODPROBE_LINE='options binder_linux devices=binder,hwbinder,vndbinder'
+BINDER_MODULES_LINE=binder_linux
+DOWNLOAD_PARALLEL=16
+DOWNLOAD_RANGE_THRESHOLD=$((64 * 1024 * 1024))
+DOWNLOAD_RANGE_BYTES=$((2 * 1024 * 1024))
+DOWNLOAD_RETRIES=30
+DOWNLOAD_RETRY_MAX_TIME=300
+DOWNLOAD_PASSES=3
+DOWNLOAD_CACHE_ROOT=/var/cache/plebian-os/waydroid
+ELEVATED_REQUEST=0
+if { [[ "${SUDO_UID:-}" =~ ^[1-9][0-9]*$ ]] \
+        || [[ "${PKEXEC_UID:-}" =~ ^[1-9][0-9]*$ ]]; } \
+        && [ "$(id -u)" = 0 ]; then
+    ELEVATED_REQUEST=1
+fi
+if [ "$ELEVATED_REQUEST" = 1 ]; then
+    # A desktop caller cannot redirect root writes through an environment that
+    # a local sudo policy happened to retain.
+    CLOSURE="$SELF_DIR/waydroid-closure.env"
+    EXPECTED_CLOSURE_SHA256=""
+    STAGING_ROOT=/var/lib/plebian-os/session
+    STATE_DIR=/var/lib/plebian-os
+    IMAGES_PARENT=/usr/share/waydroid-extra
+    WORK_DIR=/var/lib/waydroid
+else
+    CLOSURE="${PLEBIAN_OS_WAYDROID_CLOSURE:-$SELF_DIR/waydroid-closure.env}"
+    EXPECTED_CLOSURE_SHA256="${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}"
+    STAGING_ROOT="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-os/session}"
+    STATE_DIR="${PLEBIAN_OS_STATE_DIR:-/var/lib/plebian-os}"
+    IMAGES_PARENT="${PLEBIAN_OS_WAYDROID_IMAGES_PARENT:-/usr/share/waydroid-extra}"
+    WORK_DIR="${PLEBIAN_OS_WAYDROID_WORK_DIR:-/var/lib/waydroid}"
+fi
+DRY_RUN=0
+VERIFY_ONLY=0
+
+log()  { printf '\033[1;36m[waydroid]\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[waydroid]\033[0m %s\n' "$*" >&2; }
+die()  { printf '\033[1;31m[waydroid] %s\033[0m\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<EOF
+Usage: $0 [--closure FILE] [--dry-run|--verify]
+  --closure FILE  read the exact artifact closure from FILE
+  --dry-run       validate the closure and print the installation plan
+  --verify        verify the installed packages, images, init, and service
+EOF
+}
+
+if [ "$ELEVATED_REQUEST" = 1 ] && [ "$#" -ne 0 ]; then
+    die "first-use setup does not accept caller-supplied arguments"
+fi
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --closure)
+            [ "$#" -ge 2 ] || die "--closure needs a path"
+            CLOSURE="$2"; shift 2 ;;
+        --dry-run) DRY_RUN=1; shift ;;
+        --verify) VERIFY_ONLY=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        *) die "unknown option: $1" ;;
+    esac
+done
+
+case "$CLOSURE" in
+    /*) ;;
+    *) CLOSURE="$PWD/$CLOSURE" ;;
+esac
+if [ ! -f "$CLOSURE" ] || [ -L "$CLOSURE" ]; then
+    die "Waydroid closure is missing or unsafe: $CLOSURE"
+fi
+
+declare -A VALUES=()
+ALLOWED_KEYS=(
+    WAYDROID_WESTON_VERSION
+    WAYDROID_PACKAGE_VERSION
+    WAYDROID_PACKAGE_URL
+    WAYDROID_PACKAGE_SHA256
+    WAYDROID_PACKAGE_BYTES
+    WAYDROID_LIBGLIBUTIL_VERSION
+    WAYDROID_LIBGLIBUTIL_URL
+    WAYDROID_LIBGLIBUTIL_SHA256
+    WAYDROID_LIBGLIBUTIL_BYTES
+    WAYDROID_LIBGBINDER_VERSION
+    WAYDROID_LIBGBINDER_URL
+    WAYDROID_LIBGBINDER_SHA256
+    WAYDROID_LIBGBINDER_BYTES
+    WAYDROID_PYTHON_GBINDER_VERSION
+    WAYDROID_PYTHON_GBINDER_URL
+    WAYDROID_PYTHON_GBINDER_SHA256
+    WAYDROID_PYTHON_GBINDER_BYTES
+    WAYDROID_SYSTEM_IMAGE_URL
+    WAYDROID_SYSTEM_IMAGE_SHA256
+    WAYDROID_SYSTEM_IMAGE_BYTES
+    WAYDROID_VENDOR_IMAGE_URL
+    WAYDROID_VENDOR_IMAGE_SHA256
+    WAYDROID_VENDOR_IMAGE_BYTES
+)
+
+allowed_key() {
+    local wanted="$1" key
+    for key in "${ALLOWED_KEYS[@]}"; do
+        [ "$wanted" != "$key" ] || return 0
+    done
+    return 1
+}
+
+parse_closure() {
+    local line key value
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in *=*) ;; *) die "invalid closure line: $line" ;; esac
+        key="${line%%=*}"
+        value="${line#*=}"
+        allowed_key "$key" || die "unknown Waydroid closure key: $key"
+        [ -z "${VALUES[$key]+x}" ] || die "duplicate Waydroid closure key: $key"
+        [ -n "$value" ] || die "empty Waydroid closure value: $key"
+        case "$value" in *$'\n'*|*$'\r'*|*$'\t'*|*' '*)
+            die "unsafe whitespace in Waydroid closure value: $key" ;;
+        esac
+        VALUES["$key"]="$value"
+    done <"$CLOSURE"
+
+    for key in "${ALLOWED_KEYS[@]}"; do
+        [ -n "${VALUES[$key]:-}" ] || die "Waydroid closure has no $key"
+        case "$key" in
+            *_URL)
+                case "${VALUES[$key]}" in https://*) ;; *) die "$key must use HTTPS" ;; esac ;;
+            *_SHA256)
+                [[ "${VALUES[$key]}" =~ ^[0-9a-f]{64}$ ]] \
+                    || die "$key must be a lowercase SHA-256" ;;
+            *_BYTES)
+                [[ "${VALUES[$key]}" =~ ^[1-9][0-9]{0,11}$ ]] \
+                    || die "$key must be an exact positive byte count" ;;
+            WAYDROID_WESTON_VERSION)
+                [[ "${VALUES[$key]}" =~ ^[0-9A-Za-z][0-9A-Za-z.+:~_-]{0,63}$ ]] \
+                    || die "$key must be an exact Debian package version" ;;
+            *_VERSION)
+                [[ "${VALUES[$key]}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+                    || die "$key must be an exact semantic version" ;;
+        esac
+    done
+}
+
+parse_closure
+command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
+CLOSURE_SHA256="$(sha256sum -- "$CLOSURE" | awk '{print $1}')" \
+    || die "could not hash the Waydroid closure"
+if [ -z "$EXPECTED_CLOSURE_SHA256" ] && [ -f "$PINNED_CLOSURE_SHA256" ]; then
+    [ ! -L "$PINNED_CLOSURE_SHA256" ] \
+        || die "Waydroid closure checksum pin is unsafe"
+    IFS= read -r EXPECTED_CLOSURE_SHA256 <"$PINNED_CLOSURE_SHA256" \
+        || die "could not read the Waydroid closure checksum pin"
+    printf '%s\n' "$EXPECTED_CLOSURE_SHA256" \
+        | cmp -s - "$PINNED_CLOSURE_SHA256" \
+        || die "Waydroid closure checksum pin has trailing data"
+fi
+if [ -n "$EXPECTED_CLOSURE_SHA256" ]; then
+    [[ "$EXPECTED_CLOSURE_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || die "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 is invalid"
+    [ "$CLOSURE_SHA256" = "$EXPECTED_CLOSURE_SHA256" ] \
+        || die "Waydroid closure checksum mismatch"
+elif [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+    die "release mode requires PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"
+else
+    warn "closure checksum was not supplied; validated local closure is $CLOSURE_SHA256"
+fi
+
+package_version() {
+    case "$1" in
+        weston) printf '%s\n' "${VALUES[WAYDROID_WESTON_VERSION]}" ;;
+        waydroid) printf '%s\n' "${VALUES[WAYDROID_PACKAGE_VERSION]}" ;;
+        libglibutil) printf '%s\n' "${VALUES[WAYDROID_LIBGLIBUTIL_VERSION]}" ;;
+        libgbinder) printf '%s\n' "${VALUES[WAYDROID_LIBGBINDER_VERSION]}" ;;
+        python3-gbinder) printf '%s\n' "${VALUES[WAYDROID_PYTHON_GBINDER_VERSION]}" ;;
+        *) return 1 ;;
+    esac
+}
+
+verify_package() {
+    local package="$1" expected actual
+    expected="$(package_version "$package")"
+    actual="$(dpkg-query -W -f='${Status}\t${Version}' "$package" 2>/dev/null || true)"
+    [ "$actual" = $'install ok installed\t'"$expected" ] \
+        || { warn "$package is not installed at exact version $expected"; return 1; }
+}
+
+generation_path() {
+    printf '%s/generations/%s\n' "$IMAGES_PARENT" "$CLOSURE_SHA256"
+}
+
+binder_device_present() {
+    local name="$1"
+    [ -c "/dev/$name" ] || [ -c "/dev/binderfs/$name" ]
+}
+
+verify_binder_support() {
+    local failed=0 device
+    for device in binder hwbinder vndbinder; do
+        binder_device_present "$device" \
+            || { warn "Android Binder device is absent: $device"; failed=1; }
+    done
+    if [ ! -f "$BINDER_MODPROBE_CONF" ] || [ -L "$BINDER_MODPROBE_CONF" ] \
+            || ! printf '%s\n' "$BINDER_MODPROBE_LINE" \
+                | cmp -s - "$BINDER_MODPROBE_CONF"; then
+        warn "persistent Binder device options are absent or different"
+        failed=1
+    fi
+    if [ ! -f "$BINDER_MODULES_CONF" ] || [ -L "$BINDER_MODULES_CONF" ] \
+            || ! printf '%s\n' "$BINDER_MODULES_LINE" \
+                | cmp -s - "$BINDER_MODULES_CONF"; then
+        warn "persistent Binder module loading is absent or different"
+        failed=1
+    fi
+    [ "$failed" = 0 ]
+}
+
+install_binder_support() {
+    local target device
+    for target in "$BINDER_MODPROBE_CONF" "$BINDER_MODULES_CONF"; do
+        if [ -e "$target" ] || [ -L "$target" ]; then
+            [ -f "$target" ] && [ ! -L "$target" ] \
+                || die "Binder configuration path is unsafe: $target"
+        fi
+    done
+    install -d -o root -g root -m 0755 \
+        "$(dirname "$BINDER_MODPROBE_CONF")" \
+        "$(dirname "$BINDER_MODULES_CONF")"
+    printf '%s\n' "$BINDER_MODPROBE_LINE" >"$stage/binder-modprobe.conf"
+    printf '%s\n' "$BINDER_MODULES_LINE" >"$stage/binder-modules.conf"
+    install -o root -g root -m 0644 \
+        "$stage/binder-modprobe.conf" "$BINDER_MODPROBE_CONF"
+    install -o root -g root -m 0644 \
+        "$stage/binder-modules.conf" "$BINDER_MODULES_CONF"
+
+    if ! binder_device_present binder \
+            || ! binder_device_present hwbinder \
+            || ! binder_device_present vndbinder; then
+        if [ -d /sys/module/binder_linux ]; then
+            die "binder_linux is already loaded without all required devices; reboot and retry"
+        fi
+        modprobe binder_linux \
+            || die "could not load binder_linux with the configured devices"
+        command -v udevadm >/dev/null 2>&1 && udevadm settle || true
+    fi
+    for device in binder hwbinder vndbinder; do
+        binder_device_present "$device" \
+            || die "binder_linux did not expose the required device: $device"
+    done
+}
+
+verify_install() {
+    local failed=0 generation link_target stamp
+    for package in weston libglibutil libgbinder python3-gbinder waydroid; do
+        verify_package "$package" || failed=1
+    done
+    command -v weston >/dev/null 2>&1 \
+        || { warn "Weston launcher is not installed"; failed=1; }
+    command -v waydroid >/dev/null 2>&1 \
+        || { warn "Waydroid launcher is not installed"; failed=1; }
+    verify_binder_support || failed=1
+
+    generation="$(generation_path)"
+    for image in system.img vendor.img; do
+        if [ ! -f "$generation/$image" ] || [ -L "$generation/$image" ] \
+                || [ ! -s "$generation/$image" ]; then
+            warn "verified image generation has no safe $image"
+            failed=1
+        fi
+    done
+    if [ -L "$IMAGES_PARENT/images" ]; then
+        link_target="$(readlink -- "$IMAGES_PARENT/images" 2>/dev/null || true)"
+        [ "$link_target" = "generations/$CLOSURE_SHA256" ] \
+            || { warn "active Waydroid images select a different closure"; failed=1; }
+    else
+        warn "active Waydroid images are not a generation link"
+        failed=1
+    fi
+    if [ ! -f "$WORK_DIR/waydroid.cfg" ] || [ ! -d "$WORK_DIR/rootfs" ]; then
+        warn "Waydroid is not initialized"
+        failed=1
+    fi
+    stamp="$STATE_DIR/waydroid-closure.sha256"
+    if [ ! -f "$stamp" ] || [ -L "$stamp" ] \
+            || ! printf '%s\n' "$CLOSURE_SHA256" | cmp -s - "$stamp"; then
+        warn "installed Waydroid closure stamp is absent or different"
+        failed=1
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl is-enabled waydroid-container.service >/dev/null 2>&1 \
+            || { warn "waydroid-container.service is not enabled"; failed=1; }
+        systemctl is-active waydroid-container.service >/dev/null 2>&1 \
+            || { warn "waydroid-container.service is not active"; failed=1; }
+    else
+        warn "systemctl is unavailable"
+        failed=1
+    fi
+    [ "$failed" = 0 ] || return 1
+    log "Waydroid $WAYDROID_VERSION closure $CLOSURE_SHA256 is ready"
+}
+
+WAYDROID_VERSION="${VALUES[WAYDROID_PACKAGE_VERSION]}"
+if [ "$VERIFY_ONLY" = 1 ]; then
+    verify_install
+    exit $?
+fi
+
+if [ "$DRY_RUN" = 1 ]; then
+    log "validated Waydroid $WAYDROID_VERSION closure $CLOSURE_SHA256"
+    for key in \
+        WAYDROID_LIBGLIBUTIL_URL WAYDROID_LIBGBINDER_URL \
+        WAYDROID_PYTHON_GBINDER_URL WAYDROID_PACKAGE_URL \
+        WAYDROID_SYSTEM_IMAGE_URL WAYDROID_VENDOR_IMAGE_URL; do
+        printf '    + download and verify %s\n' "${VALUES[$key]}"
+    done
+    printf '    + apt-install exact Weston from the OS snapshot and four verified local packages\n'
+    printf '    + safely publish system.img + vendor.img as generation %s\n' "$CLOSURE_SHA256"
+    printf '    + initialize Waydroid from the preinstalled image generation\n'
+    printf '    + enable and start waydroid-container.service\n'
+    exit 0
+fi
+
+[ "$(id -u)" = 0 ] || die "must run as root"
+for release_file in "$CLOSURE" "$PINNED_CLOSURE_SHA256"; do
+    if [ ! -f "$release_file" ] || [ -L "$release_file" ]; then
+        die "installed Waydroid release file is unsafe: $release_file"
+    fi
+    [ "$(stat -c '%u' -- "$release_file" 2>/dev/null)" = 0 ] \
+        || die "installed Waydroid release file is not root-owned: $release_file"
+    release_mode="$(stat -c '%a' -- "$release_file" 2>/dev/null)" \
+        || die "could not inspect installed Waydroid release file"
+    (( (8#$release_mode & 8#022) == 0 )) \
+        || die "installed Waydroid release file is writable by another user"
+done
+case "$(dpkg --print-architecture 2>/dev/null || true)" in
+    amd64) ;;
+    *) die "the current 0.2.0 Waydroid closure supports amd64 only" ;;
+esac
+for command in apt-get curl dpkg-deb dpkg-query flock modprobe python3 systemctl; do
+    command -v "$command" >/dev/null 2>&1 || die "$command is required"
+done
+
+# Two first clicks must serialize around one installation. The state directory
+# is root-owned and non-writable, so an unprivileged caller cannot substitute
+# the lock path before root opens it.
+if [ -e "$STATE_DIR" ] || [ -L "$STATE_DIR" ]; then
+    if [ ! -d "$STATE_DIR" ] || [ -L "$STATE_DIR" ]; then
+        die "Plebian-OS state directory is unsafe"
+    fi
+else
+    install -d -o root -g root -m 0755 "$STATE_DIR"
+fi
+[ "$(stat -c '%u' -- "$STATE_DIR" 2>/dev/null)" = 0 ] \
+    || die "Plebian-OS state directory is not root-owned"
+(( (8#$(stat -c '%a' -- "$STATE_DIR") & 8#022) == 0 )) \
+    || die "Plebian-OS state directory is writable by another user"
+exec {INSTALL_LOCK_FD}>"$STATE_DIR/waydroid-install.lock"
+flock "$INSTALL_LOCK_FD"
+chmod 0600 "$STATE_DIR/waydroid-install.lock"
+
+if verify_install >/dev/null 2>&1; then
+    log "Waydroid $WAYDROID_VERSION closure is already ready"
+    exit 0
+fi
+
+case "$DOWNLOAD_CACHE_ROOT" in /var/cache/plebian-os/waydroid) ;; *)
+    die "privileged download cache has an unexpected path" ;;
+esac
+DOWNLOAD_CACHE="$DOWNLOAD_CACHE_ROOT/$CLOSURE_SHA256"
+for cache_dir in \
+        /var/cache/plebian-os "$DOWNLOAD_CACHE_ROOT" "$DOWNLOAD_CACHE"; do
+    if [ -e "$cache_dir" ] || [ -L "$cache_dir" ]; then
+        if [ ! -d "$cache_dir" ] || [ -L "$cache_dir" ]; then
+            die "Waydroid download cache is unsafe: $cache_dir"
+        fi
+    else
+        install -d -o root -g root -m 0700 -- "$cache_dir"
+    fi
+    [ "$(stat -c '%u' -- "$cache_dir" 2>/dev/null)" = 0 ] \
+        || die "Waydroid download cache is not root-owned: $cache_dir"
+    (( (8#$(stat -c '%a' -- "$cache_dir") & 8#077) == 0 )) \
+        || die "Waydroid download cache is accessible by another user: $cache_dir"
+done
+
+case "$STAGING_ROOT" in /var/lib/plebian-os/*) ;; *)
+    die "privileged staging must stay under /var/lib/plebian-os" ;;
+esac
+install -d -o root -g root -m 0700 -- "$STAGING_ROOT"
+stage="$(mktemp -d "$STAGING_ROOT/waydroid.XXXXXX")" \
+    || die "could not create private Waydroid staging"
+temporary_link=""
+stamp_tmp=""
+cache_assembly=""
+cleanup() {
+    case "${temporary_link:-}" in "$IMAGES_PARENT"/.images.*.new)
+        [ ! -L "$temporary_link" ] || rm -f -- "$temporary_link" ;;
+    esac
+    case "${stamp_tmp:-}" in "$STATE_DIR"/.waydroid-closure.*)
+        [ ! -f "$stamp_tmp" ] || [ -L "$stamp_tmp" ] || rm -f -- "$stamp_tmp" ;;
+    esac
+    case "${stage:-}" in "$STAGING_ROOT"/waydroid.*)
+        [ ! -L "$stage" ] && rm -rf -- "$stage" ;;
+    esac
+    case "${cache_assembly:-}" in "$DOWNLOAD_CACHE"/*.assembling.*)
+        [ ! -d "$cache_assembly" ] && rm -f -- "$cache_assembly" ;;
+    esac
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+install -d -m 0700 "$stage/packages" "$stage/images"
+
+log "configuring Android Binder devices"
+install_binder_support
+
+download_parallel_ranges() {
+    local url="$1" sha="$2" bytes="$3" output="$4"
+    local count index start end expected part pass missing curl_status
+    local assembly actual
+    local -a curl_args
+
+    count=$(( (bytes + DOWNLOAD_RANGE_BYTES - 1) / DOWNLOAD_RANGE_BYTES ))
+    for ((pass = 1; pass <= DOWNLOAD_PASSES; pass++)); do
+        curl_args=(--parallel --parallel-immediate --parallel-max "$DOWNLOAD_PARALLEL")
+        missing=0
+        for ((index = 0; index < count; index++)); do
+            start=$((index * DOWNLOAD_RANGE_BYTES))
+            end=$((start + DOWNLOAD_RANGE_BYTES - 1))
+            if ((end >= bytes)); then
+                end=$((bytes - 1))
+            fi
+            expected=$((end - start + 1))
+            printf -v part '%s.part.%06d' "$output" "$index"
+            if [ -f "$part" ] && [ ! -L "$part" ] \
+                    && [ "$(stat -c '%u' -- "$part" 2>/dev/null)" = 0 ] \
+                    && [ "$(stat -c '%s' -- "$part" 2>/dev/null)" = "$expected" ]; then
+                continue
+            fi
+            if [ -e "$part" ] || [ -L "$part" ]; then
+                [ ! -d "$part" ] || die "ranged download part is unsafe: $part"
+                rm -f -- "$part"
+            fi
+            if [ "$missing" = 1 ]; then
+                curl_args+=(--next)
+            fi
+            missing=1
+            curl_args+=(
+                --fail --location --show-error --silent
+                --proto '=https' --proto-redir '=https' --tlsv1.2
+                --connect-timeout 30 --speed-limit 1024 --speed-time 120
+                --retry "$DOWNLOAD_RETRIES" --retry-all-errors --retry-delay 1 \
+                --retry-max-time "$DOWNLOAD_RETRY_MAX_TIME"
+                --range "$start-$end" --max-filesize "$expected"
+                --output "$part" --url "$url"
+            )
+        done
+        [ "$missing" = 1 ] || break
+        log "downloading missing ranges (pass $pass/$DOWNLOAD_PASSES)"
+        curl_status=0
+        curl "${curl_args[@]}" || curl_status=$?
+        [ "$curl_status" = 0 ] || warn "range pass $pass was incomplete; retaining finished ranges"
+    done
+
+    assembly="$output.assembling.$$"
+    if [ -e "$assembly" ] || [ -L "$assembly" ]; then
+        die "ranged download assembly path is unsafe: $assembly"
+    fi
+    cache_assembly="$assembly"
+    if ! python3 - "$assembly" "$output" "$bytes" "$DOWNLOAD_RANGE_BYTES" "$count" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+
+assembly = Path(sys.argv[1])
+output = Path(sys.argv[2])
+total = int(sys.argv[3])
+chunk = int(sys.argv[4])
+count = int(sys.argv[5])
+with assembly.open("xb") as destination:
+    for index in range(count):
+        part = Path(f"{output}.part.{index:06d}")
+        expected = min(chunk, total - index * chunk)
+        if (
+            not part.is_file()
+            or part.is_symlink()
+            or part.stat().st_uid != 0
+            or part.stat().st_size != expected
+        ):
+            raise SystemExit(f"ranged download has an invalid part: {part.name}")
+        with part.open("rb") as source:
+            shutil.copyfileobj(source, destination, 1024 * 1024)
+if assembly.stat().st_size != total:
+    raise SystemExit("ranged download has an invalid assembled size")
+PY
+    then
+        rm -f -- "$assembly"
+        cache_assembly=""
+        return 1
+    fi
+    actual="$(sha256sum -- "$assembly" | awk '{print $1}')"
+    if [ "$actual" != "$sha" ]; then
+        rm -f -- "$assembly"
+        cache_assembly=""
+        for ((index = 0; index < count; index++)); do
+            printf -v part '%s.part.%06d' "$output" "$index"
+            if [ -e "$part" ] || [ -L "$part" ]; then
+                rm -f -- "$part"
+            fi
+        done
+        return 1
+    fi
+    mv -- "$assembly" "$output"
+    cache_assembly=""
+    chmod 0600 -- "$output"
+    for ((index = 0; index < count; index++)); do
+        printf -v part '%s.part.%06d' "$output" "$index"
+        rm -f -- "$part"
+    done
+}
+
+download_verified() {
+    local url="$1" sha="$2" bytes="$3" output="$4" actual actual_bytes
+    log "downloading $(basename "$output")"
+    if ((bytes >= DOWNLOAD_RANGE_THRESHOLD)); then
+        download_parallel_ranges "$url" "$sha" "$bytes" "$output" \
+            || die "ranged download failed: $url"
+    else
+        curl --fail --location --show-error --silent \
+            --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --max-filesize "$bytes" \
+            --output "$output" "$url" \
+            || die "download failed: $url"
+    fi
+    actual_bytes="$(stat -c '%s' -- "$output")"
+    [ "$actual_bytes" = "$bytes" ] || die "download size mismatch: $url"
+    actual="$(sha256sum -- "$output" | awk '{print $1}')"
+    [ "$actual" = "$sha" ] || die "download checksum mismatch: $url"
+}
+
+cached_download_verified() {
+    local name="$1" url="$2" sha="$3" bytes="$4" output
+    output="$DOWNLOAD_CACHE/$name"
+    if [ -f "$output" ] && [ ! -L "$output" ] \
+            && [ "$(stat -c '%u' -- "$output" 2>/dev/null)" = 0 ] \
+            && [ "$(stat -c '%s' -- "$output" 2>/dev/null)" = "$bytes" ] \
+            && [ "$(sha256sum -- "$output" | awk '{print $1}')" = "$sha" ]; then
+        log "reusing verified cached $name"
+    else
+        if [ -e "$output" ] || [ -L "$output" ]; then
+            [ ! -d "$output" ] || die "download cache entry is unsafe: $output"
+            rm -f -- "$output"
+        fi
+        download_verified "$url" "$sha" "$bytes" "$output"
+    fi
+    CACHED_DOWNLOAD_OUTPUT="$output"
+}
+
+package_files=()
+for prefix in LIBGLIBUTIL LIBGBINDER PYTHON_GBINDER PACKAGE; do
+    package_file="$stage/packages/${prefix,,}.deb"
+    download_verified \
+        "${VALUES[WAYDROID_${prefix}_URL]}" \
+        "${VALUES[WAYDROID_${prefix}_SHA256]}" \
+        "${VALUES[WAYDROID_${prefix}_BYTES]}" \
+        "$package_file"
+    package_files+=("$package_file")
+done
+
+package_names=(libglibutil libgbinder python3-gbinder waydroid)
+package_versions=(
+    "${VALUES[WAYDROID_LIBGLIBUTIL_VERSION]}"
+    "${VALUES[WAYDROID_LIBGBINDER_VERSION]}"
+    "${VALUES[WAYDROID_PYTHON_GBINDER_VERSION]}"
+    "${VALUES[WAYDROID_PACKAGE_VERSION]}"
+)
+package_architectures=(amd64 amd64 amd64 all)
+for index in "${!package_files[@]}"; do
+    # dpkg-deb expands these package-field tokens; the shell must not.
+    # shellcheck disable=SC2016
+    metadata="$(dpkg-deb -W \
+        --showformat='${Package}\t${Version}\t${Architecture}' \
+        "${package_files[$index]}")" \
+        || die "could not inspect downloaded Debian package"
+    expected="${package_names[$index]}"$'\t'"${package_versions[$index]}"$'\t'"${package_architectures[$index]}"
+    [ "$metadata" = "$expected" ] \
+        || die "downloaded Debian package identity differs from the closure"
+done
+
+log "installing the exact Waydroid package closure"
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    "weston=${VALUES[WAYDROID_WESTON_VERSION]}" \
+    "${package_files[@]}" \
+    || die "Waydroid package closure installation failed"
+for package in weston libglibutil libgbinder python3-gbinder waydroid; do
+    verify_package "$package" || die "installed package closure differs"
+done
+
+cached_download_verified system.zip \
+    "${VALUES[WAYDROID_SYSTEM_IMAGE_URL]}" \
+    "${VALUES[WAYDROID_SYSTEM_IMAGE_SHA256]}" \
+    "${VALUES[WAYDROID_SYSTEM_IMAGE_BYTES]}"
+system_zip="$CACHED_DOWNLOAD_OUTPUT"
+cached_download_verified vendor.zip \
+    "${VALUES[WAYDROID_VENDOR_IMAGE_URL]}" \
+    "${VALUES[WAYDROID_VENDOR_IMAGE_SHA256]}" \
+    "${VALUES[WAYDROID_VENDOR_IMAGE_BYTES]}"
+vendor_zip="$CACHED_DOWNLOAD_OUTPUT"
+
+log "extracting verified Android images"
+python3 - "$stage/images" "$system_zip" "$vendor_zip" <<'PY'
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import stat
+import sys
+import zipfile
+
+destination = Path(sys.argv[1])
+seen = set()
+members = 0
+expanded = 0
+for archive_name in sys.argv[2:]:
+    with zipfile.ZipFile(archive_name) as archive:
+        for info in archive.infolist():
+            members += 1
+            if members > 4096:
+                raise SystemExit("Android image closure has too many members")
+            name = info.filename
+            if not name or "\\" in name or "\x00" in name:
+                raise SystemExit("Android image closure has an unsafe member name")
+            path = PurePosixPath(name)
+            if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+                raise SystemExit("Android image closure escapes its destination")
+            key = path.as_posix().rstrip("/")
+            if key in seen:
+                raise SystemExit("Android image closure has duplicate members")
+            seen.add(key)
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode not in (0, stat.S_IFREG, stat.S_IFDIR):
+                raise SystemExit("Android image closure contains a link or special file")
+            target = destination.joinpath(*path.parts)
+            if info.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+                target.chmod(0o755)
+                continue
+            expanded += info.file_size
+            if expanded > 8 * 1024 * 1024 * 1024:
+                raise SystemExit("Android image closure expands beyond 8 GiB")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(info) as source, target.open("xb") as output:
+                shutil.copyfileobj(source, output, 1024 * 1024)
+            target.chmod(0o644)
+
+for required in ("system.img", "vendor.img"):
+    image = destination / required
+    if not image.is_file() or image.is_symlink() or image.stat().st_size == 0:
+        raise SystemExit(f"Android image closure has no safe {required}")
+PY
+
+generation="$(generation_path)"
+install -d -o root -g root -m 0755 "$IMAGES_PARENT" "$IMAGES_PARENT/generations"
+if [ -e "$generation" ] || [ -L "$generation" ]; then
+    if [ ! -d "$generation" ] || [ -L "$generation" ]; then
+        die "existing Waydroid image generation is unsafe"
+    fi
+else
+    mv -- "$stage/images" "$generation"
+    chown -R root:root -- "$generation"
+fi
+if [ -e "$IMAGES_PARENT/images" ] && [ ! -L "$IMAGES_PARENT/images" ]; then
+    die "$IMAGES_PARENT/images exists and is not a Plebian-OS generation link"
+fi
+temporary_link="$IMAGES_PARENT/.images.$$.new"
+ln -s "generations/$CLOSURE_SHA256" "$temporary_link"
+mv -Tf -- "$temporary_link" "$IMAGES_PARENT/images"
+temporary_link=""
+
+log "initializing Waydroid from verified preinstalled images"
+waydroid init -f -i "$IMAGES_PARENT/images" \
+    || die "Waydroid initialization failed"
+systemctl enable --now waydroid-container.service \
+    || die "could not enable and start the Waydroid container service"
+
+install -d -o root -g root -m 0755 "$STATE_DIR"
+stamp_tmp="$(mktemp "$STATE_DIR/.waydroid-closure.XXXXXX")"
+printf '%s\n' "$CLOSURE_SHA256" >"$stamp_tmp"
+chown root:root "$stamp_tmp"
+chmod 0644 "$stamp_tmp"
+mv -f -- "$stamp_tmp" "$STATE_DIR/waydroid-closure.sha256"
+stamp_tmp=""
+
+verify_install || die "installed Waydroid closure failed verification"
+log "Waydroid runtime is ready for kilix-waydroid"

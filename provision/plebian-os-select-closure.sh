@@ -128,6 +128,8 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_VOICE_LIB_SHA256
     KILIX_VOICE_MODEL_URL
     KILIX_VOICE_MODEL_SHA256
+    PLEBIAN_OS_INSTALL_WAYDROID
+    PLEBIAN_OS_WAYDROID_CLOSURE_SHA256
 )
 
 # Release-controlled too, but consumed only while building the image: the
@@ -419,6 +421,19 @@ validate_release_closure() {
         done
     fi
 
+    value="${MANIFEST[PLEBIAN_OS_INSTALL_WAYDROID]:-0}"
+    case "$value" in
+        0)
+            [ -z "${MANIFEST[PLEBIAN_OS_WAYDROID_CLOSURE_SHA256]:-}" ] \
+                || closure_reject "Waydroid closure hash is pinned while installation is disabled"
+            ;;
+        1)
+            require_manifest_format PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 \
+                '^[0-9a-f]{64}$' "a 64-character lowercase SHA-256"
+            ;;
+        *) closure_reject "PLEBIAN_OS_INSTALL_WAYDROID must be 0 or 1 (got '$value')" ;;
+    esac
+
     # PLEBIAN_OS_REF names the release tag while the image is built; the
     # installed system persists the commit that tag resolved to, never the
     # movable name.
@@ -450,6 +465,11 @@ build_selected_closure() {
         done
         CLOSURE[PLEBIAN_OS_INSTALL_VOICE_MODEL]=0
     fi
+    # Optional closures only become part of a release when its manifest names
+    # them.  In particular, do not synthesize Waydroid=0 into historical
+    # closures: selecting an older published release must not rewrite that
+    # release's byte-for-byte operator configuration merely because a newer
+    # selector knows about a future optional feature.
 }
 
 # ── resolving the immutable closure source ──────────────────────────────────
