@@ -123,10 +123,16 @@ load_release_manifest() {
         [ -z "${seen[$key]:-}" ] \
             || { echo "duplicate release manifest key: $key" >&2; exit 1; }
         seen[$key]=1
-        if [ "$val" = "REPLACE_ME" ]; then
-            echo "release $rel: $key is still REPLACE_ME in releases/$rel.env — fill it before building (see RELEASING.md)" >&2
-            exit 1
-        fi
+        # Reject the placeholder CLASS, not one spelling of it.  A manifest
+        # that still carries TBD or FIXME is exactly as unfinished as one
+        # carrying REPLACE_ME, and matching only the latter let the others
+        # through into a build labelled as a release.
+        case "${val^^}" in
+            REPLACE_ME|REPLACE-ME|TBD|TODO|FIXME|XXX|CHANGEME|CHANGE_ME|PLACEHOLDER|UNSET|NONE)
+                echo "release $rel: $key is still a placeholder (\"$val\") in releases/$rel.env — fill it before building (see RELEASING.md)" >&2
+                exit 1
+                ;;
+        esac
         export "$key=$val"
     done < "$manifest"
     if [ "$rel" = 0.1.9 ] && [ ! -f "$requirements" ]; then
@@ -183,8 +189,12 @@ PLEBIAN_OS_MEDIA_INFO="Plebian-OS $PLEBIAN_OS_VERSION amd64 installer (Debian 13
 : "${KILIX_PREBUILT_SHA256:=bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
 
 is_hex_len() {
+    # Lowercase only.  Git writes object names in lowercase and sha256sum
+    # writes digests in lowercase, so an uppercase value is not a value this
+    # project ever produces.  Accepting it let a ref pass validation here and
+    # then fail to resolve later, which is the worst place to learn about it.
     local value="$1" length="$2"
-    [[ "$value" =~ ^[0-9a-fA-F]+$ ]] && [ "${#value}" -eq "$length" ]
+    [[ "$value" =~ ^[0-9a-f]+$ ]] && [ "${#value}" -eq "$length" ]
 }
 
 validate_voice_release_closure() {
