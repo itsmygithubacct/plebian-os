@@ -4,10 +4,10 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.2.0] — Unreleased
+## [0.2.0] — 2026-08-19
 
 Selected for the coordinated 0.2.0 candidate. The exact component and external
-closure is finalized in `releases/0.2.0.env` before qualification.
+closure is finalized in `releases/0.2.0.env` for qualification.
 
 ### Added
 
