@@ -69,6 +69,36 @@ PDF_VIEWER_BUILD_PACKAGES = {
 # header and linker input rather than relying on a host's incidental package.
 NVR_BUILD_PACKAGES = {"libsqlite3-dev", "zlib1g-dev"}
 
+COMPRESSION_PREREQUISITE_PACKAGES = {
+    "python3",
+    "python3-venv",
+    "zlib1g",
+    "libbz2-1.0",
+    "liblzma5",
+    "libzstd1",
+    "zstd",
+    "bzip2",
+    "xz-utils",
+    "zip",
+    "unzip",
+    "ca-certificates",
+}
+
+HARDWARE_DISCOVERY_PACKAGES = {
+    "pciutils",
+    "usbutils",
+    "dmidecode",
+    "lshw",
+    "lm-sensors",
+    "util-linux",
+    "kmod",
+    "ethtool",
+    "smartmontools",
+    "nvme-cli",
+}
+
+PERFORMANCE_QUALIFICATION_PACKAGES = {"linux-perf"}
+
 # Kilix IceWM is built on first selection. Plebian-OS 0.2.0 must provide the
 # complete, explicit pkg-config closure used by the pinned IceWM configuration
 # on both fresh-install paths; transitive dependencies are not this contract.
@@ -153,6 +183,24 @@ class DependencyManifestTests(unittest.TestCase):
     def test_nvr_builds_on_both_paths(self):
         self.assertLessEqual(NVR_BUILD_PACKAGES, install_deps_packages())
         self.assertLessEqual(NVR_BUILD_PACKAGES, preseed_packages())
+
+    def test_021_compression_prerequisites_are_on_both_paths(self):
+        self.assertLessEqual(COMPRESSION_PREREQUISITE_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(COMPRESSION_PREREQUISITE_PACKAGES,
+                             preseed_packages())
+
+    def test_021_hardware_discovery_is_on_both_paths(self):
+        self.assertLessEqual(HARDWARE_DISCOVERY_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(HARDWARE_DISCOVERY_PACKAGES,
+                             preseed_packages())
+
+    def test_021_performance_qualification_tool_is_on_both_paths(self):
+        self.assertLessEqual(PERFORMANCE_QUALIFICATION_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(PERFORMANCE_QUALIFICATION_PACKAGES,
+                             preseed_packages())
 
     def test_kilix_icewm_builds_on_both_paths(self):
         self.assertLessEqual(ICEWM_BUILD_PACKAGES, install_deps_packages())
