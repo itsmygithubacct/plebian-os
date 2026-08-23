@@ -64,6 +64,25 @@ require_xorriso() {
                       sudo dnf install xorriso        (Fedora)"
 }
 
+# Refuse to start a netinst download whose signature we could not check anyway.
+# gpgv is a BUILD-HOST tool only: nothing on an installed Plebian-OS system uses
+# it, so it is deliberately absent from preseed.cfg and install-deps.sh. The
+# signing key itself is fetched and fingerprint-checked automatically by
+# _fetch_debian_cd_keyring, so gpgv is the only piece an operator must supply.
+require_gpgv() {
+    command -v gpgv >/dev/null 2>&1 && return 0
+    if [ "${PLEBIAN_OS_ALLOW_UNSIGNED_SUMS:-0}" = 1 ]; then
+        _lib_log "WARNING: gpgv is missing; SHA256SUMS signature verification is disabled by request"
+        return 0
+    fi
+    _lib_die "gpgv is required to verify the Debian SHA256SUMS signature but is not installed.
+   Install it first:  sudo apt-get install gpgv
+   Supplying an already-verified ISO avoids the download entirely:
+                      build/remaster-iso.sh /path/to/debian-13.x-amd64-netinst.iso out.iso
+   To download without signature verification (never for release evidence):
+                      PLEBIAN_OS_ALLOW_UNSIGNED_SUMS=1"
+}
+
 # fetch_netinst — ensure a verified Debian netinst ISO is cached; echo its path.
 # Set PLEBIAN_OS_NETINST to a local ISO to skip the download entirely.
 fetch_netinst() {
@@ -82,6 +101,7 @@ fetch_netinst() {
     command -v curl >/dev/null 2>&1 || _lib_die "curl is required to download the netinst ISO"
     command -v sha256sum >/dev/null 2>&1 || _lib_die "sha256sum is required to verify the download"
     command -v flock >/dev/null 2>&1 || _lib_die "flock is required to protect the shared ISO cache"
+    require_gpgv
     mkdir -p "$PLEBIAN_OS_CACHE"
     local netinst_lock_fd
     exec {netinst_lock_fd}>"$PLEBIAN_OS_CACHE/.download.lock"
@@ -226,7 +246,7 @@ fetch_netinst() {
     elif [ "${PLEBIAN_OS_ALLOW_UNSIGNED_SUMS:-0}" = 1 ]; then
         _lib_log "WARNING: skipping Debian SHA256SUMS signature verification by request"
     else
-        _lib_die "cannot verify Debian SHA256SUMS signature; install gpgv and debian-archive-keyring, or set PLEBIAN_OS_ALLOW_UNSIGNED_SUMS=1"
+        _lib_die "cannot verify Debian SHA256SUMS signature; install gpgv (apt install gpgv), or set PLEBIAN_OS_ALLOW_UNSIGNED_SUMS=1"
     fi
 
     # the plain amd64 netinst — not debian-edu / debian-mac
