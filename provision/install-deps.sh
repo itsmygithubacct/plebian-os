@@ -133,6 +133,9 @@ DEP_GROUPS=(
     # complete.
     "web browsers|firefox-esr chromium libssh2-1-dev libbrotli-dev"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
+    # F100's sandbox must not depend on the portal/systemd dependency graph to
+    # retain its runtime. Exact versions match the frozen S0 package identity.
+    "F100 sandbox runtime|bubblewrap=0.11.0-2+deb13u1 libseccomp2=2.6.0-2"
     "disk management|gparted"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     # The catalog's completed Kilix NVR pin is built locally and links SQLite;
