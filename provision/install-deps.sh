@@ -10,13 +10,22 @@
 #
 #   sudo plebian-os-install-deps            # install everything
 #   plebian-os-install-deps --dry-run       # just print what it would do
+#   plebian-os-install-deps --qualification # additionally install the
+#                                           # qualification-image group
+#                                           # (0.2.1 OD-12D; not base image)
 #
 # NOTE: preseed/preseed.cfg's pkgsel/include mirrors these packages for the
 # Debian-installer path (d-i can't call a script); keep the two in sync.
 set -uo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+QUALIFICATION=0
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)       DRY_RUN=1 ;;
+        --qualification) QUALIFICATION=1 ;;
+    esac
+done
 PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-os/session}"
 
 log()  { printf '\033[1;36m[deps]\033[0m %s\n' "$*"; }
@@ -159,6 +168,23 @@ DEP_GROUPS=(
     "cli utilities|tmux ncdu rsync ufw jq glances ripgrep"
 )
 
+# Qualification-image additive group (0.2.1, owner decision OD-12D).
+#
+# These are NOT base-image packages. preseed.cfg and DEP_GROUPS above must stay
+# exactly equal — tests/test_dependency_manifest.py enforces that — so anything
+# installed only onto qualification images lives here instead, and is applied
+# with `plebian-os-install-deps --qualification`.
+#
+# The separator is "::" rather than "|" precisely so the base-set parser does
+# not see these lines. A test asserts the two sets stay disjoint.
+#
+# Xephyr backs F119's nested-X lane and `pleb test --check`; putting it in the
+# base set would place a test-only server on every installed machine.
+QUAL_GROUPS=(
+    "qualification nested X :: xserver-xephyr"
+)
+
+
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
     warn "must run as root (try: sudo $0)"; exit 1
 fi
@@ -296,3 +322,19 @@ if [ "${#failed[@]}" -gt 0 ]; then
 fi
 [ "$DRY_RUN" = 1 ] && { log "dry run complete."; exit 0; }
 log "all dependency groups installed."
+
+# Qualification-image additive group (OD-12D). Only with --qualification; never
+# part of the base image, so preseed.cfg and DEP_GROUPS stay exactly equal.
+if [ "$QUALIFICATION" -eq 1 ]; then
+    for entry in "${QUAL_GROUPS[@]}"; do
+        label=${entry%% :: *}
+        pkgs=${entry#* :: }
+        log "qualification group: $label"
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "    would install: $pkgs"
+        else
+            apt-get install -y --no-install-recommends $pkgs \
+                || warn "qualification group failed: $label"
+        fi
+    done
+fi

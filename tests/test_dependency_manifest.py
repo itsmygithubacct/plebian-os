@@ -136,6 +136,19 @@ def preseed_packages():
     return set(body.split())
 
 
+def qualification_packages():
+    """The additive qualification-image group (0.2.1 owner decision OD-12D).
+
+    Uses "::" rather than "|" so install_deps_packages() cannot see it: these
+    are deliberately NOT base-image packages.
+    """
+    text = (ROOT / "provision" / "install-deps.sh").read_text()
+    pkgs = set()
+    for match in re.finditer(r'^\s*"[^"]+ :: ([^"]+)"', text, flags=re.MULTILINE):
+        pkgs.update(match.group(1).split())
+    return pkgs
+
+
 def install_deps_packages():
     text = (ROOT / "provision" / "install-deps.sh").read_text()
     pkgs = set()
@@ -147,6 +160,19 @@ def install_deps_packages():
 
 
 class DependencyManifestTests(unittest.TestCase):
+    def test_qualification_group_is_not_in_the_base_image(self):
+        """OD-12D puts Xephyr on qualification images only.
+
+        If it leaked into the base set it would ship a test-only X server to
+        every installed machine, and it would also break the preseed/install-deps
+        equality that the next test enforces.
+        """
+        qual = qualification_packages()
+        self.assertTrue(qual, "QUAL_GROUPS not found in install-deps")
+        self.assertIn("xserver-xephyr", qual)
+        self.assertTrue(qual.isdisjoint(install_deps_packages()))
+        self.assertTrue(qual.isdisjoint(preseed_packages()))
+
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
 
