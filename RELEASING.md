@@ -26,6 +26,12 @@ an incomplete candidate and must never be moved or used for a published image.
 The last published coordinated release is **0.1.9**. The next planned release
 is **0.2.0**; its closure is finalized only after the four final component
 commits are known.
+0.2.1 development is a separate, post-0.2.0 integration line. Its source or
+planning work must not be folded into, or used to rebuild, a 0.2.0 candidate or
+release worktree. Before 0.2.1 release preparation begins, freeze a distinct
+0.2.1 manifest from the exact accepted parent, then advance all four coordinated
+`VERSION` files together. Partial 0.2.1 prerequisites and planning documents do
+not constitute that closure.
 0.1.7 is the fresh-install upgrade baseline: no pre-0.1.7 in-place path is
 supported. Every release after it must pass the adjacent published-release
 upgrade gate in [UPGRADING.md](UPGRADING.md) as well as fresh-install
@@ -203,7 +209,14 @@ cannot change the process which is performing that hop.
    them red for reasons that have nothing to do with the code. Kilix-95's
    `tests/run.py` resolves Kilix from the shared source root, so
    its result reflects whatever is in that working tree. Confirm all four
-   `VERSION` files read the release version, confirm all four worktrees are
+   repositories also pass their 0.2.1 isolated-runner contract: a minimal,
+   allowlisted environment; private HOME and XDG roots; no inherited Kilix
+   session variables; bounded process, socket, service, display, input, audio,
+   GPU, network, and clock dependencies; and no leaked state or child process.
+   Record both clean-console and live-Kilix results in the release evidence.
+   A suite that passes only because of the operator's ambient session is a
+   release failure. Confirm all four `VERSION` files read the release version,
+   confirm all four worktrees are
    clean, review their exact commits, and commit the coordinated changes.
    Immediately before tagging, confirm those
    commits are still the intended branch tips; classify any newer commit as

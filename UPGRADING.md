@@ -3,6 +3,12 @@
 This policy starts with **Plebian-OS 0.1.7**. It is also encoded for tooling in
 [`releases/upgrade-policy.json`](releases/upgrade-policy.json).
 
+An in-development 0.2.1 checkout is not a supported upgrade destination. A
+target becomes supported only when its immutable release manifest, notes,
+artifacts, and adjacent-version acceptance evidence are published together.
+Never point the installed updater at a development branch or use 0.2.1 source
+work to modify a 0.2.0 release worktree.
+
 ## Baseline and supported paths
 
 - Install 0.1.7 fresh when the machine runs anything older. In particular,
