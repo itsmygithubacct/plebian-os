@@ -10,13 +10,21 @@
 #
 #   sudo plebian-os-install-deps            # install everything
 #   plebian-os-install-deps --dry-run       # just print what it would do
+#   plebian-os-install-deps --qualification # add qualification-only packages
 #
 # NOTE: preseed/preseed.cfg's pkgsel/include mirrors these packages for the
 # Debian-installer path (d-i can't call a script); keep the two in sync.
 set -uo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+QUALIFICATION=0
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=1 ;;
+        --qualification) QUALIFICATION=1 ;;
+        *) printf 'usage: %s [--dry-run] [--qualification]\n' "$0" >&2; exit 2 ;;
+    esac
+done
 PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-os/session}"
 
 log()  { printf '\033[1;36m[deps]\033[0m %s\n' "$*"; }
@@ -63,12 +71,16 @@ prepare_root_session_home() {
     fi
     install -d -o root -g root -m 0700 -- "$PLEBIAN_OS_ROOT_SESSION_HOME" \
         || { warn "could not create privileged staging directory"; return 1; }
-    [ -d "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
-        && [ ! -L "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
-        || { warn "privileged staging directory became unsafe"; return 1; }
-    chown root:root -- "$PLEBIAN_OS_ROOT_SESSION_HOME" \
-        && chmod 0700 -- "$PLEBIAN_OS_ROOT_SESSION_HOME" \
-        || { warn "could not secure privileged staging directory"; return 1; }
+    if [ ! -d "$PLEBIAN_OS_ROOT_SESSION_HOME" ] \
+        || [ -L "$PLEBIAN_OS_ROOT_SESSION_HOME" ]; then
+        warn "privileged staging directory became unsafe"
+        return 1
+    fi
+    if ! chown root:root -- "$PLEBIAN_OS_ROOT_SESSION_HOME" \
+        || ! chmod 0700 -- "$PLEBIAN_OS_ROOT_SESSION_HOME"; then
+        warn "could not secure privileged staging directory"
+        return 1
+    fi
     metadata="$(stat -c '%u:%g:%a' -- "$PLEBIAN_OS_ROOT_SESSION_HOME" 2>/dev/null)" \
         || { warn "could not inspect privileged staging directory"; return 1; }
     [ "$metadata" = 0:0:700 ] \
@@ -115,7 +127,9 @@ DEP_GROUPS=(
     # hash-locked pip install independently of uv. The coordinated 0.1.9
     # release also installs its required, verified uv pin as system tooling.
     "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
-    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
+    # Playalong links SDL2 for output and libsndfile for stem decode. Keep the
+    # runtime libraries explicit rather than relying on the -dev toolchain.
+    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm libsdl2-2.0-0 libsndfile1"
     # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
     # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free. The
     # image now enables the non-free component, so they are installable — but
@@ -150,6 +164,9 @@ DEP_GROUPS=(
     # complete.
     "web browsers|firefox-esr chromium libssh2-1-dev libbrotli-dev"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
+    # F100's sandbox must not depend on portal/systemd dependency accidents.
+    # These exact versions are the frozen F118-S0 package identities.
+    "F100 sandbox runtime|bubblewrap=0.11.0-2+deb13u1 libseccomp2=2.6.0-2"
     "disk management|gparted"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     # Native Wayland applications reuse Kilix's existing X surfaces through a
@@ -174,6 +191,12 @@ DEP_GROUPS=(
     # the three bundles a copy, so without it here they fall back to
     # something slower or search nothing at all.
     "cli utilities|tmux ncdu rsync ufw jq glances ripgrep"
+)
+
+# Additive qualification-image packages. The distinct separator keeps these
+# out of the parser that enforces exact base/preseed package parity.
+QUAL_GROUPS=(
+    "qualification nested X :: xserver-xephyr"
 )
 
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
@@ -202,6 +225,24 @@ for entry in "${DEP_GROUPS[@]}"; do
         failed+=("$name")
     fi
 done
+
+if [ "$QUALIFICATION" -eq 1 ]; then
+    for entry in "${QUAL_GROUPS[@]}"; do
+        name=${entry%% :: *}
+        pkgs=${entry#* :: }
+        log "installing group: $name"
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + apt-get install -y --no-install-recommends $pkgs"
+            continue
+        fi
+        # shellcheck disable=SC2086  # deliberate package-list splitting
+        if ! apt-get install -y --no-install-recommends $pkgs; then
+            warn "GROUP FAILED: $name"
+            warn "    packages: $pkgs"
+            failed+=("$name")
+        fi
+    done
+fi
 
 # uv is useful system tooling but is not a runtime prerequisite for Kilix's
 # Python apps: their release installers use Debian's python3-venv and locked
@@ -289,9 +330,11 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
                         [ -n "$uv_actual" ] || uv_ok=0
                     fi
                 fi
-                [ "$uv_ok" = 1 ] \
-                    && log "verified installed $uv_actual" \
-                    || warn "uv final installation verification failed"
+                if [ "$uv_ok" = 1 ]; then
+                    log "verified installed $uv_actual"
+                else
+                    warn "uv final installation verification failed"
+                fi
             fi
         fi
         [ -z "$uv_tmp" ] || rm -f "$uv_tmp"

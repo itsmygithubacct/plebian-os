@@ -1,4 +1,6 @@
+import os
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -30,6 +32,14 @@ VOICE_ARCHIVE_PREREQUISITE_PACKAGES = {
 LOCAL_BUILD_PREREQUISITE_PACKAGES = {
     "build-essential",
     "cmake",
+}
+
+PLAYALONG_RUNTIME_PACKAGES = {"libsdl2-2.0-0", "libsndfile1"}
+PLAYALONG_BUILD_PACKAGES = {"libsdl2-dev", "libsndfile1-dev", "pkg-config"}
+
+F100_SANDBOX_PACKAGES = {
+    "bubblewrap=0.11.0-2+deb13u1",
+    "libseccomp2=2.6.0-2",
 }
 
 # The session's TERM is xterm-kitty. Kilix installs the engine's own entry
@@ -143,7 +153,48 @@ def install_deps_packages():
     return pkgs
 
 
+def qualification_packages():
+    text = (ROOT / "provision" / "install-deps.sh").read_text()
+    pkgs = set()
+    for match in re.finditer(r'^\s*"[^"]+ :: ([^"]+)"', text,
+                             flags=re.MULTILINE):
+        pkgs.update(match.group(1).split())
+    return pkgs
+
+
 class DependencyManifestTests(unittest.TestCase):
+    def test_qualification_group_is_not_in_the_base_image(self):
+        qual = qualification_packages()
+        self.assertEqual(qual, {"xserver-xephyr"})
+        self.assertTrue(qual.isdisjoint(install_deps_packages()))
+        self.assertTrue(qual.isdisjoint(preseed_packages()))
+
+    def test_qualification_cli_installs_its_group_in_dry_run(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "provision" / "install-deps.sh"),
+             "--dry-run", "--qualification"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "LC_ALL": "C"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("installing group: qualification nested X",
+                      result.stdout)
+        self.assertIn("xserver-xephyr", result.stdout)
+
+    def test_dependency_cli_refuses_unknown_options(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "provision" / "install-deps.sh"),
+             "--not-a-real-option"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage:", result.stderr)
+
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
 
@@ -159,6 +210,17 @@ class DependencyManifestTests(unittest.TestCase):
     def test_local_build_prerequisites_are_installed(self):
         self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,
                              install_deps_packages())
+
+    def test_playalong_builds_and_runs_on_both_paths(self):
+        for packages in (PLAYALONG_BUILD_PACKAGES,
+                         PLAYALONG_RUNTIME_PACKAGES):
+            self.assertLessEqual(packages, install_deps_packages())
+            self.assertLessEqual(packages, preseed_packages())
+
+    def test_f100_sandbox_versions_are_explicit_on_both_paths(self):
+        self.assertLessEqual(F100_SANDBOX_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(F100_SANDBOX_PACKAGES, preseed_packages())
 
     def test_pdf_runtime_remains_available_independently_of_uv(self):
         self.assertLessEqual(PDF_RUNTIME_PREREQUISITE_PACKAGES,
