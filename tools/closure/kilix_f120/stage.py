@@ -12,8 +12,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
 from .build_cache import BuildCacheResult, ensure_build
-from .cache import cache_root, directory_bytes
-from .canonical import atomic_write_json, file_sha256
+from .cache import cache_root, directory_bytes, rename_directory_no_replace
+from .canonical import atomic_write_json, file_sha256, load_json, require_identifier
+from .contracts import validate_path
 from .errors import BuildError, ContractError
 from .keys import licenses_sha256
 from .registration import ComponentRegistration, Registration
@@ -30,6 +31,7 @@ class StageReport:
     source_cache_hits: int
     source_cache_misses: int
     fetches: int
+    fetch_bytes: int
     build_cache_hits: int
     build_cache_misses: int
     builds: int
@@ -46,6 +48,7 @@ class StageReport:
             "cache_bytes": self.cache_bytes,
             "components": self.components,
             "fetches": self.fetches,
+            "fetch_bytes": self.fetch_bytes,
             "schema": "kilix.f120.stage-report/v1",
             "source_cache_hits": self.source_cache_hits,
             "source_cache_misses": self.source_cache_misses,
@@ -215,12 +218,48 @@ def _publish_stage(candidate: Path, destination: Path) -> None:
     if destination.exists() or destination.is_symlink():
         raise BuildError("refusing to overwrite an existing staged prefix")
     destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    os.replace(candidate, destination)
+    try:
+        rename_directory_no_replace(candidate, destination)
+    except FileExistsError as exc:
+        raise BuildError("refusing to overwrite an existing staged prefix") from exc
+    except OSError as exc:
+        raise BuildError(f"cannot atomically publish staged prefix: {exc}") from exc
     descriptor = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _publish_lock(candidate: Path, destination: Path) -> None:
+    """Atomically publish a new lock without ever replacing an existing one."""
+
+    destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    linked = False
+    try:
+        os.link(candidate, destination)
+        linked = True
+        candidate.unlink()
+        descriptor = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except FileExistsError as exc:
+        raise BuildError("refusing to overwrite an existing release lock") from exc
+    except BaseException:
+        if linked:
+            destination.unlink(missing_ok=True)
+        raise
+
+
+def _retire_failed_publication(destination: Path) -> None:
+    """Remove a prefix from its public name if paired lock publication fails."""
+
+    failed_root = destination.parent / ".kilix-f120-failed"
+    failed_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    failed = failed_root / uuid.uuid4().hex
+    os.replace(destination, failed)
 
 
 def stage_workspace(
@@ -235,6 +274,21 @@ def stage_workspace(
 ) -> StageReport:
     if workspace.get("workspace_root") != str(registration.workspace_root):
         raise ContractError("workspace manifest root differs from registration")
+    cache_path = cache.resolve()
+    workspace_path = registration.workspace_root.resolve()
+    destination_path = destination.resolve()
+    for candidate, container, label in (
+        (cache_path, workspace_path, "cache root is inside the workspace"),
+        (workspace_path, cache_path, "cache root contains the workspace"),
+        (destination_path, workspace_path, "staged prefix is inside the workspace"),
+        (destination_path, cache_path, "staged prefix is inside the cache"),
+        (cache_path, destination_path, "staged prefix contains the cache"),
+    ):
+        try:
+            candidate.relative_to(container)
+        except ValueError:
+            continue
+        raise BuildError(label)
     overrides = local_sources or {}
     known = {item.instance_id for item in registration.components}
     unknown = sorted(set(overrides) - known)
@@ -291,14 +345,11 @@ def stage_workspace(
         emit_release_lock(workspace, release, records, lock_candidate)
         _publish_stage(stage, destination)
         published = True
-        os.replace(lock_candidate, release_lock)
-        lock_directory = os.open(release_lock.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(lock_directory)
-        finally:
-            os.close(lock_directory)
+        _publish_lock(lock_candidate, release_lock)
     except BaseException:
-        if not published:
+        if published:
+            _retire_failed_publication(destination)
+        else:
             shutil.rmtree(stage, ignore_errors=True)
         lock_candidate.unlink(missing_ok=True)
         raise
@@ -309,6 +360,7 @@ def stage_workspace(
         source_cache_hits=sum(item.hit for item in source_results),
         source_cache_misses=sum(not item.hit for item in source_results),
         fetches=sum(item.fetches for item in source_results),
+        fetch_bytes=sum(item.fetch_bytes for item in source_results),
         build_cache_hits=sum(item.hit for item in build_results),
         build_cache_misses=sum(not item.hit for item in build_results),
         builds=sum(item.builds for item in build_results),
@@ -326,11 +378,34 @@ def retire_stage(destination: Path, release_lock: Path | None = None) -> Path:
         raise BuildError("refusing to retire a broad filesystem path")
     if stage.is_symlink() or not stage.is_dir():
         raise BuildError("staged prefix is not a real directory")
+    if (stage / ".git").exists() or (stage / ".gitmodules").exists():
+        raise BuildError("refusing to retire a repository as a staged prefix")
+    manifest_root = stage / "share" / "kilix-f120"
+    if manifest_root.is_symlink() or not manifest_root.is_dir():
+        raise BuildError("staged prefix has no F120 stage-manifest directory")
+    manifests = sorted(manifest_root.glob("*.json"))
+    if not manifests:
+        raise BuildError("staged prefix has no F120 stage manifests")
+    if {item for item in manifest_root.iterdir()} != set(manifests):
+        raise BuildError("F120 stage-manifest directory contains unexpected entries")
+    for manifest in manifests:
+        if manifest.is_symlink() or not manifest.is_file():
+            raise BuildError("F120 stage manifest is not a regular file")
+        document = load_json(manifest)
+        if not isinstance(document, dict) or document.get("schema") != STAGE_MANIFEST_SCHEMA:
+            raise BuildError("F120 stage manifest identity is invalid")
+        instance = require_identifier(
+            document.get("component_instance"), "stage manifest component instance"
+        )
+        if manifest.name != f"{instance}.json":
+            raise BuildError("F120 stage manifest filename does not bind its component")
     lock: Path | None = None
     if release_lock is not None:
         lock = release_lock.resolve()
         if lock.is_symlink() or not lock.is_file():
             raise BuildError("release lock is not a real file")
+        lock_document = validate_path(lock)
+        _audit_stage(stage, lock_document["artifacts"])
     retirement_root = stage.parent / ".kilix-f120-retired"
     retirement_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     retirement = retirement_root / uuid.uuid4().hex

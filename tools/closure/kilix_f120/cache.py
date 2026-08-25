@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import fcntl
 import os
 import tempfile
@@ -12,6 +14,41 @@ from typing import Iterator
 
 from .canonical import require_sha256
 from .errors import CacheError
+
+
+AT_FDCWD = -100
+RENAME_NOREPLACE = 1
+
+
+def rename_directory_no_replace(candidate: Path, destination: Path) -> None:
+    """Atomically rename a path while refusing a concurrently created target."""
+
+    try:
+        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+    except AttributeError as exc:
+        raise OSError(
+            errno.ENOSYS,
+            "atomic no-replace publication requires Linux renameat2",
+        ) from exc
+    renameat2.argtypes = (
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = renameat2(
+        AT_FDCWD,
+        os.fsencode(candidate),
+        AT_FDCWD,
+        os.fsencode(destination),
+        RENAME_NOREPLACE,
+    )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), os.fspath(destination))
 
 
 def cache_root(path: Path) -> Path:
@@ -56,7 +93,12 @@ def publish_directory(candidate: Path, destination: Path) -> None:
     if destination.exists() or destination.is_symlink():
         raise CacheError("refusing to overwrite an existing cache entry")
     destination.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-    os.replace(candidate, destination)
+    try:
+        rename_directory_no_replace(candidate, destination)
+    except FileExistsError as exc:
+        raise CacheError("refusing to overwrite an existing cache entry") from exc
+    except OSError as exc:
+        raise CacheError(f"cannot atomically publish cache entry: {exc}") from exc
     descriptor = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(descriptor)

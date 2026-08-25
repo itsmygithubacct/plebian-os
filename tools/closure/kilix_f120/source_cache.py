@@ -21,6 +21,7 @@ from .gitops import COMMIT_RE, canonical_https_url, resolve_commit, run_git, sou
 
 
 SOURCE_METADATA_SCHEMA = "kilix.f120.source-cache/v1"
+CACHED_SOURCE_REF = "refs/kilix-f120/source"
 
 
 @dataclass(frozen=True)
@@ -28,13 +29,13 @@ class SourceCacheResult:
     repository: Path
     hit: bool
     fetches: int
+    fetch_bytes: int
     cache_bytes: int
 
 
 def _metadata(entry: Path) -> dict[str, Any]:
     document = load_json(entry / "metadata.json")
     if not isinstance(document, dict) or set(document) != {
-        "resolved_commit",
         "schema",
         "source_sha256",
     }:
@@ -42,13 +43,10 @@ def _metadata(entry: Path) -> dict[str, Any]:
     if document["schema"] != SOURCE_METADATA_SCHEMA:
         raise CacheError("source cache metadata schema is invalid")
     require_sha256(document["source_sha256"], "source cache source_sha256")
-    commit = document["resolved_commit"]
-    if not isinstance(commit, str) or not COMMIT_RE.fullmatch(commit):
-        raise CacheError("source cache resolved_commit is invalid")
     return document
 
 
-def _validate_entry(entry: Path, source_sha256: str, commit: str) -> Path:
+def _validate_entry(entry: Path, source_sha256: str) -> Path:
     if entry.is_symlink() or not entry.is_dir():
         raise CacheError("source cache entry is not a real directory")
     if {item.name for item in entry.iterdir()} != {"metadata.json", "repo.git"}:
@@ -56,14 +54,11 @@ def _validate_entry(entry: Path, source_sha256: str, commit: str) -> Path:
     metadata = _metadata(entry)
     if metadata["source_sha256"] != source_sha256:
         raise CacheError("source cache key does not bind metadata")
-    if metadata["resolved_commit"] != commit:
-        raise CacheError("source cache commit does not bind metadata")
     repository = entry / "repo.git"
     if repository.is_symlink() or not repository.is_dir():
         raise CacheError("source cache repository is invalid")
-    if resolve_commit(repository, commit) != commit:
-        raise CacheError("source cache repository does not contain the exact commit")
-    if source_tree_sha256(repository, commit) != source_sha256:
+    cached_commit = resolve_commit(repository, CACHED_SOURCE_REF)
+    if source_tree_sha256(repository, cached_commit) != source_sha256:
         raise CacheError("source cache repository failed content verification")
     return repository
 
@@ -74,7 +69,7 @@ def _create_entry(
     commit: str,
     canonical_url: str,
     local_source: Path | None,
-) -> tuple[Path, int]:
+) -> tuple[Path, int, int]:
     candidate = temporary_directory(root, "sources")
     try:
         repository = candidate / "repo.git"
@@ -87,13 +82,33 @@ def _create_entry(
             allow_file = True
         run_git(
             repository,
-            ["fetch", "--no-tags", "--force", "--depth=1", source, commit],
+            [
+                "-c",
+                "fetch.unpackLimit=0",
+                "fetch",
+                "--no-tags",
+                "--force",
+                "--depth=1",
+                source,
+                commit,
+            ],
             allow_file_protocol=allow_file,
         )
+        pack_bytes = sum(
+            item.stat().st_size
+            for item in (repository / "objects" / "pack").glob("*.pack")
+            if item.is_file() and not item.is_symlink()
+        )
+        if pack_bytes == 0:
+            pack_bytes = sum(
+                item.stat().st_size
+                for item in (repository / "objects").glob("[0-9a-f][0-9a-f]/*")
+                if item.is_file() and not item.is_symlink()
+            )
         fetched = resolve_commit(repository, "FETCH_HEAD")
         if fetched != commit:
             raise CacheError("fetch did not return the requested exact commit")
-        run_git(repository, ["update-ref", "refs/kilix-f120/source", commit])
+        run_git(repository, ["update-ref", CACHED_SOURCE_REF, commit])
         # FETCH_HEAD records the transport URL, which may be an explicitly
         # supplied local evidence path.  The content ref above is sufficient.
         (repository / "FETCH_HEAD").unlink(missing_ok=True)
@@ -103,13 +118,12 @@ def _create_entry(
         atomic_write_json(
             candidate / "metadata.json",
             {
-                "resolved_commit": commit,
                 "schema": SOURCE_METADATA_SCHEMA,
                 "source_sha256": source_sha256,
             },
         )
         size = directory_bytes(candidate)
-        return candidate, size
+        return candidate, size, pack_bytes
     except BaseException:
         shutil.rmtree(candidate, ignore_errors=True)
         raise
@@ -139,7 +153,7 @@ def ensure_source(
     with cache_lock(root, "sources", source_sha256):
         if entry.exists() or entry.is_symlink():
             try:
-                repository = _validate_entry(entry, source_sha256, commit)
+                repository = _validate_entry(entry, source_sha256)
             except (CacheError, ContractError, GitError, OSError):
                 quarantine(root, "sources", entry)
             else:
@@ -147,9 +161,10 @@ def ensure_source(
                     repository=repository,
                     hit=True,
                     fetches=0,
+                    fetch_bytes=0,
                     cache_bytes=directory_bytes(entry),
                 )
-        candidate, size = _create_entry(
+        candidate, size, fetch_bytes = _create_entry(
             root, source_sha256, commit, canonical_url, local_source
         )
         try:
@@ -157,10 +172,11 @@ def ensure_source(
         except BaseException:
             shutil.rmtree(candidate, ignore_errors=True)
             raise
-        repository = _validate_entry(entry, source_sha256, commit)
+        repository = _validate_entry(entry, source_sha256)
         return SourceCacheResult(
             repository=repository,
             hit=False,
             fetches=1,
+            fetch_bytes=fetch_bytes,
             cache_bytes=size,
         )

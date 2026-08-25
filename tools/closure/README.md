@@ -28,6 +28,8 @@ make check
 
 The lock uses `jsonschema[format]==4.25.1` exactly. Qualified cache operation is
 offline after the first immutable fetch: a validated hit performs no fetch.
+Publication requires Linux `renameat2(RENAME_NOREPLACE)` and fails closed when
+the kernel/libc surface is unavailable.
 
 ## Command surface
 
@@ -59,12 +61,16 @@ commit into a content-addressed cache, builds each distinct frozen build key at
 most once, audits every declared output, publishes a new prefix atomically, and
 emits a validated release lock. Existing prefixes and locks are never
 overwritten. Nested-source and recursive-submodule dependency modes block lock
-emission until the corresponding consumer conversion actually lands.
+emission until the corresponding consumer conversion actually lands. Cache and
+prefix paths must be outside the registered workspace and disjoint from each
+other. The deterministic stage report includes retained Git-object
+`fetch_bytes`; a warm hit records zero.
 
 `evict` moves one exact cache key to quarantine under its per-key lock. `retire`
 moves one exact prefix (and optionally its lock) into a sibling private
-retirement directory. Neither operation recursively targets a workspace or
-cache root, and both remain recoverable for rollback inspection.
+retirement directory after verifying F120 stage markers and, when supplied,
+exact lock-to-file agreement. Neither operation recursively targets a workspace
+or cache root, and both remain recoverable for rollback inspection.
 
 See `SEMANTICS.md` for the exact clarifications,
 `SEMANTICS-REVIEW.md` for their freeze record, and `INTEGRATION.md` for the

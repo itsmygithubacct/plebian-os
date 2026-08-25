@@ -23,6 +23,9 @@ fixture byte.
 | S05 | Inventory vocabulary did not uniquely map to v1 dependency modes. | The five mappings and declaration-only non-edge rule are explicit. A release lock refuses nested/recursive build modes until a conversion actually lands. |
 | S06 | The baseline tag exception risked widening into a generic mutable-ref allowance. | Qualification permits exactly `plebian-os`, tag, `v0.2.0`; tag resolution, expected commit, observed HEAD and clean state remain mandatory. Every other branch/tag is refused. |
 | S07 | Cache/build prose did not define corruption, path leakage, cancellation or rollback. | Per-key locks, atomic publication, quarantine, bounded subprocess groups, metadata/path rules, exact output audits, exact-key eviction and recoverable stage retirement are defined and tested. |
+| S08 | The first implementation bound `resolved_commit` and its timestamp inside caches whose frozen keys bind only source-tree bytes. | Commit identity was removed from source/build metadata, the cached ref is content-only, and `SOURCE_DATE_EPOCH=0`; same-tree distinct commits now hit one exact key and forced rebuilds are byte-identical. |
+| S09 | Loading the executable frozen validator before independently checking its bytes trusted the verifier to attest to itself. | The fixed manifest identity and every listed file digest are now parsed and checked independently before the validator module is imported. |
+| S10 | A publication race, failed paired lock publication or over-broad retirement target could replace, leave or move the wrong public path. | Cache/prefix publication uses Linux atomic no-replace rename, lock publication uses atomic no-replace linkage, a failed pair recoverably retires the prefix, cache/stage paths are disjoint from the workspace, and retirement requires exact F120 stage markers and lock/file agreement. |
 
 ## Freeze gates
 
@@ -34,8 +37,9 @@ fixture byte.
 5. Architecture, options, feature, source and toolchain mutations each change
    the frozen build key.
 6. The fixed baseline tag passes and a different tag fails.
-7. Cold, warm, concurrent, corrupt, clean-cache and rollback tests pass under
-   uv 0.12.5 with the locked dependency graph.
+7. Cold, warm, concurrent, corrupt, clean-cache, same-tree/different-commit,
+   cancellation, paired-publication and rollback tests pass under uv 0.12.5
+   with the locked dependency graph.
 8. A second full run changes no semantic or frozen-package hash.
 
 All gates passed. Incompatible meaning changes require a new companion-semantics

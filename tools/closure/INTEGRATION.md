@@ -26,8 +26,10 @@ impossible to mistake the scaffold for qualified release evidence.
 2. Replace sentinels with the reviewed canonical URL, exact 40-hex commit,
    component/API/ABI versions, architecture, features, tests, visibility,
    publication disposition, licences and committed notice hashes.
-3. Register every build executable with its absolute local path and exact file
-   SHA-256. Pin a human-readable toolchain version string. Sort tools by name.
+3. Register every build executable, including executable children, with its
+   absolute local path and exact file SHA-256. Pin a human-readable toolchain
+   version string. Sort tools by name. The build receives only these logical
+   tool names on `PATH`.
 4. Declare no shell command. Each command begins with `{tool:name}` and uses
    only argv placeholders `{source}`, `{build}`, `{prefix}` and `{tool:name}`.
 5. Declare exact source-to-prefix copies and one artifact entry for every
@@ -38,8 +40,9 @@ impossible to mistake the scaffold for qualified release evidence.
 7. Run `resolve ... --qualify`; investigate every refusal rather than weakening
    a field or using a mutable ref.
 8. Run `stage` twice against one cache and once against an empty independent
-   cache. The warm run must report zero fetches/builds. All staged bytes and the
-   validated locks must match the clean-cache run.
+   cache. The warm run must report zero fetches, zero `fetch_bytes`, and zero
+   builds. All staged bytes and the validated locks must match the clean-cache
+   run.
 
 Consumers compile only from the staged public prefix: headers beneath
 `PREFIX/include`, libraries beneath `PREFIX/lib`, pkg-config metadata beneath

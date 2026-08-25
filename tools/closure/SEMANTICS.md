@@ -13,10 +13,10 @@ a repository or migration, or replace F100/F106/F110/other owner truth.
 ## Canonical representation
 
 Canonical JSON is UTF-8 `json.dumps(value, indent=2, sort_keys=True)` plus one
-LF. Duplicate keys and documents over 4 MiB are rejected. Arrays whose ordering
-is semantic (`features`, tests, licences by SPDX, notices by path, component
-instances, dependency edges and artifacts) are sorted and unique before
-publication.
+LF, with non-finite numbers forbidden. Duplicate keys and documents over 4 MiB
+are rejected. Arrays whose ordering is semantic (`features`, tests, licences by
+SPDX, notices by path, component instances, dependency edges and artifacts) are
+sorted and unique before publication.
 
 ## Identity and source bytes
 
@@ -72,7 +72,10 @@ digest is SHA-256 of canonical JSON:
 ```
 
 Executable entries are sorted and unique by name. `version` is an owner-pinned
-identity string, not runtime discovery.
+identity string, not runtime discovery. A build's `PATH` is a private directory
+containing only logical-name symlinks to those digest-verified executables; it
+never inherits `/usr/bin`, `/bin` or an operator path. Owners must register
+every executable their recipe invokes, including executable children.
 
 `features` are sorted, owner-declared output-affecting capabilities.
 `build_options` are canonical scalar output-affecting inputs; NaN and infinity
@@ -96,6 +99,12 @@ sha256(canonical({
 }))
 ```
 
+`SOURCE_DATE_EPOCH` is the literal `0`. A commit timestamp is not a build input:
+`resolved_commit` is release evidence, while the frozen key deliberately binds
+the exact committed tree through `source_sha256`. Consequently two commits with
+the same source tree share one source entry and one build entry, and a forced
+rebuild from either commit produces the same staged bytes.
+
 ## Dependency vocabulary
 
 Inventory observations map as follows:
@@ -115,10 +124,16 @@ tests and rollback have been demonstrated.
 
 Source entries live at `sources/sha256/SOURCE_DIGEST`; build entries at
 `builds/sha256/BUILD_KEY`. A per-key `flock` serializes writers. Candidates are
-verified before same-filesystem atomic publication. Every hit revalidates its
-metadata and bytes. A corrupt entry is atomically moved under `quarantine/` and
-recreated; it is never silently used. Metadata contains content identities, not
-credentials, operator paths, hostnames or timestamps.
+verified before same-filesystem Linux `renameat2(RENAME_NOREPLACE)` publication;
+the operation fails closed if true atomic no-replace rename is unavailable.
+Every hit revalidates its metadata and bytes. A corrupt entry is atomically
+moved under `quarantine/` and recreated; it is never silently used. Metadata
+contains content identities, not credentials, operator paths, hostnames,
+commits or timestamps. The source entry
+retains one exact tree behind `refs/kilix-f120/source`; its commit identity does
+not alter the content key. A cold report records the exact received Git object
+bytes retained as a pack (or, if Git unpacks it, the exact compressed loose-
+object bytes); a hit records zero.
 
 Build commands do not use a shell and must start with a registered
 `{tool:name}`. They run under a bounded, minimal environment with fixed locale,
@@ -129,7 +144,12 @@ variables. Cancellation kills the build process group.
 A cached build prefix contains exactly its declared regular files—no symlinks,
 devices or undeclared/private outputs. Artifact bytes are refused if they embed
 the workspace, cache, work, prefix or operator-home path. A staged workspace is
-published only to a new path and adds one canonical
+published only with the same atomic no-replace primitive to a new path outside
+both the workspace and cache and adds one canonical
 `share/kilix-f120/INSTANCE.json` manifest per component. Release artifacts bind
 source, frozen build key, architecture, toolchain, features and canonical
-licence-array digest exactly as the frozen validator derives them.
+licence-array digest exactly as the frozen validator derives them. The lock is
+published with no-replace semantics; if its paired publication fails after the
+prefix rename, the prefix is recoverably moved out of its public name. Retirement
+refuses arbitrary directories and repositories and accepts only a marked F120
+stage whose optional lock validates and exactly binds every staged file.

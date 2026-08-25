@@ -82,7 +82,7 @@ def canonical_https_url(value: str) -> str:
     if (
         parsed.scheme != "https"
         or not parsed.hostname
-        or parsed.hostname != parsed.hostname.lower()
+        or parsed.netloc != parsed.netloc.lower()
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query

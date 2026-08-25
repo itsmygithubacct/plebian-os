@@ -21,7 +21,11 @@ ID_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
 def canonical_bytes(value: Any) -> bytes:
     """Return the exact canonical representation used by frozen F120 v1."""
 
-    return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        encoded = json.dumps(value, indent=2, sort_keys=True, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ContractError(f"value is not canonical JSON: {exc}") from exc
+    return (encoded + "\n").encode("utf-8")
 
 
 def canonical_sha256(value: Any) -> str:
@@ -52,9 +56,16 @@ def load_json(path: Path, *, maximum_bytes: int = MAX_DOCUMENT_BYTES) -> Any:
             result[key] = value
         return result
 
+    def reject_nonfinite(value: str) -> None:
+        raise ContractError(f"non-finite JSON number is forbidden: {value}")
+
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle, object_pairs_hook=reject_duplicates)
+            return json.load(
+                handle,
+                object_pairs_hook=reject_duplicates,
+                parse_constant=reject_nonfinite,
+            )
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ContractError(f"cannot load JSON document: {exc}") from exc
 

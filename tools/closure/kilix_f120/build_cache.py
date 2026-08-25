@@ -22,9 +22,10 @@ from .cache import (
 )
 from .canonical import atomic_write_json, file_sha256, load_json, require_relative_path
 from .errors import BuildError, CacheError, ContractError
-from .gitops import commit_timestamp, git_environment
+from .gitops import git_environment
 from .keys import build_key_sha256
 from .registration import BuildRecipe, ComponentRegistration
+from .source_cache import CACHED_SOURCE_REF
 
 
 BUILD_METADATA_SCHEMA = "kilix.f120.build-cache/v1"
@@ -33,6 +34,7 @@ PLACEHOLDER_RE = re.compile(r"\{(?:source|build|prefix|tool:[a-z0-9._-]+)\}")
 MAX_ARCHIVE_MEMBERS = 100_000
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 BUILD_TIMEOUT_SECONDS = 900
+REPRODUCIBLE_SOURCE_EPOCH = "0"
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,6 @@ def _binding(component: dict[str, Any], registration: ComponentRegistration) -> 
         "build_key_sha256": build_key_sha256(component),
         "build_options": component["build_options"],
         "features": component["features"],
-        "resolved_commit": component["resolved_commit"],
         "schema": BUILD_METADATA_SCHEMA,
         "source_sha256": component["source_sha256"],
         "toolchain_digest": component["toolchain"]["digest"],
@@ -177,9 +178,11 @@ def _run_commands(
     source: Path,
     build: Path,
     prefix: Path,
-    timestamp: int,
 ) -> None:
-    tool_directories = sorted({str(item.path.parent) for item in registration.toolchain.executables})
+    tool_directory = build / "toolchain-bin"
+    tool_directory.mkdir(mode=0o700)
+    for executable in registration.toolchain.executables:
+        (tool_directory / executable.name).symlink_to(executable.path)
     environment = {
         "GIT_ASKPASS": "/bin/false",
         "GIT_CONFIG_GLOBAL": "/dev/null",
@@ -187,8 +190,8 @@ def _run_commands(
         "GIT_CONFIG_SYSTEM": "/dev/null",
         "GIT_TERMINAL_PROMPT": "0",
         "LC_ALL": "C.UTF-8",
-        "PATH": ":".join([*tool_directories, "/usr/bin", "/bin"]),
-        "SOURCE_DATE_EPOCH": str(timestamp),
+        "PATH": str(tool_directory),
+        "SOURCE_DATE_EPOCH": REPRODUCIBLE_SOURCE_EPOCH,
         "TMPDIR": str(build / "tmp"),
         "TZ": "UTC",
     }
@@ -373,7 +376,7 @@ def _build_entry(
         build = work / "build"
         prefix = candidate / "prefix"
         build.mkdir(mode=0o755)
-        _archive(repository, component["resolved_commit"], archive)
+        _archive(repository, CACHED_SOURCE_REF, archive)
         _extract_archive(archive, source)
         assert registration.build is not None
         _run_commands(
@@ -382,7 +385,6 @@ def _build_entry(
             source=source,
             build=build,
             prefix=prefix,
-            timestamp=commit_timestamp(repository, component["resolved_commit"]),
         )
         registration.toolchain.verify()
         _copy_artifacts(registration.build, source, prefix)

@@ -11,14 +11,26 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from kilix_f120.canonical import atomic_write_json, file_sha256
+from kilix_f120.canonical import (
+    atomic_write_json,
+    canonical_bytes,
+    file_sha256,
+    load_json,
+)
 from kilix_f120.cache import evict_entry
 from kilix_f120.contracts import validate_path, verify_contract_package
-from kilix_f120.errors import BuildError, ContractError, RegistrationError
+from kilix_f120.errors import (
+    BuildError,
+    ContractError,
+    GitError,
+    RegistrationError,
+)
+from kilix_f120.gitops import canonical_https_url
 from kilix_f120.graph import reverse_dependencies
 from kilix_f120.keys import build_key_sha256
 from kilix_f120.manifest import emit_workspace_manifest
 from kilix_f120.registration import load_registration
+from kilix_f120.source_cache import ensure_source
 from kilix_f120.stage import retire_stage, stage_workspace
 
 
@@ -48,7 +60,21 @@ def concurrent_stage_worker(
         queue.put((-1, -1, f"{type(exc).__name__}: {exc}"))
 
 
-def git(repository: Path, *arguments: str) -> str:
+def git(
+    repository: Path,
+    *arguments: str,
+    extra_environment: dict[str, str] | None = None,
+) -> str:
+    environment = {
+        "GIT_ASKPASS": "/bin/false",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+    }
+    environment.update(extra_environment or {})
     result = subprocess.run(
         [
             "git",
@@ -67,15 +93,7 @@ def git(repository: Path, *arguments: str) -> str:
         check=True,
         capture_output=True,
         text=True,
-        env={
-            "GIT_ASKPASS": "/bin/false",
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_SYSTEM": "/dev/null",
-            "GIT_TERMINAL_PROMPT": "0",
-            "LC_ALL": "C.UTF-8",
-            "PATH": "/usr/bin:/bin",
-        },
+        env=environment,
     )
     return result.stdout.strip()
 
@@ -249,9 +267,12 @@ class ClosureIntegrationTest(unittest.TestCase):
         clean = self.stage(self.root / "clean-cache", "stage-clean")
 
         self.assertEqual((cold.fetches, cold.builds), (1, 1))
+        self.assertGreater(cold.fetch_bytes, 0)
         self.assertEqual((warm.fetches, warm.builds), (0, 0))
+        self.assertEqual(warm.fetch_bytes, 0)
         self.assertEqual((warm.source_cache_hits, warm.build_cache_hits), (1, 1))
         self.assertEqual((clean.fetches, clean.builds), (1, 1))
+        self.assertEqual(clean.fetch_bytes, cold.fetch_bytes)
         self.assertEqual(
             tree_bytes(self.root / "stage-cold"), tree_bytes(self.root / "stage-warm")
         )
@@ -282,6 +303,257 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertEqual(recovered.fetches, 1)
         self.assertEqual(recovered.builds, 0)
         self.assertTrue(any((cache / "quarantine" / "sources").iterdir()))
+
+    def test_corrupt_build_entry_is_quarantined_and_rebuilt(self) -> None:
+        cache = self.root / "cache"
+        cold = self.stage(cache, "stage-one")
+        self.assertEqual(cold.builds, 1)
+        build_metadata = next((cache / "builds" / "sha256").glob("*/metadata.json"))
+        build_metadata.write_text("{}\n", encoding="utf-8")
+        recovered = self.stage(cache, "stage-two")
+        self.assertEqual((recovered.fetches, recovered.builds), (0, 1))
+        self.assertTrue(any((cache / "quarantine" / "builds").iterdir()))
+
+    def test_exact_build_dimensions_separate_real_cache_entries(self) -> None:
+        cache = self.root / "dimension-cache"
+        cold = self.stage(cache, "dimension-base")
+        self.assertEqual((cold.fetches, cold.builds), (1, 1))
+        variants = (
+            ("architecture", lambda item: item.__setitem__("architecture", "aarch64-linux-gnu")),
+            ("features", lambda item: item.__setitem__("features", ["fixture", "variant"])),
+            (
+                "toolchain",
+                lambda item: item["toolchain"].__setitem__("version", "fixture-variant"),
+            ),
+        )
+        for label, mutate in variants:
+            with self.subTest(dimension=label):
+                document = copy.deepcopy(self.registration_document)
+                mutate(document["components"][0])
+                registration_path = self.root / f"dimension-{label}.json"
+                manifest_path = self.root / f"dimension-{label}-workspace.json"
+                atomic_write_json(registration_path, document)
+                registration = load_registration(registration_path)
+                manifest = emit_workspace_manifest(
+                    registration,
+                    manifest_path,
+                    local_sources={"provider": self.repository},
+                    qualify=True,
+                )
+                report = stage_workspace(
+                    registration,
+                    manifest,
+                    cache=cache,
+                    destination=self.root / f"dimension-{label}-stage",
+                    release="0.2.1",
+                    release_lock=self.root / f"dimension-{label}.lock.json",
+                    local_sources={"provider": self.repository},
+                )
+                self.assertEqual((report.fetches, report.builds), (0, 1))
+        self.assertEqual(len(list((cache / "builds" / "sha256").iterdir())), 4)
+
+    def test_same_source_tree_across_commits_reuses_content_keys(self) -> None:
+        cache = self.root / "same-tree-cache"
+        first = self.stage(cache, "same-tree-first")
+        self.assertEqual((first.fetches, first.builds), (1, 1))
+        first_source_digest = self.manifest["components"][0]["source_sha256"]
+
+        git(self.repository, "commit", "--allow-empty", "-m", "same tree, new commit")
+        second_commit = git(self.repository, "rev-parse", "HEAD")
+        document = copy.deepcopy(self.registration_document)
+        document["components"][0]["expected_commit"] = second_commit
+        document["components"][0]["requested_ref"] = second_commit
+        registration_path = self.root / "same-tree-registration.json"
+        manifest_path = self.root / "same-tree-workspace.json"
+        atomic_write_json(registration_path, document)
+        registration = load_registration(registration_path)
+        manifest = emit_workspace_manifest(
+            registration,
+            manifest_path,
+            local_sources={"provider": self.repository},
+            qualify=True,
+        )
+        self.assertEqual(manifest["components"][0]["source_sha256"], first_source_digest)
+        second = stage_workspace(
+            registration,
+            manifest,
+            cache=cache,
+            destination=self.root / "same-tree-second",
+            release="0.2.1",
+            release_lock=self.root / "same-tree-second.lock.json",
+            local_sources={"provider": self.repository},
+        )
+        self.assertEqual((second.fetches, second.builds), (0, 0))
+        self.assertEqual(
+            tree_bytes(self.root / "same-tree-first"),
+            tree_bytes(self.root / "same-tree-second"),
+        )
+        source_metadata = load_json(
+            next((cache / "sources" / "sha256").glob("*/metadata.json"))
+        )
+        build_metadata = load_json(
+            next((cache / "builds" / "sha256").glob("*/metadata.json"))
+        )
+        self.assertNotIn("resolved_commit", source_metadata)
+        self.assertNotIn("resolved_commit", build_metadata)
+
+    def test_same_tree_rebuild_is_independent_of_commit_timestamp(self) -> None:
+        writer = self.root / "write-source-epoch"
+        writer.write_text(
+            "#!/usr/bin/python3\n"
+            "import os\n"
+            "import pathlib\n"
+            "import sys\n"
+            "pathlib.Path(sys.argv[1]).write_text("
+            "os.environ['SOURCE_DATE_EPOCH'], encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        writer.chmod(0o755)
+        first_document = copy.deepcopy(self.registration_document)
+        first_component = first_document["components"][0]
+        first_component["toolchain"] = {
+            "executables": [
+                {
+                    "name": "write-source-epoch",
+                    "path": str(writer),
+                    "sha256": file_sha256(writer),
+                }
+            ],
+            "name": "epoch-writer",
+            "version": "fixture",
+        }
+        first_component["build"]["commands"] = [
+            ["{tool:write-source-epoch}", "{source}/built.txt"]
+        ]
+        first_registration_path = self.root / "epoch-first-registration.json"
+        first_manifest_path = self.root / "epoch-first-workspace.json"
+        atomic_write_json(first_registration_path, first_document)
+        first_registration = load_registration(first_registration_path)
+        first_manifest = emit_workspace_manifest(
+            first_registration,
+            first_manifest_path,
+            local_sources={"provider": self.repository},
+            qualify=True,
+        )
+        cache = self.root / "epoch-cache"
+        stage_workspace(
+            first_registration,
+            first_manifest,
+            cache=cache,
+            destination=self.root / "epoch-first-stage",
+            release="0.2.1",
+            release_lock=self.root / "epoch-first.lock.json",
+            local_sources={"provider": self.repository},
+        )
+
+        git(
+            self.repository,
+            "commit",
+            "--allow-empty",
+            "-m",
+            "same tree at a different epoch",
+            extra_environment={
+                "GIT_AUTHOR_DATE": "@2000000000",
+                "GIT_COMMITTER_DATE": "@2000000000",
+            },
+        )
+        second_commit = git(self.repository, "rev-parse", "HEAD")
+        second_document = copy.deepcopy(first_document)
+        second_component = second_document["components"][0]
+        second_component["expected_commit"] = second_commit
+        second_component["requested_ref"] = second_commit
+        second_registration_path = self.root / "epoch-second-registration.json"
+        second_manifest_path = self.root / "epoch-second-workspace.json"
+        atomic_write_json(second_registration_path, second_document)
+        second_registration = load_registration(second_registration_path)
+        second_manifest = emit_workspace_manifest(
+            second_registration,
+            second_manifest_path,
+            local_sources={"provider": self.repository},
+            qualify=True,
+        )
+        self.assertEqual(
+            first_manifest["components"][0]["source_sha256"],
+            second_manifest["components"][0]["source_sha256"],
+        )
+        build_key = next((cache / "builds" / "sha256").iterdir()).name
+        evict_entry(cache, "builds", build_key)
+        rebuilt = stage_workspace(
+            second_registration,
+            second_manifest,
+            cache=cache,
+            destination=self.root / "epoch-second-stage",
+            release="0.2.1",
+            release_lock=self.root / "epoch-second.lock.json",
+            local_sources={"provider": self.repository},
+        )
+        self.assertEqual((rebuilt.fetches, rebuilt.builds), (0, 1))
+        self.assertEqual(
+            tree_bytes(self.root / "epoch-first-stage"),
+            tree_bytes(self.root / "epoch-second-stage"),
+        )
+        artifact = self.root / "epoch-second-stage/share/provider/payload.txt"
+        self.assertEqual(artifact.read_text(encoding="utf-8"), "0")
+
+    def test_all_frozen_artifact_kinds_are_staged(self) -> None:
+        document = copy.deepcopy(self.registration_document)
+        kinds = (
+            ("provider-command", "command", "bin/provider", 493),
+            ("provider-data", "data", "share/provider/data", 420),
+            ("provider-header", "header", "include/provider.h", 420),
+            ("provider-library", "library", "lib/libprovider.a", 420),
+            ("provider-notice", "notice", "share/licenses/provider", 420),
+            ("provider-pkg-config", "pkg-config", "lib/pkgconfig/provider.pc", 420),
+            (
+                "provider-python-package",
+                "python-package",
+                "lib/python/provider.py",
+                420,
+            ),
+        )
+        build = document["components"][0]["build"]
+        build["artifacts"] = [
+            {"artifact_id": identifier, "artifact_kind": kind, "path": path}
+            for identifier, kind, path, _ in kinds
+        ]
+        build["copies"] = [
+            {"destination": path, "mode": mode, "source": "built.txt"}
+            for _, _, path, mode in kinds
+        ]
+        registration_path = self.root / "all-artifacts-registration.json"
+        manifest_path = self.root / "all-artifacts-workspace.json"
+        lock_path = self.root / "all-artifacts.lock.json"
+        atomic_write_json(registration_path, document)
+        registration = load_registration(registration_path)
+        manifest = emit_workspace_manifest(
+            registration,
+            manifest_path,
+            local_sources={"provider": self.repository},
+            qualify=True,
+        )
+        stage_workspace(
+            registration,
+            manifest,
+            cache=self.root / "all-artifacts-cache",
+            destination=self.root / "all-artifacts-stage",
+            release="0.2.1",
+            release_lock=lock_path,
+            local_sources={"provider": self.repository},
+        )
+        lock = load_json(lock_path)
+        self.assertEqual(
+            {item["artifact_kind"] for item in lock["artifacts"]},
+            {
+                "command",
+                "data",
+                "header",
+                "library",
+                "manifest",
+                "notice",
+                "pkg-config",
+                "python-package",
+            },
+        )
 
     def test_concurrent_writers_fetch_and_build_once(self) -> None:
         context = multiprocessing.get_context("fork")
@@ -360,6 +632,107 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertFalse(lock.exists())
         self.assertFalse(any((cache / "builds" / "sha256").glob("*")))
 
+    def test_cancelled_source_fetch_publishes_nothing(self) -> None:
+        cache = self.root / "cancel-source-cache"
+        component = self.manifest["components"][0]
+        from kilix_f120 import source_cache
+
+        original_run_git = source_cache.run_git
+
+        def interrupt_fetch(repository, arguments, **keywords):
+            if "fetch" in arguments:
+                raise KeyboardInterrupt()
+            return original_run_git(repository, arguments, **keywords)
+
+        with mock.patch(
+            "kilix_f120.source_cache.run_git", side_effect=interrupt_fetch
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                ensure_source(cache, component, local_source=self.repository)
+        self.assertFalse(any((cache / "sources" / "sha256").glob("*")))
+        self.assertFalse(any((cache / "tmp" / "sources").glob("candidate-*")))
+
+    def test_failed_lock_publication_retires_published_prefix(self) -> None:
+        cache = self.root / "failed-publication-cache"
+        prefix = self.root / "failed-publication-stage"
+        lock = self.root / "failed-publication.lock.json"
+        with mock.patch(
+            "kilix_f120.stage._publish_lock",
+            side_effect=BuildError("injected lock publication failure"),
+        ):
+            with self.assertRaises(BuildError):
+                stage_workspace(
+                    self.registration,
+                    self.manifest,
+                    cache=cache,
+                    destination=prefix,
+                    release="0.2.1",
+                    release_lock=lock,
+                    local_sources={"provider": self.repository},
+                )
+        self.assertFalse(prefix.exists())
+        self.assertFalse(lock.exists())
+        failed = self.root / ".kilix-f120-failed"
+        self.assertEqual(len(list(failed.iterdir())), 1)
+
+    def test_stage_publication_race_does_not_replace_destination(self) -> None:
+        cache = self.root / "raced-publication-cache"
+        prefix = self.root / "raced-publication-stage"
+        lock = self.root / "raced-publication.lock.json"
+        from kilix_f120 import stage as stage_module
+
+        rename_no_replace = stage_module.rename_directory_no_replace
+
+        def inject_competing_destination(candidate, destination):
+            destination.mkdir()
+            (destination / "owner-data.txt").write_text(
+                "must survive\n", encoding="utf-8"
+            )
+            rename_no_replace(candidate, destination)
+
+        with mock.patch.object(
+            stage_module,
+            "rename_directory_no_replace",
+            side_effect=inject_competing_destination,
+        ):
+            with self.assertRaises(BuildError):
+                stage_workspace(
+                    self.registration,
+                    self.manifest,
+                    cache=cache,
+                    destination=prefix,
+                    release="0.2.1",
+                    release_lock=lock,
+                    local_sources={"provider": self.repository},
+                )
+        self.assertEqual(
+            (prefix / "owner-data.txt").read_text(encoding="utf-8"),
+            "must survive\n",
+        )
+        self.assertFalse(lock.exists())
+
+    def test_cache_and_prefix_must_be_outside_workspace(self) -> None:
+        with self.assertRaises(BuildError):
+            stage_workspace(
+                self.registration,
+                self.manifest,
+                cache=self.workspace / "cache",
+                destination=self.root / "outside-stage",
+                release="0.2.1",
+                release_lock=self.root / "outside.lock.json",
+                local_sources={"provider": self.repository},
+            )
+        with self.assertRaises(BuildError):
+            stage_workspace(
+                self.registration,
+                self.manifest,
+                cache=self.root / "outside-cache",
+                destination=self.workspace / "stage",
+                release="0.2.1",
+                release_lock=self.root / "inside.lock.json",
+                local_sources={"provider": self.repository},
+            )
+
     def test_exact_eviction_and_stage_retirement_are_recoverable(self) -> None:
         cache = self.root / "cache"
         self.stage(cache, "installed")
@@ -375,6 +748,16 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertTrue((retirement / "prefix").is_dir())
         self.assertTrue((retirement / "release-lock.json").is_file())
         self.assertFalse((self.root / "installed").exists())
+
+    def test_stage_retirement_refuses_an_arbitrary_directory(self) -> None:
+        arbitrary = self.root / "not-a-stage"
+        arbitrary.mkdir()
+        (arbitrary / "important.txt").write_text("keep\n", encoding="utf-8")
+        with self.assertRaises(BuildError):
+            retire_stage(arbitrary)
+        self.assertEqual(
+            (arbitrary / "important.txt").read_text(encoding="utf-8"), "keep\n"
+        )
 
     def test_registration_rejects_reserved_build_environment(self) -> None:
         document = copy.deepcopy(self.registration_document)
@@ -400,6 +783,29 @@ class ClosureIntegrationTest(unittest.TestCase):
 class ContractPolicyTest(unittest.TestCase):
     def test_frozen_contract_package_is_intact(self) -> None:
         verify_contract_package()
+
+    def test_frozen_files_are_checked_before_validator_execution(self) -> None:
+        def substituted_digest(path: Path) -> str:
+            if path.name == "validate_f120.py":
+                return "0" * 64
+            return file_sha256(path)
+
+        with mock.patch(
+            "kilix_f120.contracts.file_sha256", side_effect=substituted_digest
+        ):
+            with self.assertRaises(ContractError):
+                verify_contract_package()
+
+    def test_nonfinite_json_and_uppercase_host_are_rejected(self) -> None:
+        with self.assertRaises(ContractError):
+            canonical_bytes({"not_finite": float("nan")})
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "nonfinite.json"
+            path.write_text('{"not_finite": NaN}\n', encoding="utf-8")
+            with self.assertRaises(ContractError):
+                load_json(path)
+        with self.assertRaises(GitError):
+            canonical_https_url("https://EXAMPLE.com/provider.git")
 
     def test_named_v020_tag_exception_only(self) -> None:
         fixture = (

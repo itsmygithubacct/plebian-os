@@ -8,7 +8,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from .canonical import file_sha256, load_json
+from .canonical import file_sha256, load_json, require_relative_path, require_sha256
 from .errors import ContractError
 
 
@@ -37,10 +37,52 @@ def frozen_validator() -> ModuleType:
     return module
 
 
+def _independent_hash_failures() -> list[str]:
+    """Verify frozen bytes before importing the frozen executable validator."""
+
+    manifest = CONTRACT_ROOT / "SHA256SUMS"
+    try:
+        lines = manifest.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"cannot read frozen hash manifest: {exc}"]
+    failures: list[str] = []
+    seen: set[str] = set()
+    for line_number, line in enumerate(lines, start=1):
+        digest, separator, raw_path = line.partition("  ")
+        if not separator:
+            failures.append(f"malformed SHA256SUMS line {line_number}")
+            continue
+        try:
+            expected = require_sha256(digest, "frozen file digest")
+            relative = require_relative_path(raw_path, "frozen file path")
+        except ContractError as exc:
+            failures.append(f"invalid SHA256SUMS line {line_number}: {exc}")
+            continue
+        if relative in seen:
+            failures.append(f"duplicate frozen file entry: {relative}")
+            continue
+        seen.add(relative)
+        candidate = CONTRACT_ROOT.joinpath(*Path(relative).parts)
+        if candidate.is_symlink() or not candidate.is_file():
+            failures.append(f"missing or non-regular frozen file: {relative}")
+            continue
+        if file_sha256(candidate) != expected:
+            failures.append(f"frozen file digest mismatch: {relative}")
+    if not lines:
+        failures.append("frozen hash manifest is empty")
+    return failures
+
+
 def verify_contract_package() -> None:
     actual = file_sha256(CONTRACT_ROOT / "SHA256SUMS")
     if actual != FROZEN_HASH_MANIFEST_SHA256:
         raise ContractError("frozen F120 SHA256SUMS identity changed")
+    independent_failures = _independent_hash_failures()
+    if independent_failures:
+        raise ContractError(
+            "frozen F120 contract package failed independent verification: "
+            + "; ".join(independent_failures)
+        )
     failures = frozen_validator().verify_canonical_and_hashes()
     if failures:
         raise ContractError("frozen F120 contract package failed: " + "; ".join(failures))
