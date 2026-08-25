@@ -1,19 +1,27 @@
 #!/bin/sh
 # Record the one regular account present at Debian Installer late_command time.
-# This runs in the installer environment and writes into the target root.
+# The preseed stages this script inside the target and runs it with in-target so
+# these fail-closed checks use the installed coreutils, not d-i's smaller
+# BusyBox applet set. A non-root prefix remains supported for tests.
 set -eu
 umask 077
 
 target_root="${1:-/target}"
-passwd_file="$target_root/etc/passwd"
-state_dir="$target_root/etc/plebian-os"
-record="$state_dir/installed-user"
 
 if ! [ -d "$target_root" ] || [ -L "$target_root" ] \
     || [ "$(readlink -m -- "$target_root")" != "$target_root" ]; then
     echo "plebian-os: target root is not a safe absolute directory" >&2
     exit 1
 fi
+
+# Joining an absolute path to / must produce /etc, not //etc. GNU/Linux treats
+# both alike today, but the canonical-home comparison below is intentionally
+# exact and must also work when in-target invokes us with /.
+root_prefix="$target_root"
+[ "$root_prefix" != / ] || root_prefix=
+passwd_file="$root_prefix/etc/passwd"
+state_dir="$root_prefix/etc/plebian-os"
+record="$state_dir/installed-user"
 if ! [ -f "$passwd_file" ] || [ -L "$passwd_file" ]; then
     echo "plebian-os: target passwd database is missing or unsafe" >&2
     exit 1
@@ -52,12 +60,13 @@ selected=
 while IFS=: read -r name uid home; do
     [ -n "$name" ] || continue
     printf '%s\n' "$name" | grep -Eq '^[a-z][-a-z0-9_]{0,31}$' || continue
-    [ "$(readlink -m -- "$target_root$home")" = "$target_root$home" ] || continue
-    if ! [ -d "$target_root$home" ] || [ -L "$target_root$home" ]; then
+    home_path="$root_prefix$home"
+    [ "$(readlink -m -- "$home_path")" = "$home_path" ] || continue
+    if ! [ -d "$home_path" ] || [ -L "$home_path" ]; then
         continue
     fi
     if [ "$(id -u)" -eq 0 ]; then
-        [ "$(stat -c '%u' -- "$target_root$home")" = "$uid" ] || continue
+        [ "$(stat -c '%u' -- "$home_path")" = "$uid" ] || continue
     fi
     count=$((count + 1))
     selected="$name"

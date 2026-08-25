@@ -83,9 +83,26 @@ class InstalledUserRecordTests(unittest.TestCase):
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn("plebian-os-record-installed-user", remaster)
-        recorder = preseed.index("plebian-os-record-installed-user /target")
+        stage = preseed.index(
+            "cp /cdrom/plebian-os/plebian-os-record-installed-user "
+            "/target/etc/plebian-os/.record-installed-user"
+        )
+        recorder = preseed.index(
+            "in-target /bin/sh /etc/plebian-os/.record-installed-user /"
+        )
+        cleanup = preseed.index(
+            "rm -f /target/etc/plebian-os/.record-installed-user"
+        )
         enable = preseed.index("systemctl enable plebian-os-firstboot.service")
-        self.assertLess(recorder, enable)
+        self.assertLess(stage, recorder)
+        self.assertLess(recorder, cleanup)
+        self.assertLess(cleanup, enable)
+        self.assertNotIn(
+            "/bin/sh /cdrom/plebian-os/plebian-os-record-installed-user /target",
+            preseed,
+        )
+        recorder_source = RECORDER.read_text()
+        self.assertIn('[ "$root_prefix" != / ] || root_prefix=', recorder_source)
         self.assertIn("read_recorded_user()", provision)
         self.assertIn("root-owned mode 0644 with one link", provision)
         self.assertIn("multiple eligible regular users found; refusing to guess", provision)
