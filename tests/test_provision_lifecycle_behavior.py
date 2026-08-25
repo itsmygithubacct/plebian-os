@@ -1093,8 +1093,17 @@ class PersistedPinTests(unittest.TestCase):
             "DRY_RUN=0\n"
             f"{body}"
         )
+        # A pin exported in the ambient environment is read as a deliberate
+        # operator choice and is therefore excluded from the restore -- which is
+        # correct behaviour, but it makes these tests fail for a reason that has
+        # nothing to do with the code under test. Every provisioned Plebian-OS
+        # machine exports the release closure, so that is exactly where this
+        # suite is most worth running. Explicitness is expressed through `extra`,
+        # inside the script, so scrubbing the ambient names changes no intent.
+        env = {k: v for k, v in os.environ.items() if k not in self.PINS}
         return subprocess.run(
-            ["bash", "-c", script], text=True, capture_output=True, check=False)
+            ["bash", "-c", script], text=True, capture_output=True,
+            check=False, env=env)
 
     def test_every_component_pin_is_restored_from_the_session_env(self):
         with tempfile.TemporaryDirectory() as td:

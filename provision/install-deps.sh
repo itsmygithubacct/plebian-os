@@ -10,13 +10,22 @@
 #
 #   sudo plebian-os-install-deps            # install everything
 #   plebian-os-install-deps --dry-run       # just print what it would do
+#   plebian-os-install-deps --qualification # additionally install the
+#                                           # qualification-image group
+#                                           # (0.2.1 OD-12D; not base image)
 #
 # NOTE: preseed/preseed.cfg's pkgsel/include mirrors these packages for the
 # Debian-installer path (d-i can't call a script); keep the two in sync.
 set -uo pipefail
 
 DRY_RUN=0
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=1
+QUALIFICATION=0
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)       DRY_RUN=1 ;;
+        --qualification) QUALIFICATION=1 ;;
+    esac
+done
 PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-os/session}"
 
 log()  { printf '\033[1;36m[deps]\033[0m %s\n' "$*"; }
@@ -93,7 +102,12 @@ DEP_GROUPS=(
     # hash-locked pip install independently of uv. The coordinated 0.1.9
     # release also installs its required, verified uv pin as system tooling.
     "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
-    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm"
+    # libsdl2-2.0-0 and libsndfile1 are listed here as *runtime* libraries, not
+    # only as a side effect of the -dev packages in the build toolchain group.
+    # Playalong F122 links both into its native terminal surface, so an image
+    # trimmed of the toolchain would still have to carry them or the app would
+    # fail to start with a loader error rather than a missing-feature message.
+    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm libsdl2-2.0-0 libsndfile1"
     # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
     # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free. The
     # image now enables the non-free component, so they are installable — but
@@ -114,6 +128,10 @@ DEP_GROUPS=(
     # annotations. Evince is the GTK viewer shipped by the image from 0.1.9.
     "documents|evince"
     "session-log archiving|zstd"
+    # F103 exposes the common archive formats from both its TUI and app. Keep
+    # the command providers and their runtime libraries present independently
+    # of its uv-locked Python/Brotli application environment.
+    "0.2.1 compression providers|zlib1g libbz2-1.0 liblzma5 libzstd1 bzip2 xz-utils zip"
     # firefox-esr and chromium are the graphical browsers. The text browser
     # (Chawan, via `kilix chawan`) is built from source on first use rather
     # than packaged, so what it needs from apt is headers, not a program:
@@ -124,6 +142,9 @@ DEP_GROUPS=(
     # complete.
     "web browsers|firefox-esr chromium libssh2-1-dev libbrotli-dev"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
+    # F100's sandbox must not depend on the portal/systemd dependency graph to
+    # retain its runtime. Exact versions match the frozen S0 package identity.
+    "F100 sandbox runtime|bubblewrap=0.11.0-2+deb13u1 libseccomp2=2.6.0-2"
     "disk management|gparted"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     # The catalog's completed Kilix NVR pin is built locally and links SQLite;
@@ -133,11 +154,36 @@ DEP_GROUPS=(
     # relying on transitive packages makes a fresh --no-install-recommends
     # image fail one pkg-config check at a time on first selection.
     "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libsqlite3-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libxcomposite-dev libxdamage-dev libxfixes-dev libimlib2-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
+    # F106's collector is read-only. dmidecode is invoked only through its
+    # separately reviewed fixed privileged helper; no mutating hardware tools
+    # or automatic sensors-detect run is part of provisioning.
+    "0.2.1 hardware discovery|pciutils usbutils dmidecode lshw lm-sensors kmod ethtool smartmontools nvme-cli"
+    # Required for 0.2.1 CPU-efficiency and release-performance evidence. The
+    # package alone does not grant counter access: qualification records kernel
+    # compatibility, perf_event_paranoid and least-privilege capabilities.
+    "0.2.1 performance qualification|linux-perf"
     # ripgrep is what the coding agents reach for to search a tree. None of
     # the three bundles a copy, so without it here they fall back to
     # something slower or search nothing at all.
     "cli utilities|tmux ncdu rsync ufw jq glances ripgrep"
 )
+
+# Qualification-image additive group (0.2.1, owner decision OD-12D).
+#
+# These are NOT base-image packages. preseed.cfg and DEP_GROUPS above must stay
+# exactly equal — tests/test_dependency_manifest.py enforces that — so anything
+# installed only onto qualification images lives here instead, and is applied
+# with `plebian-os-install-deps --qualification`.
+#
+# The separator is "::" rather than "|" precisely so the base-set parser does
+# not see these lines. A test asserts the two sets stay disjoint.
+#
+# Xephyr backs F119's nested-X lane and `pleb test --check`; putting it in the
+# base set would place a test-only server on every installed machine.
+QUAL_GROUPS=(
+    "qualification nested X :: xserver-xephyr"
+)
+
 
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
     warn "must run as root (try: sudo $0)"; exit 1
@@ -276,3 +322,19 @@ if [ "${#failed[@]}" -gt 0 ]; then
 fi
 [ "$DRY_RUN" = 1 ] && { log "dry run complete."; exit 0; }
 log "all dependency groups installed."
+
+# Qualification-image additive group (OD-12D). Only with --qualification; never
+# part of the base image, so preseed.cfg and DEP_GROUPS stay exactly equal.
+if [ "$QUALIFICATION" -eq 1 ]; then
+    for entry in "${QUAL_GROUPS[@]}"; do
+        label=${entry%% :: *}
+        pkgs=${entry#* :: }
+        log "qualification group: $label"
+        if [ "$DRY_RUN" -eq 1 ]; then
+            echo "    would install: $pkgs"
+        else
+            apt-get install -y --no-install-recommends $pkgs \
+                || warn "qualification group failed: $label"
+        fi
+    done
+fi

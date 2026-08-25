@@ -32,6 +32,14 @@ LOCAL_BUILD_PREREQUISITE_PACKAGES = {
     "cmake",
 }
 
+# Playalong F122's native terminal surface links SDL2 for output and libsndfile
+# for stem decode. The -dev packages are already in the build toolchain group,
+# but the runtime libraries are asserted separately on purpose: an image built
+# without the toolchain must still be able to start the app, and a loader error
+# is a much worse failure than a missing optional feature.
+PLAYALONG_RUNTIME_PACKAGES = {"libsdl2-2.0-0", "libsndfile1"}
+PLAYALONG_BUILD_PACKAGES = {"libsdl2-dev", "libsndfile1-dev", "pkg-config"}
+
 # The session's TERM is xterm-kitty. Kilix installs the engine's own entry
 # into the session user's ~/.terminfo, but root, sudo and every other account
 # read the system database, so the packaged entry is what keeps a strict
@@ -63,6 +71,36 @@ PDF_VIEWER_BUILD_PACKAGES = {
 # through SQLite's C interface, so the release image must ship the development
 # header and linker input rather than relying on a host's incidental package.
 NVR_BUILD_PACKAGES = {"libsqlite3-dev", "zlib1g-dev"}
+
+COMPRESSION_PREREQUISITE_PACKAGES = {
+    "python3",
+    "python3-venv",
+    "zlib1g",
+    "libbz2-1.0",
+    "liblzma5",
+    "libzstd1",
+    "zstd",
+    "bzip2",
+    "xz-utils",
+    "zip",
+    "unzip",
+    "ca-certificates",
+}
+
+HARDWARE_DISCOVERY_PACKAGES = {
+    "pciutils",
+    "usbutils",
+    "dmidecode",
+    "lshw",
+    "lm-sensors",
+    "util-linux",
+    "kmod",
+    "ethtool",
+    "smartmontools",
+    "nvme-cli",
+}
+
+PERFORMANCE_QUALIFICATION_PACKAGES = {"linux-perf"}
 
 # Kilix IceWM is built on first selection. Plebian-OS 0.2.0 must provide the
 # complete, explicit pkg-config closure used by the pinned IceWM configuration
@@ -98,6 +136,19 @@ def preseed_packages():
     return set(body.split())
 
 
+def qualification_packages():
+    """The additive qualification-image group (0.2.1 owner decision OD-12D).
+
+    Uses "::" rather than "|" so install_deps_packages() cannot see it: these
+    are deliberately NOT base-image packages.
+    """
+    text = (ROOT / "provision" / "install-deps.sh").read_text()
+    pkgs = set()
+    for match in re.finditer(r'^\s*"[^"]+ :: ([^"]+)"', text, flags=re.MULTILINE):
+        pkgs.update(match.group(1).split())
+    return pkgs
+
+
 def install_deps_packages():
     text = (ROOT / "provision" / "install-deps.sh").read_text()
     pkgs = set()
@@ -109,6 +160,19 @@ def install_deps_packages():
 
 
 class DependencyManifestTests(unittest.TestCase):
+    def test_qualification_group_is_not_in_the_base_image(self):
+        """OD-12D puts Xephyr on qualification images only.
+
+        If it leaked into the base set it would ship a test-only X server to
+        every installed machine, and it would also break the preseed/install-deps
+        equality that the next test enforces.
+        """
+        qual = qualification_packages()
+        self.assertTrue(qual, "QUAL_GROUPS not found in install-deps")
+        self.assertIn("xserver-xephyr", qual)
+        self.assertTrue(qual.isdisjoint(install_deps_packages()))
+        self.assertTrue(qual.isdisjoint(preseed_packages()))
+
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
 
@@ -143,9 +207,34 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(NVR_BUILD_PACKAGES, install_deps_packages())
         self.assertLessEqual(NVR_BUILD_PACKAGES, preseed_packages())
 
+    def test_021_compression_prerequisites_are_on_both_paths(self):
+        self.assertLessEqual(COMPRESSION_PREREQUISITE_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(COMPRESSION_PREREQUISITE_PACKAGES,
+                             preseed_packages())
+
+    def test_021_hardware_discovery_is_on_both_paths(self):
+        self.assertLessEqual(HARDWARE_DISCOVERY_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(HARDWARE_DISCOVERY_PACKAGES,
+                             preseed_packages())
+
+    def test_021_performance_qualification_tool_is_on_both_paths(self):
+        self.assertLessEqual(PERFORMANCE_QUALIFICATION_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(PERFORMANCE_QUALIFICATION_PACKAGES,
+                             preseed_packages())
+
     def test_kilix_icewm_builds_on_both_paths(self):
         self.assertLessEqual(ICEWM_BUILD_PACKAGES, install_deps_packages())
         self.assertLessEqual(ICEWM_BUILD_PACKAGES, preseed_packages())
+
+    def test_021_playalong_builds_and_runs_on_both_paths(self):
+        self.assertLessEqual(PLAYALONG_BUILD_PACKAGES, install_deps_packages())
+        self.assertLessEqual(PLAYALONG_BUILD_PACKAGES, preseed_packages())
+        self.assertLessEqual(PLAYALONG_RUNTIME_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(PLAYALONG_RUNTIME_PACKAGES, preseed_packages())
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())

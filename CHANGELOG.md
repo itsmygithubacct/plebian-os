@@ -4,6 +4,29 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.2.1] — in development
+
+0.2.1 is not integrated, qualified, tagged, or published. This section records
+source work present on the development line; it does not create a release
+closure and must not be used to revise 0.2.0 artifacts.
+
+### Added
+
+- Declare matching fresh-install and standalone-provisioning prerequisites for
+  common compression formats, read-only hardware discovery, storage and bus
+  inspection, thermal sensors, and `linux-perf` qualification.
+- Test that the compression, hardware-discovery, and performance package sets
+  remain present on both installation paths.
+
+### Required before release
+
+- Put every repository behind an isolated top-level test runner with private
+  filesystem and runtime roots, an allowlisted environment, bounded external
+  resources, leak detection, and equivalent clean-console/live-Kilix results.
+- Complete and qualify the interactive installer, Debian/Kilix engine refresh,
+  system-monitor and model-sizing contracts, and shared lazy-install behavior
+  before freezing the independent 0.2.1 closure.
+
 ## [0.1.9] — 2026-08-14
 
 Prepared 2026-08-12 and

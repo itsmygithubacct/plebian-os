@@ -24,6 +24,26 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    (no desktop task)          (networked)     (+ desktop provider)      (visible Kilix chrome)
 ```
 
+## 0.2.1 development status
+
+This checkout contains early source work for 0.2.1; it is not a release
+artifact or an accepted release closure. The current dependency manifest adds
+the same compression providers, read-only hardware-discovery tools, and
+`linux-perf` qualification package to the preseed and standalone provisioning
+paths. Their manifest parity is covered by repository tests.
+
+The wider 0.2.1 program—including interactive identity setup, the Debian and
+Kilix/kitty refresh, expanded system monitoring and model sizing, coordinated
+lazy installs, and isolated cross-stack test runners—remains subject to its
+implementation and release gates. Planning documents are deliberately kept
+outside the published source repositories until the corresponding contracts
+are implemented and accepted.
+
+Do not use this development checkout to alter or reproduce 0.2.0 release
+artifacts. Release reproduction always starts from that release's immutable
+tag, checksummed manifest, and published notes; 0.2.1 will receive its own
+closure only after its exact accepted component commits are known.
+
 ## Watch the series
 
 https://github.com/user-attachments/assets/af5c8cf1-f336-42c2-bbec-e78fdc9ce64d
