@@ -4,6 +4,27 @@ Registration is an implementation input, not a third frozen contract and not
 release authority. Copy the closest file under `fixtures/registrations/`, then
 replace every sentinel using the owning stream's reviewed values.
 
+## S120 handoff
+
+Dependent streams consume the exact published Track H commit announced in the
+release coordination log, never an unrecorded moving branch head. From that
+tree, run:
+
+```sh
+make --no-print-directory -C tools/closure check
+```
+
+This verifies the frozen v1 bytes before running their validator, the companion
+semantics hashes, the resolver/cache/staging suite and all ten pre-repository
+component scaffolds. A passing handoff gate proves the interface is available;
+it does not turn a scaffold into authority or make a development manifest a
+qualified release closure.
+
+The stable consumer surface is the command set documented in `README.md`, this
+registration procedure, staged headers/libraries/commands beneath one prefix,
+and exact F120 workspace/release document schemas. Incompatible changes require
+a new interface/schema identity rather than an in-place reinterpretation.
+
 ## Before a repository exists
 
 Keep the checkout path absent and record:
