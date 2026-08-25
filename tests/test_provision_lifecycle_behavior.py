@@ -781,6 +781,47 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 self.assertNotEqual(refused.returncode, 0)
                 self.assertIn(key, refused.stderr)
 
+    def test_0_2_1_release_requires_the_waydroid_first_use_helper(self):
+        ref = "a" * 40
+        digest = "b" * 64
+        env = {
+            **os.environ,
+            "PLEBIAN_OS_PROVISION_LIB_ONLY": "1",
+            "PLEBIAN_OS_RELEASE": "0.2.1",
+            "PLEBIAN_OS_RELEASE_MODE": "1",
+            "PLEBIAN_OS_REF": ref,
+            "PLEB_REF": ref,
+            "KILIX_REF": ref,
+            "KILIX95_REF": ref,
+            "KILIX_SYSTEM_MONITOR_REF": ref,
+            "KILIX_DESKTOP_SDK_REF": ref,
+            "KILIX_ICEWM_REF": ref,
+            "KILIX_MEDIA_SDK_REF": ref,
+            "KILIX_WAYDROID_REF": ref,
+            "KILIX_PREBUILT_SHA256": digest,
+            "PLEBIAN_OS_KILIX_GO_VERSION": "go1.26.5",
+            "PLEBIAN_OS_KILIX_GO_SHA256_AMD64": digest,
+            "PLEBIAN_OS_KILIX_GO_SHA256_ARM64": digest,
+            "PLEBIAN_OS_INSTALL_WAYDROID": "1",
+            "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256": digest,
+        }
+        valid = self._run_library("validate_release_inputs\n", env)
+        self.assertEqual(valid.returncode, 0, valid.stderr)
+
+        refused = self._run_library(
+            "validate_release_inputs\n",
+            {
+                **env,
+                "PLEBIAN_OS_INSTALL_WAYDROID": "0",
+                "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256": "",
+            },
+        )
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn(
+            "0.2.1 release mode requires PLEBIAN_OS_INSTALL_WAYDROID=1",
+            refused.stderr,
+        )
+
     def test_provision_voice_catalog_rejects_false_release_metadata(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

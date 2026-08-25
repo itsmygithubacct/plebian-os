@@ -154,15 +154,22 @@ DEP_GROUPS=(
     # the command providers and their runtime libraries present independently
     # of its uv-locked Python/Brotli application environment.
     "0.2.1 compression providers|zlib1g libbz2-1.0 liblzma5 libzstd1 bzip2 xz-utils zip"
-    # firefox-esr and chromium are the graphical browsers. The text browser
-    # (Chawan, via `kilix chawan`) is built from source on first use rather
-    # than packaged, so what it needs from apt is headers, not a program:
+    # Chromium is the always-present graphical browser and default link
+    # handler. Firefox ESR is deliberately absent here: F107-B installs it in
+    # the same transaction that selects it as the alternative default. The
+    # text browser (Chawan, via `kilix chawan`) is built from source on first
+    # use rather than packaged, so what it needs from apt is headers, not a
+    # program:
     # libssh2 is what gives it sftp://, and brotli is what lets it decode the
     # encoding most of the web now serves. Kilix's installer can build libssh2
     # itself and can drop SFTP entirely when it is missing, but both are
     # fallbacks — listing them here is what makes the ordinary install
     # complete.
-    "web browsers|firefox-esr chromium libssh2-1-dev libbrotli-dev"
+    "base browser + terminal browser build|chromium libssh2-1-dev libbrotli-dev"
+    # The Pleb desktop binds Print, Alt+Print and Shift+Print to XFCE's
+    # screenshot tool. It must be explicit because no XFCE desktop task is
+    # installed and --no-install-recommends cannot supply it incidentally.
+    "desktop screenshots|xfce4-screenshooter"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     # F100's sandbox must not depend on portal/systemd dependency accidents.
     # These exact versions are the frozen F118-S0 package identities.

@@ -37,6 +37,17 @@ LOCAL_BUILD_PREREQUISITE_PACKAGES = {
 PLAYALONG_RUNTIME_PACKAGES = {"libsdl2-2.0-0", "libsndfile1"}
 PLAYALONG_BUILD_PACKAGES = {"libsdl2-dev", "libsndfile1-dev", "pkg-config"}
 
+BASE_BROWSER_PACKAGES = {"chromium"}
+LAZY_BROWSER_PACKAGES = {"firefox-esr"}
+DESKTOP_SCREENSHOT_PACKAGES = {"xfce4-screenshooter"}
+
+F115_EXCLUDED_BASE_PACKAGES = {
+    "libvips42t64",
+    "gir1.2-vips-8.0",
+    "libmagickcore-7.q16-10",
+    "imagemagick-7-common",
+}
+
 F100_SANDBOX_PACKAGES = {
     "bubblewrap=0.11.0-2+deb13u1",
     "libseccomp2=2.6.0-2",
@@ -197,6 +208,25 @@ class DependencyManifestTests(unittest.TestCase):
 
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
+
+    def test_browser_classification_matches_the_installer_decision(self):
+        for packages in (install_deps_packages(), preseed_packages()):
+            self.assertLessEqual(BASE_BROWSER_PACKAGES, packages)
+            self.assertTrue(LAZY_BROWSER_PACKAGES.isdisjoint(packages))
+
+    def test_desktop_screenshot_tool_is_on_both_paths(self):
+        self.assertLessEqual(DESKTOP_SCREENSHOT_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(DESKTOP_SCREENSHOT_PACKAGES,
+                             preseed_packages())
+
+    def test_f115_excluded_engines_are_not_explicit_base_packages(self):
+        self.assertTrue(
+            F115_EXCLUDED_BASE_PACKAGES.isdisjoint(install_deps_packages())
+        )
+        self.assertTrue(
+            F115_EXCLUDED_BASE_PACKAGES.isdisjoint(preseed_packages())
+        )
 
     def test_the_engines_terminal_type_is_in_the_system_database(self):
         self.assertLessEqual(TERMINFO_PACKAGES, install_deps_packages())

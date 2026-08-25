@@ -25,11 +25,17 @@ closure and must not be used to revise 0.2.0 artifacts.
   inspection, thermal sensors, and `linux-perf` qualification.
 - Test that the compression, hardware-discovery, and performance package sets
   remain present on both installation paths.
+- Align both base-package authorities with the browser decision: Chromium is
+  universal, Firefox ESR is left for the setup selection transaction, and
+  `xfce4-screenshooter` is explicit for the desktop's Print shortcuts.
 - Carry the system-monitor, desktop-SDK, IceWM, media-SDK, and Waydroid release
   roots through closure selection, first boot, reprovisioning, updates, build
   provenance, and acceptance. Each 0.2.1 tuple requires a canonical repository,
   an exact commit, and an empty branch, and the uv installer byte bound now
   moves with the rest of the release closure.
+- Require the existing hash-bound Waydroid first-use helper in the 0.2.1
+  release closure so a valid image cannot silently omit the accepted app's
+  privileged setup path.
 
 ### Required before release
 

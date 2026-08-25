@@ -669,6 +669,8 @@ validate_release_inputs() {
     esac
     case "$INSTALL_WAYDROID" in
         0)
+            ! release_requires_f120_roots \
+                || die "0.2.1 release mode requires PLEBIAN_OS_INSTALL_WAYDROID=1 so the accepted first-use helper is staged"
             [ -z "$WAYDROID_CLOSURE_SHA256" ] \
                 || die "release mode refuses a Waydroid closure hash when installation is disabled"
             ;;

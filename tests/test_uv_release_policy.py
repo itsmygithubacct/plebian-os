@@ -24,6 +24,10 @@ NEXT_EXPECTED = {
         "504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111"
     ),
     "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "71225",
+    "PLEBIAN_OS_INSTALL_WAYDROID": "1",
+    "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256": (
+        "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175"
+    ),
 }
 
 
@@ -56,7 +60,7 @@ class UvReleasePolicyTests(unittest.TestCase):
     def test_0_1_9_requires_the_verified_uv_pin(self):
         self.assertEqual(parse_values(POLICY), EXPECTED)
 
-    def test_0_2_1_requires_the_verified_uv_pin(self):
+    def test_0_2_1_requires_the_verified_release_inputs(self):
         self.assertEqual(parse_values(NEXT_POLICY), NEXT_EXPECTED)
 
     def test_final_manifest_must_repeat_the_policy_when_created(self):

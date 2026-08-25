@@ -13,3 +13,8 @@ PLEBIAN_OS_INSTALL_UV=1
 PLEBIAN_OS_UV_VERSION=0.12.5
 PLEBIAN_OS_UV_INSTALLER_SHA256=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111
 PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
+
+# Preserve the accepted privileged first-use helper without putting Android,
+# Weston, or their large image closure in the base package set.
+PLEBIAN_OS_INSTALL_WAYDROID=1
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175

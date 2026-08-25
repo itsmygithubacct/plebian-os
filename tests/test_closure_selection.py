@@ -190,6 +190,9 @@ class ClosureSelectionTests(unittest.TestCase):
             "PLEBIAN_OS_UV_INSTALLER_SHA256":
                 "504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111",
             "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "71225",
+            "PLEBIAN_OS_INSTALL_WAYDROID": "1",
+            "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256":
+                "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175",
             **F120_ROOT_VALUES,
             **changes,
         }
@@ -307,6 +310,11 @@ class ClosureSelectionTests(unittest.TestCase):
                     self.assertEqual(after[key], expected)
             self.assertEqual(
                 after["PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"], "71225")
+            self.assertEqual(after["PLEBIAN_OS_INSTALL_WAYDROID"], "1")
+            self.assertEqual(
+                after["PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"],
+                "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175",
+            )
             self.assertEqual(after["PLEBIAN_OS_REF"], commit)
 
     def test_0_2_1_refuses_an_incomplete_f120_root_tuple(self):
@@ -326,6 +334,58 @@ class ClosureSelectionTests(unittest.TestCase):
             result = self._refuses(
                 base, "KILIX_MEDIA_SDK_REF", target="0.2.1")
             self.assertIn("incomplete closure", result.stderr)
+
+    def test_0_2_1_requirements_refuse_to_disable_waydroid(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            self._source(
+                base,
+                self._f120_manifest_text(
+                    PLEBIAN_OS_INSTALL_WAYDROID="0",
+                ),
+                version="0.2.1",
+                release="0.2.1",
+                tag="v0.2.1",
+                requirements_text=(
+                    ROOT / "releases" / "0.2.1.requirements"
+                ).read_text(),
+            )
+            self._refuses(
+                base,
+                "release requirements demand PLEBIAN_OS_INSTALL_WAYDROID=1",
+                target="0.2.1",
+            )
+
+    def test_0_2_1_selector_independently_requires_waydroid(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            requirements = "\n".join(
+                line for line in (
+                    ROOT / "releases" / "0.2.1.requirements"
+                ).read_text().splitlines()
+                if not line.startswith("PLEBIAN_OS_INSTALL_WAYDROID=")
+                and not line.startswith(
+                    "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256="
+                )
+            ) + "\n"
+            self._source(
+                base,
+                self._f120_manifest_text(
+                    PLEBIAN_OS_INSTALL_WAYDROID="0",
+                    PLEBIAN_OS_WAYDROID_CLOSURE_SHA256="",
+                ),
+                version="0.2.1",
+                release="0.2.1",
+                tag="v0.2.1",
+                requirements_text=requirements,
+            )
+            self._refuses(
+                base,
+                "0.2.1 requires PLEBIAN_OS_INSTALL_WAYDROID=1",
+                target="0.2.1",
+            )
 
     def test_selection_adds_a_pin_the_installed_release_never_had(self):
         with tempfile.TemporaryDirectory() as td:

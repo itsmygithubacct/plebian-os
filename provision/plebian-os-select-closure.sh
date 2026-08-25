@@ -512,6 +512,9 @@ validate_release_closure() {
     fi
 
     value="${MANIFEST[PLEBIAN_OS_INSTALL_WAYDROID]:-0}"
+    if release_requires_f120_roots && [ "$value" != 1 ]; then
+        closure_reject "0.2.1 requires PLEBIAN_OS_INSTALL_WAYDROID=1 so the accepted first-use helper is staged"
+    fi
     case "$value" in
         0)
             [ -z "${MANIFEST[PLEBIAN_OS_WAYDROID_CLOSURE_SHA256]:-}" ] \

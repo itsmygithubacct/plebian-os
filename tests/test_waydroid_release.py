@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CLOSURE = ROOT / "provision" / "waydroid-closure.env"
 SETUP = ROOT / "provision" / "plebian-os-waydroid-setup"
 PIN = ROOT / "provision" / "waydroid-closure.sha256"
-REQUIREMENTS = ROOT / "releases" / "0.2.0.requirements"
+REQUIREMENTS_020 = ROOT / "releases" / "0.2.0.requirements"
+REQUIREMENTS_021 = ROOT / "releases" / "0.2.1.requirements"
 
 
 def values(path: Path) -> dict[str, str]:
@@ -29,7 +30,7 @@ def values(path: Path) -> dict[str, str]:
 class WaydroidReleaseTests(unittest.TestCase):
     def test_runtime_closure_is_exact_and_bound_by_release_requirement(self):
         closure = values(CLOSURE)
-        requirements = values(REQUIREMENTS)
+        requirements = values(REQUIREMENTS_020)
         digest = hashlib.sha256(CLOSURE.read_bytes()).hexdigest()
         self.assertEqual(requirements["PLEBIAN_OS_INSTALL_WAYDROID"], "1")
         self.assertEqual(
@@ -52,6 +53,14 @@ class WaydroidReleaseTests(unittest.TestCase):
                 self.assertTrue(value.startswith("https://"), key)
             if key.endswith("_SHA256"):
                 self.assertRegex(value, r"^[0-9a-f]{64}$", key)
+
+    def test_0_2_1_retains_the_hash_bound_first_use_helper(self):
+        requirements = values(REQUIREMENTS_021)
+        digest = hashlib.sha256(CLOSURE.read_bytes()).hexdigest()
+        self.assertEqual(requirements["PLEBIAN_OS_INSTALL_WAYDROID"], "1")
+        self.assertEqual(
+            requirements["PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"], digest
+        )
 
     def test_setup_validates_and_reports_the_closure_without_root(self):
         digest = hashlib.sha256(CLOSURE.read_bytes()).hexdigest()
