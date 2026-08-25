@@ -19,7 +19,7 @@ from .registration import ToolExecutable, Toolchain
 
 
 AUTHORITY_BOOTSTRAP_SHA256 = (
-    "d8e2522d922bdac6df674e3bf00a5c62af357ba0378a7ab2bf19f730d4d6ac19"
+    "26c5ad6182ad9fc5306c369969953e93680be06378621894e90ca2c7700fabfe"
 )
 AUTHORITY_PYTHON_SHA256 = (
     "0dc3a692fa85fcdb7f1a5877d2adf179809ac417a07ffde2373c832863800a15"

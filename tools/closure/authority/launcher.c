@@ -151,6 +151,16 @@ static void digest_hex(const unsigned char digest[32], char output[65]) {
     output[64] = '\0';
 }
 
+static void sha256_buffer(const void *data, size_t length, char output[65]) {
+    struct sha256 context;
+    unsigned char digest[32];
+    sha256_init(&context);
+    sha256_update(&context, data, length);
+    sha256_final(&context, digest);
+    for (size_t index = 0; index < 32; ++index)
+        snprintf(output + index * 2, 3, "%02x", digest[index]);
+}
+
 static int sha256_fd(int descriptor, char output[65]) {
     struct sha256 context;
     sha256_init(&context);
@@ -458,7 +468,7 @@ static int supervise(pid_t child, int stdout_fd, int stderr_fd, int result_fd,
         };
         if (poll(descriptors, 3, 100) < 0 && errno != EINTR) return -1;
         int outcome;
-        if (!out_eof && (outcome = forward_bytes(stdout_fd, STDOUT_FILENO, &out_total,
+        if (!out_eof && (outcome = forward_bytes(stdout_fd, STDERR_FILENO, &out_total,
                                                   result, result_size, false, &out_eof)) != 0)
             return outcome;
         if (!err_eof && (outcome = forward_bytes(stderr_fd, STDERR_FILENO, &err_total,
@@ -477,27 +487,158 @@ static int supervise(pid_t child, int stdout_fd, int stderr_fd, int result_fd,
     return 0;
 }
 
-static void refusal(const char *reason) {
-    dprintf(STDERR_FILENO, "F120_AUTHORITY_REFUSAL: %s\n", reason);
+#ifndef TL_PROFILE_ID
+#define TL_PROFILE_ID "f120-reference/v1"
+#endif
+#ifndef TL_RESULT_SCHEMA
+#define TL_RESULT_SCHEMA "kilix.trusted-launcher.result/v1"
+#endif
+
+/* The runner's case identity is export:surface:criterion:variant, so ':' is
+   required and the closed catalogue reaches 68 bytes.  96 bytes of safe ASCII
+   covers it with headroom. */
+#define TL_CASE_ID_MAX 96
+
+static char tl_run_id[33] = "";
+static char tl_launcher_sha256[65] = "";
+static char tl_first_process[512] = "";
+static const char *tl_case_id = "unbound";
+
+/* Everything the harness needs to recognise this exact process through /proc,
+   observed once, before any refusal can fire.  Returns -1 if any component of
+   the launcher's own identity cannot be established; the caller then fails
+   closed rather than emitting a record with a sentinel in a digest field. */
+static int tl_observe_first_process(char **environment) {
+    int self_fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
+    if (self_fd < 0) return -1;
+    struct stat self_information;
+    if (fstat(self_fd, &self_information) < 0 ||
+        sha256_fd(self_fd, tl_launcher_sha256) < 0) {
+        close(self_fd);
+        return -1;
+    }
+    close(self_fd);
+
+    char argv_digest[65], environment_digest[65], cwd_digest[65];
+    int stat_fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+    if (stat_fd < 0) return -1;
+    static char scratch[65536];
+    ssize_t got = read(stat_fd, scratch, sizeof(scratch));
+    close(stat_fd);
+    if (got < 0) return -1;
+    sha256_buffer(scratch, (size_t)got, argv_digest);
+
+    size_t environment_length = 0;
+    for (char **entry = environment; entry && *entry; ++entry) {
+        size_t piece = strlen(*entry) + 1;
+        if (environment_length + piece > sizeof(scratch)) return -1;
+        memcpy(scratch + environment_length, *entry, piece);
+        environment_length += piece;
+    }
+    sha256_buffer(scratch, environment_length, environment_digest);
+
+    char working[PATH_MAX];
+    if (!getcwd(working, sizeof(working))) return -1;
+    sha256_buffer(working, strlen(working), cwd_digest);
+
+    unsigned long long start_ticks = 0;
+    int proc_stat = open("/proc/self/stat", O_RDONLY | O_CLOEXEC);
+    if (proc_stat < 0) return -1;
+    got = read(proc_stat, scratch, sizeof(scratch) - 1);
+    close(proc_stat);
+    if (got <= 0) return -1;
+    scratch[got] = '\0';
+    char *cursor = strrchr(scratch, ')');
+    if (!cursor) return -1;
+    int field = 2;
+    for (++cursor; *cursor && field < 22; ++cursor)
+        if (*cursor == ' ') ++field;
+    start_ticks = strtoull(cursor, NULL, 10);
+
+    int written = snprintf(
+        tl_first_process, sizeof(tl_first_process),
+        "{\"argv_sha256\":\"%s\",\"cwd_sha256\":\"%s\","
+        "\"environment_sha256\":\"%s\",\"executable_device\":%ju,"
+        "\"executable_inode\":%ju,\"executable_sha256\":\"%s\","
+        "\"pid\":%jd,\"start_time_ticks\":%llu}",
+        argv_digest, cwd_digest, environment_digest,
+        (uintmax_t)self_information.st_dev, (uintmax_t)self_information.st_ino,
+        tl_launcher_sha256, (intmax_t)getpid(), start_ticks);
+    if (written <= 0 || (size_t)written >= sizeof(tl_first_process)) return -1;
+    return 0;
 }
 
-int main(int argc, char **argv) {
+/* stdout carries the record and nothing else.  Human text, including every
+   byte a child writes, goes to stderr. */
+static void refusal(const char *code, const char *reason) {
+    dprintf(STDOUT_FILENO,
+            "{\"bootstrap_sha256\":\"%s\","
+            "\"case_id\":\"%s\","
+            "\"first_process_identity\":%s,"
+            "\"interpreter_sha256\":\"%s\","
+            "\"launcher_sha256\":\"%s\","
+            "\"outcome\":\"refused\","
+            "\"profile_id\":\"%s\","
+            "\"refusal_code\":\"%s\","
+            "\"run_id\":\"%s\","
+            "\"schema\":\"%s\","
+            "\"subject_manifest_sha256\":\"%s\","
+            "\"validator_started\":false}\n",
+            F120_BOOTSTRAP_SHA256, tl_case_id, tl_first_process,
+            F120_PYTHON_SHA256, tl_launcher_sha256, TL_PROFILE_ID, code,
+            tl_run_id, TL_RESULT_SCHEMA, F120_SUBJECT_MANIFEST_SHA256);
+    dprintf(STDERR_FILENO, "TRUSTED_LAUNCH_REFUSAL %s: %s\n", code, reason);
+}
+
+int main(int argc, char **argv, char **envp) {
+    /* Identity before anything else.  A refusal that cannot name its own run,
+       or that would have to put a sentinel in a digest field, is not a
+       conforming record - so failing to observe identity is fatal here rather
+       than degraded later. */
+    if (random_run_id(tl_run_id) < 0 || tl_observe_first_process(envp) < 0) {
+        dprintf(STDERR_FILENO,
+                "TRUSTED_LAUNCH_FATAL: launcher identity could not be established; "
+                "no conforming result can be emitted\n");
+        return 3;
+    }
+    /* Optional leading --case-id.  The runner's identity is
+       export:surface:criterion:variant, so ':' is part of the grammar. */
+    if (argc >= 3 && strcmp(argv[1], "--case-id") == 0) {
+        size_t length = strlen(argv[2]);
+        if (length == 0 || length > TL_CASE_ID_MAX) {
+            refusal("TL-LAUNCH-ARGV/case-id",
+                    "--case-id must be 1 to 96 bytes");
+            return 2;
+        }
+        for (const char *scan = argv[2]; *scan; ++scan)
+            if (!((*scan >= 'A' && *scan <= 'Z') || (*scan >= 'a' && *scan <= 'z') ||
+                  (*scan >= '0' && *scan <= '9') || *scan == '-' || *scan == '.' ||
+                  *scan == '_' || *scan == ':')) {
+                refusal("TL-LAUNCH-ARGV/case-id",
+                        "--case-id accepts only [A-Za-z0-9._:-]");
+                return 2;
+            }
+        tl_case_id = argv[2];
+        argv += 2;
+        argc -= 2;
+    }
     if (argc < 4 || strcmp(argv[1], "--subject") != 0 || argv[2][0] != '/' ||
         (strcmp(argv[3], "check") != 0 && strcmp(argv[3], "cli") != 0) ||
         (strcmp(argv[3], "check") == 0 && argc != 4) ||
         (strcmp(argv[3], "cli") == 0 && argc == 4)) {
-        refusal("usage is f120-authority --subject ABSOLUTE check|cli [ARGS...]");
+        refusal("TL-LAUNCH-ARGV/usage",
+                "usage is [--case-id ID] --subject ABSOLUTE check|cli [ARGS...]");
         return 2;
     }
     const char *command = argv[3];
     struct stat subject_lstat;
     if (lstat(argv[2], &subject_lstat) < 0 || !S_ISDIR(subject_lstat.st_mode)) {
-        refusal("subject is absent, symlinked or not a directory");
+        refusal("TL-SUBJECT-ROOT/absent-or-symlinked", "subject is absent, symlinked or not a directory");
         return 2;
     }
     char subject_path[PATH_MAX];
     if (!realpath(argv[2], subject_path)) {
-        refusal("cannot resolve subject path");
+        refusal("TL-SUBJECT-ROOT/unresolvable", "cannot resolve subject path");
         return 2;
     }
     int subject_fd = open(subject_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
@@ -505,7 +646,7 @@ int main(int argc, char **argv) {
     if (subject_fd < 0 || fstat(subject_fd, &subject_information) < 0 ||
         subject_information.st_dev != subject_lstat.st_dev ||
         subject_information.st_ino != subject_lstat.st_ino) {
-        refusal("cannot retain stable subject descriptor");
+        refusal("TL-SUBJECT-ROOT/unstable-descriptor", "cannot retain stable subject descriptor");
         if (subject_fd >= 0) close(subject_fd);
         return 2;
     }
@@ -513,17 +654,17 @@ int main(int argc, char **argv) {
     char executable[PATH_MAX], bundle_path[PATH_MAX];
     ssize_t executable_length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     if (executable_length <= 0 || (size_t)executable_length >= sizeof(executable) - 1) {
-        refusal("cannot resolve launcher identity");
+        refusal("TL-BOOTSTRAP-IDENTITY/launcher-unresolvable", "cannot resolve launcher identity");
         close(subject_fd);
         return 2;
     }
     executable[executable_length] = '\0';
     char *slash = strrchr(executable, '/');
-    if (!slash) { refusal("launcher path is malformed"); close(subject_fd); return 2; }
+    if (!slash) { refusal("TL-BOOTSTRAP-IDENTITY/launcher-path", "launcher path is malformed"); close(subject_fd); return 2; }
     *slash = '\0';
     if (!realpath(executable, bundle_path) || path_contains(subject_path, bundle_path) ||
         path_contains(bundle_path, subject_path)) {
-        refusal("authority bundle overlaps the subject");
+        refusal("TL-AUTHORITY-SOURCE/bundle-overlaps-subject", "authority bundle overlaps the subject");
         close(subject_fd);
         return 2;
     }
@@ -538,14 +679,14 @@ int main(int argc, char **argv) {
         (runtime_manifest_fd = open_read_only_at(bundle_fd, "runtime.manifest", false)) < 0 ||
         (dependency_fd = open_read_only_at(bundle_fd, "dependencies", true)) < 0 ||
         (dependency_manifest_fd = open_read_only_at(bundle_fd, "dependency.manifest", false)) < 0) {
-        refusal("authority bundle bytes are absent, writable or non-regular");
+        refusal("TL-AUTHORITY-SOURCE/bundle-member", "authority bundle bytes are absent, writable or non-regular");
         goto fail;
     }
     int runtime_bin = openat(runtime_fd, "bin", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (runtime_bin < 0 ||
         (python_fd = openat(runtime_bin, F120_PYTHON_BASENAME,
                             O_RDONLY | O_NOFOLLOW | O_CLOEXEC)) < 0) {
-        refusal("pinned interpreter is absent from runtime");
+        refusal("TL-INTERPRETER-IDENTITY/absent", "pinned interpreter is absent from runtime");
         if (runtime_bin >= 0) close(runtime_bin);
         goto fail;
     }
@@ -556,35 +697,35 @@ int main(int argc, char **argv) {
         (python_information.st_mode & 0222) != 0 || sha256_fd(python_fd, actual) < 0 ||
         strcmp(actual, F120_PYTHON_SHA256) != 0 || sha256_fd(bootstrap_fd, actual) < 0 ||
         strcmp(actual, F120_BOOTSTRAP_SHA256) != 0) {
-        refusal("interpreter or bootstrap identity mismatch");
+        refusal("TL-INTERPRETER-IDENTITY/digest-mismatch", "interpreter or bootstrap identity mismatch");
         goto fail;
     }
     if (verify_manifest(runtime_fd, runtime_manifest_fd,
                         F120_RUNTIME_MANIFEST_SHA256, false) < 0) {
-        refusal("runtime closure differs from its pinned manifest");
+        refusal("TL-DEPENDENCY-CLOSURE/runtime", "runtime closure differs from its pinned manifest");
         goto fail;
     }
     if (verify_manifest(dependency_fd, dependency_manifest_fd,
                         F120_DEPENDENCY_MANIFEST_SHA256, false) < 0) {
-        refusal("dependency closure differs from its pinned manifest");
+        refusal("TL-DEPENDENCY-CLOSURE/dependencies", "dependency closure differs from its pinned manifest");
         goto fail;
     }
     if (verify_manifest(subject_fd, subject_manifest_fd,
                         F120_SUBJECT_MANIFEST_SHA256, true) < 0) {
-        refusal("subject closure differs from its pinned manifest");
+        refusal("TL-SUBJECT-CLOSURE", "subject closure differs from its pinned manifest");
         goto fail;
     }
 
     char temporary[] = "/tmp/kilix-f120-authority.XXXXXX";
     if (!mkdtemp(temporary) || chmod(temporary, 0700) < 0 ||
         path_contains(subject_path, temporary) || path_contains(bundle_path, temporary)) {
-        refusal("cannot create disjoint empty authority cwd");
+        refusal("TL-LAUNCH-CWD/unavailable", "cannot create disjoint empty authority cwd");
         goto fail;
     }
     int result_pipe[2] = {-1, -1}, out_pipe[2] = {-1, -1}, err_pipe[2] = {-1, -1};
     if (pipe2(result_pipe, O_CLOEXEC) < 0 || pipe2(out_pipe, O_CLOEXEC) < 0 ||
         pipe2(err_pipe, O_CLOEXEC) < 0) {
-        refusal("cannot create bounded result channels");
+        refusal("TL-RESULT-MISSING/channel-setup", "cannot create bounded result channels");
         rmdir(temporary);
         goto fail;
     }
@@ -593,24 +734,19 @@ int main(int argc, char **argv) {
                        python_fd, result_pipe[1]};
     for (size_t index = 0; index < sizeof(inherited) / sizeof(inherited[0]); ++index) {
         if (make_inheritable(inherited[index]) < 0) {
-            refusal("cannot retain authority descriptors across exec");
+            refusal("TL-LAUNCH-ENVIRONMENT/descriptors", "cannot retain authority descriptors across exec");
             rmdir(temporary);
             goto fail_pipes;
         }
     }
-    char run_id[33];
-    if (random_run_id(run_id) < 0) {
-        refusal("cannot create run identity");
-        rmdir(temporary);
-        goto fail_pipes;
-    }
+    const char *run_id = tl_run_id;
 
     char bootstrap_path[64];
     snprintf(bootstrap_path, sizeof(bootstrap_path), "/proc/self/fd/%d", bootstrap_fd);
     size_t python_path_size = strlen(bundle_path) + strlen(F120_PYTHON_BASENAME) + 15;
     char *python_path = malloc(python_path_size);
     if (!python_path) {
-        refusal("cannot allocate pinned interpreter path");
+        refusal("TL-INTERPRETER-IDENTITY/path", "cannot allocate pinned interpreter path");
         rmdir(temporary);
         goto fail_pipes;
     }
@@ -632,11 +768,20 @@ int main(int argc, char **argv) {
     snprintf(device_number, sizeof(device_number), "%ju", (uintmax_t)subject_information.st_dev);
     snprintf(inode_number, sizeof(inode_number), "%ju", (uintmax_t)subject_information.st_ino);
 
-    size_t fixed_count = 48;
+    /* The terminal check set is bound by digest alone: the accepted record
+       states which checks concluded, not which subcommand was typed.  Computed
+       here because the bootstrap is handed the same value. */
+    const char *terminal_members =
+        strcmp(command, "check") == 0 ? "contracts\ntests\n" : "cli\n";
+    char terminal_digest[65];
+    sha256_buffer(terminal_members, strlen(terminal_members), terminal_digest);
+
+    size_t fixed_count = 58;  /* 48 base + --profile-id --case-id --launcher-sha256
+                                 --first-process-json --terminal-check-set-sha256 */
     size_t forwarded = strcmp(command, "cli") == 0 ? (size_t)(argc - 4) : 0;
     char **python_argv = calloc(fixed_count + forwarded + 1, sizeof(*python_argv));
     if (!python_argv) {
-        refusal("cannot allocate fixed launch argv");
+        refusal("TL-LAUNCH-ARGV/allocation", "cannot allocate fixed launch argv");
         free(python_path);
         rmdir(temporary);
         goto fail_pipes;
@@ -661,6 +806,11 @@ int main(int argc, char **argv) {
     ARG("--subject-inode"); ARG(inode_number);
     ARG("--subject-manifest-fd"); ARG(subject_manifest_number);
     ARG("--subject-manifest-sha256"); ARG(F120_SUBJECT_MANIFEST_SHA256);
+    ARG("--profile-id"); ARG(TL_PROFILE_ID);
+    ARG("--case-id"); ARG(tl_case_id);
+    ARG("--launcher-sha256"); ARG(tl_launcher_sha256);
+    ARG("--first-process-json"); ARG(tl_first_process);
+    ARG("--terminal-check-set-sha256"); ARG(terminal_digest);
     ARG("--result-fd"); ARG(result_number);
     ARG("--run-id"); ARG(run_id);
     ARG("--tmpdir"); ARG(temporary);
@@ -670,7 +820,7 @@ int main(int argc, char **argv) {
 #undef ARG
     python_argv[position] = NULL;
     if (position != fixed_count + forwarded) {
-        refusal("internal launch argv construction mismatch");
+        refusal("TL-LAUNCH-ARGV/construction", "internal launch argv construction mismatch");
         free(python_argv);
         free(python_path);
         rmdir(temporary);
@@ -684,7 +834,7 @@ int main(int argc, char **argv) {
 
     pid_t child = fork();
     if (child < 0) {
-        refusal("cannot fork authority process");
+        refusal("TL-EXECUTION-CHAIN/fork", "cannot fork authority process");
         free(python_argv);
         free(python_path);
         rmdir(temporary);
@@ -714,25 +864,41 @@ int main(int argc, char **argv) {
     free(python_argv);
     free(python_path);
 
-    char expected[1024];
+    char expected[2048];
     int expected_size = snprintf(
         expected, sizeof(expected),
-        "{\"command\":\"%s\",\"manifest_sha256\":\"%s\",\"run_id\":\"%s\","
-        "\"schema\":\"kilix.f120.authority-result/v1\",\"status\":\"accepted\","
-        "\"subject_device\":%ju,\"subject_inode\":%ju}\n",
-        command, F120_SUBJECT_MANIFEST_SHA256, run_id,
-        (uintmax_t)subject_information.st_dev, (uintmax_t)subject_information.st_ino);
+        "{\"bootstrap_sha256\":\"%s\","
+        "\"case_id\":\"%s\","
+        "\"first_process_identity\":%s,"
+        "\"interpreter_sha256\":\"%s\","
+        "\"launcher_sha256\":\"%s\","
+        "\"outcome\":\"accepted\","
+        "\"profile_id\":\"" TL_PROFILE_ID "\","
+        "\"run_id\":\"%s\","
+        "\"schema\":\"" TL_RESULT_SCHEMA "\","
+        "\"subject_manifest_sha256\":\"%s\","
+        "\"terminal_check_set_sha256\":\"%s\","
+        "\"validator_started\":true}\n",
+        F120_BOOTSTRAP_SHA256, tl_case_id, tl_first_process, F120_PYTHON_SHA256,
+        tl_launcher_sha256, run_id, F120_SUBJECT_MANIFEST_SHA256, terminal_digest);
     bool accepted = supervised == 0 && WIFEXITED(child_status) &&
                     WEXITSTATUS(child_status) == 0 && expected_size > 0 &&
                     (size_t)expected_size == result_size &&
                     memcmp(expected, result, result_size) == 0;
     if (rmdir(temporary) < 0) accepted = false;
     if (!accepted) {
-        refusal(supervised == -2 ? "bounded process supervision refused output or timeout" :
-                                  "canonical terminal result absent or invalid");
+        if (supervised == -2)
+            refusal("TL-RESULT-MISSING/supervision",
+                    "bounded process supervision refused output or timeout");
+        else if (result_size == 0)
+            refusal("TL-RESULT-MISSING/terminal-record-absent",
+                    "no canonical terminal result arrived on the result channel");
+        else
+            refusal("TL-RESULT-SHAPE/terminal-record",
+                    "canonical terminal result is malformed or does not bind this run");
         goto fail;
     }
-    dprintf(STDOUT_FILENO, "F120_AUTHORITY_ACCEPTED %s", expected);
+    dprintf(STDOUT_FILENO, "%s", expected);
     close(python_fd); close(dependency_manifest_fd); close(dependency_fd);
     close(runtime_manifest_fd); close(runtime_fd); close(subject_manifest_fd);
     close(bootstrap_fd); close(bundle_fd); close(subject_fd);

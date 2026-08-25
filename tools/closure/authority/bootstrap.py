@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 MANIFEST_HEADER = b"KILIX-F120-CLOSURE-MANIFEST-v1\n"
-RESULT_SCHEMA = "kilix.f120.authority-result/v1"
+RESULT_SCHEMA = "kilix.trusted-launcher.result/v1"
 RESERVED_NAMES = {"sitecustomize.py", "usercustomize.py"}
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 FORBIDDEN_PROVIDER_ENVIRONMENT = {
@@ -523,16 +523,21 @@ def _run_separate_child(
 
 def _write_result(arguments: argparse.Namespace) -> None:
     record = {
-        "command": arguments.command,
-        "manifest_sha256": arguments.subject_manifest_sha256,
+        "bootstrap_sha256": arguments.bootstrap_sha256,
+        "case_id": arguments.case_id,
+        "first_process_identity": json.loads(arguments.first_process_json),
+        "interpreter_sha256": arguments.python_sha256,
+        "launcher_sha256": arguments.launcher_sha256,
+        "outcome": "accepted",
+        "profile_id": arguments.profile_id,
         "run_id": arguments.run_id,
         "schema": RESULT_SCHEMA,
-        "status": "accepted",
-        "subject_device": arguments.subject_device,
-        "subject_inode": arguments.subject_inode,
+        "subject_manifest_sha256": arguments.subject_manifest_sha256,
+        "terminal_check_set_sha256": arguments.terminal_check_set_sha256,
+        "validator_started": True,
     }
     encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
-    if len(encoded) > 4096:
+    if len(encoded) > 8192:
         raise Refusal("canonical result exceeds fixed bound")
     if os.write(arguments.result_fd, encoded) != len(encoded):
         raise Refusal("canonical result channel short write")
@@ -541,6 +546,11 @@ def _write_result(arguments: argparse.Namespace) -> None:
 def outer_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(add_help=False)
     result.add_argument("--mode", choices=("outer",), required=True)
+    result.add_argument("--profile-id", required=True)
+    result.add_argument("--case-id", required=True)
+    result.add_argument("--launcher-sha256", required=True)
+    result.add_argument("--first-process-json", required=True)
+    result.add_argument("--terminal-check-set-sha256", required=True)
     result.add_argument("--bootstrap-fd", type=int, required=True)
     result.add_argument("--bootstrap-sha256", required=True)
     result.add_argument("--python-fd", type=int, required=True)
