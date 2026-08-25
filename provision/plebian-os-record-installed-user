@@ -1,0 +1,76 @@
+#!/bin/sh
+# Record the one regular account present at Debian Installer late_command time.
+# This runs in the installer environment and writes into the target root.
+set -eu
+umask 077
+
+target_root="${1:-/target}"
+passwd_file="$target_root/etc/passwd"
+state_dir="$target_root/etc/plebian-os"
+record="$state_dir/installed-user"
+
+if ! [ -d "$target_root" ] || [ -L "$target_root" ] \
+    || [ "$(readlink -m -- "$target_root")" != "$target_root" ]; then
+    echo "plebian-os: target root is not a safe absolute directory" >&2
+    exit 1
+fi
+if ! [ -f "$passwd_file" ] || [ -L "$passwd_file" ]; then
+    echo "plebian-os: target passwd database is missing or unsafe" >&2
+    exit 1
+fi
+if [ "$(stat -c '%u:%h' -- "$passwd_file")" != "$(id -u):1" ] \
+    || [ $((0$(stat -c '%a' -- "$passwd_file") & 022)) -ne 0 ]; then
+    echo "plebian-os: target passwd database has unsafe ownership or mode" >&2
+    exit 1
+fi
+if ! [ -d "$state_dir" ] || [ -L "$state_dir" ]; then
+    echo "plebian-os: target state directory is missing or unsafe" >&2
+    exit 1
+fi
+if [ "$(stat -c '%u' -- "$state_dir")" != "$(id -u)" ] \
+    || [ $((0$(stat -c '%a' -- "$state_dir") & 022)) -ne 0 ]; then
+    echo "plebian-os: target state directory has unsafe ownership or mode" >&2
+    exit 1
+fi
+
+candidates="$(mktemp "$state_dir/.installed-user.candidates.XXXXXX")"
+output="$(mktemp "$state_dir/.installed-user.XXXXXX")"
+cleanup() {
+    rm -f -- "$candidates" "$output"
+}
+trap cleanup EXIT HUP INT TERM
+
+awk -F: '
+    $3 >= 1000 && $3 < 65534 && $6 ~ /^\// &&
+    $6 != "/" && $6 != "/root" && $7 !~ /(nologin|false)$/ {
+        print $1 ":" $3 ":" $6
+    }
+' "$passwd_file" > "$candidates"
+
+count=0
+selected=
+while IFS=: read -r name uid home; do
+    [ -n "$name" ] || continue
+    printf '%s\n' "$name" | grep -Eq '^[a-z][-a-z0-9_]{0,31}$' || continue
+    [ "$(readlink -m -- "$target_root$home")" = "$target_root$home" ] || continue
+    if ! [ -d "$target_root$home" ] || [ -L "$target_root$home" ]; then
+        continue
+    fi
+    if [ "$(id -u)" -eq 0 ]; then
+        [ "$(stat -c '%u' -- "$target_root$home")" = "$uid" ] || continue
+    fi
+    count=$((count + 1))
+    selected="$name"
+done < "$candidates"
+
+[ "$count" -eq 1 ] || {
+    echo "plebian-os: expected exactly one Debian Installer regular account; found $count" >&2
+    exit 1
+}
+
+printf '%s\n' "$selected" > "$output"
+chown 0:0 "$output"
+chmod 0644 "$output"
+mv -fT -- "$output" "$record"
+trap - EXIT
+rm -f -- "$candidates"

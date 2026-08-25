@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import contextlib
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ import secrets
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -284,25 +286,31 @@ def default_hostname(name: str) -> str:
 
 
 def validate_identity(*, name: str, username: str, fullname: str,
-                      password: str, hostname: str) -> None:
+                      password: str, hostname: str,
+                      password_hash: str = "") -> None:
     """Reject values that Debian preseed or VirtualBox would reinterpret."""
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
         die("VM/image name must use 1-64 letters, digits, dots, underscores, or hyphens")
-    if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", username):
-        die("username must match [a-z_][a-z0-9_-]{0,31}")
+    if not re.fullmatch(r"[a-z][-a-z0-9_]{0,31}", username):
+        die("username must match [a-z][-a-z0-9_]{0,31}")
     reserved = {
         "root", "daemon", "bin", "sys", "sync", "games", "man", "lp",
         "mail", "news", "uucp", "proxy", "www-data", "backup", "list",
         "irc", "gnats", "nobody", "_apt", "messagebus", "polkitd",
         "sshd", "lightdm", "systemd-network", "systemd-timesync",
     }
-    if username.startswith("_") or username in reserved:
+    if username in reserved:
         die(f"username {username!r} is reserved for a system account")
     if (not 1 <= len(fullname) <= 128 or any(ord(ch) < 32 for ch in fullname)
             or ":" in fullname or "\\" in fullname):
         die("full name must be 1-128 printable characters with no colon or backslash")
-    if not password or any(ch in password for ch in "\r\n\0"):
-        die("password must be nonempty and contain no newline or NUL")
+    if bool(password) == bool(password_hash):
+        die("automated identity requires exactly one plaintext or crypted credential")
+    if password and any(ch in password for ch in "\r\n\0"):
+        die("password must contain no newline or NUL")
+    if password_hash and (len(password_hash) > 255 or not re.fullmatch(
+            r"\$(?:6|y)\$[^\s:]{16,}", password_hash)):
+        die("password hash must be one supported SHA-512-crypt or yescrypt value")
     if len(hostname) > 63 or not re.fullmatch(
             r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?", hostname):
         die("hostname must be a single RFC-compatible label (letters, digits, hyphens)")
@@ -327,6 +335,9 @@ class Config:
     ssh_port: int
     gui: bool              # start with a window vs headless
     wait: bool             # block until provisioning finishes
+    password_hash: str = ""       # protected hash-file mode; never plaintext
+    credential_generated: bool = False  # expire after harness verification
+    interactive_installer: bool = False  # prebuilt media collects guest identity
 
 # ── prompting ────────────────────────────────────────────────────────────────
 class Prompter:
@@ -398,37 +409,66 @@ def env_bool(name: str, default: bool) -> bool:
     raise AssertionError("unreachable")
 
 
-def select_image_password(*, explicit: str | None, prompter: Prompter,
-                          username: str, interactive_default: str) -> str:
-    """Resolve the installer password without putting generated secrets in config.
+def read_protected_credential(path: Path, *, label: str) -> str:
+    """Read one credential from an owner-only regular file without symlinks."""
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        die(f"could not inspect {label}: {exc}")
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        die(f"{label} must be a regular non-symlink file")
+    if before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o600:
+        die(f"{label} must be owned by the current user and mode 0600")
+    if before.st_nlink != 1:
+        die(f"{label} must have exactly one hard link")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+        with os.fdopen(fd, "rb") as fh:
+            current = os.fstat(fh.fileno())
+            if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+                die(f"{label} changed during validation")
+            data = fh.read(4097)
+    except OSError as exc:
+        die(f"could not read {label}: {exc}")
+    if len(data) > 4096 or b"\0" in data:
+        die(f"{label} is invalid or too large")
+    try:
+        value = data.decode("utf-8")
+    except UnicodeDecodeError:
+        die(f"{label} must be UTF-8 text")
+    if value.endswith("\n"):
+        value = value[:-1]
+    if not value or "\n" in value or "\r" in value:
+        die(f"{label} must contain exactly one nonempty line")
+    return value
 
-    An explicit CLI value wins.  IMAGE_PASSWORD/RANDOM_PASSWORD are the image
-    config contract used by release manifests: RANDOM_PASSWORD=1 ignores the
-    configured default and emits a fresh one-time secret.  With neither key
-    configured, retain the builders' established behavior (random under
-    --yes, otherwise prompt with the caller's interactive default).
-    """
-    if explicit is not None:
-        return explicit
 
-    configured = "IMAGE_PASSWORD" in os.environ or "RANDOM_PASSWORD" in os.environ
-    if configured:
-        if env_bool("RANDOM_PASSWORD", False):
-            password = generated_password()
-            warn(f"RANDOM_PASSWORD=1: generated one-time password for {username}: "
-                 f"{password}")
-            return password
-        password = os.environ.get("IMAGE_PASSWORD", "plebian")
-        if not password:
-            die("IMAGE_PASSWORD must be nonempty when RANDOM_PASSWORD=0")
-        return password
-
+def resolve_automated_credential(args, prompter: Prompter) -> tuple[str, str, bool]:
+    """Return plaintext, crypt hash, and whether the harness generated it."""
+    for key in ("IMAGE_PASSWORD", "RANDOM_PASSWORD"):
+        if key in os.environ:
+            die(f"{key} is retired; use --password-file, --password-hash-file, "
+                "or --generate-one-time-password")
+    if getattr(args, "password", None) is not None:
+        die("--password is retired because command-line secrets are process-list visible; "
+            "use --password-file")
+    password_file = getattr(args, "password_file", None)
+    hash_file = getattr(args, "password_hash_file", None)
+    generate = bool(getattr(args, "generate_one_time_password", False))
+    selected = sum(value is not None for value in (password_file, hash_file)) + int(generate)
+    if selected > 1:
+        die("choose exactly one credential mode: password file, hash file, or generated")
+    if password_file is not None:
+        return read_protected_credential(password_file, label="password file"), "", False
+    if hash_file is not None:
+        return "", read_protected_credential(hash_file, label="password hash file"), False
+    if generate:
+        return generated_password(), "", True
     if prompter.yes:
-        password = generated_password()
-        warn(f"--yes without --password: generated one-time password for {username}: "
-             f"{password}")
-        return password
-    return prompter.ask_password(interactive_default)
+        die("--yes requires --password-file, --password-hash-file, or "
+            "--generate-one-time-password")
+    return prompter.ask_password(""), "", False
 
 
 def gather_config(args) -> Config:
@@ -437,20 +477,22 @@ def gather_config(args) -> Config:
     if not args.yes:
         print("Answer the prompts (Enter accepts the [default]).\n")
 
-    name     = args.name     or p.ask("VM name", "plebian")
-    username = args.username or p.ask("username", "pleb")
-    fullname = args.fullname or p.ask("full name", "Plebian User")
-    # VM images always enable sshd for the provisioning waiter. The normal
-    # interactive path therefore has no weak default; a release/other image
-    # config may still select IMAGE_PASSWORD explicitly and the SSH gate below
-    # will reject the shipped default before building.
-    password = select_image_password(
-        explicit=args.password,
-        prompter=p,
-        username=username,
-        interactive_default="",
-    )
-    hostname = args.hostname or p.ask("hostname", default_hostname(name))
+    name = args.name or p.ask("VM name", "plebian-ci")
+    if args.interactive_installer:
+        username = fullname = password = password_hash = hostname = ""
+        credential_generated = False
+    else:
+        if args.yes and (not args.username or not args.hostname):
+            die("--yes automated images require explicit --username and --hostname")
+        username = args.username or p.ask("username", "operator")
+        fullname = args.fullname or p.ask("full name", username)
+        password, password_hash, credential_generated = resolve_automated_credential(args, p)
+        expire_requested = bool(
+            getattr(args, "expire_credential_after_verification", False))
+        if expire_requested and (not password or credential_generated):
+            die("--expire-credential-after-verification requires --password-file")
+        credential_generated = credential_generated or expire_requested
+        hostname = args.hostname or p.ask("hostname", default_hostname(name))
     ram_mb   = args.ram      or p.ask("RAM (MB)", default_ram_mb(),
                                       cast=int, validate=lambda v: v >= 512)
     cpus     = args.cpus     or p.ask("vCPUs", default_cpus(),
@@ -462,27 +504,39 @@ def gather_config(args) -> Config:
     firmware = args.firmware or os.environ.get("PLEBIAN_OS_VM_FIRMWARE", "bios")
     disk_gb  = args.disk     or p.ask("disk (GB, sparse)", 200,
                                       cast=int, validate=lambda v: v >= 8)
-    desktop_default = env_bool("PLEBIAN_OS_DESKTOP", True)
-    kiosk_default = env_bool("PLEBIAN_OS_KIOSK", False)
-    nopasswd_default = env_bool("PLEBIAN_OS_NOPASSWD_SUDO", True)
-    if args.session:
-        desktop = args.session == "desktop"
+    if args.interactive_installer:
+        desktop = kiosk = nopasswd = False
     else:
-        desktop = p.ask_bool(
-            "load the configured desktop provider in the first kilix page",
-            desktop_default,
-        )
-    kiosk    = args.kiosk if args.kiosk is not None \
-                          else p.ask_bool("autologin (kiosk) instead of a login screen",
-                                          kiosk_default)
-    nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
-                          else p.ask_bool(f"passwordless sudo for {username}",
-                                          nopasswd_default)
-    ssh_port = args.port     or p.ask("SSH host port (forwarded to guest 22)", free_port(),
-                                      cast=int, validate=lambda v: 1 <= v <= 65535)
+        desktop_default = env_bool("PLEBIAN_OS_DESKTOP", True)
+        kiosk_default = env_bool("PLEBIAN_OS_KIOSK", False)
+        nopasswd_default = env_bool("PLEBIAN_OS_NOPASSWD_SUDO", False)
+        if args.session:
+            desktop = args.session == "desktop"
+        else:
+            desktop = p.ask_bool(
+                "load the configured desktop provider in the first kilix page",
+                desktop_default,
+            )
+        kiosk = args.kiosk if args.kiosk is not None \
+            else p.ask_bool("autologin (kiosk) instead of a login screen",
+                            kiosk_default)
+        nopasswd = args.nopasswd_sudo if args.nopasswd_sudo is not None \
+            else p.ask_bool(f"passwordless sudo for {username}",
+                            nopasswd_default)
+    if args.interactive_installer:
+        ssh_port = args.port or free_port()
+    else:
+        ssh_port = args.port or p.ask(
+            "SSH host port (forwarded to guest 22)", free_port(),
+            cast=int, validate=lambda v: 1 <= v <= 65535)
 
-    validate_identity(name=name, username=username, fullname=fullname,
-                      password=password, hostname=hostname)
+    if args.interactive_installer:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", name):
+            die("VM/image name must use 1-64 letters, digits, dots, underscores, or hyphens")
+    else:
+        validate_identity(name=name, username=username, fullname=fullname,
+                          password=password, password_hash=password_hash,
+                          hostname=hostname)
     if firmware not in ("bios", "efi"):
         die("firmware must be bios or efi")
     if ram_mb < 512 or cpus < 1 or vram_mb < 1 or disk_gb < 8:
@@ -492,31 +546,48 @@ def gather_config(args) -> Config:
              "firstboot fork compilation may exhaust memory")
     if not 1 <= ssh_port <= 65535:
         die("SSH host port must be between 1 and 65535")
+    if password_hash and not args.no_wait:
+        die("--password-hash-file cannot authenticate the SSH waiter; pass --no-wait")
+    if credential_generated and (args.no_wait or not nopasswd):
+        die("generated one-time credentials require waiting and --sudo-nopasswd "
+            "so the harness can expire them")
     return Config(name=name, username=username, fullname=fullname, password=password,
                   hostname=hostname, ram_mb=ram_mb, cpus=cpus,
                   vram_mb=vram_mb, accelerate_3d=args.accelerate_3d,
                   firmware=firmware,
                   disk_gb=disk_gb,
                   desktop=desktop, kiosk=kiosk, nopasswd_sudo=nopasswd, ssh_port=ssh_port,
-                  gui=args.gui, wait=not args.no_wait)
+                  gui=args.gui, wait=not args.no_wait,
+                  password_hash=password_hash,
+                  credential_generated=credential_generated,
+                  interactive_installer=args.interactive_installer)
 
 
 def confirm_summary(cfg: Config, assume_yes: bool) -> None:
     print(c("1", "\nAbout to build:"))
-    rows = [
-        ("VM name", cfg.name), ("username", cfg.username), ("hostname", cfg.hostname),
+    rows = [("VM name", cfg.name)]
+    if cfg.interactive_installer:
+        rows.append(("identity", "chosen in Debian Installer; no credential supplied"))
+    else:
+        rows.extend([
+            ("username", cfg.username), ("hostname", cfg.hostname),
+        ])
+    rows.extend([
         ("RAM", f"{cfg.ram_mb} MB"), ("vCPUs", cfg.cpus),
         ("VRAM", f"{cfg.vram_mb} MB"),
         ("3D accel", "on" if cfg.accelerate_3d else "off"),
         ("firmware", cfg.firmware.upper()),
         ("disk", f"{cfg.disk_gb} GB (sparse)"),
-        ("session", "desktop provider in Kilix page 1" if cfg.desktop
-                    else "Kilix shell in page 1"),
-        ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
-        ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
-        ("SSH", f"ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1"),
-        ("display", "GUI window" if cfg.gui else "headless"),
-    ]
+    ])
+    if not cfg.interactive_installer:
+        rows.extend([
+            ("session", "desktop provider in Kilix page 1" if cfg.desktop
+                        else "Kilix shell in page 1"),
+            ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
+            ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
+            ("SSH", f"ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1"),
+        ])
+    rows.append(("display", "GUI window" if cfg.gui else "headless"))
     for k, v in rows:
         print(f"  {k:<9}: {v}")
     print()
@@ -550,19 +621,21 @@ def generate_preseed(cfg: Config, enable_ssh: bool = False) -> Path:
             warn(f"preseed: pattern not found, skipped: {pattern!r}")
         text = new
 
-    sub(r"^(d-i passwd/username string ).*$",      r"\g<1>" + cfg.username)
-    sub(r"^(d-i passwd/user-fullname string ).*$", r"\g<1>" + cfg.fullname)
-    sub(r"^(d-i netcfg/get_hostname string ).*$",  r"\g<1>" + cfg.hostname)
-
-    # Replace the template's default 'plebian' password with the chosen one,
-    # hashed with openssl (keeps the plaintext off the ISO). A
-    # lambda repl keeps regex-special characters in the crypt hash literal.
-    # The offline USB template may deliberately use 'plebian' (and its desktop
-    # offers the one-time transition helper), but VM/SSH entry points reject it.
-    secret, _crypted = crypt_password(cfg.password)
-    sub(r"^d-i passwd/user-password password .*$",
-        lambda _m: "d-i passwd/user-password-crypted password " + secret)
-    sub(r"^d-i passwd/user-password-again password .*\n", "")
+    # The tracked template is the normal interactive persona and contains no
+    # identity answers. Build a separate automated persona by inserting one
+    # validated identity block with a crypt hash only.
+    secret = cfg.password_hash or crypt_password(cfg.password)[0]
+    marker = "d-i passwd/root-login boolean false\n"
+    if text.count(marker) != 1:
+        die("normal preseed must contain exactly one root-login policy marker")
+    identity = (
+        "\n### Automated identity profile (generated; not publishable release media)\n"
+        f"d-i netcfg/get_hostname string {cfg.hostname}\n"
+        f"d-i passwd/user-fullname string {cfg.fullname}\n"
+        f"d-i passwd/username string {cfg.username}\n"
+        f"d-i passwd/user-password-crypted password {secret}\n"
+    )
+    text = text.replace(marker, marker + identity, 1)
 
     # The VM builder watches provisioning over SSH, so its image needs sshd; the
     # USB / raw paths do not and ship without an open sshd.
@@ -624,6 +697,8 @@ def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool) -
            "PLEBIAN_OS_PRESEED": str(preseed),
            "PLEBIAN_OS_AUTOBOOT": "1", "PLEBIAN_OS_UNATTENDED_DISK": "1",
            "PLEBIAN_OS_SSH_ENABLED": "1"}
+    env.pop("IMAGE_PASSWORD", None)
+    env.pop("RANDOM_PASSWORD", None)
     run([REMASTER, "", str(out_iso)], env=env)
     if not out_iso.exists():
         die(f"ISO build did not produce {out_iso}")
@@ -717,20 +792,42 @@ def vbox_detach_iso(cfg: Config) -> None:
         die(f"could not detach the installer ISO: {detail}")
 
 # ── SSH into the guest (password auth via SSH_ASKPASS; no sshpass needed) ─────
-def _askpass_for(pw: str) -> str:
+@contextlib.contextmanager
+def _askpass_for(pw: str):
+    """Yield an askpass program plus owner-only secret file, then remove both.
+
+    The password is never placed in argv or the process environment. The child
+    receives only a private pathname which its tiny askpass helper reads.
+    """
+    if not pw:
+        die("SSH waiting requires a plaintext credential from --password-file "
+            "or --generate-one-time-password")
     session = storage_dir("session")
     session.mkdir(parents=True, exist_ok=True)
     d = tempfile.mkdtemp(prefix="plebian-askpass-", dir=session)
-    f = os.path.join(d, "askpass.sh")
-    with open(f, "w") as fh:
-        fh.write("#!/bin/sh\nexec printf '%s\\n' \"$PLEBIAN_ASKPASS_PW\"\n")
-    os.chmod(f, 0o700)
-    atexit.register(lambda: shutil.rmtree(d, ignore_errors=True))
-    return f
+    os.chmod(d, 0o700)
+    script = Path(d) / "askpass.sh"
+    secret = Path(d) / "credential"
+    fd = os.open(secret, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(pw + "\n")
+    script.write_text(
+        "#!/bin/sh\n"
+        "IFS= read -r credential < \"$PLEBIAN_ASKPASS_FILE\" || exit 1\n"
+        "exec printf '%s\\n' \"$credential\"\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o700)
+    try:
+        yield str(script), str(secret)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
-def ssh(cfg: Config, command: str, askpass: str, timeout: int = 15):
-    env = {**os.environ, "SSH_ASKPASS": askpass, "SSH_ASKPASS_REQUIRE": "force",
-           "DISPLAY": os.environ.get("DISPLAY", ":0"), "PLEBIAN_ASKPASS_PW": cfg.password}
+def ssh(cfg: Config, command: str, askpass: tuple[str, str], timeout: int = 15):
+    script, secret = askpass
+    env = {**os.environ, "SSH_ASKPASS": script, "SSH_ASKPASS_REQUIRE": "force",
+           "DISPLAY": os.environ.get("DISPLAY", ":0"),
+           "PLEBIAN_ASKPASS_FILE": secret}
     argv = ["ssh", "-p", str(cfg.ssh_port),
             "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ConnectTimeout=8", "-o", "PreferredAuthentications=password",
@@ -742,8 +839,8 @@ def ssh(cfg: Config, command: str, askpass: str, timeout: int = 15):
     except subprocess.TimeoutExpired:
         return None
 
-def wait_for_provisioning(cfg: Config, timeout_s: int) -> None:
-    askpass = _askpass_for(cfg.password)
+def wait_for_provisioning(cfg: Config, timeout_s: int,
+                          askpass: tuple[str, str]) -> None:
     info("waiting for the unattended install + first-boot provisioning …")
     info("  (installs Debian, reboots, then pulls pleb + kilix from GitHub)")
     # Always exits 0 so we can read stdout even while provisioning is mid-flight.
@@ -781,6 +878,27 @@ def wait_for_provisioning(cfg: Config, timeout_s: int) -> None:
     print()
     die(f"timed out after {timeout_s//60} min waiting for provisioning "
         f"(the VM is still running; check it with `VBoxManage startvm {cfg.name} --type gui`).")
+
+
+def expire_generated_credential(cfg: Config, askpass: tuple[str, str]) -> None:
+    """Force a generated harness password to change at the next real login."""
+    result = ssh(
+        cfg,
+        f"sudo -n /usr/bin/chage -d 0 -- {shlex.quote(cfg.username)}",
+        askpass,
+    )
+    ok = result is not None and result.returncode == 0
+    detail = "" if ok else (
+        "SSH command timed out" if result is None else
+        "\n".join(part.strip() for part in (result.stdout, result.stderr)
+                  if part.strip())
+    )
+    if _RECORDER is not None:
+        _RECORDER.check("generated credential expired", ok, detail)
+    if not ok:
+        die("could not expire the generated one-time credential" +
+            (f": {detail}" if detail else ""))
+    info("generated harness credential expired; next login must replace it.")
 
 # ── acceptance verification (post-provision, over SSH) ───────────────────────
 def _catalog_build_script() -> str:
@@ -997,7 +1115,7 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
             "if [ \"$selected_uv\" = 1 ]; then "
             "test -x /usr/local/bin/uv && test -x /usr/local/bin/uvx && "
             "case \"$(/usr/local/bin/uv --version)\" in "
-            "\"uv $selected_uv_version\"|\"uv $selected_uv_version (\"*\)) true ;; "
+            "\"uv $selected_uv_version\"|\"uv $selected_uv_version (\"*\\)) true ;; "
             "*) false ;; esac; fi",
             askpass,
             timeout=60,
@@ -1495,7 +1613,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         'test -x /usr/local/bin/uv && test -x /usr/local/bin/uvx && '
         f'case "$(/usr/local/bin/uv --version)" in '
         f'{shlex.quote("uv " + expected_uv_version)}|'
-        f'{shlex.quote("uv " + expected_uv_version + " (")}*\)) true ;; '
+        f'{shlex.quote("uv " + expected_uv_version + " (")}*\\)) true ;; '
         '*) false ;; esac)'
     )
     checks = [
@@ -1607,15 +1725,21 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
 def final_summary(cfg: Config, iso: Path) -> None:
     print(c("1;32", "\n✓ Plebian-OS VirtualBox image is ready.\n"))
     print(f"  VM        : {cfg.name}")
-    if cfg.password == "plebian":
-        print(f"  login     : {cfg.username} / plebian (shipped default)")
+    if cfg.interactive_installer:
+        print("  login     : chosen interactively in Debian Installer")
+    elif cfg.credential_generated:
+        print(f"  login     : {cfg.username} / (harness credential expired; change at next login)")
+    elif cfg.password_hash:
+        print(f"  login     : {cfg.username} / (credential supplied as a protected crypt hash)")
     else:
-        print(f"  login     : {cfg.username} / (configured password; generated values are printed above)")
-    print(f"  session   : {'desktop provider in Kilix page 1' if cfg.desktop else 'Kilix shell in page 1'}"
-          f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
+        print(f"  login     : {cfg.username} / (credential supplied privately)")
+    if not cfg.interactive_installer:
+        print(f"  session   : {'desktop provider in Kilix page 1' if cfg.desktop else 'Kilix shell in page 1'}"
+              f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
     print(f"  firmware  : {cfg.firmware.upper()}")
     print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
-    print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")
+    if cfg.wait:
+        print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")
     print(f"  ISO       : {iso}")
     if _RECORDER is not None:
         print(f"  report    : {_RECORDER.path}")
@@ -1676,6 +1800,8 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         },
         "vm": {
             "name": cfg.name,
+            "identity_profile": (
+                "interactive-installer" if cfg.interactive_installer else "automated"),
             "username": cfg.username,
             "hostname": cfg.hostname,
             "ram_mb": cfg.ram_mb,
@@ -1709,7 +1835,16 @@ def main() -> None:
     ap.add_argument("--target", choices=["virtualbox", "vbox", "qemu", "docker"],
                     default="virtualbox", help="image type (only virtualbox today)")
     ap.add_argument("--name"); ap.add_argument("--username"); ap.add_argument("--fullname")
-    ap.add_argument("--hostname"); ap.add_argument("--password")
+    ap.add_argument("--hostname")
+    ap.add_argument("--password", help=argparse.SUPPRESS)
+    ap.add_argument("--password-file", type=Path,
+                    help="read the automated login password from an owner-mode-0600 file")
+    ap.add_argument("--password-hash-file", type=Path,
+                    help="read a crypt hash from an owner-mode-0600 file (requires --no-wait)")
+    ap.add_argument("--generate-one-time-password", action="store_true",
+                    help="generate a harness-only password and expire it after verification")
+    ap.add_argument("--expire-credential-after-verification", action="store_true",
+                    help="treat --password-file as one-time and expire it after verification")
     ap.add_argument("--ram", type=int, help="MB"); ap.add_argument("--cpus", type=int)
     ap.add_argument("--vram", type=int, default=None,
                     help="video RAM in MB (VirtualBox caps this at 256 on this host)")
@@ -1724,11 +1859,15 @@ def main() -> None:
     ap.add_argument("--no-kiosk", dest="kiosk", action="store_false",
                     help="show the login greeter instead of autologin")
     ap.add_argument("--sudo-nopasswd", dest="nopasswd_sudo", action="store_true",
-                    default=None, help="passwordless sudo for the user (default)")
+                    default=None, help="passwordless sudo for the automated user")
     ap.add_argument("--no-sudo-nopasswd", dest="nopasswd_sudo", action="store_false",
                     help="require a password for sudo")
     ap.add_argument("--port", type=int, help="SSH host port -> guest 22")
     ap.add_argument("--iso", type=Path, help="use this prebuilt ISO (skip building)")
+    ap.add_argument(
+        "--interactive-installer", action="store_true",
+        help=("prebuilt ISO collects guest identity itself; requires --iso, "
+              "--no-wait, and --no-verify"))
     ap.add_argument(
         "--out", type=Path, default=None,
         help=("ISO output path when building (release default: "
@@ -1770,16 +1909,33 @@ def main() -> None:
     # PLEBIAN_OS_RELEASE=<ver> pins every moving component from releases/<ver>.env.
     apply_release_manifest()
 
+    if args.interactive_installer:
+        if not args.iso or not args.no_wait or not args.no_verify:
+            die("--interactive-installer requires --iso, --no-wait, and --no-verify")
+        identity_options = (
+            args.username, args.fullname, args.hostname, args.password,
+            args.password_file, args.password_hash_file,
+        )
+        if (any(value is not None for value in identity_options)
+                or args.generate_one_time_password
+                or args.expire_credential_after_verification
+                or args.session is not None or args.kiosk is not None
+                or args.nopasswd_sudo is not None):
+            die("--interactive-installer refuses automated identity, credential, session, and sudo options")
+        for key in ("IMAGE_PASSWORD", "RANDOM_PASSWORD"):
+            if key in os.environ:
+                die(f"--interactive-installer refuses retired {key}")
+
     if args.iso:
-        warn("using a prebuilt ISO: custom username/password/session are NOT applied "
-             "(they live in the ISO's preseed). SSH waiting assumes the credentials "
-             "entered here match that ISO.")
-        if args.yes and args.password is None and not args.no_wait:
-            die("--yes --iso needs --password for SSH waiting (or pass --no-wait)")
+        if args.interactive_installer:
+            warn("using a prebuilt interactive ISO: Debian Installer collects the "
+                 "guest identity; no credential is supplied by this harness")
+        else:
+            warn("using a prebuilt automated ISO: builder identity options are NOT "
+                 "applied; protected credentials entered here must match that ISO")
     cfg = gather_config(args)
-    if not args.iso and cfg.password == "plebian":
-        die("VM images enable sshd; use RANDOM_PASSWORD=1, IMAGE_PASSWORD=<secret>, "
-            "or --password instead of the shipped 'plebian' default")
+    if args.iso and cfg.credential_generated:
+        die("--generate-one-time-password cannot match a prebuilt ISO; use its protected password file")
     confirm_summary(cfg, args.yes)
 
     if args.timeout <= 0:
@@ -1844,16 +2000,27 @@ def main() -> None:
         final_summary(cfg, iso)
         return
 
-    wait_for_provisioning(cfg, args.timeout * 60)
-    if _RECORDER is not None:
-        _RECORDER.stage("installer and firstboot completed")
-    vbox_detach_iso(cfg)
-    if _RECORDER is not None:
-        _RECORDER.stage("installer ISO detached")
-    if not args.no_verify:
-        verify_provisioning(cfg, _askpass_for(cfg.password))
-        if _RECORDER is not None:
-            _RECORDER.stage("post-provision acceptance completed")
+    with _askpass_for(cfg.password) as askpass:
+        provisioning_ready = False
+        try:
+            wait_for_provisioning(cfg, args.timeout * 60, askpass)
+            provisioning_ready = True
+            if _RECORDER is not None:
+                _RECORDER.stage("installer and firstboot completed")
+            vbox_detach_iso(cfg)
+            if _RECORDER is not None:
+                _RECORDER.stage("installer ISO detached")
+            if not args.no_verify:
+                verify_provisioning(cfg, askpass)
+                if _RECORDER is not None:
+                    _RECORDER.stage("post-provision acceptance completed")
+        finally:
+            # Verification can fail after the guest is ready. Do not leave a
+            # harness-owned credential usable merely because a later gate did.
+            if cfg.credential_generated and provisioning_ready:
+                expire_generated_credential(cfg, askpass)
+                if _RECORDER is not None:
+                    _RECORDER.stage("generated harness credential expired")
     if _RECORDER is not None:
         _RECORDER.complete(
             "passed" if not args.no_verify else "completed-without-verification"

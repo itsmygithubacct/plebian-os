@@ -1,22 +1,20 @@
 # `build_usb_image.py` — build a Plebian-OS USB install stick
 
-`build/build_usb_image.py` builds a bootable **Plebian-OS USB installer**. It asks
-a few questions (username, password, session, …), bakes them into a customized
-installer ISO with the repo's own tooling, then — **safely** — writes that ISO
-byte-for-byte to a physical USB device. The Plebian-OS ISO is isohybrid, so a USB
-installer is just that ISO `dd`'d to the stick.
+`build/build_usb_image.py` builds a bootable **Plebian-OS USB installer**. Its
+normal image leaves hostname, full name, username, and password to Debian
+Installer, then — **safely** — writes that ISO byte-for-byte to a physical USB
+device. The Plebian-OS ISO is isohybrid, so a USB installer is just that ISO
+`dd`'d to the stick.
 
 ```
-answers ─▶ custom preseed ─▶ ISO (remaster-iso.sh) ─▶ dd ─▶ USB stick
+identity-free preseed ─▶ ISO (remaster-iso.sh) ─▶ dd ─▶ USB stick
                                                              │
                 boot a machine from it ─▶ pick install ─▶ confirm target disk
                                                           + first-boot provision
 ```
 
-It reuses the preseed substitution from
-[`build_vm_image.py`](build_vm_image.md) (username / password hashing / session
-injection), so that intricate logic lives in **one** place and stays in sync with
-`preseed.cfg`.
+For lab automation only, `--unattended-profile` reuses the protected identity
+and preseed generation contract from [`build_vm_image.py`](build_vm_image.md).
 
 ## Requirements
 
@@ -48,35 +46,24 @@ build/build_usb_image.py --list               # list removable/USB/hotplug candi
 build/build_usb_image.py --device /dev/sdX --dry-run   # print the plan; write nothing
 ```
 
-## What it asks
+## Identity profiles
 
-Each prompt shows a `[default]`; press Enter to accept it.
+The default is `interactive-v1`: Debian Installer collects hostname, full name,
+username, and a concealed password twice. No known credential or fixed account
+is present on the ISO.
 
-| Prompt | Default | Notes |
-|--------|---------|-------|
-| image name | `plebian` | ISO output name + default hostname |
-| username | `pleb` | the uid-1000 account Pleb runs as |
-| full name | `Plebian User` | GECOS field |
-| password | `plebian` | hidden entry; stored **hashed** in the preseed |
-| hostname | *image name* | |
-| session | **desktop** | the main screen-filling Kilix instance with Kilix-95 in page 1; `shell` is the explicit bare-page override |
-| autologin (kiosk) | **no** | boot straight into Pleb, or show a login greeter |
-| passwordless sudo | **no** | optional single-user appliance convenience |
+`--unattended-profile` is a deliberately separate non-publishable profile. It
+requires explicit username and hostname plus `--password-file` or
+`--password-hash-file`; either file must be a regular non-symlink owned by the
+caller with mode 0600. USB builds refuse generated passwords because they have
+no verification harness that can expire one.
 
 ## Options
 
-Every prompt has a matching flag, so the whole thing can run non-interactively.
-With `--yes`, omitting `--password` generates a random password and prints it
-once instead of using the interactive `plebian` default.
-
-Release/image config may instead set `IMAGE_PASSWORD=plebian` and
-`RANDOM_PASSWORD=0`, which is the published offline-image policy. Set
-`RANDOM_PASSWORD=1` to ignore `IMAGE_PASSWORD` and generate a strong one-time
-password. An explicit `--password` wins over both.
-
 ```
---name NAME            --username NAME       --fullname "Full Name"
---hostname NAME        --password PASS
+--name NAME
+--unattended-profile   --username NAME       --fullname "Full Name"
+--hostname NAME        --password-file PATH  --password-hash-file PATH
 --session desktop|shell --kiosk / --no-kiosk
 --sudo-nopasswd / --no-sudo-nopasswd
 
@@ -87,7 +74,7 @@ password. An explicit `--password` wins over both.
                        plebian-os-<name>.iso in project artifacts)
 --autoboot             build a hands-off stick that auto-selects the install (see warning)
 --unattended-disk      preseed partitioning too; choosing install erases without another prompt
---with-ssh             install ssh-server (off by default; refuses password `plebian`)
+--with-ssh             install ssh-server (automated profile only; off by default)
 --list                 list removable/USB/hotplug candidates and exit
 --force                allow a disk with none of that evidence (never the system/root disk)
 -y, --yes              accept defaults / skip the typed confirmation

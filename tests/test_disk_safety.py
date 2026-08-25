@@ -74,18 +74,14 @@ class DiskSafetyTests(unittest.TestCase):
         self.assertNotIn("partman/choose_partition ", remaster)
         self.assertNotIn("partman-partitioning/.*", usb)
 
-    def test_offline_template_default_warns_but_does_not_refuse(self):
-        # 'plebian' remains a supported offline ISO default. Python builders use
-        # generated/operator passwords, and their opt-in SSH path rejects it.
+    def test_normal_template_has_no_shared_credential_policy(self):
         r = _read("build", "remaster-iso.sh")
-        self.assertIn("password plebian$", r)          # still detected
-        # the warning block must not abort the build
-        gate = r.split(
-            "# The default password is deliberate for the offline release image.",
-            1,
-        )[1].split("\n\napply_installer_snapshot()", 1)[0]
-        self.assertNotIn("exit 1", gate)
-        self.assertIn("default password 'plebian'", r)
+        self.assertNotIn("apply_image_password_policy", r)
+        self.assertNotIn("default password 'plebian'", r)
+        self.assertIn("PLEBIAN_OS_IDENTITY_PROFILE=interactive-v1", r)
+        self.assertIn("normal preseed must leave $key unanswered", r)
+        self.assertIn(
+            "$deprecated_credential_key is no longer accepted", r)
 
     def test_flashers_protect_critical_mounts_swap_and_stacked_parents(self):
         shell = _read("build", "make-usb.sh")
@@ -178,12 +174,21 @@ class DiskSafetyTests(unittest.TestCase):
         self.assertIn(
             "ExecStartPre=-/bin/rm -f /etc/sudoers.d/plebian-os-provision", svc)
 
-    def test_preseed_documents_default_credentials(self):
+    def test_preseed_documents_interactive_identity(self):
         p = _read("preseed", "preseed.cfg")
-        self.assertIn("DEFAULT CREDENTIALS", p)
-        # the header explains the safety story (no sshd + desktop nag)
-        self.assertIn("ssh-server is installed", p)
-        self.assertIn("change it on first run", p)
+        self.assertIn("IDENTITY IS DELIBERATELY NOT PRESEEDED", p)
+        self.assertIn("protected credential input", p)
+        self.assertIn("d-i passwd/root-login boolean false", p)
+        for answer in (
+            "d-i netcfg/get_hostname ",
+            "d-i passwd/user-fullname ",
+            "d-i passwd/username ",
+            "d-i passwd/user-password ",
+            "d-i passwd/user-password-again ",
+            "d-i passwd/user-password-crypted ",
+        ):
+            self.assertNotIn(answer, p)
+        self.assertNotIn("password plebian", p)
 
 
 if __name__ == "__main__":

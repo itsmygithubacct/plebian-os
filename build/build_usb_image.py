@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """build_usb_image.py — build a Plebian-OS USB install stick.
 
-Interactively asks the same few questions as the VM builder (username, password,
-session, …), bakes them into a customized Plebian-OS installer ISO with the
-repo's own tooling, then — safely — writes that ISO byte-for-byte to a physical
-USB device. The ISO is isohybrid, so a USB installer is just the ISO dd'd to the
-stick.
+By default it builds the normal identity-free installer: Debian Installer asks
+the target operator for hostname, full name, username, and password. A separate
+``--unattended-profile`` mode accepts an explicit identity and a protected
+credential file for lab automation. The resulting ISO is isohybrid, so a USB
+installer is just the ISO dd'd to the stick.
 
     build/build_usb_image.py --device /dev/sdX   # build + flash a stick
     build/build_usb_image.py                      # build the ISO only, no flash
@@ -59,6 +59,8 @@ class Config:
     desktop: bool          # PLEBIAN_OS_DESKTOP: run the provider in Kilix page 1
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
     nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
+    password_hash: str = ""
+    credential_generated: bool = False
 
 # ── prompting (reuse the VM builder's Prompter) ──────────────────────────────
 def gather_config(args) -> Config:
@@ -67,15 +69,15 @@ def gather_config(args) -> Config:
     if not args.yes:
         print("Answer the prompts (Enter accepts the [default]).\n")
 
-    name     = args.name     or p.ask("image name", "plebian")
-    username = args.username or p.ask("username", "pleb")
-    fullname = args.fullname or p.ask("full name", "Plebian User")
-    password = vm.select_image_password(
-        explicit=args.password,
-        prompter=p,
-        username=username,
-        interactive_default="plebian",
-    )
+    name = args.name or p.ask("image name", "plebian-automated")
+    if args.yes and (not args.username or not args.hostname):
+        die("--yes --unattended-profile requires explicit --username and --hostname")
+    username = args.username or p.ask("username", "operator")
+    fullname = args.fullname or p.ask("full name", username)
+    password, password_hash, generated = vm.resolve_automated_credential(args, p)
+    if generated:
+        die("USB automated profiles refuse generated passwords because no harness "
+            "can expire them; use --password-file or --password-hash-file")
     hostname = args.hostname or p.ask("hostname", name)
     desktop_default = vm.env_bool("PLEBIAN_OS_DESKTOP", True)
     kiosk_default = vm.env_bool("PLEBIAN_OS_KIOSK", False)
@@ -95,28 +97,39 @@ def gather_config(args) -> Config:
                                        nopasswd_default)
 
     vm.validate_identity(name=name, username=username, fullname=fullname,
-                         password=password, hostname=hostname)
+                         password=password, password_hash=password_hash,
+                         hostname=hostname)
     return Config(name=name, username=username, fullname=fullname, password=password,
                   hostname=hostname, desktop=desktop, kiosk=kiosk,
-                  nopasswd_sudo=nopasswd)
+                  nopasswd_sudo=nopasswd, password_hash=password_hash)
 
-def confirm_summary(cfg: Config, out_iso: Path, device: str | None,
+def confirm_summary(cfg: Config | None, out_iso: Path, device: str | None,
                     autoboot: bool, unattended_disk: bool,
                     assume_yes: bool) -> None:
     print(vm.c("1", "\nAbout to build:"))
-    rows = [
-        ("image name", cfg.name), ("username", cfg.username), ("hostname", cfg.hostname),
-        ("session", "desktop provider in Kilix page 1" if cfg.desktop
-                    else "Kilix shell in page 1"),
-        ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
-        ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
+    rows = []
+    if cfg is None:
+        rows.extend([
+            ("identity", "Debian Installer asks hostname, name, username, password"),
+            ("profile", "normal interactive installer"),
+        ])
+    else:
+        rows.extend([
+            ("image name", cfg.name), ("username", cfg.username),
+            ("hostname", cfg.hostname),
+            ("session", "desktop provider in Kilix page 1" if cfg.desktop
+                        else "Kilix shell in page 1"),
+            ("login", "autologin (kiosk)" if cfg.kiosk else "greeter"),
+            ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
+        ])
+    rows.extend([
         ("ISO out", out_iso),
         ("boot menu", "auto-selects install (--autoboot)" if autoboot
                       else "menu pause — pick the install entry"),
         ("disk setup", "unattended erase" if unattended_disk
                        else "installer asks for target disk"),
         ("flash to", device or "(none — build the ISO only)"),
-    ]
+    ])
     for k, v in rows:
         print(f"  {k:<10}: {v}")
     print()
@@ -129,13 +142,23 @@ def confirm_summary(cfg: Config, out_iso: Path, device: str | None,
         pass
 
 # ── ISO build (reuse remaster-iso.sh; autoboot only when asked) ──────────────
-def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, autoboot: bool,
+def build_iso(cfg: Config | None, preseed: Path | None, out_iso: Path, autoboot: bool,
               unattended_disk: bool, dry_run: bool,
               ssh_enabled: bool = False) -> Path:
-    info(f"building installer ISO via {REMASTER.name} (custom preseed baked in)")
-    env = {**os.environ, **vm.runtime_build_env(cfg),
-           "PLEBIAN_OS_PRESEED": str(preseed),
-           "PLEBIAN_OS_SSH_ENABLED": "1" if ssh_enabled else "0"}
+    profile = "custom automated preseed" if preseed is not None else "interactive identity"
+    info(f"building installer ISO via {REMASTER.name} ({profile})")
+    env = dict(os.environ)
+    env.pop("IMAGE_PASSWORD", None)
+    env.pop("RANDOM_PASSWORD", None)
+    if cfg is not None and preseed is not None:
+        env.update(vm.runtime_build_env(cfg))
+        env["PLEBIAN_OS_PRESEED"] = str(preseed)
+    else:
+        for key in ("PLEBIAN_OS_PRESEED", "PLEBIAN_OS_USER",
+                    "PLEBIAN_OS_TARGET_SOURCE_HOME",
+                    "PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME"):
+            env.pop(key, None)
+    env["PLEBIAN_OS_SSH_ENABLED"] = "1" if ssh_enabled else "0"
     # Default: NO autoboot — the stick pauses at the installer menu on purpose.
     # --autoboot makes it auto-select the (unattended) install for a kiosk stick.
     # Clear any inherited value so a pre-exported PLEBIAN_OS_AUTOBOOT can't
@@ -151,8 +174,8 @@ def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, autoboot: bool,
     if dry_run:
         auto = "PLEBIAN_OS_AUTOBOOT=1 " if autoboot else ""
         disk = "PLEBIAN_OS_UNATTENDED_DISK=1 " if unattended_disk else ""
-        seed = preseed if preseed is not None else "<generated preseed>"
-        info(f"+ {auto}{disk}PLEBIAN_OS_PRESEED={seed} {REMASTER} '' {out_iso}")
+        seed = f"PLEBIAN_OS_PRESEED={preseed} " if preseed is not None else ""
+        info(f"+ {auto}{disk}{seed}{REMASTER} '' {out_iso}")
         return out_iso
     vm.run([REMASTER, "", str(out_iso)], env=env)
     if not out_iso.exists():
@@ -497,7 +520,7 @@ def iso_only_summary(iso: Path) -> None:
     info(f"    build/build_usb_image.py --iso {iso} --device /dev/sdX")
     info(f"    sudo dd if={iso} of=/dev/sdX bs=4M status=progress oflag=sync conv=fsync")
 
-def final_summary(cfg: Config, iso: Path, device: str, autoboot: bool,
+def final_summary(cfg: Config | None, iso: Path, device: str, autoboot: bool,
                   from_iso: bool) -> None:
     print(vm.c("1;32", "\n✓ Plebian-OS install stick is ready.\n"))
     print(f"  device    : {device}")
@@ -505,11 +528,11 @@ def final_summary(cfg: Config, iso: Path, device: str, autoboot: bool,
         # A prebuilt ISO carries its own preseed; the flags didn't set these, so
         # don't claim a username/session the image may not actually use.
         print("  login     : whatever the prebuilt ISO's preseed defines")
+    elif cfg is None:
+        print("  identity  : Debian Installer asks hostname, name, username, and password")
     else:
-        if cfg.password == "plebian":
-            print(f"  login     : {cfg.username} / plebian (shipped default)")
-        else:
-            print(f"  login     : {cfg.username} / (configured password; generated values are printed above)")
+        kind = "protected crypt hash" if cfg.password_hash else "protected password file"
+        print(f"  login     : {cfg.username} / ({kind})")
         print(f"  session   : {'desktop provider in Kilix page 1' if cfg.desktop else 'Kilix shell in page 1'}"
               f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
         print(f"  sudo      : {'passwordless' if cfg.nopasswd_sudo else 'password required'}")
@@ -527,7 +550,16 @@ def final_summary(cfg: Config, iso: Path, device: str, autoboot: bool,
 def main() -> None:
     ap = argparse.ArgumentParser(description="Build a Plebian-OS USB install stick.")
     ap.add_argument("--name"); ap.add_argument("--username"); ap.add_argument("--fullname")
-    ap.add_argument("--hostname"); ap.add_argument("--password")
+    ap.add_argument("--hostname")
+    ap.add_argument("--unattended-profile", action="store_true",
+                    help="use an explicit automated identity instead of installer questions")
+    ap.add_argument("--password", help=argparse.SUPPRESS)
+    ap.add_argument("--password-file", type=Path,
+                    help="read the automated password from an owner-mode-0600 file")
+    ap.add_argument("--password-hash-file", type=Path,
+                    help="read a crypt hash from an owner-mode-0600 file")
+    ap.add_argument("--generate-one-time-password", action="store_true",
+                    help=argparse.SUPPRESS)
     ap.add_argument("--session", choices=["desktop", "shell"])
     ap.add_argument("--kiosk", dest="kiosk", action="store_true", default=None,
                     help="autologin straight into Pleb")
@@ -577,21 +609,31 @@ def main() -> None:
     # PLEBIAN_OS_RELEASE=<ver> pins every moving component from releases/<ver>.env.
     vm.apply_release_manifest()
 
+    image_name = args.name or "plebian"
     if args.iso:
-        cfg = Config(name=args.name or "plebian", username=args.username or "pleb",
-                     fullname=args.fullname or "Plebian User",
-                     password=args.password or "", hostname=args.hostname or "",
-                     desktop=args.session != "shell", kiosk=bool(args.kiosk),
-                     nopasswd_sudo=bool(args.nopasswd_sudo))
-        warn("using a prebuilt ISO: custom username/password/session are NOT applied "
-             "(they live in the ISO's preseed).")
-    else:
+        cfg = None
+        warn("using a prebuilt ISO: identity/profile flags are not applied")
+    elif args.unattended_profile:
         cfg = gather_config(args)
-        if args.with_ssh and cfg.password == "plebian":
-            die("--with-ssh refuses the shipped 'plebian' password; choose --password")
+        image_name = cfg.name
+    else:
+        custom_flags = (
+            args.username, args.fullname, args.hostname, args.password,
+            args.password_file, args.password_hash_file, args.session,
+            args.kiosk, args.nopasswd_sudo,
+        )
+        if any(value is not None for value in custom_flags) or \
+                args.generate_one_time_password or args.with_ssh or \
+                args.autoboot or args.unattended_disk:
+            die("identity, credential, SSH, and unattended options require "
+                "--unattended-profile")
+        for key in ("IMAGE_PASSWORD", "RANDOM_PASSWORD", "PLEBIAN_OS_USER"):
+            if key in os.environ:
+                die(f"normal interactive media refuses ambient {key}")
+        cfg = None
 
     out_iso = (args.iso or args.out or (vm.storage_dir("artifacts") /
-                                        vm.default_iso_filename(cfg.name))).resolve()
+                                        vm.default_iso_filename(image_name))).resolve()
     unattended_disk = args.autoboot or args.unattended_disk
     confirm_summary(cfg, out_iso, args.device, args.autoboot, unattended_disk, args.yes)
 
@@ -603,8 +645,10 @@ def main() -> None:
     else:
         # --dry-run writes NOTHING: skip generating the temp preseed (which would
         # spawn openssl and drop a /tmp file) since build_iso won't consume it.
-        preseed = (None if args.dry_run else
-                   make_usb_preseed(cfg, unattended_disk, enable_ssh=args.with_ssh))
+        preseed = None
+        if cfg is not None and not args.dry_run:
+            preseed = make_usb_preseed(
+                cfg, unattended_disk, enable_ssh=args.with_ssh)
         iso = build_iso(cfg, preseed, out_iso, args.autoboot,
                         unattended_disk, args.dry_run, ssh_enabled=args.with_ssh)
 

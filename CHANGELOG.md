@@ -12,6 +12,14 @@ closure and must not be used to revise 0.2.0 artifacts.
 
 ### Added
 
+- Make normal installation media identity-free: Debian Installer now asks for
+  hostname, full name, account name, and a concealed twice-entered password.
+  Automated VM/CI media is an explicitly separate profile with protected hash
+  or generated one-time credential inputs and no plaintext CLI password.
+- Record the Debian Installer-created account and resolve provisioning from
+  that root-owned record, with a unique uid-1000 account accepted only as the
+  legacy fallback. Account names use Debian's restrictive policy everywhere
+  they reach autologin, AccountsService, paths, or sudoers.
 - Declare matching fresh-install and standalone-provisioning prerequisites for
   common compression formats, read-only hardware discovery, storage and bus
   inspection, thermal sensors, and `linux-perf` qualification.
@@ -26,6 +34,13 @@ closure and must not be used to revise 0.2.0 artifacts.
 - Complete and qualify the interactive installer, Debian/Kilix engine refresh,
   system-monitor and model-sizing contracts, and shared lazy-install behavior
   before freezing the independent 0.2.1 closure.
+
+### Fixed
+
+- Contain the 0.2.0 starter credential during upgrade without changing local
+  identity or password state. If the historical hash remains, password-based
+  SSH is disabled for that account only through a validated transactional
+  drop-in; already-hardened accounts and nonmatching SSH policy are untouched.
 
 ## [0.2.0] — 2026-08-19
 

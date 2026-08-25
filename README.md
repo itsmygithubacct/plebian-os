@@ -322,22 +322,18 @@ checkout stays clean. An explicit ISO output argument is always honored, so a
 named release ISO can remain at its deliberate release location. Strict release
 builds default to `plebian-os-<version>-amd64.iso`.
 
-Install it like normal Debian; the first boot pulls everything and comes up as
-Pleb. The release login is **username `pleb`, password `plebian`**, so the
-offline image is usable out of the box; it ships no ssh-server, and the desktop
-persistently prompts for the one-time transition to a new password. The release
-manifest makes that policy explicit:
+Install it like normal Debian; Debian Installer asks for hostname, full name,
+username, and a concealed password twice. The normal image contains no shared
+identity or known credential, keeps root login disabled, and ships no SSH
+server. First boot records the account selected by the installer, pulls the
+coordinated stack, and comes up as Pleb.
 
-```sh
-IMAGE_PASSWORD=plebian
-RANDOM_PASSWORD=0
-```
-
-Set `RANDOM_PASSWORD=1` in an image config to ignore `IMAGE_PASSWORD`, generate
-a strong one-time password, and print it during the build. Python builders also
-accept `--password`, which takes precedence. Their legacy `--yes` behavior still
-generates a password when neither config key is present. Any builder path that
-enables SSH refuses the shipped password.
+Automated VM/CI media is a separate, non-publishable profile. It requires an
+explicit username and hostname plus either a crypt hash or password supplied
+through an owner-only mode-0600 file. The acceptance harness can instead
+generate a one-time password internally; it never prints or exports the secret
+and expires it after verification. The old `IMAGE_PASSWORD`,
+`RANDOM_PASSWORD`, and plaintext `--password` interfaces are rejected.
 
 The remaster brands the shared BIOS/UEFI splash, every normal and accessible
 GRUB theme, the BIOS menu title, and both graphical-installer banners from
@@ -351,16 +347,17 @@ builds the (isohybrid) ISO, and flashes it to the stick:
 ```sh
 build/make-usb.sh --list                       # find your USB device
 build/build_usb_image.py --device /dev/sdX     # safest physical USB flow
-build/make-usb.sh --device /dev/sdX            # shell flow; ships default pleb/plebian creds
+build/make-usb.sh --device /dev/sdX            # shell flow; installer asks for identity
 build/make-usb.sh --device /dev/sdX --dry-run  # preview, write nothing
 build/make-usb.sh                              # just build the ISO (no --device)
 build/make-usb.sh --netinst local.iso --device /dev/sdX   # use a local netinst
 ```
 
-The Python builder asks for credentials and, by default, leaves target-disk
-selection to the Debian installer on physical USB boots. The shell/remaster path
-does the same unless `--unattended-disk` or `PLEBIAN_OS_UNATTENDED_DISK=1` is
-set. Both flashers refuse partitions and every disk beneath critical filesystems
+Both builders leave identity and target-disk selection to Debian Installer on
+normal physical USB boots. A deliberately separate
+`build_usb_image.py --unattended-profile` accepts protected CI/lab identity
+inputs; unattended disk and SSH flags require that profile. Both flashers refuse
+partitions and every disk beneath critical filesystems
 or active swap (including multi-disk RAID/device-mapper stacks), show what they
 will erase, and make you retype the device path. A target is admitted normally
 when the kernel reports `RM=1`, `TRAN=usb`, or `HOTPLUG=1`, covering USB sticks

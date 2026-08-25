@@ -49,6 +49,29 @@ source refs, the Debian snapshot and installer input, the Kilix engine and Go
 pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
 one reviewed target closure; mixing old and new release pins is unsupported.
 
+### The 0.2.0 shared-credential transition
+
+The 0.2.0 image created the fixed `pleb` account with a documented starter
+password. A 0.2.0-to-0.2.1 update must preserve the account name, password hash,
+hostname, home ownership, autologin choice, and every user file; it never asks
+the installer identity questions again and never rewrites the password.
+
+During the OS-layer transaction, 0.2.1 compares the installed hash with the
+historical starter password through `crypt(3)`. If it still matches and an
+OpenSSH server is installed, the updater writes one root-owned OpenSSH drop-in
+that disables password and keyboard-interactive authentication for that user
+only. Public-key access and every other account retain their prior policy, and
+the local desktop password-change warning remains available. Changing the
+password through that warning removes the exact managed drop-in and reloads
+OpenSSH; a different file at that path is never replaced or removed.
+
+If the account was already hardened, remote policy is left untouched. Fresh
+0.2.1 installs carry a root-owned identity-profile record and do not install
+the legacy helper or its narrow sudo grant. The updater treats a malformed
+identity record, ambiguous root-run legacy account, unsafe SSH path, invalid
+effective SSH policy, or reload failure as an update failure. Its outer
+transaction restores both the prior drop-in state and the running SSH policy.
+
 ## Failure and rollback contract
 
 Before its first mutation, the updater must snapshot the selected source

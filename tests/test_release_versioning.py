@@ -433,10 +433,10 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn(provenance_hash, notes)
         self.assertIn("The published tags are not moved", provenance_text)
 
-    def test_release_manifest_makes_default_login_explicit(self):
+    def test_release_manifest_omits_the_retired_shared_login(self):
         manifest = self.manifest
-        self.assertIn("\nIMAGE_PASSWORD=plebian\n", manifest)
-        self.assertIn("\nRANDOM_PASSWORD=0\n", manifest)
+        self.assertNotRegex(manifest, r"(?m)^IMAGE_PASSWORD=")
+        self.assertNotRegex(manifest, r"(?m)^RANDOM_PASSWORD=")
 
     def test_acceptance_binds_instrumented_image_to_clean_candidate(self):
         source = (ROOT / "build" / "acceptance-vm.sh").read_text()
@@ -450,8 +450,11 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn('PLEBIAN_OS_REF="$candidate_commit"', source)
         self.assertIn('PLEBIAN_OS_RELEASE_MODE=0', source)
         self.assertIn('PLEBIAN_OS_RELEASE=', source)
-        self.assertIn('IMAGE_PASSWORD=', source)
-        self.assertIn('RANDOM_PASSWORD=1', source)
+        self.assertIn('unset IMAGE_PASSWORD RANDOM_PASSWORD', source)
+        self.assertIn('--generate-one-time-password', source)
+        self.assertIn('--sudo-nopasswd', source)
+        self.assertIn('--username "$ACCEPTANCE_USER"', source)
+        self.assertIn('--hostname "$ACCEPTANCE_HOSTNAME"', source)
         self.assertIn('PLEBIAN_OS_VERIFY_CATALOG_BUILDS=1', source)
         self.assertIn('PLEBIAN_OS_VERIFY_UPDATE_ROLLBACK=1', source)
         self.assertIn('PLEBIAN_OS_VERIFY_SUCCESSFUL_UPDATE=1', source)
@@ -485,8 +488,11 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertNotIn('. "$1"', source)
         self.assertIn("firmwares=(bios efi)", source)
         self.assertIn('--firmware "$firmware"', source)
+        self.assertIn("--interactive-installer", source)
         self.assertIn("--no-wait --no-verify", source)
         self.assertIn('--report "$report"', source)
+        self.assertNotIn("--password plebian", source)
+        self.assertIn("manifest must omit retired key", source)
 
 
 if __name__ == "__main__":

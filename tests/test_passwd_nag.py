@@ -1,9 +1,9 @@
-"""The default-password nag plumbing: the plebian-os-passwd helper's real
-check logic (against a shadow fixture), its set-validation, and the provisioner
-+ staging that install it with a scoped NOPASSWD sudoers rule."""
+"""Legacy 0.2.0 credential containment and the local transition helper."""
 import ctypes
 import ctypes.util
+import contextlib
 import importlib.util
+import io
 import os
 import tempfile
 import unittest
@@ -36,6 +36,79 @@ def _crypt(word, setting):
     if setting is None:                       # generate a fresh yescrypt salt
         setting = lib.crypt_gensalt(b"$y$", 0, os.urandom(16), 16).decode()
     return lib.crypt(word.encode(), setting.encode()).decode()
+
+
+@contextlib.contextmanager
+def _legacy_upgrade_fixture(password, user="operator"):
+    """A nonprivileged shadow/SSH fixture plus identity state that must survive."""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        ssh = root / "ssh"
+        ssh.mkdir(mode=0o755)
+        sshd_config = ssh / "sshd_config"
+        sshd_config.write_text(
+            "Include sshd_config.d/*.conf\n"
+            "PasswordAuthentication yes\n"
+            "KbdInteractiveAuthentication yes\n"
+        )
+        sshd_config.chmod(0o644)
+        shadow = root / "shadow"
+        shadow.write_text(
+            f"root:*:1::::::\n{user}:{_crypt(password, None)}:20000:0:99999:7:::\n"
+        )
+        hostname = root / "hostname"
+        hostname.write_text("kept-host\n")
+        autologin = root / "autologin.conf"
+        autologin.write_text(f"autologin-user={user}\n")
+        home = root / "home" / user
+        home.mkdir(parents=True, mode=0o750)
+        sentinel = home / "sentinel"
+        sentinel.write_text("keep\n")
+        preserved = {
+            "shadow": shadow.read_bytes(),
+            "hostname": hostname.read_bytes(),
+            "autologin": autologin.read_bytes(),
+            "home_uid": home.stat().st_uid,
+            "home_mode": home.stat().st_mode,
+            "sentinel": sentinel.read_bytes(),
+        }
+        old_shadow = os.environ.get("PLEBIAN_OS_SHADOW")
+        old_ssh = os.environ.get("PLEBIAN_OS_SSH_CONFIG_ROOT")
+        os.environ["PLEBIAN_OS_SHADOW"] = str(shadow)
+        os.environ["PLEBIAN_OS_SSH_CONFIG_ROOT"] = str(ssh)
+        try:
+            yield _load_helper(), {
+                "root": root,
+                "ssh": ssh,
+                "dropin": ssh / "sshd_config.d" /
+                          "50-plebian-os-legacy-default.conf",
+                "shadow": shadow,
+                "hostname": hostname,
+                "autologin": autologin,
+                "home": home,
+                "sentinel": sentinel,
+                "preserved": preserved,
+                "user": user,
+            }
+        finally:
+            if old_shadow is None:
+                os.environ.pop("PLEBIAN_OS_SHADOW", None)
+            else:
+                os.environ["PLEBIAN_OS_SHADOW"] = old_shadow
+            if old_ssh is None:
+                os.environ.pop("PLEBIAN_OS_SSH_CONFIG_ROOT", None)
+            else:
+                os.environ["PLEBIAN_OS_SSH_CONFIG_ROOT"] = old_ssh
+
+
+def _assert_identity_preserved(testcase, fixture):
+    preserved = fixture["preserved"]
+    testcase.assertEqual(fixture["shadow"].read_bytes(), preserved["shadow"])
+    testcase.assertEqual(fixture["hostname"].read_bytes(), preserved["hostname"])
+    testcase.assertEqual(fixture["autologin"].read_bytes(), preserved["autologin"])
+    testcase.assertEqual(fixture["home"].stat().st_uid, preserved["home_uid"])
+    testcase.assertEqual(fixture["home"].stat().st_mode, preserved["home_mode"])
+    testcase.assertEqual(fixture["sentinel"].read_bytes(), preserved["sentinel"])
 
 
 class PasswdHelperCheckTests(unittest.TestCase):
@@ -174,6 +247,71 @@ class TargetUserTests(unittest.TestCase):
             self._target("")
         self.assertEqual(e.exception.code, 2)
 
+    def test_non_debian_account_names_are_refused(self):
+        for user in ("Upper", "_service", "-option", "name;command",
+                     "a" * 33, "name\nMatch all"):
+            with self.subTest(user=user), self.assertRaises(SystemExit) as e:
+                self._target(user)
+            self.assertEqual(e.exception.code, 2)
+
+
+class LegacyRemotePolicyTests(unittest.TestCase):
+    def test_default_hash_disables_remote_password_for_only_that_user(self):
+        with _legacy_upgrade_fixture("plebian") as (mod, fixture):
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                self.assertEqual(mod.cmd_reconcile_remote(fixture["user"]), 0)
+            expected = mod.remote_policy(fixture["user"])
+            self.assertEqual(fixture["dropin"].read_bytes(), expected)
+            self.assertEqual(fixture["dropin"].stat().st_mode & 0o777, 0o644)
+            policy = expected.decode()
+            self.assertIn(f"Match User {fixture['user']}\n", policy)
+            self.assertIn("PasswordAuthentication no\n", policy)
+            self.assertIn("KbdInteractiveAuthentication no\n", policy)
+            self.assertTrue(policy.endswith("Match all\n"))
+            self.assertNotIn(mod.DEFAULT_PASSWORD, policy)
+            # Ignore the helper's own project-name prefix (`plebian-os-*`);
+            # the status payload must not disclose the historical password.
+            status_payload = output.getvalue().partition(": ")[2]
+            self.assertNotIn(mod.DEFAULT_PASSWORD, status_payload)
+            _assert_identity_preserved(self, fixture)
+
+    def test_changed_hash_leaves_remote_policy_untouched(self):
+        with _legacy_upgrade_fixture("owner-secret") as (mod, fixture):
+            before = fixture["ssh"].joinpath("sshd_config").read_bytes()
+            self.assertEqual(mod.cmd_reconcile_remote(fixture["user"]), 0)
+            self.assertFalse(fixture["dropin"].exists())
+            self.assertEqual(
+                fixture["ssh"].joinpath("sshd_config").read_bytes(), before)
+            _assert_identity_preserved(self, fixture)
+
+    def test_changed_hash_removes_only_the_exact_managed_policy(self):
+        with _legacy_upgrade_fixture("owner-secret") as (mod, fixture):
+            fixture["dropin"].parent.mkdir(mode=0o755)
+            fixture["dropin"].write_bytes(mod.remote_policy(fixture["user"]))
+            fixture["dropin"].chmod(0o644)
+            self.assertEqual(mod.cmd_reconcile_remote(fixture["user"]), 0)
+            self.assertFalse(fixture["dropin"].exists())
+            _assert_identity_preserved(self, fixture)
+
+    def test_nonmatching_dropin_is_never_replaced_or_removed(self):
+        for password in ("plebian", "owner-secret"):
+            with self.subTest(password=password):
+                with _legacy_upgrade_fixture(password) as (mod, fixture):
+                    fixture["dropin"].parent.mkdir(mode=0o755)
+                    foreign = b"# operator policy\nPasswordAuthentication no\n"
+                    fixture["dropin"].write_bytes(foreign)
+                    fixture["dropin"].chmod(0o644)
+                    if password == "plebian":
+                        with self.assertRaises(SystemExit) as error:
+                            mod.cmd_reconcile_remote(fixture["user"])
+                        self.assertEqual(error.exception.code, 2)
+                    else:
+                        self.assertEqual(
+                            mod.cmd_reconcile_remote(fixture["user"]), 0)
+                    self.assertEqual(fixture["dropin"].read_bytes(), foreign)
+                    _assert_identity_preserved(self, fixture)
+
 
 class PasswdHelperSetSuccessTests(unittest.TestCase):
     """cmd_set's success path must format exactly '<user>:<newpw>\\n' for chpasswd
@@ -212,9 +350,12 @@ class PasswdHelperSetSuccessTests(unittest.TestCase):
 
 
 class ProvisioningPlumbingTests(unittest.TestCase):
-    def test_provisioner_installs_helper_and_scoped_sudoers(self):
+    def test_provisioner_installs_bridge_only_for_legacy_identity(self):
         p = _read("provision", "plebian-os-provision.sh")
         self.assertIn("install_passwd_nag", p)
+        self.assertIn("has_fresh_identity_profile", p)
+        self.assertIn("fresh identity profile has no legacy password transition", p)
+        self.assertIn('rm -f -- "$rule" "$dst"', p)
         self.assertIn("/usr/local/sbin/plebian-os-passwd", p)
         self.assertIn("/etc/sudoers.d/plebian-os-passwd", p)
         # scoped to exactly the one command, not general passwordless sudo
@@ -231,11 +372,32 @@ class ProvisioningPlumbingTests(unittest.TestCase):
         self.assertLess(p.index(check), p.index(write),
                         "shadow state must be checked before writing the grant")
 
-    def test_helper_staged_by_remaster_and_preseed(self):
-        self.assertIn("plebian-os-passwd", _read("build", "remaster-iso.sh"))
+    def test_fresh_media_does_not_stage_legacy_helper(self):
+        remaster = _read("build", "remaster-iso.sh")
+        self.assertNotIn(
+            'cp "$HERE/provision/plebian-os-passwd"', remaster)
         preseed_le = _read("preseed", "preseed.cfg")
-        self.assertIn("cp /cdrom/plebian-os/plebian-os-passwd "
-                      "/target/usr/local/sbin/plebian-os-passwd", preseed_le)
+        self.assertNotIn("cp /cdrom/plebian-os/plebian-os-passwd", preseed_le)
+        self.assertIn("plebian-os-passwd", _read(
+            "provision", "plebian-os-update.sh"))
+
+    def test_updater_reconciles_remote_policy_inside_outer_transaction(self):
+        update = _read("provision", "plebian-os-update.sh")
+        production = update[update.rindex(
+            "# Capture the complete old runtime boundary"):]
+        self.assertLess(
+            production.index("self_update_os_layer\n"),
+            production.index("reconcile_legacy_remote_login\n"),
+        )
+        self.assertLess(
+            production.index("reconcile_legacy_remote_login\n"),
+            production.index("test_fail_after_boundary os-layer\n"),
+        )
+        path = "/etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf"
+        self.assertEqual(update.count(path), 2)
+        self.assertEqual(update.count("    /etc/ssh/sshd_config.d\n"), 2)
+        self.assertIn("fresh identity profile has no legacy remote credential", update)
+        self.assertIn("systemctl reload ssh.service", update)
 
     def test_helper_reads_new_password_from_stdin_not_argv(self):
         # the new password must never appear on the command line (ps-visible)

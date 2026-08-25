@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
-"""plebian-os-passwd — check / change the invoking user's login password.
+"""plebian-os-passwd — contain the legacy 0.2.0 default credential.
 
-Plebian-OS ships a default password ('plebian') so a fresh install is usable
-out of the box; the Kilix 95 desktop then prompts the owner to change it. That
-desktop runs as the unprivileged owner, which cannot read /etc/shadow — so the
-provisioner installs this helper together with a NARROW passwordless sudoers
+Fresh 0.2.1 installs do not receive this transition path. On an upgraded system
+whose account still has the historical default hash, the helper keeps the local
+password-change prompt available and disables remote SSH password login for
+that account only. The desktop runs unprivileged and cannot read /etc/shadow,
+so legacy provisioning installs this helper together with a NARROW passwordless sudoers
 rule (/etc/sudoers.d/plebian-os-passwd) that allows exactly this one command,
 without granting general passwordless sudo:
 
     sudo plebian-os-passwd check   exit 0 if the user's password IS 'plebian',
                                    1 if it is something else / locked,
                                    2 on error (can't tell)
-    sudo plebian-os-passwd set     while the password is still 'plebian', read
+    sudo plebian-os-passwd set     while the password is still the legacy value, read
                                    ONE line (the new password) from stdin and set
                                    it via chpasswd; then retire the sudoers grant.
                                    Refuses later password resets.
@@ -25,8 +26,12 @@ import ctypes
 import ctypes.util
 import fcntl
 import os
+import pathlib
+import re
+import stat
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 
 DEFAULT_PASSWORD = "plebian"
@@ -39,6 +44,12 @@ LOCK_PATH = "/run/plebian-os-passwd.lock"
 # ever misconfigured to pass the variable through.
 SHADOW_PATH = ("/etc/shadow" if os.geteuid() == 0
                else os.environ.get("PLEBIAN_OS_SHADOW", "/etc/shadow"))
+SSH_CONFIG_ROOT = pathlib.Path(
+    "/etc/ssh" if os.geteuid() == 0
+    else os.environ.get("PLEBIAN_OS_SSH_CONFIG_ROOT", "/etc/ssh")
+)
+SSH_DROPIN_NAME = "50-plebian-os-legacy-default.conf"
+ACCOUNT_RE = re.compile(r"^[a-z][-a-z0-9_]{0,31}$")
 
 
 def die(msg):
@@ -50,6 +61,8 @@ def target_user():
     user = os.environ.get("SUDO_USER") or ""
     if not user or user == "root":
         die("must be run through sudo as a normal user")
+    if not ACCOUNT_RE.fullmatch(user):
+        die("SUDO_USER violates Debian adduser policy")
     return user
 
 
@@ -146,6 +159,228 @@ def cmd_set(user):
         if p.returncode != 0:
             die(f"chpasswd failed: {(p.stderr or p.stdout).strip()}")
         revoke_sudoers_grant()
+        if os.geteuid() == 0:
+            restore_remote_password_policy(user)
+    return 0
+
+
+def remote_policy(user):
+    if not ACCOUNT_RE.fullmatch(user):
+        die("username violates Debian adduser policy")
+    return (
+        "# Managed by Plebian-OS for the legacy 0.2.0 default credential.\n"
+        f"Match User {user}\n"
+        "    PasswordAuthentication no\n"
+        "    KbdInteractiveAuthentication no\n"
+        "Match all\n"
+    ).encode("utf-8")
+
+
+def _expected_owner():
+    return 0 if os.geteuid() == 0 else os.geteuid()
+
+
+def _safe_regular(path, *, mode=None):
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        die(f"cannot inspect {path}: {exc}")
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        die(f"refusing unsafe SSH configuration path: {path}")
+    if metadata.st_uid != _expected_owner() or metadata.st_nlink != 1:
+        die(f"SSH configuration must have the expected owner and one hard link: {path}")
+    if metadata.st_mode & 0o022:
+        die(f"SSH configuration must not be group/world writable: {path}")
+    if mode is not None and stat.S_IMODE(metadata.st_mode) != mode:
+        die(f"SSH configuration has the wrong mode: {path}")
+    return True
+
+
+def _safe_ssh_root():
+    root = SSH_CONFIG_ROOT
+    config = root / "sshd_config"
+    if not root.exists() and not root.is_symlink():
+        return False
+    try:
+        metadata = root.lstat()
+    except OSError as exc:
+        die(f"cannot inspect SSH configuration directory: {exc}")
+    if (stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != _expected_owner() or metadata.st_mode & 0o022):
+        die(f"refusing unsafe SSH configuration directory: {root}")
+    if not config.exists() and not config.is_symlink():
+        return False
+    _safe_regular(config)
+    return True
+
+
+def _production_sshd():
+    if SSH_CONFIG_ROOT != pathlib.Path("/etc/ssh"):
+        return None
+    sshd = pathlib.Path("/usr/sbin/sshd")
+    if not sshd.is_file():
+        return None
+    return sshd
+
+
+def _effective_password_methods(sshd, user):
+    check = subprocess.run(
+        [str(sshd), "-T", "-C",
+         f"user={user},host=localhost,addr=127.0.0.1",
+         "-f", "/etc/ssh/sshd_config"],
+        capture_output=True, text=True,
+    )
+    if check.returncode != 0:
+        detail = (check.stderr or check.stdout).strip()
+        raise RuntimeError(f"sshd effective-policy validation failed: {detail}")
+    values = {}
+    for line in check.stdout.splitlines():
+        key, separator, value = line.partition(" ")
+        if separator:
+            values[key.lower()] = value.strip().lower()
+    required = ("passwordauthentication", "kbdinteractiveauthentication")
+    if any(key not in values for key in required):
+        raise RuntimeError("sshd effective policy omitted password authentication keys")
+    return tuple(values[key] for key in required)
+
+
+def _restore_policy_file(path, previous):
+    if previous is None:
+        path.unlink(missing_ok=True)
+    else:
+        _atomic_policy_write(path, previous)
+
+
+def _reload_ssh_after_validation(previous, *, user=None, other_before=None):
+    """Validate effective production policy, restoring the file on any error."""
+    sshd = _production_sshd()
+    if sshd is None:
+        return
+    path = SSH_CONFIG_ROOT / "sshd_config.d" / SSH_DROPIN_NAME
+    failure = ""
+    syntax = subprocess.run(
+        [str(sshd), "-t", "-f", "/etc/ssh/sshd_config"],
+        capture_output=True, text=True,
+    )
+    if syntax.returncode != 0:
+        detail = (syntax.stderr or syntax.stdout).strip()
+        failure = f"generated SSH policy failed sshd validation: {detail}"
+    elif user is not None:
+        try:
+            target_methods = _effective_password_methods(sshd, user)
+            if target_methods != ("no", "no"):
+                failure = (
+                    "generated SSH policy is not effective for the legacy account "
+                    f"(password={target_methods[0]}, keyboard-interactive={target_methods[1]})"
+                )
+            elif other_before is not None:
+                other_user, before_methods = other_before
+                after_methods = _effective_password_methods(sshd, other_user)
+                if after_methods != before_methods:
+                    failure = "generated SSH policy changed a nonmatching account"
+        except RuntimeError as exc:
+            failure = str(exc)
+    if failure:
+        _restore_policy_file(path, previous)
+        die(failure)
+
+    active = subprocess.run(
+        ["systemctl", "is-active", "--quiet", "ssh.service"],
+        capture_output=True,
+    )
+    if active.returncode == 0:
+        reload_result = subprocess.run(
+            ["systemctl", "reload", "ssh.service"], capture_output=True, text=True)
+        if reload_result.returncode != 0:
+            _restore_policy_file(path, previous)
+            # The failed reload normally leaves the daemon on its old policy.
+            # Best-effort a second reload after restoring the old disk state in
+            # case systemd had already delivered the first reload signal.
+            subprocess.run(
+                ["systemctl", "reload", "ssh.service"],
+                capture_output=True, text=True,
+            )
+            die("SSH policy was restored because the active service could not be reloaded")
+
+
+def _atomic_policy_write(path, payload):
+    path.parent.mkdir(mode=0o755, parents=False, exist_ok=True)
+    parent = path.parent.lstat()
+    if (stat.S_ISLNK(parent.st_mode) or not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid != _expected_owner() or parent.st_mode & 0o022):
+        die(f"refusing unsafe SSH drop-in directory: {path.parent}")
+    fd, raw = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = pathlib.Path(raw)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o644)
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def disable_remote_password_login(user):
+    if not _safe_ssh_root():
+        return False
+    path = SSH_CONFIG_ROOT / "sshd_config.d" / SSH_DROPIN_NAME
+    expected = remote_policy(user)
+    previous = None
+    other_before = None
+    sshd = _production_sshd()
+    if sshd is not None:
+        try:
+            other_before = ("root", _effective_password_methods(sshd, "root"))
+        except RuntimeError as exc:
+            die(str(exc))
+    if path.exists() or path.is_symlink():
+        _safe_regular(path, mode=0o644)
+        previous = path.read_bytes()
+        if previous != expected:
+            die(f"refusing to replace nonmatching SSH drop-in: {path}")
+        _reload_ssh_after_validation(
+            previous, user=user, other_before=other_before)
+        return True
+    _atomic_policy_write(path, expected)
+    _reload_ssh_after_validation(
+        previous, user=user, other_before=other_before)
+    return True
+
+
+def restore_remote_password_policy(user):
+    path = SSH_CONFIG_ROOT / "sshd_config.d" / SSH_DROPIN_NAME
+    if not path.exists() and not path.is_symlink():
+        return False
+    _safe_regular(path, mode=0o644)
+    expected = remote_policy(user)
+    current = path.read_bytes()
+    if current != expected:
+        print(f"plebian-os-passwd: warning: leaving nonmatching SSH drop-in untouched: {path}",
+              file=sys.stderr)
+        return False
+    path.unlink()
+    _reload_ssh_after_validation(previous=current)
+    return True
+
+
+def cmd_reconcile_remote(user):
+    state = cmd_check(user)
+    if state == 0:
+        if disable_remote_password_login(user):
+            print(f"plebian-os-passwd: remote password login disabled for {user}")
+        else:
+            print("plebian-os-passwd: no SSH server configuration is installed")
+    else:
+        restore_remote_password_policy(user)
     return 0
 
 
@@ -153,10 +388,16 @@ def main():
     if os.geteuid() != 0:
         die("must run as root (through the sudoers rule)")
     action = sys.argv[1] if len(sys.argv) > 1 else ""
-    if action not in ("check", "set"):
-        die("usage: plebian-os-passwd check|set")
+    if action not in ("check", "set", "reconcile-remote"):
+        die("usage: plebian-os-passwd check|set|reconcile-remote")
     user = target_user()
-    sys.exit(cmd_check(user) if action == "check" else cmd_set(user))
+    if action == "check":
+        status = cmd_check(user)
+    elif action == "set":
+        status = cmd_set(user)
+    else:
+        status = cmd_reconcile_remote(user)
+    sys.exit(status)
 
 
 if __name__ == "__main__":

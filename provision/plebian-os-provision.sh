@@ -325,8 +325,10 @@ DESKTOP="${PLEBIAN_OS_DESKTOP:-1}"             # 1 = desktop provider in Kilix p
 DESKTOP_EXPLICIT="${PLEBIAN_OS_DESKTOP:+1}"
 PLEB_WM="${PLEB_WM:-}"                         # empty = keep an existing pin, else openbox
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-}"     # empty = keep an existing pin, else 1
-TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = first regular (uid>=1000) user
+TARGET_USER="${PLEBIAN_OS_USER:-}"             # empty = DI record, then unique regular-user fallback
 TARGET_USER_EXPLICIT="${PLEBIAN_OS_USER:+1}"
+INSTALLED_USER_RECORD="${PLEBIAN_OS_INSTALLED_USER_RECORD:-/etc/plebian-os/installed-user}"
+IDENTITY_PROFILE_RECORD="${PLEBIAN_OS_IDENTITY_PROFILE_RECORD:-/etc/plebian-os/identity-profile}"
 DRY_RUN=0
 PLEB_BRANCH_EXPLICIT=0                         # 1 = --branch given on the command line
 
@@ -377,7 +379,7 @@ usage() {
     cat <<EOF
 
 Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--desktop|--no-desktop] [--branch REF] [--dry-run]
-  --user NAME    provision for this user (default: first uid>=1000 account)
+  --user NAME    provision for this user (default: recorded Debian Installer account)
   --kiosk        enable autologin straight into Pleb (no greeter)
   --nopasswd-sudo grant the target user passwordless sudo
   --desktop      load the configured desktop provider in Kilix page 1 (default)
@@ -526,7 +528,7 @@ PLEBIAN_OS_FIRSTBOOT_ENV="${PLEBIAN_OS_FIRSTBOOT_ENV:-/etc/default/plebian-os}"
 
 # key, the variable it feeds, and the only values accepted for it.
 PERSISTED_POLICY=(
-    "PLEBIAN_OS_USER"               "TARGET_USER"            '^[a-z_][a-z0-9_-]{0,31}$'
+    "PLEBIAN_OS_USER"               "TARGET_USER"            '^[a-z][-a-z0-9_]{0,31}$'
     "PLEBIAN_OS_KIOSK"              "KIOSK"                  '^[01]$'
     "PLEBIAN_OS_NOPASSWD_SUDO"      "NOPASSWD_SUDO"          '^[01]$'
     "PLEBIAN_OS_DESKTOP"            "DESKTOP"                '^[01]$'
@@ -626,6 +628,8 @@ as_user() {
 
 validate_target_user() {
     local entry shell home_uid
+    [[ "$TARGET_USER" =~ ^[a-z][-a-z0-9_]{0,31}$ ]] \
+        || die "target username must match Debian adduser policy: $TARGET_USER"
     entry="$(getent passwd "$TARGET_USER" 2>/dev/null)" \
         || die "no such user: $TARGET_USER"
     IFS=: read -r _ _ TARGET_UID TARGET_GID _ USER_HOME shell <<<"$entry"
@@ -2970,6 +2974,29 @@ trap - EXIT
     fi
 }
 
+# Return success only for a securely recorded fresh 0.2.1 identity profile.
+# Absence identifies a legacy installation; malformed or unsafe state is never
+# interpreted as legacy because doing so would install a privileged bridge.
+has_fresh_identity_profile() {
+    local metadata lines profile
+    [ -e "$IDENTITY_PROFILE_RECORD" ] || [ -L "$IDENTITY_PROFILE_RECORD" ] || return 1
+    [ -f "$IDENTITY_PROFILE_RECORD" ] && [ ! -L "$IDENTITY_PROFILE_RECORD" ] \
+        || die "identity-profile record is not a safe regular file"
+    metadata="$(stat -c '%u:%a:%h' -- "$IDENTITY_PROFILE_RECORD" 2>/dev/null)" \
+        || die "could not inspect identity-profile record"
+    [ "$metadata" = 0:644:1 ] \
+        || die "identity-profile record must be root-owned mode 0644 with one link"
+    lines="$(wc -l < "$IDENTITY_PROFILE_RECORD")" \
+        || die "could not read identity-profile record"
+    [ "$lines" = 1 ] || die "identity-profile record must contain exactly one line"
+    IFS= read -r profile < "$IDENTITY_PROFILE_RECORD" \
+        || die "identity-profile record is empty"
+    case "$profile" in
+        interactive-v1|automated-v1) return 0 ;;
+        *) die "unknown identity-profile record: $profile" ;;
+    esac
+}
+
 # Install the narrow password check/change helper (plebian-os-passwd) and a
 # SCOPED NOPASSWD sudoers rule for the target user, so the Kilix 95 desktop —
 # running unprivileged — can detect the default password ('plebian') and let
@@ -2979,6 +3006,15 @@ install_passwd_nag() {
     local dst=/usr/local/sbin/plebian-os-passwd
     local rule=/etc/sudoers.d/plebian-os-passwd
     local src=""
+    if has_fresh_identity_profile; then
+        log "fresh identity profile has no legacy password transition"
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + remove any legacy password helper/grant"
+        else
+            rm -f -- "$rule" "$dst"
+        fi
+        return 0
+    fi
     for cand in "$SELF_DIR/plebian-os-passwd" "$dst"; do
         [ -r "$cand" ] && src="$cand" && break
     done
@@ -3790,14 +3826,55 @@ validate_release_inputs
 
 [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "must run as root (try: sudo $0)"
 
-# ── pick the target user ─────────────────────────────────────────────────────
-pick_user() {
-    # the account d-i created: lowest uid >= 1000 with a real shell and home
-    getent passwd | awk -F: '$3>=1000 && $3<65534 && $7!~/(nologin|false)$/ {print $3":"$1}' \
-        | sort -n | head -1 | cut -d: -f2
+# ── resolve the target user ──────────────────────────────────────────────────
+read_recorded_user() {
+    local metadata value lines
+    [ -e "$INSTALLED_USER_RECORD" ] || [ -L "$INSTALLED_USER_RECORD" ] || return 1
+    [ -f "$INSTALLED_USER_RECORD" ] && [ ! -L "$INSTALLED_USER_RECORD" ] \
+        || die "installed-user record is not a safe regular file: $INSTALLED_USER_RECORD"
+    metadata="$(stat -c '%u:%a:%h' -- "$INSTALLED_USER_RECORD" 2>/dev/null)" \
+        || die "could not inspect installed-user record: $INSTALLED_USER_RECORD"
+    [ "$metadata" = 0:644:1 ] \
+        || die "installed-user record must be root-owned mode 0644 with one link: $INSTALLED_USER_RECORD"
+    lines="$(wc -l < "$INSTALLED_USER_RECORD")" \
+        || die "could not read installed-user record: $INSTALLED_USER_RECORD"
+    [ "$lines" = 1 ] \
+        || die "installed-user record must contain exactly one line"
+    IFS= read -r value < "$INSTALLED_USER_RECORD" \
+        || die "installed-user record is empty"
+    [[ "$value" =~ ^[a-z][-a-z0-9_]{0,31}$ ]] \
+        || die "installed-user record violates Debian adduser policy"
+    printf '%s\n' "$value"
 }
-[ -n "$TARGET_USER" ] || TARGET_USER="$(pick_user)"
-[ -n "$TARGET_USER" ] || die "no regular user found — create one, or pass --user"
+
+pick_unique_user() {
+    local -a candidates=()
+    local uid name
+    mapfile -t candidates < <(
+        getent passwd \
+            | awk -F: '$3>=1000 && $3<65534 && $6 ~ /^\// && $6!="/" && $6!="/root" && $7!~/(nologin|false)$/ {print $3 ":" $1}' \
+            | LC_ALL=C sort -n -u
+    )
+    case "${#candidates[@]}" in
+        0) die "no eligible regular user found — create one, or pass --user" ;;
+        1)
+            IFS=: read -r uid name <<<"${candidates[0]}"
+            [ "$uid" = 1000 ] \
+                || die "installed-user record absent and sole eligible user is uid $uid, not fallback uid 1000"
+            printf '%s\n' "$name"
+            ;;
+        *) die "multiple eligible regular users found; refusing to guess (pass --user)" ;;
+    esac
+}
+
+if [ -z "$TARGET_USER" ]; then
+    if [ -e "$INSTALLED_USER_RECORD" ] || [ -L "$INSTALLED_USER_RECORD" ]; then
+        TARGET_USER="$(read_recorded_user)"
+    else
+        TARGET_USER="$(pick_unique_user)"
+        warn "installed-user record absent; using the only eligible regular-user fallback"
+    fi
+fi
 validate_target_user
 GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$USER_HOME/.local/gpu_terminal/sources}"
 PLEB_DIR="${PLEB_DIR:-$GPU_TERMINAL_SOURCE_HOME/pleb}"

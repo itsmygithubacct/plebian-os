@@ -281,7 +281,6 @@ release_preflight() {
     for key in \
         PLEBIAN_OS_REF PLEBIAN_OS_NETINST_URL PLEBIAN_OS_NETINST_SHA256 \
         PLEBIAN_OS_APT_SNAPSHOT PLEB_REF KILIX_REF KILIX95_REF \
-        IMAGE_PASSWORD RANDOM_PASSWORD \
         KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
         PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
@@ -299,6 +298,16 @@ release_preflight() {
     validate_uv_release_closure
     validate_voice_release_closure
     validate_waydroid_release_closure
+    # A publishable image always uses the interactive identity profile. Secrets
+    # and identity selectors belong only to the separately labelled VM/CI
+    # derivative and must not be smuggled into a release through ambient state.
+    for key in IMAGE_PASSWORD RANDOM_PASSWORD PLEBIAN_OS_USER \
+        PLEBIAN_OS_TARGET_SOURCE_HOME PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME; do
+        [ -z "${!key:-}" ] || {
+            echo "release artifacts refuse $key (identity/credential input)" >&2
+            exit 1
+        }
+    done
     for key in PLEBIAN_OS_SSH_ENABLED PLEBIAN_OS_AUTOBOOT PLEBIAN_OS_UNATTENDED_DISK; do
         [ "${!key:-0}" != 1 ] || {
             echo "release artifacts refuse $key=1 (network/default-credential or unattended-erase risk)" >&2
@@ -319,10 +328,6 @@ release_preflight() {
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
         *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT" >&2; exit 1 ;;
-    esac
-    case "${RANDOM_PASSWORD,,}" in
-        0|no|false|off|1|yes|true|on) ;;
-        *) echo "invalid RANDOM_PASSWORD=$RANDOM_PASSWORD" >&2; exit 1 ;;
     esac
     actual_commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
     expected_commit="$(git -C "$HERE" rev-parse "${PLEBIAN_OS_REF}^{commit}" 2>/dev/null || true)"
@@ -388,19 +393,91 @@ else
     PRESEED="$HERE/preseed/preseed.cfg"
 fi
 [ -f "$PRESEED" ] || { echo "no such preseed: $PRESEED" >&2; exit 1; }
+for deprecated_credential_key in IMAGE_PASSWORD RANDOM_PASSWORD; do
+    [ -z "${!deprecated_credential_key+x}" ] || {
+        echo "$deprecated_credential_key is no longer accepted; use a protected automated-preseed credential input" >&2
+        exit 1
+    }
+done
+[ "${PLEBIAN_OS_RELEASE_MODE:-0}" != 1 ] || [ "$PRESEED_IS_CUSTOM" = 0 ] || {
+    echo "release artifacts refuse PLEBIAN_OS_PRESEED (automated identity profile)" >&2
+    exit 1
+}
 
 # Resolve the future guest's source/data layout independently from this build
-# host's cache and scratch paths. Python builders provide the same values
-# explicitly; a direct remaster derives them from the effective preseed user so
-# build-info.env and firstboot.env remain complete for the release path too.
+# host's cache and scratch paths. Normal media has no identity yet, so it emits
+# empty path fields for the provisioner to derive after Debian Installer records
+# the selected user. Only a deliberately custom automated preseed may carry an
+# identity and precomputed per-user paths.
 resolve_target_layout() {
     local configured_user="${PLEBIAN_OS_USER:-}" preseed_user target_home key
+    local fullname hostname crypted_count
+
+    if [ "$PRESEED_IS_CUSTOM" = 0 ]; then
+        PLEBIAN_OS_IDENTITY_PROFILE=interactive-v1
+        for key in netcfg/get_hostname passwd/user-fullname passwd/username \
+            passwd/user-password passwd/user-password-again \
+            passwd/user-password-crypted user-setup/allow-password-weak; do
+            ! grep -Eq "^[[:space:]]*d-i[[:space:]]+$key[[:space:]]" "$PRESEED" || {
+                echo "normal preseed must leave $key unanswered" >&2
+                exit 1
+            }
+        done
+        [ -z "$configured_user" ] || {
+            echo "interactive identity profile refuses PLEBIAN_OS_USER" >&2
+            exit 1
+        }
+        # Never inherit a live host session's per-user paths into normal media.
+        for key in PLEBIAN_OS_USER PLEBIAN_OS_TARGET_SOURCE_HOME \
+            PLEBIAN_OS_TARGET_GPU_TERMINAL_HOME GPU_TERMINAL_SOURCE_HOME \
+            GPU_TERMINAL_HOME GPU_TERMINAL_SETTINGS_FILE PLEBIAN_OS_DIR \
+            PLEB_DIR KILIX_DIR KILIX95_DIR KILIX_CAP_DIR \
+            KILIX_TUI_UTILS_DIR KILIX_LAND_DESKTOP_DIR PLEB_STORAGE_HOME \
+            PLEB_CONFIG_HOME PLEB_STATE_HOME PLEB_CACHE_HOME PLEB_SESSION_HOME \
+            PLEB_DATA_HOME KILIX_STORAGE_HOME KILIX_CONFIG_HOME \
+            KILIX_STATE_DIRECTORY KILIX_CACHE_HOME KILIX_SESSION_HOME \
+            KILIX_BUILD_DIRECTORY KILIX_DATA_HOME KILIX_DESKTOP_DIR \
+            KILIX_PREBUILT_HOME KILIX95_STORAGE_HOME KILIX95_CONFIG_HOME \
+            KILIX95_STATE_HOME KILIX95_CACHE_HOME KILIX95_SESSION_HOME \
+            KILIX95_DATA_HOME PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_SESSION_HOME; do
+            printf -v "$key" '%s' ''
+        done
+        return 0
+    fi
+
+    PLEBIAN_OS_IDENTITY_PROFILE=automated-v1
     preseed_user="$(sed -n \
         's/^d-i[[:space:]]\+passwd\/username[[:space:]]\+string[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*$/\1/p' \
         "$PRESEED" | tail -1)"
-    [[ "$preseed_user" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] \
+    fullname="$(sed -n \
+        's/^d-i[[:space:]]\+passwd\/user-fullname[[:space:]]\+string[[:space:]]\+\(.*[^[:space:]]\)[[:space:]]*$/\1/p' \
+        "$PRESEED" | tail -1)"
+    hostname="$(sed -n \
+        's/^d-i[[:space:]]\+netcfg\/get_hostname[[:space:]]\+string[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*$/\1/p' \
+        "$PRESEED" | tail -1)"
+    crypted_count="$(grep -Ec \
+        '^d-i[[:space:]]+passwd/user-password-crypted[[:space:]]+password[[:space:]]+[^[:space:]]+[[:space:]]*$' \
+        "$PRESEED" || true)"
+    [[ "$preseed_user" =~ ^[a-z][-a-z0-9_]{0,31}$ ]] \
         && [ "$preseed_user" != root ] || {
-        echo "could not resolve a safe regular target username for firstboot layout" >&2
+        echo "automated preseed requires one safe Debian regular username" >&2
+        exit 1
+    }
+    [ -n "$fullname" ] || {
+        echo "automated preseed requires passwd/user-fullname" >&2
+        exit 1
+    }
+    [[ "$hostname" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || {
+        echo "automated preseed requires one safe hostname label" >&2
+        exit 1
+    }
+    [ "$crypted_count" = 1 ] || {
+        echo "automated preseed requires exactly one crypted password answer" >&2
+        exit 1
+    }
+    ! grep -Eq '^[[:space:]]*d-i[[:space:]]+passwd/user-password(-again)?[[:space:]]+password[[:space:]]' \
+        "$PRESEED" || {
+        echo "automated preseed refuses plaintext password answers" >&2
         exit 1
     }
     if [ -n "$configured_user" ] && [ "$configured_user" != "$preseed_user" ]; then
@@ -569,6 +646,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         manifest_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
         manifest_kv PLEBIAN_OS_KIOSK "${PLEBIAN_OS_KIOSK:-0}"
+        manifest_kv PLEBIAN_OS_IDENTITY_PROFILE "$PLEBIAN_OS_IDENTITY_PROFILE"
         manifest_kv PLEBIAN_OS_USER "${PLEBIAN_OS_USER:-}"
         manifest_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
@@ -677,6 +755,7 @@ write_firstboot_env() {
         echo "# Generated by build/remaster-iso.sh. Read by plebian-os-firstboot.service."
         env_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
         env_kv PLEBIAN_OS_KIOSK "${PLEBIAN_OS_KIOSK:-0}"
+        env_kv PLEBIAN_OS_IDENTITY_PROFILE "$PLEBIAN_OS_IDENTITY_PROFILE"
         env_kv PLEBIAN_OS_USER "${PLEBIAN_OS_USER:-}"
         env_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
         env_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
@@ -1028,90 +1107,6 @@ configure_boot_menu_policy() {
 BUILD_PRESEED="$WORK/preseed.cfg"
 cp "$PRESEED" "$BUILD_PRESEED"
 
-apply_image_password_policy() {
-    local seed="$1" random_raw="${RANDOM_PASSWORD:-0}"
-    local image_password="${IMAGE_PASSWORD-plebian}" username password_hash
-
-    random_raw="${random_raw,,}"
-    case "$random_raw" in
-        1|yes|true|on) random_raw=1 ;;
-        0|no|false|off|'') random_raw=0 ;;
-        *) echo "RANDOM_PASSWORD must be one of 1/0, yes/no, true/false, or on/off" >&2; exit 1 ;;
-    esac
-
-    # Python builders already produced a password-hashed custom preseed from
-    # this same config. Do not generate a second password behind their back.
-    [ "$PRESEED_IS_CUSTOM" = 0 ] || return 0
-
-    username="$(sed -n \
-        's/^d-i[[:space:]]\+passwd\/username[[:space:]]\+string[[:space:]]\+\([^[:space:]]\+\)[[:space:]]*$/\1/p' \
-        "$seed" | tail -1)"
-    : "${username:=pleb}"
-
-    if [ "$random_raw" = 1 ]; then
-        command -v openssl >/dev/null 2>&1 || {
-            echo "openssl is required for RANDOM_PASSWORD=1" >&2
-            exit 1
-        }
-        image_password="$(openssl rand -hex 18)"
-        echo "==> generated one-time image password for $username: $image_password" >&2
-    fi
-    [ -n "$image_password" ] || {
-        echo "IMAGE_PASSWORD must be nonempty when RANDOM_PASSWORD=0" >&2
-        exit 1
-    }
-    case "$image_password" in *$'\n'*|*$'\r'*)
-        echo "IMAGE_PASSWORD must not contain a newline" >&2
-        exit 1 ;;
-    esac
-
-    if [ "$image_password" = plebian ]; then
-        grep -q '^d-i passwd/user-password password plebian$' "$seed" || {
-            echo "default IMAGE_PASSWORD does not match the base preseed" >&2
-            exit 1
-        }
-        echo "==> image login: username '$username', password 'plebian'"
-        return 0
-    fi
-
-    command -v openssl >/dev/null 2>&1 || {
-        echo "openssl is required to hash IMAGE_PASSWORD" >&2
-        exit 1
-    }
-    password_hash="$(printf '%s' "$image_password" | openssl passwd -6 -stdin)"
-    [[ "$password_hash" = \$6\$* ]] || {
-        echo "openssl did not produce a SHA-512 password hash" >&2
-        exit 1
-    }
-    grep -q '^d-i passwd/user-password password ' "$seed" || {
-        echo "base preseed has no replaceable password field" >&2
-        exit 1
-    }
-    sed -i -E \
-        -e "s|^d-i passwd/user-password password .*$|d-i passwd/user-password-crypted password $password_hash|" \
-        -e '/^d-i passwd\/user-password-again password /d' \
-        "$seed"
-    if [ "$random_raw" = 0 ]; then
-        echo "==> image login: username '$username'; password is configured by IMAGE_PASSWORD (not echoed)"
-    fi
-}
-
-apply_image_password_policy "$BUILD_PRESEED"
-
-# The default password is deliberate for the offline release image. Its Kilix
-# desktop prompts to replace it. A custom builder may include SSH, in which case
-# retaining that public credential deserves a prominent warning.
-if grep -q '^d-i passwd/user-password password plebian$' "$BUILD_PRESEED"; then
-    if grep -q '^tasksel tasksel/first multiselect .*ssh-server' "$BUILD_PRESEED"; then
-        echo "WARNING: image uses the default password 'plebian' AND enables" >&2
-        echo "  ssh-server — it is network-reachable with a weak credential." >&2
-        echo "  Use RANDOM_PASSWORD=1 or set a non-default IMAGE_PASSWORD." >&2
-    else
-        echo "note: release login is 'pleb' / 'plebian'; no ssh-server is" >&2
-        echo "  installed, and Kilix prompts to change it on first run." >&2
-    fi
-fi
-
 apply_installer_snapshot() {
     local seed="$1" ts="${PLEBIAN_OS_APT_SNAPSHOT:-}"
     [ -n "$ts" ] || return 0
@@ -1191,8 +1186,10 @@ cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/install-deps.sh"             "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-select-closure.sh" "$EXTRACT/plebian-os/"
-cp "$HERE/provision/plebian-os-passwd"           "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-record-installed-user" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-apt-snapshot-generator" "$EXTRACT/plebian-os/"
+printf '%s\n' "$PLEBIAN_OS_IDENTITY_PROFILE" > "$EXTRACT/plebian-os/identity-profile"
+chmod 0644 "$EXTRACT/plebian-os/identity-profile"
 install -m 0644 "$HERE/VERSION" "$EXTRACT/plebian-os/VERSION"
 install -m 0644 "$DESKTOP_WALLPAPER" "$EXTRACT/plebian-os/desktop-wallpaper.png"
 install -m 0644 "$LIGHTDM_GREETER_CONFIG" "$EXTRACT/plebian-os/lightdm-gtk-greeter.conf"

@@ -800,6 +800,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-passwd
+    /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -836,6 +837,7 @@ managed_dirs=(
     /usr/local/share/doc/plebian-os/installer
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
+    /etc/ssh/sshd_config.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
     /etc/pleb
@@ -855,6 +857,12 @@ for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
     dir_mode="$(stat -c '%a' "$dir")"
     (( (8#$dir_mode & 8#22) == 0 )) || exit 2
 done
+if [ -e /etc/ssh ] || [ -L /etc/ssh ]; then
+    [ -d /etc/ssh ] && [ ! -L /etc/ssh ] \
+        && [ "$(stat -c '%u' /etc/ssh)" = 0 ] || exit 2
+    ssh_mode="$(stat -c '%a' /etc/ssh)"
+    (( (8#$ssh_mode & 8#22) == 0 )) || exit 2
+fi
 for i in "${!managed_dirs[@]}"; do
     dir="${managed_dirs[$i]}"
     if [ -e "$dir" ] || [ -L "$dir" ]; then
@@ -902,10 +910,17 @@ for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
     dir_mode="$(stat -c '%a' "$dir")"
     (( (8#$dir_mode & 8#22) == 0 )) || exit 2
 done
+if [ -e /etc/ssh ] || [ -L /etc/ssh ]; then
+    [ -d /etc/ssh ] && [ ! -L /etc/ssh ] \
+        && [ "$(stat -c '%u' /etc/ssh)" = 0 ] || exit 2
+    ssh_mode="$(stat -c '%a' /etc/ssh)"
+    (( (8#$ssh_mode & 8#22) == 0 )) || exit 2
+fi
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-passwd
+    /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -942,6 +957,7 @@ managed_dirs=(
     /usr/local/share/doc/plebian-os/installer
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
+    /etc/ssh/sshd_config.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
     /etc/pleb
@@ -984,6 +1000,13 @@ for ((i=${#managed_dirs[@]}-1; i>=0; i--)); do
         exit 1
     fi
 done
+if [ -x /usr/sbin/sshd ] && [ -f /etc/ssh/sshd_config ] \
+        && [ ! -L /etc/ssh/sshd_config ]; then
+    /usr/sbin/sshd -t -f /etc/ssh/sshd_config || exit 1
+    if systemctl is-active --quiet ssh.service; then
+        systemctl reload ssh.service || exit 1
+    fi
+fi
 systemctl daemon-reload
 trap - EXIT
 cleanup_new
@@ -2358,6 +2381,90 @@ self_update_os_layer() {
     log "  (the selected dependency policy is reconciled next; full reprovisioning is not required)"
 }
 
+# A 0.2.0 machine may still have the historical shared password. Once the new
+# helper is deployed, contain that credential before any later update boundary:
+# password and keyboard-interactive SSH are disabled for the invoking account
+# only. Fresh 0.2.1 identity profiles never enter this legacy transition.
+reconcile_legacy_remote_login() {
+    case "$PLEBIAN_OS_SELF_UPDATE" in
+        1|yes|true|on) ;;
+        *) return 0 ;;
+    esac
+
+    local helper=/usr/local/sbin/plebian-os-passwd
+    local identity_record=/etc/plebian-os/identity-profile
+    local installed_user_record=/etc/plebian-os/installed-user
+    local metadata profile user entry
+    local -a uid1000_users=()
+
+    if [ -e "$identity_record" ] || [ -L "$identity_record" ]; then
+        [ -f "$identity_record" ] && [ ! -L "$identity_record" ] \
+            || die "identity-profile record is not a safe regular file"
+        metadata="$(stat -c '%u:%a:%h' -- "$identity_record" 2>/dev/null)" \
+            || die "could not inspect identity-profile record"
+        [ "$metadata" = 0:644:1 ] \
+            || die "identity-profile record must be root-owned mode 0644 with one link"
+        [ "$(wc -l < "$identity_record")" = 1 ] \
+            || die "identity-profile record must contain exactly one line"
+        IFS= read -r profile < "$identity_record" \
+            || die "identity-profile record is empty"
+        case "$profile" in
+            interactive-v1|automated-v1)
+                log "fresh identity profile has no legacy remote credential to reconcile"
+                return 0
+                ;;
+            *) die "unknown identity-profile record: $profile" ;;
+        esac
+    fi
+
+    [ -f "$helper" ] && [ ! -L "$helper" ] \
+        || die "legacy password helper is missing or unsafe: $helper"
+    metadata="$(stat -c '%u:%a:%h' -- "$helper" 2>/dev/null)" \
+        || die "could not inspect legacy password helper"
+    [ "$metadata" = 0:755:1 ] \
+        || die "legacy password helper must be root-owned mode 0755 with one link"
+
+    if [ "$(id -u)" != 0 ]; then
+        user="$(id -un)" || die "could not resolve the invoking account"
+    elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+        user="$SUDO_USER"
+    elif [ -e "$installed_user_record" ] || [ -L "$installed_user_record" ]; then
+        [ -f "$installed_user_record" ] && [ ! -L "$installed_user_record" ] \
+            || die "installed-user record is not a safe regular file"
+        metadata="$(stat -c '%u:%a:%h' -- "$installed_user_record" 2>/dev/null)" \
+            || die "could not inspect installed-user record"
+        [ "$metadata" = 0:644:1 ] \
+            || die "installed-user record must be root-owned mode 0644 with one link"
+        [ "$(wc -l < "$installed_user_record")" = 1 ] \
+            || die "installed-user record must contain exactly one line"
+        IFS= read -r user < "$installed_user_record" \
+            || die "installed-user record is empty"
+    else
+        while IFS=: read -r entry _ uid _; do
+            [ "$uid" = 1000 ] && uid1000_users+=("$entry")
+        done < <(getent passwd)
+        [ "${#uid1000_users[@]}" = 1 ] \
+            || die "root-run legacy reconciliation requires exactly one uid-1000 account"
+        user="${uid1000_users[0]}"
+    fi
+    [[ "$user" =~ ^[a-z][-a-z0-9_]{0,31}$ ]] && [ "$user" != root ] \
+        || die "legacy account violates Debian adduser policy: $user"
+    entry="$(getent passwd "$user" 2>/dev/null)" \
+        || die "legacy account no longer exists: $user"
+    [ "$(cut -d: -f3 <<<"$entry")" -ge 1000 ] \
+        && [ "$(cut -d: -f3 <<<"$entry")" -lt 65534 ] \
+        || die "legacy account is not a regular user: $user"
+
+    log "reconciling legacy remote-login policy for $user (needs root)"
+    if [ "$(id -u)" = 0 ]; then
+        SUDO_USER="$user" "$helper" reconcile-remote \
+            || die "legacy remote-login policy could not be reconciled"
+    else
+        sudo "$helper" reconcile-remote \
+            || die "legacy remote-login policy could not be reconciled"
+    fi
+}
+
 # Apply the dependency policy shipped by the selected target. The selector
 # installs the target updater before this command starts, and the OS-layer
 # refresh deploys the matching dependency helper before it is invoked here. Apt package
@@ -2850,6 +2957,7 @@ begin_stack_transaction
 
 # Refresh the OS layer itself (provisioner/deps/update helper) first, then pleb.
 self_update_os_layer
+reconcile_legacy_remote_login
 test_fail_after_boundary os-layer
 refresh_os_dependencies
 test_fail_after_boundary dependencies

@@ -1,4 +1,5 @@
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,11 +14,21 @@ import build_usb_image as usb
 
 def args(**overrides):
     values = dict(
-        yes=True, name=None, username=None, fullname=None, password="explicit",
-        hostname=None, session=None, kiosk=None, nopasswd_sudo=None,
+        yes=True, name=None, username="operator", fullname=None, password=None,
+        password_file=None, password_hash_file=None,
+        generate_one_time_password=False,
+        expire_credential_after_verification=False,
+        hostname="test-host", session=None, kiosk=None, nopasswd_sudo=None,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def gather(**overrides):
+    with mock.patch.object(
+            usb.vm, "resolve_automated_credential",
+            return_value=("private-secret", "", False)):
+        return usb.gather_config(args(**overrides))
 
 
 def cfg(**overrides):
@@ -29,6 +40,26 @@ def cfg(**overrides):
 
 
 class UsbBuilderTests(unittest.TestCase):
+    def test_default_dry_run_builds_identity_free_profile(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "build" / "build_usb_image.py"),
+             "--yes", "--dry-run", "--out", "/tmp/identity-free-test.iso"],
+            text=True, capture_output=True, check=True,
+        )
+        self.assertIn("Debian Installer asks hostname, name, username, password",
+                      result.stdout)
+        self.assertIn("interactive identity", result.stdout)
+        self.assertNotIn("PLEBIAN_OS_PRESEED=", result.stdout)
+
+    def test_identity_flags_require_explicit_automated_profile(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "build" / "build_usb_image.py"),
+             "--yes", "--dry-run", "--username", "operator"],
+            text=True, capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("require --unattended-profile", result.stderr)
+
     def test_flash_candidate_accepts_each_kernel_signal_independently(self):
         cases = (
             ("1", "sata", "0", True),
@@ -160,36 +191,31 @@ class UsbBuilderTests(unittest.TestCase):
         self.assertEqual(seen_targets, [decoded, literal_decoded_escape])
         self.assertEqual(protected, {"sdz1", "sdy1"})
 
-    def test_yes_mode_generates_password(self):
-        with mock.patch.object(usb.vm, "generated_password", return_value="random-pass"):
-            built = usb.gather_config(args(password=None))
-        self.assertEqual(built.password, "random-pass")
+    def test_generated_password_is_refused_without_expiring_harness(self):
+        with mock.patch.object(
+                usb.vm, "resolve_automated_credential",
+                return_value=("random-pass", "", True)), self.assertRaises(SystemExit):
+            usb.gather_config(args(generate_one_time_password=True))
 
-    def test_yes_mode_honors_explicit_password(self):
-        with mock.patch.object(usb.vm, "generated_password", return_value="random-pass"):
-            built = usb.gather_config(args(password="explicit"))
-        self.assertEqual(built.password, "explicit")
+    def test_plaintext_password_argument_is_retired(self):
+        with self.assertRaises(SystemExit):
+            usb.gather_config(args(password="process-visible"))
 
-    def test_release_image_config_defaults_to_plebian(self):
+    def test_ambient_image_password_is_retired(self):
         with mock.patch.dict(usb.os.environ, {
-            "IMAGE_PASSWORD": "plebian",
-            "RANDOM_PASSWORD": "0",
-        }, clear=True):
-            built = usb.gather_config(args(password=None))
-        self.assertEqual(built.password, "plebian")
+            "IMAGE_PASSWORD": "known-secret",
+        }, clear=True), self.assertRaises(SystemExit):
+            usb.gather_config(args())
 
-    def test_release_image_config_can_request_random_password(self):
+    def test_ambient_random_password_switch_is_retired(self):
         with mock.patch.dict(usb.os.environ, {
-            "IMAGE_PASSWORD": "plebian",
             "RANDOM_PASSWORD": "yes",
-        }, clear=True), mock.patch.object(
-                usb.vm, "generated_password", return_value="random-pass"):
-            built = usb.gather_config(args(password=None))
-        self.assertEqual(built.password, "random-pass")
+        }, clear=True), self.assertRaises(SystemExit):
+            usb.gather_config(args())
 
     def test_defaults_to_desktop_in_first_kilix_page_and_non_kiosk(self):
         with mock.patch.dict(usb.os.environ, {}, clear=True):
-            built = usb.gather_config(args())
+            built = gather()
         self.assertTrue(built.desktop)
         self.assertFalse(built.kiosk)
 
@@ -198,7 +224,7 @@ class UsbBuilderTests(unittest.TestCase):
             "PLEBIAN_OS_DESKTOP": "1",
             "PLEBIAN_OS_KIOSK": "true",
         }, clear=True):
-            built = usb.gather_config(args())
+            built = gather()
         self.assertTrue(built.desktop)
         self.assertTrue(built.kiosk)
 

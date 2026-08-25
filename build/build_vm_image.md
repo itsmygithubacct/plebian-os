@@ -39,7 +39,8 @@ provider from GitHub.
 
 ```sh
 build/build_vm_image.py            # interactive — answer the prompts
-build/build_vm_image.py --yes      # accept every default, no prompts
+build/build_vm_image.py --yes --username releaseci --hostname plebian-ci \
+  --generate-one-time-password --sudo-nopasswd
 build/build_vm_image.py --dry-run  # print the plan; build nothing and write no preseed
 ```
 
@@ -55,10 +56,10 @@ Each prompt shows a `[default]`; press Enter to accept it.
 
 | Prompt | Default | Notes |
 |--------|---------|-------|
-| VM name | `plebian` | VirtualBox VM name (and default hostname) |
-| username | `pleb` | the uid-1000 account Pleb runs as |
-| full name | `Plebian User` | GECOS field |
-| password | *(required)* | hidden entry; stored **hashed** in the preseed; the VM enables SSH and refuses `plebian` |
+| VM name | `plebian-ci` | VirtualBox VM name |
+| username | `operator` | explicit Debian account for an interactive invocation |
+| full name | *username* | GECOS field |
+| password | *(required)* | hidden interactive entry, or protected file mode below; only a crypt hash reaches the ISO |
 | hostname | *VM name* | |
 | RAM (MB) | **¼ of host RAM** | rounded to 256 MB, min 4096; lower explicit values are allowed with a warning |
 | vCPUs | **½ of host cores** | min 1 |
@@ -67,25 +68,28 @@ Each prompt shows a `[default]`; press Enter to accept it.
 | disk (GB) | **200** | **sparse** — grows on demand, doesn't preallocate |
 | session | **desktop** | the main screen-filling Kilix instance with Kilix-95 in page 1; `shell` is the explicit bare-page override |
 | autologin (kiosk) | **no** | show a login greeter; kiosk mode also respawns Kilix on exit |
-| passwordless sudo | **yes** | useful for update/restart actions inside the desktop |
+| passwordless sudo | **no** | generated one-time credentials require an explicit opt-in so the harness can expire them |
 | SSH host port | first free from **2222** | forwarded to the guest's port 22 |
 
 ## Options
 
-Every prompt has a matching flag, so the whole thing can run non-interactively.
-With `--yes`, omitting `--password` generates a random password and prints it
-once; interactive VM builds require an operator-entered password because they
-enable SSH for the provisioning waiter.
+Every prompt has a matching flag. Noninteractive `--yes` runs must specify
+`--username` and `--hostname`, then choose exactly one credential mode:
+`--password-file` (owner and mode 0600), `--password-hash-file` (0600; usable
+only with `--no-wait`), or `--generate-one-time-password`. Generated secrets
+remain in harness memory and a short-lived 0600 askpass file; they are never
+printed, placed in argv/environment, or written to acceptance evidence. After
+verification the harness expires the password with `chage -d 0`.
 
-Release/image config may instead set `IMAGE_PASSWORD=plebian` and
-`RANDOM_PASSWORD=0`. Set `RANDOM_PASSWORD=1` to ignore `IMAGE_PASSWORD` and
-generate a strong one-time password. An explicit `--password` wins over both.
-Because this VM path enables SSH, it refuses `IMAGE_PASSWORD=plebian`; the
-acceptance wrapper automatically opts into a random password.
+Plaintext `--password`, `IMAGE_PASSWORD`, and `RANDOM_PASSWORD` are retired and
+rejected. A generated credential also requires waiting and
+`--sudo-nopasswd`, because expiration must succeed before the run can pass.
 
 ```
 --name NAME            --username NAME       --fullname "Full Name"
---hostname NAME        --password PASS        --ram MB
+--hostname NAME        --password-file PATH   --password-hash-file PATH
+--generate-one-time-password
+--expire-credential-after-verification        --ram MB
 --cpus N               --vram MB              --accelerate-3d
 --firmware bios|efi
 --disk GB              --port HOSTPORT
@@ -94,6 +98,9 @@ acceptance wrapper automatically opts into a random password.
 
 --target virtualbox    only virtualbox today (qemu/docker planned)
 --iso PATH             use a prebuilt ISO, skip building (see note below)
+--interactive-installer
+                       let a prebuilt ISO collect guest identity; requires
+                       --iso --no-wait --no-verify
 --out PATH             ISO output path (release default:
                        plebian-os-<version>-amd64.iso; otherwise
                        plebian-os-<name>.iso)
@@ -110,8 +117,11 @@ acceptance wrapper automatically opts into a random password.
 
 > `--iso` reuses an already-built image as-is, so the username / password /
 > session choices are **not** applied (those live in that ISO's own preseed).
-> Supply matching `--username` and `--password` for the SSH waiter, or use
-> `--no-wait`. This path needs neither xorriso nor openssl.
+> Supply matching `--username` and `--password-file` for the SSH waiter, or use
+> `--no-wait`. For normal identity-free media, use `--interactive-installer`
+> together with `--no-wait --no-verify`; that mode refuses every guest identity,
+> credential, session, and sudo option and records that Debian Installer owns
+> identity collection. This path needs neither xorriso nor openssl.
 
 ## What you get
 
@@ -133,16 +143,16 @@ A registered VirtualBox VM configured with:
   configured desktop provider in page 1 by default, or a bare first-page shell
   when explicitly selected, with a greeter or straight-in hard-kiosk mode per
   your answers.
-- **sudo**: passwordless by default for the generated user, unless you pass
-  `--no-sudo-nopasswd`.
+- **sudo**: password-required by default. Acceptance derivatives explicitly use
+  `--sudo-nopasswd` so their harness-owned credential can be expired.
 
 On success the tool detaches the install ISO and prints how to start and reach
 the VM:
 
 ```
 ✓ Plebian-OS VirtualBox image is ready.
-  VM        : plebian
-  login     : pleb / (the password you set)
+  VM        : plebian-ci
+  login     : releaseci / (harness credential expired; change at next login)
   session   : desktop provider in Kilix page 1 (greeter)
   firmware  : BIOS
   start GUI : VBoxManage startvm plebian --type gui
@@ -210,9 +220,10 @@ guest source root without redirecting host-side build storage.
 
 ## How it works
 
-1. **Customized preseed.** It starts from `preseed/preseed.cfg`, substitutes the
-   username / full name / hostname, replaces the password with an
-   `openssl passwd -6` hash, and adds `ssh-server` for the loopback waiter.
+1. **Separate automated preseed.** The tracked normal preseed has no identity
+   answers. The builder inserts a validated username / full name / hostname and
+   crypt hash into a temporary automated profile, then adds `ssh-server` for the
+   loopback waiter.
    User/session choices are passed once to `remaster-iso.sh`, which writes the
    authoritative `/etc/default/plebian-os` and matching `build-info.env`.
 2. **ISO build.** It calls **`build/remaster-iso.sh`** with

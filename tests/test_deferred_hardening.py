@@ -20,12 +20,19 @@ def _cfg():
 
 
 class DeferredHardeningTests(unittest.TestCase):
-    def test_committed_preseed_default_creds_no_ssh(self):
+    def test_committed_preseed_has_interactive_identity_and_no_ssh(self):
         p = _read("preseed", "preseed.cfg")
-        # default password is 'plebian' (weak allowed so it takes); the desktop
-        # nags to change it. No ssh-server by default, so it isn't network-reachable.
-        self.assertIn("d-i passwd/user-password password plebian", p)
-        self.assertIn("d-i user-setup/allow-password-weak boolean true", p)
+        active = "\n".join(
+            line for line in p.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+        for question in (
+            "netcfg/get_hostname", "passwd/user-fullname", "passwd/username",
+            "passwd/user-password", "passwd/user-password-again",
+            "passwd/user-password-crypted", "user-setup/allow-password-weak",
+        ):
+            self.assertNotIn(question, active)
+        self.assertIn("d-i passwd/root-login boolean false", active)
         tasksel = [l for l in p.splitlines() if l.startswith("tasksel tasksel/first")]
         self.assertEqual(tasksel, ["tasksel tasksel/first multiselect standard"])
 

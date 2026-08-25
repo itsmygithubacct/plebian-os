@@ -179,13 +179,13 @@ tag_commit="$(git -C "$ROOT" rev-parse --verify "v$RELEASE^{commit}" 2>/dev/null
 [ "$iso_commit" = "$tag_commit" ] \
     || { echo "acceptance-release-iso: ISO commit $iso_commit is not v$RELEASE ($tag_commit)" >&2; exit 1; }
 
-if [ "${release_manifest[IMAGE_PASSWORD]-}" != plebian ] \
-        || [ "${release_manifest[RANDOM_PASSWORD]-}" != 0 ]; then
-    echo "acceptance-release-iso: manifest must declare the offline pleb/plebian login" >&2
-    exit 1
-fi
+for retired in IMAGE_PASSWORD RANDOM_PASSWORD; do
+    [ -z "${release_manifest[$retired]+x}" ] || {
+        echo "acceptance-release-iso: manifest must omit retired key $retired" >&2
+        exit 1
+    }
+done
 for key in "${!release_manifest[@]}"; do
-    case "$key" in IMAGE_PASSWORD|RANDOM_PASSWORD) continue ;; esac
     [ -n "${build_info[$key]+x}" ] || {
         echo "acceptance-release-iso: ISO build-info does not record manifest key $key" >&2
         exit 1
@@ -218,10 +218,9 @@ disk="${PLEBIAN_OS_ACCEPTANCE_DISK_GB:-20}"
 echo "acceptance-release-iso: strict $RELEASE artifact $iso_sha256"
 echo "acceptance-release-iso: candidate $iso_commit"
 
-# Populate the report's password-free release input section without activating the
-# builder's release/remaster path; this lane always consumes the ISO as-is.
+# Populate the report's identity-free release input section without activating
+# the builder's release/remaster path; this lane always consumes the ISO as-is.
 for key in "${!release_manifest[@]}"; do
-    case "$key" in IMAGE_PASSWORD|RANDOM_PASSWORD) continue ;; esac
     export "$key=${release_manifest[$key]}"
 done
 export PLEBIAN_OS_ACCEPTANCE_RELEASE="$RELEASE"
@@ -233,13 +232,11 @@ firmwares=(bios efi)
 [ "$FIRMWARE" = both ] || firmwares=("$FIRMWARE")
 for firmware in "${firmwares[@]}"; do
     name="plebian-release-${RELEASE}-${short}-${firmware}"
-    hostname="plebian-release-${RELEASE//./-}-${firmware}"
     report="$PLEBIAN_OS_ARTIFACTS/plebian-os-${RELEASE}-${short}-exact-iso-${firmware}.json"
     args=(
-        --yes --iso "$ISO" --name "$name" --hostname "$hostname"
-        --password plebian
+        --yes --iso "$ISO" --interactive-installer --name "$name"
         --firmware "$firmware" --ram "$ram" --cpus "$cpus" --disk "$disk"
-        --gui --no-wait --no-verify --no-sudo-nopasswd --report "$report"
+        --gui --no-wait --no-verify --report "$report"
     )
     [ "$REPLACE" = 0 ] || args+=(--replace)
     [ "$DRY_RUN" = 0 ] || args+=(--dry-run)

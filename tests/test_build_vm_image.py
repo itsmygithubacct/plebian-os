@@ -17,11 +17,15 @@ import build_vm_image as vm
 
 def args(**overrides):
     values = dict(
-        yes=True, name=None, username=None, fullname=None, password="explicit",
-        hostname=None, ram=None, cpus=None, vram=None, accelerate_3d=False,
+        yes=True, name=None, username="operator", fullname=None, password=None,
+        password_file=None, password_hash_file=None,
+        generate_one_time_password=True,
+        expire_credential_after_verification=False,
+        hostname="test-host", ram=None, cpus=None, vram=None, accelerate_3d=False,
         firmware=None,
-        disk=None, session=None, kiosk=None, nopasswd_sudo=None, port=None,
-        gui=False, no_wait=True, iso=None, no_verify=False,
+        disk=None, session=None, kiosk=None, nopasswd_sudo=True, port=None,
+        gui=False, no_wait=False, iso=None, no_verify=False,
+        interactive_installer=False,
     )
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -54,11 +58,13 @@ class VmBuilderEnvTests(unittest.TestCase):
         )
         self.assertIn("firstboot (default: 120)", result.stdout)
 
-    def test_preseed_has_identity_but_no_second_runtime_env_writer(self):
+    def test_automated_preseed_inserts_hashed_identity_into_clean_template(self):
         with mock.patch.object(vm, "crypt_password", return_value=("$6$hash", True)):
             text = vm.generate_preseed(cfg()).read_text()
         self.assertIn("d-i passwd/username string pleb", text)
+        self.assertIn("d-i netcfg/get_hostname string plebian", text)
         self.assertIn("d-i passwd/user-password-crypted password $6$hash", text)
+        self.assertNotIn("d-i passwd/user-password password", text)
         self.assertNotIn("PLEB_REF=%s", text)
         self.assertNotIn("env_fmt", text)
 
@@ -328,41 +334,125 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertTrue(roots)
         self.assertTrue(all(not root.exists() for root in roots))
 
-    def test_yes_mode_generates_password(self):
+    def test_yes_mode_generates_harness_only_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):
-            built = vm.gather_config(args(password=None))
+            built = vm.gather_config(args())
         self.assertEqual(built.password, "random-pass")
+        self.assertTrue(built.credential_generated)
 
-    def test_yes_mode_honors_explicit_password(self):
-        with mock.patch.object(vm, "generated_password", return_value="random-pass"):
-            built = vm.gather_config(args(password="explicit"))
-        self.assertEqual(built.password, "explicit")
+    def test_plaintext_password_argument_is_retired(self):
+        with self.assertRaises(SystemExit):
+            vm.gather_config(args(password="process-visible"))
 
-    def test_image_config_uses_documented_release_password(self):
+    def test_ambient_image_password_is_retired(self):
         with mock.patch.dict(os.environ, {
-            "IMAGE_PASSWORD": "plebian",
-            "RANDOM_PASSWORD": "0",
-        }, clear=True):
-            built = vm.gather_config(args(password=None))
-        self.assertEqual(built.password, "plebian")
+            "IMAGE_PASSWORD": "known-secret",
+        }, clear=True), self.assertRaises(SystemExit):
+            vm.gather_config(args())
 
-    def test_random_password_config_overrides_image_password(self):
+    def test_ambient_random_password_switch_is_retired(self):
         with mock.patch.dict(os.environ, {
-            "IMAGE_PASSWORD": "plebian",
             "RANDOM_PASSWORD": "1",
-        }, clear=True), mock.patch.object(
-                vm, "generated_password", return_value="random-pass"):
-            built = vm.gather_config(args(password=None))
-        self.assertEqual(built.password, "random-pass")
+        }, clear=True), self.assertRaises(SystemExit):
+            vm.gather_config(args())
 
-    def test_explicit_password_overrides_image_config(self):
-        with mock.patch.dict(os.environ, {
-            "IMAGE_PASSWORD": "configured",
-            "RANDOM_PASSWORD": "1",
-        }, clear=True), mock.patch.object(vm, "generated_password") as generated:
-            built = vm.gather_config(args(password="explicit"))
-        self.assertEqual(built.password, "explicit")
-        generated.assert_not_called()
+    def test_password_file_requires_owner_mode_0600(self):
+        with tempfile.TemporaryDirectory() as td:
+            credential = Path(td) / "credential"
+            credential.write_text("private-secret\n")
+            credential.chmod(0o644)
+            with self.assertRaises(SystemExit):
+                vm.gather_config(args(
+                    password_file=credential,
+                    generate_one_time_password=False,
+                ))
+            credential.chmod(0o600)
+            built = vm.gather_config(args(
+                password_file=credential,
+                generate_one_time_password=False,
+                nopasswd_sudo=False,
+            ))
+        self.assertEqual(built.password, "private-secret")
+        self.assertFalse(built.credential_generated)
+
+    def test_password_hash_file_avoids_plaintext_and_requires_no_wait(self):
+        with tempfile.TemporaryDirectory() as td:
+            credential = Path(td) / "credential.hash"
+            credential.write_text("$6$abcdefghijklmnop$hashvalue0123456789\n")
+            credential.chmod(0o600)
+            built = vm.gather_config(args(
+                password_hash_file=credential,
+                generate_one_time_password=False,
+                nopasswd_sudo=False,
+                no_wait=True,
+            ))
+        self.assertEqual(built.password, "")
+        self.assertTrue(built.password_hash.startswith("$6$"))
+
+    def test_noninteractive_identity_must_be_explicit(self):
+        with self.assertRaises(SystemExit):
+            vm.gather_config(args(username=None))
+        with self.assertRaises(SystemExit):
+            vm.gather_config(args(hostname=None))
+
+    def test_prebuilt_interactive_installer_uses_no_guest_identity_or_secret(self):
+        built = vm.gather_config(args(
+            interactive_installer=True,
+            username=None,
+            fullname=None,
+            hostname=None,
+            generate_one_time_password=False,
+            nopasswd_sudo=None,
+            no_wait=True,
+            no_verify=True,
+            iso=Path("strict-release.iso"),
+        ))
+        self.assertTrue(built.interactive_installer)
+        self.assertEqual(built.username, "")
+        self.assertEqual(built.hostname, "")
+        self.assertEqual(built.password, "")
+        self.assertEqual(built.password_hash, "")
+
+    def test_askpass_uses_private_file_not_secret_environment(self):
+        secret_value = "not-in-child-environment"
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+                vm, "storage_dir", return_value=Path(td)):
+            with vm._askpass_for(secret_value) as askpass:
+                secret_path = Path(askpass[1])
+                self.assertEqual(secret_path.read_text().strip(), secret_value)
+                self.assertEqual(secret_path.stat().st_mode & 0o777, 0o600)
+                with mock.patch.object(
+                        vm.subprocess, "run", return_value=result) as run:
+                    vm.ssh(cfg(password=secret_value), "true", askpass)
+                child_env = run.call_args.kwargs["env"]
+                self.assertNotIn(secret_value, child_env.values())
+                self.assertNotIn("PLEBIAN_ASKPASS_PW", child_env)
+                self.assertEqual(child_env["PLEBIAN_ASKPASS_FILE"], askpass[1])
+            self.assertFalse(secret_path.exists())
+
+    def test_generated_credential_expiration_is_fail_closed(self):
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                mock.patch.object(vm, "info"):
+            vm.expire_generated_credential(cfg(username="boundary-user"), ("a", "b"))
+        command = remote.call_args.args[1]
+        self.assertIn("sudo -n /usr/bin/chage -d 0", command)
+        self.assertIn("boundary-user", command)
+
+    def test_ready_generated_credential_expires_even_if_verification_fails(self):
+        source = (ROOT / "build" / "build_vm_image.py").read_text()
+        main = source[source.index("def main() -> None:"):]
+        self.assertIn("finally:\n", main)
+        self.assertIn("if cfg.credential_generated and provisioning_ready:", main)
+        self.assertLess(
+            main.index("verify_provisioning(cfg, askpass)"),
+            main.index("finally:\n"),
+        )
+        self.assertGreater(
+            main.index("expire_generated_credential(cfg, askpass)"),
+            main.index("finally:\n"),
+        )
 
     def test_defaults_to_desktop_in_first_kilix_page_and_non_kiosk(self):
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -375,8 +465,13 @@ class VmBuilderEnvTests(unittest.TestCase):
             "PLEBIAN_OS_DESKTOP": "yes",
             "PLEBIAN_OS_KIOSK": "on",
             "PLEBIAN_OS_NOPASSWD_SUDO": "no",
-        }, clear=True):
-            built = vm.gather_config(args())
+        }, clear=True), mock.patch.object(
+                vm, "resolve_automated_credential",
+                return_value=("private-secret", "", False)):
+            built = vm.gather_config(args(
+                generate_one_time_password=False,
+                nopasswd_sudo=None,
+            ))
         self.assertTrue(built.desktop)
         self.assertTrue(built.kiosk)
         self.assertFalse(built.nopasswd_sudo)
@@ -409,12 +504,8 @@ class VmBuilderEnvTests(unittest.TestCase):
             )
 
     def test_default_hostname_sanitizes_versioned_vm_name(self):
-        built = vm.gather_config(args(
-            name="plebian-acceptance-0.1.9-deadbeef",
-            hostname=None,
-        ))
         self.assertEqual(
-            built.hostname,
+            vm.default_hostname("plebian-acceptance-0.1.9-deadbeef"),
             "plebian-acceptance-0-1-9-deadbeef",
         )
 

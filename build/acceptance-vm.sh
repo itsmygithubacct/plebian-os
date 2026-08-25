@@ -118,13 +118,13 @@ export PLEBIAN_OS_ACCEPTANCE_MANIFEST_SHA256="$manifest_sha256"
 PLEBIAN_OS_REF="$candidate_commit"
 PLEBIAN_OS_RELEASE=
 PLEBIAN_OS_RELEASE_MODE=0
-# The publishable image uses the documented offline `pleb` / `plebian` login.
-# This derivative enables SSH for its waiter, so exercise the manifest's
-# generated-password option instead of exposing that default.
-IMAGE_PASSWORD=
-RANDOM_PASSWORD=1
-export PLEBIAN_OS_REF PLEBIAN_OS_RELEASE PLEBIAN_OS_RELEASE_MODE \
-    IMAGE_PASSWORD RANDOM_PASSWORD
+# This derivative enables SSH for its waiter. Its identity is explicit and its
+# one-time password exists only inside the harness; the harness expires it once
+# acceptance completes. The publishable ISO remains interactive and has neither.
+unset IMAGE_PASSWORD RANDOM_PASSWORD
+ACCEPTANCE_USER="${PLEBIAN_OS_ACCEPTANCE_USER:-releaseci}"
+ACCEPTANCE_HOSTNAME="${PLEBIAN_OS_ACCEPTANCE_HOSTNAME:-plebian-ci}"
+export PLEBIAN_OS_REF PLEBIAN_OS_RELEASE PLEBIAN_OS_RELEASE_MODE
 echo "acceptance-vm: candidate $PLEBIAN_OS_ACCEPTANCE_RELEASE @ $candidate_commit"
 echo "acceptance-vm: manifest sha256 $manifest_sha256"
 
@@ -136,6 +136,11 @@ command -v VBoxManage >/dev/null 2>&1 || {
 exec "$HERE/build_vm_image.py" \
     --yes \
     --name "$NAME" \
+    --username "$ACCEPTANCE_USER" \
+    --fullname "Release acceptance" \
+    --hostname "$ACCEPTANCE_HOSTNAME" \
+    --generate-one-time-password \
+    --sudo-nopasswd \
     --ram "$RAM" \
     --cpus "$CPUS" \
     --disk "$DISK" \

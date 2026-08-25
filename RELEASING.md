@@ -53,11 +53,13 @@ inherited through whichever Kilix commit a release selects; they do not receive
 independent coordinated tags or top-level release-manifest keys. Adding a
 desktop does not change the four-repository governance boundary.
 
-The publishable offline image declares `IMAGE_PASSWORD=plebian` and
-`RANDOM_PASSWORD=0`, making its initial `pleb` / `plebian` login explicit.
-`RANDOM_PASSWORD=1` is the opt-in generated-password policy for private or
-acceptance images; generated values are printed once and are never recorded in
-build provenance. Release artifacts with SSH enabled remain forbidden.
+The publishable image uses the `interactive-v1` identity profile: it contains no
+answered hostname, display-name, username, or password question and carries no
+known login. `IMAGE_PASSWORD`, `RANDOM_PASSWORD`, custom preseeds, SSH,
+autoboot, and unattended disk selection are forbidden in release mode. The
+separate `automated-v1` VM/CI derivative requires explicit identity plus a
+protected mode-0600 credential input, or a harness-generated password that is
+never logged and is expired after verification.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
@@ -230,9 +232,9 @@ cannot change the process which is performing that hop.
    an old pairing and reporting green while the shipped combination is untested.
    Its advisory `pairing` job runs the same suite against Kilix's branch head; a
    red result there is the early warning that this pin — or the provider — needs
-   to move. Confirm the release manifest explicitly contains
-   `IMAGE_PASSWORD=plebian` and `RANDOM_PASSWORD=0`; never commit a private
-   password to the manifest. For every release after 0.1.7, name the immediately
+   to move. Confirm the release manifest omits `IMAGE_PASSWORD` and
+   `RANDOM_PASSWORD`; `remaster-iso.sh` must refuse either key and every custom
+   identity input in release mode. For every release after 0.1.7, name the immediately
    previous published release as the supported upgrade source and reserve a
    provenance section for the upgrade acceptance result. Name any supported
    direct skip separately; silence means the skip is unsupported. Write the
@@ -323,9 +325,11 @@ cannot change the process which is performing that hop.
    the candidate-tag commit, clean/release-mode provenance, disabled
    SSH/autoboot/unattended-disk flags, the release volume ID, and both BIOS and
    UEFI El Torito entries. It then starts distinct BIOS and EFI VMs using that
-   exact ISO without remastering it. Use `--dry-run` to perform every artifact
-   validation and print both VM plans without creating anything. These strict
-   installs are interactive by design; their JSON reports say
+   exact ISO without remastering it. Its prebuilt-ISO harness uses the
+   identity-free `--interactive-installer` mode and supplies no guest username,
+   hostname, password, session, or sudo policy. Use `--dry-run` to perform every
+   artifact validation and print both VM plans without creating anything. These
+   strict installs are interactive by design; their JSON reports say
    `vm-started-no-verification` and are provenance/start records, not passing
    acceptance results.
 
