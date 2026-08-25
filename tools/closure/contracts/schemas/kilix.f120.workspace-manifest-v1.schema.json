@@ -1,0 +1,369 @@
+{
+  "$comment": "Frozen F120 v1 contract, 2026-08-19; incompatible changes require a new schema identity.",
+  "$defs": {
+    "architecture": {
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._+-]*$",
+      "type": "string"
+    },
+    "buildOptions": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "integer",
+          "boolean"
+        ]
+      },
+      "maxProperties": 256,
+      "type": "object"
+    },
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "component": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "resolution_state": {
+                "const": "resolved"
+              }
+            },
+            "required": [
+              "resolution_state"
+            ]
+          },
+          "then": {
+            "required": [
+              "resolved_commit",
+              "source_sha256"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "abi_version": {
+          "$ref": "#/$defs/version"
+        },
+        "api_version": {
+          "$ref": "#/$defs/version"
+        },
+        "architecture": {
+          "$ref": "#/$defs/architecture"
+        },
+        "build_options": {
+          "$ref": "#/$defs/buildOptions"
+        },
+        "canonical_url": {
+          "$ref": "#/$defs/url"
+        },
+        "component_id": {
+          "$ref": "#/$defs/id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/version"
+        },
+        "dirty": {
+          "type": "boolean"
+        },
+        "expected_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/id"
+        },
+        "licenses": {
+          "$ref": "#/$defs/licenses"
+        },
+        "notices": {
+          "$ref": "#/$defs/notices"
+        },
+        "publication_disposition": {
+          "$ref": "#/$defs/publication"
+        },
+        "ref_kind": {
+          "enum": [
+            "exact-commit",
+            "tag",
+            "branch"
+          ]
+        },
+        "requested_ref": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "required_tests": {
+          "$ref": "#/$defs/tests"
+        },
+        "resolution_state": {
+          "enum": [
+            "resolved",
+            "unresolved"
+          ]
+        },
+        "resolved_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "runtime_kind": {
+          "$ref": "#/$defs/runtimeKind"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toolchain": {
+          "$ref": "#/$defs/toolchain"
+        },
+        "visibility": {
+          "$ref": "#/$defs/visibility"
+        }
+      },
+      "required": [
+        "instance_id",
+        "component_id",
+        "canonical_url",
+        "visibility",
+        "resolution_state",
+        "dirty",
+        "expected_commit",
+        "ref_kind",
+        "requested_ref",
+        "component_version",
+        "api_version",
+        "abi_version",
+        "architecture",
+        "runtime_kind",
+        "toolchain",
+        "build_options",
+        "features",
+        "licenses",
+        "notices",
+        "publication_disposition",
+        "required_tests"
+      ],
+      "type": "object"
+    },
+    "consumptionMode": {
+      "enum": [
+        "recursive-git-submodule",
+        "nested-source-build",
+        "staged-prefix",
+        "system-package",
+        "runtime-process"
+      ]
+    },
+    "dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "consumption_mode": {
+          "$ref": "#/$defs/consumptionMode"
+        },
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "required_abi_version": {
+          "$ref": "#/$defs/version"
+        },
+        "required_api_version": {
+          "$ref": "#/$defs/version"
+        },
+        "required_tests": {
+          "$ref": "#/$defs/tests"
+        },
+        "runtime_process": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "consumption_mode",
+        "runtime_process",
+        "required_api_version",
+        "required_abi_version",
+        "required_tests"
+      ],
+      "type": "object"
+    },
+    "features": {
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "id": {
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+      "type": "string"
+    },
+    "license": {
+      "additionalProperties": false,
+      "properties": {
+        "spdx": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "text_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "spdx",
+        "text_sha256"
+      ],
+      "type": "object"
+    },
+    "licenses": {
+      "items": {
+        "$ref": "#/$defs/license"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "notice": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "notices": {
+      "items": {
+        "$ref": "#/$defs/notice"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "publication": {
+      "enum": [
+        "publish",
+        "private",
+        "unpublished",
+        "restricted"
+      ]
+    },
+    "relativePath": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$",
+      "type": "string"
+    },
+    "runtimeKind": {
+      "enum": [
+        "native-provider",
+        "process",
+        "python-distribution",
+        "data"
+      ]
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "tests": {
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "toolchain": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "name": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "url": {
+      "format": "uri",
+      "pattern": "^https://",
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "visibility": {
+      "enum": [
+        "public",
+        "private",
+        "local-only"
+      ]
+    }
+  },
+  "$id": "https://schemas.kilix.dev/kilix.f120.workspace-manifest/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "components": {
+      "items": {
+        "$ref": "#/$defs/component"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "type": "array"
+    },
+    "dependencies": {
+      "items": {
+        "$ref": "#/$defs/dependency"
+      },
+      "maxItems": 16384,
+      "type": "array"
+    },
+    "schema": {
+      "const": "kilix.f120.workspace-manifest/v1"
+    },
+    "workspace_root": {
+      "maxLength": 4096,
+      "pattern": "^/",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "workspace_root",
+    "components",
+    "dependencies"
+  ],
+  "title": "Kilix F120 observed workspace manifest",
+  "type": "object"
+}

@@ -1,0 +1,382 @@
+{
+  "$comment": "Frozen F120 v1 contract, 2026-08-19; incompatible changes require a new schema identity.",
+  "$defs": {
+    "architecture": {
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._+-]*$",
+      "type": "string"
+    },
+    "artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "architecture": {
+          "$ref": "#/$defs/architecture"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "artifact_kind": {
+          "enum": [
+            "command",
+            "header",
+            "library",
+            "python-package",
+            "pkg-config",
+            "data",
+            "notice",
+            "manifest"
+          ]
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "build_key_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "component_instance": {
+          "$ref": "#/$defs/id"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "licenses_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toolchain_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "artifact_kind",
+        "component_instance",
+        "path",
+        "artifact_sha256",
+        "source_sha256",
+        "build_key_sha256",
+        "architecture",
+        "toolchain_digest",
+        "features",
+        "licenses_sha256"
+      ],
+      "type": "object"
+    },
+    "buildOptions": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "integer",
+          "boolean"
+        ]
+      },
+      "maxProperties": 256,
+      "type": "object"
+    },
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "component": {
+      "additionalProperties": false,
+      "properties": {
+        "abi_version": {
+          "$ref": "#/$defs/version"
+        },
+        "api_version": {
+          "$ref": "#/$defs/version"
+        },
+        "architecture": {
+          "$ref": "#/$defs/architecture"
+        },
+        "build_options": {
+          "$ref": "#/$defs/buildOptions"
+        },
+        "canonical_url": {
+          "$ref": "#/$defs/url"
+        },
+        "component_id": {
+          "$ref": "#/$defs/id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/version"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/id"
+        },
+        "licenses": {
+          "$ref": "#/$defs/licenses"
+        },
+        "notices": {
+          "$ref": "#/$defs/notices"
+        },
+        "publication_disposition": {
+          "enum": [
+            "publish",
+            "private",
+            "unpublished",
+            "restricted"
+          ]
+        },
+        "required_tests": {
+          "$ref": "#/$defs/tests"
+        },
+        "resolved_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "runtime_kind": {
+          "$ref": "#/$defs/runtimeKind"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toolchain": {
+          "$ref": "#/$defs/toolchain"
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "private",
+            "local-only"
+          ]
+        }
+      },
+      "required": [
+        "instance_id",
+        "component_id",
+        "canonical_url",
+        "visibility",
+        "resolved_commit",
+        "source_sha256",
+        "component_version",
+        "api_version",
+        "abi_version",
+        "architecture",
+        "runtime_kind",
+        "toolchain",
+        "build_options",
+        "features",
+        "licenses",
+        "notices",
+        "publication_disposition",
+        "required_tests"
+      ],
+      "type": "object"
+    },
+    "dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "consumption_mode": {
+          "enum": [
+            "recursive-git-submodule",
+            "nested-source-build",
+            "staged-prefix",
+            "system-package",
+            "runtime-process"
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "required_abi_version": {
+          "$ref": "#/$defs/version"
+        },
+        "required_api_version": {
+          "$ref": "#/$defs/version"
+        },
+        "required_tests": {
+          "$ref": "#/$defs/tests"
+        },
+        "runtime_process": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "consumption_mode",
+        "runtime_process",
+        "required_api_version",
+        "required_abi_version",
+        "required_tests"
+      ],
+      "type": "object"
+    },
+    "features": {
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "id": {
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+      "type": "string"
+    },
+    "license": {
+      "additionalProperties": false,
+      "properties": {
+        "spdx": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "text_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "spdx",
+        "text_sha256"
+      ],
+      "type": "object"
+    },
+    "licenses": {
+      "items": {
+        "$ref": "#/$defs/license"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "notice": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "notices": {
+      "items": {
+        "$ref": "#/$defs/notice"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "relativePath": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$",
+      "type": "string"
+    },
+    "runtimeKind": {
+      "enum": [
+        "native-provider",
+        "process",
+        "python-distribution",
+        "data"
+      ]
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "tests": {
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "toolchain": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "name": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "url": {
+      "format": "uri",
+      "pattern": "^https://",
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "https://schemas.kilix.dev/kilix.f120.release-lock/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/artifact"
+      },
+      "maxItems": 16384,
+      "minItems": 1,
+      "type": "array"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/component"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "type": "array"
+    },
+    "dependencies": {
+      "items": {
+        "$ref": "#/$defs/dependency"
+      },
+      "maxItems": 16384,
+      "type": "array"
+    },
+    "release": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "kilix.f120.release-lock/v1"
+    }
+  },
+  "required": [
+    "schema",
+    "release",
+    "components",
+    "dependencies",
+    "artifacts"
+  ],
+  "title": "Kilix F120 exact release lock",
+  "type": "object"
+}

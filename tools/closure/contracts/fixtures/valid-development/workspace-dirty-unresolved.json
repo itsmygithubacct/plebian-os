@@ -1,0 +1,46 @@
+{
+  "components": [
+    {
+      "abi_version": "0",
+      "api_version": "0",
+      "architecture": "aarch64-linux-gnu",
+      "build_options": {},
+      "canonical_url": "https://github.com/example/pending.git",
+      "component_id": "pending-provider",
+      "component_version": "0.0.0",
+      "dirty": true,
+      "expected_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [],
+      "instance_id": "pending",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "publication_disposition": "unpublished",
+      "ref_kind": "branch",
+      "requested_ref": "main",
+      "required_tests": [
+        "unit"
+      ],
+      "resolution_state": "unresolved",
+      "runtime_kind": "native-provider",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "local-only"
+    }
+  ],
+  "dependencies": [],
+  "schema": "kilix.f120.workspace-manifest/v1",
+  "workspace_root": "/workspace"
+}

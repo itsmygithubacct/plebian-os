@@ -1,0 +1,135 @@
+# F120 v1 companion semantics
+
+**Status:** clarification alongside byte-frozen v1; this file does not alter an
+accepted schema or fixture. `contracts/SHA256SUMS` must remain unchanged.
+
+## Authority boundary
+
+F120 records values supplied or observed under an owning stream's contract. A
+workspace manifest and release lock are unauthenticated evidence and can only
+refuse on disagreement. They never grant authority, choose a release, authorize
+a repository or migration, or replace F100/F106/F110/other owner truth.
+
+## Canonical representation
+
+Canonical JSON is UTF-8 `json.dumps(value, indent=2, sort_keys=True)` plus one
+LF. Duplicate keys and documents over 4 MiB are rejected. Arrays whose ordering
+is semantic (`features`, tests, licences by SPDX, notices by path, component
+instances, dependency edges and artifacts) are sorted and unique before
+publication.
+
+## Identity and source bytes
+
+`instance_id` distinguishes path-addressed occurrences. If an owner does not
+supply one, it is:
+
+```text
+component_id + "-" + sha256(normalized_relative_path_utf8)[0:12]
+```
+
+`source_sha256` identifies the committed Git tree, not a tar encoding, checkout
+metadata, dirty bytes, or submodule checkout contents. Start SHA-256 with the
+domain bytes `kilix.f120.source-tree/v1\0`. Walk `git ls-tree -r -z --full-tree
+COMMIT` order. For each entry, length-prefix with an unsigned eight-byte
+big-endian count and hash, in order: mode, object kind, object ID, raw path, and
+blob bytes. A gitlink hashes its commit identity and an empty content field; it
+is not recursively traversed. Finish with the entry count as unsigned
+eight-byte big-endian. Unsupported object kinds fail closed.
+
+A resolved manifest records the observed checkout `HEAD`. Dirty and untracked
+bytes set `dirty=true` but never change `source_sha256`. Notice hashes are
+verified against blobs committed at that same `HEAD`.
+
+Canonical source URLs are credential-free HTTPS URLs with lowercase host, no
+query or fragment, and no trailing slash. A noncanonical observed remote is a
+drift error unless the operator supplied an explicit local evidence override.
+
+Qualification requires exact-commit refs with `requested_ref == expected_commit
+== resolved_commit`, except for the one fixed baseline record:
+
+```text
+component_id = plebian-os
+ref_kind = tag
+requested_ref = v0.2.0
+```
+
+The tag must still resolve to `expected_commit`, checkout `HEAD` must match it,
+and the checkout must be clean. No other tag or branch qualifies.
+
+## Toolchain, options, features and tests
+
+Every build executable is registered by logical name, absolute path and SHA-256
+and verified immediately before either a cache hit or build. Paths are local
+execution inputs and are excluded from persistent metadata. The toolchain
+digest is SHA-256 of canonical JSON:
+
+```json
+{
+  "executables": [{"name": "cc", "sha256": "..."}],
+  "name": "gnu-c",
+  "version": "14.2.0"
+}
+```
+
+Executable entries are sorted and unique by name. `version` is an owner-pinned
+identity string, not runtime discovery.
+
+`features` are sorted, owner-declared output-affecting capabilities.
+`build_options` are canonical scalar output-affecting inputs; NaN and infinity
+are forbidden. `required_tests` are sorted gate identifiers and are evidence
+requirements, not commands the resolver invents or silently runs.
+
+The registration's complete declared recipe (commands, environment, copies and
+artifacts) has its own canonical digest. It is injected as the reserved
+`build_options.f120_recipe_sha256`, ensuring a recipe change changes the frozen
+build key without defining a parallel key.
+
+The only build-cache key is the frozen validator derivation:
+
+```text
+sha256(canonical({
+  architecture,
+  build_options,
+  features,
+  source_sha256,
+  toolchain_digest
+}))
+```
+
+## Dependency vocabulary
+
+Inventory observations map as follows:
+
+- a recursively initialized Git dependency: `recursive-git-submodule`;
+- a provider compiled from a nested/sibling source tree: `nested-source-build`;
+- an immutable F120 public prefix: `staged-prefix`;
+- a distribution/host package surface: `system-package`;
+- an independently running IPC/CLI service: `runtime-process`.
+
+Declaration-only inventory sightings do not create an edge by themselves.
+Qualified release-lock emission rejects recursive/nested build modes: the mode
+may change to `staged-prefix` only after the consumer conversion lands and its
+tests and rollback have been demonstrated.
+
+## Cache and staged prefix
+
+Source entries live at `sources/sha256/SOURCE_DIGEST`; build entries at
+`builds/sha256/BUILD_KEY`. A per-key `flock` serializes writers. Candidates are
+verified before same-filesystem atomic publication. Every hit revalidates its
+metadata and bytes. A corrupt entry is atomically moved under `quarantine/` and
+recreated; it is never silently used. Metadata contains content identities, not
+credentials, operator paths, hostnames or timestamps.
+
+Build commands do not use a shell and must start with a registered
+`{tool:name}`. They run under a bounded, minimal environment with fixed locale,
+timezone, source epoch and temporary directory. Registered environment input
+cannot replace `HOME`, `PATH`, Git credential controls or reproducibility
+variables. Cancellation kills the build process group.
+
+A cached build prefix contains exactly its declared regular files—no symlinks,
+devices or undeclared/private outputs. Artifact bytes are refused if they embed
+the workspace, cache, work, prefix or operator-home path. A staged workspace is
+published only to a new path and adds one canonical
+`share/kilix-f120/INSTANCE.json` manifest per component. Release artifacts bind
+source, frozen build key, architecture, toolchain, features and canonical
+licence-array digest exactly as the frozen validator derives them.

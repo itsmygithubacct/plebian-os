@@ -1,0 +1,48 @@
+{
+  "components": [
+    {
+      "abi_version": "1",
+      "api_version": "1",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {},
+      "canonical_url": "https://github.com/example/provider.git",
+      "component_id": "provider",
+      "component_version": "1.0.0",
+      "dirty": true,
+      "expected_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [],
+      "instance_id": "provider",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "publication_disposition": "unpublished",
+      "ref_kind": "exact-commit",
+      "requested_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "required_tests": [
+        "unit"
+      ],
+      "resolution_state": "resolved",
+      "resolved_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_kind": "native-provider",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "local-only"
+    }
+  ],
+  "dependencies": [],
+  "schema": "kilix.f120.workspace-manifest/v1",
+  "workspace_root": "/workspace"
+}

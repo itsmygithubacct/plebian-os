@@ -1,0 +1,157 @@
+{
+  "components": [
+    {
+      "abi_version": "1",
+      "api_version": "1",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {},
+      "canonical_url": "https://github.com/example/app.git",
+      "component_id": "app",
+      "component_version": "1.0.0",
+      "dirty": false,
+      "expected_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "features": [],
+      "instance_id": "app",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "publication_disposition": "publish",
+      "ref_kind": "exact-commit",
+      "requested_ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "required_tests": [
+        "unit"
+      ],
+      "resolution_state": "resolved",
+      "resolved_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_kind": "process",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "public"
+    },
+    {
+      "abi_version": "2",
+      "api_version": "2",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {},
+      "canonical_url": "https://github.com/example/raster.git",
+      "component_id": "soft-raster",
+      "component_version": "2.0.0",
+      "dirty": false,
+      "expected_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "features": [
+        "simd"
+      ],
+      "instance_id": "raster-a",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "publication_disposition": "publish",
+      "ref_kind": "exact-commit",
+      "requested_ref": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "required_tests": [
+        "unit"
+      ],
+      "resolution_state": "resolved",
+      "resolved_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "runtime_kind": "native-provider",
+      "source_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "public"
+    },
+    {
+      "abi_version": "2",
+      "api_version": "2",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {},
+      "canonical_url": "https://github.com/example/raster.git",
+      "component_id": "soft-raster",
+      "component_version": "2.1.0",
+      "dirty": false,
+      "expected_commit": "cccccccccccccccccccccccccccccccccccccccc",
+      "features": [
+        "simd"
+      ],
+      "instance_id": "raster-b",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "publication_disposition": "publish",
+      "ref_kind": "exact-commit",
+      "requested_ref": "cccccccccccccccccccccccccccccccccccccccc",
+      "required_tests": [
+        "unit"
+      ],
+      "resolution_state": "resolved",
+      "resolved_commit": "cccccccccccccccccccccccccccccccccccccccc",
+      "runtime_kind": "native-provider",
+      "source_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "public"
+    }
+  ],
+  "dependencies": [
+    {
+      "consumption_mode": "nested-source-build",
+      "from": "app",
+      "required_abi_version": "2",
+      "required_api_version": "2",
+      "required_tests": [
+        "integration"
+      ],
+      "runtime_process": "app-process",
+      "to": "raster-a"
+    },
+    {
+      "consumption_mode": "nested-source-build",
+      "from": "app",
+      "required_abi_version": "2",
+      "required_api_version": "2",
+      "required_tests": [
+        "integration"
+      ],
+      "runtime_process": "app-process",
+      "to": "raster-b"
+    }
+  ],
+  "schema": "kilix.f120.workspace-manifest/v1",
+  "workspace_root": "/workspace"
+}

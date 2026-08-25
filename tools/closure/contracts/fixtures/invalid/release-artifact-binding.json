@@ -1,0 +1,58 @@
+{
+  "artifacts": [
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "provider-lib",
+      "artifact_kind": "library",
+      "artifact_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "build_key_sha256": "1b7dd7da4bd19204bfa92bb3ac368bf49af1028416c568329b2e86ba33de3689",
+      "component_instance": "provider",
+      "features": [],
+      "licenses_sha256": "8cde4a880e47b1ae99e030f7d697ddf8240df3142d172217cef0c708fdadc242",
+      "path": "lib/provider.a",
+      "source_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "toolchain_digest": "3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  ],
+  "components": [
+    {
+      "abi_version": "1",
+      "api_version": "1",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {},
+      "canonical_url": "https://github.com/example/provider.git",
+      "component_id": "provider",
+      "component_version": "1.0.0",
+      "features": [],
+      "instance_id": "provider",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "publication_disposition": "publish",
+      "required_tests": [
+        "unit"
+      ],
+      "resolved_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_kind": "native-provider",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "public"
+    }
+  ],
+  "dependencies": [],
+  "release": "0.2.1",
+  "schema": "kilix.f120.release-lock/v1"
+}

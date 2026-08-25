@@ -1,0 +1,130 @@
+{
+  "artifacts": [
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "app-bin",
+      "artifact_kind": "command",
+      "artifact_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "build_key_sha256": "33318825787de6d0ed6366a7acd03ef74a72fb68e1c9bb4bb9a293da63d1b64b",
+      "component_instance": "app",
+      "features": [
+        "terminal"
+      ],
+      "licenses_sha256": "8cde4a880e47b1ae99e030f7d697ddf8240df3142d172217cef0c708fdadc242",
+      "path": "bin/example-app",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "toolchain_digest": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "raster-lib",
+      "artifact_kind": "library",
+      "artifact_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+      "build_key_sha256": "ceda7886e68e6b3688fd0b822eec3d13f6b1b3d3f529a74feafeea6a81d9b94f",
+      "component_instance": "raster",
+      "features": [
+        "simd"
+      ],
+      "licenses_sha256": "73da8921e08a353d9baed6d3d79d9a5bff66ccfb00d87a736765f7e601a8cbe0",
+      "path": "lib/libraster.a",
+      "source_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "toolchain_digest": "3333333333333333333333333333333333333333333333333333333333333333"
+    }
+  ],
+  "components": [
+    {
+      "abi_version": "1",
+      "api_version": "1",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {},
+      "canonical_url": "https://github.com/example/app.git",
+      "component_id": "example-app",
+      "component_version": "1.0.0",
+      "features": [
+        "terminal"
+      ],
+      "instance_id": "app",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      ],
+      "publication_disposition": "publish",
+      "required_tests": [
+        "unit"
+      ],
+      "resolved_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_kind": "process",
+      "source_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "public"
+    },
+    {
+      "abi_version": "2",
+      "api_version": "2",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {
+        "simd": true
+      },
+      "canonical_url": "https://github.com/example/soft-raster.git",
+      "component_id": "soft-raster",
+      "component_version": "2.1.0",
+      "features": [
+        "simd"
+      ],
+      "instance_id": "raster",
+      "licenses": [
+        {
+          "spdx": "MIT",
+          "text_sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "notices": [
+        {
+          "path": "LICENSE",
+          "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      ],
+      "publication_disposition": "publish",
+      "required_tests": [
+        "abi",
+        "unit"
+      ],
+      "resolved_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "runtime_kind": "native-provider",
+      "source_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "toolchain": {
+        "digest": "3333333333333333333333333333333333333333333333333333333333333333",
+        "name": "gcc",
+        "version": "14.2"
+      },
+      "visibility": "public"
+    }
+  ],
+  "dependencies": [
+    {
+      "consumption_mode": "staged-prefix",
+      "from": "app",
+      "required_abi_version": "2",
+      "required_api_version": "2",
+      "required_tests": [
+        "integration"
+      ],
+      "runtime_process": "app-process",
+      "to": "raster"
+    }
+  ],
+  "release": "0.2.1",
+  "schema": "kilix.f120.release-lock/v1"
+}

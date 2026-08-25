@@ -1,0 +1,11 @@
+[project]
+name = "kilix-f120-closure"
+version = "0.1.0"
+description = "Exact F120 workspace closure, source cache, and staged-provider tooling"
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema[format]==4.25.1",
+]
+
+[tool.uv]
+package = false
