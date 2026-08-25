@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "releases" / "0.1.9.requirements"
+NEXT_POLICY = ROOT / "releases" / "0.2.1.requirements"
 DEPS = ROOT / "provision" / "install-deps.sh"
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 EXPECTED = {
@@ -15,6 +16,14 @@ EXPECTED = {
     "PLEBIAN_OS_UV_INSTALLER_SHA256": (
         "a7e3924ea1cd06bf1518c577d635c624ae2e2db030e0fc8ff8cf426224384e17"
     ),
+}
+NEXT_EXPECTED = {
+    "PLEBIAN_OS_INSTALL_UV": "1",
+    "PLEBIAN_OS_UV_VERSION": "0.12.5",
+    "PLEBIAN_OS_UV_INSTALLER_SHA256": (
+        "504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111"
+    ),
+    "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "71225",
 }
 
 
@@ -46,6 +55,9 @@ def shell_function(path: Path, name: str) -> str:
 class UvReleasePolicyTests(unittest.TestCase):
     def test_0_1_9_requires_the_verified_uv_pin(self):
         self.assertEqual(parse_values(POLICY), EXPECTED)
+
+    def test_0_2_1_requires_the_verified_uv_pin(self):
+        self.assertEqual(parse_values(NEXT_POLICY), NEXT_EXPECTED)
 
     def test_final_manifest_must_repeat_the_policy_when_created(self):
         manifest = ROOT / "releases" / "0.1.9.env"
