@@ -22,6 +22,7 @@ from .cache import (
 )
 from .canonical import atomic_write_json, file_sha256, load_json, require_relative_path
 from .errors import BuildError, CacheError, ContractError
+from .execution import prepare_launch, run_with_execution_closure
 from .gitops import git_environment
 from .keys import build_key_sha256
 from .registration import BuildRecipe, ComponentRegistration
@@ -208,6 +209,7 @@ def _run_commands(
         match = TOOL_TOKEN_RE.fullmatch(command[0])
         if match is None:
             raise BuildError("each build command must start with an exact {tool:name}")
+        executable = registration.toolchain.executable_record(match.group(1))
         arguments = [
             _render(
                 argument,
@@ -218,29 +220,21 @@ def _run_commands(
             )
             for argument in command
         ]
-        process = subprocess.Popen(
+        launch = prepare_launch(
+            executable,
             arguments,
-            cwd=source,
-            env=environment,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
+            registration.toolchain,
+            environment,
+            source,
+            build / "tmp",
         )
-        try:
-            process.wait(timeout=BUILD_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired as exc:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait()
-            raise BuildError("provider build exceeded the fixed timeout") from exc
-        except BaseException:
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
-            raise
-        if process.returncode:
-            # Build output may include local paths or source-controlled secrets.
-            # Preserve only the bounded exit status in the public diagnostic.
-            raise BuildError(f"provider build failed with exit {process.returncode}")
+        run_with_execution_closure(
+            launch,
+            environment=environment,
+            cwd=source,
+            toolchain=registration.toolchain,
+            timeout=BUILD_TIMEOUT_SECONDS,
+        )
 
 
 def _contains_private_path(path: Path, needles: list[bytes]) -> bool:

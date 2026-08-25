@@ -24,6 +24,6 @@
     }
   ],
   "dependencies": [],
-  "schema": "kilix.f120.registration/v1",
+  "schema": "kilix.f120.registration/v2",
   "workspace_root": "/workspace"
 }

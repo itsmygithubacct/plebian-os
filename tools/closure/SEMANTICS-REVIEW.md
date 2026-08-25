@@ -1,8 +1,9 @@
-# F120 v1 companion-semantics review
+# F120 companion-semantics/v2 review
 
 **Review date:** 2026-08-25
-**Status:** frozen clarification; it changes no frozen v1 schema, validator or
-fixture byte.
+**Status:** refrozen clarification; it changes no frozen workspace/release v1
+schema, validator or fixture byte. It supersedes companion-semantics/v1 and
+changes the non-authoritative registration input identity to v2.
 
 ## Inputs
 
@@ -26,6 +27,8 @@ fixture byte.
 | S08 | The first implementation bound `resolved_commit` and its timestamp inside caches whose frozen keys bind only source-tree bytes. | Commit identity was removed from source/build metadata, the cached ref is content-only, and `SOURCE_DATE_EPOCH=0`; same-tree distinct commits now hit one exact key and forced rebuilds are byte-identical. |
 | S09 | Loading the executable frozen validator before independently checking its bytes trusted the verifier to attest to itself. | The fixed manifest identity and every listed file digest are now parsed and checked independently before the validator module is imported. |
 | S10 | A publication race, failed paired lock publication or over-broad retirement target could replace, leave or move the wrong public path. | Cache/prefix publication uses Linux atomic no-replace rename, lock publication uses atomic no-replace linkage, a failed pair recoverably retires the prefix, cache/stage paths are disjoint from the workspace, and retirement requires exact F120 stage markers and lock/file agreement. |
+| S11 | Python processed subject-controlled `sitecustomize`, `usercustomize` or `.pth` bytes before the old resolver/check bodies, so forged PASS plus exit zero could bypass every validator. | Release entry is an independently accepted external native launcher. It verifies the complete subject/runtime/dependency/bootstrap closure before direct descriptor execution of pinned Python with `-I -S -B`, an empty external cwd and exact environment. Subject code runs only in children without the result descriptor; only the launcher's bounded canonical record authorizes success. |
+| S12 | A digest-bound build wrapper could select an undeclared or site-enabled child executable. | Registration/v2 classifies every executable and binds script interpreters. A ptrace exec monitor verifies every descendant before user-space execution; Python scripts additionally route through the same pinned interpreter/bootstrap profile. Registration/v1 is refused rather than reinterpreted. |
 
 ## Freeze gates
 
@@ -41,7 +44,13 @@ fixture byte.
    cancellation, paired-publication and rollback tests pass under uv 0.12.5
    with the locked dependency graph.
 8. A second full run changes no semantic or frozen-package hash.
+9. Calibrated startup hooks forge the historical command but are refused by the
+   external command whether absent from or listed in a candidate manifest.
+10. Every launch/result guard has a causal one-change mutant, and a registered
+    wrapper's undeclared Python child is stopped before its source hook runs.
 
-All gates passed. Incompatible meaning changes require a new companion-semantics
-identity and, where accepted-document behavior changes, new frozen contract
-schema identities.
+The original S01-S10 gates passed for companion-semantics/v1. The v2 gates are
+accepted only by the retained trusted-launcher qualification packet; this review
+does not claim them from source inspection. Future incompatible meaning changes
+require another companion-semantics identity and, where accepted-document
+behavior changes, new frozen contract schema identities.

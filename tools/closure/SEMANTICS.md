@@ -1,7 +1,12 @@
 # F120 v1 companion semantics
 
-**Status:** clarification alongside byte-frozen v1; this file does not alter an
-accepted schema or fixture. `contracts/SHA256SUMS` must remain unchanged.
+**Companion identity:** `kilix.f120.companion-semantics/v2`
+
+**Status:** refrozen clarification alongside byte-frozen workspace/release v1;
+this file does not alter an accepted schema or fixture.
+`contracts/SHA256SUMS` must remain unchanged. Registration inputs use
+`kilix.f120.registration/v2`; v1 registration is refused because it cannot bind
+the executable classification/interpreter closure added by this revision.
 
 ## Authority boundary
 
@@ -58,24 +63,30 @@ and the checkout must be clean. No other tag or branch qualifies.
 
 ## Toolchain, options, features and tests
 
-Every build executable is registered by logical name, absolute path and SHA-256
-and verified immediately before either a cache hit or build. Paths are local
-execution inputs and are excluded from persistent metadata. The toolchain
-digest is SHA-256 of canonical JSON:
+Every build executable is registered by logical name, absolute path, SHA-256,
+kind and optional interpreter name and verified immediately before either a
+cache hit or build. Paths are local execution inputs and are excluded from
+persistent metadata. The toolchain digest is SHA-256 of canonical JSON:
 
 ```json
 {
-  "executables": [{"name": "cc", "sha256": "..."}],
+  "executables": [
+    {"interpreter": null, "kind": "native", "name": "cc", "sha256": "..."}
+  ],
   "name": "gnu-c",
   "version": "14.2.0"
 }
 ```
 
-Executable entries are sorted and unique by name. `version` is an owner-pinned
-identity string, not runtime discovery. A build's `PATH` is a private directory
-containing only logical-name symlinks to those digest-verified executables; it
-never inherits `/usr/bin`, `/bin` or an operator path. Owners must register
-every executable their recipe invokes, including executable children.
+Executable entries are sorted and unique by name. Kinds are `native`, `script`,
+`python-interpreter` and `python-script`; both script kinds bind a registered
+interpreter. `version` is an owner-pinned identity string, not runtime discovery.
+A build's `PATH` is a private directory containing only logical-name symlinks to
+those digest-verified executables; it never inherits `/usr/bin`, `/bin` or an
+operator path. A Linux ptrace monitor stops every descendant at its kernel exec
+event and refuses an identity absent from the registration before its first
+user-space instruction. This makes registration of executable children an
+enforced closure rather than owner prose.
 
 `features` are sorted, owner-declared output-affecting capabilities.
 `build_options` are canonical scalar output-affecting inputs; NaN and infinity
@@ -138,8 +149,15 @@ object bytes); a hit records zero.
 Build commands do not use a shell and must start with a registered
 `{tool:name}`. They run under a bounded, minimal environment with fixed locale,
 timezone, source epoch and temporary directory. Registered environment input
-cannot replace `HOME`, `PATH`, Git credential controls or reproducibility
-variables. Cancellation kills the build process group.
+cannot replace `HOME`, `PATH`, Git credential controls, reproducibility
+variables, Python startup state, loader state, virtual environments or
+package-manager/plugin configuration. Direct Python-interpreter commands are
+refused. A `python-script` is invoked with the authority bundle's exact pinned
+interpreter and external bootstrap under `-I -S -B`; its initial cwd is an empty
+mode-0700 directory and the source is added only after that envelope is checked.
+Recipe-controlled names are confined to `F120_INPUT_[A-Z0-9_]+`, making this a
+positive namespace rather than a finite startup-variable denylist. Cancellation
+kills the build process group.
 
 A cached build prefix contains exactly its declared regular files—no symlinks,
 devices or undeclared/private outputs. Artifact bytes are refused if they embed

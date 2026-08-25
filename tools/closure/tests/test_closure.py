@@ -6,6 +6,7 @@ import json
 import multiprocessing
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -221,6 +222,7 @@ class ClosureIntegrationTest(unittest.TestCase):
                     "toolchain": {
                         "executables": [
                             {
+                                "kind": "native",
                                 "name": "cp",
                                 "path": str(copy_tool),
                                 "sha256": file_sha256(copy_tool),
@@ -233,7 +235,7 @@ class ClosureIntegrationTest(unittest.TestCase):
                 }
             ],
             "dependencies": [],
-            "schema": "kilix.f120.registration/v1",
+            "schema": "kilix.f120.registration/v2",
             "workspace_root": str(self.workspace),
         }
         atomic_write_json(self.registration_path, self.registration_document)
@@ -398,6 +400,15 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertNotIn("resolved_commit", build_metadata)
 
     def test_same_tree_rebuild_is_independent_of_commit_timestamp(self) -> None:
+        startup_marker = self.root / "provider-sitecustomize-marker"
+        (self.repository / "sitecustomize.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(startup_marker)!r}).write_text('ran', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        git(self.repository, "add", "sitecustomize.py")
+        git(self.repository, "commit", "-m", "add calibrated provider startup hook")
+        first_commit = git(self.repository, "rev-parse", "HEAD")
         writer = self.root / "write-source-epoch"
         writer.write_text(
             "#!/usr/bin/python3\n"
@@ -411,9 +422,19 @@ class ClosureIntegrationTest(unittest.TestCase):
         writer.chmod(0o755)
         first_document = copy.deepcopy(self.registration_document)
         first_component = first_document["components"][0]
+        first_component["expected_commit"] = first_commit
+        first_component["requested_ref"] = first_commit
         first_component["toolchain"] = {
             "executables": [
                 {
+                    "kind": "python-interpreter",
+                    "name": "python",
+                    "path": str(Path(sys.executable).resolve()),
+                    "sha256": file_sha256(Path(sys.executable).resolve()),
+                },
+                {
+                    "interpreter": "python",
+                    "kind": "python-script",
                     "name": "write-source-epoch",
                     "path": str(writer),
                     "sha256": file_sha256(writer),
@@ -445,6 +466,7 @@ class ClosureIntegrationTest(unittest.TestCase):
             release_lock=self.root / "epoch-first.lock.json",
             local_sources={"provider": self.repository},
         )
+        self.assertFalse(startup_marker.exists())
 
         git(
             self.repository,
@@ -488,6 +510,7 @@ class ClosureIntegrationTest(unittest.TestCase):
             local_sources={"provider": self.repository},
         )
         self.assertEqual((rebuilt.fetches, rebuilt.builds), (0, 1))
+        self.assertFalse(startup_marker.exists())
         self.assertEqual(
             tree_bytes(self.root / "epoch-first-stage"),
             tree_bytes(self.root / "epoch-second-stage"),
@@ -595,6 +618,7 @@ class ClosureIntegrationTest(unittest.TestCase):
         component["toolchain"] = {
             "executables": [
                 {
+                    "kind": "native",
                     "name": "sleep",
                     "path": str(sleep_tool),
                     "sha256": file_sha256(sleep_tool),
@@ -760,12 +784,98 @@ class ClosureIntegrationTest(unittest.TestCase):
         )
 
     def test_registration_rejects_reserved_build_environment(self) -> None:
+        for index, name in enumerate(("HOME", "PYTHONPATH", "LD_PRELOAD", "UV_PROJECT")):
+            with self.subTest(name=name):
+                document = copy.deepcopy(self.registration_document)
+                document["components"][0]["build"]["environment"] = {name: "/tmp"}
+                path = self.root / f"reserved-environment-{index}.json"
+                atomic_write_json(path, document)
+                with self.assertRaises(RegistrationError):
+                    load_registration(path)
+        allowed = copy.deepcopy(self.registration_document)
+        allowed["components"][0]["build"]["environment"] = {
+            "F120_INPUT_MODE": "fixture"
+        }
+        allowed_path = self.root / "allowed-environment.json"
+        atomic_write_json(allowed_path, allowed)
+        self.assertEqual(
+            load_registration(allowed_path).components[0].build.environment,
+            (("F120_INPUT_MODE", "fixture"),),
+        )
+
+    def test_registration_v1_is_refused_not_reinterpreted(self) -> None:
         document = copy.deepcopy(self.registration_document)
-        document["components"][0]["build"]["environment"] = {"HOME": "/tmp"}
-        path = self.root / "reserved-environment.json"
+        document["schema"] = "kilix.f120.registration/v1"
+        path = self.root / "registration-v1.json"
         atomic_write_json(path, document)
         with self.assertRaises(RegistrationError):
             load_registration(path)
+
+    def test_registered_wrapper_cannot_exec_an_undeclared_python(self) -> None:
+        marker = self.root / "undeclared-python-marker"
+        (self.repository / "sitecustomize.py").write_text(
+            "from pathlib import Path\n"
+            f"Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n",
+            encoding="utf-8",
+        )
+        git(self.repository, "add", "sitecustomize.py")
+        git(self.repository, "commit", "-m", "add wrapper startup probe")
+        commit = git(self.repository, "rev-parse", "HEAD")
+        shell = Path("/bin/sh").resolve()
+        python = Path("/usr/bin/python3").resolve()
+        wrapper = self.root / "python-wrapper"
+        wrapper.write_text(
+            f"#!{shell}\nPYTHONPATH=: exec {python} -c 'raise SystemExit(0)'\n",
+            encoding="utf-8",
+        )
+        wrapper.chmod(0o700)
+        document = copy.deepcopy(self.registration_document)
+        component = document["components"][0]
+        component["expected_commit"] = commit
+        component["requested_ref"] = commit
+        component["toolchain"] = {
+            "executables": [
+                {
+                    "kind": "native",
+                    "name": "sh",
+                    "path": str(shell),
+                    "sha256": file_sha256(shell),
+                },
+                {
+                    "interpreter": "sh",
+                    "kind": "script",
+                    "name": "wrapper",
+                    "path": str(wrapper),
+                    "sha256": file_sha256(wrapper),
+                },
+            ],
+            "name": "wrapper-fixture",
+            "version": "fixture",
+        }
+        component["build"]["commands"] = [["{tool:wrapper}"]]
+        registration_path = self.root / "wrapper-registration.json"
+        manifest_path = self.root / "wrapper-workspace.json"
+        atomic_write_json(registration_path, document)
+        registration = load_registration(registration_path)
+        manifest = emit_workspace_manifest(
+            registration,
+            manifest_path,
+            local_sources={"provider": self.repository},
+            qualify=True,
+        )
+        with self.assertRaises(BuildError):
+            stage_workspace(
+                registration,
+                manifest,
+                cache=self.root / "wrapper-cache",
+                destination=self.root / "wrapper-stage",
+                release="0.2.1",
+                release_lock=self.root / "wrapper.lock.json",
+                local_sources={"provider": self.repository},
+            )
+        self.assertFalse(marker.exists())
+        self.assertFalse((self.root / "wrapper-stage").exists())
+        self.assertFalse((self.root / "wrapper.lock.json").exists())
 
     def test_unresolved_component_is_development_only(self) -> None:
         document = copy.deepcopy(self.registration_document)

@@ -1,0 +1,628 @@
+#!/usr/bin/env python3
+"""First-Python bootstrap for the external F120 authority launcher."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import runpy
+import stat
+import sys
+import traceback
+from pathlib import Path
+
+
+MANIFEST_HEADER = b"KILIX-F120-CLOSURE-MANIFEST-v1\n"
+RESULT_SCHEMA = "kilix.f120.authority-result/v1"
+RESERVED_NAMES = {"sitecustomize.py", "usercustomize.py"}
+MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+FORBIDDEN_PROVIDER_ENVIRONMENT = {
+    "BASH_ENV",
+    "ENV",
+    "PERL5LIB",
+    "RUBYOPT",
+    "VIRTUAL_ENV",
+}
+FORBIDDEN_PROVIDER_PREFIXES = (
+    "CONDA_",
+    "DYLD_",
+    "LD_",
+    "NODE_",
+    "NPM_",
+    "PIP_",
+    "PYTHON",
+    "UV_",
+)
+FIXED_PROVIDER_ENVIRONMENT = {
+    "GIT_ASKPASS",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_TERMINAL_PROMPT",
+    "LC_ALL",
+    "PATH",
+    "SOURCE_DATE_EPOCH",
+    "TMPDIR",
+    "TZ",
+}
+
+
+class Refusal(ValueError):
+    """A stable fail-closed launch refusal."""
+
+
+def _sha256_fd(descriptor: int) -> str:
+    digest = hashlib.sha256()
+    offset = 0
+    while True:
+        block = os.pread(descriptor, 1024 * 1024, offset)
+        if not block:
+            return digest.hexdigest()
+        digest.update(block)
+        offset += len(block)
+
+
+def _read_fd(descriptor: int, limit: int) -> bytes:
+    result = bytearray()
+    offset = 0
+    while True:
+        block = os.pread(descriptor, min(1024 * 1024, limit + 1 - len(result)), offset)
+        if not block:
+            return bytes(result)
+        result.extend(block)
+        offset += len(block)
+        if len(result) > limit:
+            raise Refusal("manifest exceeds fixed size limit")
+
+
+def _entry_line(kind: str, mode: int, size: int, digest: str, relative: str) -> bytes:
+    if any(character in relative for character in ("\0", "\n", "\r", "\t")):
+        raise Refusal("manifest path contains a control separator")
+    return f"{kind}\t{mode:04o}\t{size}\t{digest}\t{relative}\n".encode("utf-8")
+
+
+def _manifest_bytes(root_fd: int, *, reject_reserved: bool) -> bytes:
+    root = os.fstat(root_fd)
+    if not stat.S_ISDIR(root.st_mode):
+        raise Refusal("closure root is not a directory")
+    identities: set[tuple[int, int]] = {(root.st_dev, root.st_ino)}
+    lines: list[bytes] = []
+
+    def walk(directory_fd: int, prefix: str) -> None:
+        try:
+            os.lseek(directory_fd, 0, os.SEEK_SET)
+            names = sorted(os.listdir(directory_fd))
+        except OSError as exc:
+            raise Refusal("cannot enumerate closure root") from exc
+        for name in names:
+            if name in {".", ".."}:
+                raise Refusal("closure has an invalid directory member")
+            if reject_reserved and (name in RESERVED_NAMES or name.endswith(".pth")):
+                raise Refusal(f"reserved Python startup member: {prefix}{name}")
+            if any(character in name for character in ("\0", "\n", "\r", "\t", "/")):
+                raise Refusal("closure member name is not representable")
+            try:
+                information = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            except OSError as exc:
+                raise Refusal("cannot stat closure member") from exc
+            relative = f"{prefix}{name}"
+            if information.st_dev != root.st_dev:
+                raise Refusal(f"cross-device closure member: {relative}")
+            identity = (information.st_dev, information.st_ino)
+            if identity in identities:
+                raise Refusal(f"aliased closure member: {relative}")
+            identities.add(identity)
+            mode = stat.S_IMODE(information.st_mode)
+            flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+            if stat.S_ISDIR(information.st_mode):
+                child = os.open(name, flags | os.O_DIRECTORY, dir_fd=directory_fd)
+                try:
+                    lines.append(_entry_line("d", mode, 0, "-", relative))
+                    walk(child, relative + "/")
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(information.st_mode):
+                child = os.open(name, flags, dir_fd=directory_fd)
+                try:
+                    current = os.fstat(child)
+                    if (current.st_dev, current.st_ino) != identity:
+                        raise Refusal(f"closure member changed during open: {relative}")
+                    lines.append(
+                        _entry_line(
+                            "f", mode, information.st_size, _sha256_fd(child), relative
+                        )
+                    )
+                finally:
+                    os.close(child)
+            else:
+                raise Refusal(f"non-regular closure member: {relative}")
+
+    walk(root_fd, "")
+    return MANIFEST_HEADER + b"".join(lines)
+
+
+def _verify_manifest(
+    root_fd: int,
+    manifest_fd: int,
+    expected_sha256: str,
+    *,
+    label: str,
+    reject_reserved: bool,
+) -> None:
+    expected = _read_fd(manifest_fd, MAX_MANIFEST_BYTES)
+    if hashlib.sha256(expected).hexdigest() != expected_sha256:
+        raise Refusal(f"{label} authority manifest digest mismatch")
+    observed = _manifest_bytes(root_fd, reject_reserved=reject_reserved)
+    if observed != expected:
+        observed_sha256 = hashlib.sha256(observed).hexdigest()
+        expected_lines = expected.splitlines()
+        observed_lines = observed.splitlines()
+        mismatch = min(len(expected_lines), len(observed_lines))
+        for index, (expected_line, observed_line) in enumerate(
+            zip(expected_lines, observed_lines)
+        ):
+            if expected_line != observed_line:
+                mismatch = index
+                break
+        expected_detail = (
+            expected_lines[mismatch][:240].decode("utf-8", "replace")
+            if mismatch < len(expected_lines)
+            else "<missing>"
+        )
+        observed_detail = (
+            observed_lines[mismatch][:240].decode("utf-8", "replace")
+            if mismatch < len(observed_lines)
+            else "<missing>"
+        )
+        raise Refusal(
+            f"{label} exact closure differs from authority manifest "
+            f"(observed {observed_sha256}; line {mismatch + 1}: "
+            f"expected {expected_detail!r}, observed {observed_detail!r})"
+        )
+
+
+def _same_file(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _resolved_fd(descriptor: int) -> Path:
+    try:
+        return Path(os.readlink(f"/proc/self/fd/{descriptor}")).resolve(strict=True)
+    except OSError as exc:
+        raise Refusal("cannot resolve retained authority descriptor") from exc
+
+
+def _inside(candidate: Path, root: Path) -> bool:
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _kernel_argv() -> list[str]:
+    try:
+        raw = Path("/proc/self/cmdline").read_bytes()
+    except OSError as exc:
+        raise Refusal("cannot read kernel argv") from exc
+    if not raw.endswith(b"\0"):
+        raise Refusal("kernel argv is malformed")
+    try:
+        return [item.decode("utf-8") for item in raw[:-1].split(b"\0")]
+    except UnicodeDecodeError as exc:
+        raise Refusal("kernel argv is not UTF-8") from exc
+
+
+def _python_startup_guard(
+    *,
+    python_fd: int,
+    python_sha256: str,
+    bootstrap_fd: int,
+    bootstrap_sha256: str,
+) -> tuple[str, ...]:
+    flags = sys.flags
+    required = {
+        "dont_write_bytecode": 1,
+        "ignore_environment": 1,
+        "isolated": 1,
+        "no_site": 1,
+        "no_user_site": 1,
+        "safe_path": True,
+    }
+    for name, expected in required.items():
+        if getattr(flags, name) != expected:
+            raise Refusal(f"required Python flag absent: {name}")
+    for name in ("site", "sitecustomize", "usercustomize"):
+        if name in sys.modules:
+            raise Refusal(f"startup module already loaded: {name}")
+
+    kernel = _kernel_argv()
+    expected_script = f"/proc/self/fd/{bootstrap_fd}"
+    if len(kernel) < 5 or kernel[1:5] != ["-I", "-S", "-B", expected_script]:
+        raise Refusal("kernel argv lacks exact ordered -I -S -B bootstrap launch")
+
+    python_information = os.fstat(python_fd)
+    try:
+        executable_information = Path("/proc/self/exe").stat()
+        sys_executable_information = Path(sys.executable).stat()
+    except OSError as exc:
+        raise Refusal("cannot bind live interpreter identity") from exc
+    if not stat.S_ISREG(python_information.st_mode):
+        raise Refusal("pinned interpreter is not a regular file")
+    if not _same_file(python_information, executable_information):
+        raise Refusal("live executable differs from pinned interpreter descriptor")
+    if not _same_file(python_information, sys_executable_information):
+        raise Refusal("sys.executable differs from pinned interpreter descriptor")
+    if _sha256_fd(python_fd) != python_sha256:
+        raise Refusal("pinned interpreter digest mismatch")
+    if _sha256_fd(bootstrap_fd) != bootstrap_sha256:
+        raise Refusal("trusted bootstrap digest mismatch")
+    return tuple(sys.path)
+
+
+def _initial_guard(arguments: argparse.Namespace) -> tuple[Path, tuple[str, ...]]:
+    initial_sys_path = _python_startup_guard(
+        python_fd=arguments.python_fd,
+        python_sha256=arguments.python_sha256,
+        bootstrap_fd=arguments.bootstrap_fd,
+        bootstrap_sha256=arguments.bootstrap_sha256,
+    )
+
+    expected_environment = {
+        "LC_ALL": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+        "TMPDIR": arguments.tmpdir,
+        "TZ": "UTC",
+    }
+    if dict(os.environ) != expected_environment:
+        raise Refusal("process environment differs from the exact launch profile")
+
+    cwd = Path.cwd().resolve(strict=True)
+    if str(cwd) != arguments.tmpdir:
+        raise Refusal("process cwd differs from the launch profile")
+    cwd_information = cwd.stat()
+    if stat.S_IMODE(cwd_information.st_mode) != 0o700 or any(cwd.iterdir()):
+        raise Refusal("authority cwd is not an empty mode-0700 directory")
+
+    subject = _resolved_fd(arguments.subject_fd)
+    subject_information = os.fstat(arguments.subject_fd)
+    try:
+        path_information = Path(arguments.subject_path).stat(follow_symlinks=False)
+    except OSError as exc:
+        raise Refusal("subject path no longer identifies the retained root") from exc
+    if not _same_file(subject_information, path_information):
+        raise Refusal("subject path and retained descriptor disagree")
+    if subject_information.st_dev != arguments.subject_device:
+        raise Refusal("subject device identity mismatch")
+    if subject_information.st_ino != arguments.subject_inode:
+        raise Refusal("subject inode identity mismatch")
+
+    dependency = _resolved_fd(arguments.dependency_fd)
+    runtime = _resolved_fd(arguments.runtime_fd)
+    for controlled in (subject, dependency, runtime):
+        if _inside(cwd, controlled) or _inside(controlled, cwd):
+            raise Refusal("authority cwd overlaps controlled bytes")
+
+    forbidden = {subject, *subject.parents}
+    initial_path: list[str] = []
+    for entry in initial_sys_path:
+        if not entry:
+            raise Refusal("initial sys.path contains an empty entry")
+        try:
+            resolved = Path(entry).resolve(strict=False)
+        except OSError as exc:
+            raise Refusal("cannot resolve initial sys.path") from exc
+        if resolved in forbidden:
+            raise Refusal("subject or subject parent appears on initial sys.path")
+        initial_path.append(entry)
+    return subject, tuple(initial_path)
+
+
+def _environment_sha256() -> str:
+    encoded = json.dumps(
+        dict(os.environ), sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _provider_main(arguments: argparse.Namespace) -> int:
+    initial_path = _python_startup_guard(
+        python_fd=arguments.python_fd,
+        python_sha256=arguments.python_sha256,
+        bootstrap_fd=arguments.bootstrap_fd,
+        bootstrap_sha256=arguments.bootstrap_sha256,
+    )
+    if _environment_sha256() != arguments.environment_sha256:
+        raise Refusal("provider environment differs from its exact profile")
+    for name in os.environ:
+        if name in FORBIDDEN_PROVIDER_ENVIRONMENT or name.startswith(
+            FORBIDDEN_PROVIDER_PREFIXES
+        ):
+            raise Refusal(f"provider environment contains forbidden startup name: {name}")
+        if name not in FIXED_PROVIDER_ENVIRONMENT and not name.startswith(
+            "F120_INPUT_"
+        ):
+            raise Refusal(f"provider environment contains an unprofiled name: {name}")
+    cwd = Path.cwd().resolve(strict=True)
+    if str(cwd) != arguments.tmpdir:
+        raise Refusal("provider bootstrap cwd differs from its exact profile")
+    information = cwd.stat()
+    if stat.S_IMODE(information.st_mode) != 0o700 or any(cwd.iterdir()):
+        raise Refusal("provider bootstrap cwd is not empty mode-0700")
+
+    source = _resolved_fd(arguments.source_fd)
+    source_information = os.fstat(arguments.source_fd)
+    path_information = Path(arguments.source_path).stat(follow_symlinks=False)
+    if not _same_file(source_information, path_information):
+        raise Refusal("provider source path and retained descriptor disagree")
+    if _inside(cwd, source) or _inside(source, cwd):
+        raise Refusal("provider bootstrap cwd overlaps source")
+
+    script_information = os.fstat(arguments.script_fd)
+    registered_information = Path(arguments.script_path).stat(follow_symlinks=False)
+    if not stat.S_ISREG(script_information.st_mode) or not _same_file(
+        script_information, registered_information
+    ):
+        raise Refusal("provider script path and retained descriptor disagree")
+    if _sha256_fd(arguments.script_fd) != arguments.script_sha256:
+        raise Refusal("provider script digest mismatch")
+
+    forbidden = {source, *source.parents}
+    for entry in initial_path:
+        if not entry:
+            raise Refusal("provider initial sys.path contains an empty entry")
+        if Path(entry).resolve(strict=False) in forbidden:
+            raise Refusal("provider source appears on initial sys.path")
+
+    forwarded = arguments.forwarded
+    if forwarded[:1] == ["--"]:
+        forwarded = forwarded[1:]
+    os.chdir(source)
+    sys.path[:] = [f"/proc/self/fd/{arguments.source_fd}", *initial_path]
+    sys.argv = [arguments.script_path, *forwarded]
+    try:
+        runpy.run_path(f"/proc/self/fd/{arguments.script_fd}", run_name="__main__")
+    except SystemExit as exc:
+        return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
+    return 0
+
+
+def _verify_all(arguments: argparse.Namespace) -> None:
+    _verify_manifest(
+        arguments.runtime_fd,
+        arguments.runtime_manifest_fd,
+        arguments.runtime_manifest_sha256,
+        label="runtime",
+        reject_reserved=False,
+    )
+    _verify_manifest(
+        arguments.dependency_fd,
+        arguments.dependency_manifest_fd,
+        arguments.dependency_manifest_sha256,
+        label="dependency",
+        reject_reserved=False,
+    )
+    _verify_manifest(
+        arguments.subject_fd,
+        arguments.subject_manifest_fd,
+        arguments.subject_manifest_sha256,
+        label="subject",
+        reject_reserved=True,
+    )
+
+
+def _verify_companion_hashes(subject_fd: int) -> None:
+    try:
+        manifest_fd = os.open(
+            "SHA256SUMS", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=subject_fd
+        )
+        manifest = _read_fd(manifest_fd, 64 * 1024).decode("ascii")
+        os.close(manifest_fd)
+    except (OSError, UnicodeDecodeError) as exc:
+        raise Refusal("cannot read companion-semantics hash manifest") from exc
+    expected_names = ["SEMANTICS-REVIEW.md", "SEMANTICS.md"]
+    lines = manifest.splitlines()
+    if len(lines) != len(expected_names):
+        raise Refusal("companion-semantics hash manifest has the wrong file set")
+    observed_names: list[str] = []
+    for line in lines:
+        digest, separator, name = line.partition("  ")
+        if (
+            not separator
+            or len(digest) != 64
+            or any(character not in "0123456789abcdef" for character in digest)
+        ):
+            raise Refusal("companion-semantics hash manifest is malformed")
+        observed_names.append(name)
+        try:
+            descriptor = os.open(
+                name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=subject_fd
+            )
+        except OSError as exc:
+            raise Refusal("companion-semantics file is absent or non-regular") from exc
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise Refusal("companion-semantics member is not a regular file")
+            if _sha256_fd(descriptor) != digest:
+                raise Refusal("companion-semantics digest mismatch")
+        finally:
+            os.close(descriptor)
+    if observed_names != expected_names:
+        raise Refusal("companion-semantics hash manifest is not canonical")
+
+
+def _child_main(
+    kind: str,
+    forwarded: list[str],
+    arguments: argparse.Namespace,
+    initial_path: tuple[str, ...],
+) -> int:
+    # The complete closure and path/fd identity were accepted before this
+    # intentional-execution child.  Use the verified absolute path so frozen
+    # validators whose own semantics compare __file__ and resolved roots retain
+    # their byte-frozen behavior.
+    subject_path = arguments.subject_path
+    dependency_path = f"/proc/self/fd/{arguments.dependency_fd}"
+    sys.path[:] = [subject_path, dependency_path, *initial_path]
+    # These retained, externally verified descriptors are inherited only after
+    # the outer closure gate.  The build dispatcher uses them to route a
+    # registered Python script back through this bootstrap.
+    os.environ["KILIX_F120_AUTHORITY_BOOTSTRAP_FD"] = str(arguments.bootstrap_fd)
+    os.environ["KILIX_F120_AUTHORITY_PYTHON_FD"] = str(arguments.python_fd)
+    if kind == "contracts":
+        sys.argv = [f"{subject_path}/contracts/validate_f120.py", "--self-test"]
+        try:
+            runpy.run_path(sys.argv[0], run_name="__main__")
+        except SystemExit as exc:
+            return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
+        return 0
+    if kind == "tests":
+        import unittest
+
+        suite = unittest.defaultTestLoader.discover(
+            f"{subject_path}/tests", top_level_dir=subject_path
+        )
+        return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
+    if kind == "cli":
+        sys.argv = ["python -m kilix_f120", *forwarded]
+        from kilix_f120.cli import main
+
+        return int(main())
+    return 2
+
+
+def _run_separate_child(
+    kind: str,
+    forwarded: list[str],
+    arguments: argparse.Namespace,
+    initial_path: tuple[str, ...],
+) -> None:
+    child = os.fork()
+    if child == 0:
+        try:
+            os.close(arguments.result_fd)
+            code = _child_main(kind, forwarded, arguments, initial_path)
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except BaseException:
+            traceback.print_exc(file=sys.stderr)
+            code = 2
+        os._exit(code)
+    while True:
+        try:
+            waited, status = os.waitpid(child, 0)
+            break
+        except InterruptedError:
+            continue
+    if waited != child or not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
+        raise Refusal(f"{kind} child did not complete successfully")
+    _verify_all(arguments)
+
+
+def _write_result(arguments: argparse.Namespace) -> None:
+    record = {
+        "command": arguments.command,
+        "manifest_sha256": arguments.subject_manifest_sha256,
+        "run_id": arguments.run_id,
+        "schema": RESULT_SCHEMA,
+        "status": "accepted",
+        "subject_device": arguments.subject_device,
+        "subject_inode": arguments.subject_inode,
+    }
+    encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    if len(encoded) > 4096:
+        raise Refusal("canonical result exceeds fixed bound")
+    if os.write(arguments.result_fd, encoded) != len(encoded):
+        raise Refusal("canonical result channel short write")
+
+
+def outer_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(add_help=False)
+    result.add_argument("--mode", choices=("outer",), required=True)
+    result.add_argument("--bootstrap-fd", type=int, required=True)
+    result.add_argument("--bootstrap-sha256", required=True)
+    result.add_argument("--python-fd", type=int, required=True)
+    result.add_argument("--python-sha256", required=True)
+    result.add_argument("--runtime-fd", type=int, required=True)
+    result.add_argument("--runtime-manifest-fd", type=int, required=True)
+    result.add_argument("--runtime-manifest-sha256", required=True)
+    result.add_argument("--dependency-fd", type=int, required=True)
+    result.add_argument("--dependency-manifest-fd", type=int, required=True)
+    result.add_argument("--dependency-manifest-sha256", required=True)
+    result.add_argument("--subject-fd", type=int, required=True)
+    result.add_argument("--subject-path", required=True)
+    result.add_argument("--subject-device", type=int, required=True)
+    result.add_argument("--subject-inode", type=int, required=True)
+    result.add_argument("--subject-manifest-fd", type=int, required=True)
+    result.add_argument("--subject-manifest-sha256", required=True)
+    result.add_argument("--result-fd", type=int, required=True)
+    result.add_argument("--run-id", required=True)
+    result.add_argument("--tmpdir", required=True)
+    result.add_argument("--command", choices=("check", "cli"), required=True)
+    result.add_argument("forwarded", nargs=argparse.REMAINDER)
+    return result
+
+
+def provider_parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(add_help=False)
+    result.add_argument("--mode", choices=("provider",), required=True)
+    result.add_argument("--bootstrap-fd", type=int, required=True)
+    result.add_argument("--bootstrap-sha256", required=True)
+    result.add_argument("--python-fd", type=int, required=True)
+    result.add_argument("--python-sha256", required=True)
+    result.add_argument("--source-fd", type=int, required=True)
+    result.add_argument("--source-path", required=True)
+    result.add_argument("--script-fd", type=int, required=True)
+    result.add_argument("--script-path", required=True)
+    result.add_argument("--script-sha256", required=True)
+    result.add_argument("--environment-sha256", required=True)
+    result.add_argument("--tmpdir", required=True)
+    result.add_argument("forwarded", nargs=argparse.REMAINDER)
+    return result
+
+
+def main() -> int:
+    try:
+        modes = [
+            sys.argv[index + 1]
+            for index, value in enumerate(sys.argv[:-1])
+            if value == "--mode"
+        ]
+        if modes == ["provider"]:
+            return _provider_main(provider_parser().parse_args())
+        if modes != ["outer"]:
+            raise Refusal("launch mode is absent, duplicated or invalid")
+        arguments = outer_parser().parse_args()
+        forwarded = arguments.forwarded
+        if forwarded[:1] == ["--"]:
+            forwarded = forwarded[1:]
+        if arguments.command == "check" and forwarded:
+            raise Refusal("check command accepts no forwarded arguments")
+        if arguments.command == "cli" and not forwarded:
+            raise Refusal("cli command requires a resolver subcommand")
+        subject, initial_path = _initial_guard(arguments)
+        if str(subject) != str(Path(arguments.subject_path).resolve(strict=True)):
+            raise Refusal("subject descriptor resolves to an unexpected path")
+        _verify_all(arguments)
+        _verify_companion_hashes(arguments.subject_fd)
+        os.set_inheritable(arguments.result_fd, False)
+        if arguments.command == "check":
+            _run_separate_child("contracts", [], arguments, initial_path)
+            _run_separate_child("tests", [], arguments, initial_path)
+        else:
+            _run_separate_child("cli", forwarded, arguments, initial_path)
+        _verify_all(arguments)
+        _write_result(arguments)
+    except Refusal as exc:
+        print(f"F120_AUTHORITY_REFUSAL: {exc}", file=sys.stderr)
+        return 2
+    except BaseException:
+        print("F120_AUTHORITY_REFUSAL: bootstrap operation failed", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

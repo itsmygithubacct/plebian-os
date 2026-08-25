@@ -6,19 +6,31 @@ evidence, never release authority: this report does not select a revision or
 freeze the final 0.2.1 release lock. The exact published S120 handoff commit is
 recorded in the Track H release log after the final clean-tree gate.
 
-## Locked implementation gate
+## Superseding trusted-launch implementation gate
 
-The implementation gate uses uv 0.12.5 and the locked environment:
+The original S120 measurements below are retained as historical evidence at
+the published handoff. They no longer authorize P9: the demonstrated Python
+startup-ordering bypass invalidated the old subject-cwd uv/Make launch shape.
+
+Companion-semantics/v2 and registration/v2 replace that entry point with the
+independently accepted external bundle documented in `authority/README.md`.
+The qualifying command is:
 
 ```text
-sha256sum -c SHA256SUMS
-SEMANTICS.md: OK
-python contracts/validate_f120.py --self-test
+/external/accepted/f120-authority --subject /exact/export/tools/closure check
 PASS: 2 valid, 1 development-state, 7 invalid fixtures; schemas and SHA256SUMS verified
-python -m unittest discover -s tests -v
-Ran 25 tests
+Ran 27 tests
 OK
+F120_AUTHORITY_ACCEPTED {canonical run/subject/manifest-bound record}
 ```
+
+The external launcher verifies the complete subject, copied Python runtime,
+dependency closure and bootstrap before Python starts; uses direct descriptor
+execution with `-I -S -B`, an empty external cwd and exact environment; and
+accepts only a bounded canonical result on a descriptor unavailable to the
+validator/test children. `make check` delegates to that launcher and refuses
+without an absolute `F120_AUTHORITY`; the direct external command remains the
+release authority.
 
 The suite includes all eight artifact kinds, independent source-digest
 agreement, qualification/development separation, non-finite JSON and uppercase
@@ -30,7 +42,10 @@ source and build process-group cancellation with no publication, exact-key
 eviction, guarded recoverable stage retirement, atomic paired prefix/lock
 failure recovery, a competing-destination publication race with no replacement,
 cache/prefix workspace separation, cold/warm/clean byte equality, and all ten
-future-component scaffolds.
+future-component scaffolds. It additionally proves registration/v1 refusal,
+the positive `F120_INPUT_*` environment namespace, isolated provider-Python
+execution with a live source-root hook, and pre-execution refusal of an exact
+wrapper's undeclared Python child.
 
 The audit also exercises the otherwise easy-to-miss invariant that two commits
 with the same source tree share the source/build cache key. Commit identity is

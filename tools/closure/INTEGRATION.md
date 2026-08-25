@@ -7,18 +7,24 @@ replace every sentinel using the owning stream's reviewed values.
 ## S120 handoff
 
 Dependent streams consume the exact published Track H commit announced in the
-release coordination log, never an unrecorded moving branch head. From that
-tree, run:
+release coordination log, never an unrecorded moving branch head. Build and
+independently accept the external authority bundle described in
+`authority/README.md` from that exact tree. The qualifying command is the
+external process, not a wrapper stored in the tree:
 
 ```sh
-make --no-print-directory -C tools/closure check
+/external/accepted/f120-authority \
+  --subject /exact/export/tools/closure check
 ```
 
-This verifies the frozen v1 bytes before running their validator, the companion
-semantics hashes, the resolver/cache/staging suite and all ten pre-repository
-component scaffolds. A passing handoff gate proves the interface is available;
-it does not turn a scaffold into authority or make a development manifest a
-qualified release closure.
+For developer ergonomics, the exact accepted launcher can also be passed as
+`F120_AUTHORITY` to `make --no-print-directory -C tools/closure check`; that
+subject Makefile is not the release authority. The launcher verifies the frozen
+v1 bytes and complete subject before running their validator, the companion
+semantics, the resolver/cache/staging suite and all ten pre-repository component
+scaffolds. A passing handoff gate proves the interface is available; it does not
+turn a scaffold into authority or make a development manifest a qualified
+release closure.
 
 The stable consumer surface is the command set documented in `README.md`, this
 registration procedure, staged headers/libraries/commands beneath one prefix,
@@ -48,11 +54,18 @@ impossible to mistake the scaffold for qualified release evidence.
    component/API/ABI versions, architecture, features, tests, visibility,
    publication disposition, licences and committed notice hashes.
 3. Register every build executable, including executable children, with its
-   absolute local path and exact file SHA-256. Pin a human-readable toolchain
-   version string. Sort tools by name. The build receives only these logical
-   tool names on `PATH`.
+   absolute local path, exact file SHA-256 and `kind`: `native`, `script`,
+   `python-interpreter` or `python-script`. Each script also names its registered
+   `interpreter`; a Python script's interpreter must be the exact release-pinned
+   authority Python. Pin a human-readable toolchain version string. Sort tools
+   by name. The build receives only these logical tool names on `PATH`, and the
+   execution monitor refuses every undeclared exec descendant.
 4. Declare no shell command. Each command begins with `{tool:name}` and uses
    only argv placeholders `{source}`, `{build}`, `{prefix}` and `{tool:name}`.
+   Recipe environment names, when unavoidable, must use the
+   `F120_INPUT_[A-Z0-9_]+` namespace; every other recipe-controlled environment
+   name is refused so a new plugin/package-manager startup variable cannot
+   bypass a finite denylist.
 5. Declare exact source-to-prefix copies and one artifact entry for every
    destination. Lists are sorted; artifact IDs must be unique across the whole
    closure. Private headers and sources are never staged.

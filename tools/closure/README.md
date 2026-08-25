@@ -16,34 +16,43 @@ single owner-named qualification exception is preserved exactly:
 `component_id=plebian-os`, `ref_kind=tag`, `requested_ref=v0.2.0`. No other
 mutable ref qualifies.
 
-## Requirements and checks
+## Trusted launch and checks
 
-Use the release-pinned uv 0.12.5. From this directory:
+Release and P9 evidence must use an independently accepted external authority
+bundle built as documented in `authority/README.md`. The old subject-cwd
+`uv run ... python` commands are deliberately no longer qualifying commands.
+From an exact export:
 
 ```sh
-uv run --locked python -m kilix_f120 contracts
-uv run --locked python -m unittest discover -s tests -v
-make check
+/external/accepted/f120-authority \
+  --subject /exact/export/tools/closure check
+F120_AUTHORITY=/external/accepted/f120-authority make check
 ```
 
-The lock uses `jsonschema[format]==4.25.1` exactly. Qualified cache operation is
-offline after the first immutable fetch: a validated hit performs no fetch.
-Publication requires Linux `renameat2(RENAME_NOREPLACE)` and fails closed when
-the kernel/libc surface is unavailable.
+The direct external command is the authority entry point; the Make target is a
+convenience delegator and refuses without an absolute launcher. The bundle pins
+Python 3.12.8, the bootstrap and a copied dependency closure containing
+`jsonschema[format]==4.25.1`. It verifies the complete subject before loading
+the validator and accepts only its dedicated canonical result record.
+
+Qualified cache operation is offline after the first immutable fetch: a
+validated hit performs no fetch. Publication requires Linux
+`renameat2(RENAME_NOREPLACE)` and fails closed when the kernel/libc surface is
+unavailable.
 
 ## Command surface
 
 ```text
-python -m kilix_f120 contracts
-python -m kilix_f120 resolve REGISTRATION OUTPUT [--qualify]
+f120-authority --subject SUBJECT cli contracts
+f120-authority --subject SUBJECT cli resolve REGISTRATION OUTPUT [--qualify]
     [--local-source INSTANCE=/absolute/path]
-python -m kilix_f120 validate DOCUMENT [--allow-development-state]
-python -m kilix_f120 stage REGISTRATION WORKSPACE_MANIFEST
+f120-authority --subject SUBJECT cli validate DOCUMENT [--allow-development-state]
+f120-authority --subject SUBJECT cli stage REGISTRATION WORKSPACE_MANIFEST
     --cache CACHE --prefix PREFIX --release VERSION --release-lock LOCK
     [--report REPORT] [--local-source INSTANCE=/absolute/path]
-python -m kilix_f120 reverse-deps DOCUMENT INSTANCE... [--direct]
-python -m kilix_f120 evict --cache CACHE --namespace sources|builds --key SHA256
-python -m kilix_f120 retire --prefix PREFIX [--release-lock LOCK]
+f120-authority --subject SUBJECT cli reverse-deps DOCUMENT INSTANCE... [--direct]
+f120-authority --subject SUBJECT cli evict --cache CACHE --namespace sources|builds --key SHA256
+f120-authority --subject SUBJECT cli retire --prefix PREFIX [--release-lock LOCK]
 ```
 
 `--local-source` is an explicit offline/evidence override. Its path is never
@@ -65,6 +74,13 @@ emission until the corresponding consumer conversion actually lands. Cache and
 prefix paths must be outside the registered workspace and disjoint from each
 other. The deterministic stage report includes retained Git-object
 `fetch_bytes`; a warm hit records zero.
+
+Every registered executable is classified as `native`, `script`,
+`python-interpreter` or `python-script`; scripts bind a named registered
+interpreter. Linux ptrace exec events bind every executable descendant before
+its first user-space instruction. Undeclared children are refused. Registered
+Python scripts run only through the external pinned interpreter/bootstrap with
+`-I -S -B`; direct or ambient Python selection is refused.
 
 `evict` moves one exact cache key to quarantine under its per-key lock. `retire`
 moves one exact prefix (and optionally its lock) into a sibling private

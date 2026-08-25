@@ -22,10 +22,11 @@ from .errors import RegistrationError
 from .gitops import canonical_https_url
 
 
-REGISTRATION_ID = "kilix.f120.registration/v1"
+REGISTRATION_ID = "kilix.f120.registration/v2"
 ZERO_COMMIT = "0" * 40
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 ENVIRONMENT_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+BUILD_ENVIRONMENT_NAME_RE = re.compile(r"^F120_INPUT_[A-Z0-9_]+$")
 RESERVED_ENVIRONMENT = {
     "GIT_ASKPASS",
     "GIT_CONFIG_GLOBAL",
@@ -38,7 +39,23 @@ RESERVED_ENVIRONMENT = {
     "SOURCE_DATE_EPOCH",
     "TMPDIR",
     "TZ",
+    "BASH_ENV",
+    "ENV",
+    "PERL5LIB",
+    "RUBYOPT",
+    "VIRTUAL_ENV",
 }
+RESERVED_ENVIRONMENT_PREFIXES = (
+    "CONDA_",
+    "DYLD_",
+    "LD_",
+    "NODE_",
+    "NPM_",
+    "PIP_",
+    "PYTHON",
+    "UV_",
+)
+EXECUTABLE_KINDS = {"native", "python-interpreter", "python-script", "script"}
 VISIBILITIES = {"public", "private", "local-only"}
 PUBLICATION = {"publish", "private", "unpublished", "restricted"}
 RUNTIME_KINDS = {"native-provider", "process", "python-distribution", "data"}
@@ -98,14 +115,28 @@ class ToolExecutable:
     name: str
     path: Path
     sha256: str
+    kind: str
+    interpreter: str | None
 
     def verify(self) -> None:
         if not self.path.is_absolute():
             raise RegistrationError(f"tool {self.name} path must be absolute")
-        if not self.path.is_file() or not os.access(self.path, os.X_OK):
+        if self.path.is_symlink() or not self.path.is_file() or not os.access(self.path, os.X_OK):
             raise RegistrationError(f"tool {self.name} is not an executable file")
         if file_sha256(self.path) != self.sha256:
             raise RegistrationError(f"tool {self.name} digest mismatch")
+        with self.path.open("rb") as handle:
+            prefix = handle.read(4096)
+        if self.kind in {"native", "python-interpreter"}:
+            if not prefix.startswith(b"\x7fELF"):
+                raise RegistrationError(f"tool {self.name} is not a classified ELF executable")
+            if self.interpreter is not None:
+                raise RegistrationError(f"tool {self.name} native kind names an interpreter")
+        else:
+            if not prefix.startswith(b"#!") or b"\0" in prefix.split(b"\n", 1)[0]:
+                raise RegistrationError(f"tool {self.name} is not a classified script")
+            if self.interpreter is None:
+                raise RegistrationError(f"tool {self.name} script kind lacks an interpreter")
 
 
 @dataclass(frozen=True)
@@ -119,7 +150,12 @@ class Toolchain:
         return canonical_sha256(
             {
                 "executables": [
-                    {"name": item.name, "sha256": item.sha256}
+                    {
+                        "interpreter": item.interpreter,
+                        "kind": item.kind,
+                        "name": item.name,
+                        "sha256": item.sha256,
+                    }
                     for item in self.executables
                 ],
                 "name": self.name,
@@ -136,11 +172,33 @@ class Toolchain:
             raise RegistrationError(f"build recipe names unknown tool: {name}")
         return matches[0]
 
+    def executable_record(self, name: str) -> ToolExecutable:
+        matches = [item for item in self.executables if item.name == name]
+        if len(matches) != 1:
+            raise RegistrationError(f"build recipe names unknown tool: {name}")
+        return matches[0]
+
     def verify(self) -> None:
         if not self.executables:
             raise RegistrationError("resolved build toolchain has no executables")
         for executable in self.executables:
             executable.verify()
+        by_name = {item.name: item for item in self.executables}
+        for executable in self.executables:
+            if executable.kind in {"script", "python-script"}:
+                interpreter = by_name.get(executable.interpreter or "")
+                if interpreter is None:
+                    raise RegistrationError(
+                        f"tool {executable.name} names an unregistered interpreter"
+                    )
+                expected = (
+                    "python-interpreter" if executable.kind == "python-script" else "native"
+                )
+                if interpreter.kind != expected:
+                    raise RegistrationError(
+                        f"tool {executable.name} interpreter has kind {interpreter.kind}, "
+                        f"expected {expected}"
+                    )
 
 
 @dataclass(frozen=True)
@@ -241,12 +299,27 @@ def _parse_toolchain(value: Any, label: str) -> Toolchain:
     executables: list[ToolExecutable] = []
     for index, raw in enumerate(_array(document["executables"], f"{label}.executables")):
         item = _object(raw, f"{label}.executables[{index}]")
-        _keys(item, {"name", "path", "sha256"}, {"name", "path", "sha256"}, f"{label}.executables[{index}]")
+        _keys(
+            item,
+            {"interpreter", "kind", "name", "path", "sha256"},
+            {"kind", "name", "path", "sha256"},
+            f"{label}.executables[{index}]",
+        )
+        kind = _string(item["kind"], f"{label}.executables[{index}].kind")
+        if kind not in EXECUTABLE_KINDS:
+            raise RegistrationError(f"{label}.executables[{index}] has invalid kind")
+        interpreter = item.get("interpreter")
+        if interpreter is not None:
+            interpreter = require_identifier(
+                interpreter, f"{label}.executables[{index}].interpreter"
+            )
         executables.append(
             ToolExecutable(
                 name=require_identifier(item["name"], f"{label}.executables[{index}].name"),
                 path=Path(_string(item["path"], f"{label}.executables[{index}].path")),
                 sha256=require_sha256(item["sha256"], f"{label}.executables[{index}].sha256"),
+                kind=kind,
+                interpreter=interpreter,
             )
         )
     if [item.name for item in executables] != sorted({item.name for item in executables}):
@@ -276,8 +349,14 @@ def _parse_build(value: Any, label: str) -> BuildRecipe:
     for name, raw_value in sorted(environment_document.items()):
         if not ENVIRONMENT_NAME_RE.fullmatch(name):
             raise RegistrationError(f"{label}.environment has invalid name: {name}")
-        if name in RESERVED_ENVIRONMENT:
-            raise RegistrationError(f"{label}.environment uses reserved name: {name}")
+        if (
+            name in RESERVED_ENVIRONMENT
+            or name.startswith(RESERVED_ENVIRONMENT_PREFIXES)
+            or not BUILD_ENVIRONMENT_NAME_RE.fullmatch(name)
+        ):
+            raise RegistrationError(
+                f"{label}.environment uses unsupported or reserved name: {name}"
+            )
         environment.append((name, _string(raw_value, f"{label}.environment.{name}")))
 
     copies: list[CopySpec] = []
