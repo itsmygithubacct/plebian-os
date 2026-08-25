@@ -58,10 +58,26 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX95_REPO
     KILIX95_BRANCH
     KILIX95_REF
+    KILIX_SYSTEM_MONITOR_REPO
+    KILIX_SYSTEM_MONITOR_BRANCH
+    KILIX_SYSTEM_MONITOR_REF
+    KILIX_DESKTOP_SDK_REPO
+    KILIX_DESKTOP_SDK_BRANCH
+    KILIX_DESKTOP_SDK_REF
+    KILIX_ICEWM_REPO
+    KILIX_ICEWM_BRANCH
+    KILIX_ICEWM_REF
+    KILIX_MEDIA_SDK_REPO
+    KILIX_MEDIA_SDK_BRANCH
+    KILIX_MEDIA_SDK_REF
+    KILIX_WAYDROID_REPO
+    KILIX_WAYDROID_BRANCH
+    KILIX_WAYDROID_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_INSTALL_UV
     PLEBIAN_OS_UV_VERSION
     PLEBIAN_OS_UV_INSTALLER_SHA256
+    PLEBIAN_OS_UV_INSTALLER_MAX_BYTES
     KILIX_PREBUILT_VERSION
     KILIX_PREBUILT_SHA256
     PLEBIAN_OS_BUILD_KILIX_FORK
@@ -133,6 +149,7 @@ declare -A PERSISTED_KEY_VARS=(
     [PLEBIAN_OS_INSTALL_UV]=INSTALL_UV
     [PLEBIAN_OS_UV_VERSION]=UV_VERSION_PIN
     [PLEBIAN_OS_UV_INSTALLER_SHA256]=UV_INSTALLER_SHA256
+    [PLEBIAN_OS_UV_INSTALLER_MAX_BYTES]=UV_INSTALLER_MAX_BYTES
     [PLEBIAN_OS_INSTALL_WAYDROID]=INSTALL_WAYDROID
     [PLEBIAN_OS_WAYDROID_CLOSURE_SHA256]=WAYDROID_CLOSURE_SHA256
 )
@@ -289,6 +306,21 @@ KILIX_GO_SHA256_ARM64="${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
+KILIX_SYSTEM_MONITOR_REPO="${KILIX_SYSTEM_MONITOR_REPO:-https://github.com/itsmygithubacct/kilix-system-monitor.git}"
+KILIX_SYSTEM_MONITOR_BRANCH="${KILIX_SYSTEM_MONITOR_BRANCH:-}"
+KILIX_SYSTEM_MONITOR_REF="${KILIX_SYSTEM_MONITOR_REF:-}"
+KILIX_DESKTOP_SDK_REPO="${KILIX_DESKTOP_SDK_REPO:-https://github.com/itsmygithubacct/kilix-desktop-sdk.git}"
+KILIX_DESKTOP_SDK_BRANCH="${KILIX_DESKTOP_SDK_BRANCH:-}"
+KILIX_DESKTOP_SDK_REF="${KILIX_DESKTOP_SDK_REF:-}"
+KILIX_ICEWM_REPO="${KILIX_ICEWM_REPO:-https://github.com/itsmygithubacct/kilix-icewm.git}"
+KILIX_ICEWM_BRANCH="${KILIX_ICEWM_BRANCH:-}"
+KILIX_ICEWM_REF="${KILIX_ICEWM_REF:-}"
+KILIX_MEDIA_SDK_REPO="${KILIX_MEDIA_SDK_REPO:-https://github.com/itsmygithubacct/kilix-media-sdk.git}"
+KILIX_MEDIA_SDK_BRANCH="${KILIX_MEDIA_SDK_BRANCH:-}"
+KILIX_MEDIA_SDK_REF="${KILIX_MEDIA_SDK_REF:-}"
+KILIX_WAYDROID_REPO="${KILIX_WAYDROID_REPO:-https://github.com/itsmygithubacct/kilix-waydroid.git}"
+KILIX_WAYDROID_BRANCH="${KILIX_WAYDROID_BRANCH:-}"
+KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
 # Plebian-OS layer itself: where the provisioner/update-helper/deps script come
 # from, so `plebian-os-update` can refresh the OS layer (not just pleb/kilix).
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
@@ -308,6 +340,7 @@ INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
 INSTALL_UV_EXPLICIT="${PLEBIAN_OS_INSTALL_UV:+1}"
 UV_VERSION_PIN="${PLEBIAN_OS_UV_VERSION:-}"
 UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
+UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
 # The apt root is overridable only to exercise snapshot transactions in an
 # isolated test tree. Production and firstboot leave it at /etc.
 APT_ETC_ROOT="${PLEBIAN_OS_APT_ETC_ROOT:-/etc}"
@@ -568,6 +601,10 @@ restore_persisted_policy() {
     log "restored install policy from $PLEBIAN_OS_FIRSTBOOT_ENV: ${restored[*]}"
 }
 
+release_requires_f120_roots() {
+    [ "${PLEBIAN_OS_RELEASE:-}" = 0.2.1 ]
+}
+
 validate_release_inputs() {
     [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
     local key
@@ -575,6 +612,27 @@ validate_release_inputs() {
         [[ "${!key}" =~ ^[0-9a-fA-F]{40}$ ]] \
             || die "release mode requires $key to be a full 40-character commit SHA"
     done
+    if release_requires_f120_roots; then
+        for key in KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF \
+            KILIX_ICEWM_REF KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF; do
+            [[ "${!key}" =~ ^[0-9a-f]{40}$ ]] \
+                || die "release mode requires $key to be a full 40-character lowercase commit SHA"
+        done
+        [ "$KILIX_SYSTEM_MONITOR_REPO" = https://github.com/itsmygithubacct/kilix-system-monitor.git ] \
+            || die "release mode requires the canonical KILIX_SYSTEM_MONITOR_REPO"
+        [ "$KILIX_DESKTOP_SDK_REPO" = https://github.com/itsmygithubacct/kilix-desktop-sdk.git ] \
+            || die "release mode requires the canonical KILIX_DESKTOP_SDK_REPO"
+        [ "$KILIX_ICEWM_REPO" = https://github.com/itsmygithubacct/kilix-icewm.git ] \
+            || die "release mode requires the canonical KILIX_ICEWM_REPO"
+        [ "$KILIX_MEDIA_SDK_REPO" = https://github.com/itsmygithubacct/kilix-media-sdk.git ] \
+            || die "release mode requires the canonical KILIX_MEDIA_SDK_REPO"
+        [ "$KILIX_WAYDROID_REPO" = https://github.com/itsmygithubacct/kilix-waydroid.git ] \
+            || die "release mode requires the canonical KILIX_WAYDROID_REPO"
+        for key in KILIX_SYSTEM_MONITOR_BRANCH KILIX_DESKTOP_SDK_BRANCH \
+            KILIX_ICEWM_BRANCH KILIX_MEDIA_SDK_BRANCH KILIX_WAYDROID_BRANCH; do
+            [ -z "${!key}" ] || die "release mode requires $key to be empty"
+        done
+    fi
     for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
         [[ "${!key}" =~ ^[0-9a-fA-F]{64}$ ]] \
             || die "release mode requires a 64-character $key"
@@ -586,6 +644,10 @@ validate_release_inputs() {
             || die "release mode requires an exact PLEBIAN_OS_UV_VERSION when uv is enabled"
         [[ "$UV_INSTALLER_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
             || die "release mode requires a 64-character PLEBIAN_OS_UV_INSTALLER_SHA256 when uv is enabled"
+        if release_requires_f120_roots; then
+            [[ "$UV_INSTALLER_MAX_BYTES" =~ ^[1-9][0-9]*$ ]] \
+                || die "release mode requires a positive PLEBIAN_OS_UV_INSTALLER_MAX_BYTES when uv is enabled"
+        fi
     fi
     case "$INSTALL_VOICE_MODEL" in
         0) ;;
@@ -2896,6 +2958,21 @@ write_source_tool_manifest() {
         provenance_kv KILIX95_DATA_HOME "$KILIX95_DATA_HOME"
         provenance_kv KILIX95_COMMIT "$kilix95_commit"
         provenance_kv KILIX95_VERSION "$kilix95_version"
+        provenance_kv KILIX_SYSTEM_MONITOR_REPO "$KILIX_SYSTEM_MONITOR_REPO"
+        provenance_kv KILIX_SYSTEM_MONITOR_BRANCH "$KILIX_SYSTEM_MONITOR_BRANCH"
+        provenance_kv KILIX_SYSTEM_MONITOR_REF "$KILIX_SYSTEM_MONITOR_REF"
+        provenance_kv KILIX_DESKTOP_SDK_REPO "$KILIX_DESKTOP_SDK_REPO"
+        provenance_kv KILIX_DESKTOP_SDK_BRANCH "$KILIX_DESKTOP_SDK_BRANCH"
+        provenance_kv KILIX_DESKTOP_SDK_REF "$KILIX_DESKTOP_SDK_REF"
+        provenance_kv KILIX_ICEWM_REPO "$KILIX_ICEWM_REPO"
+        provenance_kv KILIX_ICEWM_BRANCH "$KILIX_ICEWM_BRANCH"
+        provenance_kv KILIX_ICEWM_REF "$KILIX_ICEWM_REF"
+        provenance_kv KILIX_MEDIA_SDK_REPO "$KILIX_MEDIA_SDK_REPO"
+        provenance_kv KILIX_MEDIA_SDK_BRANCH "$KILIX_MEDIA_SDK_BRANCH"
+        provenance_kv KILIX_MEDIA_SDK_REF "$KILIX_MEDIA_SDK_REF"
+        provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
+        provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
+        provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
@@ -2903,6 +2980,7 @@ write_source_tool_manifest() {
         provenance_kv PLEBIAN_OS_INSTALL_UV "$INSTALL_UV"
         provenance_kv PLEBIAN_OS_UV_VERSION "$UV_VERSION_PIN"
         provenance_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "$UV_INSTALLER_SHA256"
+        provenance_kv PLEBIAN_OS_UV_INSTALLER_MAX_BYTES "$UV_INSTALLER_MAX_BYTES"
         provenance_kv UV_VERSION "$uv_version"
         provenance_kv GIT_VERSION "$(git --version 2>/dev/null || true)"
         provenance_kv PYTHON3_VERSION "$(python3 --version 2>&1 || true)"
@@ -3988,6 +4066,9 @@ done
 [ -n "$DEPS_SCRIPT" ] || die "dependency installer not found (plebian-os-install-deps / install-deps.sh)"
 configure_apt_snapshot
 log "installing runtime dependencies via $DEPS_SCRIPT"
+export PLEBIAN_OS_UV_VERSION="$UV_VERSION_PIN"
+export PLEBIAN_OS_UV_INSTALLER_SHA256="$UV_INSTALLER_SHA256"
+export PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="$UV_INSTALLER_MAX_BYTES"
 if [ "$DRY_RUN" = 1 ]; then
     bash "$DEPS_SCRIPT" --dry-run
 else
@@ -4248,6 +4329,21 @@ install_env=(
     "KILIX95_REPO=$KILIX95_REPO"
     "KILIX95_BRANCH=$KILIX95_BRANCH"
     "KILIX95_REF=$KILIX95_REF"
+    "KILIX_SYSTEM_MONITOR_REPO=$KILIX_SYSTEM_MONITOR_REPO"
+    "KILIX_SYSTEM_MONITOR_BRANCH=$KILIX_SYSTEM_MONITOR_BRANCH"
+    "KILIX_SYSTEM_MONITOR_REF=$KILIX_SYSTEM_MONITOR_REF"
+    "KILIX_DESKTOP_SDK_REPO=$KILIX_DESKTOP_SDK_REPO"
+    "KILIX_DESKTOP_SDK_BRANCH=$KILIX_DESKTOP_SDK_BRANCH"
+    "KILIX_DESKTOP_SDK_REF=$KILIX_DESKTOP_SDK_REF"
+    "KILIX_ICEWM_REPO=$KILIX_ICEWM_REPO"
+    "KILIX_ICEWM_BRANCH=$KILIX_ICEWM_BRANCH"
+    "KILIX_ICEWM_REF=$KILIX_ICEWM_REF"
+    "KILIX_MEDIA_SDK_REPO=$KILIX_MEDIA_SDK_REPO"
+    "KILIX_MEDIA_SDK_BRANCH=$KILIX_MEDIA_SDK_BRANCH"
+    "KILIX_MEDIA_SDK_REF=$KILIX_MEDIA_SDK_REF"
+    "KILIX_WAYDROID_REPO=$KILIX_WAYDROID_REPO"
+    "KILIX_WAYDROID_BRANCH=$KILIX_WAYDROID_BRANCH"
+    "KILIX_WAYDROID_REF=$KILIX_WAYDROID_REF"
 )
 [ -n "${PROVISION_LOCK_FD:-}" ] \
     && install_env+=("PLEB_UPDATE_LOCK_FD=$PROVISION_LOCK_FD")
@@ -4444,6 +4540,21 @@ EOF
     write_session_default KILIX95_REPO "$KILIX95_REPO"
     write_session_default KILIX95_BRANCH "$KILIX95_BRANCH"
     write_session_default KILIX95_REF "$KILIX95_REF"
+    write_session_default KILIX_SYSTEM_MONITOR_REPO "$KILIX_SYSTEM_MONITOR_REPO"
+    write_session_default KILIX_SYSTEM_MONITOR_BRANCH "$KILIX_SYSTEM_MONITOR_BRANCH"
+    write_session_default KILIX_SYSTEM_MONITOR_REF "$KILIX_SYSTEM_MONITOR_REF"
+    write_session_default KILIX_DESKTOP_SDK_REPO "$KILIX_DESKTOP_SDK_REPO"
+    write_session_default KILIX_DESKTOP_SDK_BRANCH "$KILIX_DESKTOP_SDK_BRANCH"
+    write_session_default KILIX_DESKTOP_SDK_REF "$KILIX_DESKTOP_SDK_REF"
+    write_session_default KILIX_ICEWM_REPO "$KILIX_ICEWM_REPO"
+    write_session_default KILIX_ICEWM_BRANCH "$KILIX_ICEWM_BRANCH"
+    write_session_default KILIX_ICEWM_REF "$KILIX_ICEWM_REF"
+    write_session_default KILIX_MEDIA_SDK_REPO "$KILIX_MEDIA_SDK_REPO"
+    write_session_default KILIX_MEDIA_SDK_BRANCH "$KILIX_MEDIA_SDK_BRANCH"
+    write_session_default KILIX_MEDIA_SDK_REF "$KILIX_MEDIA_SDK_REF"
+    write_session_default KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
+    write_session_default KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
+    write_session_default KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
     write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
     write_session_default PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
     write_session_default PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
@@ -4457,6 +4568,7 @@ EOF
     write_session_default PLEBIAN_OS_INSTALL_UV "$INSTALL_UV"
     write_session_default PLEBIAN_OS_UV_VERSION "$UV_VERSION_PIN"
     write_session_default PLEBIAN_OS_UV_INSTALLER_SHA256 "$UV_INSTALLER_SHA256"
+    write_session_default PLEBIAN_OS_UV_INSTALLER_MAX_BYTES "$UV_INSTALLER_MAX_BYTES"
     # Pleb versions predating these category-level names do not explicitly
     # re-export them after sourcing session.env. Export both storage and desktop
     # selection provenance here so a main-Kilix login passes the same pinned

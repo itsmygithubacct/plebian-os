@@ -128,16 +128,18 @@ load_release_manifest() {
         # carrying REPLACE_ME, and matching only the latter let the others
         # through into a build labelled as a release.
         case "${val^^}" in
-            REPLACE_ME|REPLACE-ME|TBD|TODO|FIXME|XXX|CHANGEME|CHANGE_ME|PLACEHOLDER|UNSET|NONE)
+            REPLACE_ME|REPLACE-ME|TBD|TODO|FIXME|XXX|CHANGEME|CHANGE_ME|PLACEHOLDER|UNSET|NONE|*\<*|*\>*)
                 echo "release $rel: $key is still a placeholder (\"$val\") in releases/$rel.env — fill it before building (see RELEASING.md)" >&2
                 exit 1
                 ;;
         esac
         export "$key=$val"
     done < "$manifest"
-    if [ "$rel" = 0.1.9 ] && [ ! -f "$requirements" ]; then
+    if [ "$rel" = 0.1.9 ] || [ "$rel" = 0.2.1 ]; then
+        [ -f "$requirements" ] || {
         echo "release $rel is missing releases/$rel.requirements" >&2
         exit 1
+        }
     fi
     if [ -f "$requirements" ]; then
         local -A required_seen=()
@@ -155,8 +157,12 @@ load_release_manifest() {
             [ -z "${required_seen[$key]:-}" ] \
                 || { echo "duplicate release requirements key: $key" >&2; exit 1; }
             required_seen[$key]=1
-            [ "$val" != REPLACE_ME ] \
-                || { echo "release $rel requirement $key is still REPLACE_ME" >&2; exit 1; }
+            case "${val^^}" in
+                REPLACE_ME|REPLACE-ME|TBD|TODO|FIXME|XXX|CHANGEME|CHANGE_ME|PLACEHOLDER|UNSET|NONE|*\<*|*\>*)
+                    echo "release $rel requirement $key is still a placeholder" >&2
+                    exit 1
+                    ;;
+            esac
             [ -n "${seen[$key]:-}" ] || {
                 echo "release $rel manifest must declare required key $key" >&2
                 exit 1
@@ -271,6 +277,54 @@ validate_uv_release_closure() {
         || { echo "release mode requires an exact PLEBIAN_OS_UV_VERSION when uv is enabled" >&2; exit 1; }
     is_hex_len "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}" 64 \
         || { echo "release mode requires a 64-character PLEBIAN_OS_UV_INSTALLER_SHA256 when uv is enabled" >&2; exit 1; }
+    if release_requires_f120_roots; then
+        [[ "${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}" =~ ^[1-9][0-9]*$ ]] \
+            || { echo "release mode requires a positive PLEBIAN_OS_UV_INSTALLER_MAX_BYTES when uv is enabled" >&2; exit 1; }
+    fi
+}
+
+release_requires_f120_roots() {
+    [ "${PLEBIAN_OS_VERSION:-}" = 0.2.1 ]
+}
+
+validate_f120_release_roots() {
+    release_requires_f120_roots || return 0
+    local key missing=()
+    for key in KILIX_SYSTEM_MONITOR_REPO KILIX_SYSTEM_MONITOR_REF \
+        KILIX_DESKTOP_SDK_REPO KILIX_DESKTOP_SDK_REF \
+        KILIX_ICEWM_REPO KILIX_ICEWM_REF \
+        KILIX_MEDIA_SDK_REPO KILIX_MEDIA_SDK_REF \
+        KILIX_WAYDROID_REPO KILIX_WAYDROID_REF; do
+        [ -n "${!key:-}" ] || missing+=("$key")
+    done
+    [ "${#missing[@]}" -eq 0 ] || {
+        printf 'PLEBIAN_OS_RELEASE_MODE=1 requires pinned values for: %s\n' "${missing[*]}" >&2
+        exit 1
+    }
+    for key in KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF \
+        KILIX_ICEWM_REF KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF; do
+        is_hex_len "${!key}" 40 || {
+            echo "release mode requires $key to be a full 40-character lowercase commit SHA" >&2
+            exit 1
+        }
+    done
+    [ "$KILIX_SYSTEM_MONITOR_REPO" = https://github.com/itsmygithubacct/kilix-system-monitor.git ] \
+        || { echo "release mode requires the canonical KILIX_SYSTEM_MONITOR_REPO" >&2; exit 1; }
+    [ "$KILIX_DESKTOP_SDK_REPO" = https://github.com/itsmygithubacct/kilix-desktop-sdk.git ] \
+        || { echo "release mode requires the canonical KILIX_DESKTOP_SDK_REPO" >&2; exit 1; }
+    [ "$KILIX_ICEWM_REPO" = https://github.com/itsmygithubacct/kilix-icewm.git ] \
+        || { echo "release mode requires the canonical KILIX_ICEWM_REPO" >&2; exit 1; }
+    [ "$KILIX_MEDIA_SDK_REPO" = https://github.com/itsmygithubacct/kilix-media-sdk.git ] \
+        || { echo "release mode requires the canonical KILIX_MEDIA_SDK_REPO" >&2; exit 1; }
+    [ "$KILIX_WAYDROID_REPO" = https://github.com/itsmygithubacct/kilix-waydroid.git ] \
+        || { echo "release mode requires the canonical KILIX_WAYDROID_REPO" >&2; exit 1; }
+    for key in KILIX_SYSTEM_MONITOR_BRANCH KILIX_DESKTOP_SDK_BRANCH \
+        KILIX_ICEWM_BRANCH KILIX_MEDIA_SDK_BRANCH KILIX_WAYDROID_BRANCH; do
+        [ -n "${!key+x}" ] && [ -z "${!key}" ] || {
+            echo "release mode requires $key to be declared and empty" >&2
+            exit 1
+        }
+    done
 }
 
 # Run before fetch_netinst or mkdir: a release build must verify its immutable
@@ -296,6 +350,7 @@ release_preflight() {
         exit 1
     }
     validate_uv_release_closure
+    validate_f120_release_roots
     validate_voice_release_closure
     validate_waydroid_release_closure
     # A publishable image always uses the interactive identity profile. Secrets
@@ -580,6 +635,7 @@ release_mode_check() {
         exit 1
     fi
     validate_uv_release_closure
+    validate_f120_release_roots
     validate_voice_release_closure
     case "$PLEBIAN_OS_APT_SNAPSHOT" in
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
@@ -658,6 +714,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_UNATTENDED_DISK "${PLEBIAN_OS_UNATTENDED_DISK:-0}"
         manifest_kv PLEBIAN_OS_UV_VERSION "${PLEBIAN_OS_UV_VERSION:-}"
         manifest_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
+        manifest_kv PLEBIAN_OS_UV_INSTALLER_MAX_BYTES "${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
         manifest_kv GPU_TERMINAL_SOURCE_HOME "${GPU_TERMINAL_SOURCE_HOME:-}"
         manifest_kv GPU_TERMINAL_HOME "${GPU_TERMINAL_HOME:-}"
         manifest_kv GPU_TERMINAL_SETTINGS_FILE "${GPU_TERMINAL_SETTINGS_FILE:-}"
@@ -724,6 +781,21 @@ write_build_info() {
         manifest_kv KILIX95_REPO "${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
         manifest_kv KILIX95_BRANCH "${KILIX95_BRANCH:-}"
         manifest_kv KILIX95_REF "${KILIX95_REF:-}"
+        manifest_kv KILIX_SYSTEM_MONITOR_REPO "${KILIX_SYSTEM_MONITOR_REPO:-}"
+        manifest_kv KILIX_SYSTEM_MONITOR_BRANCH "${KILIX_SYSTEM_MONITOR_BRANCH:-}"
+        manifest_kv KILIX_SYSTEM_MONITOR_REF "${KILIX_SYSTEM_MONITOR_REF:-}"
+        manifest_kv KILIX_DESKTOP_SDK_REPO "${KILIX_DESKTOP_SDK_REPO:-}"
+        manifest_kv KILIX_DESKTOP_SDK_BRANCH "${KILIX_DESKTOP_SDK_BRANCH:-}"
+        manifest_kv KILIX_DESKTOP_SDK_REF "${KILIX_DESKTOP_SDK_REF:-}"
+        manifest_kv KILIX_ICEWM_REPO "${KILIX_ICEWM_REPO:-}"
+        manifest_kv KILIX_ICEWM_BRANCH "${KILIX_ICEWM_BRANCH:-}"
+        manifest_kv KILIX_ICEWM_REF "${KILIX_ICEWM_REF:-}"
+        manifest_kv KILIX_MEDIA_SDK_REPO "${KILIX_MEDIA_SDK_REPO:-}"
+        manifest_kv KILIX_MEDIA_SDK_BRANCH "${KILIX_MEDIA_SDK_BRANCH:-}"
+        manifest_kv KILIX_MEDIA_SDK_REF "${KILIX_MEDIA_SDK_REF:-}"
+        manifest_kv KILIX_WAYDROID_REPO "${KILIX_WAYDROID_REPO:-}"
+        manifest_kv KILIX_WAYDROID_BRANCH "${KILIX_WAYDROID_BRANCH:-}"
+        manifest_kv KILIX_WAYDROID_REF "${KILIX_WAYDROID_REF:-}"
         manifest_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         manifest_kv KILIX_DIR "${KILIX_DIR:-}"
         manifest_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"
@@ -765,6 +837,7 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_SSH_ENABLED "${PLEBIAN_OS_SSH_ENABLED:-0}"
         env_kv PLEBIAN_OS_UV_VERSION "${PLEBIAN_OS_UV_VERSION:-}"
         env_kv PLEBIAN_OS_UV_INSTALLER_SHA256 "${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
+        env_kv PLEBIAN_OS_UV_INSTALLER_MAX_BYTES "${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
         env_kv GPU_TERMINAL_SOURCE_HOME "${GPU_TERMINAL_SOURCE_HOME:-}"
         env_kv GPU_TERMINAL_HOME "${GPU_TERMINAL_HOME:-}"
         env_kv GPU_TERMINAL_SETTINGS_FILE "${GPU_TERMINAL_SETTINGS_FILE:-}"
@@ -836,6 +909,21 @@ write_firstboot_env() {
         env_kv KILIX95_REPO "${KILIX95_REPO:-https://github.com/itsmygithubacct/kilix-95.git}"
         env_kv KILIX95_BRANCH "${KILIX95_BRANCH:-}"
         env_kv KILIX95_REF "${KILIX95_REF:-}"
+        env_kv KILIX_SYSTEM_MONITOR_REPO "${KILIX_SYSTEM_MONITOR_REPO:-}"
+        env_kv KILIX_SYSTEM_MONITOR_BRANCH "${KILIX_SYSTEM_MONITOR_BRANCH:-}"
+        env_kv KILIX_SYSTEM_MONITOR_REF "${KILIX_SYSTEM_MONITOR_REF:-}"
+        env_kv KILIX_DESKTOP_SDK_REPO "${KILIX_DESKTOP_SDK_REPO:-}"
+        env_kv KILIX_DESKTOP_SDK_BRANCH "${KILIX_DESKTOP_SDK_BRANCH:-}"
+        env_kv KILIX_DESKTOP_SDK_REF "${KILIX_DESKTOP_SDK_REF:-}"
+        env_kv KILIX_ICEWM_REPO "${KILIX_ICEWM_REPO:-}"
+        env_kv KILIX_ICEWM_BRANCH "${KILIX_ICEWM_BRANCH:-}"
+        env_kv KILIX_ICEWM_REF "${KILIX_ICEWM_REF:-}"
+        env_kv KILIX_MEDIA_SDK_REPO "${KILIX_MEDIA_SDK_REPO:-}"
+        env_kv KILIX_MEDIA_SDK_BRANCH "${KILIX_MEDIA_SDK_BRANCH:-}"
+        env_kv KILIX_MEDIA_SDK_REF "${KILIX_MEDIA_SDK_REF:-}"
+        env_kv KILIX_WAYDROID_REPO "${KILIX_WAYDROID_REPO:-}"
+        env_kv KILIX_WAYDROID_BRANCH "${KILIX_WAYDROID_BRANCH:-}"
+        env_kv KILIX_WAYDROID_REF "${KILIX_WAYDROID_REF:-}"
         env_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         env_kv KILIX_DIR "${KILIX_DIR:-}"
         env_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"

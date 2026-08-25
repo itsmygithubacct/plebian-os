@@ -207,6 +207,53 @@ class ReleaseVersioningTests(unittest.TestCase):
                 self.assertEqual(os.environ["PLEBIAN_OS_RELEASE_MODE"], "1")
                 self.assertEqual(os.environ["PLEB_REF"], "b" * 40)
 
+    def test_python_0_2_1_loader_requires_complete_f120_roots(self):
+        import sys
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "build"))
+        import build_vm_image as vm
+
+        requirements = {
+            "PLEBIAN_OS_INSTALL_UV": "1",
+            "PLEBIAN_OS_UV_VERSION": "0.12.5",
+            "PLEBIAN_OS_UV_INSTALLER_SHA256":
+                "504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111",
+            "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "71225",
+        }
+        values = {
+            "PLEBIAN_OS_VERSION": "0.2.1",
+            "PLEBIAN_OS_RELEASE_MODE": "1",
+            **requirements,
+        }
+        for index, (root, repo_url) in enumerate(
+                vm.F120_ROOT_REPOS.items(), start=1):
+            values[f"{root}_REF"] = str(index) * 40
+            values[f"{root}_REPO"] = repo_url
+            values[f"{root}_BRANCH"] = ""
+
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            releases = repo / "releases"
+            releases.mkdir()
+            (repo / "VERSION").write_text("0.2.1\n")
+            manifest = releases / "0.2.1.env"
+            manifest.write_text("".join(
+                f"{key}={value}\n" for key, value in values.items()))
+            (releases / "0.2.1.requirements").write_text("".join(
+                f"{key}={value}\n" for key, value in requirements.items()))
+
+            with mock.patch.object(vm, "REPO", repo), mock.patch.dict(
+                    os.environ, {}, clear=False):
+                vm.apply_release_manifest("0.2.1")
+                for key in vm.F120_ROOT_KEYS:
+                    self.assertEqual(os.environ[key], values[key])
+
+                del values["KILIX_MEDIA_SDK_REF"]
+                manifest.write_text("".join(
+                    f"{key}={value}\n" for key, value in values.items()))
+                with self.assertRaises(SystemExit):
+                    vm.apply_release_manifest("0.2.1")
+
     def test_remaster_records_version_and_runtime_config(self):
         # build-info + firstboot env must carry the version and the previously
         # missing security-relevant runtime knobs (provenance completeness).

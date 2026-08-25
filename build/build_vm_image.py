@@ -38,6 +38,22 @@ REPO = Path(__file__).resolve().parent.parent
 PRESEED_TEMPLATE = REPO / "preseed" / "preseed.cfg"
 REMASTER = REPO / "build" / "remaster-iso.sh"
 DEFAULT_PROVISION_TIMEOUT_MINUTES = 120
+F120_ROOT_REPOS = {
+    "KILIX_SYSTEM_MONITOR":
+        "https://github.com/itsmygithubacct/kilix-system-monitor.git",
+    "KILIX_DESKTOP_SDK":
+        "https://github.com/itsmygithubacct/kilix-desktop-sdk.git",
+    "KILIX_ICEWM": "https://github.com/itsmygithubacct/kilix-icewm.git",
+    "KILIX_MEDIA_SDK":
+        "https://github.com/itsmygithubacct/kilix-media-sdk.git",
+    "KILIX_WAYDROID":
+        "https://github.com/itsmygithubacct/kilix-waydroid.git",
+}
+F120_ROOT_KEYS = tuple(
+    f"{root}_{suffix}"
+    for root in F120_ROOT_REPOS
+    for suffix in ("REF", "REPO", "BRANCH")
+)
 
 
 def utc_now() -> str:
@@ -195,24 +211,64 @@ def apply_release_manifest(release: str | None = None) -> None:
     if not manifest.exists():
         die(f"no release manifest: releases/{release}.env")
     os.environ["PLEBIAN_OS_RELEASE"] = release
-    seen: set[str] = set()
-    for raw in manifest.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
-            die(f"invalid release manifest line: {raw}")
-        key, val = line.split("=", 1)
-        key, val = key.strip(), val.strip().strip('"')
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            die(f"invalid release manifest key: {key}")
-        if key in seen:
-            die(f"duplicate release manifest key: {key}")
-        seen.add(key)
-        if val == "REPLACE_ME":
-            die(f"release {release}: {key} is still REPLACE_ME in "
-                f"releases/{release}.env — fill it before building (see RELEASING.md)")
+    placeholders = {
+        "REPLACE_ME", "REPLACE-ME", "TBD", "TODO", "FIXME", "XXX",
+        "CHANGEME", "CHANGE_ME", "PLACEHOLDER", "UNSET", "NONE",
+    }
+
+    def read_assignments(path: Path, label: str) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for raw in path.read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" not in line:
+                die(f"invalid {label} line: {raw}")
+            key, val = line.split("=", 1)
+            key, val = key.strip(), val.strip().strip('"')
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+                die(f"invalid {label} key: {key}")
+            if key in values:
+                die(f"duplicate {label} key: {key}")
+            if val.upper() in placeholders or "<" in val or ">" in val:
+                die(f"release {release}: {key} is still a placeholder in "
+                    f"{path.relative_to(REPO)}")
+            values[key] = val
+        return values
+
+    manifest_values = read_assignments(manifest, "release manifest")
+    for key, val in manifest_values.items():
         os.environ[key] = val
+
+    requirements = REPO / "releases" / f"{release}.requirements"
+    if release in {"0.1.9", "0.2.1"} and not requirements.exists():
+        die(f"release {release} is missing releases/{release}.requirements")
+    if requirements.exists():
+        for key, required in read_assignments(
+                requirements, "release requirements").items():
+            if key not in manifest_values:
+                die(f"release {release} manifest must declare required key {key}")
+            if manifest_values[key] != required:
+                die(f"release {release} requires {key}={required} "
+                    f"(manifest has {manifest_values[key]})")
+
+    if release == "0.2.1":
+        for root, expected_repo in F120_ROOT_REPOS.items():
+            ref_key, repo_key, branch_key = (
+                f"{root}_REF", f"{root}_REPO", f"{root}_BRANCH")
+            ref = manifest_values.get(ref_key, "")
+            if not re.fullmatch(r"[0-9a-f]{40}", ref):
+                die(f"release {release} requires {ref_key} to be a full "
+                    "40-character lowercase commit SHA")
+            if manifest_values.get(repo_key) != expected_repo:
+                die(f"release {release} requires canonical {repo_key}")
+            if branch_key not in manifest_values or manifest_values[branch_key]:
+                die(f"release {release} requires {branch_key} to be declared empty")
+        max_bytes = manifest_values.get(
+            "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES", "")
+        if not re.fullmatch(r"[1-9][0-9]*", max_bytes):
+            die("release mode requires a positive "
+                "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES")
     tracked = (REPO / "VERSION").read_text().strip()
     if os.environ.get("PLEBIAN_OS_RELEASE_MODE") != "1":
         die(f"release {release} manifest must set PLEBIAN_OS_RELEASE_MODE=1")
@@ -1081,6 +1137,16 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
         # merely observing the old still-active invocation would be a false
         # positive, while sampling the restart gap once is a false negative.
         old = shlex.quote(before_invocation)
+        closure_receipt_keys = (*F120_ROOT_KEYS,
+                                "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES")
+        capture_release_roots = " ".join(
+            f'selected_{key.lower()}="${{{key}:-}}";'
+            for key in closure_receipt_keys
+        )
+        compare_release_roots = " && ".join(
+            f'test "${{{key}:-}}" = "$selected_{key.lower()}"'
+            for key in closure_receipt_keys
+        )
         post = ssh(
             cfg,
             f"old={old}; "
@@ -1104,6 +1170,7 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
             "selected_kilix=\"$KILIX_REF\" && selected_kilix95=\"$KILIX95_REF\" && "
             "selected_uv=\"${PLEBIAN_OS_INSTALL_UV:-0}\" && "
             "selected_uv_version=\"${PLEBIAN_OS_UV_VERSION:-}\" && "
+            f"{capture_release_roots} "
             ". /var/lib/plebian-os/versions.env && "
             "test \"$PLEBIAN_OS_VERSION\" = \"$selected_version\" && "
             "test \"$PLEBIAN_OS_COMMIT\" = \"$selected_os\" && "
@@ -1112,6 +1179,7 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
             "test \"$KILIX95_COMMIT\" = \"$selected_kilix95\" && "
             "test \"$PLEBIAN_OS_INSTALL_UV\" = \"$selected_uv\" && "
             "test \"$PLEBIAN_OS_UV_VERSION\" = \"$selected_uv_version\" && "
+            f"{compare_release_roots} && "
             "if [ \"$selected_uv\" = 1 ]; then "
             "test -x /usr/local/bin/uv && test -x /usr/local/bin/uvx && "
             "case \"$(/usr/local/bin/uv --version)\" in "
@@ -1473,6 +1541,9 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         "PLEB_REF": os.environ.get("PLEB_REF", ""),
         "KILIX_REF": os.environ.get("KILIX_REF", ""),
         "KILIX95_REF": expected_kilix95_ref,
+        **{key: os.environ.get(key, "") for key in F120_ROOT_KEYS},
+        "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": os.environ.get(
+            "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES", ""),
         "PLEBIAN_OS_SSH_ENABLED": "1",
         "PLEBIAN_OS_AUTOBOOT": "1",
         "PLEBIAN_OS_UNATTENDED_DISK": "1",
@@ -1489,6 +1560,12 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         f'printf \'%s\\n\' "$selected" | grep -Fqx '
         f'{shlex.quote("  PLEBIAN_OS_REF=" + expected_os_commit)}'
     )
+    if expected_version == "0.2.1":
+        for key in (*F120_ROOT_KEYS, "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"):
+            selector_contract += (
+                ' && printf \'%s\\n\' "$selected" | grep -Fqx '
+                + shlex.quote("  " + key + "=" + os.environ.get(key, ""))
+            )
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", expected_version):
         provision_version = (
             'test "$(/usr/local/sbin/plebian-os-provision --version)" = '
@@ -1602,6 +1679,9 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         "KILIX95_COMMIT": expected_kilix95_ref,
         "PLEBIAN_OS_INSTALL_UV": expected_uv_policy,
         "PLEBIAN_OS_UV_VERSION": expected_uv_version,
+        "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": os.environ.get(
+            "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES", ""),
+        **{key: os.environ.get(key, "") for key in F120_ROOT_KEYS},
     }
     exact_source_provenance = " && ".join(
         f"grep -Fqx {shlex.quote(key + '=' + value)} "
@@ -1759,12 +1839,14 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "PLEB_REF",
         "KILIX_REF",
         "KILIX95_REF",
+        *F120_ROOT_KEYS,
         "PLEBIAN_OS_NETINST_URL",
         "PLEBIAN_OS_NETINST_SHA256",
         "PLEBIAN_OS_APT_SNAPSHOT",
         "PLEBIAN_OS_INSTALL_UV",
         "PLEBIAN_OS_UV_VERSION",
         "PLEBIAN_OS_UV_INSTALLER_SHA256",
+        "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES",
         "KILIX_PREBUILT_VERSION",
         "KILIX_PREBUILT_SHA256",
         "PLEBIAN_OS_KILIX_GO_VERSION",

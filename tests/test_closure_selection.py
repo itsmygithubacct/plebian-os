@@ -25,6 +25,28 @@ MANIFEST = ROOT / "releases" / "0.1.8.env"
 UPGRADING = ROOT / "UPGRADING.md"
 RELEASING = ROOT / "RELEASING.md"
 NOTES = ROOT / "releases" / "0.1.8-notes.md"
+F120_ROOT_VALUES = {
+    "KILIX_SYSTEM_MONITOR_REPO":
+        "https://github.com/itsmygithubacct/kilix-system-monitor.git",
+    "KILIX_SYSTEM_MONITOR_BRANCH": "",
+    "KILIX_SYSTEM_MONITOR_REF": "1" * 40,
+    "KILIX_DESKTOP_SDK_REPO":
+        "https://github.com/itsmygithubacct/kilix-desktop-sdk.git",
+    "KILIX_DESKTOP_SDK_BRANCH": "",
+    "KILIX_DESKTOP_SDK_REF": "2" * 40,
+    "KILIX_ICEWM_REPO":
+        "https://github.com/itsmygithubacct/kilix-icewm.git",
+    "KILIX_ICEWM_BRANCH": "",
+    "KILIX_ICEWM_REF": "3" * 40,
+    "KILIX_MEDIA_SDK_REPO":
+        "https://github.com/itsmygithubacct/kilix-media-sdk.git",
+    "KILIX_MEDIA_SDK_BRANCH": "",
+    "KILIX_MEDIA_SDK_REF": "4" * 40,
+    "KILIX_WAYDROID_REPO":
+        "https://github.com/itsmygithubacct/kilix-waydroid.git",
+    "KILIX_WAYDROID_BRANCH": "",
+    "KILIX_WAYDROID_REF": "5" * 40,
+}
 
 # What a 0.1.7 image left in /etc/pleb/session.env. Every one of these is
 # release-controlled and must move together.
@@ -159,6 +181,24 @@ class ClosureSelectionTests(unittest.TestCase):
             git + ["rev-parse", f"{tag}^{{commit}}"],
             capture_output=True, text=True, check=True).stdout.strip()
 
+    def _f120_manifest_text(self, drop=(), **changes) -> str:
+        values = {
+            "PLEBIAN_OS_VERSION": "0.2.1",
+            "PLEBIAN_OS_REF": "v0.2.1",
+            "PLEBIAN_OS_INSTALL_UV": "1",
+            "PLEBIAN_OS_UV_VERSION": "0.12.5",
+            "PLEBIAN_OS_UV_INSTALLER_SHA256":
+                "504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111",
+            "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "71225",
+            **F120_ROOT_VALUES,
+            **changes,
+        }
+        text = self._manifest_text(**values)
+        return "\n".join(
+            line for line in text.splitlines()
+            if not any(line.startswith(f"{key}=") for key in drop)
+        ) + "\n"
+
     def _run(self, base: Path, *args, fail_after=None, check_ancestry=False):
         env = {
             "HOME": str(base / "home"),
@@ -245,6 +285,48 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("plebian-os-update --restart", result.stdout)
             self.assertIn("Do not run plebian-os-provision", result.stdout)
 
+    def test_0_2_1_selects_every_f120_root_tuple_and_uv_bound(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            commit = self._source(
+                base,
+                self._f120_manifest_text(),
+                version="0.2.1",
+                release="0.2.1",
+                tag="v0.2.1",
+                requirements_text=(
+                    ROOT / "releases" / "0.2.1.requirements"
+                ).read_text(),
+            )
+            result = self._run(base, "0.2.1", "--offline")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            after = self._values(env)
+            for key, expected in F120_ROOT_VALUES.items():
+                with self.subTest(key=key):
+                    self.assertEqual(after[key], expected)
+            self.assertEqual(
+                after["PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"], "71225")
+            self.assertEqual(after["PLEBIAN_OS_REF"], commit)
+
+    def test_0_2_1_refuses_an_incomplete_f120_root_tuple(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            self._source(
+                base,
+                self._f120_manifest_text(drop=("KILIX_MEDIA_SDK_REF",)),
+                version="0.2.1",
+                release="0.2.1",
+                tag="v0.2.1",
+                requirements_text=(
+                    ROOT / "releases" / "0.2.1.requirements"
+                ).read_text(),
+            )
+            result = self._refuses(
+                base, "KILIX_MEDIA_SDK_REF", target="0.2.1")
+            self.assertIn("incomplete closure", result.stderr)
+
     def test_selection_adds_a_pin_the_installed_release_never_had(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -289,10 +371,10 @@ class ClosureSelectionTests(unittest.TestCase):
                           after_lines)
 
     # ── an incomplete or malformed closure is refused, by name ──────────────
-    def _refuses(self, base: Path, expected: str, *args):
+    def _refuses(self, base: Path, expected: str, *args, target="0.1.8"):
         env = base / "root" / "etc" / "pleb" / "session.env"
         before = env.read_bytes()
-        result = self._run(base, "0.1.8", "--offline", *args)
+        result = self._run(base, target, "--offline", *args)
         self.assertNotEqual(result.returncode, 0, result.stdout)
         self.assertIn(expected, result.stderr)
         self.assertEqual(env.read_bytes(), before)

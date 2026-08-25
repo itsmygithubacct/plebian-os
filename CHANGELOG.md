@@ -25,6 +25,11 @@ closure and must not be used to revise 0.2.0 artifacts.
   inspection, thermal sensors, and `linux-perf` qualification.
 - Test that the compression, hardware-discovery, and performance package sets
   remain present on both installation paths.
+- Carry the system-monitor, desktop-SDK, IceWM, media-SDK, and Waydroid release
+  roots through closure selection, first boot, reprovisioning, updates, build
+  provenance, and acceptance. Each 0.2.1 tuple requires a canonical repository,
+  an exact commit, and an empty branch, and the uv installer byte bound now
+  moves with the rest of the release closure.
 
 ### Required before release
 

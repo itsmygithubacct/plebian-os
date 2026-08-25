@@ -153,12 +153,17 @@ actually cutting.
 `releases/<x.y.z>.env` must include:
 
 - the coordinated source refs for all four repositories;
+- for 0.2.1, complete exact-commit/canonical-repository/empty-branch tuples for
+  `KILIX_SYSTEM_MONITOR`, `KILIX_DESKTOP_SDK`, `KILIX_ICEWM`,
+  `KILIX_MEDIA_SDK`, and `KILIX_WAYDROID`. These are release-root selectors:
+  component versions remain in their owner manifests and child gitlink commits
+  remain facts of the selected Git trees rather than duplicate env pins;
 - a stable Debian archive URL and SHA-256 for the source netinst;
 - a `snapshot.debian.org` timestamp covering installer and firstboot packages;
 - the fallback kitty bundle version and SHA-256;
 - the exact Go version and SHA-256 for every supported build architecture;
-- pinned installer versions/checksums for any optional network installers that
-  are enabled (currently `uv`);
+- pinned installer versions/checksums and a positive download byte bound for
+  any optional network installers that are enabled (currently `uv`);
 - when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
   library version/URL/SHA-256, and acoustic-model URL/SHA-256. Both installed
   Vosk assets must retain readable upstream provenance and Apache-2.0 license
@@ -211,9 +216,12 @@ hands. If a release introduces a new release-controlled key, add it to
 `RELEASE_CONTROLLED_KEYS` in the selector (and to the required lists if the
 release cannot build without it) in the same commit that adds it to the manifest;
 the selector adds keys the installed release never had, but only ones it knows
-are release-controlled. The selector must fetch and compare all four exact Git
-component refs before rendering the new configuration, so a higher coordinated
-version cannot hide a component downgrade. It is installed on PATH as part of
+are release-controlled. The selector must fetch and compare all four directly
+installed Git checkouts before rendering the new configuration, so a higher
+coordinated version cannot hide a component downgrade. Additional release-root
+tuples are preserved byte-for-value for the release graph verifier, which
+reconstructs their selected trees and gitlinks from the public exact commits.
+It is installed on PATH as part of
 the twelve-file transactional OS layer beginning with 0.1.9. The selection
 transaction also installs the exact target updater and backs up the prior
 updater, selector, and session together. This is required whenever the target

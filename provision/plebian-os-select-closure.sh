@@ -110,10 +110,26 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX95_REPO
     KILIX95_BRANCH
     KILIX95_REF
+    KILIX_SYSTEM_MONITOR_REPO
+    KILIX_SYSTEM_MONITOR_BRANCH
+    KILIX_SYSTEM_MONITOR_REF
+    KILIX_DESKTOP_SDK_REPO
+    KILIX_DESKTOP_SDK_BRANCH
+    KILIX_DESKTOP_SDK_REF
+    KILIX_ICEWM_REPO
+    KILIX_ICEWM_BRANCH
+    KILIX_ICEWM_REF
+    KILIX_MEDIA_SDK_REPO
+    KILIX_MEDIA_SDK_BRANCH
+    KILIX_MEDIA_SDK_REF
+    KILIX_WAYDROID_REPO
+    KILIX_WAYDROID_BRANCH
+    KILIX_WAYDROID_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_INSTALL_UV
     PLEBIAN_OS_UV_VERSION
     PLEBIAN_OS_UV_INSTALLER_SHA256
+    PLEBIAN_OS_UV_INSTALLER_MAX_BYTES
     KILIX_PREBUILT_VERSION
     KILIX_PREBUILT_SHA256
     PLEBIAN_OS_BUILD_KILIX_FORK
@@ -152,6 +168,16 @@ REQUIRED_VALUE_KEYS=(
     KILIX_REF
     KILIX95_REPO
     KILIX95_REF
+    KILIX_SYSTEM_MONITOR_REPO
+    KILIX_SYSTEM_MONITOR_REF
+    KILIX_DESKTOP_SDK_REPO
+    KILIX_DESKTOP_SDK_REF
+    KILIX_ICEWM_REPO
+    KILIX_ICEWM_REF
+    KILIX_MEDIA_SDK_REPO
+    KILIX_MEDIA_SDK_REF
+    KILIX_WAYDROID_REPO
+    KILIX_WAYDROID_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
@@ -172,6 +198,11 @@ REQUIRED_EMPTY_KEYS=(
     PLEB_BRANCH
     KILIX_BRANCH
     KILIX95_BRANCH
+    KILIX_SYSTEM_MONITOR_BRANCH
+    KILIX_DESKTOP_SDK_BRANCH
+    KILIX_ICEWM_BRANCH
+    KILIX_MEDIA_SDK_BRANCH
+    KILIX_WAYDROID_BRANCH
 )
 
 VOICE_CLOSURE_KEYS=(
@@ -269,6 +300,11 @@ parse_release_manifest() {
         seen[$key]=1
         [ "$val" != REPLACE_ME ] \
             || closure_reject "$key is still REPLACE_ME — the release was never finished"
+        case "${val^^}" in
+            REPLACE-ME|TBD|TODO|FIXME|XXX|CHANGEME|CHANGE_ME|PLACEHOLDER|UNSET|NONE|*\<*|*\>*)
+                closure_reject "$key is still a placeholder ('$val') — the release was never finished"
+                ;;
+        esac
         MANIFEST["$key"]="$val"
     done <"$manifest"
 }
@@ -295,6 +331,11 @@ parse_release_requirements() {
         seen[$key]=1
         [ "$val" != REPLACE_ME ] \
             || closure_reject "requirement $key is still REPLACE_ME"
+        case "${val^^}" in
+            REPLACE-ME|TBD|TODO|FIXME|XXX|CHANGEME|CHANGE_ME|PLACEHOLDER|UNSET|NONE|*\<*|*\>*)
+                closure_reject "requirement $key is still a placeholder ('$val')"
+                ;;
+        esac
         REQUIREMENTS["$key"]="$val"
     done <"$requirements"
 }
@@ -316,6 +357,18 @@ require_manifest_format() {
         || closure_reject "$key must be $description (got '$value')"
 }
 
+release_requires_f120_roots() {
+    [ "$TARGET" = 0.2.1 ]
+}
+
+is_f120_root_key() {
+    case "$1" in
+        KILIX_SYSTEM_MONITOR_*|KILIX_DESKTOP_SDK_*|KILIX_ICEWM_*|\
+        KILIX_MEDIA_SDK_*|KILIX_WAYDROID_*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 validate_release_closure() {
     local key value missing=() present=()
 
@@ -331,17 +384,26 @@ validate_release_closure() {
     validate_release_requirements
 
     for key in "${REQUIRED_VALUE_KEYS[@]}"; do
+        if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]:-}" ] || missing+=("$key")
     done
     [ "${#missing[@]}" -eq 0 ] \
         || closure_reject "incomplete closure — no value for: ${missing[*]}"
 
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
+        if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]+x}" ] || present+=("$key")
     done
     [ "${#present[@]}" -eq 0 ] \
         || closure_reject "incomplete closure — these must be declared, even empty: ${present[*]}"
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
+        if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
         [ -z "${MANIFEST[$key]}" ] \
             || closure_reject "$key must be empty in a release closure — a release pins exact commits, not branches (got '${MANIFEST[$key]}')"
     done
@@ -350,6 +412,28 @@ validate_release_closure() {
         require_manifest_format "$key" '^[0-9a-f]{40}$' \
             "a full 40-character lowercase commit SHA"
     done
+    if release_requires_f120_roots; then
+        for key in KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF \
+            KILIX_ICEWM_REF KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF; do
+            require_manifest_format "$key" '^[0-9a-f]{40}$' \
+                "a full 40-character lowercase commit SHA"
+        done
+        [ "${MANIFEST[KILIX_SYSTEM_MONITOR_REPO]}" = \
+            https://github.com/itsmygithubacct/kilix-system-monitor.git ] \
+            || closure_reject "KILIX_SYSTEM_MONITOR_REPO must name the canonical release repository"
+        [ "${MANIFEST[KILIX_DESKTOP_SDK_REPO]}" = \
+            https://github.com/itsmygithubacct/kilix-desktop-sdk.git ] \
+            || closure_reject "KILIX_DESKTOP_SDK_REPO must name the canonical release repository"
+        [ "${MANIFEST[KILIX_ICEWM_REPO]}" = \
+            https://github.com/itsmygithubacct/kilix-icewm.git ] \
+            || closure_reject "KILIX_ICEWM_REPO must name the canonical release repository"
+        [ "${MANIFEST[KILIX_MEDIA_SDK_REPO]}" = \
+            https://github.com/itsmygithubacct/kilix-media-sdk.git ] \
+            || closure_reject "KILIX_MEDIA_SDK_REPO must name the canonical release repository"
+        [ "${MANIFEST[KILIX_WAYDROID_REPO]}" = \
+            https://github.com/itsmygithubacct/kilix-waydroid.git ] \
+            || closure_reject "KILIX_WAYDROID_REPO must name the canonical release repository"
+    fi
     for key in PLEBIAN_OS_REPO PLEB_REPO KILIX_REPO KILIX95_REPO; do
         require_manifest_format "$key" '^https://[A-Za-z0-9._~:/?#@!$&+,;=%-]+\.git$' \
             "an https git URL"
@@ -385,6 +469,12 @@ validate_release_closure() {
                 '^[0-9]+\.[0-9]+\.[0-9]+$' "an exact semantic version"
             require_manifest_format PLEBIAN_OS_UV_INSTALLER_SHA256 \
                 '^[0-9a-f]{64}$' "a 64-character lowercase SHA-256"
+            if release_requires_f120_roots; then
+                [ -n "${MANIFEST[PLEBIAN_OS_UV_INSTALLER_MAX_BYTES]:-}" ] \
+                    || closure_reject "PLEBIAN_OS_INSTALL_UV=1 needs a pinned PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"
+                require_manifest_format PLEBIAN_OS_UV_INSTALLER_MAX_BYTES \
+                    '^[1-9][0-9]*$' "a positive byte count"
+            fi
             ;;
         *) closure_reject "PLEBIAN_OS_INSTALL_UV must be 0 or 1 (got '$value')" ;;
     esac
@@ -457,6 +547,9 @@ build_selected_closure() {
     CLOSURE[PLEBIAN_OS_VERSION]="$TARGET"
     CLOSURE[PLEBIAN_OS_REF]="$OS_COMMIT"
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
+        if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
         CLOSURE["$key"]=""
     done
     if [ "${MANIFEST[PLEBIAN_OS_INSTALL_VOICE_MODEL]:-0}" != 1 ]; then

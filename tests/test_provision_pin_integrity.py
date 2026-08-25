@@ -29,12 +29,21 @@ ROOT = Path(__file__).resolve().parents[1]
 os.umask(0o022)
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 SELECT = ROOT / "provision" / "plebian-os-select-closure.sh"
+UPDATE = ROOT / "provision" / "plebian-os-update.sh"
+REMASTER = ROOT / "build" / "remaster-iso.sh"
+F120_ROOTS = (
+    "KILIX_SYSTEM_MONITOR",
+    "KILIX_DESKTOP_SDK",
+    "KILIX_ICEWM",
+    "KILIX_MEDIA_SDK",
+    "KILIX_WAYDROID",
+)
 
 # A machine pinned to a complete closure. Shapes match a real installed
 # session.env: exact commits, exact archive checksums, exact URLs.
 INSTALLED_CLOSURE = {
-    "PLEBIAN_OS_VERSION": "0.2.0",
-    "PLEBIAN_OS_RELEASE": "0.2.0",
+    "PLEBIAN_OS_VERSION": "0.2.1",
+    "PLEBIAN_OS_RELEASE": "0.2.1",
     "PLEBIAN_OS_RELEASE_MODE": "1",
     "PLEBIAN_OS_REPO": "https://github.com/itsmygithubacct/plebian-os.git",
     "PLEBIAN_OS_BRANCH": "",
@@ -48,10 +57,32 @@ INSTALLED_CLOSURE = {
     "KILIX95_REPO": "https://github.com/itsmygithubacct/kilix-95.git",
     "KILIX95_BRANCH": "",
     "KILIX95_REF": "4" * 40,
+    "KILIX_SYSTEM_MONITOR_REPO":
+        "https://github.com/itsmygithubacct/kilix-system-monitor.git",
+    "KILIX_SYSTEM_MONITOR_BRANCH": "",
+    "KILIX_SYSTEM_MONITOR_REF": "c" * 40,
+    "KILIX_DESKTOP_SDK_REPO":
+        "https://github.com/itsmygithubacct/kilix-desktop-sdk.git",
+    "KILIX_DESKTOP_SDK_BRANCH": "",
+    "KILIX_DESKTOP_SDK_REF": "d" * 40,
+    "KILIX_ICEWM_REPO":
+        "https://github.com/itsmygithubacct/kilix-icewm.git",
+    "KILIX_ICEWM_BRANCH": "",
+    "KILIX_ICEWM_REF": "e" * 40,
+    "KILIX_MEDIA_SDK_REPO":
+        "https://github.com/itsmygithubacct/kilix-media-sdk.git",
+    "KILIX_MEDIA_SDK_BRANCH": "",
+    "KILIX_MEDIA_SDK_REF": "f" * 40,
+    "KILIX_WAYDROID_REPO":
+        "https://github.com/itsmygithubacct/kilix-waydroid.git",
+    "KILIX_WAYDROID_BRANCH": "",
+    "KILIX_WAYDROID_REF": "a" * 40,
     "PLEBIAN_OS_APT_SNAPSHOT": "20260727T000000Z",
     "PLEBIAN_OS_INSTALL_UV": "1",
-    "PLEBIAN_OS_UV_VERSION": "0.12.3",
-    "PLEBIAN_OS_UV_INSTALLER_SHA256": "b" * 64,
+    "PLEBIAN_OS_UV_VERSION": "0.12.5",
+    "PLEBIAN_OS_UV_INSTALLER_SHA256":
+        "504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111",
+    "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "71225",
     "KILIX_PREBUILT_VERSION": "0.47.3",
     "KILIX_PREBUILT_SHA256": "5" * 64,
     "PLEBIAN_OS_BUILD_KILIX_FORK": "0",
@@ -165,6 +196,38 @@ class ReleaseControlledClassificationTests(unittest.TestCase):
             with self.subTest(key=key):
                 var = provisioner_key_variable(key)
                 self.assertIn(f'write_session_default {key} "${var}"\n', text)
+
+    def test_f120_roots_are_required_and_carried_through_every_os_surface(self):
+        selector = SELECT.read_text()
+        required_values = declared_bash_array(selector, "REQUIRED_VALUE_KEYS")
+        required_empty = declared_bash_array(selector, "REQUIRED_EMPTY_KEYS")
+        controlled = selector_release_keys()
+        provision = PROVISION.read_text()
+        update = UPDATE.read_text()
+        remaster = REMASTER.read_text()
+        for root in F120_ROOTS:
+            for suffix in ("REPO", "REF"):
+                key = f"{root}_{suffix}"
+                with self.subTest(key=key, surface="required"):
+                    self.assertIn(key, required_values)
+            branch = f"{root}_BRANCH"
+            self.assertIn(branch, required_empty)
+            for suffix in ("REPO", "BRANCH", "REF"):
+                key = f"{root}_{suffix}"
+                with self.subTest(key=key, surface="transport"):
+                    self.assertIn(key, controlled)
+                    self.assertIn(f'write_session_default {key} "${key}"', provision)
+                    self.assertIn(f"provenance_kv {key}", provision)
+                    self.assertIn(f"provenance_kv {key}", update)
+                    self.assertIn(f"manifest_kv {key}", remaster)
+                    self.assertIn(f"env_kv {key}", remaster)
+
+        uv_bound = "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"
+        self.assertIn(uv_bound, controlled)
+        self.assertIn(f"provenance_kv {uv_bound}", provision)
+        self.assertIn(f"provenance_kv {uv_bound}", update)
+        self.assertIn(f"manifest_kv {uv_bound}", remaster)
+        self.assertIn(f"env_kv {uv_bound}", remaster)
 
 
 class ReprovisionPinIntegrityTests(unittest.TestCase):
@@ -391,6 +454,16 @@ def bash_array(script: Path, name: str) -> list[str]:
     if result.returncode != 0:
         raise AssertionError(f"could not read {name}: {result.stderr}")
     return [line for line in result.stdout.splitlines() if line]
+
+
+def declared_bash_array(source: str, name: str) -> list[str]:
+    start = source.index(f"{name}=(") + len(name) + 2
+    end = source.index("\n)", start)
+    return [
+        line.strip()
+        for line in source[start:end].splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
 
 
 def provisioner_release_keys() -> list[str]:
