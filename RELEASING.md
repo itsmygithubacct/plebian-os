@@ -6,6 +6,44 @@ Plebian-OS, [pleb](https://github.com/itsmygithubacct/pleb),
 stack. A release uses one version across all four repositories and pins every
 network-fetched build input.
 
+## Installer personas and identity inventory
+
+The 0.2.1 installer has four deliberately separate personas. Identity never
+crosses between them implicitly.
+
+| Persona | Identity and credential contract | Disk/network contract | Acceptance |
+|---|---|---|---|
+| Normal release ISO | Debian Installer asks for hostname, display name, Unix username, and a concealed password twice. The image carries no answered identity field and no known password. | Boot menus wait; partitioning and destructive confirmation remain interactive; SSH is absent. | Install a non-default 32-character account and hostname in both BIOS and UEFI lanes. |
+| Unattended VM/CI derivative | The caller explicitly supplies username and hostname and either a crypt hash through a protected input or lets the harness generate a strong one-time credential. Plaintext is never an argument, environment value, build record, or log field. | Explicitly non-publishable; SSH, autoboot, and unattended partitioning are enabled only for this derivative. | The harness owns the temporary credential, verifies the guest, then expires it. |
+| Upgrade from 0.2.0 | Existing username, uid, home, password hash, hostname, login policy, and ownership are retained. Installer questions never run during an upgrade. | The selected release closure moves transactionally. If the legacy default hash remains, password-based remote login is disabled for that account without disabling console login. | Run distinct retained-default-hash and changed-password fixtures through update and rollback. |
+| Offline install | Uses the normal interactive identity flow. | Base installation completes from media; network-dependent firstboot work reports a bounded resumable failure and never changes identity. Optional models are not part of the base image. | Reach the login/recovery boundary with the recorded account intact, then resume core provisioning when networking is restored. |
+
+Phase-0 inventory was frozen against `work/0.2.1-iso` commit
+`3a05ea9cd31bbc0f8d153daa46734ac4b29212ed`. These are the fixed-identity or
+credential-bearing sites that 0.2.1 must either remove from the normal image or
+confine to the explicit automated/legacy persona:
+
+| Baseline site | Assumption at the frozen baseline | Required disposition |
+|---|---|---|
+| `preseed/preseed.cfg:14-20,30,39-49` | Documents and answers hostname `plebian`, account `pleb`, display name, plaintext password, and weak-password policy. | Remove every normal-image identity answer and let Debian Installer ask. |
+| `preseed/preseed.cfg:152-184` | Stages firstboot files but does not record which account Debian Installer created. | Atomically record the single DI-created account for firstboot. |
+| `build/remaster-iso.sh:268-325` | Release mode requires `IMAGE_PASSWORD` and `RANDOM_PASSWORD`. | Refuse either key in release mode. |
+| `build/remaster-iso.sh:386-461` | Derives every guest path from the preseeded username. | Permit an identity-free normal preseed; defer per-user paths to firstboot. |
+| `build/remaster-iso.sh:1021-1110` | Generates/replaces the image password and asserts the shipped password as validity evidence. | Replace with interactive-versus-automated profile validation; never generate a release credential. |
+| `build/build_vm_image.py:275-431,434-500,531-575,1706-1782` | Defaults the account, accepts plaintext `--password`/`IMAGE_PASSWORD`, and prints generated values. | Require explicit automated identity, protected credential input or harness-owned generation, and redact all output/evidence. |
+| `build/build_usb_image.py:64-101,526-609` | Treats a physical USB build as a pre-answered identity image and accepts plaintext `--password`. | Make the default physical image interactive; require an explicit non-publishable automated profile for pre-answered identity. |
+| `build/install-vm-from-usb-iso.sh:18-69` | Places the VM password in an environment variable and twice in process arguments. | Use one private, short-lived credential file and delete it on every exit. |
+| `releases/0.2.0.env` | Publishes `IMAGE_PASSWORD=plebian` and `RANDOM_PASSWORD=0`. | Preserve as historical 0.2.0 evidence; omit and forbid both keys in 0.2.1. |
+| `provision/plebian-os-provision.sh:328,529,627-652,2937-3025,3793-3801` | Has generic passwd/home validation, but silently chooses the lowest eligible uid and installs the legacy transition path on every fresh install. | Prefer the DI record, refuse ambiguous fallback, enforce Debian's username policy, and install the legacy transition only when its hash remains. |
+| `provision/plebian-os-passwd:1-163` | Detects and changes the legacy default password through a narrow helper. | Retain only for 0.2.0 upgrades; add per-account remote-login neutralization and never use it as a fresh-install password API. |
+| `provision/plebian-os-update.sh` and `provision/plebian-os-select-closure.sh` | Carry paths from the running user's home/session closure and do not rename accounts. | Preserve that behavior and reconcile the legacy remote-login policy during the adjacent release hop. |
+| `tests/test_deferred_hardening.py`, `tests/test_disk_safety.py`, `tests/test_passwd_nag.py`, `tests/test_release_versioning.py`, `tests/test_remaster_contract.py`, `tests/test_build_vm_image.py`, `tests/test_build_usb_image.py` | Assert the outgoing fixed-credential behavior. | Replace with interactive-release, protected-automation, arbitrary-user, ambiguity, and legacy-upgrade regressions. |
+
+Product-name uses of “Pleb” and storage names such as `/etc/pleb/session.env`
+are not account assumptions. No `/home/pleb` path is present in the owned
+provision/update/session scripts; the remaining numeric `1000` uses are uid
+range policy and are not an equality assumption.
+
 The release login session is the main Kilix instance, with its clickable page
 strip and pane controls visibly present, Kilix 95 in its 95 flavor loaded as
 page 1, and hard-kiosk respawn off. A bare first-page shell is an explicit
