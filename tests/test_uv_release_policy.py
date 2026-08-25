@@ -18,6 +18,15 @@ EXPECTED = {
     ),
 }
 NEXT_EXPECTED = {
+    "PLEBIAN_OS_NETINST_URL": (
+        "https://cdimage.debian.org/cdimage/archive/13.5.0/amd64/iso-cd/"
+        "debian-13.5.0-amd64-netinst.iso"
+    ),
+    "PLEBIAN_OS_NETINST_SHA256": (
+        "95838884f5ea6c82421dfe6baaa5a639dbbe6756c1e380f9fe7a7cb0c1949d2a"
+    ),
+    "PLEBIAN_OS_NETINST_MAX_BYTES": "791674880",
+    "PLEBIAN_OS_APT_SNAPSHOT": "20260727T000000Z",
     "PLEBIAN_OS_INSTALL_UV": "1",
     "PLEBIAN_OS_UV_VERSION": "0.12.5",
     "PLEBIAN_OS_UV_INSTALLER_SHA256": (

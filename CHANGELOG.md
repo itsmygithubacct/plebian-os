@@ -36,6 +36,9 @@ closure and must not be used to revise 0.2.0 artifacts.
 - Require the existing hash-bound Waydroid first-use helper in the 0.2.1
   release closure so a valid image cannot silently omit the accepted app's
   privileged setup path.
+- Freeze the immutable Debian 13.5.0 amd64 bootstrap URL, checksum, byte
+  ceiling, and the signed `20260727T000000Z` package snapshot after the
+  latest-stable recheck confirmed that Debian 13.6.0 still had no archive URL.
 
 ### Required before release
 

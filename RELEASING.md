@@ -158,7 +158,8 @@ actually cutting.
   `KILIX_MEDIA_SDK`, and `KILIX_WAYDROID`. These are release-root selectors:
   component versions remain in their owner manifests and child gitlink commits
   remain facts of the selected Git trees rather than duplicate env pins;
-- a stable Debian archive URL and SHA-256 for the source netinst;
+- a stable Debian archive URL, SHA-256, and positive byte ceiling for the
+  source netinst;
 - a `snapshot.debian.org` timestamp covering installer and firstboot packages;
 - the fallback kitty bundle version and SHA-256;
 - the exact Go version and SHA-256 for every supported build architecture;

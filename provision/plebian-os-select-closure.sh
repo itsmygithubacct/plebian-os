@@ -154,6 +154,7 @@ RELEASE_CONTROLLED_KEYS=(
 BUILD_ONLY_RELEASE_KEYS=(
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
+    PLEBIAN_OS_NETINST_MAX_BYTES
 )
 
 # Must be present in the manifest and non-empty.
@@ -443,6 +444,10 @@ validate_release_closure() {
     require_manifest_format PLEBIAN_OS_NETINST_URL '^https://' "an https URL"
     require_manifest_format PLEBIAN_OS_NETINST_SHA256 '^[0-9a-f]{64}$' \
         "a 64-character lowercase SHA-256"
+    if [ -n "${MANIFEST[PLEBIAN_OS_NETINST_MAX_BYTES]+x}" ]; then
+        require_manifest_format PLEBIAN_OS_NETINST_MAX_BYTES \
+            '^[1-9][0-9]*$' "a positive byte count"
+    fi
     require_manifest_format KILIX_PREBUILT_VERSION \
         '^[0-9][0-9A-Za-z.+-]*$' "an engine version"
     require_manifest_format KILIX_PREBUILT_SHA256 '^[0-9a-f]{64}$' \

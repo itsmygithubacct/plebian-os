@@ -185,6 +185,13 @@ class ClosureSelectionTests(unittest.TestCase):
         values = {
             "PLEBIAN_OS_VERSION": "0.2.1",
             "PLEBIAN_OS_REF": "v0.2.1",
+            "PLEBIAN_OS_NETINST_URL":
+                "https://cdimage.debian.org/cdimage/archive/13.5.0/amd64/"
+                "iso-cd/debian-13.5.0-amd64-netinst.iso",
+            "PLEBIAN_OS_NETINST_SHA256":
+                "95838884f5ea6c82421dfe6baaa5a639dbbe6756c1e380f9fe7a7cb0c1949d2a",
+            "PLEBIAN_OS_NETINST_MAX_BYTES": "791674880",
+            "PLEBIAN_OS_APT_SNAPSHOT": "20260727T000000Z",
             "PLEBIAN_OS_INSTALL_UV": "1",
             "PLEBIAN_OS_UV_VERSION": "0.12.5",
             "PLEBIAN_OS_UV_INSTALLER_SHA256":
@@ -288,7 +295,7 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("plebian-os-update --restart", result.stdout)
             self.assertIn("Do not run plebian-os-provision", result.stdout)
 
-    def test_0_2_1_selects_every_f120_root_tuple_and_uv_bound(self):
+    def test_0_2_1_selects_every_f120_root_tuple_and_bound_input(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
@@ -315,7 +322,39 @@ class ClosureSelectionTests(unittest.TestCase):
                 after["PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"],
                 "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175",
             )
+            self.assertNotIn("PLEBIAN_OS_NETINST_MAX_BYTES", after)
+            self.assertIn(
+                "PLEBIAN_OS_NETINST_MAX_BYTES: validated, image-build input only",
+                result.stdout,
+            )
             self.assertEqual(after["PLEBIAN_OS_REF"], commit)
+
+    def test_0_2_1_requirements_refuse_different_debian_inputs(self):
+        mutations = {
+            "PLEBIAN_OS_NETINST_URL": "https://example.invalid/netinst.iso",
+            "PLEBIAN_OS_NETINST_SHA256": "0" * 64,
+            "PLEBIAN_OS_NETINST_MAX_BYTES": "791674881",
+            "PLEBIAN_OS_APT_SNAPSHOT": "20260824T000000Z",
+        }
+        for key, value in mutations.items():
+            with self.subTest(key=key), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                self._machine(base)
+                self._source(
+                    base,
+                    self._f120_manifest_text(**{key: value}),
+                    version="0.2.1",
+                    release="0.2.1",
+                    tag="v0.2.1",
+                    requirements_text=(
+                        ROOT / "releases" / "0.2.1.requirements"
+                    ).read_text(),
+                )
+                self._refuses(
+                    base,
+                    f"release requirements demand {key}=",
+                    target="0.2.1",
+                )
 
     def test_0_2_1_refuses_an_incomplete_f120_root_tuple(self):
         with tempfile.TemporaryDirectory() as td:
