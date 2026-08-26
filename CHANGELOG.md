@@ -17,6 +17,11 @@ closure and must not be used to revise 0.2.0 artifacts.
   inspection, thermal sensors, and `linux-perf` qualification.
 - Test that the compression, hardware-discovery, and performance package sets
   remain present on both installation paths.
+- Add explicit opt-in Vulkan runtime closures for Mesa and Nouveau without
+  changing the base image, and confine `vulkaninfo` to Vulkan qualification
+  images.
+- Test the CPU-only, generic Vulkan, Nouveau Vulkan, and qualified Vulkan
+  package selections independently.
 
 ### Required before release
 

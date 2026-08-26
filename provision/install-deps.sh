@@ -13,17 +13,30 @@
 #   plebian-os-install-deps --qualification # additionally install the
 #                                           # qualification-image group
 #                                           # (0.2.1 OD-12D; not base image)
+#   plebian-os-install-deps --vulkan        # add the Mesa Vulkan runtime
+#   plebian-os-install-deps --vulkan-nouveau # add Mesa Vulkan + Nouveau firmware
+#   plebian-os-install-deps --qualification --vulkan
+#                                           # also add vulkaninfo for qualification
 #
-# NOTE: preseed/preseed.cfg's pkgsel/include mirrors these packages for the
-# Debian-installer path (d-i can't call a script); keep the two in sync.
+# NOTE: preseed/preseed.cfg's pkgsel/include mirrors DEP_GROUPS for the
+# Debian-installer path (d-i can't call a script). Optional groups below must
+# stay out of both base-image manifests.
 set -uo pipefail
 
 DRY_RUN=0
 QUALIFICATION=0
+VULKAN=0
+VULKAN_NOUVEAU=0
 for arg in "$@"; do
     case "$arg" in
-        --dry-run)       DRY_RUN=1 ;;
-        --qualification) QUALIFICATION=1 ;;
+        --dry-run)         DRY_RUN=1 ;;
+        --qualification)   QUALIFICATION=1 ;;
+        --vulkan)          VULKAN=1 ;;
+        --vulkan-nouveau)  VULKAN=1; VULKAN_NOUVEAU=1 ;;
+        *)
+            printf 'unknown option: %s\n' "$arg" >&2
+            exit 2
+            ;;
     esac
 done
 PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-os/session}"
@@ -171,17 +184,40 @@ DEP_GROUPS=(
 # Qualification-image additive group (0.2.1, owner decision OD-12D).
 #
 # These are NOT base-image packages. preseed.cfg and DEP_GROUPS above must stay
-# exactly equal — tests/test_dependency_manifest.py enforces that — so anything
-# installed only onto qualification images lives here instead, and is applied
-# with `plebian-os-install-deps --qualification`.
+# exactly equal — tests/test_dependency_manifest.py enforces that. General
+# qualification additions live here and are applied with
+# `plebian-os-install-deps --qualification`; lane-specific tools have their own
+# additive arrays below.
 #
 # The separator is "::" rather than "|" precisely so the base-set parser does
-# not see these lines. A test asserts the two sets stay disjoint.
+# not see these lines. Tests parse each named array and assert disjoint sets.
 #
 # Xephyr backs F119's nested-X lane and `pleb test --check`; putting it in the
 # base set would place a test-only server on every installed machine.
 QUAL_GROUPS=(
     "qualification nested X :: xserver-xephyr"
+)
+
+# F105's Vulkan acceleration closure is selected only when its codepath is
+# enabled. It must not enter DEP_GROUPS or preseed.cfg: CPU-only machines retain
+# the base image, and a future model/application selector invokes this installed
+# helper explicitly. Name both packages even though mesa-vulkan-drivers depends
+# on libvulkan1; the loader and ICD are separate runtime responsibilities.
+VULKAN_GROUPS=(
+    "Vulkan loader + Mesa ICDs :: libvulkan1 mesa-vulkan-drivers"
+)
+
+# Nouveau needs redistributable GPU firmware from non-free-firmware. Keep this
+# provider-specific so Intel, AMD and software Vulkan selections do not acquire
+# NVIDIA firmware. --vulkan-nouveau implies the common Vulkan closure above.
+VULKAN_NOUVEAU_GROUPS=(
+    "Nouveau firmware :: firmware-nvidia-graphics"
+)
+
+# vulkaninfo is evidence tooling, not an application runtime. It is installed
+# only for a qualification image whose Vulkan lane was explicitly selected.
+QUAL_VULKAN_GROUPS=(
+    "qualification Vulkan probe :: vulkan-tools"
 )
 
 
@@ -197,12 +233,12 @@ else
 fi
 
 failed=()
-for entry in "${DEP_GROUPS[@]}"; do
-    name="${entry%%|*}"; pkgs="${entry#*|}"
-    log "installing group: $name"
+install_package_group() {
+    local heading="$1" name="$2" pkgs="$3"
+    log "$heading: $name"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + apt-get install -y --no-install-recommends $pkgs"
-        continue
+        return 0
     fi
     # shellcheck disable=SC2086  # deliberate word-splitting of the package list
     if ! apt-get install -y --no-install-recommends $pkgs; then
@@ -210,7 +246,39 @@ for entry in "${DEP_GROUPS[@]}"; do
         warn "    packages: $pkgs"
         failed+=("$name")
     fi
+}
+
+for entry in "${DEP_GROUPS[@]}"; do
+    name="${entry%%|*}"; pkgs="${entry#*|}"
+    install_package_group "installing group" "$name" "$pkgs"
 done
+
+if [ "$VULKAN" -eq 1 ]; then
+    for entry in "${VULKAN_GROUPS[@]}"; do
+        name=${entry%% :: *}; pkgs=${entry#* :: }
+        install_package_group "optional runtime group" "$name" "$pkgs"
+    done
+fi
+
+if [ "$VULKAN_NOUVEAU" -eq 1 ]; then
+    for entry in "${VULKAN_NOUVEAU_GROUPS[@]}"; do
+        name=${entry%% :: *}; pkgs=${entry#* :: }
+        install_package_group "optional runtime group" "$name" "$pkgs"
+    done
+fi
+
+if [ "$QUALIFICATION" -eq 1 ]; then
+    for entry in "${QUAL_GROUPS[@]}"; do
+        name=${entry%% :: *}; pkgs=${entry#* :: }
+        install_package_group "qualification group" "$name" "$pkgs"
+    done
+    if [ "$VULKAN" -eq 1 ]; then
+        for entry in "${QUAL_VULKAN_GROUPS[@]}"; do
+            name=${entry%% :: *}; pkgs=${entry#* :: }
+            install_package_group "qualification group" "$name" "$pkgs"
+        done
+    fi
+fi
 
 # uv is useful system tooling but is not a runtime prerequisite for Kilix's
 # Python apps: their release installers use Debian's python3-venv and locked
@@ -322,19 +390,3 @@ if [ "${#failed[@]}" -gt 0 ]; then
 fi
 [ "$DRY_RUN" = 1 ] && { log "dry run complete."; exit 0; }
 log "all dependency groups installed."
-
-# Qualification-image additive group (OD-12D). Only with --qualification; never
-# part of the base image, so preseed.cfg and DEP_GROUPS stay exactly equal.
-if [ "$QUALIFICATION" -eq 1 ]; then
-    for entry in "${QUAL_GROUPS[@]}"; do
-        label=${entry%% :: *}
-        pkgs=${entry#* :: }
-        log "qualification group: $label"
-        if [ "$DRY_RUN" -eq 1 ]; then
-            echo "    would install: $pkgs"
-        else
-            apt-get install -y --no-install-recommends $pkgs \
-                || warn "qualification group failed: $label"
-        fi
-    done
-fi

@@ -1,4 +1,5 @@
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -102,6 +103,10 @@ HARDWARE_DISCOVERY_PACKAGES = {
 
 PERFORMANCE_QUALIFICATION_PACKAGES = {"linux-perf"}
 
+VULKAN_RUNTIME_PACKAGES = {"libvulkan1", "mesa-vulkan-drivers"}
+VULKAN_NOUVEAU_PACKAGES = {"firmware-nvidia-graphics"}
+VULKAN_QUALIFICATION_PACKAGES = {"vulkan-tools"}
+
 # Kilix IceWM is built on first selection. Plebian-OS 0.2.0 must provide the
 # complete, explicit pkg-config closure used by the pinned IceWM configuration
 # on both fresh-install paths; transitive dependencies are not this contract.
@@ -136,17 +141,31 @@ def preseed_packages():
     return set(body.split())
 
 
-def qualification_packages():
-    """The additive qualification-image group (0.2.1 owner decision OD-12D).
-
-    Uses "::" rather than "|" so install_deps_packages() cannot see it: these
-    are deliberately NOT base-image packages.
-    """
+def additive_packages(array_name):
+    """Return packages from one explicitly named additive shell array."""
     text = (ROOT / "provision" / "install-deps.sh").read_text()
+    match = re.search(
+        rf"^{array_name}=\(\n(?P<body>.*?)^\)",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if not match:
+        raise AssertionError(f"{array_name} not found in install-deps")
     pkgs = set()
-    for match in re.finditer(r'^\s*"[^"]+ :: ([^"]+)"', text, flags=re.MULTILINE):
-        pkgs.update(match.group(1).split())
+    for entry in re.finditer(r'^\s*"[^"]+ :: ([^"]+)"',
+                             match.group("body"), flags=re.MULTILINE):
+        pkgs.update(entry.group(1).split())
     return pkgs
+
+
+def qualification_packages():
+    """The additive qualification-image groups.
+
+    These are deliberately NOT base-image packages. Vulkan evidence tooling is
+    additionally gated on selection of the Vulkan qualification lane.
+    """
+    return (additive_packages("QUAL_GROUPS")
+            | additive_packages("QUAL_VULKAN_GROUPS"))
 
 
 def install_deps_packages():
@@ -172,6 +191,55 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertIn("xserver-xephyr", qual)
         self.assertTrue(qual.isdisjoint(install_deps_packages()))
         self.assertTrue(qual.isdisjoint(preseed_packages()))
+
+    def test_vulkan_runtime_is_conditional_and_provider_specific(self):
+        common = additive_packages("VULKAN_GROUPS")
+        nouveau = additive_packages("VULKAN_NOUVEAU_GROUPS")
+        self.assertEqual(common, VULKAN_RUNTIME_PACKAGES)
+        self.assertEqual(nouveau, VULKAN_NOUVEAU_PACKAGES)
+        self.assertTrue(common.isdisjoint(install_deps_packages()))
+        self.assertTrue(nouveau.isdisjoint(install_deps_packages()))
+        self.assertTrue(common.isdisjoint(preseed_packages()))
+        self.assertTrue(nouveau.isdisjoint(preseed_packages()))
+
+    def test_vulkan_tools_are_qualification_only(self):
+        tools = additive_packages("QUAL_VULKAN_GROUPS")
+        self.assertEqual(tools, VULKAN_QUALIFICATION_PACKAGES)
+        self.assertTrue(tools.isdisjoint(install_deps_packages()))
+        self.assertTrue(tools.isdisjoint(preseed_packages()))
+
+    def test_vulkan_modes_select_the_exact_dry_run_closures(self):
+        installer = ROOT / "provision" / "install-deps.sh"
+
+        def output(*args):
+            result = subprocess.run(
+                ["bash", str(installer), "--dry-run", *args],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        base = output()
+        vulkan = output("--vulkan")
+        nouveau = output("--vulkan-nouveau")
+        qualified = output("--qualification", "--vulkan")
+
+        for package in VULKAN_RUNTIME_PACKAGES | VULKAN_NOUVEAU_PACKAGES \
+                | VULKAN_QUALIFICATION_PACKAGES:
+            self.assertNotIn(package, base)
+        for package in VULKAN_RUNTIME_PACKAGES:
+            self.assertIn(package, vulkan)
+            self.assertIn(package, nouveau)
+            self.assertIn(package, qualified)
+        self.assertNotIn("firmware-nvidia-graphics", vulkan)
+        self.assertIn("firmware-nvidia-graphics", nouveau)
+        self.assertNotIn("firmware-nvidia-graphics", qualified)
+        self.assertNotIn("vulkan-tools", vulkan)
+        self.assertNotIn("vulkan-tools", nouveau)
+        self.assertIn("vulkan-tools", qualified)
+        self.assertIn("xserver-xephyr", qualified)
 
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())
