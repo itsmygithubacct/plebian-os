@@ -13,6 +13,8 @@
 #   plebian-os-install-deps --qualification # add qualification-only packages
 #   plebian-os-install-deps --vulkan        # add the Mesa Vulkan runtime
 #   plebian-os-install-deps --vulkan-nouveau # add Mesa Vulkan + Nouveau firmware
+#   plebian-os-install-deps --vulkan-tts    # add Vulkan plus the optional,
+#                                           # pinned Pocket converter closure
 #   plebian-os-install-deps --qualification --vulkan
 #                                           # also add vulkaninfo for qualification
 #
@@ -24,14 +26,16 @@ DRY_RUN=0
 QUALIFICATION=0
 VULKAN=0
 VULKAN_NOUVEAU=0
+VULKAN_TTS=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
         --qualification) QUALIFICATION=1 ;;
         --vulkan) VULKAN=1 ;;
         --vulkan-nouveau) VULKAN=1; VULKAN_NOUVEAU=1 ;;
+        --vulkan-tts) VULKAN=1; VULKAN_TTS=1 ;;
         *)
-            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau]\n' \
+            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau] [--vulkan-tts]\n' \
                 "$0" >&2
             exit 2
             ;;
@@ -262,6 +266,16 @@ QUAL_VULKAN_GROUPS=(
     "qualification Vulkan probe :: vulkan-tools"
 )
 
+# Pocket TTS conversion is a one-time, opt-in operation. These exact direct
+# pins reproduced the catalog's Q8_0 model and projector hashes against the
+# release Debian snapshot. python3-torch brings a large transitive closure, so
+# this group must never enter DEP_GROUPS, preseed.cfg, or qualification images.
+# The runtime Vulkan path does not need these Python conversion packages after
+# the user's local GGUF derivation has completed.
+VULKAN_TTS_CONVERTER_GROUPS=(
+    "Pocket TTS local converter :: python3-torch=2.6.0+dfsg-7 python3-numpy=1:2.2.4+ds-1 python3-sentencepiece=0.2.0-1+b3 python3-protobuf=3.21.12-11+deb13u1 python3-yaml=6.0.2-1+b2 python3-tqdm=4.67.1-5"
+)
+
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
     warn "must run as root (try: sudo $0)"; exit 1
 fi
@@ -342,6 +356,13 @@ if [ "$VULKAN_NOUVEAU" -eq 1 ]; then
     for entry in "${VULKAN_NOUVEAU_GROUPS[@]}"; do
         name=${entry%% :: *}; pkgs=${entry#* :: }
         install_package_group "optional runtime group" "$name" "$pkgs"
+    done
+fi
+
+if [ "$VULKAN_TTS" -eq 1 ]; then
+    for entry in "${VULKAN_TTS_CONVERTER_GROUPS[@]}"; do
+        name=${entry%% :: *}; pkgs=${entry#* :: }
+        install_package_group "optional converter group" "$name" "$pkgs"
     done
 fi
 

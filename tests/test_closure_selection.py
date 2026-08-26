@@ -1048,7 +1048,7 @@ class ClosureSelectionContractTests(unittest.TestCase):
         for text in (update, provision, preseed):
             self.assertIn(destination, text)
         self.assertIn("plebian-os-select-closure.sh", remaster)
-        self.assertIn('[ "${#expected_hashes[@]}" -eq 12 ]', update)
+        self.assertIn('[ "${#expected_hashes[@]}" -eq 13 ]', update)
 
 
 if __name__ == "__main__":

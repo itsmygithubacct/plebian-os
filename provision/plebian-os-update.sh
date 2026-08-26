@@ -819,6 +819,7 @@ txn="$(mktemp -d "$base/update-rollback.XXXXXX")"
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
+    /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /usr/local/bin/plebian-os-update
@@ -939,6 +940,7 @@ fi
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
+    /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /usr/local/bin/plebian-os-update
@@ -1917,6 +1919,7 @@ stage_and_validate_os_layer() {
     local required=(
         "$prov/plebian-os-provision.sh"
         "$prov/install-deps.sh"
+        "$prov/plebian-os-install-ollama-converter"
         "$prov/plebian-os-passwd"
         "$prov/plebian-os-update.sh"
         "$prov/plebian-os-firstboot.service"
@@ -1942,6 +1945,8 @@ stage_and_validate_os_layer() {
 
     install -m 0755 "$prov/plebian-os-provision.sh" "$stage/plebian-os-provision"
     install -m 0755 "$prov/install-deps.sh" "$stage/plebian-os-install-deps"
+    install -m 0755 "$prov/plebian-os-install-ollama-converter" \
+        "$stage/plebian-os-install-ollama-converter"
     install -m 0755 "$prov/plebian-os-passwd" "$stage/plebian-os-passwd"
     install -m 0755 "$prov/plebian-os-update.sh" "$stage/plebian-os-update"
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
@@ -1957,11 +1962,13 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
         "$stage/plebian-os-select-closure" \
         || die "staged OS-layer shell validation failed"
-    python3 - "$stage/plebian-os-passwd" <<'PY' \
-        || die "staged password helper Python validation failed"
+    python3 - "$stage/plebian-os-passwd" \
+        "$stage/plebian-os-install-ollama-converter" <<'PY' \
+        || die "staged Python helper validation failed"
 import pathlib
 import sys
-compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
+for name in sys.argv[1:]:
+    compile(pathlib.Path(name).read_text(), name, "exec")
 PY
     if ! grep -q '^\[Unit\]$' "$stage/plebian-os-firstboot.service" \
         || ! grep -q '^\[Service\]$' "$stage/plebian-os-firstboot.service" \
@@ -2072,7 +2079,7 @@ deploy_staged_os_layer() {
     shift
     local -a expected_hashes=("$@")
     local -a root_command
-    [ "${#expected_hashes[@]}" -eq 12 ] \
+    [ "${#expected_hashes[@]}" -eq 13 ] \
         || die "OS-layer deployment requires one expected hash per staged file"
     if [ "$EUID" = 0 ]; then
         # A root-run updater stages root-owned files. Clear inherited sudo
@@ -2111,6 +2118,7 @@ names=(
     COPYING.GPL-2
     lightdm-gtk-greeter.conf
     plebian-os-select-closure
+    plebian-os-install-ollama-converter
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -2125,9 +2133,10 @@ dests=(
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/plebian-os-select-closure
+    /usr/local/sbin/plebian-os-install-ollama-converter
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -2301,10 +2310,11 @@ for i in "${!new_paths[@]}"; do
 done
 bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
     "${new_paths[5]}" "${new_paths[11]}"
-python3 - "${new_paths[2]}" <<'PY'
+python3 - "${new_paths[2]}" "${new_paths[12]}" <<'PY'
 import pathlib
 import sys
-compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
+for name in sys.argv[1:]:
+    compile(pathlib.Path(name).read_text(), name, "exec")
 PY
 grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^\[Service\]$' "${new_paths[4]}" \
@@ -2412,6 +2422,7 @@ self_update_os_layer() {
         COPYING.GPL-2
         lightdm-gtk-greeter.conf
         plebian-os-select-closure
+        plebian-os-install-ollama-converter
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"

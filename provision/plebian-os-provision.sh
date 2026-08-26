@@ -997,6 +997,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     "$INSTALLER_ATTRIBUTION_DST"
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
+    /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/bin/plebian-os-nvidia-driver
     /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
@@ -4112,6 +4113,31 @@ install_desktop_wallpaper
 install_version_marker
 install_lightdm_greeter_branding
 install_artwork_notices
+
+# Ship only the small source-closure installer. It is never invoked during
+# provisioning: the large Python converter dependencies and all model bytes
+# remain an explicit, later opt-in.
+OLLAMA_CONVERTER_INSTALLER_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-install-ollama-converter" \
+    /usr/local/sbin/plebian-os-install-ollama-converter; do
+    [ -r "$cand" ] && OLLAMA_CONVERTER_INSTALLER_SRC="$cand" && break
+done
+if [ -n "$OLLAMA_CONVERTER_INSTALLER_SRC" ]; then
+    if [ "$OLLAMA_CONVERTER_INSTALLER_SRC" = \
+        /usr/local/sbin/plebian-os-install-ollama-converter ]; then
+        log "optional Ollama converter installer already present at /usr/local/sbin/plebian-os-install-ollama-converter"
+    elif [ "$DRY_RUN" = 1 ]; then
+        log "installing optional Ollama converter installer -> /usr/local/sbin/plebian-os-install-ollama-converter"
+        echo "    + install -m 0755 $OLLAMA_CONVERTER_INSTALLER_SRC /usr/local/sbin/plebian-os-install-ollama-converter"
+    else
+        log "installing optional Ollama converter installer -> /usr/local/sbin/plebian-os-install-ollama-converter"
+        install -m 0755 "$OLLAMA_CONVERTER_INSTALLER_SRC" \
+            /usr/local/sbin/plebian-os-install-ollama-converter
+    fi
+else
+    warn "optional Ollama converter installer not found; continuing without it"
+fi
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same

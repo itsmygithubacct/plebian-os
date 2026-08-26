@@ -36,6 +36,21 @@ ICDs, while `--vulkan-nouveau` adds the Nouveau firmware closure. Combining a
 Vulkan mode with `--qualification` adds `vulkaninfo`; none of these packages is
 added to the base-image manifest by this codepath.
 
+Pocket TTS local conversion is a second, larger opt-in. It ships neither model
+weights nor generated GGUF files. A user first runs
+`sudo plebian-os-install-deps --vulkan-tts`, which selects the common Vulkan
+runtime and six exact direct Debian converter pins, then runs
+`sudo plebian-os-install-ollama-converter`. The latter downloads one immutable
+llama.cpp source archive from GitHub, verifies its size and SHA-256, extracts a
+1.6 MiB Pocket-only source tree, retains the MIT license and modification
+notice, and installs a fixed offline wrapper. The measured Debian converter
+closure is roughly 150 MiB of package downloads and 0.8 GiB installed; it is
+therefore never selected by provisioning, qualification, preseed, or a plain
+Vulkan install. Its Python packages are needed for local conversion, not for
+subsequent Vulkan inference, and are not automatically removed because another
+local application may share them. This closure is still a 0.2.2 candidate, not
+an accepted release schema or model-publication authorization.
+
 The wider 0.2.1 program—including interactive identity setup, the Debian and
 Kilix/kitty refresh, expanded system monitoring and model sizing, coordinated
 lazy installs, and isolated cross-stack test runners—remains subject to its

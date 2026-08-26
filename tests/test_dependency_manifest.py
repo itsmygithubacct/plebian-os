@@ -51,6 +51,14 @@ F115_EXCLUDED_BASE_PACKAGES = {
 VULKAN_RUNTIME_PACKAGES = {"libvulkan1", "mesa-vulkan-drivers"}
 VULKAN_NOUVEAU_PACKAGES = {"firmware-nvidia-graphics"}
 VULKAN_QUALIFICATION_PACKAGES = {"vulkan-tools"}
+VULKAN_TTS_CONVERTER_PACKAGES = {
+    "python3-torch=2.6.0+dfsg-7",
+    "python3-numpy=1:2.2.4+ds-1",
+    "python3-sentencepiece=0.2.0-1+b3",
+    "python3-protobuf=3.21.12-11+deb13u1",
+    "python3-yaml=6.0.2-1+b2",
+    "python3-tqdm=4.67.1-5",
+}
 
 F100_SANDBOX_PACKAGES = {
     "bubblewrap=0.11.0-2+deb13u1",
@@ -269,6 +277,36 @@ class DependencyManifestTests(unittest.TestCase):
             self.assertIn(package, qualified)
         for package in VULKAN_NOUVEAU_PACKAGES:
             self.assertNotIn(package, qualified)
+
+    def test_pocket_tts_converter_is_opt_in_and_never_in_an_image(self):
+        converter = additive_packages("VULKAN_TTS_CONVERTER_GROUPS")
+        self.assertEqual(converter, VULKAN_TTS_CONVERTER_PACKAGES)
+        for other in (install_deps_packages(), preseed_packages(),
+                      qualification_packages()):
+            self.assertTrue(converter.isdisjoint(other))
+
+    def test_vulkan_tts_selects_the_converter_and_implies_the_runtime(self):
+        installer = ROOT / "provision" / "install-deps.sh"
+
+        def output(*args):
+            result = subprocess.run(
+                ["bash", str(installer), "--dry-run", *args],
+                capture_output=True, text=True, check=False,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                     "LC_ALL": "C"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        tts = output("--vulkan-tts")
+        for package in VULKAN_TTS_CONVERTER_PACKAGES | VULKAN_RUNTIME_PACKAGES:
+            self.assertIn(package, tts)
+        for package in VULKAN_NOUVEAU_PACKAGES | VULKAN_QUALIFICATION_PACKAGES:
+            self.assertNotIn(package, tts)
+
+        for package in VULKAN_TTS_CONVERTER_PACKAGES:
+            self.assertNotIn(package, output())
+            self.assertNotIn(package, output("--vulkan"))
 
     def test_dependency_cli_refuses_unknown_options(self):
         result = subprocess.run(
