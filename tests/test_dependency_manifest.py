@@ -48,6 +48,10 @@ F115_EXCLUDED_BASE_PACKAGES = {
     "imagemagick-7-common",
 }
 
+VULKAN_RUNTIME_PACKAGES = {"libvulkan1", "mesa-vulkan-drivers"}
+VULKAN_NOUVEAU_PACKAGES = {"firmware-nvidia-graphics"}
+VULKAN_QUALIFICATION_PACKAGES = {"vulkan-tools"}
+
 F100_SANDBOX_PACKAGES = {
     "bubblewrap=0.11.0-2+deb13u1",
     "libseccomp2=2.6.0-2",
@@ -164,13 +168,31 @@ def install_deps_packages():
     return pkgs
 
 
-def qualification_packages():
+def additive_packages(array_name):
+    """Packages from one named additive array in install-deps.sh.
+
+    Every additive group uses the "::" separator so the base-set parser cannot
+    see it, which means a parser that reads *all* "::" lines would merge the
+    qualification group with the optional Vulkan lanes. Each array is therefore
+    read by name, and a missing or renamed array is an error rather than an
+    empty set that silently passes a disjointness assertion.
+    """
     text = (ROOT / "provision" / "install-deps.sh").read_text()
+    match = re.search(rf"^{array_name}=\(\n(?P<body>.*?)^\)",
+                      text, flags=re.MULTILINE | re.DOTALL)
+    if match is None:
+        raise AssertionError(f"install-deps {array_name} not found")
     pkgs = set()
-    for match in re.finditer(r'^\s*"[^"]+ :: ([^"]+)"', text,
-                             flags=re.MULTILINE):
-        pkgs.update(match.group(1).split())
+    for entry in re.finditer(r'^\s*"[^"]+ :: ([^"]+)"',
+                             match.group("body"), flags=re.MULTILINE):
+        pkgs.update(entry.group(1).split())
+    if not pkgs:
+        raise AssertionError(f"install-deps {array_name} is empty")
     return pkgs
+
+
+def qualification_packages():
+    return additive_packages("QUAL_GROUPS")
 
 
 class DependencyManifestTests(unittest.TestCase):
@@ -194,6 +216,59 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertIn("installing group: qualification nested X",
                       result.stdout)
         self.assertIn("xserver-xephyr", result.stdout)
+
+    def test_vulkan_runtime_is_conditional_and_provider_specific(self):
+        common = additive_packages("VULKAN_GROUPS")
+        nouveau = additive_packages("VULKAN_NOUVEAU_GROUPS")
+        self.assertEqual(common, VULKAN_RUNTIME_PACKAGES)
+        self.assertEqual(nouveau, VULKAN_NOUVEAU_PACKAGES)
+        for group in (common, nouveau):
+            self.assertTrue(group.isdisjoint(install_deps_packages()))
+            self.assertTrue(group.isdisjoint(preseed_packages()))
+
+    def test_vulkan_tools_are_qualification_only(self):
+        tools = additive_packages("QUAL_VULKAN_GROUPS")
+        self.assertEqual(tools, VULKAN_QUALIFICATION_PACKAGES)
+        self.assertTrue(tools.isdisjoint(install_deps_packages()))
+        self.assertTrue(tools.isdisjoint(preseed_packages()))
+        self.assertTrue(tools.isdisjoint(qualification_packages()))
+
+    def test_vulkan_modes_select_the_exact_dry_run_closures(self):
+        installer = ROOT / "provision" / "install-deps.sh"
+
+        def output(*args):
+            result = subprocess.run(
+                ["bash", str(installer), "--dry-run", *args],
+                capture_output=True, text=True, check=False,
+                env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                     "LC_ALL": "C"},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+        cpu_only = output()
+        for package in (VULKAN_RUNTIME_PACKAGES | VULKAN_NOUVEAU_PACKAGES
+                        | VULKAN_QUALIFICATION_PACKAGES):
+            self.assertNotIn(package, cpu_only)
+
+        generic = output("--vulkan")
+        for package in VULKAN_RUNTIME_PACKAGES:
+            self.assertIn(package, generic)
+        for package in VULKAN_NOUVEAU_PACKAGES | VULKAN_QUALIFICATION_PACKAGES:
+            self.assertNotIn(package, generic)
+
+        nouveau = output("--vulkan-nouveau")
+        for package in VULKAN_RUNTIME_PACKAGES | VULKAN_NOUVEAU_PACKAGES:
+            self.assertIn(package, nouveau)
+        for package in VULKAN_QUALIFICATION_PACKAGES:
+            self.assertNotIn(package, nouveau)
+
+        qualified = output("--qualification", "--vulkan")
+        for package in (VULKAN_RUNTIME_PACKAGES
+                        | VULKAN_QUALIFICATION_PACKAGES):
+            self.assertIn(package, qualified)
+        for package in VULKAN_NOUVEAU_PACKAGES:
+            self.assertNotIn(package, qualified)
 
     def test_dependency_cli_refuses_unknown_options(self):
         result = subprocess.run(

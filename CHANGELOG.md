@@ -59,6 +59,13 @@ closure and must not be used to revise 0.2.1 artifacts.
 
 - `build/remaster-iso.sh` refuses media whose closure submodule gitlinks do not
   resolve on their remotes, not merely whose refs do.
+- Opt-in Vulkan runtime closures for Mesa and Nouveau that leave the base image
+  unchanged: `plebian-os-install-deps --vulkan` installs the loader and Mesa
+  ICDs, `--vulkan-nouveau` adds the Nouveau firmware, and `vulkaninfo` arrives
+  only when a Vulkan lane is combined with `--qualification`. The CPU-only,
+  generic, Nouveau and qualified selections are each tested independently, and
+  each additive array is read by name so no lane can silently merge into
+  another.
 
 ## [0.2.1] — 2026-09-01
 

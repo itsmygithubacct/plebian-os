@@ -30,7 +30,11 @@ This checkout contains early source work for 0.2.1; it is not a release
 artifact or an accepted release closure. The current dependency manifest adds
 the same compression providers, read-only hardware-discovery tools, and
 `linux-perf` qualification package to the preseed and standalone provisioning
-paths. Their manifest parity is covered by repository tests.
+paths. Their manifest parity is covered by repository tests. Vulkan inference
+remains opt-in: `plebian-os-install-deps --vulkan` installs the loader and Mesa
+ICDs, while `--vulkan-nouveau` adds the Nouveau firmware closure. Combining a
+Vulkan mode with `--qualification` adds `vulkaninfo`; none of these packages is
+added to the base-image manifest by this codepath.
 
 The wider 0.2.1 program—including interactive identity setup, the Debian and
 Kilix/kitty refresh, expanded system monitoring and model sizing, coordinated

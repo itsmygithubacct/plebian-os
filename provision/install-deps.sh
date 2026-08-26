@@ -11,6 +11,10 @@
 #   sudo plebian-os-install-deps            # install everything
 #   plebian-os-install-deps --dry-run       # just print what it would do
 #   plebian-os-install-deps --qualification # add qualification-only packages
+#   plebian-os-install-deps --vulkan        # add the Mesa Vulkan runtime
+#   plebian-os-install-deps --vulkan-nouveau # add Mesa Vulkan + Nouveau firmware
+#   plebian-os-install-deps --qualification --vulkan
+#                                           # also add vulkaninfo for qualification
 #
 # NOTE: preseed/preseed.cfg's pkgsel/include mirrors these packages for the
 # Debian-installer path (d-i can't call a script); keep the two in sync.
@@ -18,11 +22,19 @@ set -uo pipefail
 
 DRY_RUN=0
 QUALIFICATION=0
+VULKAN=0
+VULKAN_NOUVEAU=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
         --qualification) QUALIFICATION=1 ;;
-        *) printf 'usage: %s [--dry-run] [--qualification]\n' "$0" >&2; exit 2 ;;
+        --vulkan) VULKAN=1 ;;
+        --vulkan-nouveau) VULKAN=1; VULKAN_NOUVEAU=1 ;;
+        *)
+            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau]\n' \
+                "$0" >&2
+            exit 2
+            ;;
     esac
 done
 PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-os/session}"
@@ -228,6 +240,28 @@ QUAL_GROUPS=(
     "qualification nested X :: xserver-xephyr"
 )
 
+# F105's Vulkan acceleration closure is selected only when its codepath is
+# enabled. It must not enter DEP_GROUPS or preseed.cfg: CPU-only machines retain
+# the base image, and a future model/application selector invokes this installed
+# helper explicitly. Name both packages even though mesa-vulkan-drivers depends
+# on libvulkan1; the loader and ICD are separate runtime responsibilities.
+VULKAN_GROUPS=(
+    "Vulkan loader + Mesa ICDs :: libvulkan1 mesa-vulkan-drivers"
+)
+
+# Nouveau needs redistributable GPU firmware from non-free-firmware. Keep this
+# provider-specific so Intel, AMD and software Vulkan selections do not acquire
+# NVIDIA firmware. --vulkan-nouveau implies the common Vulkan closure above.
+VULKAN_NOUVEAU_GROUPS=(
+    "Nouveau firmware :: firmware-nvidia-graphics"
+)
+
+# vulkaninfo is evidence tooling, not an application runtime. It is installed
+# only for a qualification image whose Vulkan lane was explicitly selected.
+QUAL_VULKAN_GROUPS=(
+    "qualification Vulkan probe :: vulkan-tools"
+)
+
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
     warn "must run as root (try: sudo $0)"; exit 1
 fi
@@ -255,6 +289,24 @@ for entry in "${DEP_GROUPS[@]}"; do
     fi
 done
 
+# The additive groups below share one installer so a new optional lane cannot
+# drift from the base loop's dry-run, failure-reporting and word-splitting
+# behaviour. The base and qualification loops above are left as they are.
+install_package_group() {
+    local heading="$1" name="$2" pkgs="$3"
+    log "$heading: $name"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + apt-get install -y --no-install-recommends $pkgs"
+        return 0
+    fi
+    # shellcheck disable=SC2086  # deliberate package-list splitting
+    if ! apt-get install -y --no-install-recommends $pkgs; then
+        warn "GROUP FAILED: $name"
+        warn "    packages: $pkgs"
+        failed+=("$name")
+    fi
+}
+
 if [ "$QUALIFICATION" -eq 1 ]; then
     for entry in "${QUAL_GROUPS[@]}"; do
         name=${entry%% :: *}
@@ -270,6 +322,26 @@ if [ "$QUALIFICATION" -eq 1 ]; then
             warn "    packages: $pkgs"
             failed+=("$name")
         fi
+    done
+    if [ "$VULKAN" -eq 1 ]; then
+        for entry in "${QUAL_VULKAN_GROUPS[@]}"; do
+            name=${entry%% :: *}; pkgs=${entry#* :: }
+            install_package_group "qualification group" "$name" "$pkgs"
+        done
+    fi
+fi
+
+if [ "$VULKAN" -eq 1 ]; then
+    for entry in "${VULKAN_GROUPS[@]}"; do
+        name=${entry%% :: *}; pkgs=${entry#* :: }
+        install_package_group "optional runtime group" "$name" "$pkgs"
+    done
+fi
+
+if [ "$VULKAN_NOUVEAU" -eq 1 ]; then
+    for entry in "${VULKAN_NOUVEAU_GROUPS[@]}"; do
+        name=${entry%% :: *}; pkgs=${entry#* :: }
+        install_package_group "optional runtime group" "$name" "$pkgs"
     done
 fi
 
