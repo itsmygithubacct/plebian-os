@@ -478,6 +478,22 @@ def _child_main(
         except SystemExit as exc:
             return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
         return 0
+    if kind == "candidate-contracts":
+        # This is a review-candidate gate, not authority for the new schema
+        # identities.  It nevertheless runs behind the same externally
+        # verified first-process boundary so subject-root startup hooks cannot
+        # forge its self-test.  The candidate itself keeps release
+        # qualification fail-closed until the accepted F100 validator API is
+        # bound.
+        sys.argv = [
+            f"{subject_path}/contracts-v2-candidate/validate_candidate.py",
+            "--self-test",
+        ]
+        try:
+            runpy.run_path(sys.argv[0], run_name="__main__")
+        except SystemExit as exc:
+            return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
+        return 0
     if kind == "tests":
         import unittest
 
@@ -620,6 +636,7 @@ def main() -> int:
         os.set_inheritable(arguments.result_fd, False)
         if arguments.command == "check":
             _run_separate_child("contracts", [], arguments, initial_path)
+            _run_separate_child("candidate-contracts", [], arguments, initial_path)
             _run_separate_child("tests", [], arguments, initial_path)
         else:
             _run_separate_child("cli", forwarded, arguments, initial_path)
