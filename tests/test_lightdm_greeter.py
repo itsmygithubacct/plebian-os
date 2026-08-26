@@ -108,7 +108,7 @@ validate_artwork_notice "$CONFIG" "$LIGHTDM_GREETER_CONFIG_SHA256" \
 
     def test_update_transaction_covers_override_and_rollback(self):
         update = UPDATE.read_text()
-        self.assertIn('[ "${#expected_hashes[@]}" -eq 12 ]', update)
+        self.assertIn('[ "${#expected_hashes[@]}" -eq 13 ]', update)
         self.assertGreaterEqual(update.count("lightdm-gtk-greeter.conf"), 8)
         self.assertGreaterEqual(update.count(DESTINATION), 3)
         self.assertIn("/ /usr /usr/local /usr/local/share /etc /etc/lightdm", update)

@@ -106,6 +106,14 @@ PERFORMANCE_QUALIFICATION_PACKAGES = {"linux-perf"}
 VULKAN_RUNTIME_PACKAGES = {"libvulkan1", "mesa-vulkan-drivers"}
 VULKAN_NOUVEAU_PACKAGES = {"firmware-nvidia-graphics"}
 VULKAN_QUALIFICATION_PACKAGES = {"vulkan-tools"}
+VULKAN_TTS_CONVERTER_PACKAGES = {
+    "python3-torch=2.6.0+dfsg-7",
+    "python3-numpy=1:2.2.4+ds-1",
+    "python3-sentencepiece=0.2.0-1+b3",
+    "python3-protobuf=3.21.12-11+deb13u1",
+    "python3-yaml=6.0.2-1+b2",
+    "python3-tqdm=4.67.1-5",
+}
 
 # Kilix IceWM is built on first selection. Plebian-OS 0.2.0 must provide the
 # complete, explicit pkg-config closure used by the pinned IceWM configuration
@@ -208,6 +216,13 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertTrue(tools.isdisjoint(install_deps_packages()))
         self.assertTrue(tools.isdisjoint(preseed_packages()))
 
+    def test_pocket_converter_is_exact_and_opt_in(self):
+        converter = additive_packages("VULKAN_TTS_CONVERTER_GROUPS")
+        self.assertEqual(converter, VULKAN_TTS_CONVERTER_PACKAGES)
+        converter_names = {item.split("=", 1)[0] for item in converter}
+        self.assertTrue(converter_names.isdisjoint(install_deps_packages()))
+        self.assertTrue(converter_names.isdisjoint(preseed_packages()))
+
     def test_vulkan_modes_select_the_exact_dry_run_closures(self):
         installer = ROOT / "provision" / "install-deps.sh"
 
@@ -225,6 +240,7 @@ class DependencyManifestTests(unittest.TestCase):
         vulkan = output("--vulkan")
         nouveau = output("--vulkan-nouveau")
         qualified = output("--qualification", "--vulkan")
+        tts = output("--vulkan-tts")
 
         for package in VULKAN_RUNTIME_PACKAGES | VULKAN_NOUVEAU_PACKAGES \
                 | VULKAN_QUALIFICATION_PACKAGES:
@@ -240,6 +256,16 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertNotIn("vulkan-tools", nouveau)
         self.assertIn("vulkan-tools", qualified)
         self.assertIn("xserver-xephyr", qualified)
+        for package in VULKAN_RUNTIME_PACKAGES:
+            self.assertIn(package, tts)
+        for package in VULKAN_TTS_CONVERTER_PACKAGES:
+            self.assertNotIn(package, base)
+            self.assertNotIn(package, vulkan)
+            self.assertNotIn(package, nouveau)
+            self.assertNotIn(package, qualified)
+            self.assertIn(package, tts)
+        self.assertNotIn("firmware-nvidia-graphics", tts)
+        self.assertNotIn("vulkan-tools", tts)
 
     def test_preseed_and_install_deps_package_sets_match(self):
         self.assertEqual(preseed_packages(), install_deps_packages())

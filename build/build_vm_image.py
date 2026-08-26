@@ -847,6 +847,7 @@ def verify_update_rollback(cfg: Config, askpass: str) -> None:
     managed_paths = (
         "/usr/local/sbin/plebian-os-provision",
         "/usr/local/sbin/plebian-os-install-deps",
+        "/usr/local/sbin/plebian-os-install-ollama-converter",
         "/usr/local/sbin/plebian-os-passwd",
         "/usr/local/bin/plebian-os-update",
         "/etc/systemd/system/plebian-os-firstboot.service",
@@ -1526,6 +1527,13 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
         ("update helper",        "test -x /usr/local/bin/plebian-os-update"),
         ("closure selector",     selector_contract),
+        (
+            "optional Ollama converter installer",
+            "test -x /usr/local/sbin/plebian-os-install-ollama-converter && "
+            "timeout 30 /usr/local/sbin/plebian-os-install-ollama-converter "
+            "--dry-run | grep -Fqx '  sha256: "
+            "8759ab3d3a92d86ba3ba24fab7e6adde08eaf2f941e6c79118373e4f41e0af8c'",
+        ),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]
