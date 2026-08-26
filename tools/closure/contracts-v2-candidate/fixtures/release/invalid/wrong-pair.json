@@ -1,0 +1,909 @@
+{
+  "artifacts": [
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-artifact-descriptor",
+      "artifact_kind": "manifest",
+      "artifact_role": "artifact-descriptor",
+      "artifact_sha256": "9c2c6a31567fac570147533cc752a8ab8d1e2c63358d001951ea7742b94ccd97",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/artifact-descriptor",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-carrier-archive",
+      "artifact_kind": "data",
+      "artifact_role": "carrier-archive",
+      "artifact_sha256": "d5c99e963df0006fb1839d919235a0b4c221a77e1dc0047c4dfd8a8dd7ef9891",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/carrier-archive",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-carrier-manifest",
+      "artifact_kind": "manifest",
+      "artifact_role": "carrier-manifest",
+      "artifact_sha256": "9f10bdfbdd1128c6a9a432527e51f2779b3e6e1f2098572c46ebf6673bb99e54",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/carrier-manifest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-compliance-manifest",
+      "artifact_kind": "manifest",
+      "artifact_role": "compliance-manifest",
+      "artifact_sha256": "f771ab213aee8e5fae00ab047f9c90ecd3799d6244c93f83b6eb4bc5ba6b3926",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/compliance-manifest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-internal-sha256sums",
+      "artifact_kind": "notice",
+      "artifact_role": "internal-sha256sums",
+      "artifact_sha256": "7966329c60cfa54653b1901261f6397cab6692964114c0dd72cae688f0d237b2",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/internal-sha256sums",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-modifications",
+      "artifact_kind": "notice",
+      "artifact_role": "modifications",
+      "artifact_sha256": "361fc4fe1e750004cf893ed306a74ed5cf3f600906aca3454a9e4b73332e8073",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/modifications",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-notice",
+      "artifact_kind": "notice",
+      "artifact_role": "conveyance-notice",
+      "artifact_sha256": "28d96fd6978c4219bcd5be65ed47c07d65f1eb97be83f76925bb2d95c11170c8",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/NOTICE",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-pair-digest",
+      "artifact_kind": "notice",
+      "artifact_role": "pair-digest",
+      "artifact_sha256": "b2ac911c3aa1f4c435b2c5284a9933654dd8da64635f719db1738da678767591",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/pair-digest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-pair-record",
+      "artifact_kind": "manifest",
+      "artifact_role": "pair-record",
+      "artifact_sha256": "42ee4571f5caa388870e90153b317dd280c3ea3f816d5456a2149c51f051e277",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/pair-record",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "alpha-upstream-notice-inventory",
+      "artifact_kind": "notice",
+      "artifact_role": "upstream-notice-inventory",
+      "artifact_sha256": "61e043ebb35ec58134093adcaa7315493a957e61dd74af026de290ad7cb40a89",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/alpha/upstream-notice-inventory",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-artifact-descriptor",
+      "artifact_kind": "manifest",
+      "artifact_role": "artifact-descriptor",
+      "artifact_sha256": "063f8ef6f6f4be72f3af92854a8adf3d63319b8c248211c6466e462d6006d202",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/artifact-descriptor",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-carrier-archive",
+      "artifact_kind": "data",
+      "artifact_role": "carrier-archive",
+      "artifact_sha256": "25290876e62ea5cc66f638e4901e3fd11c28526e613508565fbd312bdcb9cf5d",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/carrier-archive",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-carrier-manifest",
+      "artifact_kind": "manifest",
+      "artifact_role": "carrier-manifest",
+      "artifact_sha256": "431cf9145cbe71ed871f78d4232efdeb0599f0a7527c260645401028b11096e7",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/carrier-manifest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-compliance-manifest",
+      "artifact_kind": "manifest",
+      "artifact_role": "compliance-manifest",
+      "artifact_sha256": "935b65616b4ec333467f2ef2a3fd2a67eef9454f9327b499960aaf170225b8f5",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/compliance-manifest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-internal-sha256sums",
+      "artifact_kind": "notice",
+      "artifact_role": "internal-sha256sums",
+      "artifact_sha256": "3cc737868b1cfee3cb60482794f3debabb2748b6958c4592b02015eb59a7d293",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/internal-sha256sums",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-modifications",
+      "artifact_kind": "notice",
+      "artifact_role": "modifications",
+      "artifact_sha256": "3a463f0385b60bcccf224af9fd71ce84f3a8054ee10fd84a5974130bf38ee50d",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/modifications",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-notice",
+      "artifact_kind": "notice",
+      "artifact_role": "conveyance-notice",
+      "artifact_sha256": "788b243cb7f06870000c8d62126350e2af0d2630662dad0320966b23b77862f5",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/NOTICE",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-pair-digest",
+      "artifact_kind": "notice",
+      "artifact_role": "pair-digest",
+      "artifact_sha256": "43a9067262e242eb1eab61341391d11a1d7831b77dd14c25efc5ecfbbe48d55a",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/pair-digest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-pair-record",
+      "artifact_kind": "manifest",
+      "artifact_role": "pair-record",
+      "artifact_sha256": "82094722cf3db406c10c4140a6489cbbc2dcf01484b827fdf0bc46939169a42d",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/pair-record",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "beta-upstream-notice-inventory",
+      "artifact_kind": "notice",
+      "artifact_role": "upstream-notice-inventory",
+      "artifact_sha256": "e6dc535c6af20303f224ce88a79ac74851498d0db54bf744c399b140ee247256",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/beta/upstream-notice-inventory",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-artifact-descriptor",
+      "artifact_kind": "manifest",
+      "artifact_role": "artifact-descriptor",
+      "artifact_sha256": "41ff2498944e0d3b076fc808152a89fceaf18b816e3b48751a0814df72d29bc2",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/artifact-descriptor",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-carrier-archive",
+      "artifact_kind": "data",
+      "artifact_role": "carrier-archive",
+      "artifact_sha256": "33962382ce36edbf60174ae9453a69f90ecff2d53e8c36b5c207f24d3b9eb350",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/carrier-archive",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-carrier-manifest",
+      "artifact_kind": "manifest",
+      "artifact_role": "carrier-manifest",
+      "artifact_sha256": "70fb73b4b3b292bf013fe91919b5aeb36b4f5f03cc1503134ed8b38fdb918671",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/carrier-manifest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-compliance-manifest",
+      "artifact_kind": "manifest",
+      "artifact_role": "compliance-manifest",
+      "artifact_sha256": "9255b24ba7d695f6805efe790b33134f5588c91f1607f38a595dedbb67b88877",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/compliance-manifest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-internal-sha256sums",
+      "artifact_kind": "notice",
+      "artifact_role": "internal-sha256sums",
+      "artifact_sha256": "867a98430d85a611901adf64352cda7cfe9b8c39c4353a0f9be5b09672baa55e",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/internal-sha256sums",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-modifications",
+      "artifact_kind": "notice",
+      "artifact_role": "modifications",
+      "artifact_sha256": "c758a59b921e22113b3f9d90be715ee351a2afeb33ccba4c2a2cfdad241b6909",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/modifications",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-notice",
+      "artifact_kind": "notice",
+      "artifact_role": "conveyance-notice",
+      "artifact_sha256": "cc232252d9c7975883b475de4d623076440d1e27f4476210d26bc128321c6574",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/NOTICE",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-pair-digest",
+      "artifact_kind": "notice",
+      "artifact_role": "pair-digest",
+      "artifact_sha256": "42a39c1d14defb3a71a764b774c212d2c9384e76d78424fc69bfc0573efb1aa7",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/pair-digest",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-pair-record",
+      "artifact_kind": "manifest",
+      "artifact_role": "pair-record",
+      "artifact_sha256": "64b2af93ce355f9793f747959b8f80fdae4a62610755d6f8ef70c6b60ee2d95e",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/pair-record",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "gamma-upstream-notice-inventory",
+      "artifact_kind": "notice",
+      "artifact_role": "upstream-notice-inventory",
+      "artifact_sha256": "1f57e39b80cdb96a9d1bd038c741039b506c49c1f56d31a14b14833e0af52761",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/compliance/gamma/upstream-notice-inventory",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "license-apache",
+      "artifact_kind": "notice",
+      "artifact_role": "license-text",
+      "artifact_sha256": "953bff80ae85708ce1c2ce87b5edd16ccfc9499d6e3c84d8b872947b85ef6e35",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/licenses/demo/Apache-2.0.txt",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "license-mit",
+      "artifact_kind": "notice",
+      "artifact_role": "license-text",
+      "artifact_sha256": "27f3fe40677c6b38fce37a0515c6d39aaaa7b5ae2e13354107c636c92ea66a6f",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/licenses/demo/MIT.txt",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-alpha",
+      "artifact_kind": "command",
+      "artifact_role": "payload",
+      "artifact_sha256": "22d1a759a3cdf00881d2e48f6a449670b057271ddd5ef0e87ffb303128cb7f22",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "9931a114cec06f1ba28fdd60652f8a806f8a0c15d7b073137a8f7557598459da",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "alpha",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "bin/payload-alpha",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-beta",
+      "artifact_kind": "command",
+      "artifact_role": "payload",
+      "artifact_sha256": "cda0bf925d150c8ebbac640db8f1580ac7e8646f00ded519c38d92804b18fc5a",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "100e1d4382f498ef6c351cd99100fefb3af049aec72c2910bbacee88e08c4691",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "beta",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "bin/payload-beta",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-gamma-data",
+      "artifact_kind": "command",
+      "artifact_role": "payload",
+      "artifact_sha256": "e535180176d40ae85f8dd4d6750e642f2405eb223efdc8c71063511935203204",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "742e4fcb65c4008aca2d10b33504c5b9b3107c872cb3ab025b60b0ab95eb8369",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "gamma",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "bin/payload-gamma-data",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-gamma-tool",
+      "artifact_kind": "data",
+      "artifact_role": "payload",
+      "artifact_sha256": "61d0044794f062f2140de133f48394e17a2591cd292d0f05bda2698cee3ed987",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "742e4fcb65c4008aca2d10b33504c5b9b3107c872cb3ab025b60b0ab95eb8369",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "gamma",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/demo/payload-gamma-tool",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "stage-manifest-f120-v2-demo",
+      "artifact_kind": "manifest",
+      "artifact_role": "internal-stage-manifest",
+      "artifact_sha256": "d2495f5d1458e526fddd3f65547cd2586a6337c1840445510dcd5dc4fa9255e0",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/kilix-f120/f120-v2-demo.json",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    }
+  ],
+  "compliance_units": [
+    {
+      "artifact_binding_sha256": "9c2c6a31567fac570147533cc752a8ab8d1e2c63358d001951ea7742b94ccd97",
+      "artifact_descriptor": {
+        "artifact_id": "alpha-artifact-descriptor",
+        "artifact_sha256": "9c2c6a31567fac570147533cc752a8ab8d1e2c63358d001951ea7742b94ccd97",
+        "staged_path": "share/compliance/alpha/artifact-descriptor"
+      },
+      "carrier_archive": {
+        "artifact_id": "alpha-carrier-archive",
+        "artifact_sha256": "d5c99e963df0006fb1839d919235a0b4c221a77e1dc0047c4dfd8a8dd7ef9891",
+        "staged_path": "share/compliance/alpha/carrier-archive"
+      },
+      "carrier_manifest": {
+        "artifact_id": "alpha-carrier-manifest",
+        "artifact_sha256": "9f10bdfbdd1128c6a9a432527e51f2779b3e6e1f2098572c46ebf6673bb99e54",
+        "staged_path": "share/compliance/alpha/carrier-manifest"
+      },
+      "compliance_binding_sha256": "9931a114cec06f1ba28fdd60652f8a806f8a0c15d7b073137a8f7557598459da",
+      "compliance_manifest": {
+        "artifact_id": "alpha-compliance-manifest",
+        "artifact_sha256": "f771ab213aee8e5fae00ab047f9c90ecd3799d6244c93f83b6eb4bc5ba6b3926",
+        "staged_path": "share/compliance/alpha/compliance-manifest"
+      },
+      "component_instance": "f120-v2-demo",
+      "internal_sha256sums": {
+        "artifact_id": "alpha-internal-sha256sums",
+        "artifact_sha256": "7966329c60cfa54653b1901261f6397cab6692964114c0dd72cae688f0d237b2",
+        "staged_path": "share/compliance/alpha/internal-sha256sums"
+      },
+      "license_texts": [
+        {
+          "artifact_id": "license-apache",
+          "artifact_sha256": "953bff80ae85708ce1c2ce87b5edd16ccfc9499d6e3c84d8b872947b85ef6e35",
+          "spdx": "Apache-2.0",
+          "staged_path": "share/licenses/demo/Apache-2.0.txt",
+          "text_sha256": "953bff80ae85708ce1c2ce87b5edd16ccfc9499d6e3c84d8b872947b85ef6e35"
+        }
+      ],
+      "modifications": {
+        "artifact_id": "alpha-modifications",
+        "artifact_sha256": "361fc4fe1e750004cf893ed306a74ed5cf3f600906aca3454a9e4b73332e8073",
+        "staged_path": "share/compliance/alpha/modifications"
+      },
+      "notices": [
+        {
+          "artifact_id": "alpha-notice",
+          "artifact_sha256": "28d96fd6978c4219bcd5be65ed47c07d65f1eb97be83f76925bb2d95c11170c8",
+          "kind": "conveyance",
+          "path": "compliance/alpha/NOTICE",
+          "sha256": "28d96fd6978c4219bcd5be65ed47c07d65f1eb97be83f76925bb2d95c11170c8",
+          "staged_path": "share/compliance/alpha/NOTICE"
+        }
+      ],
+      "other_notices": [],
+      "pair": {
+        "artifact_id": "alpha-pair-record",
+        "artifact_sha256": "42ee4571f5caa388870e90153b317dd280c3ea3f816d5456a2149c51f051e277",
+        "staged_path": "share/compliance/alpha/pair-record"
+      },
+      "pair_digest": {
+        "artifact_id": "alpha-pair-digest",
+        "artifact_sha256": "b2ac911c3aa1f4c435b2c5284a9933654dd8da64635f719db1738da678767591",
+        "staged_path": "share/compliance/alpha/pair-digest"
+      },
+      "pair_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "payloads": [
+        {
+          "artifact_id": "payload-alpha",
+          "artifact_sha256": "22d1a759a3cdf00881d2e48f6a449670b057271ddd5ef0e87ffb303128cb7f22",
+          "staged_path": "bin/payload-alpha"
+        }
+      ],
+      "unit_id": "alpha",
+      "upstream_notice_inventory": {
+        "artifact_id": "alpha-upstream-notice-inventory",
+        "artifact_sha256": "61e043ebb35ec58134093adcaa7315493a957e61dd74af026de290ad7cb40a89",
+        "staged_path": "share/compliance/alpha/upstream-notice-inventory"
+      }
+    },
+    {
+      "artifact_binding_sha256": "063f8ef6f6f4be72f3af92854a8adf3d63319b8c248211c6466e462d6006d202",
+      "artifact_descriptor": {
+        "artifact_id": "beta-artifact-descriptor",
+        "artifact_sha256": "063f8ef6f6f4be72f3af92854a8adf3d63319b8c248211c6466e462d6006d202",
+        "staged_path": "share/compliance/beta/artifact-descriptor"
+      },
+      "carrier_archive": {
+        "artifact_id": "beta-carrier-archive",
+        "artifact_sha256": "25290876e62ea5cc66f638e4901e3fd11c28526e613508565fbd312bdcb9cf5d",
+        "staged_path": "share/compliance/beta/carrier-archive"
+      },
+      "carrier_manifest": {
+        "artifact_id": "beta-carrier-manifest",
+        "artifact_sha256": "431cf9145cbe71ed871f78d4232efdeb0599f0a7527c260645401028b11096e7",
+        "staged_path": "share/compliance/beta/carrier-manifest"
+      },
+      "compliance_binding_sha256": "100e1d4382f498ef6c351cd99100fefb3af049aec72c2910bbacee88e08c4691",
+      "compliance_manifest": {
+        "artifact_id": "beta-compliance-manifest",
+        "artifact_sha256": "935b65616b4ec333467f2ef2a3fd2a67eef9454f9327b499960aaf170225b8f5",
+        "staged_path": "share/compliance/beta/compliance-manifest"
+      },
+      "component_instance": "f120-v2-demo",
+      "internal_sha256sums": {
+        "artifact_id": "beta-internal-sha256sums",
+        "artifact_sha256": "3cc737868b1cfee3cb60482794f3debabb2748b6958c4592b02015eb59a7d293",
+        "staged_path": "share/compliance/beta/internal-sha256sums"
+      },
+      "license_texts": [
+        {
+          "artifact_id": "license-mit",
+          "artifact_sha256": "27f3fe40677c6b38fce37a0515c6d39aaaa7b5ae2e13354107c636c92ea66a6f",
+          "spdx": "MIT",
+          "staged_path": "share/licenses/demo/MIT.txt",
+          "text_sha256": "27f3fe40677c6b38fce37a0515c6d39aaaa7b5ae2e13354107c636c92ea66a6f"
+        }
+      ],
+      "modifications": {
+        "artifact_id": "beta-modifications",
+        "artifact_sha256": "3a463f0385b60bcccf224af9fd71ce84f3a8054ee10fd84a5974130bf38ee50d",
+        "staged_path": "share/compliance/beta/modifications"
+      },
+      "notices": [
+        {
+          "artifact_id": "beta-notice",
+          "artifact_sha256": "788b243cb7f06870000c8d62126350e2af0d2630662dad0320966b23b77862f5",
+          "kind": "conveyance",
+          "path": "compliance/beta/NOTICE",
+          "sha256": "788b243cb7f06870000c8d62126350e2af0d2630662dad0320966b23b77862f5",
+          "staged_path": "share/compliance/beta/NOTICE"
+        }
+      ],
+      "other_notices": [],
+      "pair": {
+        "artifact_id": "beta-pair-record",
+        "artifact_sha256": "82094722cf3db406c10c4140a6489cbbc2dcf01484b827fdf0bc46939169a42d",
+        "staged_path": "share/compliance/beta/pair-record"
+      },
+      "pair_digest": {
+        "artifact_id": "beta-pair-digest",
+        "artifact_sha256": "43a9067262e242eb1eab61341391d11a1d7831b77dd14c25efc5ecfbbe48d55a",
+        "staged_path": "share/compliance/beta/pair-digest"
+      },
+      "pair_sha256": "82094722cf3db406c10c4140a6489cbbc2dcf01484b827fdf0bc46939169a42d",
+      "payloads": [
+        {
+          "artifact_id": "payload-beta",
+          "artifact_sha256": "cda0bf925d150c8ebbac640db8f1580ac7e8646f00ded519c38d92804b18fc5a",
+          "staged_path": "bin/payload-beta"
+        }
+      ],
+      "unit_id": "beta",
+      "upstream_notice_inventory": {
+        "artifact_id": "beta-upstream-notice-inventory",
+        "artifact_sha256": "e6dc535c6af20303f224ce88a79ac74851498d0db54bf744c399b140ee247256",
+        "staged_path": "share/compliance/beta/upstream-notice-inventory"
+      }
+    },
+    {
+      "artifact_binding_sha256": "41ff2498944e0d3b076fc808152a89fceaf18b816e3b48751a0814df72d29bc2",
+      "artifact_descriptor": {
+        "artifact_id": "gamma-artifact-descriptor",
+        "artifact_sha256": "41ff2498944e0d3b076fc808152a89fceaf18b816e3b48751a0814df72d29bc2",
+        "staged_path": "share/compliance/gamma/artifact-descriptor"
+      },
+      "carrier_archive": {
+        "artifact_id": "gamma-carrier-archive",
+        "artifact_sha256": "33962382ce36edbf60174ae9453a69f90ecff2d53e8c36b5c207f24d3b9eb350",
+        "staged_path": "share/compliance/gamma/carrier-archive"
+      },
+      "carrier_manifest": {
+        "artifact_id": "gamma-carrier-manifest",
+        "artifact_sha256": "70fb73b4b3b292bf013fe91919b5aeb36b4f5f03cc1503134ed8b38fdb918671",
+        "staged_path": "share/compliance/gamma/carrier-manifest"
+      },
+      "compliance_binding_sha256": "742e4fcb65c4008aca2d10b33504c5b9b3107c872cb3ab025b60b0ab95eb8369",
+      "compliance_manifest": {
+        "artifact_id": "gamma-compliance-manifest",
+        "artifact_sha256": "9255b24ba7d695f6805efe790b33134f5588c91f1607f38a595dedbb67b88877",
+        "staged_path": "share/compliance/gamma/compliance-manifest"
+      },
+      "component_instance": "f120-v2-demo",
+      "internal_sha256sums": {
+        "artifact_id": "gamma-internal-sha256sums",
+        "artifact_sha256": "867a98430d85a611901adf64352cda7cfe9b8c39c4353a0f9be5b09672baa55e",
+        "staged_path": "share/compliance/gamma/internal-sha256sums"
+      },
+      "license_texts": [
+        {
+          "artifact_id": "license-apache",
+          "artifact_sha256": "953bff80ae85708ce1c2ce87b5edd16ccfc9499d6e3c84d8b872947b85ef6e35",
+          "spdx": "Apache-2.0",
+          "staged_path": "share/licenses/demo/Apache-2.0.txt",
+          "text_sha256": "953bff80ae85708ce1c2ce87b5edd16ccfc9499d6e3c84d8b872947b85ef6e35"
+        }
+      ],
+      "modifications": {
+        "artifact_id": "gamma-modifications",
+        "artifact_sha256": "c758a59b921e22113b3f9d90be715ee351a2afeb33ccba4c2a2cfdad241b6909",
+        "staged_path": "share/compliance/gamma/modifications"
+      },
+      "notices": [
+        {
+          "artifact_id": "gamma-notice",
+          "artifact_sha256": "cc232252d9c7975883b475de4d623076440d1e27f4476210d26bc128321c6574",
+          "kind": "conveyance",
+          "path": "compliance/gamma/NOTICE",
+          "sha256": "cc232252d9c7975883b475de4d623076440d1e27f4476210d26bc128321c6574",
+          "staged_path": "share/compliance/gamma/NOTICE"
+        }
+      ],
+      "other_notices": [],
+      "pair": {
+        "artifact_id": "gamma-pair-record",
+        "artifact_sha256": "64b2af93ce355f9793f747959b8f80fdae4a62610755d6f8ef70c6b60ee2d95e",
+        "staged_path": "share/compliance/gamma/pair-record"
+      },
+      "pair_digest": {
+        "artifact_id": "gamma-pair-digest",
+        "artifact_sha256": "42a39c1d14defb3a71a764b774c212d2c9384e76d78424fc69bfc0573efb1aa7",
+        "staged_path": "share/compliance/gamma/pair-digest"
+      },
+      "pair_sha256": "64b2af93ce355f9793f747959b8f80fdae4a62610755d6f8ef70c6b60ee2d95e",
+      "payloads": [
+        {
+          "artifact_id": "payload-gamma-data",
+          "artifact_sha256": "e535180176d40ae85f8dd4d6750e642f2405eb223efdc8c71063511935203204",
+          "staged_path": "bin/payload-gamma-data"
+        },
+        {
+          "artifact_id": "payload-gamma-tool",
+          "artifact_sha256": "61d0044794f062f2140de133f48394e17a2591cd292d0f05bda2698cee3ed987",
+          "staged_path": "share/demo/payload-gamma-tool"
+        }
+      ],
+      "unit_id": "gamma",
+      "upstream_notice_inventory": {
+        "artifact_id": "gamma-upstream-notice-inventory",
+        "artifact_sha256": "1f57e39b80cdb96a9d1bd038c741039b506c49c1f56d31a14b14833e0af52761",
+        "staged_path": "share/compliance/gamma/upstream-notice-inventory"
+      }
+    }
+  ],
+  "components": [
+    {
+      "abi_version": "1",
+      "api_version": "1",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {
+        "f120_compliance_declaration_sha256": "514131a7b4b94955a897f0f2c90423ea75be289f8fe8ee0c7631166020550957",
+        "f120_recipe_sha256": "e775e11bfe72f441376aa9112a2dd42285edf24d6f6c3981c00943ecb6d16563",
+        "fixture": true
+      },
+      "canonical_url": "https://github.com/itsmygithubacct/f120-v2-demo.git",
+      "component_id": "f120-v2-demo",
+      "component_version": "1.0.0",
+      "features": [
+        "carrier-v2"
+      ],
+      "instance_id": "f120-v2-demo",
+      "licenses": [
+        {
+          "spdx": "Apache-2.0",
+          "text_path": "LICENSES/Apache-2.0.txt",
+          "text_sha256": "953bff80ae85708ce1c2ce87b5edd16ccfc9499d6e3c84d8b872947b85ef6e35"
+        },
+        {
+          "spdx": "MIT",
+          "text_path": "LICENSES/MIT.txt",
+          "text_sha256": "27f3fe40677c6b38fce37a0515c6d39aaaa7b5ae2e13354107c636c92ea66a6f"
+        }
+      ],
+      "notices": [
+        {
+          "path": "compliance/alpha/NOTICE",
+          "sha256": "28d96fd6978c4219bcd5be65ed47c07d65f1eb97be83f76925bb2d95c11170c8"
+        },
+        {
+          "path": "compliance/beta/NOTICE",
+          "sha256": "788b243cb7f06870000c8d62126350e2af0d2630662dad0320966b23b77862f5"
+        },
+        {
+          "path": "compliance/gamma/NOTICE",
+          "sha256": "cc232252d9c7975883b475de4d623076440d1e27f4476210d26bc128321c6574"
+        }
+      ],
+      "publication_disposition": "publish",
+      "required_tests": [
+        "carrier-conformance"
+      ],
+      "resolved_commit": "1111111111111111111111111111111111111111",
+      "runtime_kind": "native-provider",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain": {
+        "digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e",
+        "name": "fixture-toolchain",
+        "version": "1"
+      },
+      "visibility": "public"
+    }
+  ],
+  "dependencies": [],
+  "release": "0.2.1",
+  "schema": "kilix.f120.release-lock/v2"
+}

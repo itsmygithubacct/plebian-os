@@ -1,0 +1,646 @@
+{
+  "$comment": "Review candidate for the ratified F120 licence carrier amendment; not authority until the required independent two-review freeze.",
+  "$defs": {
+    "architecture": {
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9._+-]*$",
+      "type": "string"
+    },
+    "artifact": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "distribution_unit_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "compliance_binding_sha256"
+                  ]
+                }
+              ]
+            }
+          },
+          "if": {
+            "properties": {
+              "artifact_role": {
+                "const": "payload"
+              }
+            },
+            "required": [
+              "artifact_role"
+            ]
+          },
+          "then": {
+            "required": [
+              "distribution_unit_id",
+              "compliance_binding_sha256"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "architecture": {
+          "$ref": "#/$defs/architecture"
+        },
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "artifact_kind": {
+          "enum": [
+            "command",
+            "header",
+            "library",
+            "python-package",
+            "pkg-config",
+            "data",
+            "notice",
+            "manifest"
+          ]
+        },
+        "artifact_role": {
+          "$ref": "#/$defs/artifactRole"
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "build_key_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compliance_binding_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "component_instance": {
+          "$ref": "#/$defs/id"
+        },
+        "distribution_unit_id": {
+          "$ref": "#/$defs/id"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "licenses_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toolchain_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "architecture",
+        "artifact_id",
+        "artifact_kind",
+        "artifact_role",
+        "artifact_sha256",
+        "build_key_sha256",
+        "component_instance",
+        "features",
+        "licenses_sha256",
+        "path",
+        "source_sha256",
+        "toolchain_digest"
+      ],
+      "type": "object"
+    },
+    "artifactRole": {
+      "enum": [
+        "payload",
+        "artifact-descriptor",
+        "compliance-manifest",
+        "license-text",
+        "conveyance-notice",
+        "upstream-notice",
+        "other-notice",
+        "modifications",
+        "upstream-notice-inventory",
+        "internal-sha256sums",
+        "carrier-archive",
+        "carrier-manifest",
+        "pair-record",
+        "pair-digest",
+        "internal-stage-manifest"
+      ]
+    },
+    "buildOptions": {
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "integer",
+          "boolean"
+        ]
+      },
+      "maxProperties": 256,
+      "type": "object"
+    },
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "component": {
+      "additionalProperties": false,
+      "properties": {
+        "abi_version": {
+          "$ref": "#/$defs/version"
+        },
+        "api_version": {
+          "$ref": "#/$defs/version"
+        },
+        "architecture": {
+          "$ref": "#/$defs/architecture"
+        },
+        "build_options": {
+          "$ref": "#/$defs/buildOptions"
+        },
+        "canonical_url": {
+          "$ref": "#/$defs/url"
+        },
+        "component_id": {
+          "$ref": "#/$defs/id"
+        },
+        "component_version": {
+          "$ref": "#/$defs/version"
+        },
+        "features": {
+          "$ref": "#/$defs/features"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/id"
+        },
+        "licenses": {
+          "$ref": "#/$defs/licenses"
+        },
+        "notices": {
+          "$ref": "#/$defs/notices"
+        },
+        "publication_disposition": {
+          "enum": [
+            "publish",
+            "private",
+            "unpublished",
+            "restricted"
+          ]
+        },
+        "required_tests": {
+          "$ref": "#/$defs/tests"
+        },
+        "resolved_commit": {
+          "$ref": "#/$defs/commit"
+        },
+        "runtime_kind": {
+          "$ref": "#/$defs/runtimeKind"
+        },
+        "source_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toolchain": {
+          "$ref": "#/$defs/toolchain"
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "private",
+            "local-only"
+          ]
+        }
+      },
+      "required": [
+        "instance_id",
+        "component_id",
+        "canonical_url",
+        "visibility",
+        "resolved_commit",
+        "source_sha256",
+        "component_version",
+        "api_version",
+        "abi_version",
+        "architecture",
+        "runtime_kind",
+        "toolchain",
+        "build_options",
+        "features",
+        "licenses",
+        "notices",
+        "publication_disposition",
+        "required_tests"
+      ],
+      "type": "object"
+    },
+    "dependency": {
+      "additionalProperties": false,
+      "properties": {
+        "consumption_mode": {
+          "enum": [
+            "recursive-git-submodule",
+            "nested-source-build",
+            "staged-prefix",
+            "system-package",
+            "runtime-process"
+          ]
+        },
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "required_abi_version": {
+          "$ref": "#/$defs/version"
+        },
+        "required_api_version": {
+          "$ref": "#/$defs/version"
+        },
+        "required_tests": {
+          "$ref": "#/$defs/tests"
+        },
+        "runtime_process": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "consumption_mode",
+        "runtime_process",
+        "required_api_version",
+        "required_abi_version",
+        "required_tests"
+      ],
+      "type": "object"
+    },
+    "expandedArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "staged_path": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "staged_path",
+        "artifact_sha256"
+      ],
+      "type": "object"
+    },
+    "expandedComplianceUnit": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_binding_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "artifact_descriptor": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "carrier_archive": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "carrier_manifest": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "compliance_binding_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compliance_manifest": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "component_instance": {
+          "$ref": "#/$defs/id"
+        },
+        "internal_sha256sums": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "license_texts": {
+          "items": {
+            "$ref": "#/$defs/expandedLicenseText"
+          },
+          "maxItems": 256,
+          "minItems": 1,
+          "type": "array"
+        },
+        "modifications": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "notices": {
+          "items": {
+            "$ref": "#/$defs/expandedNotice"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "type": "array"
+        },
+        "other_notices": {
+          "items": {
+            "$ref": "#/$defs/expandedArtifact"
+          },
+          "maxItems": 4096,
+          "type": "array"
+        },
+        "pair": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "pair_digest": {
+          "$ref": "#/$defs/expandedArtifact"
+        },
+        "pair_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "payloads": {
+          "items": {
+            "$ref": "#/$defs/expandedArtifact"
+          },
+          "maxItems": 16384,
+          "minItems": 1,
+          "type": "array"
+        },
+        "unit_id": {
+          "$ref": "#/$defs/id"
+        },
+        "upstream_notice_inventory": {
+          "$ref": "#/$defs/expandedArtifact"
+        }
+      },
+      "required": [
+        "artifact_binding_sha256",
+        "artifact_descriptor",
+        "carrier_archive",
+        "carrier_manifest",
+        "compliance_binding_sha256",
+        "compliance_manifest",
+        "component_instance",
+        "internal_sha256sums",
+        "license_texts",
+        "modifications",
+        "notices",
+        "other_notices",
+        "pair",
+        "pair_digest",
+        "pair_sha256",
+        "payloads",
+        "unit_id",
+        "upstream_notice_inventory"
+      ],
+      "type": "object"
+    },
+    "expandedLicenseText": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "spdx": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "staged_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "text_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "spdx",
+        "text_sha256",
+        "staged_path",
+        "artifact_sha256"
+      ],
+      "type": "object"
+    },
+    "expandedNotice": {
+      "additionalProperties": false,
+      "properties": {
+        "artifact_id": {
+          "$ref": "#/$defs/id"
+        },
+        "artifact_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "kind": {
+          "enum": [
+            "conveyance",
+            "upstream",
+            "attribution",
+            "other"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "staged_path": {
+          "$ref": "#/$defs/relativePath"
+        }
+      },
+      "required": [
+        "artifact_id",
+        "kind",
+        "path",
+        "sha256",
+        "staged_path",
+        "artifact_sha256"
+      ],
+      "type": "object"
+    },
+    "features": {
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "id": {
+      "maxLength": 128,
+      "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+      "type": "string"
+    },
+    "license": {
+      "additionalProperties": false,
+      "properties": {
+        "spdx": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "text_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "text_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "spdx",
+        "text_path",
+        "text_sha256"
+      ],
+      "type": "object"
+    },
+    "licenses": {
+      "items": {
+        "$ref": "#/$defs/license"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "notice": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "notices": {
+      "items": {
+        "$ref": "#/$defs/notice"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "relativePath": {
+      "maxLength": 4096,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[^\\u0000]+$",
+      "type": "string"
+    },
+    "runtimeKind": {
+      "enum": [
+        "native-provider",
+        "process",
+        "python-distribution",
+        "data"
+      ]
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "tests": {
+      "items": {
+        "$ref": "#/$defs/id"
+      },
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "toolchain": {
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "name": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "digest"
+      ],
+      "type": "object"
+    },
+    "url": {
+      "format": "uri",
+      "pattern": "^https://",
+      "type": "string"
+    },
+    "version": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "$id": "https://schemas.kilix.dev/kilix.f120.release-lock/v2",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/artifact"
+      },
+      "maxItems": 16384,
+      "minItems": 1,
+      "type": "array"
+    },
+    "compliance_units": {
+      "items": {
+        "$ref": "#/$defs/expandedComplianceUnit"
+      },
+      "maxItems": 16384,
+      "minItems": 1,
+      "type": "array"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/component"
+      },
+      "maxItems": 4096,
+      "minItems": 1,
+      "type": "array"
+    },
+    "dependencies": {
+      "items": {
+        "$ref": "#/$defs/dependency"
+      },
+      "maxItems": 16384,
+      "type": "array"
+    },
+    "release": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$",
+      "type": "string"
+    },
+    "schema": {
+      "const": "kilix.f120.release-lock/v2"
+    }
+  },
+  "required": [
+    "artifacts",
+    "compliance_units",
+    "components",
+    "dependencies",
+    "release",
+    "schema"
+  ],
+  "title": "Kilix F120 exact release lock with distribution-unit carriers",
+  "type": "object"
+}

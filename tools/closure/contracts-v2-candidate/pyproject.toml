@@ -1,0 +1,11 @@
+[project]
+name = "kilix-f120-contracts-v2-candidate"
+version = "0.0.0"
+description = "Review-only F120 v3/v2/v2 licence-carrier contract candidate"
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema[format]==4.25.1",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,154 @@
+{
+  "artifacts": [
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-alpha",
+      "artifact_kind": "command",
+      "artifact_role": "payload",
+      "artifact_sha256": "22d1a759a3cdf00881d2e48f6a449670b057271ddd5ef0e87ffb303128cb7f22",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "9931a114cec06f1ba28fdd60652f8a806f8a0c15d7b073137a8f7557598459da",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "alpha",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "bin/payload-alpha",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-beta",
+      "artifact_kind": "command",
+      "artifact_role": "payload",
+      "artifact_sha256": "cda0bf925d150c8ebbac640db8f1580ac7e8646f00ded519c38d92804b18fc5a",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "100e1d4382f498ef6c351cd99100fefb3af049aec72c2910bbacee88e08c4691",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "beta",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "bin/payload-beta",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-gamma-data",
+      "artifact_kind": "command",
+      "artifact_role": "payload",
+      "artifact_sha256": "e535180176d40ae85f8dd4d6750e642f2405eb223efdc8c71063511935203204",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "742e4fcb65c4008aca2d10b33504c5b9b3107c872cb3ab025b60b0ab95eb8369",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "gamma",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "bin/payload-gamma-data",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "payload-gamma-tool",
+      "artifact_kind": "data",
+      "artifact_role": "payload",
+      "artifact_sha256": "61d0044794f062f2140de133f48394e17a2591cd292d0f05bda2698cee3ed987",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "compliance_binding_sha256": "742e4fcb65c4008aca2d10b33504c5b9b3107c872cb3ab025b60b0ab95eb8369",
+      "component_instance": "f120-v2-demo",
+      "distribution_unit_id": "gamma",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/demo/payload-gamma-tool",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    },
+    {
+      "architecture": "x86_64-linux-gnu",
+      "artifact_id": "stage-manifest-f120-v2-demo",
+      "artifact_kind": "manifest",
+      "artifact_role": "internal-stage-manifest",
+      "artifact_sha256": "d2495f5d1458e526fddd3f65547cd2586a6337c1840445510dcd5dc4fa9255e0",
+      "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
+      "component_instance": "f120-v2-demo",
+      "features": [
+        "carrier-v2"
+      ],
+      "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
+      "path": "share/kilix-f120/f120-v2-demo.json",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
+    }
+  ],
+  "compliance_units": [],
+  "components": [
+    {
+      "abi_version": "1",
+      "api_version": "1",
+      "architecture": "x86_64-linux-gnu",
+      "build_options": {
+        "f120_compliance_declaration_sha256": "514131a7b4b94955a897f0f2c90423ea75be289f8fe8ee0c7631166020550957",
+        "f120_recipe_sha256": "e775e11bfe72f441376aa9112a2dd42285edf24d6f6c3981c00943ecb6d16563",
+        "fixture": true
+      },
+      "canonical_url": "https://github.com/itsmygithubacct/f120-v2-demo.git",
+      "component_id": "f120-v2-demo",
+      "component_version": "1.0.0",
+      "features": [
+        "carrier-v2"
+      ],
+      "instance_id": "f120-v2-demo",
+      "licenses": [
+        {
+          "spdx": "Apache-2.0",
+          "text_path": "LICENSES/Apache-2.0.txt",
+          "text_sha256": "953bff80ae85708ce1c2ce87b5edd16ccfc9499d6e3c84d8b872947b85ef6e35"
+        },
+        {
+          "spdx": "MIT",
+          "text_path": "LICENSES/MIT.txt",
+          "text_sha256": "27f3fe40677c6b38fce37a0515c6d39aaaa7b5ae2e13354107c636c92ea66a6f"
+        }
+      ],
+      "notices": [
+        {
+          "path": "compliance/alpha/NOTICE",
+          "sha256": "28d96fd6978c4219bcd5be65ed47c07d65f1eb97be83f76925bb2d95c11170c8"
+        },
+        {
+          "path": "compliance/beta/NOTICE",
+          "sha256": "788b243cb7f06870000c8d62126350e2af0d2630662dad0320966b23b77862f5"
+        },
+        {
+          "path": "compliance/gamma/NOTICE",
+          "sha256": "cc232252d9c7975883b475de4d623076440d1e27f4476210d26bc128321c6574"
+        }
+      ],
+      "publication_disposition": "publish",
+      "required_tests": [
+        "carrier-conformance"
+      ],
+      "resolved_commit": "1111111111111111111111111111111111111111",
+      "runtime_kind": "native-provider",
+      "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
+      "toolchain": {
+        "digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e",
+        "name": "fixture-toolchain",
+        "version": "1"
+      },
+      "visibility": "public"
+    }
+  ],
+  "dependencies": [],
+  "release": "0.2.1",
+  "schema": "kilix.f120.release-lock/v2"
+}
