@@ -197,7 +197,11 @@ DEP_GROUPS=(
     # ripgrep is what the coding agents reach for to search a tree. None of
     # the three bundles a copy, so without it here they fall back to
     # something slower or search nothing at all.
-    "cli utilities|tmux ncdu rsync ufw jq glances ripgrep"
+    # progress reports how far a running cp, mv, dd or tar has actually got by
+    # reading its file descriptors from /proc. Without it a long image or
+    # payload copy is indistinguishable from a hung one, and the usual reaction
+    # to that is to kill it and start again.
+    "cli utilities|tmux ncdu rsync ufw jq glances ripgrep progress"
 )
 
 # Additive qualification-image packages. The distinct separator keeps these
