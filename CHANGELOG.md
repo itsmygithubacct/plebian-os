@@ -66,6 +66,18 @@ closure and must not be used to revise 0.2.1 artifacts.
   generic, Nouveau and qualified selections are each tested independently, and
   each additive array is read by name so no lane can silently merge into
   another.
+- A source-only Pocket TTS converter installer with immutable source and output
+  pins. No model or converted weight bytes are carried.
+- A local-build installer for the persistent Kilix Vulkan TTS worker. It
+  verifies the immutable llama.cpp archive, the worker source, the Debian build
+  inputs and a byte-reproducible 66,532,472-byte runtime closure before atomic
+  publication, then discards its temporary source and build tree.
+- The exact private-Unix Ollama listener patch and a fail-closed local closure
+  installer. It installs no model bytes and exposes no download URL; the
+  119,645,888-byte runtime carrier remains owner-reserved and unaccepted.
+- Both optional installers are carried through fresh ISO, standalone
+  provisioning, transactional update and rollback, and VM acceptance without
+  being invoked by any of them.
 
 ## [0.2.1] — 2026-09-01
 

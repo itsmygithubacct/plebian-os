@@ -1,0 +1,1246 @@
+#!/usr/bin/python3
+"""Build and install the optional persistent Kilix Vulkan TTS runtime.
+
+The image carries this installer and its small worker source, not generated
+Vulkan shaders, native libraries, model weights, voices, or audio. An explicit
+root invocation downloads one immutable llama.cpp source archive, verifies it,
+builds in a private directory with network-fetching features disabled, and
+publishes only an exact reproducible runtime generation.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import platform
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+
+ARCHIVE_URL = (
+    "https://github.com/ggml-org/llama.cpp/archive/"
+    "7e4c0a96880dae4fc4268ad441f8a6446bd5460a.tar.gz"
+)
+ARCHIVE_SIZE = 36_889_653
+ARCHIVE_SHA256 = (
+    "8759ab3d3a92d86ba3ba24fab7e6adde0"
+    "8eaf2f941e6c79118373e4f41e0af8c"
+)
+ARCHIVE_ROOT = "llama.cpp-7e4c0a96880dae4fc4268ad441f8a6446bd5460a"
+ARCHIVE_MEMBERS = 3_791
+ARCHIVE_EXTRACTED_BYTES = 168_672_955
+MAX_ARCHIVE_MEMBERS = 4_000
+MAX_EXTRACTED_BYTES = 192 * 1024 * 1024
+MINIMUM_FREE_BYTES = 1024 * 1024 * 1024
+SOURCE_DATE_EPOCH = "1786820200"
+WORKER_SOURCE_SHA256 = (
+    "e8c7ecd2d2458962666fdc560b40f5ed"
+    "754e3e7c126400dd1f914a4bb50dc964"
+)
+
+SESSION_ROOT = Path("/var/lib/plebian-os/session")
+INSTALL_ROOT = Path("/usr/lib/plebian-os/ollama")
+GENERATION_NAME = "vulkan-tts-b10434-r1"
+GENERATION = INSTALL_ROOT / GENERATION_NAME
+WORKER_PATH = INSTALL_ROOT / "kilix-tts-worker-current"
+
+PACKAGE_VERSIONS = {
+    "binutils": "2.44-3",
+    "build-essential": "12.12",
+    "cmake": "3.31.6-2",
+    "g++": "4:14.2.0-1",
+    "g++-14": "14.2.0-19",
+    "gcc": "4:14.2.0-1",
+    "gcc-14": "14.2.0-19",
+    "glslc": "2025.2-1",
+    "libc6-dev": "2.41-12+deb13u3",
+    "libstdc++-14-dev": "14.2.0-19",
+    "libvulkan-dev": "1.4.309.0-1",
+    "libvulkan1": "1.4.309.0-1",
+    "make": "4.4.1-2",
+    "mesa-vulkan-drivers": "25.0.7-2+deb13u1",
+}
+
+# final name: (build-tree source name, byte count, SHA-256)
+RUNTIME_OUTPUTS = {
+    "kilix-tts-worker": (
+        "kilix-tts-worker",
+        45_928,
+        "268ffc8c045eb48c7d1ebcf9866cc0be78eb746e6574abbcded430098ab40773",
+    ),
+    "libggml-base.so.0": (
+        "libggml-base.so.0.20.0",
+        873_168,
+        "a93d40b31051e76e7bc62aed360c1346ff2948e461447d511f1ce78d044c1846",
+    ),
+    "libggml-cpu.so": (
+        "libggml-cpu.so",
+        889_200,
+        "fd53889b46fe8c878f3245e2b68716765342bb9e4fdd28383b89c14931cc14e2",
+    ),
+    "libggml-vulkan.so": (
+        "libggml-vulkan.so",
+        52_742_656,
+        "5db1b7c2c3f9686e48f5bf379b9765c52125935579c83efbca111913a357316d",
+    ),
+    "libggml.so.0": (
+        "libggml.so.0.20.0",
+        55_312,
+        "9c5bdbfc9283dde3fdf767a9e9a6b7a3289c9abeec773f539dace94d23277794",
+    ),
+    "libllama-common.so.0": (
+        "libllama-common.so.0.1.0",
+        5_845_496,
+        "f856d0d5017d60dc8e836c5f02127a284bb6abefe0926772ba8631e6ec4e462e",
+    ),
+    "libllama.so.0": (
+        "libllama.so.0.1.0",
+        4_270_608,
+        "1e33c725f400c9d589e6fc1f49cb88d5c775125ce47c1b38722c9afaba856387",
+    ),
+    "libmtmd.so.0": (
+        "libmtmd.so.0.1.0",
+        1_810_104,
+        "51db2c76b9214536971be1d1c68a2aff0c264a716568221ea9ed1b8e23587546",
+    ),
+}
+
+WORKER_SOURCE = r'''// Persistent, pipe-framed Pocket TTS worker for the Kilix Vulkan runtime.
+//
+// This source is built against the exact admitted llama.cpp closure.  It keeps
+// the model resident but clears request-specific model, sampler, and audio
+// state before every utterance.  Standard output is protocol-only; callers
+// must launch with llama.cpp logging disabled.
+
+#include "arg.h"
+#include "common.h"
+#include "log.h"
+#include "sampling.h"
+#include "llama.h"
+#include "llama-cpp.h"
+#include "mtmd.h"
+#include "mtmd-helper.h"
+
+#include <array>
+#include <cerrno>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <string>
+#include <vector>
+
+#include <unistd.h>
+
+namespace {
+
+constexpr std::array<uint8_t, 8> READY = {'K', 'I', 'L', 'I', 'X', 'T', '1', '\n'};
+constexpr std::array<uint8_t, 4> REQUEST_MAGIC = {'K', 'X', 'Q', '1'};
+constexpr std::array<uint8_t, 4> RESPONSE_MAGIC = {'K', 'X', 'R', '1'};
+constexpr uint32_t MAX_TEXT_BYTES = 4096;
+constexpr uint64_t MAX_WAV_BYTES = 64ULL * 1024ULL * 1024ULL;
+constexpr int32_t REQUIRED_SAMPLE_RATE = 24000;
+constexpr int64_t MAX_AUDIO_SAMPLES = 120LL * REQUIRED_SAMPLE_RATE;
+
+enum class read_result {
+    ok,
+    eof,
+    error,
+};
+
+read_result read_exact(void * output, size_t length, bool allow_initial_eof) {
+    auto * cursor = static_cast<uint8_t *>(output);
+    size_t offset = 0;
+    while (offset < length) {
+        const ssize_t count = ::read(STDIN_FILENO, cursor + offset, length - offset);
+        if (count > 0) {
+            offset += static_cast<size_t>(count);
+            continue;
+        }
+        if (count == 0) {
+            return allow_initial_eof && offset == 0 ? read_result::eof : read_result::error;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        return read_result::error;
+    }
+    return read_result::ok;
+}
+
+bool write_exact(const void * input, size_t length) {
+    const auto * cursor = static_cast<const uint8_t *>(input);
+    size_t offset = 0;
+    while (offset < length) {
+        const ssize_t count = ::write(STDOUT_FILENO, cursor + offset, length - offset);
+        if (count > 0) {
+            offset += static_cast<size_t>(count);
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+uint32_t decode_u32(const uint8_t * value) {
+    return static_cast<uint32_t>(value[0]) |
+           (static_cast<uint32_t>(value[1]) << 8U) |
+           (static_cast<uint32_t>(value[2]) << 16U) |
+           (static_cast<uint32_t>(value[3]) << 24U);
+}
+
+void encode_u32(uint8_t * output, uint32_t value) {
+    for (unsigned index = 0; index < 4; ++index) {
+        output[index] = static_cast<uint8_t>((value >> (8U * index)) & 0xffU);
+    }
+}
+
+void encode_u64(uint8_t * output, uint64_t value) {
+    for (unsigned index = 0; index < 8; ++index) {
+        output[index] = static_cast<uint8_t>((value >> (8U * index)) & 0xffU);
+    }
+}
+
+bool valid_utf8(const std::string & value) {
+    size_t index = 0;
+    while (index < value.size()) {
+        const uint8_t lead = static_cast<uint8_t>(value[index]);
+        uint32_t codepoint = 0;
+        size_t continuation = 0;
+        if (lead <= 0x7fU) {
+            if (lead == 0) {
+                return false;
+            }
+            ++index;
+            continue;
+        }
+        if (lead >= 0xc2U && lead <= 0xdfU) {
+            codepoint = lead & 0x1fU;
+            continuation = 1;
+        } else if (lead >= 0xe0U && lead <= 0xefU) {
+            codepoint = lead & 0x0fU;
+            continuation = 2;
+        } else if (lead >= 0xf0U && lead <= 0xf4U) {
+            codepoint = lead & 0x07U;
+            continuation = 3;
+        } else {
+            return false;
+        }
+        if (index + continuation >= value.size()) {
+            return false;
+        }
+        for (size_t offset = 1; offset <= continuation; ++offset) {
+            const uint8_t byte = static_cast<uint8_t>(value[index + offset]);
+            if ((byte & 0xc0U) != 0x80U) {
+                return false;
+            }
+            codepoint = (codepoint << 6U) | (byte & 0x3fU);
+        }
+        if ((continuation == 2 && codepoint < 0x800U) ||
+            (continuation == 3 && codepoint < 0x10000U) ||
+            (codepoint >= 0xd800U && codepoint <= 0xdfffU) ||
+            codepoint > 0x10ffffU) {
+            return false;
+        }
+        index += continuation + 1;
+    }
+    return true;
+}
+
+bool send_response(uint32_t status, const char * data, uint64_t length) {
+    std::array<uint8_t, 16> header{};
+    std::memcpy(header.data(), RESPONSE_MAGIC.data(), RESPONSE_MAGIC.size());
+    encode_u32(header.data() + 4, status);
+    encode_u64(header.data() + 8, length);
+    return write_exact(header.data(), header.size()) &&
+           (length == 0 || write_exact(data, static_cast<size_t>(length)));
+}
+
+uint32_t synthesize(
+        const common_params & params,
+        llama_model * model,
+        mtmd_context * mctx,
+        const std::string & prompt,
+        std::vector<char> * output) {
+    // Pocket's backbone has recurrent state whose device buffers must start at
+    // zero.  A fresh context provides that guarantee without reloading either
+    // model.  Reusing a context with metadata-only clearing leaks recurrent
+    // state; zeroing the full device cache is slower than context recreation
+    // on the qualified NVK tuple.
+    llama_context_params context_params = common_context_params_to_llama(params);
+    llama_context_ptr context(llama_init_from_model(model, context_params));
+    if (!context) {
+        return 19;
+    }
+    common_params_sampling sampling = params.sampling;
+    common_sampler_ptr sampler(common_sampler_init(model, sampling));
+    if (!sampler) {
+        return 19;
+    }
+    mtmd_helper::gen_audio generator(context.get(), mctx);
+
+    // The current mtmd ABI reseeds its persistent projector RNG only when the
+    // numeric seed changes.  Prime it once with a guaranteed-different seed;
+    // the first real generation step then restores the admitted seed.  The
+    // priming graph is stateless apart from RNG/output scratch and avoids
+    // cross-utterance stochastic drift without reloading the projector.
+    std::vector<float> zero_hidden(static_cast<size_t>(llama_model_n_embd(model)), 0.0f);
+    mtmd_gen_inp reseed = mtmd_gen_inp_default(mctx);
+    reseed.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+    reseed.embd = zero_hidden.data();
+    reseed.seed = params.sampling.seed ^ 0xa5a5a5a5U;
+    mtmd_gen_out ignored{};
+    if (mtmd_gen_audio_process(mctx, &reseed, &ignored) != 0) {
+        return 18;
+    }
+
+    mtmd_helper_gen_audio_inp input{};
+    input.seq_id = 0;
+    input.prompt = prompt.data();
+    input.prompt_len = prompt.size();
+    input.speaker_ref = nullptr;
+    input.lang = params.tts_lang.c_str();
+    input.top_k = params.sampling.top_k;
+    input.top_p = params.sampling.top_p;
+    input.seed = params.sampling.seed;
+    input.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    if (generator.set_input(&input) != 0) {
+        return 20;
+    }
+
+    for (;;) {
+        const int32_t remaining = generator.step_prompt(params.n_batch);
+        if (remaining < 0) {
+            return 21;
+        }
+        if (remaining == 0) {
+            break;
+        }
+    }
+
+    auto sample_semantic_code = [&]() -> llama_token {
+        const llama_token token = common_sampler_sample(sampler.get(), context.get(), -1);
+        common_sampler_accept(sampler.get(), token, true);
+        return token;
+    };
+
+    const int maximum_frames = params.n_predict > 0 ? params.n_predict : 512;
+    int frames = 0;
+    llama_token sampled = sample_semantic_code();
+    const float * hidden_state = llama_get_embeddings_ith(context.get(), -1);
+    if (hidden_state == nullptr) {
+        return 22;
+    }
+    bool stop = false;
+    while (!stop && frames < maximum_frames) {
+        const float * next_state = nullptr;
+        if (generator.step_gen(sampled, hidden_state, &next_state, &stop) != 0) {
+            return 23;
+        }
+        if (next_state == nullptr) {
+            break;
+        }
+        ++frames;
+        hidden_state = next_state;
+        sampled = sample_semantic_code();
+    }
+
+    int32_t sample_rate = 0;
+    const char * data = nullptr;
+    size_t data_length = 0;
+    int64_t samples = 0;
+    if (generator.get_output(&sample_rate, &data, &data_length, &samples) != 0) {
+        return 24;
+    }
+    if (sample_rate != REQUIRED_SAMPLE_RATE || samples <= 0 ||
+        samples > MAX_AUDIO_SAMPLES || data == nullptr || data_length <= 44 ||
+        data_length > MAX_WAV_BYTES) {
+        return 25;
+    }
+    output->assign(data, data + data_length);
+    return 0;
+}
+
+void print_usage(int, char ** argv) {
+    LOG("\nusage: %s --model MODEL --mmproj PROJECTOR [fixed runtime options]\n", argv[0]);
+}
+
+} // namespace
+
+int main(int argc, char ** argv) {
+    common_params params;
+    common_init();
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_TTS, print_usage)) {
+        return 2;
+    }
+    mtmd_helper_log_set(common_log_default_callback, nullptr);
+    if (!params.prompt.empty() || params.mmproj.path.empty() ||
+        !params.tts_speaker_file.empty()) {
+        return 2;
+    }
+
+    params.embedding = true;
+    llama_backend_init();
+    llama_numa_init(params.numa);
+    auto llama_init = common_init_from_params(params, true);
+    if (!llama_init) {
+        llama_backend_free();
+        return 3;
+    }
+    llama_model * model = llama_init->model();
+    if (model == nullptr) {
+        llama_backend_free();
+        return 3;
+    }
+
+    mtmd_context_params mtmd_params = mtmd_context_params_default();
+    mtmd_params.use_gpu = params.mmproj_use_gpu;
+    mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mtmd_params));
+    if (!mctx || mtmd_gen_audio_get_info(mctx.get()).type != MTMD_GEN_AUDIO_TYPE_POCKETTTS) {
+        llama_backend_free();
+        return 4;
+    }
+    if (!write_exact(READY.data(), READY.size())) {
+        llama_backend_free();
+        return 5;
+    }
+
+    for (;;) {
+        std::array<uint8_t, 8> request{};
+        const read_result result = read_exact(request.data(), request.size(), true);
+        if (result == read_result::eof) {
+            break;
+        }
+        if (result != read_result::ok ||
+            std::memcmp(request.data(), REQUEST_MAGIC.data(), REQUEST_MAGIC.size()) != 0) {
+            llama_backend_free();
+            return 6;
+        }
+        const uint32_t length = decode_u32(request.data() + 4);
+        if (length == 0) {
+            break;
+        }
+        if (length > MAX_TEXT_BYTES) {
+            send_response(10, nullptr, 0);
+            llama_backend_free();
+            return 7;
+        }
+        std::string prompt(length, '\0');
+        if (read_exact(prompt.data(), prompt.size(), false) != read_result::ok ||
+            !valid_utf8(prompt)) {
+            send_response(11, nullptr, 0);
+            llama_backend_free();
+            return 7;
+        }
+
+        std::vector<char> output;
+        const uint32_t status = synthesize(
+            params,
+            model,
+            mctx.get(),
+            prompt,
+            &output);
+        if (!send_response(
+                status,
+                output.empty() ? nullptr : output.data(),
+                status == 0 ? static_cast<uint64_t>(output.size()) : 0)) {
+            llama_backend_free();
+            return 8;
+        }
+        if (status != 0) {
+            llama_backend_free();
+            return 9;
+        }
+    }
+
+    llama_backend_free();
+    return 0;
+}
+'''
+
+KILIX_LICENSE = """MIT License
+
+Copyright (c) 2026 itsmygithubacct
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"""
+
+NOTICE = f"""Kilix persistent Vulkan TTS runtime
+
+This optional runtime is built locally from llama.cpp build 10434, commit
+7e4c0a96880dae4fc4268ad441f8a6446bd5460a. The source archive is {ARCHIVE_URL}
+with SHA-256 {ARCHIVE_SHA256}. llama.cpp's MIT license and the Kilix MIT
+license are retained in this generation.
+
+The Kilix worker adds a bounded, persistent, pipe-framed Pocket TTS execution
+surface. It keeps the model pair resident, recreates request-specific state,
+and primes the current projector RNG implementation before every fixed-seed
+utterance to prevent cross-request stochastic drift.
+
+No model weights, voice data, speaker embeddings, generated audio, prompts, or
+responses are part of this runtime closure.
+"""
+
+
+def build_closure_text() -> str:
+    lines = [
+        "schema=plebian.kilix-vulkan-tts-build/v0-unfrozen",
+        "schema_status=development-unfrozen",
+        "release_admission=false",
+        "architecture=linux-amd64",
+        "llama_cpp_build=10434",
+        "llama_cpp_commit=7e4c0a96880dae4fc4268ad441f8a6446bd5460a",
+        f"llama_cpp_archive_sha256={ARCHIVE_SHA256}",
+        f"worker_source_sha256={WORKER_SOURCE_SHA256}",
+        f"source_date_epoch={SOURCE_DATE_EPOCH}",
+        "build_shared_libs=ON",
+        "ggml_backend_dl=ON",
+        "ggml_cpu_all_variants=OFF",
+        "ggml_native=OFF",
+        "ggml_openmp=OFF",
+        "ggml_vulkan=ON",
+        "llama_curl=OFF",
+        "llama_openssl=OFF",
+        "network_build_fetches=false",
+        "model_or_weight_artifacts=false",
+    ]
+    for name, (_source, size, digest) in sorted(RUNTIME_OUTPUTS.items()):
+        lines.append(f"output={name}\t{size}\t{digest}")
+    return "\n".join(lines) + "\n"
+
+
+WRAPPER_SOURCE = f'''#!/bin/sh
+set -eu
+exec {GENERATION}/kilix-tts-worker "$@"
+'''
+
+
+class InstallFailure(RuntimeError):
+    """A safe, actionable refusal from the optional runtime installer."""
+
+
+def fail(message: str) -> None:
+    raise InstallFailure(message)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def require_root_directory(path: Path, *, private: bool = False) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        fail(f"cannot inspect {path}: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail(f"not a real directory: {path}")
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid != 0 or mode & 0o022:
+        fail(f"directory is not root-controlled: {path}")
+    if private and mode & 0o077:
+        fail(f"privileged staging directory is not private: {path}")
+
+
+def ensure_root_path(path: Path, *, final_mode: int) -> None:
+    current = Path("/")
+    require_root_directory(current)
+    for part in path.parts[1:]:
+        current = current / part
+        if not os.path.lexists(current):
+            os.mkdir(current, final_mode if current == path else 0o755)
+        require_root_directory(
+            current,
+            private=current == path and final_mode == 0o700,
+        )
+    if stat.S_IMODE(path.stat().st_mode) != final_mode:
+        os.chmod(path, final_mode)
+        require_root_directory(path, private=final_mode == 0o700)
+
+
+def verify_platform() -> None:
+    if platform.system() != "Linux" or platform.machine() != "x86_64":
+        fail("this candidate is limited to Linux x86_64")
+    result = subprocess.run(
+        ["/usr/bin/dpkg", "--print-architecture"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        check=False,
+    )
+    if result.returncode != 0 or result.stdout.strip() != "amd64":
+        fail("the Debian package architecture must be amd64")
+
+
+def verify_packages() -> None:
+    for package, expected in PACKAGE_VERSIONS.items():
+        result = subprocess.run(
+            ["/usr/bin/dpkg-query", "-W", "-f=${Version}", package],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            check=False,
+        )
+        if result.returncode != 0 or result.stdout != expected:
+            fail(
+                f"{package} must be exactly {expected}; first run "
+                "plebian-os-install-deps --vulkan-tts"
+            )
+
+
+def copy_and_verify_archive(source: Path, destination: Path) -> None:
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    try:
+        source_descriptor = os.open(source, flags)
+    except OSError as error:
+        fail(f"cannot open local archive {source}: {error}")
+    destination_descriptor = -1
+    try:
+        info = os.fstat(source_descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != ARCHIVE_SIZE:
+            fail("local archive is not the exact pinned regular file")
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+        digest = hashlib.sha256()
+        count = 0
+        with os.fdopen(source_descriptor, "rb") as input_stream, os.fdopen(
+            destination_descriptor, "wb"
+        ) as output_stream:
+            source_descriptor = -1
+            destination_descriptor = -1
+            for block in iter(lambda: input_stream.read(1024 * 1024), b""):
+                count += len(block)
+                digest.update(block)
+                output_stream.write(block)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        if count != ARCHIVE_SIZE or digest.hexdigest() != ARCHIVE_SHA256:
+            destination.unlink(missing_ok=True)
+            fail("local archive failed its exact size/SHA-256 pin")
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+
+
+def download_archive(destination: Path, private_home: Path) -> None:
+    result = subprocess.run(
+        [
+            "/usr/bin/curl",
+            "--fail",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            "600",
+            "--silent",
+            "--show-error",
+            "--output",
+            str(destination),
+            ARCHIVE_URL,
+        ],
+        stdin=subprocess.DEVNULL,
+        env={
+            "HOME": str(private_home),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C",
+            "LC_ALL": "C",
+        },
+        check=False,
+    )
+    if result.returncode != 0:
+        fail(f"source archive download failed with status {result.returncode}")
+    try:
+        info = destination.lstat()
+    except OSError as error:
+        fail(f"downloaded archive is unavailable: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        fail("downloaded archive is not a regular file")
+    if info.st_size != ARCHIVE_SIZE or sha256(destination) != ARCHIVE_SHA256:
+        fail("downloaded archive failed its exact size/SHA-256 pin")
+    os.chmod(destination, 0o600)
+
+
+def archive_member_path(member_name: str) -> PurePosixPath:
+    member = PurePosixPath(member_name)
+    if member.is_absolute() or ".." in member.parts or not member.parts:
+        fail(f"unsafe archive member: {member_name}")
+    if member.parts[0] != ARCHIVE_ROOT:
+        fail(f"archive member has an unexpected root: {member_name}")
+    return PurePosixPath(*member.parts[1:])
+
+
+def write_exclusive(path: Path, data: bytes, mode: int) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        mode,
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(path, mode)
+
+
+def ensure_private_directory(root: Path, relative: PurePosixPath) -> Path:
+    current = root
+    for part in relative.parts:
+        current /= part
+        try:
+            info = current.lstat()
+        except FileNotFoundError:
+            current.mkdir(mode=0o700)
+            continue
+        except OSError as error:
+            fail(f"cannot inspect extraction directory {current}: {error}")
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            fail(f"source archive path is not a directory: {current}")
+    return current
+
+
+def extract_source(archive: Path, target: Path) -> None:
+    target.mkdir(mode=0o700)
+    seen: set[PurePosixPath] = set()
+    total = 0
+    members = 0
+    with tarfile.open(archive, mode="r:gz") as source:
+        for member in source:
+            members += 1
+            if members > MAX_ARCHIVE_MEMBERS:
+                fail("source archive exceeds its member-count bound")
+            relative = archive_member_path(member.name)
+            if relative in seen:
+                fail(f"duplicate source archive member: {relative}")
+            seen.add(relative)
+            if not relative.parts:
+                if not member.isdir():
+                    fail("source archive root is not a directory")
+                continue
+            destination = target.joinpath(*relative.parts)
+            if member.isdir():
+                ensure_private_directory(target, relative)
+                continue
+            if not member.isfile() or member.size < 0:
+                fail(f"source archive member is not a regular file: {relative}")
+            total += member.size
+            if total > MAX_EXTRACTED_BYTES:
+                fail("source archive exceeds its extracted-byte bound")
+            ensure_private_directory(target, relative.parent)
+            input_stream = source.extractfile(member)
+            if input_stream is None:
+                fail(f"cannot read source archive member: {relative}")
+            mode = 0o700 if member.mode & 0o111 else 0o600
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                mode,
+            )
+            copied = 0
+            with input_stream, os.fdopen(descriptor, "wb") as output:
+                while True:
+                    block = input_stream.read(1024 * 1024)
+                    if not block:
+                        break
+                    copied += len(block)
+                    output.write(block)
+            if copied != member.size:
+                fail(f"short extraction for source archive member: {relative}")
+    if members != ARCHIVE_MEMBERS or total != ARCHIVE_EXTRACTED_BYTES:
+        fail("source archive contents do not match the pinned member/byte counts")
+    license_path = target / "LICENSE"
+    if sha256(license_path) != (
+        "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+    ):
+        fail("extracted llama.cpp license failed verification")
+
+
+def build_environment(work: Path) -> dict[str, str]:
+    private_home = work / "home"
+    temporary = work / "tmp"
+    private_home.mkdir(mode=0o700)
+    temporary.mkdir(mode=0o700)
+    return {
+        "CMAKE_BUILD_PARALLEL_LEVEL": "2",
+        "FETCHCONTENT_FULLY_DISCONNECTED": "ON",
+        "HOME": str(private_home),
+        "LANG": "C",
+        "LC_ALL": "C",
+        "NO_PROXY": "*",
+        "PATH": "/usr/bin:/bin",
+        "SOURCE_DATE_EPOCH": SOURCE_DATE_EPOCH,
+        "TMPDIR": str(temporary),
+        "no_proxy": "*",
+    }
+
+
+def cmake_arguments(work: Path) -> list[str]:
+    source = work / "source"
+    build = work / "build"
+    prefix_map = " ".join(
+        (
+            f"-ffile-prefix-map={work}=/usr/src/kilix-vulkan-tts-r1",
+            f"-fdebug-prefix-map={work}=/usr/src/kilix-vulkan-tts-r1",
+            f"-fmacro-prefix-map={work}=/usr/src/kilix-vulkan-tts-r1",
+        )
+    )
+    return [
+        "/usr/bin/cmake",
+        "-S",
+        str(source),
+        "-B",
+        str(build),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_BUILD_RPATH=$ORIGIN",
+        "-DCMAKE_INSTALL_RPATH=$ORIGIN",
+        "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+        f"-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG {prefix_map}",
+        f"-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG {prefix_map}",
+        "-DBUILD_SHARED_LIBS=ON",
+        "-DGGML_BACKEND_DL=ON",
+        "-DGGML_CCACHE=OFF",
+        "-DGGML_CPU_ALL_VARIANTS=OFF",
+        "-DGGML_NATIVE=OFF",
+        "-DGGML_OPENMP=OFF",
+        "-DGGML_VULKAN=ON",
+        "-DLLAMA_BUILD_APP=OFF",
+        "-DLLAMA_BUILD_EXAMPLES=OFF",
+        "-DLLAMA_BUILD_SERVER=OFF",
+        "-DLLAMA_BUILD_TESTS=OFF",
+        "-DLLAMA_BUILD_TOOLS=ON",
+        "-DLLAMA_CURL=OFF",
+        "-DLLAMA_LLGUIDANCE=OFF",
+        "-DLLAMA_OPENSSL=OFF",
+        "-DLLAMA_SUBPROCESS=OFF",
+        "-DLLAMA_BUILD_NUMBER=10434",
+        "-DLLAMA_BUILD_COMMIT=7e4c0a96880d",
+        "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
+    ]
+
+
+def compiler_arguments(work: Path) -> list[str]:
+    source = work / "source"
+    build = work / "build"
+    worker = work / "worker" / "kilix_tts_worker.cpp"
+    prefix_flags = [
+        f"-ffile-prefix-map={work}=/usr/src/kilix-vulkan-tts-r1",
+        f"-fdebug-prefix-map={work}=/usr/src/kilix-vulkan-tts-r1",
+        f"-fmacro-prefix-map={work}=/usr/src/kilix-vulkan-tts-r1",
+    ]
+    return [
+        "/usr/bin/g++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        *prefix_flags,
+        "-DGGML_BACKEND_DL",
+        "-DGGML_SHARED",
+        "-DLLAMA_SHARED",
+        f"-I{source / 'include'}",
+        f"-I{source / 'ggml/include'}",
+        f"-I{source / 'common'}",
+        f"-I{source / 'vendor'}",
+        f"-I{source / 'tools/mtmd'}",
+        "-Wmissing-declarations",
+        "-Wmissing-noreturn",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Wcast-qual",
+        "-Wno-unused-function",
+        "-Wno-array-bounds",
+        "-Wextra-semi",
+        str(worker),
+        "-o",
+        str(build / "bin/kilix-tts-worker"),
+        "-Wl,-rpath,$ORIGIN",
+        str(build / "bin/libllama-common.so.0.1.0"),
+        str(build / "bin/libmtmd.so.0.1.0"),
+        str(build / "common/libllama-common-base.a"),
+        str(build / "bin/libllama.so.0.1.0"),
+        str(build / "bin/libggml.so.0.20.0"),
+        str(build / "bin/libggml-base.so.0.20.0"),
+    ]
+
+
+def run_checked(arguments: list[str], *, cwd: Path, env: dict[str, str]) -> None:
+    result = subprocess.run(
+        arguments,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    if result.returncode != 0:
+        fail(f"local runtime build command failed with status {result.returncode}")
+
+
+def build_runtime(work: Path) -> Path:
+    worker_dir = work / "worker"
+    worker_dir.mkdir(mode=0o700)
+    worker_bytes = WORKER_SOURCE.encode("utf-8")
+    if hashlib.sha256(worker_bytes).hexdigest() != WORKER_SOURCE_SHA256:
+        fail("embedded Kilix worker source failed its own SHA-256 pin")
+    write_exclusive(worker_dir / "kilix_tts_worker.cpp", worker_bytes, 0o600)
+    build = work / "build"
+    build.mkdir(mode=0o700)
+    env = build_environment(work)
+    run_checked(cmake_arguments(work), cwd=work, env=env)
+    run_checked(
+        [
+            "/usr/bin/cmake",
+            "--build",
+            str(build),
+            "--target",
+            "llama-tts",
+            "--parallel",
+            "2",
+        ],
+        cwd=work,
+        env=env,
+    )
+    run_checked(compiler_arguments(work), cwd=work, env=env)
+    return build / "bin"
+
+
+def verified_file_digest(
+    path: Path,
+    *,
+    expected_size: int,
+    expected_hash: str,
+    expected_owner: int,
+    expected_mode: int,
+) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as error:
+        fail(f"cannot open runtime closure file {path}: {error}")
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            fail(f"runtime closure entry is not a regular file: {path}")
+        if info.st_uid != expected_owner or stat.S_IMODE(info.st_mode) != expected_mode:
+            fail(f"runtime closure entry has unsafe ownership/mode: {path}")
+        if info.st_size != expected_size:
+            fail(f"runtime closure entry has an unexpected size: {path}")
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        if digest.hexdigest() != expected_hash:
+            fail(f"runtime closure entry failed SHA-256 verification: {path}")
+    finally:
+        os.close(descriptor)
+
+
+def copy_verified_output(source: Path, destination: Path, size: int, digest: str) -> None:
+    try:
+        source_descriptor = os.open(
+            source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+    except OSError as error:
+        fail(f"cannot open local build output {source}: {error}")
+    destination_descriptor = -1
+    try:
+        info = os.fstat(source_descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != size:
+            fail(f"local build output has an unexpected type or size: {source.name}")
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o700,
+        )
+        actual = hashlib.sha256()
+        copied = 0
+        with os.fdopen(source_descriptor, "rb") as input_stream, os.fdopen(
+            destination_descriptor, "wb"
+        ) as output_stream:
+            source_descriptor = -1
+            destination_descriptor = -1
+            for block in iter(lambda: input_stream.read(1024 * 1024), b""):
+                copied += len(block)
+                actual.update(block)
+                output_stream.write(block)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        if copied != size or actual.hexdigest() != digest:
+            destination.unlink(missing_ok=True)
+            fail(f"local build output failed its exact pin: {source.name}")
+        os.chmod(destination, 0o755)
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+
+
+def generation_texts() -> dict[str, bytes]:
+    return {
+        "BUILD-CLOSURE": build_closure_text().encode("utf-8"),
+        "LICENSE.kilix": KILIX_LICENSE.encode("utf-8"),
+        "NOTICE": NOTICE.encode("utf-8"),
+    }
+
+
+def verify_generation(path: Path = GENERATION, *, expected_owner: int = 0) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        fail(f"cannot inspect runtime generation: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail("runtime generation is not a real directory")
+    if info.st_uid != expected_owner or stat.S_IMODE(info.st_mode) != 0o755:
+        fail("runtime generation has unsafe ownership/mode")
+    expected_names = set(RUNTIME_OUTPUTS) | set(generation_texts()) | {
+        "LICENSE.llama.cpp"
+    }
+    if {entry.name for entry in os.scandir(path)} != expected_names:
+        fail("runtime generation has unexpected entries")
+    for name, (_build_name, size, digest) in RUNTIME_OUTPUTS.items():
+        verified_file_digest(
+            path / name,
+            expected_size=size,
+            expected_hash=digest,
+            expected_owner=expected_owner,
+            expected_mode=0o755,
+        )
+    for name, expected in generation_texts().items():
+        verified_file_digest(
+            path / name,
+            expected_size=len(expected),
+            expected_hash=hashlib.sha256(expected).hexdigest(),
+            expected_owner=expected_owner,
+            expected_mode=0o644,
+        )
+    verified_file_digest(
+        path / "LICENSE.llama.cpp",
+        expected_size=1_078,
+        expected_hash=(
+            "94f29bbed6a22c35b992c5c6ebf0e7c"
+            "92f13b836b90f36f461c9cf2f0f1d010d"
+        ),
+        expected_owner=expected_owner,
+        expected_mode=0o644,
+    )
+
+
+def verify_wrapper(path: Path = WORKER_PATH) -> None:
+    expected = WRAPPER_SOURCE.encode("utf-8")
+    verified_file_digest(
+        path,
+        expected_size=len(expected),
+        expected_hash=hashlib.sha256(expected).hexdigest(),
+        expected_owner=0,
+        expected_mode=0o755,
+    )
+
+
+def stage_generation(work: Path, build_bin: Path) -> Path:
+    stage = work / "generation"
+    stage.mkdir(mode=0o700)
+    for final_name, (build_name, size, digest) in RUNTIME_OUTPUTS.items():
+        copy_verified_output(build_bin / build_name, stage / final_name, size, digest)
+    for name, payload in generation_texts().items():
+        write_exclusive(stage / name, payload, 0o644)
+    llama_license = work / "source/LICENSE"
+    copy_verified_output(
+        llama_license,
+        stage / "LICENSE.llama.cpp",
+        1_078,
+        "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    )
+    os.chmod(stage / "LICENSE.llama.cpp", 0o644)
+    os.chmod(stage, 0o755)
+    verify_generation(stage, expected_owner=os.geteuid())
+    return stage
+
+
+def publish_generation(staged: Path) -> None:
+    destination_stage = Path(
+        tempfile.mkdtemp(prefix=f".{GENERATION_NAME}.stage-", dir=INSTALL_ROOT)
+    )
+    try:
+        destination_stage.rmdir()
+        shutil.copytree(staged, destination_stage, symlinks=False)
+        os.chmod(destination_stage, 0o755)
+        for entry in os.scandir(destination_stage):
+            os.chmod(
+                entry.path,
+                0o755 if entry.name in RUNTIME_OUTPUTS else 0o644,
+            )
+        verify_generation(destination_stage, expected_owner=0)
+        os.rename(destination_stage, GENERATION)
+        fsync_directory(INSTALL_ROOT)
+    finally:
+        if os.path.lexists(destination_stage):
+            shutil.rmtree(destination_stage)
+
+
+def publish_wrapper() -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".kilix-tts-wrapper-", dir=INSTALL_ROOT
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(WRAPPER_SOURCE.encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o755)
+        os.rename(temporary, WORKER_PATH)
+        fsync_directory(INSTALL_ROOT)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def install(archive: Path | None) -> bool:
+    verify_platform()
+    verify_packages()
+    ensure_root_path(SESSION_ROOT, final_mode=0o700)
+    ensure_root_path(INSTALL_ROOT, final_mode=0o755)
+    if shutil.disk_usage(SESSION_ROOT).free < MINIMUM_FREE_BYTES:
+        fail("at least 1 GiB free is required for the local Vulkan build")
+
+    generation_exists = os.path.lexists(GENERATION)
+    wrapper_exists = os.path.lexists(WORKER_PATH)
+    if generation_exists:
+        verify_generation()
+    if wrapper_exists:
+        verify_wrapper()
+    if generation_exists and wrapper_exists:
+        return False
+    if wrapper_exists and not generation_exists:
+        fail("runtime wrapper exists without its generation; refusing to replace it")
+
+    work = Path(tempfile.mkdtemp(prefix="kilix-vulkan-tts.", dir=SESSION_ROOT))
+    os.chmod(work, 0o700)
+    try:
+        if not generation_exists:
+            archive_stage = work / "llama.cpp.tar.gz"
+            if archive is None:
+                download_archive(archive_stage, work)
+            else:
+                copy_and_verify_archive(archive, archive_stage)
+            extract_source(archive_stage, work / "source")
+            build_bin = build_runtime(work)
+            staged = stage_generation(work, build_bin)
+            publish_generation(staged)
+            verify_generation()
+        publish_wrapper()
+        verify_wrapper()
+        return True
+    finally:
+        shutil.rmtree(work)
+
+
+def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="build the optional persistent Kilix Vulkan TTS runtime"
+    )
+    parser.add_argument(
+        "--archive",
+        type=Path,
+        help="use an already downloaded exact source archive instead of the network",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="describe exact inputs and destinations without changing the system",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="verify the installed runtime and direct Debian package pins",
+    )
+    return parser.parse_args(argv)
+
+
+def print_plan() -> None:
+    print("Kilix persistent Vulkan TTS runtime (optional; no model weights)")
+    print(f"  source: {ARCHIVE_URL}")
+    print(f"  source bytes: {ARCHIVE_SIZE}")
+    print(f"  source sha256: {ARCHIVE_SHA256}")
+    print(f"  worker source sha256: {WORKER_SOURCE_SHA256}")
+    print(f"  temporary free space: at least {MINIMUM_FREE_BYTES} bytes")
+    print(f"  installed runtime bytes: {sum(item[1] for item in RUNTIME_OUTPUTS.values())}")
+    print("  local build: two jobs; may take several minutes")
+    print(f"  generation: {GENERATION}")
+    print(f"  launcher: {WORKER_PATH}")
+    print("  Debian direct pins:")
+    for package, version in PACKAGE_VERSIONS.items():
+        print(f"    {package}={version}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_arguments(sys.argv[1:] if argv is None else argv)
+    if args.dry_run:
+        print_plan()
+        return 0
+    try:
+        if args.verify:
+            verify_platform()
+            verify_packages()
+            verify_generation()
+            verify_wrapper()
+            print(f"verified {WORKER_PATH}")
+            return 0
+        if os.geteuid() != 0:
+            fail("installation must run as root (try sudo)")
+        archive = args.archive.resolve(strict=True) if args.archive else None
+        changed = install(archive)
+        print(("installed" if changed else "already verified"), WORKER_PATH)
+        return 0
+    except (InstallFailure, OSError, tarfile.TarError) as error:
+        print(f"plebian-os-install-kilix-vulkan-tts: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

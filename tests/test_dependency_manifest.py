@@ -59,6 +59,10 @@ VULKAN_TTS_CONVERTER_PACKAGES = {
     "python3-yaml=6.0.2-1+b2",
     "python3-tqdm=4.67.1-5",
 }
+VULKAN_TTS_BUILD_PACKAGES = {
+    "libvulkan-dev=1.4.309.0-1",
+    "glslc=2025.2-1",
+}
 
 F100_SANDBOX_PACKAGES = {
     "bubblewrap=0.11.0-2+deb13u1",
@@ -280,10 +284,16 @@ class DependencyManifestTests(unittest.TestCase):
 
     def test_pocket_tts_converter_is_opt_in_and_never_in_an_image(self):
         converter = additive_packages("VULKAN_TTS_CONVERTER_GROUPS")
+        build = additive_packages("VULKAN_TTS_BUILD_GROUPS")
         self.assertEqual(converter, VULKAN_TTS_CONVERTER_PACKAGES)
+        self.assertEqual(build, VULKAN_TTS_BUILD_PACKAGES)
+        # These entries carry an exact version, while the base and preseed sets
+        # carry bare names. Compare on the name alone: comparing the versioned
+        # strings would be disjoint from anything and could never fail.
+        optional_names = {item.split("=", 1)[0] for item in converter | build}
         for other in (install_deps_packages(), preseed_packages(),
                       qualification_packages()):
-            self.assertTrue(converter.isdisjoint(other))
+            self.assertTrue(optional_names.isdisjoint(other))
 
     def test_vulkan_tts_selects_the_converter_and_implies_the_runtime(self):
         installer = ROOT / "provision" / "install-deps.sh"
@@ -299,12 +309,13 @@ class DependencyManifestTests(unittest.TestCase):
             return result.stdout
 
         tts = output("--vulkan-tts")
-        for package in VULKAN_TTS_CONVERTER_PACKAGES | VULKAN_RUNTIME_PACKAGES:
+        for package in (VULKAN_TTS_CONVERTER_PACKAGES | VULKAN_TTS_BUILD_PACKAGES
+                        | VULKAN_RUNTIME_PACKAGES):
             self.assertIn(package, tts)
         for package in VULKAN_NOUVEAU_PACKAGES | VULKAN_QUALIFICATION_PACKAGES:
             self.assertNotIn(package, tts)
 
-        for package in VULKAN_TTS_CONVERTER_PACKAGES:
+        for package in VULKAN_TTS_CONVERTER_PACKAGES | VULKAN_TTS_BUILD_PACKAGES:
             self.assertNotIn(package, output())
             self.assertNotIn(package, output("--vulkan"))
 
