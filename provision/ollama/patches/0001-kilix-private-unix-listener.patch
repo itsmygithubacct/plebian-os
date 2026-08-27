@@ -1,0 +1,241 @@
+diff --git a/cmd/cmd.go b/cmd/cmd.go
+index c56834f..e9aa385 100644
+--- a/cmd/cmd.go
++++ b/cmd/cmd.go
+@@ -2015,19 +2015,26 @@
+ func RunServer(_ *cobra.Command, _ []string) error {
+-	if err := initializeKeypair(); err != nil {
+-		return err
+-	}
+-
+-	ln, err := net.Listen("tcp", envconfig.Host().Host)
+-	if err != nil {
+-		return err
+-	}
+-
+-	err = server.Serve(ln)
+-	if errors.Is(err, http.ErrServerClosed) {
+-		return nil
+-	}
+-
+-	return err
+-}
+-
++	if err := initializeServerIdentity(); err != nil {
++		return err
++	}
++
++	ln, err := listenServer()
++	if err != nil {
++		return err
++	}
++
++	err = server.Serve(ln)
++	if errors.Is(err, http.ErrServerClosed) {
++		return nil
++	}
++
++	return err
++}
++
++func initializeServerIdentity() error {
++	if envconfig.NoCloud() {
++		return nil
++	}
++	return initializeKeypair()
++}
++
+ func initializeKeypair() error {
+diff --git a/cmd/kilix_listener.go b/cmd/kilix_listener.go
+new file mode 100644
+index 0000000..21fd654
+--- /dev/null
++++ b/cmd/kilix_listener.go
+@@ -0,0 +1,88 @@
++package cmd
++
++import (
++	"errors"
++	"fmt"
++	"net"
++	"os"
++	"path/filepath"
++	"strings"
++
++	"github.com/ollama/ollama/envconfig"
++)
++
++const kilixUnixSocketEnv = "OLLAMA_KILIX_SOCKET"
++
++func listenServer() (net.Listener, error) {
++	path := os.Getenv(kilixUnixSocketEnv)
++	if path == "" {
++		return net.Listen("tcp", envconfig.Host().Host)
++	}
++	return listenKilixUnix(path)
++}
++
++func listenKilixUnix(path string) (*net.UnixListener, error) {
++	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
++		return nil, fmt.Errorf("%s must be an absolute, clean path", kilixUnixSocketEnv)
++	}
++	if len([]byte(path)) > 107 {
++		return nil, fmt.Errorf("%s exceeds the Linux Unix-socket path limit", kilixUnixSocketEnv)
++	}
++	if strings.IndexFunc(path, func(character rune) bool {
++		return character < 0x20 || character == 0x7f
++	}) >= 0 {
++		return nil, fmt.Errorf("%s contains a control character", kilixUnixSocketEnv)
++	}
++
++	parent := filepath.Dir(path)
++	parentInfo, err := os.Lstat(parent)
++	if err != nil {
++		return nil, fmt.Errorf("inspect Unix-socket parent: %w", err)
++	}
++	if parentInfo.Mode()&os.ModeSymlink != 0 || !parentInfo.IsDir() {
++		return nil, fmt.Errorf("Unix-socket parent is not a real directory")
++	}
++	if parentInfo.Mode().Perm() != 0o700 {
++		return nil, fmt.Errorf("Unix-socket parent must have mode 0700")
++	}
++	if _, err := os.Lstat(path); err == nil {
++		return nil, fmt.Errorf("refusing occupied Unix-socket path")
++	} else if !errors.Is(err, os.ErrNotExist) {
++		return nil, fmt.Errorf("inspect Unix-socket path: %w", err)
++	}
++
++	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
++	if err != nil {
++		return nil, err
++	}
++	// The supervising process removes only the inode it observed after
++	// readiness.  Never let net.UnixListener unlink a replacement pathname.
++	listener.SetUnlinkOnClose(false)
++	boundInfo, err := os.Lstat(path)
++	if err != nil {
++		listener.Close()
++		return nil, fmt.Errorf("inspect bound Unix socket: %w", err)
++	}
++	cleanup := func() {
++		listener.Close()
++		current, currentErr := os.Lstat(path)
++		if currentErr == nil && os.SameFile(boundInfo, current) {
++			_ = os.Remove(path)
++		}
++	}
++	if boundInfo.Mode().Type() != os.ModeSocket {
++		cleanup()
++		return nil, fmt.Errorf("bound Unix listener is not a socket")
++	}
++	if err := os.Chmod(path, 0o600); err != nil {
++		cleanup()
++		return nil, fmt.Errorf("secure Unix socket: %w", err)
++	}
++	securedInfo, err := os.Lstat(path)
++	if err != nil || !os.SameFile(boundInfo, securedInfo) ||
++		securedInfo.Mode().Type() != os.ModeSocket || securedInfo.Mode().Perm() != 0o600 {
++		cleanup()
++		return nil, fmt.Errorf("Unix socket changed while it was being secured")
++	}
++	return listener, nil
++}
+diff --git a/cmd/kilix_listener_test.go b/cmd/kilix_listener_test.go
+new file mode 100644
+index 0000000..83f185e
+--- /dev/null
++++ b/cmd/kilix_listener_test.go
+@@ -0,0 +1,93 @@
++package cmd
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func shortPrivateDir(t *testing.T) string {
++	t.Helper()
++	directory, err := os.MkdirTemp("/tmp", "kilix-ollama-test-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.RemoveAll(directory) })
++	if err := os.Chmod(directory, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	return directory
++}
++
++func TestListenKilixUnix(t *testing.T) {
++	directory := shortPrivateDir(t)
++	path := filepath.Join(directory, "ollama.sock")
++	listener, err := listenKilixUnix(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	info, err := os.Lstat(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if info.Mode().Type() != os.ModeSocket || info.Mode().Perm() != 0o600 {
++		t.Fatalf("socket mode = %v, want socket 0600", info.Mode())
++	}
++	if listener.Addr().Network() != "unix" || listener.Addr().String() != path {
++		t.Fatalf("listener address = %v, want unix %s", listener.Addr(), path)
++	}
++	if err := listener.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Lstat(path); err != nil {
++		t.Fatalf("supervisor-owned socket path was unlinked on close: %v", err)
++	}
++}
++
++func TestListenKilixUnixRefusesUnsafePaths(t *testing.T) {
++	private := shortPrivateDir(t)
++	occupied := filepath.Join(private, "occupied")
++	if err := os.WriteFile(occupied, []byte("keep"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	openParent := filepath.Join(private, "open")
++	if err := os.Mkdir(openParent, 0o755); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Chmod(openParent, 0o755); err != nil {
++		t.Fatal(err)
++	}
++	cases := []string{
++		"relative.sock",
++		filepath.Join(private, "bad\nname"),
++		filepath.Join(private, strings.Repeat("x", 108)),
++		filepath.Join(openParent, "ollama.sock"),
++		occupied,
++	}
++	for _, path := range cases {
++		t.Run(path, func(t *testing.T) {
++			listener, err := listenKilixUnix(path)
++			if err == nil {
++				listener.Close()
++				t.Fatalf("listenKilixUnix(%q) unexpectedly succeeded", path)
++			}
++		})
++	}
++	content, err := os.ReadFile(occupied)
++	if err != nil || string(content) != "keep" {
++		t.Fatalf("occupied path changed: content=%q err=%v", content, err)
++	}
++}
++
++func TestNoCloudServerCreatesNoRegistryIdentity(t *testing.T) {
++	home := t.TempDir()
++	t.Setenv("HOME", home)
++	t.Setenv("OLLAMA_NO_CLOUD", "1")
++	if err := initializeServerIdentity(); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Lstat(filepath.Join(home, ".ollama")); !os.IsNotExist(err) {
++		t.Fatalf("no-cloud server created registry identity state: %v", err)
++	}
++}

@@ -1,0 +1,777 @@
+#!/usr/bin/python3
+"""Install the exact local Kilix Ollama/Vulkan runtime candidate.
+
+No runtime bundle, model, weight, or public carrier location is shipped here.
+Until an owner-approved carrier exists, installation requires an explicitly
+supplied directory whose complete contents match the qualified local closure.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import platform
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+
+
+INSTALL_ROOT = Path("/usr/lib/plebian-os/ollama")
+SESSION_ROOT = Path("/var/lib/plebian-os/session")
+GENERATION_NAME = "ollama-0.32.14-kilix-unix-vulkan-r1"
+GENERATION = INSTALL_ROOT / GENERATION_NAME
+LAUNCHER = INSTALL_ROOT / "ollama-current"
+MINIMUM_FREE_BYTES = 256 * 1024 * 1024
+CARRIER_STATUS = "owner-reserved-unaccepted"
+UNIX_LISTENER_PATCH_SHA256 = (
+    "ad1ba7475946a22e371156c06cbb8dba"
+    "58d8fd23f916a3bcffa8d937bf35ccde"
+)
+BUILD_CLOSURE = PurePosixPath("usr/share/doc/ollama-runtime/BUILD-CLOSURE")
+BUILD_CLOSURE_SIZE = 1_533
+BUILD_CLOSURE_SHA256 = (
+    "82f1a560d1f9545a30ea907cd8d6cf62"
+    "9dfe3f249c2cb8930b17ad68b1c16ddd"
+)
+NOTICE_ROOT = PurePosixPath("usr/share/doc/ollama-runtime/notices")
+NOTICE_MANIFEST = NOTICE_ROOT / "SHA256SUMS"
+NOTICE_MANIFEST_SIZE = 8_233
+NOTICE_MANIFEST_SHA256 = (
+    "708d4db8b86a2c824226bb1125da0756"
+    "5a46974aed31d17ec574a093cb4a71e0"
+)
+NOTICE_RECORDS = 80
+MAX_NOTICE_BYTES = 1024 * 1024
+
+PACKAGE_VERSIONS = {
+    "firmware-nvidia-graphics": "20250410-2",
+    "libc6": "2.41-12+deb13u3",
+    "libgcc-s1": "14.2.0-19",
+    "libstdc++6": "14.2.0-19",
+    "libvulkan1": "1.4.309.0-1",
+    "mesa-vulkan-drivers": "25.0.7-2+deb13u1",
+}
+
+# Exact regular runtime files: relative path -> (bytes, SHA-256).
+RUNTIME_FILES = {
+    PurePosixPath("usr/bin/ollama"): (
+        35_336_984,
+        "63f9670532c81db5712420defb481732f55bcfdfa5f94b1b45cfb0739626cfbc",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-base.so.0.20.0"): (
+        805_080,
+        "ad0a46da5f62ee60c7892a178e6ab3ec01aac38908a583e4ebc4eefad77ccfe2",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-alderlake.so"): (
+        1_148_248,
+        "3f831dbf112407049b0db479996d2e159a6367809cf5f7c4253a7e9e0469c805",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-cannonlake.so"): (
+        1_391_536,
+        "63df199730381488eefe079b377e656f434f2600340a466dd803ad3c09f0bb15",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-cascadelake.so"): (
+        1_387_440,
+        "04f3e689df40680ef2609611ae265976048d676bc15f2ae37c2026d9163b068f",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-cooperlake.so"): (
+        1_387_600,
+        "a482e5333eb27a8bcf2129a8f5447f3acca39d8f6528c88e13d1216ff535aa13",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-haswell.so"): (
+        1_148_248,
+        "afb7af6495ba55d5eaf10e4b22adf210c2e12b6478aabfcd15bfc6b6110da202",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-icelake.so"): (
+        1_387_440,
+        "ec7782e43ac79c2f7bc926b9e53135d448a13e77daa3286cd7fa692af4b86def",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-ivybridge.so"): (
+        1_089_400,
+        "5a0c7ece2c5c18e096869c6766e8a33b00479a244b5c69d2641b3e327e032d66",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-piledriver.so"): (
+        1_085_304,
+        "95f02dca3e30c73200fddaed928fd1bfda2998cf9bd720379a921a6c061c98e7",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-sandybridge.so"): (
+        1_080_088,
+        "8a45db3cb0800cc3a1f05d04f4cc35fd48e3c2184520853419ee901274643c8b",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-sapphirerapids.so"): (
+        1_691_320,
+        "2c41c975a2db6272fac919811298f8e88323f9550f6ec60eb20fca2313bc0f5e",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-skylakex.so"): (
+        1_391_536,
+        "fdd8b1100e8d9b91e9d9f5764558d1f730f95e5ff2be5cb2496b5975cc950b7a",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-sse42.so"): (
+        917_752,
+        "f0987508e458ae14a64ff0773780ac8a323eaf375a5da68c8471bd3a18153d3b",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-x64.so"): (
+        889_200,
+        "0c12c095d86d2c3dc50e59d6cf25bdb075f79ce413cdb8172fdeae74da6f85d1",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml-cpu-zen4.so"): (
+        1_387_600,
+        "7bb984386244872f90fd619a95a1c38b9c1080d0e624649e92fed2cf7fef6b1c",
+    ),
+    PurePosixPath("usr/lib/ollama/libggml.so.0.20.0"): (
+        47_640,
+        "377798ff94687686a9013dd691ef94b99e536c08459bf8c7f236dd01fd2fd412",
+    ),
+    PurePosixPath("usr/lib/ollama/libllama-common.so.0.1.0"): (
+        4_488_744,
+        "29d6789f2e3e7c35b2d85fd7afdd4cd6d43ac8c44593dbb92e3e7019d7995c31",
+    ),
+    PurePosixPath("usr/lib/ollama/libllama-quantize-impl.so"): (
+        68_280,
+        "033f8c0495276b74db70039269998132f7a8ab28c17d24b166bb05961c1d2f61",
+    ),
+    PurePosixPath("usr/lib/ollama/libllama-server-impl.so"): (
+        3_437_528,
+        "3cd3b4f2fda28a2c921f60914343e7bfb568caaaaa1d763505fd48e050e1b113",
+    ),
+    PurePosixPath("usr/lib/ollama/libllama.so.0.1.0"): (
+        3_814_192,
+        "79c08afc2881e1b30ea85d56fa2e7f20eae8bf2f11aecc9f4d8ba74ea2265f6b",
+    ),
+    PurePosixPath("usr/lib/ollama/libmtmd.so.0.1.0"): (
+        1_834_984,
+        "e6ecc6cace8a9bf38e6df1c829949c6b4b0be1640c4d9ec65b225ad307db4cfb",
+    ),
+    PurePosixPath("usr/lib/ollama/llama-quantize"): (
+        14_696,
+        "ad9c01681dd183b502d307d7e9ec2552ea978ee717f5515ad76b7aa3d25b60e0",
+    ),
+    PurePosixPath("usr/lib/ollama/llama-server"): (
+        14_696,
+        "b4542b31918478e1a8b8b19f2bd9c4252ace18ffe18062732ff419be23854f9c",
+    ),
+    PurePosixPath("usr/lib/ollama/vulkan/libggml-vulkan.so"): (
+        52_400_352,
+        "c39641767ba8bca4e021684a80e6c888cc87f39d7ec96aa26a736ca42751760e",
+    ),
+}
+
+RUNTIME_LINKS = {
+    PurePosixPath("usr/lib/ollama/libggml-base.so"): "libggml-base.so.0",
+    PurePosixPath("usr/lib/ollama/libggml-base.so.0"): "libggml-base.so.0.20.0",
+    PurePosixPath("usr/lib/ollama/libggml.so"): "libggml.so.0",
+    PurePosixPath("usr/lib/ollama/libggml.so.0"): "libggml.so.0.20.0",
+    PurePosixPath("usr/lib/ollama/libllama-common.so"): "libllama-common.so.0",
+    PurePosixPath("usr/lib/ollama/libllama-common.so.0"): "libllama-common.so.0.1.0",
+    PurePosixPath("usr/lib/ollama/libllama.so"): "libllama.so.0",
+    PurePosixPath("usr/lib/ollama/libllama.so.0"): "libllama.so.0.1.0",
+    PurePosixPath("usr/lib/ollama/libmtmd.so"): "libmtmd.so.0",
+    PurePosixPath("usr/lib/ollama/libmtmd.so.0"): "libmtmd.so.0.1.0",
+}
+
+KILIX_MODIFICATIONS = f"""# Kilix runtime delta
+
+This development candidate adds a private Unix-listener option and suppresses
+registry identity creation when Ollama's no-cloud mode is active. The exact
+downstream patch is carried in Plebian OS as
+`provision/ollama/patches/0001-kilix-private-unix-listener.patch`, SHA-256
+`{UNIX_LISTENER_PATCH_SHA256}`.
+
+The bundled R3 modification notice describes the dependency and llama.cpp
+compatibility deltas that precede this listener change. This record extends,
+and does not replace, that notice. The candidate is unfrozen and not release
+admitted.
+"""
+
+METADATA = f"""schema=plebian.kilix-ollama-runtime/v0-unfrozen
+schema_status=development-unfrozen
+release_admission=false
+carrier_status={CARRIER_STATUS}
+ollama_version=0.32.14+plebian.security-license-r3
+ollama_upstream_commit=d67ad83426633195089509347ffd4fe795120198
+llama_cpp_commit=7e4c0a96880dae4fc4268ad441f8a6446bd5460a
+unix_listener_patch_sha256={UNIX_LISTENER_PATCH_SHA256}
+runtime_files={len(RUNTIME_FILES)}
+runtime_bytes={sum(size for size, _digest in RUNTIME_FILES.values())}
+model_or_weight_artifacts=false
+"""
+
+WRAPPER_SOURCE = f"""#!/bin/sh
+set -eu
+exec {GENERATION}/usr/bin/ollama "$@"
+"""
+
+GENERATED_FILES = {
+    PurePosixPath("usr/share/doc/ollama-runtime/KILIX-MODIFICATIONS.md"):
+        KILIX_MODIFICATIONS.encode("utf-8"),
+    PurePosixPath("usr/share/doc/ollama-runtime/KILIX-INSTALLER-METADATA"):
+        METADATA.encode("utf-8"),
+}
+
+_MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  \./([^\r\n]+)\Z")
+
+
+class InstallFailure(RuntimeError):
+    """A safe refusal from the optional local-closure installer."""
+
+
+def fail(message: str) -> None:
+    raise InstallFailure(message)
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def require_root_directory(path: Path, *, private: bool = False) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        fail(f"cannot inspect {path}: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail(f"not a real directory: {path}")
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid != 0 or mode & 0o022:
+        fail(f"directory is not root-controlled: {path}")
+    if private and mode & 0o077:
+        fail(f"privileged staging directory is not private: {path}")
+
+
+def ensure_root_path(path: Path, *, final_mode: int) -> None:
+    current = Path("/")
+    require_root_directory(current)
+    for part in path.parts[1:]:
+        current /= part
+        if not os.path.lexists(current):
+            os.mkdir(current, final_mode if current == path else 0o755)
+        require_root_directory(
+            current,
+            private=current == path and final_mode == 0o700,
+        )
+    if stat.S_IMODE(path.stat().st_mode) != final_mode:
+        os.chmod(path, final_mode)
+        require_root_directory(path, private=final_mode == 0o700)
+
+
+def verify_platform() -> None:
+    if platform.system() != "Linux" or platform.machine() != "x86_64":
+        fail("this candidate is limited to Linux x86_64")
+    result = subprocess.run(
+        ["/usr/bin/dpkg", "--print-architecture"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        check=False,
+    )
+    if result.returncode != 0 or result.stdout.strip() != "amd64":
+        fail("the Debian package architecture must be amd64")
+
+
+def verify_packages() -> None:
+    for package, expected in PACKAGE_VERSIONS.items():
+        result = subprocess.run(
+            ["/usr/bin/dpkg-query", "-W", "-f=${Version}", package],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            check=False,
+        )
+        if result.returncode != 0 or result.stdout != expected:
+            fail(
+                f"{package} must be exactly {expected}; first run "
+                "plebian-os-install-deps --vulkan-nouveau"
+            )
+
+
+def digest_file(
+    path: Path,
+    *,
+    expected_size: int | None = None,
+    expected_hash: str | None = None,
+    expected_owner: int | None = None,
+    expected_mode: int | None = None,
+) -> tuple[int, str]:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as error:
+        fail(f"cannot open closure file {path}: {error}")
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            fail(f"closure entry is not a regular file: {path}")
+        if expected_size is not None and info.st_size != expected_size:
+            fail(f"closure entry has an unexpected size: {path}")
+        if expected_owner is not None and info.st_uid != expected_owner:
+            fail(f"closure entry has an unexpected owner: {path}")
+        if expected_mode is not None and stat.S_IMODE(info.st_mode) != expected_mode:
+            fail(f"closure entry has an unexpected mode: {path}")
+        digest = hashlib.sha256()
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        value = digest.hexdigest()
+        if expected_hash is not None and value != expected_hash:
+            fail(f"closure entry failed SHA-256 verification: {path}")
+        return info.st_size, value
+    finally:
+        os.close(descriptor)
+
+
+def read_exact_file(path: Path, *, size: int, digest: str) -> bytes:
+    digest_file(path, expected_size=size, expected_hash=digest)
+    payload = path.read_bytes()
+    if len(payload) != size or hashlib.sha256(payload).hexdigest() != digest:
+        fail(f"closure entry changed during verification: {path}")
+    return payload
+
+
+def parse_notice_manifest(payload: bytes) -> dict[PurePosixPath, str]:
+    try:
+        text = payload.decode("utf-8", errors="strict")
+    except UnicodeError as error:
+        raise InstallFailure("notice manifest is not UTF-8") from error
+    records: dict[PurePosixPath, str] = {}
+    lines = text.splitlines()
+    if len(lines) != NOTICE_RECORDS or not text.endswith("\n"):
+        fail("notice manifest has an unexpected record count or terminator")
+    for line in lines:
+        match = _MANIFEST_LINE.fullmatch(line)
+        if match is None:
+            fail("notice manifest contains a malformed record")
+        relative = PurePosixPath(match.group(2))
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or ".." in relative.parts
+            or relative in records
+        ):
+            fail("notice manifest contains an unsafe or duplicate path")
+        records[relative] = match.group(1)
+    return records
+
+
+def closure_inventory(root: Path) -> tuple[set[PurePosixPath], dict[PurePosixPath, str], set[PurePosixPath]]:
+    files: set[PurePosixPath] = set()
+    links: dict[PurePosixPath, str] = {}
+    directories: set[PurePosixPath] = {PurePosixPath(".")}
+    for current, directory_names, file_names in os.walk(root, topdown=True, followlinks=False):
+        current_path = Path(current)
+        relative_root = PurePosixPath(current_path.relative_to(root).as_posix())
+        for name in list(directory_names):
+            path = current_path / name
+            relative = relative_root / name
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                links[relative] = os.readlink(path)
+                directory_names.remove(name)
+            elif stat.S_ISDIR(info.st_mode):
+                directories.add(relative)
+            else:
+                fail(f"closure directory entry has an unsafe type: {relative}")
+        for name in file_names:
+            path = current_path / name
+            relative = relative_root / name
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                links[relative] = os.readlink(path)
+            elif stat.S_ISREG(info.st_mode):
+                files.add(relative)
+            else:
+                fail(f"closure file entry has an unsafe type: {relative}")
+    return files, links, directories
+
+
+def parent_directories(paths: set[PurePosixPath]) -> set[PurePosixPath]:
+    directories = {PurePosixPath(".")}
+    for path in paths:
+        parent = path.parent
+        while parent != PurePosixPath("."):
+            directories.add(parent)
+            parent = parent.parent
+    return directories
+
+
+def verify_source_closure(root: Path) -> dict[PurePosixPath, tuple[int, str, int]]:
+    try:
+        info = root.lstat()
+    except OSError as error:
+        fail(f"cannot inspect local runtime closure: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail("local runtime closure is not a real directory")
+
+    manifest_payload = read_exact_file(
+        root.joinpath(*NOTICE_MANIFEST.parts),
+        size=NOTICE_MANIFEST_SIZE,
+        digest=NOTICE_MANIFEST_SHA256,
+    )
+    notices = parse_notice_manifest(manifest_payload)
+    expected: dict[PurePosixPath, tuple[int, str, int]] = {}
+    for relative, (size, digest) in RUNTIME_FILES.items():
+        expected[relative] = (size, digest, 0o755)
+    expected[BUILD_CLOSURE] = (BUILD_CLOSURE_SIZE, BUILD_CLOSURE_SHA256, 0o644)
+    expected[NOTICE_MANIFEST] = (
+        NOTICE_MANIFEST_SIZE,
+        NOTICE_MANIFEST_SHA256,
+        0o644,
+    )
+
+    notice_bytes = 0
+    for relative, digest in notices.items():
+        path = NOTICE_ROOT / relative
+        size, actual = digest_file(root.joinpath(*path.parts), expected_hash=digest)
+        notice_bytes += size
+        if notice_bytes > MAX_NOTICE_BYTES:
+            fail("notice closure exceeds its byte bound")
+        expected[path] = (size, actual, 0o644)
+
+    files, links, directories = closure_inventory(root)
+    if files != set(expected):
+        fail("local runtime closure has missing or unexpected regular files")
+    if links != RUNTIME_LINKS:
+        fail("local runtime closure has missing or unexpected symbolic links")
+    wanted_directories = parent_directories(files | set(links))
+    if directories != wanted_directories:
+        fail("local runtime closure has missing or unexpected directories")
+
+    for relative, (size, digest, _mode) in expected.items():
+        digest_file(
+            root.joinpath(*relative.parts),
+            expected_size=size,
+            expected_hash=digest,
+        )
+    return expected
+
+
+def write_exclusive(path: Path, payload: bytes, mode: int) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        mode,
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(path, mode)
+
+
+def copy_exact_file(
+    source: Path,
+    destination: Path,
+    *,
+    size: int,
+    digest: str,
+    mode: int,
+) -> None:
+    source_descriptor = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    destination_descriptor = -1
+    try:
+        source_info = os.fstat(source_descriptor)
+        if not stat.S_ISREG(source_info.st_mode) or source_info.st_size != size:
+            fail(f"source closure entry changed: {source}")
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            mode,
+        )
+        actual = hashlib.sha256()
+        copied = 0
+        with os.fdopen(source_descriptor, "rb") as input_stream, os.fdopen(
+            destination_descriptor, "wb"
+        ) as output_stream:
+            source_descriptor = -1
+            destination_descriptor = -1
+            for block in iter(lambda: input_stream.read(1024 * 1024), b""):
+                copied += len(block)
+                actual.update(block)
+                output_stream.write(block)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        if copied != size or actual.hexdigest() != digest:
+            fail(f"source closure entry changed during copy: {source}")
+        os.chmod(destination, mode)
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+
+
+def create_directories(root: Path, paths: set[PurePosixPath]) -> None:
+    for relative in sorted(paths, key=lambda item: (len(item.parts), item.parts)):
+        if relative == PurePosixPath("."):
+            continue
+        directory = root.joinpath(*relative.parts)
+        directory.mkdir(mode=0o755)
+        os.chmod(directory, 0o755)
+
+
+def verify_generation(path: Path = GENERATION, *, expected_owner: int = 0) -> None:
+    try:
+        root_info = path.lstat()
+    except OSError as error:
+        fail(f"installed runtime generation is unavailable: {error}")
+    if (
+        stat.S_ISLNK(root_info.st_mode)
+        or not stat.S_ISDIR(root_info.st_mode)
+        or root_info.st_uid != expected_owner
+        or stat.S_IMODE(root_info.st_mode) != 0o755
+    ):
+        fail("installed runtime generation root is unsafe")
+
+    manifest_payload = read_exact_file(
+        path.joinpath(*NOTICE_MANIFEST.parts),
+        size=NOTICE_MANIFEST_SIZE,
+        digest=NOTICE_MANIFEST_SHA256,
+    )
+    notices = parse_notice_manifest(manifest_payload)
+    expected_files = (
+        set(RUNTIME_FILES)
+        | {BUILD_CLOSURE, NOTICE_MANIFEST}
+        | {NOTICE_ROOT / relative for relative in notices}
+        | set(GENERATED_FILES)
+    )
+    files, links, directories = closure_inventory(path)
+    if files != expected_files or links != RUNTIME_LINKS:
+        fail("installed runtime generation inventory is not exact")
+    if directories != parent_directories(files | set(links)):
+        fail("installed runtime generation directory inventory is not exact")
+
+    for relative, (size, digest) in RUNTIME_FILES.items():
+        digest_file(
+            path.joinpath(*relative.parts),
+            expected_size=size,
+            expected_hash=digest,
+            expected_owner=expected_owner,
+            expected_mode=0o755,
+        )
+    digest_file(
+        path.joinpath(*BUILD_CLOSURE.parts),
+        expected_size=BUILD_CLOSURE_SIZE,
+        expected_hash=BUILD_CLOSURE_SHA256,
+        expected_owner=expected_owner,
+        expected_mode=0o644,
+    )
+    digest_file(
+        path.joinpath(*NOTICE_MANIFEST.parts),
+        expected_size=NOTICE_MANIFEST_SIZE,
+        expected_hash=NOTICE_MANIFEST_SHA256,
+        expected_owner=expected_owner,
+        expected_mode=0o644,
+    )
+    for relative, digest in notices.items():
+        digest_file(
+            path.joinpath(*(NOTICE_ROOT / relative).parts),
+            expected_hash=digest,
+            expected_owner=expected_owner,
+            expected_mode=0o644,
+        )
+    for relative, payload in GENERATED_FILES.items():
+        digest_file(
+            path.joinpath(*relative.parts),
+            expected_size=len(payload),
+            expected_hash=hashlib.sha256(payload).hexdigest(),
+            expected_owner=expected_owner,
+            expected_mode=0o644,
+        )
+    for relative, target in RUNTIME_LINKS.items():
+        link = path.joinpath(*relative.parts)
+        info = link.lstat()
+        if not stat.S_ISLNK(info.st_mode) or info.st_uid != expected_owner:
+            fail(f"installed runtime link is unsafe: {relative}")
+        if os.readlink(link) != target:
+            fail(f"installed runtime link target drifted: {relative}")
+    for relative in directories:
+        directory = path if relative == PurePosixPath(".") else path.joinpath(*relative.parts)
+        info = directory.lstat()
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != expected_owner
+            or stat.S_IMODE(info.st_mode) != 0o755
+        ):
+            fail(f"installed runtime directory is unsafe: {relative}")
+
+
+def verify_launcher(path: Path = LAUNCHER) -> None:
+    payload = WRAPPER_SOURCE.encode("utf-8")
+    digest_file(
+        path,
+        expected_size=len(payload),
+        expected_hash=hashlib.sha256(payload).hexdigest(),
+        expected_owner=0,
+        expected_mode=0o755,
+    )
+
+
+def stage_generation(source: Path, work: Path) -> Path:
+    expected = verify_source_closure(source)
+    stage = work / "generation"
+    stage.mkdir(mode=0o755)
+    os.chmod(stage, 0o755)
+    all_paths = set(expected) | set(RUNTIME_LINKS) | set(GENERATED_FILES)
+    create_directories(stage, parent_directories(all_paths))
+    for relative, (size, digest, mode) in expected.items():
+        copy_exact_file(
+            source.joinpath(*relative.parts),
+            stage.joinpath(*relative.parts),
+            size=size,
+            digest=digest,
+            mode=mode,
+        )
+    for relative, target in RUNTIME_LINKS.items():
+        os.symlink(target, stage.joinpath(*relative.parts))
+    for relative, payload in GENERATED_FILES.items():
+        write_exclusive(stage.joinpath(*relative.parts), payload, 0o644)
+    verify_generation(stage, expected_owner=os.geteuid())
+    return stage
+
+
+def publish_generation(staged: Path) -> None:
+    destination_stage = Path(
+        tempfile.mkdtemp(prefix=f".{GENERATION_NAME}.stage-", dir=INSTALL_ROOT)
+    )
+    try:
+        destination_stage.rmdir()
+        shutil.copytree(staged, destination_stage, symlinks=True)
+        verify_generation(destination_stage, expected_owner=0)
+        os.rename(destination_stage, GENERATION)
+        fsync_directory(INSTALL_ROOT)
+    finally:
+        if os.path.lexists(destination_stage):
+            shutil.rmtree(destination_stage)
+
+
+def publish_launcher() -> None:
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".ollama-wrapper-", dir=INSTALL_ROOT
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(WRAPPER_SOURCE.encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o755)
+        os.rename(temporary, LAUNCHER)
+        fsync_directory(INSTALL_ROOT)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def install(source: Path) -> bool:
+    verify_platform()
+    verify_packages()
+    ensure_root_path(SESSION_ROOT, final_mode=0o700)
+    ensure_root_path(INSTALL_ROOT, final_mode=0o755)
+    if shutil.disk_usage(SESSION_ROOT).free < MINIMUM_FREE_BYTES:
+        fail("at least 256 MiB free is required to stage the local runtime closure")
+
+    generation_exists = os.path.lexists(GENERATION)
+    launcher_exists = os.path.lexists(LAUNCHER)
+    if generation_exists:
+        verify_generation()
+    if launcher_exists:
+        verify_launcher()
+    if generation_exists and launcher_exists:
+        return False
+    if launcher_exists and not generation_exists:
+        fail("runtime launcher exists without its generation; refusing to replace it")
+
+    work = Path(tempfile.mkdtemp(prefix="kilix-ollama-runtime.", dir=SESSION_ROOT))
+    os.chmod(work, 0o700)
+    try:
+        if not generation_exists:
+            staged = stage_generation(source, work)
+            publish_generation(staged)
+            verify_generation()
+        publish_launcher()
+        verify_launcher()
+        return True
+    finally:
+        shutil.rmtree(work)
+
+
+def print_plan() -> None:
+    print("Kilix Ollama private-Unix Vulkan runtime (optional; no models or weights)")
+    print(f"  carrier: {CARRIER_STATUS}; an exact local closure is required")
+    print("  upstream Ollama: 0.32.14 @ d67ad83426633195089509347ffd4fe795120198")
+    print("  upstream llama.cpp: 7e4c0a96880dae4fc4268ad441f8a6446bd5460a")
+    print(f"  Unix listener patch sha256: {UNIX_LISTENER_PATCH_SHA256}")
+    print(f"  runtime files: {len(RUNTIME_FILES)}")
+    print(f"  runtime bytes: {sum(size for size, _digest in RUNTIME_FILES.values())}")
+    print(f"  generation: {GENERATION}")
+    print(f"  launcher: {LAUNCHER}")
+    print("  Debian direct pins:")
+    for package, version in PACKAGE_VERSIONS.items():
+        print(f"    {package}={version}")
+
+
+def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="install the exact local Kilix Ollama/Vulkan runtime closure"
+    )
+    parser.add_argument(
+        "--closure",
+        type=Path,
+        help="exact locally supplied runtime directory (no carrier is accepted yet)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="describe exact inputs and destinations without changing the system",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="verify the installed runtime and exact Debian runtime pins",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_arguments(sys.argv[1:] if argv is None else argv)
+    if sum((args.closure is not None, args.dry_run, args.verify)) != 1:
+        print(
+            "plebian-os-install-kilix-ollama-runtime: choose exactly one of "
+            "--closure PATH, --dry-run, or --verify",
+            file=sys.stderr,
+        )
+        return 2
+    if args.dry_run:
+        print_plan()
+        return 0
+    try:
+        if args.verify:
+            verify_platform()
+            verify_packages()
+            verify_generation()
+            verify_launcher()
+            print(f"verified {LAUNCHER}")
+            return 0
+        if os.geteuid() != 0:
+            fail("installation must run as root (try sudo)")
+        source = args.closure.resolve(strict=True)
+        changed = install(source)
+        print(("installed" if changed else "already verified"), LAUNCHER)
+        return 0
+    except (InstallFailure, OSError) as error:
+        print(f"plebian-os-install-kilix-ollama-runtime: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

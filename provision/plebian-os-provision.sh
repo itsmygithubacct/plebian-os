@@ -879,6 +879,8 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/bin/plebian-os-nvidia-driver
     /usr/local/sbin/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
@@ -3850,6 +3852,54 @@ if [ -n "$OLLAMA_CONVERTER_INSTALLER_SRC" ]; then
     fi
 else
     warn "optional Ollama converter installer not found; continuing without it"
+fi
+
+# Likewise, ship the exact source-build helper without invoking it. The native
+# runtime and every model remain a deliberate, later opt-in.
+VULKAN_TTS_INSTALLER_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-install-kilix-vulkan-tts" \
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts; do
+    [ -r "$cand" ] && VULKAN_TTS_INSTALLER_SRC="$cand" && break
+done
+if [ -n "$VULKAN_TTS_INSTALLER_SRC" ]; then
+    if [ "$VULKAN_TTS_INSTALLER_SRC" = \
+        /usr/local/sbin/plebian-os-install-kilix-vulkan-tts ]; then
+        log "optional Kilix Vulkan TTS installer already present at /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
+    elif [ "$DRY_RUN" = 1 ]; then
+        log "installing optional Kilix Vulkan TTS installer -> /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
+        echo "    + install -m 0755 $VULKAN_TTS_INSTALLER_SRC /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
+    else
+        log "installing optional Kilix Vulkan TTS installer -> /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
+        install -m 0755 "$VULKAN_TTS_INSTALLER_SRC" \
+            /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    fi
+else
+    warn "optional Kilix Vulkan TTS installer not found; continuing without it"
+fi
+
+# The verified Ollama runtime carrier is owner-reserved and not yet accepted.
+# Ship its exact local-closure installer, but never invoke it during provision.
+OLLAMA_RUNTIME_INSTALLER_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-install-kilix-ollama-runtime" \
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime; do
+    [ -r "$cand" ] && OLLAMA_RUNTIME_INSTALLER_SRC="$cand" && break
+done
+if [ -n "$OLLAMA_RUNTIME_INSTALLER_SRC" ]; then
+    if [ "$OLLAMA_RUNTIME_INSTALLER_SRC" = \
+        /usr/local/sbin/plebian-os-install-kilix-ollama-runtime ]; then
+        log "optional Kilix Ollama runtime installer already present at /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+    elif [ "$DRY_RUN" = 1 ]; then
+        log "installing optional Kilix Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        echo "    + install -m 0755 $OLLAMA_RUNTIME_INSTALLER_SRC /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+    else
+        log "installing optional Kilix Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        install -m 0755 "$OLLAMA_RUNTIME_INSTALLER_SRC" \
+            /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    fi
+else
+    warn "optional Kilix Ollama runtime installer not found; continuing without it"
 fi
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap

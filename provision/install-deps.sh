@@ -16,7 +16,7 @@
 #   plebian-os-install-deps --vulkan        # add the Mesa Vulkan runtime
 #   plebian-os-install-deps --vulkan-nouveau # add Mesa Vulkan + Nouveau firmware
 #   plebian-os-install-deps --vulkan-tts    # add Vulkan plus the optional,
-#                                           # pinned Pocket converter closure
+#                                           # pinned Pocket converter/build closure
 #   plebian-os-install-deps --qualification --vulkan
 #                                           # also add vulkaninfo for qualification
 #
@@ -234,6 +234,15 @@ VULKAN_TTS_CONVERTER_GROUPS=(
     "Pocket TTS local converter :: python3-torch=2.6.0+dfsg-7 python3-numpy=1:2.2.4+ds-1 python3-sentencepiece=0.2.0-1+b3 python3-protobuf=3.21.12-11+deb13u1 python3-yaml=6.0.2-1+b2 python3-tqdm=4.67.1-5"
 )
 
+# The persistent speech runtime is also built locally and published only after
+# its output closure matches exact hashes. The base toolchain already supplies
+# CMake and the compiler; these two opt-in packages provide the pinned Vulkan
+# headers and shader compiler. Neither is needed after the build, but automatic
+# removal is unsafe because another local source build may share them.
+VULKAN_TTS_BUILD_GROUPS=(
+    "Pocket TTS Vulkan local build :: libvulkan-dev=1.4.309.0-1 glslc=2025.2-1"
+)
+
 
 if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
     warn "must run as root (try: sudo $0)"; exit 1
@@ -285,6 +294,10 @@ if [ "$VULKAN_TTS" -eq 1 ]; then
     for entry in "${VULKAN_TTS_CONVERTER_GROUPS[@]}"; do
         name=${entry%% :: *}; pkgs=${entry#* :: }
         install_package_group "optional converter group" "$name" "$pkgs"
+    done
+    for entry in "${VULKAN_TTS_BUILD_GROUPS[@]}"; do
+        name=${entry%% :: *}; pkgs=${entry#* :: }
+        install_package_group "optional build group" "$name" "$pkgs"
     done
 fi
 

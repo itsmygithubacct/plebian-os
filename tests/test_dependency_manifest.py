@@ -114,6 +114,10 @@ VULKAN_TTS_CONVERTER_PACKAGES = {
     "python3-yaml=6.0.2-1+b2",
     "python3-tqdm=4.67.1-5",
 }
+VULKAN_TTS_BUILD_PACKAGES = {
+    "libvulkan-dev=1.4.309.0-1",
+    "glslc=2025.2-1",
+}
 
 # Kilix IceWM is built on first selection. Plebian-OS 0.2.0 must provide the
 # complete, explicit pkg-config closure used by the pinned IceWM configuration
@@ -218,10 +222,14 @@ class DependencyManifestTests(unittest.TestCase):
 
     def test_pocket_converter_is_exact_and_opt_in(self):
         converter = additive_packages("VULKAN_TTS_CONVERTER_GROUPS")
+        build = additive_packages("VULKAN_TTS_BUILD_GROUPS")
         self.assertEqual(converter, VULKAN_TTS_CONVERTER_PACKAGES)
-        converter_names = {item.split("=", 1)[0] for item in converter}
-        self.assertTrue(converter_names.isdisjoint(install_deps_packages()))
-        self.assertTrue(converter_names.isdisjoint(preseed_packages()))
+        self.assertEqual(build, VULKAN_TTS_BUILD_PACKAGES)
+        optional_names = {
+            item.split("=", 1)[0] for item in converter | build
+        }
+        self.assertTrue(optional_names.isdisjoint(install_deps_packages()))
+        self.assertTrue(optional_names.isdisjoint(preseed_packages()))
 
     def test_vulkan_modes_select_the_exact_dry_run_closures(self):
         installer = ROOT / "provision" / "install-deps.sh"
@@ -258,7 +266,7 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertIn("xserver-xephyr", qualified)
         for package in VULKAN_RUNTIME_PACKAGES:
             self.assertIn(package, tts)
-        for package in VULKAN_TTS_CONVERTER_PACKAGES:
+        for package in VULKAN_TTS_CONVERTER_PACKAGES | VULKAN_TTS_BUILD_PACKAGES:
             self.assertNotIn(package, base)
             self.assertNotIn(package, vulkan)
             self.assertNotIn(package, nouveau)

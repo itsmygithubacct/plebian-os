@@ -36,20 +36,55 @@ ICDs, while `--vulkan-nouveau` adds the Nouveau firmware closure. Combining a
 Vulkan mode with `--qualification` adds `vulkaninfo`; none of these packages is
 added to the base-image manifest by this codepath.
 
-Pocket TTS local conversion is a second, larger opt-in. It ships neither model
-weights nor generated GGUF files. A user first runs
-`sudo plebian-os-install-deps --vulkan-tts`, which selects the common Vulkan
-runtime and six exact direct Debian converter pins, then runs
-`sudo plebian-os-install-ollama-converter`. The latter downloads one immutable
-llama.cpp source archive from GitHub, verifies its size and SHA-256, extracts a
-1.6 MiB Pocket-only source tree, retains the MIT license and modification
+Pocket TTS conversion and its persistent Vulkan runtime are separate explicit
+opt-ins. The image ships neither model weights, generated GGUF files, nor
+native runtime binaries. Prepare their exact Debian prerequisites and install
+the two source closures with:
+
+```sh
+sudo plebian-os-install-deps --vulkan-tts
+sudo plebian-os-install-ollama-converter
+sudo plebian-os-install-kilix-vulkan-tts
+```
+
+On Nouveau, combine `--vulkan-tts` with `--vulkan-nouveau` so the firmware
+closure is present too. The dependency command selects the common Vulkan
+runtime, six direct Pocket-converter pins, and the two Vulkan build pins. The
+converter installer verifies one immutable llama.cpp archive, extracts a
+1.6 MiB Pocket-only source tree, retains its MIT license and modification
 notice, and installs a fixed offline wrapper. The measured Debian converter
-closure is roughly 150 MiB of package downloads and 0.8 GiB installed; it is
-therefore never selected by provisioning, qualification, preseed, or a plain
-Vulkan install. Its Python packages are needed for local conversion, not for
-subsequent Vulkan inference, and are not automatically removed because another
-local application may share them. This closure is still a 0.2.1 candidate, not
-an accepted release schema or model-publication authorization.
+closure is roughly 150 MiB to download and 0.8 GiB installed. Those Python
+packages are needed only for local conversion and are not automatically
+removed because another local application may share them.
+
+The runtime installer fetches the same 36,889,653-byte source archive, builds
+locally with two jobs, and admits only an independently reproduced exact
+66,532,472-byte runtime closure. It needs at least 1 GiB of temporary free
+space; its source archive and build tree are discarded after atomic
+installation. `--archive PATH` lets both installers reuse an already downloaded
+exact archive. A first request may also spend substantial time compiling the
+Vulkan shader cache. None of these commands runs during provisioning,
+qualification, preseed, or a plain Vulkan install. These closures remain 0.2.1
+candidates, not accepted release schemas or model-publication authorization.
+
+The patched Ollama/Vulkan service runtime follows the same small-image policy.
+Plebian OS carries only
+`plebian-os-install-kilix-ollama-runtime` and the auditable Unix-listener patch,
+not the 119,645,888-byte native closure. Its public carrier remains
+owner-reserved and unaccepted, so this development installer deliberately has
+no download URL and fails closed unless an operator supplies the exact local
+closure:
+
+```sh
+sudo plebian-os-install-deps --vulkan-nouveau
+sudo plebian-os-install-kilix-ollama-runtime --closure /path/to/exact/closure
+```
+
+It verifies all 25 executable/library files, ten relative library links, the
+complete bounded third-party notice set, the exact Debian/NVK runtime tuple,
+and the tracked listener delta before atomic installation. This local-closure
+path supports development without publishing the binary candidate or implying
+that a release carrier has been approved.
 
 The wider 0.2.1 program—including interactive identity setup, the Debian and
 Kilix/kitty refresh, expanded system monitoring and model sizing, coordinated

@@ -798,6 +798,8 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
@@ -905,6 +907,8 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
@@ -1849,6 +1853,8 @@ stage_and_validate_os_layer() {
         "$prov/plebian-os-provision.sh"
         "$prov/install-deps.sh"
         "$prov/plebian-os-install-ollama-converter"
+        "$prov/plebian-os-install-kilix-vulkan-tts"
+        "$prov/plebian-os-install-kilix-ollama-runtime"
         "$prov/plebian-os-passwd"
         "$prov/plebian-os-update.sh"
         "$prov/plebian-os-firstboot.service"
@@ -1876,6 +1882,10 @@ stage_and_validate_os_layer() {
     install -m 0755 "$prov/install-deps.sh" "$stage/plebian-os-install-deps"
     install -m 0755 "$prov/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-ollama-converter"
+    install -m 0755 "$prov/plebian-os-install-kilix-vulkan-tts" \
+        "$stage/plebian-os-install-kilix-vulkan-tts"
+    install -m 0755 "$prov/plebian-os-install-kilix-ollama-runtime" \
+        "$stage/plebian-os-install-kilix-ollama-runtime"
     install -m 0755 "$prov/plebian-os-passwd" "$stage/plebian-os-passwd"
     install -m 0755 "$prov/plebian-os-update.sh" "$stage/plebian-os-update"
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
@@ -1892,7 +1902,9 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-select-closure" \
         || die "staged OS-layer shell validation failed"
     python3 - "$stage/plebian-os-passwd" \
-        "$stage/plebian-os-install-ollama-converter" <<'PY' \
+        "$stage/plebian-os-install-ollama-converter" \
+        "$stage/plebian-os-install-kilix-vulkan-tts" \
+        "$stage/plebian-os-install-kilix-ollama-runtime" <<'PY' \
         || die "staged Python helper validation failed"
 import pathlib
 import sys
@@ -2048,6 +2060,8 @@ names=(
     lightdm-gtk-greeter.conf
     plebian-os-select-closure
     plebian-os-install-ollama-converter
+    plebian-os-install-kilix-vulkan-tts
+    plebian-os-install-kilix-ollama-runtime
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -2063,9 +2077,11 @@ dests=(
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/plebian-os-select-closure
     /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -2349,6 +2365,8 @@ self_update_os_layer() {
         lightdm-gtk-greeter.conf
         plebian-os-select-closure
         plebian-os-install-ollama-converter
+        plebian-os-install-kilix-vulkan-tts
+        plebian-os-install-kilix-ollama-runtime
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"

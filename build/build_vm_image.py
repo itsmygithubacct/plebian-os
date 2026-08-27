@@ -848,6 +848,8 @@ def verify_update_rollback(cfg: Config, askpass: str) -> None:
         "/usr/local/sbin/plebian-os-provision",
         "/usr/local/sbin/plebian-os-install-deps",
         "/usr/local/sbin/plebian-os-install-ollama-converter",
+        "/usr/local/sbin/plebian-os-install-kilix-vulkan-tts",
+        "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
         "/usr/local/sbin/plebian-os-passwd",
         "/usr/local/bin/plebian-os-update",
         "/etc/systemd/system/plebian-os-firstboot.service",
@@ -1533,6 +1535,20 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
             "timeout 30 /usr/local/sbin/plebian-os-install-ollama-converter "
             "--dry-run | grep -Fqx '  sha256: "
             "8759ab3d3a92d86ba3ba24fab7e6adde08eaf2f941e6c79118373e4f41e0af8c'",
+        ),
+        (
+            "optional Kilix Vulkan TTS installer",
+            "test -x /usr/local/sbin/plebian-os-install-kilix-vulkan-tts && "
+            "timeout 30 /usr/local/sbin/plebian-os-install-kilix-vulkan-tts "
+            "--dry-run | grep -Fqx '  worker source sha256: "
+            "e8c7ecd2d2458962666fdc560b40f5ed754e3e7c126400dd1f914a4bb50dc964'",
+        ),
+        (
+            "optional Kilix Ollama runtime installer",
+            "test -x /usr/local/sbin/plebian-os-install-kilix-ollama-runtime && "
+            "timeout 30 /usr/local/sbin/plebian-os-install-kilix-ollama-runtime "
+            "--dry-run | grep -Fqx '  Unix listener patch sha256: "
+            "ad1ba7475946a22e371156c06cbb8dba58d8fd23f916a3bcffa8d937bf35ccde'",
         ),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
