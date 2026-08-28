@@ -16,9 +16,12 @@
 # install` outputs.
 # Disable OS-layer refresh with PLEBIAN_OS_SELF_UPDATE=0.
 #
-# Usage: plebian-os-update [--restart]
+# Usage: plebian-os-update [--restart] [--revalidate-current]
 # By default the running graphical session is left alone. Pass --restart to ask
 # Pleb to restart it only after the stack update has completed successfully.
+# By default the newest published stable Plebian-OS release is selected before
+# the stack is refreshed. Pass --revalidate-current only for recovery or
+# diagnostics when the selected release must not change.
 #
 # Run as the Pleb user; `pleb install` elevates via sudo where it needs root.
 # Deployed to the target as /usr/local/bin/plebian-os-update and offered by
@@ -540,14 +543,17 @@ PLEBIAN_OS_UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
 PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
 
 restart_arg=--no-restart
-[ "$#" -le 1 ] || die "expected at most one option (try --help)"
-case "${1:-}" in
-    --version|-V) echo "plebian-os-update $PLEBIAN_OS_VERSION"; exit 0 ;;
-    -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-    --restart) restart_arg=--restart ;;
-    "") ;;
-    *) die "unknown option: $1 (try --help)" ;;
-esac
+select_latest_release=1
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --version|-V) echo "plebian-os-update $PLEBIAN_OS_VERSION"; exit 0 ;;
+        -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+        --restart) restart_arg=--restart ;;
+        --revalidate-current) select_latest_release=0 ;;
+        *) die "unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
 
 # Repair the complete coordinated data tree before the update lock is the first
 # writer on an older or freshly created installation.
@@ -1913,6 +1919,115 @@ update_os_checkout() {
     git -C "$PLEBIAN_OS_DIR" pull --ff-only || return 1
 }
 
+# Resolve only stable semantic release tags.  A plain update is a release
+# update, not merely a revalidation of whatever closure happens to be selected
+# already.  Non-release tags such as media-v1 and prerelease spellings are
+# deliberately ignored.
+latest_published_release() {
+    local refs latest
+    refs="$(git ls-remote --refs --tags "$PLEBIAN_OS_REPO" 'refs/tags/v*')" \
+        || die "could not query published Plebian-OS releases from $PLEBIAN_OS_REPO"
+    latest="$(printf '%s\n' "$refs" \
+        | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ {
+                   sub(/^refs\/tags\/v/, "", $2); print $2
+               }' \
+        | LC_ALL=C sort -V \
+        | tail -n 1)"
+    [ -n "$latest" ] \
+        || die "no published stable vX.Y.Z release tags were found at $PLEBIAN_OS_REPO"
+    printf '%s\n' "$latest"
+}
+
+release_is_newer() {
+    local candidate="$1" installed="$2" highest
+    [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [[ "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [ "$candidate" != "$installed" ] || return 1
+    highest="$(printf '%s\n%s\n' "$installed" "$candidate" \
+        | LC_ALL=C sort -V | tail -n 1)"
+    [ "$highest" = "$candidate" ]
+}
+
+ensure_os_source_checkout_for_selection() {
+    local parent remote
+    case "$PLEBIAN_OS_DIR" in
+        /*) ;;
+        *) die "PLEBIAN_OS_DIR must be absolute before selecting a release: $PLEBIAN_OS_DIR" ;;
+    esac
+    if [ -d "$PLEBIAN_OS_DIR/.git" ]; then
+        remote="$(git -C "$PLEBIAN_OS_DIR" config --get remote.origin.url 2>/dev/null || true)"
+        if [ "$remote" != "$PLEBIAN_OS_REPO" ] \
+            && [ "${PLEBIAN_OS_TRUST_EXISTING_CHECKOUT:-0}" != 1 ]; then
+            die "Plebian-OS checkout at $PLEBIAN_OS_DIR has origin '${remote:-unset}', expected '$PLEBIAN_OS_REPO' (set PLEBIAN_OS_TRUST_EXISTING_CHECKOUT=1 to override)"
+        fi
+        return 0
+    fi
+    [ ! -e "$PLEBIAN_OS_DIR" ] \
+        || die "Plebian-OS source path exists but is not a git checkout: $PLEBIAN_OS_DIR"
+    parent="$(dirname -- "$PLEBIAN_OS_DIR")"
+    mkdir -p -- "$parent" \
+        || die "could not create Plebian-OS source parent: $parent"
+    log "cloning Plebian-OS release source -> $PLEBIAN_OS_DIR"
+    git clone --no-recurse-submodules "$PLEBIAN_OS_REPO" "$PLEBIAN_OS_DIR" \
+        || die "could not clone Plebian-OS release source"
+}
+
+select_latest_release_if_needed() {
+    local latest target_commit stage selector rc
+    local -a relaunch_args=()
+    [ "$select_latest_release" = 1 ] || {
+        log "explicitly revalidating selected release $PLEBIAN_OS_VERSION"
+        return 0
+    }
+    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not semantic; use --revalidate-current only for recovery"
+    latest="$(latest_published_release)"
+    if [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
+        log "Plebian-OS $PLEBIAN_OS_VERSION is the latest published release"
+        return 0
+    fi
+    if ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
+        die "published release $latest is not newer than selected release $PLEBIAN_OS_VERSION; refusing an implicit downgrade"
+    fi
+
+    log "new published release found: $PLEBIAN_OS_VERSION -> $latest"
+    ensure_os_source_checkout_for_selection
+    git -C "$PLEBIAN_OS_DIR" fetch --force origin "refs/tags/v$latest" \
+        || die "could not fetch target release tag v$latest"
+    target_commit="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
+        || die "target release tag v$latest did not resolve to a commit"
+    stage="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-latest.XXXXXX")" \
+        || die "could not allocate target-selector staging"
+    selector="$stage/plebian-os-select-closure"
+    if ! git -C "$PLEBIAN_OS_DIR" show \
+            "$target_commit:provision/plebian-os-select-closure.sh" >"$selector"; then
+        rm -rf -- "$stage"
+        die "published release v$latest does not contain its closure selector"
+    fi
+    chmod 0700 -- "$selector"
+    if ! bash -n "$selector"; then
+        rm -rf -- "$stage"
+        die "published release v$latest contains an invalid closure selector"
+    fi
+
+    log "validating and selecting the complete $latest release closure"
+    if "$selector" "$latest" --source "$PLEBIAN_OS_DIR"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    rm -rf -- "$stage"
+    [ "$rc" -eq 0 ] \
+        || die "target release $latest closure selection failed (status $rc)"
+    [ -x /usr/local/bin/plebian-os-update ] \
+        || die "target release $latest did not deploy an executable updater"
+    [ "$restart_arg" != --restart ] || relaunch_args+=(--restart)
+    log "release $latest selected; relaunching its updater"
+    # shellcheck disable=SC2093 -- replacing this process is the transaction boundary
+    exec /usr/local/bin/plebian-os-update "${relaunch_args[@]}"
+    die "could not relaunch the $latest updater"
+}
+
 # Copy every required OS-layer file into an unprivileged staging directory and
 # validate the complete set before any privileged destination is touched.
 stage_and_validate_os_layer() {
@@ -3051,6 +3166,13 @@ write_final_provenance() {
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
     return 0
 fi
+
+# A normal update first moves to the newest published coordinated closure.  Do
+# this before the outer stack transaction: the target selector has its own
+# atomic configuration/tool transaction, then exec above starts the target
+# updater from a fresh environment.  If no newer release exists, this returns
+# and the already-selected closure is revalidated normally.
+select_latest_release_if_needed
 
 # Pleb does its system writes via sudo; on a non-passwordless box a clickable
 # "update" action would silently prompt or fail. Warn early rather than hang.

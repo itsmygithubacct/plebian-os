@@ -143,20 +143,24 @@ and documented.
 
 ## Operator procedure
 
-Release images keep exact refs in `/etc/pleb/session.env`; running
-`plebian-os-update` without selecting a new closure intentionally revalidates
-the installed release rather than drifting to a branch head; the updater alone
-does not select a new release closure. Every future target release must ship an
-actionable release-specific mechanism or exact instructions which validate and
-atomically select all of its release-controlled keys as one closure. That
-mechanism must complete successfully before the operator runs:
+Release images keep exact refs in `/etc/pleb/session.env`. Beginning with 0.2.1,
+plain `plebian-os-update` queries the published stable `vX.Y.Z` tags, selects the
+highest version through that target release's own immutable closure selector,
+and then runs the newly installed updater. The normal upgrade is therefore one
+command:
 
 ```sh
 plebian-os-update --restart
 ```
 
-The mechanism is `provision/plebian-os-select-closure.sh`, and the release which
-ships it is the **target** release, not the installed one: it reads
+`--revalidate-current` is the explicit recovery/diagnostic escape hatch which
+keeps the selected closure unchanged. A failed release query or selection is a
+failed update; the command must never report success after silently remaining
+on an older release.
+
+The selection mechanism is `provision/plebian-os-select-closure.sh`, and the
+copy executed during a release hop comes from the **target** release, not the
+installed one: it reads
 `releases/<x.y.z>.env` out of the published `v<x.y.z>` tag, so the pins are the
 immutable ones that release was accepted with, whatever the machine is running
 now.

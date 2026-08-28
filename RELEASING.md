@@ -207,14 +207,14 @@ or passing fresh-install acceptance does not satisfy this gate.
 
 ### Every release ships its own closure selector
 
-`plebian-os-update` revalidates the release the machine already has; it never
-selects a new one. The mechanism that does is
+Beginning with 0.2.1, `plebian-os-update` resolves the highest published stable
+`vX.Y.Z` tag by default, extracts that target's
 [`provision/plebian-os-select-closure.sh`](provision/plebian-os-select-closure.sh),
-and the release which ships it to an operator is the **target**, not the source:
-it reads `releases/<x.y.z>.env` out of the published `v<x.y.z>` tag. A machine
-running the previous release therefore fetches that tag and runs the selector out
-of it, which is why the exact command block belongs in the target's release
-notes.
+uses it to atomically select the target closure, and relaunches the target's
+newly installed updater. `--revalidate-current` is the explicit no-hop recovery
+mode. The selector reads `releases/<x.y.z>.env` out of the published target tag;
+the target release therefore continues to own both the closure and the code
+which validates it.
 
 `releases/<x.y.z>.env` is the closure; the selector is what makes it selectable.
 So a release is only shippable when the selector accepts its manifest —

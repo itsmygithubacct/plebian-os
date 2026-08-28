@@ -55,6 +55,13 @@ closure and must not be used to revise 0.2.1 artifacts.
   had never exposed — a gap that shipped in 0.2.1 because CI tested against a
   Kilix predating the setting.
 
+### Changed
+
+- Plain `plebian-os-update` advances to the newest published stable release
+  before refreshing the stack. It bootstraps the target tag's own closure
+  selector and updater, fails instead of silently remaining behind, and keeps
+  exact-current revalidation behind an explicit `--revalidate-current` flag.
+
 ### Added
 
 - `build/remaster-iso.sh` refuses media whose closure submodule gitlinks do not
