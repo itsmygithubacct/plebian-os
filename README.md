@@ -229,24 +229,26 @@ the policy to `0` for native Openbox windows, extend it with
 `KILIX_RUN_ALIAS_EXCLUDE_APPS="gimp"`.
 
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
-pulls `~/.local/gpu_terminal/sources/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
-engine, and optional desktop-provider update to `pleb update --no-restart`.
+first resolves the highest published stable Plebian-OS release, runs that target
+tag's own closure selector, and relaunches the newly installed updater. It then
+pulls `~/.local/gpu_terminal/sources/pleb`, re-runs `pleb install`, and delegates
+the Kilix, submodule, engine, and optional desktop-provider update to
+`pleb update --no-restart`.
 It **also refreshes the Plebian-OS layer itself** as one validated, rollback-safe
 transaction (provisioner, dependency installer, closure selector, unit, helpers,
 version, branded wallpaper, and artwork notices) from a `plebian-os` checkout, so OS-layer fixes reach
 installed systems too — pinned
 by `PLEBIAN_OS_REF` and disablable with
 `PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
-`KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, the update helper keeps using
-those exact refs instead of drifting to branch heads. Moving an installed machine
-to another release is therefore a separate, deliberate step: the selector
-extracted from the target release's immutable tag validates that release's complete closure,
-fetches every exact target component commit, reports each component's ancestry
-direction, and selects every release-controlled pin at once while leaving
-operator choices alone. It also installs the exact target selector and updater
-as part of that same recoverable selection. It runs **before**
-`plebian-os-update --restart` — see
-[UPGRADING.md](UPGRADING.md) for the exact commands. Updates are serialized;
+`KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, those exact refs remain the
+authority within the selected release instead of drifting to branch heads. The
+target selector validates the complete closure, fetches every exact component
+commit, reports each component's ancestry direction, and moves every
+release-controlled pin at once while leaving operator choices alone. It also
+installs the exact target selector and updater as part of that same recoverable
+selection. Use `--revalidate-current` only when you explicitly need to refresh
+the already-selected release without hopping. See [UPGRADING.md](UPGRADING.md)
+for the exact contract. Updates are serialized;
 participating checkouts with local changes are refused. Before the first change,
 the updater snapshots the deployed OS/Pleb files, checkout positions, engine
 artifacts, system uv binaries, and final provenance. It reconciles the selected

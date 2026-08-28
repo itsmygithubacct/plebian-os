@@ -12,6 +12,10 @@ closure and must not be used to revise 0.2.0 artifacts.
 
 ### Added
 
+- Make plain `plebian-os-update` advance to the newest published stable release
+  before refreshing the stack. It bootstraps the target tag's own closure
+  selector and updater, fails instead of silently remaining behind, and keeps
+  exact-current revalidation behind the explicit `--revalidate-current` flag.
 - Declare matching fresh-install and standalone-provisioning prerequisites for
   common compression formats, read-only hardware discovery, storage and bus
   inspection, thermal sensors, and `linux-perf` qualification.

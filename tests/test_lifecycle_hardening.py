@@ -42,7 +42,10 @@ class UpdateLifecycleTests(unittest.TestCase):
                         UPDATE.index(". /etc/pleb/session.env"))
 
     def test_restart_is_explicit_opt_in(self):
-        self.assertIn("Usage: plebian-os-update [--restart]", UPDATE)
+        self.assertIn(
+            "Usage: plebian-os-update [--restart] [--revalidate-current]",
+            UPDATE,
+        )
         self.assertIn("restart_arg=--no-restart", UPDATE)
         self.assertIn("--restart) restart_arg=--restart", UPDATE)
         self.assertIn('pleb" update --no-restart', UPDATE)
@@ -56,7 +59,10 @@ class UpdateLifecycleTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(help_result.returncode, 0, help_result.stderr)
-        self.assertIn("Usage: plebian-os-update [--restart]", help_result.stdout)
+        self.assertIn(
+            "Usage: plebian-os-update [--restart] [--revalidate-current]",
+            help_result.stdout,
+        )
 
     def test_pinned_checkouts_are_clean_and_fetch_resolved(self):
         self.assertIn("status --porcelain --untracked-files=normal", UPDATE)

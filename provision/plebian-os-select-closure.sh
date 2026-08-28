@@ -2,13 +2,12 @@
 # plebian-os-select-closure.sh — validate and atomically select one coordinated
 # Plebian-OS release closure on an already-installed machine.
 #
-# Release images keep exact refs in /etc/pleb/session.env, so plebian-os-update
-# deliberately revalidates the release the machine already has instead of
-# drifting to a branch head. Nothing in the updater selects a NEW release. This
-# is the other half: UPGRADING.md's "Operator procedure" requires every release
-# after 0.1.7 to ship an actionable mechanism which validates and atomically
-# selects all of its release-controlled keys as one closure, and requires that
-# mechanism to succeed BEFORE the operator runs `plebian-os-update --restart`.
+# Release images keep exact refs in /etc/pleb/session.env.  Beginning with
+# 0.2.1, plebian-os-update resolves the newest published stable release and
+# bootstraps this selector from that target's immutable tag before refreshing
+# the stack.  This tool remains the atomic boundary that validates and selects
+# every release-controlled key together; it is also available directly for an
+# exact target, dry-run, inspection, and rollback.
 #
 # Usage:
 #   plebian-os-select-closure <x.y.z> [--source DIR] [--offline] [--dry-run]
