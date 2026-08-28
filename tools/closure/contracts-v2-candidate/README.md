@@ -1,9 +1,11 @@
-# F120 v3/v2/v2 licence-carrier contract candidate
+# F120 v3/v2/v2 licence-carrier correction candidate
 
-This directory is a **review candidate, not contract authority and not release
-qualification evidence**.  It implements the contract-design gate selected by
-Owner Decision 14 without changing one byte in the frozen v1 package at
-`../contracts/`.
+This directory is a **fresh correction candidate, not contract authority and
+not release qualification evidence**.  It implements the contract-design gate
+selected by Owner Decision 14 without changing one byte in the frozen v1
+package at `../contracts/`.  The preceding exact bytes were not accepted after
+two reviews found three open Low findings.  Reviews of those bytes do not
+transfer to this candidate.
 
 The candidate is bound to the exact owner-ratified amendment copied as
 `RATIFIED-AMENDMENT.md`, whose required SHA-256 is
@@ -37,10 +39,12 @@ uv run --locked python build_candidate.py --check
 uv run --locked python validate_candidate.py --self-test
 ```
 
-`--contract-preflight` is deliberately named and printed as non-qualifying.  A
-normal release validation refuses with
+Individual validation has no implicit mode.  It requires exactly one of
+`--contract-preflight` and `--release-qualification`, so a successful preflight
+cannot be consumed as a release-qualification result by exit status alone.
+`--contract-preflight` is deliberately named and printed as non-qualifying.  An
+explicit release validation refuses with
 `F120-V2-F100-VALIDATOR-UNAVAILABLE` until F100 publishes accepted validator
 and API identities.  There is no permissive fallback, embedded substitute or
 test stub.  Independent reviewers must accept the exact candidate bytes before
 the identities can become authority or be integrated into the resolver.
-

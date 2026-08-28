@@ -168,18 +168,51 @@ EXPANDED_UNIT_KEYS = {
 }
 
 EXPECTED_INVALID = {
+    "registration/invalid/older-schema-identity.json": "F120-V3-SCHEMA-IDENTITY",
     "registration/invalid/declared-internal-manifest.json": "F120-V3-DECLARED-INTERNAL-MANIFEST",
     "registration/invalid/reserved-compliance-option.json": "F120-V3-RESERVED-BUILD-OPTION",
+    "workspace/invalid/older-schema-identity.json": "F120-V2-SCHEMA-IDENTITY",
     "workspace/invalid/payload-without-unit.json": "F120-V2-PAYLOAD-WITHOUT-UNIT",
+    "release/invalid/artifact-binding-mismatch.json": "F120-V2-ARTIFACT-BINDING-MISMATCH",
     "release/invalid/borrowed-same-spdx.json": "F120-V2-LICENCE-TUPLE-MISMATCH",
     "release/invalid/cross-component.json": "F120-V2-CROSS-COMPONENT-REFERENCE",
     "release/invalid/duplicate-artifact-path.json": "F120-V2-DUPLICATE-ARTIFACT-PATH",
+    "release/invalid/exclusive-artifact-shared.json": "F120-V2-EXCLUSIVE-COMPLIANCE-ARTIFACT",
+    "release/invalid/licence-union-mismatch.json": "F120-V2-LICENCE-UNION-MISMATCH",
     "release/invalid/missing-conveyance.json": "F120-V2-CONVEYANCE-NOTICE-COUNT",
+    "release/invalid/notice-tuple-mismatch.json": "F120-V2-NOTICE-TUPLE-MISMATCH",
+    "release/invalid/notice-union-mismatch.json": "F120-V2-NOTICE-UNION-MISMATCH",
+    "release/invalid/orphan-compliance-artifact.json": "F120-V2-ORPHAN-COMPLIANCE-ARTIFACT",
     "release/invalid/payload-without-unit.json": "F120-V2-PAYLOAD-WITHOUT-UNIT",
     "release/invalid/role-mismatch.json": "F120-V2-ROLE-MISMATCH",
+    "release/invalid/staged-artifact-mismatch.json": "F120-V2-STAGED-ARTIFACT-MISMATCH",
+    "release/invalid/unknown-artifact.json": "F120-V2-UNKNOWN-ARTIFACT",
     "release/invalid/wrong-pair.json": "F120-V2-PAIR-DIGEST-MISMATCH",
     "release/invalid/wrong-unit-binding.json": "F120-V2-COMPLIANCE-BINDING-MISMATCH",
     "release/invalid/zero-notice-counterexample.json": "F120-V2-ZERO-NOTICE-CARRIER",
+}
+
+EXPECTED_REFUSAL_FAMILIES = {
+    "F120-V3-SCHEMA-IDENTITY",
+    "F120-V2-SCHEMA-IDENTITY",
+    "F120-V3-RESERVED-BUILD-OPTION",
+    "F120-V3-DECLARED-INTERNAL-MANIFEST",
+    "F120-V2-ZERO-NOTICE-CARRIER",
+    "F120-V2-PAYLOAD-WITHOUT-UNIT",
+    "F120-V2-UNKNOWN-ARTIFACT",
+    "F120-V2-CROSS-COMPONENT-REFERENCE",
+    "F120-V2-ROLE-MISMATCH",
+    "F120-V2-LICENCE-TUPLE-MISMATCH",
+    "F120-V2-NOTICE-TUPLE-MISMATCH",
+    "F120-V2-LICENCE-UNION-MISMATCH",
+    "F120-V2-NOTICE-UNION-MISMATCH",
+    "F120-V2-ORPHAN-COMPLIANCE-ARTIFACT",
+    "F120-V2-EXCLUSIVE-COMPLIANCE-ARTIFACT",
+    "F120-V2-ARTIFACT-BINDING-MISMATCH",
+    "F120-V2-PAIR-DIGEST-MISMATCH",
+    "F120-V2-STAGED-ARTIFACT-MISMATCH",
+    "F120-V2-COMPLIANCE-BINDING-MISMATCH",
+    "F120-V2-F100-VALIDATOR-UNAVAILABLE",
 }
 
 
@@ -1048,7 +1081,7 @@ def validate_document(
     if not isinstance(document, dict):
         return [issue("F120-V2-OBJECT-SHAPE", "document must be an object")]
     identity = document.get("schema")
-    if identity == REGISTRATION_ID:
+    if isinstance(identity, str) and identity.startswith("kilix.f120.registration/"):
         return registration_errors(document)
     errors = schema_errors(document, available)
     if identity == WORKSPACE_ID:
@@ -1075,10 +1108,45 @@ def package_files() -> list[Path]:
         ROOT / "uv.lock",
         Path(__file__),
     ]
+    valid = [
+        FIXTURES / "registration" / "valid" / "two-obligation-units.json",
+        FIXTURES / "workspace" / "valid" / "two-obligation-units.json",
+        FIXTURES / "release" / "valid" / "two-obligation-units.json",
+    ]
+    invalid = [FIXTURES / relative for relative in EXPECTED_INVALID]
     return sorted(
-        [*fixed, *SCHEMAS.values(), *FIXTURES.glob("*/*/*.json")],
+        [*fixed, *SCHEMAS.values(), *valid, *invalid],
         key=lambda path: path.relative_to(ROOT).as_posix(),
     )
+
+
+def observed_package_files() -> tuple[set[Path], list[str]]:
+    """Enumerate the complete candidate byte surface, not just known globs.
+
+    A top-level ``.venv`` is review-run state created by ``uv`` and is outside
+    the candidate package.  Every other directory member is examined.  The
+    manifest excludes itself to avoid a self-referential digest.
+    """
+
+    observed: set[Path] = set()
+    errors: list[str] = []
+    for path in ROOT.rglob("*"):
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] == ".venv":
+            continue
+        if relative == Path("SHA256SUMS"):
+            continue
+        if path.is_symlink():
+            errors.append(
+                issue("F120-V2-PACKAGE-INVENTORY", f"symlink is forbidden: {relative.as_posix()}")
+            )
+        elif path.is_file():
+            observed.add(path)
+        elif not path.is_dir():
+            errors.append(
+                issue("F120-V2-PACKAGE-INVENTORY", f"special member is forbidden: {relative.as_posix()}")
+            )
+    return observed, errors
 
 
 def expected_hash_manifest() -> str:
@@ -1090,6 +1158,22 @@ def expected_hash_manifest() -> str:
 
 def package_errors() -> list[str]:
     errors: list[str] = []
+    expected = set(package_files())
+    observed, inventory_errors = observed_package_files()
+    errors.extend(inventory_errors)
+    missing = sorted(
+        path.relative_to(ROOT).as_posix() for path in expected - observed
+    )
+    unexpected = sorted(
+        path.relative_to(ROOT).as_posix() for path in observed - expected
+    )
+    if missing or unexpected:
+        errors.append(
+            issue(
+                "F120-V2-PACKAGE-INVENTORY",
+                f"missing={missing} unexpected={unexpected}",
+            )
+        )
     ratified = ROOT / "RATIFIED-AMENDMENT.md"
     if (
         not ratified.is_file()
@@ -1102,7 +1186,10 @@ def package_errors() -> list[str]:
                 "RATIFIED-AMENDMENT.md does not match Owner Decision 14 bytes",
             )
         )
-    for path in [*SCHEMAS.values(), *FIXTURES.glob("*/*/*.json")]:
+    for path in [*SCHEMAS.values(), *(FIXTURES / relative for relative in EXPECTED_INVALID), *(
+        FIXTURES / family / "valid" / "two-obligation-units.json"
+        for family in ("registration", "workspace", "release")
+    )]:
         try:
             if path.read_bytes() != canonical_bytes(load_json(path)):
                 errors.append(issue("F120-V2-NONCANONICAL-BYTES", str(path.relative_to(ROOT))))
@@ -1122,13 +1209,16 @@ def self_test(available: dict[str, Draft202012Validator]) -> int:
     invalid_paths = sorted(FIXTURES.glob("*/invalid/*.json"))
     if len(valid_paths) != 3:
         failures.append(issue("F120-V2-FIXTURE-INVENTORY", f"expected 3 valid fixtures, found {len(valid_paths)}"))
+    observed_refusal_families: set[str] = set()
     for path in valid_paths:
         errors = validate_document(path, available, contract_preflight=True)
         if errors:
             failures.append(f"valid fixture rejected: {path.relative_to(FIXTURES)}: {errors}")
         if path.parts[-3] == "release":
             qualifying = validate_document(path, available, contract_preflight=False)
-            if not any("F120-V2-F100-VALIDATOR-UNAVAILABLE" in error for error in qualifying):
+            if any("F120-V2-F100-VALIDATOR-UNAVAILABLE" in error for error in qualifying):
+                observed_refusal_families.add("F120-V2-F100-VALIDATOR-UNAVAILABLE")
+            else:
                 failures.append("release fixture did not fail closed on absent accepted F100 validator")
     observed_invalid = {
         path.relative_to(FIXTURES).as_posix() for path in invalid_paths
@@ -1148,6 +1238,17 @@ def self_test(available: dict[str, Draft202012Validator]) -> int:
             failures.append(f"invalid fixture accepted: {relative}")
         elif expected is not None and not any(expected in error for error in errors):
             failures.append(f"invalid fixture {relative} missed {expected}: {errors}")
+        elif expected is not None:
+            observed_refusal_families.add(expected)
+
+    missing_families = sorted(EXPECTED_REFUSAL_FAMILIES - observed_refusal_families)
+    if missing_families:
+        failures.append(
+            issue(
+                "F120-V2-REFUSAL-COVERAGE",
+                f"profile-mandated families without a focused fixture: {missing_families}",
+            )
+        )
 
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -1169,8 +1270,9 @@ def self_test(available: dict[str, Draft202012Validator]) -> int:
         return 1
     print(
         "PASS: review-only v3/v2/v2 schemas, 3 valid and "
-        f"{len(invalid_paths)} named-invalid fixtures; qualification remains "
-        "fail-closed on absent accepted F100 validators"
+        f"{len(invalid_paths)} named-invalid fixtures; 20/20 profile refusal "
+        "families covered; qualification remains fail-closed on absent "
+        "accepted F100 validators"
     )
     return 0
 
@@ -1179,10 +1281,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", nargs="?", type=Path)
     parser.add_argument("--allow-development-state", action="store_true")
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--contract-preflight",
         action="store_true",
         help="non-qualifying F120-owned join review; does not call F100",
+    )
+    mode.add_argument(
+        "--release-qualification",
+        action="store_true",
+        help="release qualification; fails closed until accepted F100 validators are bound",
     )
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument(
@@ -1200,6 +1308,10 @@ def main() -> int:
         return self_test(available)
     if args.path is None:
         parser.error("PATH is required unless --self-test is used")
+    if not args.contract_preflight and not args.release_qualification:
+        parser.error(
+            "choose exactly one explicit mode: --contract-preflight or --release-qualification"
+        )
     errors = validate_document(
         args.path,
         available,

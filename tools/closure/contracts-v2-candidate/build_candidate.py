@@ -839,6 +839,14 @@ def invalid_fixtures(
 ) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
 
+    registration_old_identity = copy.deepcopy(registration)
+    registration_old_identity["schema"] = "kilix.f120.registration/v2"
+    result["registration-older-schema-identity.json"] = registration_old_identity
+
+    workspace_old_identity = copy.deepcopy(workspace)
+    workspace_old_identity["schema"] = "kilix.f120.workspace-manifest/v1"
+    result["workspace-older-schema-identity.json"] = workspace_old_identity
+
     zero_notice = copy.deepcopy(release)
     zero_notice["compliance_units"] = []
     zero_notice["artifacts"] = [
@@ -852,13 +860,29 @@ def invalid_fixtures(
     wrong_binding["compliance_units"][0]["compliance_binding_sha256"] = "0" * 64
     result["release-wrong-unit-binding.json"] = wrong_binding
 
+    wrong_artifact_binding = copy.deepcopy(release)
+    wrong_artifact_binding["compliance_units"][0]["artifact_binding_sha256"] = "0" * 64
+    result["release-artifact-binding-mismatch.json"] = wrong_artifact_binding
+
     borrowed = copy.deepcopy(release)
     borrowed["compliance_units"][1]["license_texts"][0]["spdx"] = "Apache-2.0"
     result["release-borrowed-same-spdx.json"] = borrowed
 
+    missing_licence_union = copy.deepcopy(release)
+    missing_licence_union["compliance_units"][1]["license_texts"] = []
+    result["release-licence-union-mismatch.json"] = missing_licence_union
+
     missing_payload = copy.deepcopy(release)
     missing_payload["compliance_units"][0]["payloads"] = []
     result["release-payload-without-unit.json"] = missing_payload
+
+    unknown_artifact = copy.deepcopy(release)
+    unknown_artifact["compliance_units"][0]["payloads"][0]["artifact_id"] = "missing-payload"
+    result["release-unknown-artifact.json"] = unknown_artifact
+
+    staged_mismatch = copy.deepcopy(release)
+    staged_mismatch["compliance_units"][0]["payloads"][0]["staged_path"] = "bin/not-the-payload"
+    result["release-staged-artifact-mismatch.json"] = staged_mismatch
 
     role_mismatch = copy.deepcopy(release)
     notice_id = role_mismatch["compliance_units"][0]["notices"][0]["artifact_id"]
@@ -878,6 +902,34 @@ def invalid_fixtures(
     no_conveyance = copy.deepcopy(release)
     no_conveyance["compliance_units"][0]["notices"][0]["kind"] = "upstream"
     result["release-missing-conveyance.json"] = no_conveyance
+
+    notice_tuple = copy.deepcopy(release)
+    notice_tuple["compliance_units"][0]["notices"][0]["sha256"] = "0" * 64
+    result["release-notice-tuple-mismatch.json"] = notice_tuple
+
+    missing_notice_union = copy.deepcopy(release)
+    missing_notice_union["compliance_units"][1]["notices"] = []
+    result["release-notice-union-mismatch.json"] = missing_notice_union
+
+    orphan = copy.deepcopy(release)
+    orphan_artifact = copy.deepcopy(
+        next(
+            item
+            for item in orphan["artifacts"]
+            if item["artifact_role"] == "conveyance-notice"
+        )
+    )
+    orphan_artifact["artifact_id"] = "zz-orphan-compliance-artifact"
+    orphan_artifact["path"] = "share/compliance/zz-orphan/NOTICE"
+    orphan["artifacts"].append(orphan_artifact)
+    orphan["artifacts"].sort(key=lambda item: item["artifact_id"])
+    result["release-orphan-compliance-artifact.json"] = orphan
+
+    shared_exclusive = copy.deepcopy(release)
+    shared_exclusive["compliance_units"][1]["modifications"] = copy.deepcopy(
+        shared_exclusive["compliance_units"][0]["modifications"]
+    )
+    result["release-exclusive-artifact-shared.json"] = shared_exclusive
 
     wrong_pair = copy.deepcopy(release)
     wrong_pair["compliance_units"][0]["pair_sha256"] = "f" * 64
@@ -942,9 +994,12 @@ def main() -> int:
     verify_frozen_v1()
     if args.check:
         expected = expected_outputs()
-        observed_paths = set(SCHEMAS.glob("*.json")) | set(
-            FIXTURES.glob("*/*/*.json")
-        )
+        observed_paths = {
+            path
+            for root in (SCHEMAS, FIXTURES)
+            for path in root.rglob("*")
+            if path.is_file() or path.is_symlink()
+        }
         changed = sorted(
             path.relative_to(ROOT).as_posix()
             for path in set(expected) | observed_paths

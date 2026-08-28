@@ -178,7 +178,10 @@ Until F100 publishes an accepted package identity, API identity and
 implementation digest for all three, the only permitted result is
 `F120-V2-F100-VALIDATOR-UNAVAILABLE`.  `--contract-preflight` deliberately
 omits those external calls for schema review and prints that its result is not
-release qualification.  It is forbidden in P9 and has no permissive fallback.
+release qualification.  Individual validation requires an explicit choice
+between `--contract-preflight` and `--release-qualification`; there is no
+implicit mode whose exit status could be mistaken for the other.  Preflight is
+forbidden in P9 and has no permissive fallback.
 
 ## 5. Stable named refusal families
 
@@ -217,4 +220,6 @@ accept the same complete `SHA256SUMS` bytes with zero open findings and the
 two-pass no-drift gate passes.  Local self-review or deterministic regeneration
 alone is not either independent acceptance.  Production resolver/stager work
 must be based on the accepted package identity, not on mutable candidate files.
-
+The complete package census is recursive and excludes only `SHA256SUMS` itself
+and the top-level `.venv` review-run environment; any other unlisted regular
+file, symlink or special member is a refusal.
