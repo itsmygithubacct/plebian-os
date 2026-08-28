@@ -1194,15 +1194,18 @@ configure_boot_menu_policy() {
 
 BUILD_PRESEED="$WORK/preseed.cfg"
 cp "$PRESEED" "$BUILD_PRESEED"
+INSTALLER_APT_SNAPSHOT="$WORK/installer-apt-snapshot"
 
 apply_installer_snapshot() {
-    local seed="$1" ts="${PLEBIAN_OS_APT_SNAPSHOT:-}"
+    local seed="$1" snapshot_carrier="$2" ts="${PLEBIAN_OS_APT_SNAPSHOT:-}"
     [ -n "$ts" ] || return 0
     case "$ts" in
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
         *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$ts" >&2; exit 1 ;;
     esac
+    printf '%s\n' "$ts" > "$snapshot_carrier"
+    chmod 0644 "$snapshot_carrier"
     echo "    apt snapshot: pinning Debian Installer and first boot to $ts"
     sed -i -E \
         -e 's#^d-i mirror/http/hostname string .*#d-i mirror/http/hostname string snapshot.debian.org#' \
@@ -1221,7 +1224,7 @@ d-i preseed/early_command string set -e; \\
 EOF
 }
 
-apply_installer_snapshot "$BUILD_PRESEED"
+apply_installer_snapshot "$BUILD_PRESEED" "$INSTALLER_APT_SNAPSHOT"
 if [ "${PLEBIAN_OS_UNATTENDED_DISK:-0}" = 1 ]; then
     echo "    disk setup: unattended partitioning enabled"
 else
@@ -1276,6 +1279,9 @@ cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-select-closure.sh" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-record-installed-user" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-apt-snapshot-generator" "$EXTRACT/plebian-os/"
+if [ -n "${PLEBIAN_OS_APT_SNAPSHOT:-}" ]; then
+    install -m 0644 "$INSTALLER_APT_SNAPSHOT" "$EXTRACT/plebian-os/apt-snapshot"
+fi
 printf '%s\n' "$PLEBIAN_OS_IDENTITY_PROFILE" > "$EXTRACT/plebian-os/identity-profile"
 chmod 0644 "$EXTRACT/plebian-os/identity-profile"
 install -m 0644 "$HERE/VERSION" "$EXTRACT/plebian-os/VERSION"

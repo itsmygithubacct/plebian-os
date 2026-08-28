@@ -374,6 +374,11 @@ class RemasterContractTests(unittest.TestCase):
         install = self.source.index(
             "install -m 0755 /cdrom/plebian-os/plebian-os-apt-snapshot-generator")
         self.assertLess(mkdir, install)
+        self.assertIn(
+            'install -m 0644 "$INSTALLER_APT_SNAPSHOT" '
+            '"$EXTRACT/plebian-os/apt-snapshot"',
+            self.source,
+        )
 
     def test_output_is_same_filesystem_staged_and_boot_validated(self):
         self.assertIn('refusing to overwrite the source ISO', self.source)
@@ -807,20 +812,134 @@ class RemasterContractTests(unittest.TestCase):
         )
         self.assertNotRegex(late, r";\s*\\?\s*true\s*$")
 
+    def test_snapshot_generation_executes_exact_three_suite_contract(self):
+        snapshot = "20260727T000000Z"
+        generator = ROOT / "provision" / "plebian-os-apt-snapshot-generator"
+        components = "main contrib non-free non-free-firmware"
+        expected_supplemental = [
+            "deb http://snapshot.debian.org/archive/debian/"
+            f"{snapshot} trixie-updates {components}",
+            "deb http://snapshot.debian.org/archive/debian-security/"
+            f"{snapshot} trixie-security {components}",
+        ]
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            supplied_carrier = base / "supplied-apt-snapshot"
+            supplied_carrier.write_text(f"{snapshot}\n")
+            generator_output = base / "generator-output"
+            subprocess.run(
+                ["sh", str(generator), str(generator_output),
+                 str(supplied_carrier)],
+                env={**os.environ, "ROOT": str(base / "target")}, check=True,
+            )
+            supplemental = [
+                line for line in generator_output.read_text().splitlines()
+                if line and not line.startswith("#")
+            ]
+            self.assertEqual(supplemental, expected_supplemental)
+
+            seed = base / "preseed.cfg"
+            seed.write_text(
+                "d-i mirror/http/hostname string deb.debian.org\n"
+                "d-i mirror/http/directory string /debian\n"
+            )
+            generated_carrier = base / "generated-apt-snapshot"
+            function = self.source_section(
+                "apply_installer_snapshot() {",
+                "\n\napply_installer_snapshot ",
+            )
+            harness = (
+                "set -euo pipefail\n"
+                f"{function}\n"
+                'apply_installer_snapshot "$1" "$2"\n'
+            )
+            subprocess.run(
+                ["bash", "-c", harness, "snapshot-contract-test",
+                 str(seed), str(generated_carrier)],
+                env={**os.environ, "PLEBIAN_OS_APT_SNAPSHOT": snapshot},
+                text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(generated_carrier.read_text(), f"{snapshot}\n")
+
+            generated_output = base / "generated-output"
+            subprocess.run(
+                ["sh", str(generator), str(generated_output),
+                 str(generated_carrier)],
+                env={**os.environ, "ROOT": str(base / "generated-target")},
+                check=True,
+            )
+            generated_supplemental = [
+                line for line in generated_output.read_text().splitlines()
+                if line and not line.startswith("#")
+            ]
+
+            rendered = seed.read_text()
+
+            def directive(name):
+                match = re.search(
+                    rf"^d-i {re.escape(name)} string (\S+)$", rendered,
+                    re.MULTILINE,
+                )
+                self.assertIsNotNone(match, f"missing generated {name}")
+                return match.group(1)
+
+            base_source = (
+                f"deb http://{directive('mirror/http/hostname')}"
+                f"{directive('mirror/http/directory')} "
+                f"{directive('mirror/suite')} {components}"
+            )
+            self.assertEqual(
+                [base_source, *generated_supplemental],
+                [
+                    "deb http://snapshot.debian.org/archive/debian/"
+                    f"{snapshot} trixie {components}",
+                    *expected_supplemental,
+                ],
+            )
+
     def test_snapshot_generator_writes_target_apt_policy(self):
         generator = ROOT / "provision" / "plebian-os-apt-snapshot-generator"
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             root = base / "target"
             marker = base / "generator-output"
+            carrier = base / "apt-snapshot"
+            carrier.write_text("20260727T000000Z\n")
             subprocess.run(
-                ["sh", str(generator), str(marker)],
+                ["sh", str(generator), str(marker), str(carrier)],
                 env={**os.environ, "ROOT": str(root)}, check=True,
             )
             policy = root / "etc" / "apt" / "apt.conf.new"
             self.assertEqual(policy.read_text(),
                              'Acquire::Check-Valid-Until "false";\n')
-            self.assertIn("snapshot validity policy", marker.read_text())
+            self.assertIn("trixie-security", marker.read_text())
+
+    def test_snapshot_generator_stops_apt_setup_without_valid_carrier(self):
+        generator = ROOT / "provision" / "plebian-os-apt-snapshot-generator"
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            for label, carrier_text in (
+                ("missing", None),
+                ("malformed", "not-a-snapshot\n"),
+            ):
+                with self.subTest(label=label):
+                    carrier = base / f"{label}-carrier"
+                    if carrier_text is not None:
+                        carrier.write_text(carrier_text)
+                    output = base / f"{label}-output"
+                    root = base / f"{label}-target"
+                    result = subprocess.run(
+                        ["sh", str(generator), str(output), str(carrier)],
+                        env={**os.environ, "ROOT": str(root)},
+                        text=True, capture_output=True,
+                    )
+                    # apt-setup propagates only its special rc 10; arbitrary
+                    # generator failures are discarded and installation goes on.
+                    self.assertEqual(result.returncode, 10, result.stderr)
+                    self.assertFalse(output.exists())
+                    self.assertFalse((root / "etc" / "apt" /
+                                      "apt.conf.new").exists())
 
 
 if __name__ == "__main__":
