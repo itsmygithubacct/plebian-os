@@ -1041,7 +1041,10 @@ class ClosureSelectionContractTests(unittest.TestCase):
         self.assertIn("select_latest_release=1", source)
         self.assertIn("--revalidate-current) select_latest_release=0", source)
         self.assertIn("git ls-remote --refs --tags", source)
-        self.assertIn("exec /usr/local/bin/plebian-os-update", source)
+        self.assertIn(
+            'exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update',
+            source,
+        )
 
     def test_upgrade_docs_make_latest_the_default(self):
         text = UPGRADING.read_text()

@@ -61,6 +61,10 @@ closure and must not be used to revise 0.2.1 artifacts.
   before refreshing the stack. It bootstraps the target tag's own closure
   selector and updater, fails instead of silently remaining behind, and keeps
   exact-current revalidation behind an explicit `--revalidate-current` flag.
+- The target updater is relaunched with the previous session's
+  release-controlled environment values cleared, so an update started inside an
+  older Kilix pane cannot override the newly selected closure with stale
+  component refs.
 
 ### Added
 
