@@ -16,6 +16,9 @@ closure and must not be used to revise 0.2.0 artifacts.
   before refreshing the stack. It bootstraps the target tag's own closure
   selector and updater, fails instead of silently remaining behind, and keeps
   exact-current revalidation behind the explicit `--revalidate-current` flag.
+- Clear the previous session's release-controlled environment values when the
+  target updater is relaunched, so an update started inside an older Kilix pane
+  cannot override the newly selected closure with stale component refs.
 - Declare matching fresh-install and standalone-provisioning prerequisites for
   common compression formats, read-only hardware discovery, storage and bus
   inspection, thermal sensors, and `linux-perf` qualification.

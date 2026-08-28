@@ -88,6 +88,37 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("could not query published", result.stderr)
 
+    def test_relaunch_drops_every_target_release_key_from_an_old_pane(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            repo = self._repo_with_tags(root)
+            selector = root / "selector"
+            selector.write_text(
+                "#!/bin/sh\n"
+                "cat <<'EOF'\n"
+                "[plebian-os] release-controlled keys currently selected:\n"
+                "  PLEBIAN_OS_VERSION=0.2.1\n"
+                "  KILIX95_REF=target-ref\n"
+                "  KILIX_VOICE_REF (not set)\n"
+                "EOF\n"
+            )
+            selector.chmod(0o700)
+            result = self._source_and_run(
+                f"selected_release_environment_keys {selector}", repo
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                ["PLEBIAN_OS_VERSION", "KILIX95_REF", "KILIX_VOICE_REF"],
+            )
+
+        source = UPDATE.read_text()
+        self.assertIn('relaunch_env+=(-u "$key")', source)
+        self.assertIn(
+            'exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update',
+            source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

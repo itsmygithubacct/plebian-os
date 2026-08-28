@@ -109,7 +109,10 @@ plebian-os-update --restart
 `--revalidate-current` is the explicit recovery/diagnostic escape hatch which
 keeps the selected closure unchanged. A failed release query or selection is a
 failed update; the command must never report success after silently remaining
-on an older release.
+on an older release. The handoff also clears release-controlled variables
+inherited from the old graphical session before starting the target updater;
+the new root-owned closure therefore wins even when the command is launched
+from a Kilix pane created by the previous release.
 
 The selection mechanism is `provision/plebian-os-select-closure.sh`, and the
 copy executed during a release hop comes from the **target** release, not the

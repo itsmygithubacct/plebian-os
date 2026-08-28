@@ -1877,6 +1877,35 @@ release_is_newer() {
     [ "$highest" = "$candidate" ]
 }
 
+# The shell which starts an update can belong to the previous release.  Pleb's
+# configuration contract deliberately gives explicit environment values
+# precedence over /etc/pleb/session.env, so exec alone would let an old pane's
+# exported refs override the closure which was just selected.  Ask the
+# installed target selector for its own release-key classification and remove
+# exactly those variables at the relaunch boundary.  The target updater then
+# reloads their newly selected values from the root-owned session file while
+# operator-controlled environment choices remain intact.
+selected_release_environment_keys() {
+    local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
+    local output keys
+    [ -x "$selector" ] || {
+        warn "target closure selector is not executable: $selector"
+        return 1
+    }
+    output="$("$selector" --show)" || {
+        warn "could not read the target selector's release-controlled keys"
+        return 1
+    }
+    keys="$(printf '%s\n' "$output" | sed -n \
+        -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' \
+        -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
+    [ -n "$keys" ] || {
+        warn "target selector reported no release-controlled keys"
+        return 1
+    }
+    printf '%s\n' "$keys"
+}
+
 ensure_os_source_checkout_for_selection() {
     local parent remote
     case "$PLEBIAN_OS_DIR" in
@@ -1902,8 +1931,8 @@ ensure_os_source_checkout_for_selection() {
 }
 
 select_latest_release_if_needed() {
-    local latest target_commit stage selector rc
-    local -a relaunch_args=()
+    local latest target_commit stage selector rc release_keys key
+    local -a relaunch_args=() relaunch_env=(env)
     [ "$select_latest_release" = 1 ] || {
         log "explicitly revalidating selected release $PLEBIAN_OS_VERSION"
         return 0
@@ -1951,9 +1980,15 @@ select_latest_release_if_needed() {
     [ -x /usr/local/bin/plebian-os-update ] \
         || die "target release $latest did not deploy an executable updater"
     [ "$restart_arg" != --restart ] || relaunch_args+=(--restart)
+    release_keys="$(selected_release_environment_keys)" \
+        || die "could not prepare a clean target-release environment"
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        relaunch_env+=(-u "$key")
+    done <<<"$release_keys"
     log "release $latest selected; relaunching its updater"
     # shellcheck disable=SC2093 -- replacing this process is the transaction boundary
-    exec /usr/local/bin/plebian-os-update "${relaunch_args[@]}"
+    exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update "${relaunch_args[@]}"
     die "could not relaunch the $latest updater"
 }
 
