@@ -32,7 +32,7 @@ from kilix_f120.keys import build_key_sha256
 from kilix_f120.manifest import emit_workspace_manifest
 from kilix_f120.registration import load_registration
 from kilix_f120.source_cache import ensure_source
-from kilix_f120.stage import retire_stage, stage_workspace
+from kilix_f120.stage import _staged_build_order, retire_stage, stage_workspace
 
 
 def concurrent_stage_worker(
@@ -288,6 +288,235 @@ class ClosureIntegrationTest(unittest.TestCase):
         validate_path(self.root / "stage-cold.lock.json")
         metadata = b"".join(path.read_bytes() for path in cache.rglob("metadata.json"))
         self.assertNotIn(str(self.root).encode(), metadata)
+
+    def test_staged_dependency_changes_rebuild_the_consumer(self) -> None:
+        consumer_repository = self.workspace / "consumer"
+        consumer_repository.mkdir()
+        git(consumer_repository, "init", "--initial-branch=main")
+        license_bytes = b"consumer test license\n"
+        (consumer_repository / "LICENSE").write_bytes(license_bytes)
+        git(consumer_repository, "add", "LICENSE")
+        git(consumer_repository, "commit", "-m", "consumer fixture")
+        consumer_commit = git(consumer_repository, "rev-parse", "HEAD")
+
+        document = copy.deepcopy(self.registration_document)
+        provider = document["components"][0]
+        consumer = copy.deepcopy(provider)
+        consumer.update(
+            {
+                "component_id": "example-consumer",
+                "component_version": "2.0.0",
+                "expected_commit": consumer_commit,
+                "instance_id": "consumer",
+                "licenses": [
+                    {
+                        "spdx": "MIT",
+                        "text_sha256": hashlib.sha256(license_bytes).hexdigest(),
+                    }
+                ],
+                "notices": [
+                    {
+                        "path": "LICENSE",
+                        "sha256": hashlib.sha256(license_bytes).hexdigest(),
+                    }
+                ],
+                "path": "consumer",
+                "requested_ref": consumer_commit,
+            }
+        )
+        consumer["build"] = {
+            "artifacts": [
+                {
+                    "artifact_id": "consumer-data",
+                    "artifact_kind": "data",
+                    "path": "share/consumer/provider-payload.txt",
+                }
+            ],
+            "commands": [
+                [
+                    "{tool:cp}",
+                    "{dependency:provider}/share/provider/payload.txt",
+                    "{source}/built.txt",
+                ]
+            ],
+            "copies": [
+                {
+                    "destination": "share/consumer/provider-payload.txt",
+                    "mode": 420,
+                    "source": "built.txt",
+                }
+            ],
+            "environment": {},
+        }
+        document["components"] = [consumer, provider]
+        document["dependencies"] = [
+            {
+                "consumption_mode": "staged-prefix",
+                "from": "consumer",
+                "required_abi_version": provider["abi_version"],
+                "required_api_version": provider["api_version"],
+                "required_tests": ["installed-consumer"],
+                "runtime_process": "consumer-runtime",
+                "to": "provider",
+            }
+        ]
+        cache = self.root / "dependency-cache"
+        local_sources = {
+            "consumer": consumer_repository,
+            "provider": self.repository,
+        }
+
+        def qualify_and_stage(
+            candidate: dict[str, object], name: str, cache_path: Path = cache
+        ):
+            registration_path = self.root / f"{name}-registration.json"
+            workspace_path = self.root / f"{name}-workspace.json"
+            atomic_write_json(registration_path, candidate)
+            registration = load_registration(registration_path)
+            workspace = emit_workspace_manifest(
+                registration,
+                workspace_path,
+                local_sources=local_sources,
+                qualify=True,
+            )
+            report = stage_workspace(
+                registration,
+                workspace,
+                cache=cache_path,
+                destination=self.root / f"{name}-stage",
+                release="0.2.1",
+                release_lock=self.root / f"{name}.lock.json",
+                local_sources=local_sources,
+            )
+            return report, workspace, load_json(self.root / f"{name}.lock.json")
+
+        missing_reference = copy.deepcopy(document)
+        missing_consumer = next(
+            item
+            for item in missing_reference["components"]
+            if item["instance_id"] == "consumer"
+        )
+        missing_consumer["build"]["commands"] = [
+            ["{tool:cp}", "{source}/LICENSE", "{source}/built.txt"]
+        ]
+        with self.assertRaisesRegex(BuildError, "missing=\\['provider'\\]"):
+            qualify_and_stage(
+                missing_reference,
+                "dependency-missing-reference",
+                self.root / "dependency-missing-reference-cache",
+            )
+
+        collision = copy.deepcopy(document)
+        collision_consumer = next(
+            item
+            for item in collision["components"]
+            if item["instance_id"] == "consumer"
+        )
+        collision_consumer["build"]["artifacts"][0]["path"] = (
+            "share/provider/payload.txt"
+        )
+        collision_consumer["build"]["copies"][0]["destination"] = (
+            "share/provider/payload.txt"
+        )
+        with self.assertRaisesRegex(BuildError, "duplicate staged artifact path"):
+            qualify_and_stage(
+                collision,
+                "dependency-path-collision",
+                self.root / "dependency-path-collision-cache",
+            )
+        self.assertFalse((self.root / "dependency-path-collision-stage").exists())
+        self.assertFalse((self.root / "dependency-path-collision.lock.json").exists())
+
+        first, first_workspace, first_lock = qualify_and_stage(document, "dependency-first")
+        self.assertEqual((first.fetches, first.builds), (2, 2))
+        first_consumer = next(
+            item for item in first_lock["components"] if item["instance_id"] == "consumer"
+        )
+        workspace_consumer = next(
+            item
+            for item in first_workspace["components"]
+            if item["instance_id"] == "consumer"
+        )
+        self.assertNotIn(
+            "f120_staged_dependencies_sha256", workspace_consumer["build_options"]
+        )
+        self.assertIn(
+            "f120_staged_dependencies_sha256", first_consumer["build_options"]
+        )
+
+        (self.repository / "payload.txt").write_bytes(b"changed provider artifact\n")
+        git(self.repository, "add", "payload.txt")
+        git(self.repository, "commit", "-m", "change provider artifact")
+        changed_commit = git(self.repository, "rev-parse", "HEAD")
+        changed = copy.deepcopy(document)
+        changed_provider = next(
+            item for item in changed["components"] if item["instance_id"] == "provider"
+        )
+        changed_provider["expected_commit"] = changed_commit
+        changed_provider["requested_ref"] = changed_commit
+
+        second, _, second_lock = qualify_and_stage(changed, "dependency-second")
+        warm, _, warm_lock = qualify_and_stage(changed, "dependency-warm")
+        clean, _, clean_lock = qualify_and_stage(
+            changed, "dependency-clean", self.root / "dependency-clean-cache"
+        )
+        self.assertEqual((second.fetches, second.builds), (1, 2))
+        self.assertEqual((warm.fetches, warm.builds), (0, 0))
+        self.assertEqual((clean.fetches, clean.builds), (2, 2))
+        second_consumer = next(
+            item for item in second_lock["components"] if item["instance_id"] == "consumer"
+        )
+        self.assertNotEqual(
+            first_consumer["build_options"]["f120_staged_dependencies_sha256"],
+            second_consumer["build_options"]["f120_staged_dependencies_sha256"],
+        )
+        first_artifact = next(
+            item
+            for item in first_lock["artifacts"]
+            if item["artifact_id"] == "consumer-data"
+        )
+        second_artifact = next(
+            item
+            for item in second_lock["artifacts"]
+            if item["artifact_id"] == "consumer-data"
+        )
+        self.assertNotEqual(
+            first_artifact["build_key_sha256"], second_artifact["build_key_sha256"]
+        )
+        self.assertEqual(second_lock, warm_lock)
+        self.assertEqual(second_lock, clean_lock)
+        self.assertEqual(
+            tree_bytes(self.root / "dependency-second-stage"),
+            tree_bytes(self.root / "dependency-warm-stage"),
+        )
+        self.assertEqual(
+            tree_bytes(self.root / "dependency-second-stage"),
+            tree_bytes(self.root / "dependency-clean-stage"),
+        )
+        self.assertEqual(
+            (
+                self.root
+                / "dependency-second-stage/share/consumer/provider-payload.txt"
+            ).read_bytes(),
+            b"changed provider artifact\n",
+        )
+
+        cyclic = copy.deepcopy(document)
+        cyclic["dependencies"].append(
+            {
+                "consumption_mode": "staged-prefix",
+                "from": "provider",
+                "required_abi_version": consumer["abi_version"],
+                "required_api_version": consumer["api_version"],
+                "required_tests": ["installed-provider"],
+                "runtime_process": "provider-runtime",
+                "to": "consumer",
+            }
+        )
+        cyclic_path = self.root / "dependency-cycle-registration.json"
+        atomic_write_json(cyclic_path, cyclic)
+        with self.assertRaisesRegex(ContractError, "staged-prefix dependency cycle"):
+            _staged_build_order(load_registration(cyclic_path))
 
     def test_source_digest_matches_independent_reader(self) -> None:
         self.assertEqual(
@@ -802,6 +1031,74 @@ class ClosureIntegrationTest(unittest.TestCase):
             load_registration(allowed_path).components[0].build.environment,
             (("F120_INPUT_MODE", "fixture"),),
         )
+
+    def test_registration_rejects_reserved_derived_build_options(self) -> None:
+        for index, name in enumerate(
+            ("f120_recipe_sha256", "f120_staged_dependencies_sha256")
+        ):
+            with self.subTest(name=name):
+                document = copy.deepcopy(self.registration_document)
+                document["components"][0]["build_options"] = {name: "0" * 64}
+                path = self.root / f"reserved-build-option-{index}.json"
+                atomic_write_json(path, document)
+                with self.assertRaises(RegistrationError):
+                    load_registration(path)
+
+    def test_build_recipe_refuses_an_unbound_host_path(self) -> None:
+        document = copy.deepcopy(self.registration_document)
+        document["components"][0]["build"]["commands"][0].append("/tmp/host-input")
+        registration_path = self.root / "host-path-registration.json"
+        manifest_path = self.root / "host-path-workspace.json"
+        atomic_write_json(registration_path, document)
+        registration = load_registration(registration_path)
+        manifest = emit_workspace_manifest(
+            registration,
+            manifest_path,
+            local_sources={"provider": self.repository},
+            qualify=True,
+        )
+        with self.assertRaisesRegex(BuildError, "unbound path"):
+            stage_workspace(
+                registration,
+                manifest,
+                cache=self.root / "host-path-cache",
+                destination=self.root / "host-path-stage",
+                release="0.2.1",
+                release_lock=self.root / "host-path.lock.json",
+                local_sources={"provider": self.repository},
+            )
+        self.assertFalse((self.root / "host-path-stage").exists())
+        self.assertFalse((self.root / "host-path.lock.json").exists())
+
+    def test_build_recipe_refuses_an_undeclared_dependency(self) -> None:
+        document = copy.deepcopy(self.registration_document)
+        document["components"][0]["build"]["commands"][0][1] = (
+            "{dependency:undeclared}/share/provider/payload.txt"
+        )
+        registration_path = self.root / "undeclared-dependency-registration.json"
+        manifest_path = self.root / "undeclared-dependency-workspace.json"
+        atomic_write_json(registration_path, document)
+        registration = load_registration(registration_path)
+        manifest = emit_workspace_manifest(
+            registration,
+            manifest_path,
+            local_sources={"provider": self.repository},
+            qualify=True,
+        )
+        with self.assertRaisesRegex(
+            BuildError, "undeclared=\\['undeclared'\\]"
+        ):
+            stage_workspace(
+                registration,
+                manifest,
+                cache=self.root / "undeclared-dependency-cache",
+                destination=self.root / "undeclared-dependency-stage",
+                release="0.2.1",
+                release_lock=self.root / "undeclared-dependency.lock.json",
+                local_sources={"provider": self.repository},
+            )
+        self.assertFalse((self.root / "undeclared-dependency-stage").exists())
+        self.assertFalse((self.root / "undeclared-dependency.lock.json").exists())
 
     def test_registration_v1_is_refused_not_reinterpreted(self) -> None:
         document = copy.deepcopy(self.registration_document)

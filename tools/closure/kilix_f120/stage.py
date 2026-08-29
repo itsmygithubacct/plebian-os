@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import heapq
 import os
 import shutil
 import tempfile
@@ -11,13 +13,21 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-from .build_cache import BuildCacheResult, ensure_build
+from .build_cache import (
+    BuildCacheResult,
+    ensure_build,
+    staged_dependencies_sha256,
+)
 from .cache import cache_root, directory_bytes, rename_directory_no_replace
 from .canonical import atomic_write_json, file_sha256, load_json, require_identifier
 from .contracts import validate_path
 from .errors import BuildError, ContractError
 from .keys import licenses_sha256
-from .registration import ComponentRegistration, Registration
+from .registration import (
+    RESERVED_STAGED_DEPENDENCIES_OPTION,
+    ComponentRegistration,
+    Registration,
+)
 from .release import emit_release_lock
 from .source_cache import SourceCacheResult, ensure_source
 
@@ -112,6 +122,7 @@ def _copy_cached_artifacts(
     stage: Path,
     component: dict[str, Any],
     artifact_ids: set[str],
+    artifact_paths: set[str],
 ) -> list[dict[str, Any]]:
     build_key = result.metadata["build_key_sha256"]
     records: list[dict[str, Any]] = []
@@ -120,6 +131,9 @@ def _copy_cached_artifacts(
         if artifact_id in artifact_ids:
             raise BuildError(f"duplicate release artifact_id: {artifact_id}")
         artifact_ids.add(artifact_id)
+        if artifact["path"] in artifact_paths:
+            raise BuildError(f"duplicate staged artifact path: {artifact['path']}")
+        artifact_paths.add(artifact["path"])
         relative = PurePosixPath(artifact["path"])
         source = result.prefix.joinpath(*relative.parts)
         destination = stage.joinpath(*relative.parts)
@@ -150,8 +164,12 @@ def _write_stage_manifest(
     build_result: BuildCacheResult,
     component_records: list[dict[str, Any]],
     artifact_ids: set[str],
+    artifact_paths: set[str],
 ) -> dict[str, Any]:
     relative = f"share/kilix-f120/{component['instance_id']}.json"
+    if relative in artifact_paths:
+        raise BuildError(f"stage manifest path collision: {relative}")
+    artifact_paths.add(relative)
     document = {
         "architecture": component["architecture"],
         "artifacts": [
@@ -194,8 +212,8 @@ def _audit_stage(stage: Path, records: list[dict[str, Any]]) -> int:
     for record in records:
         path = record["path"]
         digest = record["artifact_sha256"]
-        if path in declared and declared[path] != digest:
-            raise BuildError(f"release records disagree for staged path: {path}")
+        if path in declared:
+            raise BuildError(f"release records duplicate staged path: {path}")
         declared[path] = digest
     observed: dict[str, str] = {}
     total = 0
@@ -262,6 +280,67 @@ def _retire_failed_publication(destination: Path) -> None:
     os.replace(destination, failed)
 
 
+def _staged_dependency_map(
+    registration: Registration,
+) -> dict[str, tuple[str, ...]]:
+    known = {component.instance_id for component in registration.components}
+    dependencies: dict[str, list[str]] = {instance: [] for instance in known}
+    for edge in registration.dependencies:
+        if edge["consumption_mode"] != "staged-prefix":
+            continue
+        consumer = edge["from"]
+        provider = edge["to"]
+        if consumer not in known or provider not in known:
+            raise ContractError("staged-prefix edge names an unknown component")
+        if consumer == provider:
+            raise ContractError("staged-prefix dependency cannot be self-referential")
+        if provider in dependencies[consumer]:
+            raise ContractError("duplicate staged-prefix dependency edge")
+        dependencies[consumer].append(provider)
+    return {
+        consumer: tuple(sorted(providers))
+        for consumer, providers in dependencies.items()
+    }
+
+
+def _staged_build_order(registration: Registration) -> list[ComponentRegistration]:
+    dependencies = _staged_dependency_map(registration)
+    components = {item.instance_id: item for item in registration.components}
+    consumers: dict[str, list[str]] = {instance: [] for instance in components}
+    pending = {instance: len(providers) for instance, providers in dependencies.items()}
+    for consumer, providers in dependencies.items():
+        for provider in providers:
+            consumers[provider].append(consumer)
+    ready = [instance for instance, count in pending.items() if count == 0]
+    heapq.heapify(ready)
+    ordered: list[ComponentRegistration] = []
+    while ready:
+        instance = heapq.heappop(ready)
+        ordered.append(components[instance])
+        for consumer in sorted(consumers[instance]):
+            pending[consumer] -= 1
+            if pending[consumer] == 0:
+                heapq.heappush(ready, consumer)
+    if len(ordered) != len(components):
+        blocked = sorted(instance for instance, count in pending.items() if count)
+        raise ContractError(f"staged-prefix dependency cycle: {blocked}")
+    return ordered
+
+
+def _build_component(
+    component: dict[str, Any], dependencies: Mapping[str, BuildCacheResult]
+) -> dict[str, Any]:
+    result = copy.deepcopy(component)
+    digest = staged_dependencies_sha256(dependencies)
+    if digest is not None:
+        options = dict(result["build_options"])
+        if RESERVED_STAGED_DEPENDENCIES_OPTION in options:
+            raise ContractError("workspace uses reserved staged-dependency build option")
+        options[RESERVED_STAGED_DEPENDENCIES_OPTION] = digest
+        result["build_options"] = options
+    return result
+
+
 def stage_workspace(
     registration: Registration,
     workspace: dict[str, Any],
@@ -306,13 +385,24 @@ def stage_workspace(
     lock_candidate = release_lock.parent / f".{release_lock.name}.{uuid.uuid4().hex}.candidate"
     source_results: list[SourceCacheResult] = []
     build_results: list[BuildCacheResult] = []
+    build_results_by_id: dict[str, BuildCacheResult] = {}
+    locked_components: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
     artifact_ids: set[str] = set()
+    artifact_paths: set[str] = set()
     published = False
     try:
+        dependencies = _staged_dependency_map(registration)
         for component_registration in registration.components:
             component = observed_by_id[component_registration.instance_id]
             _verify_component_registration(component, component_registration)
+        for component_registration in _staged_build_order(registration):
+            component = observed_by_id[component_registration.instance_id]
+            component_dependencies = {
+                instance: build_results_by_id[instance]
+                for instance in dependencies[component_registration.instance_id]
+            }
+            build_component = _build_component(component, component_dependencies)
             source_result = ensure_source(
                 cache,
                 component,
@@ -321,28 +411,41 @@ def stage_workspace(
             source_results.append(source_result)
             build_result = ensure_build(
                 cache,
-                component,
+                build_component,
                 component_registration,
                 source_result.repository,
                 workspace_root=registration.workspace_root,
+                dependencies=component_dependencies,
             )
             build_results.append(build_result)
+            build_results_by_id[component_registration.instance_id] = build_result
+            locked_components[component_registration.instance_id] = build_component
             component_records = _copy_cached_artifacts(
-                build_result, stage, component, artifact_ids
+                build_result,
+                stage,
+                build_component,
+                artifact_ids,
+                artifact_paths,
             )
             records.extend(component_records)
             records.append(
                 _write_stage_manifest(
                     stage,
-                    component,
+                    build_component,
                     build_result,
                     component_records,
                     artifact_ids,
+                    artifact_paths,
                 )
             )
         staged_bytes = _audit_stage(stage, records)
         release_lock.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-        emit_release_lock(workspace, release, records, lock_candidate)
+        release_workspace = copy.deepcopy(workspace)
+        release_workspace["components"] = [
+            locked_components[item["instance_id"]]
+            for item in release_workspace["components"]
+        ]
+        emit_release_lock(release_workspace, release, records, lock_candidate)
         _publish_stage(stage, destination)
         published = True
         _publish_lock(lock_candidate, release_lock)

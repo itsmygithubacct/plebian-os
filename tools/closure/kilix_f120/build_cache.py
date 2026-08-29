@@ -20,18 +20,33 @@ from .cache import (
     quarantine,
     temporary_directory,
 )
-from .canonical import atomic_write_json, file_sha256, load_json, require_relative_path
+from .canonical import (
+    atomic_write_json,
+    canonical_sha256,
+    file_sha256,
+    load_json,
+    require_relative_path,
+)
 from .errors import BuildError, CacheError, ContractError
 from .execution import prepare_launch, run_with_execution_closure
 from .gitops import git_environment
 from .keys import build_key_sha256
-from .registration import BuildRecipe, ComponentRegistration
+from .registration import (
+    RESERVED_STAGED_DEPENDENCIES_OPTION,
+    BuildRecipe,
+    ComponentRegistration,
+)
 from .source_cache import CACHED_SOURCE_REF
 
 
 BUILD_METADATA_SCHEMA = "kilix.f120.build-cache/v1"
 TOOL_TOKEN_RE = re.compile(r"^\{tool:([a-z0-9]+(?:[._-][a-z0-9]+)*)\}$")
-PLACEHOLDER_RE = re.compile(r"\{(?:source|build|prefix|tool:[a-z0-9._-]+)\}")
+DEPENDENCY_TOKEN_RE = re.compile(
+    r"\{dependency:([a-z0-9]+(?:[._-][a-z0-9]+)*)\}"
+)
+PLACEHOLDER_RE = re.compile(
+    r"\{(?:source|build|prefix|tool:[a-z0-9._-]+|dependency:[a-z0-9._-]+)\}"
+)
 MAX_ARCHIVE_MEMBERS = 100_000
 MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 BUILD_TIMEOUT_SECONDS = 900
@@ -61,11 +76,17 @@ def _binding(component: dict[str, Any], registration: ComponentRegistration) -> 
 
 
 def _verify_registration_binding(
-    component: dict[str, Any], registration: ComponentRegistration
+    component: dict[str, Any],
+    registration: ComponentRegistration,
+    dependencies: Mapping[str, BuildCacheResult],
 ) -> None:
+    options = registration.effective_build_options
+    dependency_digest = staged_dependencies_sha256(dependencies)
+    if dependency_digest is not None:
+        options[RESERVED_STAGED_DEPENDENCIES_OPTION] = dependency_digest
     checks = {
         "architecture": registration.architecture,
-        "build_options": registration.effective_build_options,
+        "build_options": options,
         "features": list(registration.features),
         "toolchain": registration.toolchain.contract_value(),
     }
@@ -152,6 +173,7 @@ def _render(
     build: Path,
     prefix: Path,
     registration: ComponentRegistration,
+    dependencies: Mapping[str, Path],
 ) -> str:
     fixed = {
         "{source}": str(source),
@@ -163,6 +185,12 @@ def _render(
         token = match.group(0)
         if token in fixed:
             return fixed[token]
+        dependency = DEPENDENCY_TOKEN_RE.fullmatch(token)
+        if dependency is not None:
+            name = dependency.group(1)
+            if name not in dependencies:
+                raise BuildError(f"build recipe names undeclared dependency: {name}")
+            return str(dependencies[name])
         name = token[len("{tool:") : -1]
         return str(registration.toolchain.executable(name))
 
@@ -172,6 +200,40 @@ def _render(
     return rendered
 
 
+def _recipe_values(recipe: BuildRecipe) -> list[str]:
+    return [
+        *(value for command in recipe.commands for value in command),
+        *(value for _, value in recipe.environment),
+    ]
+
+
+def _verify_recipe_dependency_surface(
+    recipe: BuildRecipe, dependencies: Mapping[str, Path]
+) -> None:
+    values = _recipe_values(recipe)
+    referenced = {
+        match.group(1)
+        for value in values
+        for match in DEPENDENCY_TOKEN_RE.finditer(value)
+    }
+    if referenced != set(dependencies):
+        missing = sorted(set(dependencies) - referenced)
+        undeclared = sorted(referenced - set(dependencies))
+        raise BuildError(
+            "build recipe dependency surface differs from staged-prefix edges; "
+            f"missing={missing}, undeclared={undeclared}"
+        )
+    for value in values:
+        tokens = list(PLACEHOLDER_RE.finditer(value))
+        if "/" in value and not tokens:
+            raise BuildError("build recipe contains an unbound path")
+        rendered_shape = PLACEHOLDER_RE.sub("BOUND", value)
+        if any(part == ".." for part in rendered_shape.split("/")):
+            raise BuildError("build recipe contains a parent path segment")
+        if re.search(r"(?:^|[=,:]|-[A-Za-z0-9]+)/", rendered_shape):
+            raise BuildError("build recipe contains an absolute host path")
+
+
 def _run_commands(
     recipe: BuildRecipe,
     registration: ComponentRegistration,
@@ -179,7 +241,9 @@ def _run_commands(
     source: Path,
     build: Path,
     prefix: Path,
+    dependencies: Mapping[str, Path],
 ) -> None:
+    _verify_recipe_dependency_surface(recipe, dependencies)
     tool_directory = build / "toolchain-bin"
     tool_directory.mkdir(mode=0o700)
     for executable in registration.toolchain.executables:
@@ -204,6 +268,7 @@ def _run_commands(
             build=build,
             prefix=prefix,
             registration=registration,
+            dependencies=dependencies,
         )
     for command in recipe.commands:
         match = TOOL_TOKEN_RE.fullmatch(command[0])
@@ -217,6 +282,7 @@ def _run_commands(
                 build=build,
                 prefix=prefix,
                 registration=registration,
+                dependencies=dependencies,
             )
             for argument in command
         ]
@@ -354,6 +420,118 @@ def _validate_entry(
     return metadata
 
 
+def _validated_dependency_metadata(result: BuildCacheResult) -> dict[str, Any]:
+    expected_binding = {
+        key: value for key, value in result.metadata.items() if key != "artifacts"
+    }
+    try:
+        metadata = _validate_entry(result.entry, expected_binding)
+    except (CacheError, ContractError, OSError) as exc:
+        raise BuildError("staged dependency cache entry failed verification") from exc
+    if metadata != result.metadata:
+        raise BuildError("staged dependency metadata changed after selection")
+    return metadata
+
+
+def staged_dependency_records(
+    dependencies: Mapping[str, BuildCacheResult],
+) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for instance_id, result in sorted(dependencies.items()):
+        metadata = _validated_dependency_metadata(result)
+        for artifact in metadata["artifacts"]:
+            records.append(
+                {
+                    "artifact_id": artifact["artifact_id"],
+                    "artifact_sha256": artifact["artifact_sha256"],
+                    "build_key_sha256": metadata["build_key_sha256"],
+                    "component_instance": instance_id,
+                    "path": artifact["path"],
+                }
+            )
+    return sorted(
+        records,
+        key=lambda item: (
+            item["component_instance"],
+            item["build_key_sha256"],
+            item["artifact_id"],
+            item["path"],
+            item["artifact_sha256"],
+        ),
+    )
+
+
+def staged_dependencies_sha256(
+    dependencies: Mapping[str, BuildCacheResult],
+) -> str | None:
+    if not dependencies:
+        return None
+    return canonical_sha256(
+        {
+            "dependencies": staged_dependency_records(dependencies),
+            "schema": "kilix.f120.staged-dependencies/v1",
+        }
+    )
+
+
+def _audit_dependency_view(
+    view: Path, metadata: Mapping[str, Any]
+) -> None:
+    expected = {
+        artifact["path"]: artifact["artifact_sha256"]
+        for artifact in metadata["artifacts"]
+    }
+    observed: dict[str, str] = {}
+    for candidate in view.rglob("*"):
+        if candidate.is_symlink():
+            raise BuildError("staged dependency view contains a symbolic link")
+        if candidate.is_dir():
+            if candidate.stat().st_mode & 0o222:
+                raise BuildError("staged dependency directory is writable")
+            continue
+        if not candidate.is_file():
+            raise BuildError("staged dependency view contains a non-regular file")
+        if candidate.stat().st_mode & 0o222:
+            raise BuildError("staged dependency artifact is writable")
+        observed[candidate.relative_to(view).as_posix()] = file_sha256(candidate)
+    if view.stat().st_mode & 0o222:
+        raise BuildError("staged dependency root is writable")
+    if observed != expected:
+        raise BuildError("staged dependency view differs from its cache metadata")
+
+
+def _dependency_views(
+    work: Path, dependencies: Mapping[str, BuildCacheResult]
+) -> dict[str, Path]:
+    if not dependencies:
+        return {}
+    root = work / "dependencies"
+    root.mkdir(mode=0o700)
+    views: dict[str, Path] = {}
+    for instance_id, result in sorted(dependencies.items()):
+        metadata = _validated_dependency_metadata(result)
+        destination = root / instance_id
+        if destination.exists() or destination.is_symlink():
+            raise BuildError("staged dependency view path collision")
+        shutil.copytree(result.prefix, destination, copy_function=shutil.copy2)
+        for candidate in sorted(destination.rglob("*"), reverse=True):
+            if candidate.is_symlink():
+                raise BuildError("staged dependency cache contains a symbolic link")
+            candidate.chmod(candidate.stat().st_mode & 0o555)
+        destination.chmod(destination.stat().st_mode & 0o555)
+        _audit_dependency_view(destination, metadata)
+        views[instance_id] = destination
+    return views
+
+
+def _make_directories_writable(root: Path) -> None:
+    if not root.exists():
+        return
+    for candidate in [root, *root.rglob("*")]:
+        if candidate.is_dir() and not candidate.is_symlink():
+            candidate.chmod(candidate.stat().st_mode | 0o700)
+
+
 def _build_entry(
     root: Path,
     component: dict[str, Any],
@@ -361,6 +539,7 @@ def _build_entry(
     repository: Path,
     workspace_root: Path,
     expected_binding: dict[str, Any],
+    dependencies: Mapping[str, BuildCacheResult],
 ) -> Path:
     candidate = temporary_directory(root, "builds")
     work = temporary_directory(root, "build-work")
@@ -370,6 +549,7 @@ def _build_entry(
         build = work / "build"
         prefix = candidate / "prefix"
         build.mkdir(mode=0o755)
+        dependency_views = _dependency_views(work, dependencies)
         _archive(repository, CACHED_SOURCE_REF, archive)
         _extract_archive(archive, source)
         assert registration.build is not None
@@ -379,13 +559,29 @@ def _build_entry(
             source=source,
             build=build,
             prefix=prefix,
+            dependencies=dependency_views,
         )
+        for instance_id, dependency in dependencies.items():
+            _audit_dependency_view(
+                dependency_views[instance_id],
+                _validated_dependency_metadata(dependency),
+            )
         registration.toolchain.verify()
         _copy_artifacts(registration.build, source, prefix)
         artifacts = _audit_prefix(
             prefix,
             registration,
-            [root, candidate, work, source, build, prefix, workspace_root, Path.home()],
+            [
+                root,
+                candidate,
+                work,
+                source,
+                build,
+                prefix,
+                *dependency_views.values(),
+                workspace_root,
+                Path.home(),
+            ],
         )
         atomic_write_json(
             candidate / "metadata.json", {**expected_binding, "artifacts": artifacts}
@@ -395,6 +591,7 @@ def _build_entry(
         shutil.rmtree(candidate, ignore_errors=True)
         raise
     finally:
+        _make_directories_writable(work / "dependencies")
         shutil.rmtree(work, ignore_errors=True)
 
 
@@ -405,8 +602,15 @@ def ensure_build(
     repository: Path,
     *,
     workspace_root: Path,
+    dependencies: Mapping[str, BuildCacheResult] | None = None,
 ) -> BuildCacheResult:
-    _verify_registration_binding(component, registration)
+    staged_dependencies = dependencies or {}
+    _verify_registration_binding(component, registration, staged_dependencies)
+    assert registration.build is not None
+    _verify_recipe_dependency_surface(
+        registration.build,
+        {instance: Path("/") for instance in staged_dependencies},
+    )
     root = cache_root(cache)
     binding = _binding(component, registration)
     key = binding["build_key_sha256"]
@@ -433,6 +637,7 @@ def ensure_build(
             repository,
             workspace_root,
             binding,
+            staged_dependencies,
         )
         try:
             publish_directory(candidate, entry)

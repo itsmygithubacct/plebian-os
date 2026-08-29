@@ -75,6 +75,15 @@ prefix paths must be outside the registered workspace and disjoint from each
 other. The deterministic stage report includes retained Git-object
 `fetch_bytes`; a warm hit records zero.
 
+The P9-H2 candidate adds a deterministic `staged-prefix` build graph. Providers
+build before consumers; a consumer names each direct provider only through
+`{dependency:INSTANCE_ID}`. Its key binds a canonical vector of the provider's
+instance, build key and artifact identities through the reserved
+`build_options.f120_staged_dependencies_sha256` scalar. This changed companion
+surface is construction-only until the independent review and refreeze stated
+in `P9-STAGED-DEPENDENCY-SEMANTICS.md`; it does not change frozen contract
+bytes or authorize a consumer migration.
+
 Every registered executable is classified as `native`, `script`,
 `python-interpreter` or `python-script`; scripts bind a named registered
 interpreter. Linux ptrace exec events bind every executable descendant before
@@ -90,5 +99,7 @@ or cache root, and both remain recoverable for rollback inspection.
 
 See `SEMANTICS.md` for the exact clarifications,
 `SEMANTICS-REVIEW.md` for their freeze record, and `INTEGRATION.md` for the
-registration/freeze procedure. Files under `fixtures/registrations/` are
-development-only handoff scaffolds, not release facts.
+registration/freeze procedure. The unaccepted P9-H2 successor semantics are in
+`P9-STAGED-DEPENDENCY-SEMANTICS.md`. Files under
+`fixtures/registrations/` are development-only handoff scaffolds, not release
+facts.

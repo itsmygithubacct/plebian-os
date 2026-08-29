@@ -61,7 +61,11 @@ impossible to mistake the scaffold for qualified release evidence.
    by name. The build receives only these logical tool names on `PATH`, and the
    execution monitor refuses every undeclared exec descendant.
 4. Declare no shell command. Each command begins with `{tool:name}` and uses
-   only argv placeholders `{source}`, `{build}`, `{prefix}` and `{tool:name}`.
+   only argv placeholders `{source}`, `{build}`, `{prefix}`, `{tool:name}` and,
+   for a direct `staged-prefix` edge only, `{dependency:INSTANCE_ID}`. Every
+   direct staged dependency must be referenced and every referenced dependency
+   must have that edge. Literal absolute, parent, host and sibling-source paths
+   are refused.
    Recipe environment names, when unavoidable, must use the
    `F120_INPUT_[A-Z0-9_]+` namespace; every other recipe-controlled environment
    name is refused so a new plugin/package-manager startup variable cannot
@@ -73,7 +77,11 @@ impossible to mistake the scaffold for qualified release evidence.
    edge must equal the target's declared API/ABI versions.
 7. Run `resolve ... --qualify`; investigate every refusal rather than weakening
    a field or using a mutable ref.
-8. Run `stage` twice against one cache and once against an empty independent
+8. For each `staged-prefix` consumer, land the owning component's linkage or
+   import choice, installed-surface tests, private-API disposition and walked
+   rollback before changing the edge. Track H supplies the shared dependency
+   token and derived key binding; it does not perform that consumer change.
+9. Run `stage` twice against one cache and once against an empty independent
    cache. The warm run must report zero fetches, zero `fetch_bytes`, and zero
    builds. All staged bytes and the validated locks must match the clean-cache
    run.
