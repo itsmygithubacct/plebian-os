@@ -289,6 +289,9 @@ def load_json(path: Path) -> Any:
     def reject_constant(value: str) -> None:
         raise CandidateFailure(f"non-finite JSON number: {value}")
 
+    def reject_float(value: str) -> None:
+        raise CandidateFailure(f"non-integer JSON number: {value}")
+
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
@@ -303,6 +306,7 @@ def load_json(path: Path) -> Any:
         text,
         object_pairs_hook=reject_duplicates,
         parse_constant=reject_constant,
+        parse_float=reject_float,
     )
     if payload != canonical_bytes(value):
         raise CandidateFailure("non-canonical JSON bytes")
@@ -1665,6 +1669,14 @@ def adjudication_regression_errors(
     fractional = copy.deepcopy(registration)
     fractional["components"][0]["build_options"]["review_fraction"] = 0.5
     require_code(registration_errors(fractional), "F120-V2-BUILD-OPTION", "fractional build option")
+    with tempfile.TemporaryDirectory() as temporary:
+        fractional_path = Path(temporary) / "fractional.json"
+        fractional_path.write_bytes(canonical_bytes(fractional))
+        require_code(
+            validate_document(fractional_path, available, contract_preflight=True),
+            "F120-V2-LOAD",
+            "fractional number before joins",
+        )
 
     # L-04: locally decidable role and conveyance restrictions live in the schemas.
     workspace_validator = available[WORKSPACE_ID]
