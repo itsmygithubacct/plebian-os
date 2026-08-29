@@ -1,0 +1,8 @@
+schema=plebian-os.steam-policy/v1
+authorization_schema=kilix.install.authorization/v2
+architectures=amd64,i386
+packages=steam-launcher,steam-libs-amd64:amd64,steam-libs-i386:i386
+helper_modes=install,repair,verify
+archive_policy_sha256=f75939222c9336f4db45bcb1c108794ce9f3ea6c176b3998383b88eb1e3081bb
+key_policy_sha256=98e9fc5b108bba854f03021a8ac38a5cbb01c32cb723c37433967c0d5d3db763
+pin_policy_sha256=c09fd01ffce59e65bf8c6bfce990f7587d11c33ced4c2b95b149b8d81a99a228

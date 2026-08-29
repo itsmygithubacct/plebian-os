@@ -201,6 +201,12 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             "/usr/local/share/doc/plebian-os/COPYING.GPL-2",
             "/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
             "/usr/local/sbin/plebian-os-passwd",
+            "/usr/libexec/plebian-os-steam-setup",
+            "/usr/share/plebian-os/steam/steam-closure.env",
+            "/usr/share/plebian-os/steam/steam-closure.sha256",
+            "/usr/share/plebian-os/steam/steam-source.sources",
+            "/usr/share/plebian-os/steam/steam-pin.pref",
+            "/usr/share/plebian-os/steam/policy-v1.manifest",
             "/etc/sudoers.d/plebian-os-passwd",
             "/usr/local/bin/pleb-session",
             "/usr/share/xsessions/pleb.desktop",
@@ -217,6 +223,8 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         self.assertTrue(required_paths <= paths, required_paths - paths)
         self.assertNotIn("/etc/sudoers.d/plebian-os-provision", paths)
         self.assertIn("/usr/local/share/doc/plebian-os/installer", dirs)
+        self.assertIn("/usr/libexec", dirs)
+        self.assertIn("/usr/share/plebian-os/steam", dirs)
         self.assertIn("/etc/pleb", dirs)
 
         account = self._run(

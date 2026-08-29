@@ -1,0 +1,8 @@
+# Plebian OS F102 policy. Installation remains disabled until the closure and
+# pre-mutation authorization-v2 mediator are accepted.
+Types: deb
+URIs: https://repo.steampowered.com/steam/
+Suites: stable
+Components: steam
+Architectures: amd64 i386
+Signed-By: /usr/share/keyrings/steam.gpg

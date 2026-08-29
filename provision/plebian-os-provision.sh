@@ -881,6 +881,12 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    /usr/libexec/plebian-os-steam-setup
+    /usr/share/plebian-os/steam/steam-closure.env
+    /usr/share/plebian-os/steam/steam-closure.sha256
+    /usr/share/plebian-os/steam/steam-source.sources
+    /usr/share/plebian-os/steam/steam-pin.pref
+    /usr/share/plebian-os/steam/policy-v1.manifest
     /usr/local/bin/plebian-os-nvidia-driver
     /usr/local/sbin/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
@@ -934,6 +940,9 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /etc/lightdm/lightdm.conf.d
     /etc/pleb
     /usr/share/xsessions
+    /usr/libexec
+    /usr/share/plebian-os
+    /usr/share/plebian-os/steam
     /usr/local/share/plebian-os
     /usr/local/share/plebian-os/wallpapers
     /usr/local/share/doc
@@ -3900,6 +3909,67 @@ if [ -n "$OLLAMA_RUNTIME_INSTALLER_SRC" ]; then
     fi
 else
     warn "optional Kilix Ollama runtime installer not found; continuing without it"
+fi
+
+# Install the fixed Steam transaction helper and its policy as inert OS files.
+# Provisioning never invokes it, enables i386, adds Valve's source, downloads a
+# key, or installs Steam. First use remains a separate two-decision workflow,
+# and the packaged closure itself stays fail-closed while qualification is 0.
+STEAM_HELPER_TARGET=/usr/libexec/plebian-os-steam-setup
+STEAM_POLICY_TARGET=/usr/share/plebian-os/steam
+STEAM_HELPER_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-steam-setup" \
+    "$STEAM_HELPER_TARGET"; do
+    [ -f "$cand" ] && [ ! -L "$cand" ] \
+        && STEAM_HELPER_SRC="$cand" && break
+done
+declare -a STEAM_POLICY_NAMES=(
+    steam-closure.env
+    steam-closure.sha256
+    steam-source.sources
+    steam-pin.pref
+    policy-v1.manifest
+)
+declare -a STEAM_POLICY_SOURCES=()
+for STEAM_POLICY_NAME in "${STEAM_POLICY_NAMES[@]}"; do
+    STEAM_POLICY_SOURCE=""
+    for cand in "$SELF_DIR/$STEAM_POLICY_NAME" \
+            "$STEAM_POLICY_TARGET/$STEAM_POLICY_NAME"; do
+        [ -f "$cand" ] && [ ! -L "$cand" ] \
+            && STEAM_POLICY_SOURCE="$cand" && break
+    done
+    [ -n "$STEAM_POLICY_SOURCE" ] \
+        || die "packaged Steam policy source is missing: $STEAM_POLICY_NAME"
+    STEAM_POLICY_SOURCES+=("$STEAM_POLICY_SOURCE")
+done
+[ -n "$STEAM_HELPER_SRC" ] || die "packaged Steam setup helper is missing"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + install -m 0755 $STEAM_HELPER_SRC $STEAM_HELPER_TARGET"
+    for STEAM_POLICY_INDEX in "${!STEAM_POLICY_NAMES[@]}"; do
+        echo "    + install -m 0644 ${STEAM_POLICY_SOURCES[$STEAM_POLICY_INDEX]} $STEAM_POLICY_TARGET/${STEAM_POLICY_NAMES[$STEAM_POLICY_INDEX]}"
+    done
+else
+    install -d -o root -g root -m 0755 /usr/libexec "$STEAM_POLICY_TARGET"
+    if [ "$STEAM_HELPER_SRC" != "$STEAM_HELPER_TARGET" ]; then
+        install -o root -g root -m 0755 "$STEAM_HELPER_SRC" \
+            "$STEAM_HELPER_TARGET"
+    else
+        chown root:root "$STEAM_HELPER_TARGET"
+        chmod 0755 "$STEAM_HELPER_TARGET"
+    fi
+    for STEAM_POLICY_INDEX in "${!STEAM_POLICY_NAMES[@]}"; do
+        STEAM_POLICY_DESTINATION="$STEAM_POLICY_TARGET/${STEAM_POLICY_NAMES[$STEAM_POLICY_INDEX]}"
+        if [ "${STEAM_POLICY_SOURCES[$STEAM_POLICY_INDEX]}" \
+                != "$STEAM_POLICY_DESTINATION" ]; then
+            install -o root -g root -m 0644 \
+                "${STEAM_POLICY_SOURCES[$STEAM_POLICY_INDEX]}" \
+                "$STEAM_POLICY_DESTINATION"
+        else
+            chown root:root "$STEAM_POLICY_DESTINATION"
+            chmod 0644 "$STEAM_POLICY_DESTINATION"
+        fi
+    done
 fi
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap

@@ -1,0 +1,9 @@
+# Refuse every package from the Valve archive except the three direct packages
+# admitted by the fixed F102 transaction.
+Package: *
+Pin: origin "repo.steampowered.com"
+Pin-Priority: -1
+
+Package: steam-launcher steam-libs-amd64 steam-libs-i386
+Pin: origin "repo.steampowered.com"
+Pin-Priority: 500
