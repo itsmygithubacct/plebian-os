@@ -1,7 +1,5 @@
 #define _GNU_SOURCE
 
-#include "profile.h"
-
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,12 +19,25 @@
 #include <time.h>
 #include <unistd.h>
 
+enum tl_argument_mode {
+    TL_ARGUMENTS_FORBIDDEN = 0,
+    TL_ARGUMENTS_REQUIRED = 1,
+};
+
+struct tl_profile_command {
+    const char *name;
+    const char *terminal_sha256;
+    enum tl_argument_mode argument_mode;
+};
+
+#include "profile.h"
+
 #ifndef AT_EMPTY_PATH
 #define AT_EMPTY_PATH 0x1000
 #endif
 
 #define DIAGNOSTIC_LIMIT (4U * 1024U * 1024U)
-#define MANIFEST_HEADER "KILIX-F120-CLOSURE-MANIFEST-v1\n"
+#define MANIFEST_HEADER "KILIX-TRUSTED-CLOSURE-MANIFEST-v1\n"
 #define RESULT_LIMIT 4096U
 #define RUN_TIMEOUT_SECONDS 900
 
@@ -584,10 +595,16 @@ static void refusal(const char *code, const char *reason) {
             "\"schema\":\"%s\","
             "\"subject_manifest_sha256\":\"%s\","
             "\"validator_started\":false}\n",
-            F120_BOOTSTRAP_SHA256, tl_case_id, tl_first_process,
-            F120_PYTHON_SHA256, tl_launcher_sha256, TL_PROFILE_ID, code,
-            tl_run_id, TL_RESULT_SCHEMA, F120_SUBJECT_MANIFEST_SHA256);
+            TL_BOOTSTRAP_SHA256, tl_case_id, tl_first_process,
+            TL_PYTHON_SHA256, tl_launcher_sha256, TL_PROFILE_ID, code,
+            tl_run_id, TL_RESULT_SCHEMA, TL_SUBJECT_MANIFEST_SHA256);
     dprintf(STDERR_FILENO, "TRUSTED_LAUNCH_REFUSAL %s: %s\n", code, reason);
+}
+
+static const struct tl_profile_command *profile_command(const char *name) {
+    for (size_t index = 0; index < TL_COMMAND_COUNT; ++index)
+        if (strcmp(TL_COMMANDS[index].name, name) == 0) return &TL_COMMANDS[index];
+    return NULL;
 }
 
 int main(int argc, char **argv, char **envp) {
@@ -622,12 +639,14 @@ int main(int argc, char **argv, char **envp) {
         argv += 2;
         argc -= 2;
     }
+    const struct tl_profile_command *selected =
+        argc >= 4 ? profile_command(argv[3]) : NULL;
     if (argc < 4 || strcmp(argv[1], "--subject") != 0 || argv[2][0] != '/' ||
-        (strcmp(argv[3], "check") != 0 && strcmp(argv[3], "cli") != 0) ||
-        (strcmp(argv[3], "check") == 0 && argc != 4) ||
-        (strcmp(argv[3], "cli") == 0 && argc == 4)) {
+        selected == NULL ||
+        (selected && selected->argument_mode == TL_ARGUMENTS_FORBIDDEN && argc != 4) ||
+        (selected && selected->argument_mode == TL_ARGUMENTS_REQUIRED && argc == 4)) {
         refusal("TL-LAUNCH-ARGV/usage",
-                "usage is [--case-id ID] --subject ABSOLUTE check|cli [ARGS...]");
+                "usage is [--case-id ID] --subject ABSOLUTE COMMAND [ARGS...]");
         return 2;
     }
     const char *command = argv[3];
@@ -651,7 +670,7 @@ int main(int argc, char **argv, char **envp) {
         return 2;
     }
 
-    char executable[PATH_MAX], bundle_path[PATH_MAX];
+    char executable[PATH_MAX], launcher_path[PATH_MAX], bundle_path[PATH_MAX];
     ssize_t executable_length = readlink("/proc/self/exe", executable, sizeof(executable) - 1);
     if (executable_length <= 0 || (size_t)executable_length >= sizeof(executable) - 1) {
         refusal("TL-BOOTSTRAP-IDENTITY/launcher-unresolvable", "cannot resolve launcher identity");
@@ -659,6 +678,12 @@ int main(int argc, char **argv, char **envp) {
         return 2;
     }
     executable[executable_length] = '\0';
+    if (!realpath(executable, launcher_path)) {
+        refusal("TL-BOOTSTRAP-IDENTITY/launcher-unresolvable", "cannot canonicalize launcher identity");
+        close(subject_fd);
+        return 2;
+    }
+    memcpy(executable, launcher_path, strlen(launcher_path) + 1);
     char *slash = strrchr(executable, '/');
     if (!slash) { refusal("TL-BOOTSTRAP-IDENTITY/launcher-path", "launcher path is malformed"); close(subject_fd); return 2; }
     *slash = '\0';
@@ -669,11 +694,12 @@ int main(int argc, char **argv, char **envp) {
         return 2;
     }
     int bundle_fd = open(bundle_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    int bootstrap_fd = -1, subject_manifest_fd = -1, runtime_fd = -1;
+    int bootstrap_fd = -1, profile_fd = -1, subject_manifest_fd = -1, runtime_fd = -1;
     int runtime_manifest_fd = -1, dependency_fd = -1, dependency_manifest_fd = -1;
     int python_fd = -1;
     if (bundle_fd < 0 ||
         (bootstrap_fd = open_read_only_at(bundle_fd, "bootstrap.py", false)) < 0 ||
+        (profile_fd = open_read_only_at(bundle_fd, "launch-profile.json", false)) < 0 ||
         (subject_manifest_fd = open_read_only_at(bundle_fd, "subject.manifest", false)) < 0 ||
         (runtime_fd = open_read_only_at(bundle_fd, "runtime", true)) < 0 ||
         (runtime_manifest_fd = open_read_only_at(bundle_fd, "runtime.manifest", false)) < 0 ||
@@ -684,7 +710,7 @@ int main(int argc, char **argv, char **envp) {
     }
     int runtime_bin = openat(runtime_fd, "bin", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (runtime_bin < 0 ||
-        (python_fd = openat(runtime_bin, F120_PYTHON_BASENAME,
+        (python_fd = openat(runtime_bin, TL_PYTHON_BASENAME,
                             O_RDONLY | O_NOFOLLOW | O_CLOEXEC)) < 0) {
         refusal("TL-INTERPRETER-IDENTITY/absent", "pinned interpreter is absent from runtime");
         if (runtime_bin >= 0) close(runtime_bin);
@@ -695,28 +721,32 @@ int main(int argc, char **argv, char **envp) {
     char actual[65];
     if (fstat(python_fd, &python_information) < 0 || !S_ISREG(python_information.st_mode) ||
         (python_information.st_mode & 0222) != 0 || sha256_fd(python_fd, actual) < 0 ||
-        strcmp(actual, F120_PYTHON_SHA256) != 0 || sha256_fd(bootstrap_fd, actual) < 0 ||
-        strcmp(actual, F120_BOOTSTRAP_SHA256) != 0) {
+        strcmp(actual, TL_PYTHON_SHA256) != 0 || sha256_fd(bootstrap_fd, actual) < 0 ||
+        strcmp(actual, TL_BOOTSTRAP_SHA256) != 0) {
         refusal("TL-INTERPRETER-IDENTITY/digest-mismatch", "interpreter or bootstrap identity mismatch");
         goto fail;
     }
+    if (sha256_fd(profile_fd, actual) < 0 || strcmp(actual, TL_PROFILE_SHA256) != 0) {
+        refusal("TL-AUTHORITY-SOURCE/profile", "launch profile identity mismatch");
+        goto fail;
+    }
     if (verify_manifest(runtime_fd, runtime_manifest_fd,
-                        F120_RUNTIME_MANIFEST_SHA256, false) < 0) {
+                        TL_RUNTIME_MANIFEST_SHA256, false) < 0) {
         refusal("TL-DEPENDENCY-CLOSURE/runtime", "runtime closure differs from its pinned manifest");
         goto fail;
     }
     if (verify_manifest(dependency_fd, dependency_manifest_fd,
-                        F120_DEPENDENCY_MANIFEST_SHA256, false) < 0) {
+                        TL_DEPENDENCY_MANIFEST_SHA256, false) < 0) {
         refusal("TL-DEPENDENCY-CLOSURE/dependencies", "dependency closure differs from its pinned manifest");
         goto fail;
     }
     if (verify_manifest(subject_fd, subject_manifest_fd,
-                        F120_SUBJECT_MANIFEST_SHA256, true) < 0) {
+                        TL_SUBJECT_MANIFEST_SHA256, true) < 0) {
         refusal("TL-SUBJECT-CLOSURE", "subject closure differs from its pinned manifest");
         goto fail;
     }
 
-    char temporary[] = "/tmp/kilix-f120-authority.XXXXXX";
+    char temporary[] = "/tmp/kilix-trusted-launch.XXXXXX";
     if (!mkdtemp(temporary) || chmod(temporary, 0700) < 0 ||
         path_contains(subject_path, temporary) || path_contains(bundle_path, temporary)) {
         refusal("TL-LAUNCH-CWD/unavailable", "cannot create disjoint empty authority cwd");
@@ -729,7 +759,7 @@ int main(int argc, char **argv, char **envp) {
         rmdir(temporary);
         goto fail;
     }
-    int inherited[] = {subject_fd, bootstrap_fd, subject_manifest_fd, runtime_fd,
+    int inherited[] = {subject_fd, bootstrap_fd, profile_fd, subject_manifest_fd, runtime_fd,
                        runtime_manifest_fd, dependency_fd, dependency_manifest_fd,
                        python_fd, result_pipe[1]};
     for (size_t index = 0; index < sizeof(inherited) / sizeof(inherited[0]); ++index) {
@@ -743,7 +773,7 @@ int main(int argc, char **argv, char **envp) {
 
     char bootstrap_path[64];
     snprintf(bootstrap_path, sizeof(bootstrap_path), "/proc/self/fd/%d", bootstrap_fd);
-    size_t python_path_size = strlen(bundle_path) + strlen(F120_PYTHON_BASENAME) + 15;
+    size_t python_path_size = strlen(bundle_path) + strlen(TL_PYTHON_BASENAME) + 15;
     char *python_path = malloc(python_path_size);
     if (!python_path) {
         refusal("TL-INTERPRETER-IDENTITY/path", "cannot allocate pinned interpreter path");
@@ -751,12 +781,13 @@ int main(int argc, char **argv, char **envp) {
         goto fail_pipes;
     }
     snprintf(python_path, python_path_size, "%s/runtime/bin/%s", bundle_path,
-             F120_PYTHON_BASENAME);
-    char bootstrap_number[32], python_number[32], runtime_number[32];
+             TL_PYTHON_BASENAME);
+    char bootstrap_number[32], profile_number[32], python_number[32], runtime_number[32];
     char runtime_manifest_number[32], dependency_number[32], dependency_manifest_number[32];
     char subject_number[32], subject_manifest_number[32], result_number[32];
     char device_number[64], inode_number[64];
     snprintf(bootstrap_number, sizeof(bootstrap_number), "%d", bootstrap_fd);
+    snprintf(profile_number, sizeof(profile_number), "%d", profile_fd);
     snprintf(python_number, sizeof(python_number), "%d", python_fd);
     snprintf(runtime_number, sizeof(runtime_number), "%d", runtime_fd);
     snprintf(runtime_manifest_number, sizeof(runtime_manifest_number), "%d", runtime_manifest_fd);
@@ -768,17 +799,15 @@ int main(int argc, char **argv, char **envp) {
     snprintf(device_number, sizeof(device_number), "%ju", (uintmax_t)subject_information.st_dev);
     snprintf(inode_number, sizeof(inode_number), "%ju", (uintmax_t)subject_information.st_ino);
 
-    /* The terminal check set is bound by digest alone: the accepted record
-       states which checks concluded, not which subcommand was typed.  Computed
-       here because the bootstrap is handed the same value. */
-    const char *terminal_members =
-        strcmp(command, "check") == 0 ? "contracts\ntests\n" : "cli\n";
-    char terminal_digest[65];
-    sha256_buffer(terminal_members, strlen(terminal_members), terminal_digest);
+    /* The builder derives this digest from the exact ordered child IDs in the
+       canonical profile.  The bootstrap independently re-derives it from the
+       retained profile descriptor before any intentional child starts. */
+    const char *terminal_digest = selected->terminal_sha256;
 
-    size_t fixed_count = 58;  /* 48 base + --profile-id --case-id --launcher-sha256
-                                 --first-process-json --terminal-check-set-sha256 */
-    size_t forwarded = strcmp(command, "cli") == 0 ? (size_t)(argc - 4) : 0;
+    size_t fixed_count = 66;  /* profile FD/hash plus exact launcher/Python paths */
+    size_t forwarded = selected->argument_mode == TL_ARGUMENTS_REQUIRED
+                           ? (size_t)(argc - 4)
+                           : 0;
     char **python_argv = calloc(fixed_count + forwarded + 1, sizeof(*python_argv));
     if (!python_argv) {
         refusal("TL-LAUNCH-ARGV/allocation", "cannot allocate fixed launch argv");
@@ -791,24 +820,28 @@ int main(int argc, char **argv, char **envp) {
     ARG(python_path); ARG("-I"); ARG("-S"); ARG("-B"); ARG(bootstrap_path);
     ARG("--mode"); ARG("outer");
     ARG("--bootstrap-fd"); ARG(bootstrap_number);
-    ARG("--bootstrap-sha256"); ARG(F120_BOOTSTRAP_SHA256);
+    ARG("--bootstrap-sha256"); ARG(TL_BOOTSTRAP_SHA256);
+    ARG("--profile-fd"); ARG(profile_number);
+    ARG("--profile-sha256"); ARG(TL_PROFILE_SHA256);
     ARG("--python-fd"); ARG(python_number);
-    ARG("--python-sha256"); ARG(F120_PYTHON_SHA256);
+    ARG("--python-sha256"); ARG(TL_PYTHON_SHA256);
+    ARG("--python-path"); ARG(python_path);
     ARG("--runtime-fd"); ARG(runtime_number);
     ARG("--runtime-manifest-fd"); ARG(runtime_manifest_number);
-    ARG("--runtime-manifest-sha256"); ARG(F120_RUNTIME_MANIFEST_SHA256);
+    ARG("--runtime-manifest-sha256"); ARG(TL_RUNTIME_MANIFEST_SHA256);
     ARG("--dependency-fd"); ARG(dependency_number);
     ARG("--dependency-manifest-fd"); ARG(dependency_manifest_number);
-    ARG("--dependency-manifest-sha256"); ARG(F120_DEPENDENCY_MANIFEST_SHA256);
+    ARG("--dependency-manifest-sha256"); ARG(TL_DEPENDENCY_MANIFEST_SHA256);
     ARG("--subject-fd"); ARG(subject_number);
     ARG("--subject-path"); ARG(subject_path);
     ARG("--subject-device"); ARG(device_number);
     ARG("--subject-inode"); ARG(inode_number);
     ARG("--subject-manifest-fd"); ARG(subject_manifest_number);
-    ARG("--subject-manifest-sha256"); ARG(F120_SUBJECT_MANIFEST_SHA256);
+    ARG("--subject-manifest-sha256"); ARG(TL_SUBJECT_MANIFEST_SHA256);
     ARG("--profile-id"); ARG(TL_PROFILE_ID);
     ARG("--case-id"); ARG(tl_case_id);
     ARG("--launcher-sha256"); ARG(tl_launcher_sha256);
+    ARG("--launcher-path"); ARG(launcher_path);
     ARG("--first-process-json"); ARG(tl_first_process);
     ARG("--terminal-check-set-sha256"); ARG(terminal_digest);
     ARG("--result-fd"); ARG(result_number);
@@ -879,8 +912,8 @@ int main(int argc, char **argv, char **envp) {
         "\"subject_manifest_sha256\":\"%s\","
         "\"terminal_check_set_sha256\":\"%s\","
         "\"validator_started\":true}\n",
-        F120_BOOTSTRAP_SHA256, tl_case_id, tl_first_process, F120_PYTHON_SHA256,
-        tl_launcher_sha256, run_id, F120_SUBJECT_MANIFEST_SHA256, terminal_digest);
+        TL_BOOTSTRAP_SHA256, tl_case_id, tl_first_process, TL_PYTHON_SHA256,
+        tl_launcher_sha256, run_id, TL_SUBJECT_MANIFEST_SHA256, terminal_digest);
     bool accepted = supervised == 0 && WIFEXITED(child_status) &&
                     WEXITSTATUS(child_status) == 0 && expected_size > 0 &&
                     (size_t)expected_size == result_size &&
@@ -901,7 +934,7 @@ int main(int argc, char **argv, char **envp) {
     dprintf(STDOUT_FILENO, "%s", expected);
     close(python_fd); close(dependency_manifest_fd); close(dependency_fd);
     close(runtime_manifest_fd); close(runtime_fd); close(subject_manifest_fd);
-    close(bootstrap_fd); close(bundle_fd); close(subject_fd);
+    close(profile_fd); close(bootstrap_fd); close(bundle_fd); close(subject_fd);
     return 0;
 
 fail_pipes:
@@ -918,6 +951,7 @@ fail:
     if (runtime_manifest_fd >= 0) close(runtime_manifest_fd);
     if (runtime_fd >= 0) close(runtime_fd);
     if (subject_manifest_fd >= 0) close(subject_manifest_fd);
+    if (profile_fd >= 0) close(profile_fd);
     if (bootstrap_fd >= 0) close(bootstrap_fd);
     if (bundle_fd >= 0) close(bundle_fd);
     close(subject_fd);
