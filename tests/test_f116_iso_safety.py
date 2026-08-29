@@ -51,6 +51,54 @@ class F116IsoSafetyTests(unittest.TestCase):
                 vm.write_unattended_media_warnings(out)
             self.assertEqual(victim.read_text(), "preserve me\n")
 
+    def test_preflight_reuses_exact_shared_warning_for_a_different_iso(self):
+        with tempfile.TemporaryDirectory() as td:
+            first = Path(td) / "first.iso"
+            second = Path(td) / "second.iso"
+            vm.write_unattended_media_warnings(first)
+
+            vm.preflight_unattended_output(second)
+
+            directory_warning, _sibling_warning = vm.unattended_warning_paths(second)
+            self.assertEqual(
+                directory_warning.read_text(),
+                vm.unattended_directory_warning_content(),
+            )
+
+    def test_preflight_still_refuses_the_output_or_its_sibling_warning(self):
+        for existing in ("output", "sibling warning"):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "candidate.iso"
+                if existing == "output":
+                    out.write_bytes(b"existing ISO")
+                else:
+                    _directory_warning, sibling_warning = vm.unattended_warning_paths(out)
+                    sibling_warning.write_text(
+                        vm.unattended_sibling_warning_content(out)
+                    )
+
+                with self.assertRaises(SystemExit):
+                    vm.preflight_unattended_output(out)
+
+    def test_preflight_refuses_unsafe_or_changed_shared_warning(self):
+        for existing in ("symlink", "non-file", "different content"):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as td:
+                out = Path(td) / "candidate.iso"
+                directory_warning, _sibling_warning = vm.unattended_warning_paths(out)
+                victim = Path(td) / "victim"
+                if existing == "symlink":
+                    victim.write_text("preserve me\n")
+                    directory_warning.symlink_to(victim)
+                elif existing == "non-file":
+                    directory_warning.mkdir()
+                else:
+                    directory_warning.write_text("not the expected warning\n")
+
+                with self.assertRaises(SystemExit):
+                    vm.preflight_unattended_output(out)
+                if existing == "symlink":
+                    self.assertEqual(victim.read_text(), "preserve me\n")
+
     def test_automated_summary_warns_and_interactive_summary_does_not(self):
         automated = io.StringIO()
         with contextlib.redirect_stdout(automated):

@@ -190,6 +190,50 @@ def unattended_warning_paths(out_iso: Path) -> tuple[Path, Path]:
     )
 
 
+def unattended_directory_warning_content() -> str:
+    return (
+        "UNATTENDED VM TEST IMAGES — NOT INSTALLATION MEDIA\n\n"
+        f"{UNATTENDED_WARNING}\n"
+        f"Every unattended ISO carries volume label {UNATTENDED_VOLUME_ID}.\n"
+    )
+
+
+def unattended_sibling_warning_content(out_iso: Path) -> str:
+    return (
+        f"{out_iso.name}\n\n{UNATTENDED_WARNING}\n"
+        f"Expected ISO 9660 volume label: {UNATTENDED_VOLUME_ID}\n"
+    )
+
+
+def _is_exact_regular_warning(path: Path, content: str) -> bool:
+    """Accept only the ordinary warning file this builder would write."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        return path.read_text(encoding="utf-8") == content
+    except (OSError, UnicodeError):
+        return False
+
+
+def preflight_unattended_output(out_iso: Path) -> None:
+    """Refuse output collisions while allowing the shared safety carrier."""
+    directory_warning, sibling_warning = unattended_warning_paths(out_iso)
+    for path in (out_iso, sibling_warning):
+        if path.exists() or path.is_symlink():
+            die(f"VM artifact output already exists: {path}; "
+                "pass --replace explicitly")
+
+    # This warning belongs to the directory, not to one ISO. A later build
+    # with a different output name must retain and reuse the exact safe file.
+    # Anything else remains a collision; the writer repeats this validation
+    # immediately before its atomic write, so a later substitution is refused.
+    if (directory_warning.exists() or directory_warning.is_symlink()) \
+            and not _is_exact_regular_warning(
+                directory_warning, unattended_directory_warning_content()):
+        die(f"VM artifact output already exists: {directory_warning}; "
+            "pass --replace explicitly")
+
+
 def _write_warning_file(path: Path, content: str, *, replace: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink() or (path.exists() and not path.is_file()):
@@ -219,15 +263,12 @@ def write_unattended_media_warnings(out_iso: Path, *, replace: bool = False) -> 
     directory_warning, sibling_warning = unattended_warning_paths(out_iso)
     _write_warning_file(
         directory_warning,
-        "UNATTENDED VM TEST IMAGES — NOT INSTALLATION MEDIA\n\n"
-        f"{UNATTENDED_WARNING}\n"
-        f"Every unattended ISO carries volume label {UNATTENDED_VOLUME_ID}.\n",
+        unattended_directory_warning_content(),
         replace=replace,
     )
     _write_warning_file(
         sibling_warning,
-        f"{out_iso.name}\n\n{UNATTENDED_WARNING}\n"
-        f"Expected ISO 9660 volume label: {UNATTENDED_VOLUME_ID}\n",
+        unattended_sibling_warning_content(out_iso),
         replace=replace,
     )
 
@@ -2108,13 +2149,7 @@ def main() -> None:
     if vbox_exists(cfg.name) and not args.replace:
         die(f"a VM named {cfg.name!r} already exists; pass --replace explicitly")
     if out is not None and not args.replace:
-        existing_vm_outputs = [
-            path for path in (out, *unattended_warning_paths(out))
-            if path.exists()
-        ]
-        if existing_vm_outputs:
-            die(f"VM artifact output already exists: {existing_vm_outputs[0]}; "
-                "pass --replace explicitly")
+        preflight_unattended_output(out)
     report_path = args.report.resolve() if args.report else None
     if report_path is not None and not args.replace:
         existing_report_outputs = [
