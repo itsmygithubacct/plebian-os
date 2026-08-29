@@ -187,8 +187,13 @@ load_release_manifest() {
 # A named release manifest is authoritative; without one, an explicit value
 # takes precedence over the repo VERSION file.
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-$(cat "$HERE/VERSION" 2>/dev/null || echo 0.0.0-dev)}"
-PLEBIAN_OS_ISO_VOLUME_ID="PLEBIAN-OS $PLEBIAN_OS_VERSION AMD64"
-PLEBIAN_OS_MEDIA_INFO="Plebian-OS $PLEBIAN_OS_VERSION amd64 installer (Debian 13 trixie base)"
+if [ "${PLEBIAN_OS_UNATTENDED_DISK:-0}" = 1 ]; then
+    PLEBIAN_OS_ISO_VOLUME_ID="PLEBIAN-TEST-ERASES-DISK"
+    PLEBIAN_OS_MEDIA_INFO="Plebian-OS $PLEBIAN_OS_VERSION unattended test installer - ERASES TARGET DISK"
+else
+    PLEBIAN_OS_ISO_VOLUME_ID="PLEBIAN-OS $PLEBIAN_OS_VERSION AMD64"
+    PLEBIAN_OS_MEDIA_INFO="Plebian-OS $PLEBIAN_OS_VERSION amd64 installer (Debian 13 trixie base)"
+fi
 # Plebian-OS builds amd64 images, so even non-release installs use a known-good
 # verified fallback engine instead of silently consenting to an unpinned asset.
 : "${KILIX_PREBUILT_VERSION:=0.47.4}"

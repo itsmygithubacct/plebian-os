@@ -310,6 +310,13 @@ build/remaster-iso.sh                          # auto-download the netinst, buil
 build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netinst
 ```
 
+For publishable, version-bound installation media, follow
+[`RELEASING.md`](RELEASING.md) rather than copying the newest ISO from an
+artifacts directory. Automated VM images are isolated under
+`~/.local/gpu_terminal/plebian-os/artifacts/acceptance/`; they auto-install,
+erase the target disk, carry the volume label `PLEBIAN-TEST-ERASES-DISK`, and
+must never be written to USB or booted on real hardware.
+
 Fresh installations keep the core source checkouts in
 `~/.local/gpu_terminal/sources/{plebian-os,pleb,kilix}`, Kilix-95 in
 `~/.local/gpu_terminal/sources/kilix-desktops/kilix-95`, and runtime data in

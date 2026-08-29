@@ -109,8 +109,9 @@ manifest_commit="$(git -C "$ROOT" rev-parse --verify "${manifest_os_ref}^{commit
 manifest_sha256="$(sha256sum "$manifest" | awk '{print $1}')"
 candidate_short="${candidate_commit:0:12}"
 NAME="${PLEBIAN_OS_ACCEPTANCE_NAME:-plebian-acceptance-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}}"
-OUT="${PLEBIAN_OS_ACCEPTANCE_ISO:-$PLEBIAN_OS_ARTIFACTS/plebian-os-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}-acceptance.iso}"
-REPORT="${PLEBIAN_OS_ACCEPTANCE_REPORT:-$PLEBIAN_OS_ARTIFACTS/plebian-os-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}-acceptance.json}"
+ACCEPTANCE_ARTIFACTS="${PLEBIAN_OS_ACCEPTANCE_ARTIFACTS:-$PLEBIAN_OS_ARTIFACTS/acceptance}"
+OUT="${PLEBIAN_OS_ACCEPTANCE_ISO:-$ACCEPTANCE_ARTIFACTS/plebian-os-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}-acceptance.iso}"
+REPORT="${PLEBIAN_OS_ACCEPTANCE_REPORT:-$ACCEPTANCE_ARTIFACTS/plebian-os-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}-acceptance.json}"
 
 export PLEBIAN_OS_ACCEPTANCE_RELEASE
 export PLEBIAN_OS_ACCEPTANCE_COMMIT="$candidate_commit"
