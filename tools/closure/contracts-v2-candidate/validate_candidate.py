@@ -433,18 +433,18 @@ def declaration_errors(
     notice_list = require_array(notices, f"{label}.notices", errors)
     if len(artifact_list) > MAX_ARTIFACTS or len(unit_list) > MAX_UNITS:
         errors.append(issue("F120-V2-BOUND", f"{label} exceeds artifact/unit bound"))
-    if not licence_list or len(licence_list) > MAX_LICENCE_ENTRIES:
+    if not licence_list:
         errors.append(
             issue(
                 "F120-V2-BOUND",
-                f"{label}.licenses must contain 1..{MAX_LICENCE_ENTRIES} entries",
+                f"{label}.licenses must not be empty",
             )
         )
-    if not notice_list or len(notice_list) > MAX_NOTICE_ENTRIES:
+    if not notice_list:
         errors.append(
             issue(
                 "F120-V2-BOUND",
-                f"{label}.notices must contain 1..{MAX_NOTICE_ENTRIES} entries",
+                f"{label}.notices must not be empty",
             )
         )
     by_id: dict[str, dict[str, Any]] = {}
