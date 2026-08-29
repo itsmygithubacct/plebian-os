@@ -870,7 +870,9 @@ def registration_errors(document: Any) -> list[str]:
                 allow_empty=False,
             )
         )
-    sorted_unique(instance_ids, "components instance_id", errors)
+    comparable_instances = [value for value in instance_ids if isinstance(value, str)]
+    if len(comparable_instances) != len(set(comparable_instances)):
+        errors.append(issue("F120-V2-DUPLICATE-COMPONENT", "registration instance_id"))
     dependencies = require_array(top.get("dependencies"), "dependencies", errors)
     dependency_order: list[tuple[Any, Any, Any, Any]] = []
     for index, raw in enumerate(dependencies):
