@@ -120,6 +120,20 @@ surface is construction-only until the independent review and refreeze stated
 in `P9-STAGED-DEPENDENCY-SEMANTICS.md`; it does not change frozen contract
 bytes or authorize a consumer migration.
 
+`landings` is the matching fail-closed consumer-return surface. It consumes the
+assembled registration and its exact assembly report, 2/2 independently named
+owner sets (required owners and owner receipt paths), and an exact set of
+retained evidence files. It requires one landing record for every
+`staged-prefix` edge and none for any other edge. Each record must bind the
+consumer/provider commits, exact dependency token, linkage/import choice,
+every edge `required_tests` identifier as a passing installed-surface receipt,
+a closed private-API disposition and a passing walked rollback. Evidence files
+are regular non-symlink inputs whose observed digests must match the receipt;
+the canonical report contains IDs, digests and byte counts but no operator
+paths or command text. This R4 surface records complete evidence coverage. It
+does not decide whether the evidence is technically sufficient, accept an
+owner return, edit a consumer worktree or change the frozen contract.
+
 Every registered executable is classified as `native`, `script`,
 `python-interpreter` or `python-script`; scripts bind a named registered
 interpreter. Linux ptrace exec events bind every executable descendant before

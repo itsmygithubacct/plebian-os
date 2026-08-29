@@ -32,6 +32,7 @@ from kilix_f120.errors import (
 from kilix_f120.gitops import canonical_https_url
 from kilix_f120.graph import reverse_dependencies
 from kilix_f120.keys import build_key_sha256
+from kilix_f120.landing import verify_consumer_landings
 from kilix_f120.manifest import emit_workspace_manifest
 from kilix_f120.registration import load_registration
 from kilix_f120.source_cache import ensure_source
@@ -319,6 +320,90 @@ class ClosureIntegrationTest(unittest.TestCase):
             atomic_write_json(path, document)
             paths[owner] = path
         return paths
+
+    def landing_inputs(
+        self, label: str
+    ) -> tuple[Path, Path, dict[str, Path], dict[str, Path], dict[str, dict[str, object]]]:
+        fragments = self.write_owner_fragments(self.owner_fragment_documents(), label)
+        registration = self.root / f"{label}-registration.json"
+        assembly_report = self.root / f"{label}-assembly.json"
+        assemble_registration(
+            [(owner, fragments[owner]) for owner in ("f106", "f110", "f111")],
+            ["f106", "f110", "f111"],
+            workspace_root=self.workspace,
+            output=registration,
+            report=assembly_report,
+        )
+        assembled = load_registration(registration)
+        commits = {
+            component.instance_id: component.expected_commit
+            for component in assembled.components
+        }
+        evidence_paths: dict[str, Path] = {}
+        evidence_references: dict[str, dict[str, str]] = {}
+        for evidence_id in (
+            "f110-linkage",
+            "f110-private-api",
+            "f110-rollback",
+            "f110-unit",
+        ):
+            path = self.root / f"{label}-{evidence_id}.txt"
+            path.write_text(f"retained evidence for {evidence_id}\n", encoding="utf-8")
+            evidence_paths[evidence_id] = path
+            evidence_references[evidence_id] = {
+                "evidence_id": evidence_id,
+                "sha256": file_sha256(path),
+            }
+        receipts: dict[str, dict[str, object]] = {}
+        for owner in ("f106", "f110", "f111"):
+            receipts[owner] = {
+                "assembly_report_sha256": file_sha256(assembly_report),
+                "landings": [],
+                "owner": owner,
+                "registration_sha256": file_sha256(registration),
+                "schema": "kilix.f120.consumer-landing/v1",
+            }
+        receipts["f110"]["landings"] = [
+            {
+                "consumer_commit": commits["f110"],
+                "consumer_instance": "f110",
+                "installed_surface_tests": [
+                    {
+                        "command": ["test-f110-installed-surface", "--unit"],
+                        "evidence": evidence_references["f110-unit"],
+                        "exit_status": 0,
+                        "producing_commit": commits["f110"],
+                        "test_id": "unit",
+                    }
+                ],
+                "linkage": {
+                    "evidence": evidence_references["f110-linkage"],
+                    "kind": "runtime-import",
+                    "producing_commit": commits["f110"],
+                },
+                "private_api": {
+                    "disposition": "not-used",
+                    "evidence": evidence_references["f110-private-api"],
+                    "producing_commit": commits["f110"],
+                },
+                "provider_commit": commits["f106"],
+                "provider_instance": "f106",
+                "recipe_token": "{dependency:f106}",
+                "rollback": {
+                    "command": ["test-f110-rollback", "--provider", "f106"],
+                    "evidence": evidence_references["f110-rollback"],
+                    "exit_status": 0,
+                    "producing_commit": commits["f110"],
+                },
+                "runtime_process": "none",
+            }
+        ]
+        receipt_paths: dict[str, Path] = {}
+        for owner, receipt in receipts.items():
+            path = self.root / f"{label}-{owner}-landing.json"
+            atomic_write_json(path, receipt)
+            receipt_paths[owner] = path
+        return registration, assembly_report, receipt_paths, evidence_paths, receipts
 
     def test_cold_warm_and_clean_cache_are_exact(self) -> None:
         cache = self.root / "cache"
@@ -727,6 +812,289 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertTrue(symlink_output.is_symlink())
         self.assertEqual(victim.read_bytes(), b"keep victim\n")
         self.assertFalse(symlink_report.exists())
+
+    def test_consumer_landings_are_order_independent_and_cover_every_edge(self) -> None:
+        registration, assembly, receipts, evidence, _ = self.landing_inputs(
+            "landing-order"
+        )
+        first_output = self.root / "landing-order-first.json"
+        second_output = self.root / "landing-order-second.json"
+        first = verify_consumer_landings(
+            registration,
+            assembly,
+            [(owner, receipts[owner]) for owner in ("f111", "f106", "f110")],
+            ["f110", "f111", "f106"],
+            list(reversed(list(evidence.items()))),
+            output=first_output,
+        )
+        second = verify_consumer_landings(
+            registration,
+            assembly,
+            [(owner, receipts[owner]) for owner in ("f106", "f110", "f111")],
+            ["f106", "f110", "f111"],
+            list(evidence.items()),
+            output=second_output,
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first_output.read_bytes(), second_output.read_bytes())
+        self.assertEqual(
+            (
+                first["owners"],
+                first["staged_prefix_edges"],
+                first["installed_surface_tests"],
+                first["evidence_files"],
+            ),
+            (3, 1, 1, 4),
+        )
+        self.assertEqual(first["required_owners"], ["f106", "f110", "f111"])
+        self.assertEqual(first["registration_sha256"], file_sha256(registration))
+        self.assertEqual(first["assembly_report_sha256"], file_sha256(assembly))
+        self.assertNotIn(str(self.root), first_output.read_text(encoding="utf-8"))
+
+        zero_documents = self.owner_fragment_documents()
+        zero_documents["f110"]["dependencies"] = []
+        zero_documents["f110"]["components"][0]["build"]["environment"] = {}
+        zero_fragments = self.write_owner_fragments(zero_documents, "landing-zero")
+        zero_registration = self.root / "landing-zero-registration.json"
+        zero_assembly = self.root / "landing-zero-assembly.json"
+        assemble_registration(
+            [(owner, zero_fragments[owner]) for owner in ("f106", "f110", "f111")],
+            ["f106", "f110", "f111"],
+            workspace_root=self.workspace,
+            output=zero_registration,
+            report=zero_assembly,
+        )
+        zero_receipts: list[tuple[str, Path]] = []
+        for owner in ("f106", "f110", "f111"):
+            path = self.root / f"landing-zero-{owner}.json"
+            atomic_write_json(
+                path,
+                {
+                    "assembly_report_sha256": file_sha256(zero_assembly),
+                    "landings": [],
+                    "owner": owner,
+                    "registration_sha256": file_sha256(zero_registration),
+                    "schema": "kilix.f120.consumer-landing/v1",
+                },
+            )
+            zero_receipts.append((owner, path))
+        zero_report = verify_consumer_landings(
+            zero_registration,
+            zero_assembly,
+            zero_receipts,
+            ["f106", "f110", "f111"],
+            [],
+            output=self.root / "landing-zero-report.json",
+        )
+        self.assertEqual(
+            (zero_report["staged_prefix_edges"], zero_report["evidence_files"]),
+            (0, 0),
+        )
+
+    def test_consumer_landings_cli_requires_explicit_absolute_inputs(self) -> None:
+        registration, assembly, receipts, evidence, _ = self.landing_inputs(
+            "landing-cli"
+        )
+        output = self.root / "landing-cli-report.json"
+        arguments = cli_parser().parse_args(
+            [
+                "landings",
+                str(registration),
+                str(assembly),
+                "--output",
+                str(output),
+                "--required-owner",
+                "f106",
+                "--required-owner",
+                "f110",
+                "--required-owner",
+                "f111",
+                *sum(
+                    (["--receipt", f"{owner}={path}"] for owner, path in receipts.items()),
+                    [],
+                ),
+                *sum(
+                    (
+                        ["--evidence", f"{evidence_id}={path}"]
+                        for evidence_id, path in evidence.items()
+                    ),
+                    [],
+                ),
+            ]
+        )
+        with mock.patch("kilix_f120.cli._print_json") as print_json:
+            self.assertEqual(arguments.handler(arguments), 0)
+        print_json.assert_called_once()
+        self.assertEqual(load_json(output)["staged_prefix_edges"], 1)
+
+    def test_consumer_landings_refuse_owner_assembly_and_input_identity_drift(self) -> None:
+        registration, assembly, receipts, evidence, _ = self.landing_inputs(
+            "landing-input-drift"
+        )
+        with self.assertRaisesRegex(RegistrationError, "receipt set differs"):
+            verify_consumer_landings(
+                registration,
+                assembly,
+                [("f106", receipts["f106"]), ("f110", receipts["f110"])],
+                ["f106", "f110", "f111"],
+                list(evidence.items()),
+                output=self.root / "landing-missing-owner.json",
+            )
+
+        changed_assembly = load_json(assembly)
+        changed_assembly["staged_prefix_edges"] = 0
+        atomic_write_json(assembly, changed_assembly)
+        with self.assertRaisesRegex(RegistrationError, "staged-prefix edge count differs"):
+            verify_consumer_landings(
+                registration,
+                assembly,
+                list(receipts.items()),
+                ["f106", "f110", "f111"],
+                list(evidence.items()),
+                output=self.root / "landing-changed-assembly.json",
+            )
+
+        registration2, assembly2, receipts2, evidence2, _ = self.landing_inputs(
+            "landing-symlink"
+        )
+        receipt_link = self.root / "landing-receipt-link.json"
+        receipt_link.symlink_to(receipts2["f110"])
+        with self.assertRaisesRegex(RegistrationError, "without following links"):
+            verify_consumer_landings(
+                registration2,
+                assembly2,
+                [
+                    ("f106", receipts2["f106"]),
+                    ("f110", receipt_link),
+                    ("f111", receipts2["f111"]),
+                ],
+                ["f106", "f110", "f111"],
+                list(evidence2.items()),
+                output=self.root / "landing-symlink-output.json",
+            )
+
+    def test_consumer_landings_refuse_edge_commit_test_and_claim_mutations(self) -> None:
+        def missing_edge(receipt: dict[str, object]) -> None:
+            receipt["landings"] = []
+
+        def unknown_edge(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["provider_instance"] = "missing"
+
+        def wrong_consumer_commit(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["consumer_commit"] = "1" * 40
+
+        def wrong_provider_commit(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["provider_commit"] = "2" * 40
+
+        def wrong_recipe_token(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["recipe_token"] = "{dependency:f111}"
+
+        def missing_test(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["installed_surface_tests"] = []
+
+        def failed_test(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["installed_surface_tests"][0]["exit_status"] = 1
+
+        def invalid_private_api(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["private_api"]["disposition"] = "still-used"
+
+        def wrong_rollback_commit(receipt: dict[str, object]) -> None:
+            receipt["landings"][0]["rollback"]["producing_commit"] = "3" * 40
+
+        mutations = {
+            "missing-edge": missing_edge,
+            "unknown-edge": unknown_edge,
+            "wrong-consumer-commit": wrong_consumer_commit,
+            "wrong-provider-commit": wrong_provider_commit,
+            "wrong-recipe-token": wrong_recipe_token,
+            "missing-test": missing_test,
+            "failed-test": failed_test,
+            "invalid-private-api": invalid_private_api,
+            "wrong-rollback-commit": wrong_rollback_commit,
+        }
+        for index, (label, mutate) in enumerate(mutations.items()):
+            with self.subTest(label=label):
+                registration, assembly, receipts, evidence, documents = self.landing_inputs(
+                    f"landing-mutation-{index}"
+                )
+                mutate(documents["f110"])
+                atomic_write_json(receipts["f110"], documents["f110"])
+                with self.assertRaises(RegistrationError):
+                    verify_consumer_landings(
+                        registration,
+                        assembly,
+                        list(receipts.items()),
+                        ["f106", "f110", "f111"],
+                        list(evidence.items()),
+                        output=self.root / f"landing-mutation-{index}-output.json",
+                    )
+
+    def test_consumer_landings_refuse_missing_extra_changed_or_aliased_evidence(self) -> None:
+        registration, assembly, receipts, evidence, _ = self.landing_inputs(
+            "landing-evidence"
+        )
+        with self.assertRaisesRegex(RegistrationError, "evidence set differs"):
+            verify_consumer_landings(
+                registration,
+                assembly,
+                list(receipts.items()),
+                ["f106", "f110", "f111"],
+                [(key, value) for key, value in evidence.items() if key != "f110-unit"],
+                output=self.root / "landing-missing-evidence.json",
+            )
+        extra = self.root / "landing-extra-evidence.txt"
+        extra.write_text("unexpected evidence\n", encoding="utf-8")
+        with self.assertRaisesRegex(RegistrationError, "evidence set differs"):
+            verify_consumer_landings(
+                registration,
+                assembly,
+                list(receipts.items()),
+                ["f106", "f110", "f111"],
+                [*evidence.items(), ("unexpected", extra)],
+                output=self.root / "landing-extra-evidence.json",
+            )
+        evidence["f110-unit"].write_text("changed evidence\n", encoding="utf-8")
+        with self.assertRaisesRegex(RegistrationError, "evidence digest differs"):
+            verify_consumer_landings(
+                registration,
+                assembly,
+                list(receipts.items()),
+                ["f106", "f110", "f111"],
+                list(evidence.items()),
+                output=self.root / "landing-changed-evidence.json",
+            )
+
+        registration2, assembly2, receipts2, evidence2, _ = self.landing_inputs(
+            "landing-evidence-alias"
+        )
+        aliased = dict(evidence2)
+        aliased["f110-private-api"] = evidence2["f110-linkage"]
+        with self.assertRaisesRegex(RegistrationError, "distinct identities"):
+            verify_consumer_landings(
+                registration2,
+                assembly2,
+                list(receipts2.items()),
+                ["f106", "f110", "f111"],
+                list(aliased.items()),
+                output=self.root / "landing-aliased-evidence.json",
+            )
+
+    def test_consumer_landings_never_overwrite_an_existing_report(self) -> None:
+        registration, assembly, receipts, evidence, _ = self.landing_inputs(
+            "landing-no-overwrite"
+        )
+        output = self.root / "landing-existing-report.json"
+        output.write_bytes(b"keep landing report\n")
+        with self.assertRaises(ContractError):
+            verify_consumer_landings(
+                registration,
+                assembly,
+                list(receipts.items()),
+                ["f106", "f110", "f111"],
+                list(evidence.items()),
+                output=output,
+            )
+        self.assertEqual(output.read_bytes(), b"keep landing report\n")
 
     def test_staged_dependency_changes_rebuild_the_consumer(self) -> None:
         consumer_repository = self.workspace / "consumer"

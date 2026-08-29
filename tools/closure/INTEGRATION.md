@@ -121,6 +121,51 @@ The report binds every fragment digest, the exact component set, provider-first
 build order and assembled registration digest. It is private evidence and does
 not accept a fragment or authorize a consumer conversion.
 
+## Exact consumer-landing evidence
+
+After the 3/3 owner fragments are assembled, name those same 3/3 owners again
+and supply one receipt file per owner. Also supply every evidence ID referenced
+by those receipts through a separate explicit list; use no glob:
+
+```sh
+/external/accepted/f120-authority --subject /exact/export/tools/closure cli \
+  landings /private/p9/registration.json \
+  /private/p9/registration-assembly-report.json \
+  --output /private/p9/consumer-landing-report.json \
+  --required-owner f106 --receipt f106=/reviewed/f106-landings.json \
+  --required-owner f110 --receipt f110=/reviewed/f110-landings.json \
+  --required-owner f111 --receipt f111=/reviewed/f111-landings.json \
+  --evidence f110-telemetry-link=/retained/f110-telemetry-link.txt \
+  --evidence f110-telemetry-installed=/retained/f110-telemetry-installed.txt \
+  --evidence f110-telemetry-private=/retained/f110-telemetry-private.txt \
+  --evidence f110-telemetry-rollback=/retained/f110-telemetry-rollback.txt
+```
+
+The evidence names are illustrative; the owners return the actual exact set.
+Every owner receipt has schema `kilix.f120.consumer-landing/v1`, binds the
+registration and assembly-report SHA-256 values, and carries a canonically
+ordered `landings` array. Owners with 0 staged edges return an empty array,
+rather than disappearing from the owner population. Each landing contains:
+
+- consumer/provider instance IDs and their exact registered commits;
+- `runtime_process` and the exact `{dependency:PROVIDER}` recipe token;
+- linkage `kind` (`static-link`, `dynamic-link`, `runtime-import`,
+  `command-exec` or `data-interface`), producing consumer commit and evidence;
+- one passing installed-surface record for every canonically ordered edge
+  `required_tests` ID, including argv, producing commit, zero exit status and
+  evidence;
+- private-API `disposition` (`not-used` or `removed`), producing commit and
+  evidence; and
+- walked rollback argv, producing commit, zero exit status and evidence.
+
+An evidence reference is exactly `evidence_id` plus lowercase nonzero SHA-256.
+Every referenced ID must be supplied, no unreferenced ID is accepted, and all
+input files must be distinct regular non-symlinks that remain unchanged while
+captured. Output is new-file-only and omits local paths and command arguments.
+The report proves exact mechanical coverage for 3/3 owner returns and all N/N
+staged edges; it grants acceptance for 0/3 owners. Independent owner/release
+review still decides whether each retained result actually proves its claim.
+
 Consumers compile only from the staged public prefix: headers beneath
 `PREFIX/include`, libraries beneath `PREFIX/lib`, pkg-config metadata beneath
 `PREFIX/lib/pkgconfig` or `PREFIX/share/pkgconfig`, and commands beneath

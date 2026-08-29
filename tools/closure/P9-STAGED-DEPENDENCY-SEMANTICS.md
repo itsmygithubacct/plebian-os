@@ -108,6 +108,26 @@ atomic new-file publication and never overwrite an existing byte. This is a
 mechanical landing surface; only F106/F110/F111 owners can supply or review
 their facts.
 
+`landings` closes the mechanical gap between those owner facts and the
+assembled graph. The required-owner set and receipt-owner set must match
+exactly. The assembly report must bind the captured registration and map every
+component to exactly one required owner. Every `staged-prefix` edge then has
+exactly one landing filed by its consumer's mapped owner; non-staged edges have
+zero landing records. An owner with zero such edges still supplies one receipt
+with an empty array.
+
+Each edge landing binds the exact registered endpoint commits, runtime-process
+identity and `{dependency:PROVIDER}` token. Its installed-surface test IDs must
+equal the edge's complete canonical `required_tests` list. Linkage/import,
+every installed-surface test, private-API disposition and rollback each bind a
+nonzero SHA-256 evidence reference and the exact consumer commit; test and
+rollback exits must be integer zero. `not-used` and `removed` are the only
+closed private-API states. Referenced evidence IDs and explicitly supplied
+regular non-symlink files form equal sets, and observed evidence hashes must
+match. The output report omits local paths and command text, publishes only as
+a new file and cannot accept the technical sufficiency of the owner evidence.
+That judgment remains outside this construction candidate.
+
 `kilix.f120.stage-evidence-report/v1` retains 2/2 exact per-component vectors
 without changing the default `kilix.f120.stage-report/v1` shape. Source
 receipts bind instance, canonical URL, resolved commit, committed-tree/cache

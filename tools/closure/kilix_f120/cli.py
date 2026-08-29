@@ -18,6 +18,7 @@ from .canonical import (
 from .contracts import frozen_validator, validate_path, verify_contract_package
 from .errors import ClosureError
 from .graph import reverse_dependencies
+from .landing import verify_consumer_landings
 from .manifest import emit_workspace_manifest
 from .registration import load_registration
 from .stage import retire_stage, stage_workspace
@@ -58,6 +59,24 @@ def _owner_fragments(values: list[str]) -> list[tuple[str, Path]]:
     return result
 
 
+def _named_paths(values: list[str], label: str) -> list[tuple[str, Path]]:
+    result: list[tuple[str, Path]] = []
+    names: set[str] = set()
+    for value in values:
+        name, separator, path_value = value.partition("=")
+        if not separator:
+            raise ClosureError(f"{label} must use ID=/absolute/path")
+        name = require_identifier(name, f"{label} ID")
+        path = Path(path_value)
+        if not path.is_absolute():
+            raise ClosureError(f"{label} path must be absolute")
+        if name in names:
+            raise ClosureError(f"duplicate {label} ID: {name}")
+        names.add(name)
+        result.append((name, path))
+    return result
+
+
 def _print_json(document: object) -> None:
     sys.stdout.buffer.write(canonical_bytes(document))
 
@@ -94,6 +113,19 @@ def _resolve(arguments: argparse.Namespace) -> int:
             "schema": "kilix.f120.resolve-report/v1",
         }
     )
+    return 0
+
+
+def _landings(arguments: argparse.Namespace) -> int:
+    document = verify_consumer_landings(
+        arguments.registration,
+        arguments.assembly_report,
+        _named_paths(arguments.receipt, "consumer landing receipt"),
+        arguments.required_owner,
+        _named_paths(arguments.evidence, "consumer landing evidence"),
+        output=arguments.output,
+    )
+    _print_json(document)
     return 0
 
 
@@ -268,6 +300,24 @@ def parser() -> argparse.ArgumentParser:
         "--required-owner", required=True, action="append", metavar="OWNER"
     )
     assemble.set_defaults(handler=_assemble)
+
+    landings = commands.add_parser(
+        "landings",
+        help="bind every staged consumer edge to exact owner landing evidence",
+    )
+    landings.add_argument("registration", type=Path)
+    landings.add_argument("assembly_report", type=Path)
+    landings.add_argument("--output", required=True, type=Path)
+    landings.add_argument(
+        "--required-owner", required=True, action="append", metavar="OWNER"
+    )
+    landings.add_argument(
+        "--receipt", required=True, action="append", metavar="OWNER=/ABSOLUTE/PATH"
+    )
+    landings.add_argument(
+        "--evidence", action="append", default=[], metavar="ID=/ABSOLUTE/PATH"
+    )
+    landings.set_defaults(handler=_landings)
 
     resolve = commands.add_parser("resolve", help="emit an observed workspace manifest")
     resolve.add_argument("registration", type=Path)
