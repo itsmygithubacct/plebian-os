@@ -17,16 +17,23 @@ was rejected by root adjudication.  Review 1 accepted at zero findings; Review
 conditions as closed.  No R3 review transfers to R4.
 
 The decisive R3 High accepted an internally re-bound release lock whose payload
-artifact used `./share/licenses/...` while its own unit's readable licence used
-`share/licenses/...`; the two strings named one staged file but bypassed raw
-string uniqueness.  R4 fixes the acceptance, rather than adding a diagnostic to
-an accepted document, by:
+artifact used `share//licenses/demo/Apache-2.0.txt` or
+`share/./licenses/demo/Apache-2.0.txt` while its own unit's readable licence
+used `share/licenses/demo/Apache-2.0.txt`; the string-distinct spellings name
+one filesystem file but bypassed raw-string uniqueness.  The corrected
+adjudication and cross-family reproduction explicitly distinguish this from the
+already-refused string-exact control.  R4 fixes the acceptance, rather than
+adding a diagnostic to an accepted document, by:
 
 - retaining the frozen normalized POSIX relative-path grammar in registration
-  v3, both generated schemas and the release semantic joins;
+  v3 and both generated schemas, while independently normalizing safe relative
+  paths before artifact uniqueness, staged-artifact, notice-union and
+  copy-closure comparisons;
 - adding a canonical self-consistent fixture that rebinds the unit digest and
-  payload binding after constructing the payload/licence alias, and requiring
-  `F120-V2-PATH` under preflight, qualification and direct release joins;
+  payload binding after constructing the `share//...` payload/licence alias,
+  and requiring both `F120-V2-PATH` and
+  `F120-V2-DUPLICATE-ARTIFACT-PATH` under preflight, qualification and direct
+  release joins for both `share//...` and `share/./...` spellings;
 - requiring exactly one validation mode at the public library boundary as well
   as the CLI boundary; and
 - converting malformed semantic/census aborts into stable named refusals while
@@ -75,7 +82,8 @@ Each reviewer must independently establish:
    paths and contains every referenced artifact's identity, path and digest;
 7. the component union is not treated as the per-payload obligation answer;
 8. payload, shared and exclusive compliance coverage matches §§3.4 and 3.8,
-   including path uniqueness after normalized-path enforcement;
+   including path uniqueness over normalized comparison keys independently of
+   canonical-path syntax refusal;
 9. A, P, licence, notice, build-key and compliance-unit digests have one
    canonical computation and no self-reference;
 10. no CLI or library release path can use `--contract-preflight`, omit its
@@ -89,9 +97,11 @@ Each reviewer must independently establish:
 14. recursive package census refuses added root files and nested fixture bytes,
     while the explicit preflight/qualification modes cannot return a successful
     qualification result when F100 is absent;
-15. the self-consistent payload/licence path-alias fixture produces a real
-    F120-owned path refusal under preflight and qualification, rather than only
-    the temporary F100-validator-unavailable condition;
+15. both self-consistent `share//...` and `share/./...` payload/licence aliases
+    produce `F120-V2-DUPLICATE-ARTIFACT-PATH` under preflight, qualification
+    and direct joins, while the string-exact control remains refused by the same
+    name and qualification does not emit only the temporary
+    F100-validator-unavailable condition;
 16. malformed release toolchain/path shapes and a missing manifest-bound member
     return stable named refusals without a traceback; and
 17. all 24 invalid fixtures reach their independently enumerated primary names.

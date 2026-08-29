@@ -47,7 +47,10 @@ Individual validation has no implicit mode.  It requires exactly one of
 cannot be consumed as a release-qualification result by exit status alone at
 either the CLI or library boundary.  All relative paths use the frozen
 normalized POSIX grammar in the registration parser, both schemas and the
-release joins; alternate spellings cannot create distinct identities for one
+release joins.  The semantic joins additionally normalize safe relative paths
+before every identity comparison, so `share//licenses/...` and
+`share/./licenses/...` collide with `share/licenses/...` even though their raw
+strings differ.  Alternate spellings cannot create distinct identities for one
 staged file.  Schema-invalid documents cannot escape through a traceback: deep
 semantic failures and package-census read failures return stable named
 refusals.

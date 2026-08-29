@@ -232,7 +232,7 @@ EXPECTED_INVALID = {
     "release/invalid/notice-tuple-mismatch.json": "F120-V2-NOTICE-TUPLE-MISMATCH",
     "release/invalid/notice-union-mismatch.json": "F120-V2-NOTICE-UNION-MISMATCH",
     "release/invalid/orphan-compliance-artifact.json": "F120-V2-ORPHAN-COMPLIANCE-ARTIFACT",
-    "release/invalid/payload-license-path-alias.json": "F120-V2-PATH",
+    "release/invalid/payload-license-path-alias.json": "F120-V2-DUPLICATE-ARTIFACT-PATH",
     "release/invalid/payload-without-unit.json": "F120-V2-PAYLOAD-WITHOUT-UNIT",
     "release/invalid/role-mismatch.json": "F120-V2-ROLE-MISMATCH",
     "release/invalid/staged-artifact-mismatch.json": "F120-V2-STAGED-ARTIFACT-MISMATCH",
@@ -388,15 +388,18 @@ def valid_artifact_id(value: Any) -> bool:
     return valid_id(value) and set(value) != {"0"}
 
 
-def valid_relative_path(value: Any) -> bool:
+def normalized_relative_path(value: Any) -> str | None:
     if not isinstance(value, str) or not value or len(value) > 4096 or "\0" in value:
-        return False
+        return None
     path = PurePosixPath(value)
-    return (
-        not path.is_absolute()
-        and ".." not in path.parts
-        and value == path.as_posix()
-    )
+    if path.is_absolute() or ".." in path.parts:
+        return None
+    return path.as_posix()
+
+
+def valid_relative_path(value: Any) -> bool:
+    normalized = normalized_relative_path(value)
+    return normalized is not None and value == normalized
 
 
 def canonical_url_error(value: Any) -> bool:
@@ -461,7 +464,7 @@ def declaration_errors(
             )
         )
     by_id: dict[str, dict[str, Any]] = {}
-    paths: set[str] = set()
+    normalized_paths: set[str] = set()
     for index, raw in enumerate(artifact_list):
         item_label = f"{label}.artifact_declarations[{index}]"
         if not isinstance(raw, dict):
@@ -480,12 +483,16 @@ def declaration_errors(
             errors.append(issue("F120-V2-DUPLICATE-ARTIFACT-ID", str(artifact_id)))
         else:
             by_id[artifact_id] = raw
+        comparison_path = normalized_relative_path(path)
         if not valid_relative_path(path):
             errors.append(issue("F120-V2-PATH", f"{item_label}.path is invalid"))
-        elif path in paths:
-            errors.append(issue("F120-V2-DUPLICATE-ARTIFACT-PATH", str(path)))
-        else:
-            paths.add(path)
+        if comparison_path is not None:
+            if comparison_path in normalized_paths:
+                errors.append(
+                    issue("F120-V2-DUPLICATE-ARTIFACT-PATH", comparison_path)
+                )
+            else:
+                normalized_paths.add(comparison_path)
         errors.extend(kind_role_errors(raw.get("artifact_kind"), role, item_label))
         if role == "internal-stage-manifest":
             errors.append(issue("F120-V3-DECLARED-INTERNAL-MANIFEST", item_label))
@@ -504,7 +511,7 @@ def declaration_errors(
         if isinstance(item, dict)
     }
     notice_union = {
-        (item.get("path"), item.get("sha256"))
+        (normalized_relative_path(item.get("path")), item.get("sha256"))
         for item in notice_list
         if isinstance(item, dict)
     }
@@ -615,7 +622,10 @@ def declaration_errors(
                 continue
             if set(ref) != {"artifact_id", "kind", "path", "sha256"}:
                 errors.append(issue("F120-V2-OBJECT-SHAPE", f"{unit_label}.notices entry"))
-            tuple_value = (ref.get("path"), ref.get("sha256"))
+            tuple_value = (
+                normalized_relative_path(ref.get("path")),
+                ref.get("sha256"),
+            )
             observed_notices.add(tuple_value)
             notice_order.append((ref.get("path"), ref.get("sha256"), ref.get("kind"), ref.get("artifact_id")))
             if ref.get("kind") == "conveyance":
@@ -871,7 +881,18 @@ def registration_errors(document: Any) -> list[str]:
                 errors.append(issue("F120-V2-COPY", f"{label}.build.copies entry"))
             destinations.append(copy_item.get("destination"))
         artifact_paths = [item.get("path") for item in artifacts if isinstance(item, dict)]
-        if set(destinations) != set(artifact_paths) or len(destinations) != len(artifact_paths):
+        normalized_destinations = [
+            normalized_relative_path(value) for value in destinations
+        ]
+        normalized_artifact_paths = [
+            normalized_relative_path(value) for value in artifact_paths
+        ]
+        if (
+            None in normalized_destinations
+            or None in normalized_artifact_paths
+            or set(normalized_destinations) != set(normalized_artifact_paths)
+            or len(normalized_destinations) != len(normalized_artifact_paths)
+        ):
             errors.append(issue("F120-V3-COPY-ARTIFACT-CLOSURE", label))
         errors.extend(
             declaration_errors(
@@ -1109,9 +1130,16 @@ def unit_reference(
         errors.append(issue("F120-V2-CROSS-COMPONENT-REFERENCE", f"{unit_label}:{artifact_id}"))
     if artifact.get("artifact_role") != expected_role:
         errors.append(issue("F120-V2-ROLE-MISMATCH", f"{unit_label}:{artifact_id} expected {expected_role}"))
+    staged_path = normalized_relative_path(value.get("staged_path"))
+    artifact_path = normalized_relative_path(artifact.get("path"))
     if not valid_relative_path(value.get("staged_path")):
         errors.append(issue("F120-V2-PATH", f"{unit_label}:{artifact_id} staged_path"))
-    if value.get("staged_path") != artifact.get("path") or value.get("artifact_sha256") != artifact.get("artifact_sha256"):
+    if (
+        staged_path is None
+        or artifact_path is None
+        or staged_path != artifact_path
+        or value.get("artifact_sha256") != artifact.get("artifact_sha256")
+    ):
         errors.append(issue("F120-V2-STAGED-ARTIFACT-MISMATCH", f"{unit_label}:{artifact_id}"))
     return artifact
 
@@ -1124,7 +1152,7 @@ def release_semantic_errors(document: dict[str, Any], *, require_f100: bool) -> 
         if isinstance(item, dict)
     }
     artifacts: dict[str, dict[str, Any]] = {}
-    paths: set[str] = set()
+    normalized_paths: set[str] = set()
     component_artifacts: set[str] = set()
     payload_ids: set[str] = set()
     for index, artifact in enumerate(document.get("artifacts", [])):
@@ -1141,12 +1169,16 @@ def release_semantic_errors(document: dict[str, Any], *, require_f100: bool) -> 
             errors.append(issue("F120-V2-DUPLICATE-ARTIFACT-ID", str(artifact_id)))
         else:
             artifacts[artifact_id] = artifact
+        comparison_path = normalized_relative_path(path)
         if not valid_relative_path(path):
             errors.append(issue("F120-V2-PATH", f"{label}.path"))
-        elif path in paths:
-            errors.append(issue("F120-V2-DUPLICATE-ARTIFACT-PATH", str(path)))
-        else:
-            paths.add(path)
+        if comparison_path is not None:
+            if comparison_path in normalized_paths:
+                errors.append(
+                    issue("F120-V2-DUPLICATE-ARTIFACT-PATH", comparison_path)
+                )
+            else:
+                normalized_paths.add(comparison_path)
         instance = artifact.get("component_instance")
         component = components.get(instance)
         if component is None:
@@ -1203,7 +1235,7 @@ def release_semantic_errors(document: dict[str, Any], *, require_f100: bool) -> 
     }
     component_notice_union: dict[str, set[tuple[Any, Any]]] = {
         instance: {
-            (item.get("path"), item.get("sha256"))
+            (normalized_relative_path(item.get("path")), item.get("sha256"))
             for item in component.get("notices", [])
             if isinstance(item, dict)
         }
@@ -1313,7 +1345,10 @@ def release_semantic_errors(document: dict[str, Any], *, require_f100: bool) -> 
             )
             if kind == "conveyance":
                 conveyance += 1
-            tuple_value = (value.get("path"), value.get("sha256"))
+            tuple_value = (
+                normalized_relative_path(value.get("path")),
+                value.get("sha256"),
+            )
             observed_notices[instance].add(tuple_value)
             notice_order.append((value.get("path"), value.get("sha256"), kind, value.get("artifact_id")))
             if tuple_value not in component_notice_union[instance]:
@@ -1863,33 +1898,85 @@ def r3_adjudication_regression_errors(
                 failures.append(f"R4 regression {identity} schema accepted path alias {alias!r}")
 
     # The decisive fixture is internally re-bound after staging the payload at
-    # an alias of its own unit's readable licence path.  Both public modes and
-    # the direct release join must reject the acceptance.  Qualification may
-    # also report unavailable F100 authority, but that temporary condition can
-    # no longer be the only F120 refusal.
-    for mode, errors in (
-        (
-            "contract preflight",
-            validate_document(alias_path, available, contract_preflight=True),
+    # an alias of its own unit's readable licence path.  Normalize every safe
+    # relative path before the uniqueness join: canonical-syntax refusal is a
+    # separate defense and must not be the only reason these collisions fail.
+    def rebound_path_alias(spelling: str) -> dict[str, Any]:
+        mutation = copy.deepcopy(release)
+        unit = next(item for item in mutation["compliance_units"] if item["unit_id"] == "alpha")
+        payload_reference = unit["payloads"][0]
+        payload_reference["staged_path"] = spelling
+        payload_artifact = next(
+            item
+            for item in mutation["artifacts"]
+            if item["artifact_id"] == payload_reference["artifact_id"]
+        )
+        payload_artifact["path"] = spelling
+        binding_input = copy.deepcopy(unit)
+        binding_input.pop("compliance_binding_sha256", None)
+        binding = hashlib.sha256(
+            b"kilix.f120.compliance-unit/v1\0" + canonical_bytes(binding_input)
+        ).hexdigest()
+        unit["compliance_binding_sha256"] = binding
+        payload_artifact["compliance_binding_sha256"] = binding
+        return mutation
+
+    licence_path = next(
+        item for item in release["compliance_units"] if item["unit_id"] == "alpha"
+    )["license_texts"][0]["staged_path"]
+    alias_mutations = (
+        ("double separator", "share//licenses/demo/Apache-2.0.txt"),
+        ("dot segment", "share/./licenses/demo/Apache-2.0.txt"),
+    )
+    if alias_release != rebound_path_alias(alias_mutations[0][1]):
+        failures.append("R4 regression generated double-separator fixture drifted")
+    with tempfile.TemporaryDirectory() as temporary:
+        for index, (label, spelling) in enumerate(alias_mutations):
+            mutation = rebound_path_alias(spelling)
+            path = Path(temporary) / f"path-alias-{index}.json"
+            path.write_bytes(canonical_bytes(mutation))
+            for mode, errors in (
+                (
+                    "contract preflight",
+                    validate_document(path, available, contract_preflight=True),
+                ),
+                (
+                    "release qualification",
+                    validate_document(path, available, release_qualification=True),
+                ),
+                (
+                    "direct release joins",
+                    release_semantic_errors(mutation, require_f100=False),
+                ),
+            ):
+                require_code(errors, "F120-V2-PATH", f"{label} {mode}")
+                require_code(
+                    errors,
+                    "F120-V2-DUPLICATE-ARTIFACT-PATH",
+                    f"{label} normalized collision {mode}",
+                )
+            qualification_errors = validate_document(
+                path, available, release_qualification=True
+            )
+            non_temporary = [
+                error
+                for error in qualification_errors
+                if "F120-V2-F100-VALIDATOR-UNAVAILABLE" not in error
+            ]
+            if not non_temporary:
+                failures.append(
+                    f"R4 regression {label} emitted only temporary F100 refusal"
+                )
+
+    # Preserve the already-working raw-string control while proving that the
+    # two distinct spellings above reach the same normalized collision name.
+    require_code(
+        release_semantic_errors(
+            rebound_path_alias(licence_path), require_f100=False
         ),
-        (
-            "release qualification",
-            validate_document(alias_path, available, release_qualification=True),
-        ),
-        (
-            "direct release joins",
-            release_semantic_errors(alias_release, require_f100=False),
-        ),
-    ):
-        require_code(errors, "F120-V2-PATH", f"payload/licence alias {mode}")
-    qualification_errors = validate_document(alias_path, available, release_qualification=True)
-    non_temporary = [
-        error
-        for error in qualification_errors
-        if "F120-V2-F100-VALIDATOR-UNAVAILABLE" not in error
-    ]
-    if not non_temporary:
-        failures.append("R4 regression payload/licence alias emitted only temporary F100 refusal")
+        "F120-V2-DUPLICATE-ARTIFACT-PATH",
+        "exact-string payload/licence collision",
+    )
 
     # L-01: the library has no implicit permissive mode, even when a caller
     # bypasses argparse.
@@ -1987,6 +2074,11 @@ def self_test(available: dict[str, Draft202012Validator]) -> int:
         errors = validate_document(path, available, contract_preflight=True)
         relative = path.relative_to(FIXTURES).as_posix()
         expected = EXPECTED_INVALID.get(relative)
+        observed_refusal_families.update(
+            family
+            for family in EXPECTED_REFUSAL_FAMILIES
+            if any(family in error for error in errors)
+        )
         if not errors:
             failures.append(f"invalid fixture accepted: {relative}")
         elif expected is not None and not any(expected in error for error in errors):

@@ -519,14 +519,14 @@
       "artifact_role": "payload",
       "artifact_sha256": "22d1a759a3cdf00881d2e48f6a449670b057271ddd5ef0e87ffb303128cb7f22",
       "build_key_sha256": "56289de8caefafb9a884a86e46ed7a12388579c6adc81083029f2344c5ff4033",
-      "compliance_binding_sha256": "ac2c0a8483f7b7a090f619cf1ad003a23a87a6c92c8d8c330a8e3d3011552ed8",
+      "compliance_binding_sha256": "74f19f937675f5c1cfb50ce3054b529cec7af2dbc9f044bd1b3d9ead283d5077",
       "component_instance": "f120-v2-demo",
       "distribution_unit_id": "alpha",
       "features": [
         "carrier-v2"
       ],
       "licenses_sha256": "33d3ed9e47d31acb574b509103f989becb0b499a51968d59aa3cc3a635a10f0b",
-      "path": "./share/licenses/demo/Apache-2.0.txt",
+      "path": "share//licenses/demo/Apache-2.0.txt",
       "source_sha256": "a8ef86c152475f7206e99d3647870b6bfd48c9585157e9cc5516311085b2a80a",
       "toolchain_digest": "fe0062f9c381c693c0bb90bc2f9361915b0dabaaa390a36a9d418ab252ea430e"
     },
@@ -619,7 +619,7 @@
         "artifact_sha256": "9f10bdfbdd1128c6a9a432527e51f2779b3e6e1f2098572c46ebf6673bb99e54",
         "staged_path": "share/compliance/alpha/carrier-manifest"
       },
-      "compliance_binding_sha256": "ac2c0a8483f7b7a090f619cf1ad003a23a87a6c92c8d8c330a8e3d3011552ed8",
+      "compliance_binding_sha256": "74f19f937675f5c1cfb50ce3054b529cec7af2dbc9f044bd1b3d9ead283d5077",
       "compliance_manifest": {
         "artifact_id": "alpha-compliance-manifest",
         "artifact_sha256": "f771ab213aee8e5fae00ab047f9c90ecd3799d6244c93f83b6eb4bc5ba6b3926",
@@ -671,7 +671,7 @@
         {
           "artifact_id": "payload-alpha",
           "artifact_sha256": "22d1a759a3cdf00881d2e48f6a449670b057271ddd5ef0e87ffb303128cb7f22",
-          "staged_path": "./share/licenses/demo/Apache-2.0.txt"
+          "staged_path": "share//licenses/demo/Apache-2.0.txt"
         }
       ],
       "unit_id": "alpha",

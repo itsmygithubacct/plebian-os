@@ -1016,7 +1016,7 @@ def invalid_fixtures(
     alias_unit = payload_licence_alias["compliance_units"][0]
     payload_reference = alias_unit["payloads"][0]
     licence_path = alias_unit["license_texts"][0]["staged_path"]
-    aliased_path = f"./{licence_path}"
+    aliased_path = licence_path.replace("/", "//", 1)
     payload_reference["staged_path"] = aliased_path
     for artifact in payload_licence_alias["artifacts"]:
         if artifact["artifact_id"] == payload_reference["artifact_id"]:
