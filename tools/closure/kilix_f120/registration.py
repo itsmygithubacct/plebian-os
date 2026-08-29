@@ -525,8 +525,10 @@ def _parse_component(value: Any, index: int) -> ComponentRegistration:
     )
 
 
-def load_registration(path: Path) -> Registration:
-    document = _object(load_json(path), "registration")
+def registration_from_document(value: Any) -> Registration:
+    """Parse one already-captured registration document without rereading it."""
+
+    document = _object(value, "registration")
     _keys(document, {"schema", "workspace_root", "components", "dependencies"}, {"schema", "workspace_root", "components", "dependencies"}, "registration")
     if document["schema"] != REGISTRATION_ID:
         raise RegistrationError(f"unknown registration schema: {document['schema']!r}")
@@ -602,3 +604,7 @@ def load_registration(path: Path) -> Registration:
     ):
         raise RegistrationError("dependencies must be in canonical edge order")
     return Registration(workspace_root.resolve(), components, tuple(dependencies))
+
+
+def load_registration(path: Path) -> Registration:
+    return registration_from_document(load_json(path))

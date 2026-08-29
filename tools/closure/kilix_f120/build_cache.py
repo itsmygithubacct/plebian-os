@@ -10,7 +10,7 @@ import subprocess
 import tarfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping
+from typing import Any, Collection, Mapping
 
 from .cache import (
     cache_lock,
@@ -207,18 +207,19 @@ def _recipe_values(recipe: BuildRecipe) -> list[str]:
     ]
 
 
-def _verify_recipe_dependency_surface(
-    recipe: BuildRecipe, dependencies: Mapping[str, Path]
+def verify_recipe_dependency_surface(
+    recipe: BuildRecipe, dependency_instances: Collection[str]
 ) -> None:
+    expected = set(dependency_instances)
     values = _recipe_values(recipe)
     referenced = {
         match.group(1)
         for value in values
         for match in DEPENDENCY_TOKEN_RE.finditer(value)
     }
-    if referenced != set(dependencies):
-        missing = sorted(set(dependencies) - referenced)
-        undeclared = sorted(referenced - set(dependencies))
+    if referenced != expected:
+        missing = sorted(expected - referenced)
+        undeclared = sorted(referenced - expected)
         raise BuildError(
             "build recipe dependency surface differs from staged-prefix edges; "
             f"missing={missing}, undeclared={undeclared}"
@@ -243,7 +244,7 @@ def _run_commands(
     prefix: Path,
     dependencies: Mapping[str, Path],
 ) -> None:
-    _verify_recipe_dependency_surface(recipe, dependencies)
+    verify_recipe_dependency_surface(recipe, set(dependencies))
     tool_directory = build / "toolchain-bin"
     tool_directory.mkdir(mode=0o700)
     for executable in registration.toolchain.executables:
@@ -607,10 +608,7 @@ def ensure_build(
     staged_dependencies = dependencies or {}
     _verify_registration_binding(component, registration, staged_dependencies)
     assert registration.build is not None
-    _verify_recipe_dependency_surface(
-        registration.build,
-        {instance: Path("/") for instance in staged_dependencies},
-    )
+    verify_recipe_dependency_surface(registration.build, set(staged_dependencies))
     root = cache_root(cache)
     binding = _binding(component, registration)
     key = binding["build_key_sha256"]

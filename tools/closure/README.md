@@ -44,12 +44,15 @@ unavailable.
 
 ```text
 f120-authority --subject SUBJECT cli contracts
+f120-authority --subject SUBJECT cli assemble OUTPUT --workspace-root ROOT
+    --report REPORT --required-owner OWNER... --fragment OWNER=/absolute/path...
 f120-authority --subject SUBJECT cli resolve REGISTRATION OUTPUT [--qualify]
     [--local-source INSTANCE=/absolute/path]
 f120-authority --subject SUBJECT cli validate DOCUMENT [--allow-development-state]
 f120-authority --subject SUBJECT cli stage REGISTRATION WORKSPACE_MANIFEST
     --cache CACHE --prefix PREFIX --release VERSION --release-lock LOCK
-    [--report REPORT] [--local-source INSTANCE=/absolute/path]
+    [--report REPORT] [--evidence-report EVIDENCE]
+    [--local-source INSTANCE=/absolute/path]
 f120-authority --subject SUBJECT cli reverse-deps DOCUMENT INSTANCE... [--direct]
 f120-authority --subject SUBJECT cli evict --cache CACHE --namespace sources|builds --key SHA256
 f120-authority --subject SUBJECT cli retire --prefix PREFIX [--release-lock LOCK]
@@ -65,6 +68,16 @@ become dirty/unresolved development records. `--qualify` additionally requires
 the exact expected commit, a clean checkout, an allowed ref, verified committed
 notice bytes, and the registered executable digests.
 
+`assemble` consumes an explicit named set of reviewed owner fragments and
+refuses a missing, unexpected or duplicate owner. It sorts the union,
+preflights final commits, tools, builds, licences, notices, edges, artifact
+names/paths and staged-dependency recipe tokens, and atomically publishes a new
+registration and its digest-bound assembly report as new files. The report is
+published first, so an interruption cannot expose an assembled registration
+without its receipt; a normal output refusal cleans the new report. Existing
+output/report files are never overwritten. The command cannot manufacture owner
+facts: F106, F110 and F111 owners still supply the exact fragments and receipts.
+
 `stage` accepts only a manifest that already qualifies. It fetches each exact
 commit into a content-addressed cache, builds each distinct frozen build key at
 most once, audits every declared output, publishes a new prefix atomically, and
@@ -72,8 +85,14 @@ emits a validated release lock. Existing prefixes and locks are never
 overwritten. Nested-source and recursive-submodule dependency modes block lock
 emission until the corresponding consumer conversion actually lands. Cache and
 prefix paths must be outside the registered workspace and disjoint from each
-other. The deterministic stage report includes retained Git-object
-`fetch_bytes`; a warm hit records zero.
+other. The default `kilix.f120.stage-report/v1` remains byte-shape compatible.
+The opt-in `kilix.f120.stage-evidence-report/v1` includes one exact source and
+build receipt per component, the provider-first build order and retained
+Git-object `fetch_bytes`; a warm hit records zero fetches, zero fetch bytes and
+zero builds for every component. Its path must be new, outside the workspace,
+cache and staged prefix, and distinct from the inputs, lock and summary report.
+An evidence-publication failure recoverably retires the newly published prefix
+and lock.
 
 The P9-H2 candidate adds a deterministic `staged-prefix` build graph. Providers
 build before consumers; a consumer names each direct provider only through

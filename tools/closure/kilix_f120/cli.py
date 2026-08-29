@@ -6,8 +6,14 @@ import argparse
 import sys
 from pathlib import Path
 
+from .assembly import assemble_registration
 from .cache import evict_entry
-from .canonical import atomic_write_json, canonical_bytes, require_identifier
+from .canonical import (
+    atomic_write_json,
+    atomic_write_json_new,
+    canonical_bytes,
+    require_identifier,
+)
 from .contracts import frozen_validator, validate_path, verify_contract_package
 from .errors import ClosureError
 from .graph import reverse_dependencies
@@ -32,6 +38,24 @@ def _local_sources(values: list[str]) -> dict[str, Path]:
     return result
 
 
+def _owner_fragments(values: list[str]) -> list[tuple[str, Path]]:
+    result: list[tuple[str, Path]] = []
+    owners: set[str] = set()
+    for value in values:
+        owner, separator, path_value = value.partition("=")
+        if not separator:
+            raise ClosureError("owner fragment must use OWNER=/absolute/path")
+        owner = require_identifier(owner, "fragment owner")
+        path = Path(path_value)
+        if not path.is_absolute():
+            raise ClosureError("owner fragment path must be absolute")
+        if owner in owners:
+            raise ClosureError(f"duplicate fragment owner: {owner}")
+        owners.add(owner)
+        result.append((owner, path))
+    return result
+
+
 def _print_json(document: object) -> None:
     sys.stdout.buffer.write(canonical_bytes(document))
 
@@ -39,6 +63,18 @@ def _print_json(document: object) -> None:
 def _contracts(_: argparse.Namespace) -> int:
     verify_contract_package()
     return frozen_validator().self_test(frozen_validator().validators())
+
+
+def _assemble(arguments: argparse.Namespace) -> int:
+    document = assemble_registration(
+        _owner_fragments(arguments.fragment),
+        arguments.required_owner,
+        workspace_root=arguments.workspace_root,
+        output=arguments.output,
+        report=arguments.report,
+    )
+    _print_json(document)
+    return 0
 
 
 def _resolve(arguments: argparse.Namespace) -> int:
@@ -76,6 +112,39 @@ def _validate(arguments: argparse.Namespace) -> int:
 
 def _stage(arguments: argparse.Namespace) -> int:
     registration = load_registration(arguments.registration)
+    prefix = arguments.prefix.resolve()
+    release_lock = arguments.release_lock.resolve()
+    cache = arguments.cache.resolve()
+    workspace_root = registration.workspace_root.resolve()
+    protected_inputs = {
+        arguments.registration.resolve(),
+        arguments.workspace_manifest.resolve(),
+    }
+    reports = [
+        item
+        for item in (arguments.report, arguments.evidence_report)
+        if item is not None
+    ]
+    if len({item.resolve() for item in reports}) != len(reports):
+        raise ClosureError("stage report paths must be distinct")
+    for item in reports:
+        resolved = item.resolve()
+        if resolved == release_lock or resolved in protected_inputs:
+            raise ClosureError("stage report path collides with an input or release lock")
+        for container, label in (
+            (prefix, "staged prefix"),
+            (cache, "cache"),
+            (workspace_root, "workspace"),
+        ):
+            try:
+                resolved.relative_to(container)
+            except ValueError:
+                continue
+            raise ClosureError(f"stage report path must be outside the {label}")
+    if arguments.evidence_report is not None and (
+        arguments.evidence_report.exists() or arguments.evidence_report.is_symlink()
+    ):
+        raise ClosureError("refusing to overwrite an existing stage evidence report")
     workspace = validate_path(arguments.workspace_manifest)
     report = stage_workspace(
         registration,
@@ -87,6 +156,14 @@ def _stage(arguments: argparse.Namespace) -> int:
         local_sources=_local_sources(arguments.local_source),
     )
     document = report.document()
+    if arguments.evidence_report is not None:
+        try:
+            atomic_write_json_new(
+                arguments.evidence_report, report.evidence_document()
+            )
+        except BaseException:
+            retire_stage(arguments.prefix, arguments.release_lock)
+            raise
     if arguments.report is not None:
         atomic_write_json(arguments.report, document)
     _print_json(document)
@@ -146,6 +223,20 @@ def parser() -> argparse.ArgumentParser:
     contracts = commands.add_parser("contracts", help="verify the frozen v1 package")
     contracts.set_defaults(handler=_contracts)
 
+    assemble = commands.add_parser(
+        "assemble", help="assemble and preflight exact reviewed owner fragments"
+    )
+    assemble.add_argument("output", type=Path)
+    assemble.add_argument("--workspace-root", required=True, type=Path)
+    assemble.add_argument("--report", required=True, type=Path)
+    assemble.add_argument(
+        "--fragment", required=True, action="append", metavar="OWNER=/ABSOLUTE/PATH"
+    )
+    assemble.add_argument(
+        "--required-owner", required=True, action="append", metavar="OWNER"
+    )
+    assemble.set_defaults(handler=_assemble)
+
     resolve = commands.add_parser("resolve", help="emit an observed workspace manifest")
     resolve.add_argument("registration", type=Path)
     resolve.add_argument("output", type=Path)
@@ -166,6 +257,7 @@ def parser() -> argparse.ArgumentParser:
     stage.add_argument("--release", required=True)
     stage.add_argument("--release-lock", required=True, type=Path)
     stage.add_argument("--report", type=Path)
+    stage.add_argument("--evidence-report", type=Path)
     stage.add_argument("--local-source", action="append", default=[], metavar="INSTANCE=PATH")
     stage.set_defaults(handler=_stage)
 

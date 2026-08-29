@@ -2,7 +2,7 @@
 
 **Candidate identity:** `kilix.f120.staged-dependencies/v1`
 
-**Status:** Track H construction candidate for P9-H2. It is not accepted,
+**Status:** Track H R2 construction successor for P9-H2/P9-H1 mechanics. It is not accepted,
 refrozen or P9-usable until two independent exact-byte passes accept it and an
 accepted companion-semantics successor binds these bytes. It changes no byte
 under `contracts/` and does not reinterpret the frozen workspace-manifest/v1
@@ -91,6 +91,32 @@ mechanism and does not edit consumer worktrees or invent final registration
 facts. An edge may be changed to `staged-prefix` only after that owner evidence
 lands.
 
+## Owner-fragment assembly and cache receipts
+
+The `assemble` surface takes 2/2 independent lists: required owner IDs and
+`OWNER=/absolute/path` fragments. The sets must match exactly. It captures each
+regular non-symlink fragment without a changing-byte race, validates it as
+registration/v2, sorts components and edges independently of argument order,
+and binds every fragment SHA-256 in
+`kilix.f120.registration-assembly-report/v1`.
+
+Release preflight refuses all 8/8 unresolved or ambiguous populations: zero
+commits/digests, non-exact refs, missing recipes/tools, `NOASSERTION`, duplicate
+components/edges/artifacts/paths, missing/self endpoints, API/ABI disagreement
+and staged-prefix cycles or recipe-token disagreement. Output and report use
+atomic new-file publication and never overwrite an existing byte. This is a
+mechanical landing surface; only F106/F110/F111 owners can supply or review
+their facts.
+
+`kilix.f120.stage-evidence-report/v1` retains 2/2 exact per-component vectors
+without changing the default `kilix.f120.stage-report/v1` shape. Source
+receipts bind instance, canonical URL, resolved commit, committed-tree/cache
+key, local-override state, hit/miss, fetch count and bytes. Build receipts bind
+instance, build key, staged-dependency digest, artifact count, hit/miss and
+build count. The report also records the actual provider-first build order.
+The accepted tree-level source-cache and frozen build-key derivations are
+unchanged.
+
 ## Required acceptance evidence
 
 The focused causal population must include all 7/7 conditions:
@@ -108,6 +134,11 @@ The focused causal population must include all 7/7 conditions:
 
 The complete frozen-contract, source-cache, build-cache, concurrency,
 corruption, cancellation, publication-race and retirement populations must
-also pass. Review must verify the exact commit/tree/path hashes and state every
+also pass. Assembly review must cover all 6/6 mutation families: argument-order
+equality, missing/extra/duplicate owner, unresolved field, duplicate/unknown
+graph identity, API/ABI or recipe mismatch, and existing-output refusal with
+no partial pair. Report review must prove all 2/2 receipt vectors are complete
+for cold, warm and independent-clean legs. Review must verify the exact
+commit/tree/path hashes and state every
 assessed and unassessed population with denominators. No builder-authored pass
 or earlier F120/launcher review transfers to these bytes.

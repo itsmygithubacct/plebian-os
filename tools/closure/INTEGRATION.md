@@ -86,6 +86,29 @@ impossible to mistake the scaffold for qualified release evidence.
    builds. All staged bytes and the validated locks must match the clean-cache
    run.
 
+## Exact owner-fragment assembly
+
+P9 names every expected owner independently of the fragments supplied. Use an
+explicit absolute path for each reviewed return; do not use a glob:
+
+```sh
+/external/accepted/f120-authority --subject /exact/export/tools/closure cli \
+  assemble /private/p9/registration.json \
+  --workspace-root /private/p9/workspace \
+  --report /private/p9/registration-assembly-report.json \
+  --required-owner f106 --fragment f106=/reviewed/f106.json \
+  --required-owner f110 --fragment f110=/reviewed/f110.json \
+  --required-owner f111 --fragment f111=/reviewed/f111.json
+```
+
+The 3/3 names above are release coordination identities, not inferred product
+truth. The output is order-independent and refuses a missing/extra owner,
+duplicate component or edge, unknown endpoint, unresolved final field,
+API/ABI mismatch, artifact collision, staged cycle, or recipe/edge mismatch.
+The report binds every fragment digest, the exact component set, provider-first
+build order and assembled registration digest. It is private evidence and does
+not accept a fragment or authorize a consumer conversion.
+
 Consumers compile only from the staged public prefix: headers beneath
 `PREFIX/include`, libraries beneath `PREFIX/lib`, pkg-config metadata beneath
 `PREFIX/lib/pkgconfig` or `PREFIX/share/pkgconfig`, and commands beneath

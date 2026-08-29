@@ -48,8 +48,11 @@ class StageReport:
     cache_bytes: int
     staged_bytes: int
     artifacts: int
+    build_order: tuple[str, ...]
+    source_receipts: tuple[dict[str, Any], ...]
+    build_receipts: tuple[dict[str, Any], ...]
 
-    def document(self) -> dict[str, int | str]:
+    def document(self) -> dict[str, Any]:
         return {
             "artifacts": self.artifacts,
             "build_cache_hits": self.build_cache_hits,
@@ -63,6 +66,15 @@ class StageReport:
             "source_cache_hits": self.source_cache_hits,
             "source_cache_misses": self.source_cache_misses,
             "staged_bytes": self.staged_bytes,
+        }
+
+    def evidence_document(self) -> dict[str, Any]:
+        return {
+            "build_order": list(self.build_order),
+            "build_receipts": [dict(item) for item in self.build_receipts],
+            "schema": "kilix.f120.stage-evidence-report/v1",
+            "source_receipts": [dict(item) for item in self.source_receipts],
+            "summary": self.document(),
         }
 
 
@@ -385,6 +397,9 @@ def stage_workspace(
     lock_candidate = release_lock.parent / f".{release_lock.name}.{uuid.uuid4().hex}.candidate"
     source_results: list[SourceCacheResult] = []
     build_results: list[BuildCacheResult] = []
+    source_receipts: list[dict[str, Any]] = []
+    build_receipts: list[dict[str, Any]] = []
+    build_order: list[str] = []
     build_results_by_id: dict[str, BuildCacheResult] = {}
     locked_components: dict[str, dict[str, Any]] = {}
     records: list[dict[str, Any]] = []
@@ -409,6 +424,21 @@ def stage_workspace(
                 local_source=overrides.get(component_registration.instance_id),
             )
             source_results.append(source_result)
+            source_receipts.append(
+                {
+                    "cache_hit": source_result.hit,
+                    "cache_key_sha256": component["source_sha256"],
+                    "canonical_url": component["canonical_url"],
+                    "component_instance": component_registration.instance_id,
+                    "fetch_bytes": source_result.fetch_bytes,
+                    "fetches": source_result.fetches,
+                    "local_source_override": (
+                        component_registration.instance_id in overrides
+                    ),
+                    "resolved_commit": component["resolved_commit"],
+                    "source_sha256": component["source_sha256"],
+                }
+            )
             build_result = ensure_build(
                 cache,
                 build_component,
@@ -418,6 +448,19 @@ def stage_workspace(
                 dependencies=component_dependencies,
             )
             build_results.append(build_result)
+            build_order.append(component_registration.instance_id)
+            build_receipts.append(
+                {
+                    "artifacts": len(build_result.metadata["artifacts"]),
+                    "build_key_sha256": build_result.metadata["build_key_sha256"],
+                    "builds": build_result.builds,
+                    "cache_hit": build_result.hit,
+                    "component_instance": component_registration.instance_id,
+                    "staged_dependencies_sha256": build_component["build_options"].get(
+                        RESERVED_STAGED_DEPENDENCIES_OPTION
+                    ),
+                }
+            )
             build_results_by_id[component_registration.instance_id] = build_result
             locked_components[component_registration.instance_id] = build_component
             component_records = _copy_cached_artifacts(
@@ -470,6 +513,13 @@ def stage_workspace(
         cache_bytes=directory_bytes(root / "sources") + directory_bytes(root / "builds"),
         staged_bytes=staged_bytes,
         artifacts=len(records),
+        build_order=tuple(build_order),
+        source_receipts=tuple(
+            sorted(source_receipts, key=lambda item: item["component_instance"])
+        ),
+        build_receipts=tuple(
+            sorted(build_receipts, key=lambda item: item["component_instance"])
+        ),
     )
 
 

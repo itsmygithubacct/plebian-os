@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from kilix_f120.assembly import assemble_registration
 from kilix_f120.canonical import (
     atomic_write_json,
     canonical_bytes,
@@ -19,9 +20,11 @@ from kilix_f120.canonical import (
     load_json,
 )
 from kilix_f120.cache import evict_entry
+from kilix_f120.cli import parser as cli_parser
 from kilix_f120.contracts import validate_path, verify_contract_package
 from kilix_f120.errors import (
     BuildError,
+    ClosureError,
     ContractError,
     GitError,
     RegistrationError,
@@ -262,6 +265,60 @@ class ClosureIntegrationTest(unittest.TestCase):
             local_sources={"provider": self.repository},
         )
 
+    def owner_fragment_documents(self) -> dict[str, dict[str, object]]:
+        documents: dict[str, dict[str, object]] = {}
+        for owner in ("f106", "f110", "f111"):
+            component = copy.deepcopy(self.registration_document["components"][0])
+            component.update(
+                {
+                    "component_id": f"example-{owner}",
+                    "instance_id": owner,
+                    "path": f"components/{owner}",
+                }
+            )
+            component["build"]["artifacts"][0].update(
+                {
+                    "artifact_id": f"{owner}-data",
+                    "path": f"share/{owner}/payload.txt",
+                }
+            )
+            component["build"]["copies"][0]["destination"] = (
+                f"share/{owner}/payload.txt"
+            )
+            dependencies: list[dict[str, object]] = []
+            if owner == "f110":
+                component["build"]["environment"] = {
+                    "F120_INPUT_PROVIDER": "{dependency:f106}"
+                }
+                dependencies.append(
+                    {
+                        "consumption_mode": "staged-prefix",
+                        "from": "f110",
+                        "required_abi_version": "1",
+                        "required_api_version": "1",
+                        "required_tests": ["unit"],
+                        "runtime_process": "none",
+                        "to": "f106",
+                    }
+                )
+            documents[owner] = {
+                "components": [component],
+                "dependencies": dependencies,
+                "schema": "kilix.f120.registration/v2",
+                "workspace_root": str(self.workspace),
+            }
+        return documents
+
+    def write_owner_fragments(
+        self, documents: dict[str, dict[str, object]], label: str
+    ) -> dict[str, Path]:
+        paths: dict[str, Path] = {}
+        for owner, document in documents.items():
+            path = self.root / f"{label}-{owner}.json"
+            atomic_write_json(path, document)
+            paths[owner] = path
+        return paths
+
     def test_cold_warm_and_clean_cache_are_exact(self) -> None:
         cache = self.root / "cache"
         cold = self.stage(cache, "stage-cold")
@@ -275,6 +332,35 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertEqual((warm.source_cache_hits, warm.build_cache_hits), (1, 1))
         self.assertEqual((clean.fetches, clean.builds), (1, 1))
         self.assertEqual(clean.fetch_bytes, cold.fetch_bytes)
+        self.assertEqual(cold.document()["schema"], "kilix.f120.stage-report/v1")
+        cold_report = cold.evidence_document()
+        warm_report = warm.evidence_document()
+        self.assertEqual(
+            cold_report["schema"], "kilix.f120.stage-evidence-report/v1"
+        )
+        self.assertEqual(cold_report["summary"], cold.document())
+        self.assertEqual(cold_report["build_order"], ["provider"])
+        self.assertEqual(len(cold_report["source_receipts"]), 1)
+        self.assertEqual(len(cold_report["build_receipts"]), 1)
+        self.assertEqual(
+            (
+                cold_report["source_receipts"][0]["cache_hit"],
+                cold_report["source_receipts"][0]["fetches"],
+                cold_report["build_receipts"][0]["cache_hit"],
+                cold_report["build_receipts"][0]["builds"],
+            ),
+            (False, 1, False, 1),
+        )
+        self.assertEqual(
+            (
+                warm_report["source_receipts"][0]["cache_hit"],
+                warm_report["source_receipts"][0]["fetches"],
+                warm_report["source_receipts"][0]["fetch_bytes"],
+                warm_report["build_receipts"][0]["cache_hit"],
+                warm_report["build_receipts"][0]["builds"],
+            ),
+            (True, 0, 0, True, 0),
+        )
         self.assertEqual(
             tree_bytes(self.root / "stage-cold"), tree_bytes(self.root / "stage-warm")
         )
@@ -288,6 +374,358 @@ class ClosureIntegrationTest(unittest.TestCase):
         validate_path(self.root / "stage-cold.lock.json")
         metadata = b"".join(path.read_bytes() for path in cache.rglob("metadata.json"))
         self.assertNotIn(str(self.root).encode(), metadata)
+
+    def test_source_cache_fetches_one_committed_tree_once_across_instances(self) -> None:
+        cache = self.root / "shared-source-cache"
+        first_component = copy.deepcopy(self.manifest["components"][0])
+        second_component = copy.deepcopy(first_component)
+        second_component["component_id"] = "second-owner-component"
+        second_component["instance_id"] = "second-owner"
+        first = ensure_source(cache, first_component, local_source=self.repository)
+        second = ensure_source(cache, second_component, local_source=self.repository)
+        self.assertEqual((first.fetches, second.fetches), (1, 0))
+        self.assertEqual((first.hit, second.hit), (False, True))
+        self.assertEqual(first.repository, second.repository)
+        self.assertEqual(
+            len(list((cache / "sources" / "sha256").iterdir())), 1
+        )
+
+    def test_stage_cli_emits_opt_in_evidence_without_changing_summary(self) -> None:
+        evidence = self.root / "cli-stage-evidence.json"
+        arguments = cli_parser().parse_args(
+            [
+                "stage",
+                str(self.registration_path),
+                str(self.manifest_path),
+                "--cache",
+                str(self.root / "cli-stage-cache"),
+                "--prefix",
+                str(self.root / "cli-stage-prefix"),
+                "--release",
+                "0.2.1",
+                "--release-lock",
+                str(self.root / "cli-stage.lock.json"),
+                "--evidence-report",
+                str(evidence),
+                "--local-source",
+                f"provider={self.repository}",
+            ]
+        )
+        with mock.patch("kilix_f120.cli._print_json") as print_json:
+            self.assertEqual(arguments.handler(arguments), 0)
+        summary = print_json.call_args.args[0]
+        evidence_document = load_json(evidence)
+        self.assertEqual(summary["schema"], "kilix.f120.stage-report/v1")
+        self.assertEqual(
+            evidence_document["schema"],
+            "kilix.f120.stage-evidence-report/v1",
+        )
+        self.assertEqual(evidence_document["summary"], summary)
+
+    def test_stage_cli_retires_publication_when_evidence_write_fails(self) -> None:
+        prefix = self.root / "failed-evidence-prefix"
+        release_lock = self.root / "failed-evidence.lock.json"
+        arguments = cli_parser().parse_args(
+            [
+                "stage",
+                str(self.registration_path),
+                str(self.manifest_path),
+                "--cache",
+                str(self.root / "failed-evidence-cache"),
+                "--prefix",
+                str(prefix),
+                "--release",
+                "0.2.1",
+                "--release-lock",
+                str(release_lock),
+                "--evidence-report",
+                str(self.root / "failed-evidence-report.json"),
+                "--local-source",
+                f"provider={self.repository}",
+            ]
+        )
+        with mock.patch(
+            "kilix_f120.cli.atomic_write_json_new",
+            side_effect=OSError("injected evidence publication failure"),
+        ):
+            with self.assertRaisesRegex(OSError, "injected evidence"):
+                arguments.handler(arguments)
+        self.assertFalse(prefix.exists())
+        self.assertFalse(release_lock.exists())
+        retired = prefix.parent / ".kilix-f120-retired"
+        self.assertEqual(len(list(retired.iterdir())), 1)
+
+    def test_stage_cli_refuses_evidence_inside_the_publication(self) -> None:
+        prefix = self.root / "report-inside-prefix"
+        arguments = cli_parser().parse_args(
+            [
+                "stage",
+                str(self.registration_path),
+                str(self.manifest_path),
+                "--cache",
+                str(self.root / "report-inside-cache"),
+                "--prefix",
+                str(prefix),
+                "--release",
+                "0.2.1",
+                "--release-lock",
+                str(self.root / "report-inside.lock.json"),
+                "--evidence-report",
+                str(prefix / "evidence.json"),
+            ]
+        )
+        with mock.patch("kilix_f120.cli.stage_workspace") as stage:
+            with self.assertRaisesRegex(ClosureError, "outside the staged prefix"):
+                arguments.handler(arguments)
+        stage.assert_not_called()
+
+    def test_owner_fragment_assembly_is_order_independent(self) -> None:
+        paths = self.write_owner_fragments(
+            self.owner_fragment_documents(), "order-independent"
+        )
+        first_output = self.root / "assembled-first.json"
+        first_report = self.root / "assembled-first-report.json"
+        second_output = self.root / "assembled-second.json"
+        second_report = self.root / "assembled-second-report.json"
+        first = assemble_registration(
+            [("f111", paths["f111"]), ("f106", paths["f106"]), ("f110", paths["f110"])],
+            ["f110", "f111", "f106"],
+            workspace_root=self.workspace,
+            output=first_output,
+            report=first_report,
+        )
+        second = assemble_registration(
+            [("f110", paths["f110"]), ("f111", paths["f111"]), ("f106", paths["f106"])],
+            ["f106", "f110", "f111"],
+            workspace_root=self.workspace,
+            output=second_output,
+            report=second_report,
+        )
+        self.assertEqual(first_output.read_bytes(), second_output.read_bytes())
+        self.assertEqual(first_report.read_bytes(), second_report.read_bytes())
+        self.assertEqual(first, second)
+        self.assertEqual(
+            (
+                first["components"],
+                first["dependencies"],
+                first["staged_prefix_edges"],
+                first["artifacts"],
+            ),
+            (3, 1, 1, 3),
+        )
+        self.assertEqual(first["required_owners"], ["f106", "f110", "f111"])
+        self.assertEqual(first["build_order"], ["f106", "f110", "f111"])
+        self.assertEqual(
+            first["registration_sha256"], file_sha256(first_output)
+        )
+        load_registration(first_output)
+
+    def test_owner_fragment_assembly_cli_uses_explicit_absolute_inputs(self) -> None:
+        paths = self.write_owner_fragments(self.owner_fragment_documents(), "cli")
+        output = self.root / "cli-assembled.json"
+        report = self.root / "cli-assembled-report.json"
+        arguments = cli_parser().parse_args(
+            [
+                "assemble",
+                str(output),
+                "--workspace-root",
+                str(self.workspace),
+                "--report",
+                str(report),
+                "--required-owner",
+                "f106",
+                "--fragment",
+                f"f106={paths['f106']}",
+                "--required-owner",
+                "f110",
+                "--fragment",
+                f"f110={paths['f110']}",
+                "--required-owner",
+                "f111",
+                "--fragment",
+                f"f111={paths['f111']}",
+            ]
+        )
+        with mock.patch("kilix_f120.cli._print_json") as print_json:
+            self.assertEqual(arguments.handler(arguments), 0)
+        print_json.assert_called_once()
+        self.assertTrue(output.is_file())
+        self.assertTrue(report.is_file())
+        self.assertEqual(
+            load_json(report)["registration_sha256"], file_sha256(output)
+        )
+
+    def test_owner_fragment_assembly_refuses_owner_set_drift(self) -> None:
+        paths = self.write_owner_fragments(self.owner_fragment_documents(), "owner-drift")
+        cases = {
+            "missing": (
+                [("f106", paths["f106"]), ("f110", paths["f110"])],
+                ["f106", "f110", "f111"],
+            ),
+            "unexpected": (
+                [
+                    ("f106", paths["f106"]),
+                    ("f110", paths["f110"]),
+                    ("f111", paths["f111"]),
+                    ("extra", paths["f111"]),
+                ],
+                ["f106", "f110", "f111"],
+            ),
+            "duplicate": (
+                [("f106", paths["f106"]), ("f106", paths["f110"])],
+                ["f106"],
+            ),
+        }
+        for label, (fragments, required) in cases.items():
+            with self.subTest(label=label):
+                output = self.root / f"owner-{label}.json"
+                report = self.root / f"owner-{label}-report.json"
+                with self.assertRaises(RegistrationError):
+                    assemble_registration(
+                        fragments,
+                        required,
+                        workspace_root=self.workspace,
+                        output=output,
+                        report=report,
+                    )
+                self.assertFalse(output.exists())
+                self.assertFalse(report.exists())
+
+        symlink = self.root / "owner-fragment-symlink.json"
+        symlink.symlink_to(paths["f106"])
+        symlink_output = self.root / "owner-symlink.json"
+        symlink_report = self.root / "owner-symlink-report.json"
+        with self.assertRaises(RegistrationError):
+            assemble_registration(
+                [
+                    ("f106", symlink),
+                    ("f110", paths["f110"]),
+                    ("f111", paths["f111"]),
+                ],
+                ["f106", "f110", "f111"],
+                workspace_root=self.workspace,
+                output=symlink_output,
+                report=symlink_report,
+            )
+        self.assertFalse(symlink_output.exists())
+        self.assertFalse(symlink_report.exists())
+
+    def test_owner_fragment_assembly_refuses_release_preflight_mutations(self) -> None:
+        def zero_commit(documents: dict[str, dict[str, object]]) -> None:
+            documents["f106"]["components"][0]["expected_commit"] = "0" * 40
+
+        def missing_build(documents: dict[str, dict[str, object]]) -> None:
+            del documents["f111"]["components"][0]["build"]
+
+        def api_mismatch(documents: dict[str, dict[str, object]]) -> None:
+            documents["f110"]["dependencies"][0]["required_api_version"] = "2"
+
+        def recipe_mismatch(documents: dict[str, dict[str, object]]) -> None:
+            documents["f110"]["components"][0]["build"]["environment"] = {}
+
+        def unknown_endpoint(documents: dict[str, dict[str, object]]) -> None:
+            documents["f110"]["dependencies"][0]["to"] = "missing"
+
+        def duplicate_component(documents: dict[str, dict[str, object]]) -> None:
+            documents["f110"]["components"][0]["instance_id"] = "f106"
+
+        def artifact_collision(documents: dict[str, dict[str, object]]) -> None:
+            source = documents["f106"]["components"][0]["build"]
+            target = documents["f111"]["components"][0]["build"]
+            target["artifacts"][0]["artifact_id"] = source["artifacts"][0]["artifact_id"]
+
+        def dependency_cycle(documents: dict[str, dict[str, object]]) -> None:
+            documents["f106"]["components"][0]["build"]["environment"] = {
+                "F120_INPUT_PROVIDER": "{dependency:f110}"
+            }
+            documents["f106"]["dependencies"].append(
+                {
+                    "consumption_mode": "staged-prefix",
+                    "from": "f106",
+                    "required_abi_version": "1",
+                    "required_api_version": "1",
+                    "required_tests": ["unit"],
+                    "runtime_process": "none",
+                    "to": "f110",
+                }
+            )
+
+        mutations = {
+            "zero-commit": zero_commit,
+            "missing-build": missing_build,
+            "api-mismatch": api_mismatch,
+            "recipe-mismatch": recipe_mismatch,
+            "unknown-endpoint": unknown_endpoint,
+            "duplicate-component": duplicate_component,
+            "artifact-collision": artifact_collision,
+            "dependency-cycle": dependency_cycle,
+        }
+        for index, (label, mutate) in enumerate(mutations.items()):
+            with self.subTest(label=label):
+                documents = self.owner_fragment_documents()
+                mutate(documents)
+                paths = self.write_owner_fragments(documents, f"mutation-{index}")
+                output = self.root / f"mutation-{index}.json"
+                report = self.root / f"mutation-{index}-report.json"
+                with self.assertRaises(RegistrationError):
+                    assemble_registration(
+                        [(owner, paths[owner]) for owner in ("f106", "f110", "f111")],
+                        ["f106", "f110", "f111"],
+                        workspace_root=self.workspace,
+                        output=output,
+                        report=report,
+                    )
+                self.assertFalse(output.exists())
+                self.assertFalse(report.exists())
+
+    def test_owner_fragment_assembly_never_overwrites_or_leaves_a_partial_pair(self) -> None:
+        paths = self.write_owner_fragments(self.owner_fragment_documents(), "no-overwrite")
+        fragments = [(owner, paths[owner]) for owner in ("f106", "f110", "f111")]
+
+        existing_report = self.root / "existing-report.json"
+        existing_report.write_bytes(b"keep report\n")
+        absent_output = self.root / "cleaned-output.json"
+        with self.assertRaises(ContractError):
+            assemble_registration(
+                fragments,
+                ["f106", "f110", "f111"],
+                workspace_root=self.workspace,
+                output=absent_output,
+                report=existing_report,
+            )
+        self.assertFalse(absent_output.exists())
+        self.assertEqual(existing_report.read_bytes(), b"keep report\n")
+
+        existing_output = self.root / "existing-output.json"
+        existing_output.write_bytes(b"keep output\n")
+        absent_report = self.root / "absent-report.json"
+        with self.assertRaises(ContractError):
+            assemble_registration(
+                fragments,
+                ["f106", "f110", "f111"],
+                workspace_root=self.workspace,
+                output=existing_output,
+                report=absent_report,
+            )
+        self.assertEqual(existing_output.read_bytes(), b"keep output\n")
+        self.assertFalse(absent_report.exists())
+
+        victim = self.root / "output-symlink-victim.json"
+        victim.write_bytes(b"keep victim\n")
+        symlink_output = self.root / "output-symlink.json"
+        symlink_output.symlink_to(victim)
+        symlink_report = self.root / "output-symlink-report.json"
+        with self.assertRaises(ContractError):
+            assemble_registration(
+                fragments,
+                ["f106", "f110", "f111"],
+                workspace_root=self.workspace,
+                output=symlink_output,
+                report=symlink_report,
+            )
+        self.assertTrue(symlink_output.is_symlink())
+        self.assertEqual(victim.read_bytes(), b"keep victim\n")
+        self.assertFalse(symlink_report.exists())
 
     def test_staged_dependency_changes_rebuild_the_consumer(self) -> None:
         consumer_repository = self.workspace / "consumer"
@@ -443,6 +881,19 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertIn(
             "f120_staged_dependencies_sha256", first_consumer["build_options"]
         )
+        first_report = first.evidence_document()
+        self.assertEqual(first_report["build_order"], ["provider", "consumer"])
+        self.assertEqual(len(first_report["source_receipts"]), 2)
+        self.assertEqual(len(first_report["build_receipts"]), 2)
+        first_consumer_receipt = next(
+            item
+            for item in first_report["build_receipts"]
+            if item["component_instance"] == "consumer"
+        )
+        self.assertEqual(
+            first_consumer_receipt["staged_dependencies_sha256"],
+            first_consumer["build_options"]["f120_staged_dependencies_sha256"],
+        )
 
         (self.repository / "payload.txt").write_bytes(b"changed provider artifact\n")
         git(self.repository, "add", "payload.txt")
@@ -463,6 +914,22 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertEqual((second.fetches, second.builds), (1, 2))
         self.assertEqual((warm.fetches, warm.builds), (0, 0))
         self.assertEqual((clean.fetches, clean.builds), (2, 2))
+        warm_report = warm.evidence_document()
+        self.assertEqual(
+            sum(item["fetches"] for item in warm_report["source_receipts"]), 0
+        )
+        self.assertEqual(
+            sum(item["fetch_bytes"] for item in warm_report["source_receipts"]), 0
+        )
+        self.assertEqual(
+            sum(item["builds"] for item in warm_report["build_receipts"]), 0
+        )
+        self.assertTrue(
+            all(item["cache_hit"] for item in warm_report["source_receipts"])
+        )
+        self.assertTrue(
+            all(item["cache_hit"] for item in warm_report["build_receipts"])
+        )
         second_consumer = next(
             item for item in second_lock["components"] if item["instance_id"] == "consumer"
         )
