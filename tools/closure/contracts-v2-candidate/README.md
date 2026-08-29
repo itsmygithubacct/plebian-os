@@ -1,13 +1,15 @@
 # F120 v3/v2/v2 licence-carrier correction candidate
 
-This directory is the **R4 correction candidate, not contract authority and
+This directory is the **R5 correction candidate, not contract authority and
 not release qualification evidence**.  It implements the contract-design gate
 selected by Owner Decision 14 without changing one byte in the frozen v1
-package at `../contracts/`.  Root adjudication rejected R3 after Review 1
-accepted at zero findings and Review 2 returned one High and two Low findings.
-The adjudication records all eight R2 return conditions closed; R4 retains those
-corrections and closes the three new findings.  No R2 or R3 review transfers to
-these changed bytes.
+package at `../contracts/`.  Root adjudication rejected R4 at 0C/0H/**1M**/1L.
+That adjudication independently confirms the R3 High closed across two model
+families and all eleven inherited families re-closed.  R5 corrects the two open
+R4 findings and nothing else: the Low over-refusal of user-chosen keys inside
+the open `build_options` bag, and the Medium under which malformed input left
+the pre-semantic and registration boundaries as an uncaught traceback instead
+of a stable named refusal.  No R4 review transfers to these changed bytes.
 
 The candidate is bound to the exact owner-ratified amendment copied as
 `RATIFIED-AMENDMENT.md`, whose required SHA-256 is
@@ -51,9 +53,15 @@ release joins.  The semantic joins additionally normalize safe relative paths
 before every identity comparison, so `share//licenses/...` and
 `share/./licenses/...` collide with `share/licenses/...` even though their raw
 strings differ.  Alternate spellings cannot create distinct identities for one
-staged file.  Schema-invalid documents cannot escape through a traceback: deep
-semantic failures and package-census read failures return stable named
-refusals.
+staged file.  The supplemental document walk is scoped by contract role: it
+reads a value as a path only at the exact locations both published schemas
+declare one, so a user-chosen knob named `path`, `staged_path` or `text_path`
+inside the open `build_options` map is never reinterpreted as a contract path.
+The grammar itself is unchanged.  Malformed input cannot escape through a
+traceback: the fail-closed envelope covers the registration parser, the schema
+pass and the scoped path walk as well as the semantic joins, nesting past the
+safe canonicalization depth is a named load refusal, and an identity is
+compared rather than used as a dictionary or set key.
 Qualification is bound to an exact `kilix.f120.release-lock/v2` input and is
 mutually exclusive with construction and self-test actions.
 `--contract-preflight` is deliberately named and printed as non-qualifying.  An

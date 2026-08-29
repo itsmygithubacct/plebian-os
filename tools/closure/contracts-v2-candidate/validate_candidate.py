@@ -59,6 +59,36 @@ RESERVED_BUILD_OPTIONS = {
     "f120_recipe_sha256",
     "f120_compliance_declaration_sha256",
 }
+PATH_FIELD_NAMES = frozenset({"path", "staged_path", "text_path"})
+# Every location at which a published schema declares a contract path field,
+# as a tuple of object keys; array indices do not extend a location.  The
+# supplemental path walk is scoped to exactly this set, so a user-chosen key
+# inside the open `build_options` map is never read as a contract path.
+# `schema_declared_path_fields` re-derives this from both schemas and the
+# self-test refuses on any difference.
+CONTRACT_PATH_FIELDS = frozenset(
+    {
+        ("artifacts", "path"),
+        ("components", "artifact_declarations", "path"),
+        ("components", "compliance_units", "notices", "path"),
+        ("components", "licenses", "text_path"),
+        ("components", "notices", "path"),
+        ("compliance_units", "artifact_descriptor", "staged_path"),
+        ("compliance_units", "carrier_archive", "staged_path"),
+        ("compliance_units", "carrier_manifest", "staged_path"),
+        ("compliance_units", "compliance_manifest", "staged_path"),
+        ("compliance_units", "internal_sha256sums", "staged_path"),
+        ("compliance_units", "license_texts", "staged_path"),
+        ("compliance_units", "modifications", "staged_path"),
+        ("compliance_units", "notices", "path"),
+        ("compliance_units", "notices", "staged_path"),
+        ("compliance_units", "other_notices", "staged_path"),
+        ("compliance_units", "pair", "staged_path"),
+        ("compliance_units", "pair_digest", "staged_path"),
+        ("compliance_units", "payloads", "staged_path"),
+        ("compliance_units", "upstream_notice_inventory", "staged_path"),
+    }
+)
 ARTIFACT_ROLES = {
     "payload",
     "artifact-descriptor",
@@ -307,13 +337,23 @@ def load_json(path: Path) -> Any:
 
     payload = path.read_bytes()
     text = payload.decode("utf-8")
-    value = json.loads(
-        text,
-        object_pairs_hook=reject_duplicates,
-        parse_constant=reject_constant,
-        parse_float=reject_float,
-    )
-    if payload != canonical_bytes(value):
+    # The 4 MiB size bound does not bound nesting depth: a few kilobytes of
+    # nested arrays exhaust the interpreter stack in the decoder or in the
+    # canonical re-encode.  That is malformed input, so it must leave here as
+    # the same stable named refusal every other malformed document gets.
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_constant,
+            parse_float=reject_float,
+        )
+        canonical = canonical_bytes(value)
+    except RecursionError as exc:
+        raise CandidateFailure(
+            "document nesting exceeds the safe canonicalization depth"
+        ) from exc
+    if payload != canonical:
         raise CandidateFailure("non-canonical JSON bytes")
     return value
 
@@ -331,6 +371,18 @@ def schema_validators() -> dict[str, Draft202012Validator]:
 
 def issue(code: str, detail: str) -> str:
     return f"{code}: {detail}"
+
+
+def bounded_repr(value: Any, limit: int = 120) -> str:
+    """Render an untrusted value for a diagnostic without echoing a document."""
+
+    try:
+        text = repr(value)
+    except Exception:  # pragma: no cover - a hostile __repr__ is still bounded
+        return f"<unrepresentable {type(value).__name__}>"
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}...<truncated {len(text)} characters>"
 
 
 def exact_keys(
@@ -1414,9 +1466,12 @@ def release_semantic_errors(document: dict[str, Any], *, require_f100: bool) -> 
 
 def schema_errors(document: dict[str, Any], available: dict[str, Draft202012Validator]) -> list[str]:
     identity = document.get("schema")
-    validator = available.get(identity)
-    if validator is None:
-        return [issue("F120-V2-SCHEMA-IDENTITY", repr(identity))]
+    # A schema identity is a string.  Anything else -- including an unhashable
+    # list or object -- is simply not a known identity, and must be named as
+    # one rather than raising out of a dict lookup.
+    if not isinstance(identity, str) or identity not in available:
+        return [issue("F120-V2-SCHEMA-IDENTITY", bounded_repr(identity))]
+    validator = available[identity]
     return [
         issue(
             "F120-V2-SCHEMA",
@@ -1429,31 +1484,92 @@ def schema_errors(document: dict[str, Any], available: dict[str, Draft202012Vali
 
 
 def document_relative_path_errors(document: dict[str, Any]) -> list[str]:
-    """Apply the frozen POSIX path grammar without trusting document shape.
+    """Apply the frozen POSIX path grammar to contract path fields only.
 
     Registration has its own closed parser because it is not a published JSON
     Schema.  Workspace and release documents use this small, type-safe pass in
     addition to their schemas so a known path-alias attack receives a stable
     refusal while malformed shapes remain outside the deeper semantic joins.
+
+    The pass is scoped **by contract role, not by key name**.  A field is a
+    contract path only at the exact schema-declared locations in
+    ``CONTRACT_PATH_FIELDS``; the grammar itself is unchanged.  A user-chosen
+    key inside a schema-defined open map -- ``build_options`` is the only such
+    map in either schema -- can never reach a declared location, so naming a
+    build knob ``path`` no longer refuses an otherwise valid document.  List
+    indices do not extend the location, so every array element of a declared
+    field is checked.
     """
 
-    if document.get("schema") not in {WORKSPACE_ID, RELEASE_ID}:
+    identity = document.get("schema")
+    # Identity is compared, never used as a set or dict key: an unhashable
+    # value is simply not one of the two published identities.
+    if not isinstance(identity, str) or identity not in {WORKSPACE_ID, RELEASE_ID}:
         return []
     errors: list[str] = []
 
-    def visit(value: Any, label: str) -> None:
+    def visit(value: Any, label: str, location: tuple[str, ...]) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
                 child_label = f"{label}.{key}"
-                if key in {"path", "staged_path", "text_path"} and not valid_relative_path(child):
+                child_location = location + (key,)
+                if child_location in CONTRACT_PATH_FIELDS and not valid_relative_path(
+                    child
+                ):
                     errors.append(issue("F120-V2-PATH", f"{child_label} is not normalized"))
-                visit(child, child_label)
+                visit(child, child_label, child_location)
         elif isinstance(value, list):
             for index, child in enumerate(value):
-                visit(child, f"{label}[{index}]")
+                visit(child, f"{label}[{index}]", location)
 
-    visit(document, "document")
+    visit(document, "document", ())
     return errors
+
+
+def schema_declared_path_fields(
+    schema: dict[str, Any],
+) -> set[tuple[str, ...]]:
+    """Return every location where a published schema declares a path field.
+
+    The result is the authority for ``CONTRACT_PATH_FIELDS``; the self-test
+    compares the two so the scoped walk cannot silently drift away from the
+    schemas it is scoping to.  Array items do not extend a location, matching
+    the walk in :func:`document_relative_path_errors`.
+    """
+
+    definitions = schema.get("$defs", {})
+    found: set[tuple[str, ...]] = set()
+
+    def resolve(node: Any) -> Any:
+        seen: set[str] = set()
+        while isinstance(node, dict) and "$ref" in node:
+            reference = node["$ref"]
+            if not isinstance(reference, str) or not reference.startswith("#/$defs/"):
+                raise CandidateFailure(f"unsupported schema reference {reference!r}")
+            name = reference[len("#/$defs/") :]
+            if name in seen:
+                raise CandidateFailure(f"cyclic schema reference {reference!r}")
+            seen.add(name)
+            node = definitions[name]
+        return node
+
+    def walk(node: Any, location: tuple[str, ...], stack: frozenset[int]) -> None:
+        node = resolve(node)
+        if not isinstance(node, dict) or id(node) in stack:
+            return
+        stack = stack | {id(node)}
+        properties = node.get("properties")
+        if isinstance(properties, dict):
+            for name, subschema in properties.items():
+                if name in PATH_FIELD_NAMES:
+                    found.add(location + (name,))
+                walk(subschema, location + (name,), stack)
+        for keyword in ("items", "contains"):
+            if keyword in node:
+                walk(node[keyword], location, stack)
+
+    walk(schema, (), frozenset())
+    return found
 
 
 def validate_document(
@@ -1489,13 +1605,24 @@ def validate_document(
         return [
             issue(
                 "F120-V2-QUALIFICATION-INPUT-IDENTITY",
-                f"release qualification requires exact {RELEASE_ID}, got {identity!r}",
+                f"release qualification requires exact {RELEASE_ID}, "
+                f"got {bounded_repr(identity)}",
             )
         ]
-    if isinstance(identity, str) and identity.startswith("kilix.f120.registration/"):
-        return registration_errors(document)
-    errors = [*schema_errors(document, available), *document_relative_path_errors(document)]
+    # The fail-closed envelope covers every pass that reads untrusted document
+    # shape -- the registration parser, the schema pass and the scoped path
+    # walk as well as the semantic joins.  PROFILE.md 4 states that malformed
+    # input which aborts a check leaves as a stable named refusal; scoping the
+    # envelope to the semantic joins alone left the registration parser and the
+    # pre-semantic passes able to raise a traceback instead.
+    errors: list[str] = []
     try:
+        if isinstance(identity, str) and identity.startswith("kilix.f120.registration/"):
+            return registration_errors(document)
+        errors = [
+            *schema_errors(document, available),
+            *document_relative_path_errors(document),
+        ]
         if identity == WORKSPACE_ID:
             errors.extend(
                 workspace_semantic_errors(
@@ -1510,7 +1637,7 @@ def validate_document(
         errors.append(
             issue(
                 "F120-V2-VALIDATOR-FAILURE",
-                f"semantic validation aborted safely: {type(exc).__name__}",
+                f"validation aborted safely: {type(exc).__name__}",
             )
         )
     return errors
@@ -2037,10 +2164,241 @@ def r3_adjudication_regression_errors(
     return failures
 
 
+def r4_adjudication_regression_errors(
+    available: dict[str, Draft202012Validator],
+) -> list[str]:
+    """Replay R4's adjudicated Low and Medium against the R5 boundary.
+
+    The Low was an over-refusal: the supplemental path walk read any key named
+    like a path, including a user's own build knob.  The Medium was a class of
+    malformed inputs that left as tracebacks instead of named refusals.  Both
+    are replayed here, together with the negative half of each -- the contract
+    path fields must still refuse, and no hostile shape may escape.
+    """
+
+    failures: list[str] = []
+    registration = load_json(
+        FIXTURES / "registration" / "valid" / "two-obligation-units.json"
+    )
+    workspace = load_json(
+        FIXTURES / "workspace" / "valid" / "two-obligation-units.json"
+    )
+    release = load_json(FIXTURES / "release" / "valid" / "two-obligation-units.json")
+
+    def require_code(errors: list[str], code: str, label: str) -> None:
+        if not any(code in error for error in errors):
+            failures.append(f"R5 regression {label} missed {code}: {errors[:8]}")
+
+    def rebind_build_key(document: dict[str, Any]) -> dict[str, Any]:
+        """Recompute the frozen build key after a build-option change."""
+
+        component = document["components"][0]
+        expected = canonical_sha256(
+            {
+                "architecture": component["architecture"],
+                "build_options": component["build_options"],
+                "features": component["features"],
+                "source_sha256": component["source_sha256"],
+                "toolchain_digest": component["toolchain"]["digest"],
+            }
+        )
+        for artifact in document.get("artifacts", []):
+            if artifact.get("component_instance") == component["instance_id"]:
+                artifact["build_key_sha256"] = expected
+        return document
+
+    # L-01 positive: a user-chosen build knob named like a path is not a
+    # contract path.  Values that the grammar would refuse in a contract field
+    # are accepted here, in both published documents, after exact rebinding.
+    opaque_options = (
+        ("path", "/opt/stage"),
+        ("staged_path", "share//licenses/demo/Apache-2.0.txt"),
+        ("text_path", "./relative/notice"),
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        for option, value in opaque_options:
+            for label, base in (("workspace", workspace), ("release", release)):
+                mutation = copy.deepcopy(base)
+                mutation["components"][0]["build_options"][option] = value
+                if label == "release":
+                    rebind_build_key(mutation)
+                document_path = root / f"{label}-option-{option}.json"
+                document_path.write_bytes(canonical_bytes(mutation))
+                errors = validate_document(
+                    document_path, available, contract_preflight=True
+                )
+                if errors:
+                    failures.append(
+                        f"R5 regression opaque {label} build option {option!r} "
+                        f"was refused: {errors[:8]}"
+                    )
+
+        # L-01 negative: the grammar itself is unchanged.  Every contract path
+        # field the scoped walk still owns must refuse the same alias, or the
+        # scoping would have silently disabled the pass that closed the R3 High.
+        contract_fields = (
+            ("workspace", workspace, ("components", 0, "artifact_declarations", 0, "path")),
+            ("workspace", workspace, ("components", 0, "licenses", 0, "text_path")),
+            ("workspace", workspace, ("components", 0, "notices", 0, "path")),
+            ("release", release, ("artifacts", 0, "path")),
+            ("release", release, ("compliance_units", 0, "payloads", 0, "staged_path")),
+            ("release", release, ("compliance_units", 0, "notices", 0, "staged_path")),
+            ("release", release, ("components", 0, "licenses", 0, "text_path")),
+        )
+        for index, (label, base, field) in enumerate(contract_fields):
+            mutation = copy.deepcopy(base)
+            cursor: Any = mutation
+            for part in field[:-1]:
+                cursor = cursor[part]
+            cursor[field[-1]] = "share//licenses/demo/Apache-2.0.txt"
+            walk_errors = document_relative_path_errors(mutation)
+            require_code(
+                walk_errors,
+                "F120-V2-PATH",
+                f"scoped walk still owns {label} {'.'.join(map(str, field))}",
+            )
+            document_path = root / f"contract-field-{index}.json"
+            document_path.write_bytes(canonical_bytes(mutation))
+            require_code(
+                validate_document(document_path, available, contract_preflight=True),
+                "F120-V2-PATH",
+                f"{label} contract path field {'.'.join(map(str, field))}",
+            )
+
+        # L-01 drift guard: the scoped location set is the schemas' own, not a
+        # hand-maintained list that can fall behind them.
+        declared: set[tuple[str, ...]] = set()
+        for schema_path in SCHEMAS.values():
+            declared |= schema_declared_path_fields(load_json(schema_path))
+        if declared != set(CONTRACT_PATH_FIELDS):
+            failures.append(
+                issue(
+                    "F120-V2-PATH-SCOPE",
+                    "CONTRACT_PATH_FIELDS does not equal the schema-declared "
+                    f"path fields: missing={sorted(declared - set(CONTRACT_PATH_FIELDS))} "
+                    f"extra={sorted(set(CONTRACT_PATH_FIELDS) - declared)}",
+                )
+            )
+
+        # M-01: malformed input aborts into a stable named refusal, never a
+        # traceback.  Each case is the exact reproduction carried by the R4
+        # adjudication.
+        unhashable_identity = root / "unhashable-identity.json"
+        for spelling in ([], {}):
+            mutation = copy.deepcopy(release)
+            mutation["schema"] = spelling
+            unhashable_identity.write_bytes(canonical_bytes(mutation))
+            require_code(
+                validate_document(
+                    unhashable_identity, available, contract_preflight=True
+                ),
+                "F120-V2-SCHEMA-IDENTITY",
+                f"unhashable schema identity {spelling!r} in preflight",
+            )
+            require_code(
+                validate_document(
+                    unhashable_identity, available, release_qualification=True
+                ),
+                "F120-V2-QUALIFICATION-INPUT-IDENTITY",
+                f"unhashable schema identity {spelling!r} in qualification",
+            )
+
+        deep = root / "deep-nesting.json"
+        deep.write_bytes(
+            b'{"schema": "'
+            + RELEASE_ID.encode("ascii")
+            + b'", "x": '
+            + b"[" * 1200
+            + b"]" * 1200
+            + b"}"
+        )
+        for mode in ({"contract_preflight": True}, {"release_qualification": True}):
+            require_code(
+                validate_document(deep, available, **mode),
+                "F120-V2-LOAD",
+                f"nesting beyond the safe canonicalization depth in {mode}",
+            )
+
+        registration_aborts = (
+            ("licence spdx", ("components", 0, "licenses", 0, "spdx"), []),
+            ("notice sha256", ("components", 0, "notices", 0, "sha256"), {}),
+            (
+                "unit identity",
+                ("components", 0, "build", "compliance_units", 0),
+                {},
+            ),
+        )
+        for index, (label, field, value) in enumerate(registration_aborts):
+            mutation = copy.deepcopy(registration)
+            cursor = mutation
+            for part in field[:-1]:
+                cursor = cursor[part]
+            cursor[field[-1]] = value
+            document_path = root / f"registration-abort-{index}.json"
+            document_path.write_bytes(canonical_bytes(mutation))
+            try:
+                errors = validate_document(
+                    document_path, available, contract_preflight=True
+                )
+            except Exception as exc:  # the defect being replayed
+                failures.append(
+                    f"R5 regression registration {label} raised "
+                    f"{type(exc).__name__} instead of a named refusal"
+                )
+                continue
+            if not errors:
+                failures.append(f"R5 regression registration {label} was accepted")
+            if not any(
+                any(family in error for family in EXPECTED_REFUSAL_FAMILIES)
+                for error in errors
+            ):
+                failures.append(
+                    f"R5 regression registration {label} returned no profile "
+                    f"refusal family: {errors[:8]}"
+                )
+
+        # M-01 breadth: no hostile shape at any published boundary may escape
+        # as an exception, whatever else it does.
+        hostile: list[tuple[str, Any]] = []
+        for base in (registration, workspace, release):
+            for key in list(base):
+                for value in (None, 0, "", [], {}, [None], [[]], {"k": None}, True):
+                    mutation = copy.deepcopy(base)
+                    mutation[key] = value
+                    hostile.append((f"{base['schema']}:{key}={value!r}", mutation))
+        escaped = 0
+        hostile_path = root / "hostile.json"
+        for label, mutation in hostile:
+            try:
+                hostile_path.write_bytes(canonical_bytes(mutation))
+            except CandidateFailure:
+                continue
+            for mode in ({"contract_preflight": True}, {"release_qualification": True}):
+                try:
+                    validate_document(hostile_path, available, **mode)
+                except Exception as exc:
+                    escaped += 1
+                    if escaped <= 4:
+                        failures.append(
+                            f"R5 regression hostile shape {label} raised "
+                            f"{type(exc).__name__}"
+                        )
+        if escaped:
+            failures.append(
+                issue(
+                    "F120-V2-VALIDATOR-FAILURE",
+                    f"{escaped} hostile shapes escaped as exceptions",
+                )
+            )
+    return failures
+
+
 def self_test(available: dict[str, Draft202012Validator]) -> int:
     failures = package_errors()
     failures.extend(adjudication_regression_errors(available))
     failures.extend(r3_adjudication_regression_errors(available))
+    failures.extend(r4_adjudication_regression_errors(available))
     valid_paths = sorted(FIXTURES.glob("*/valid/*.json"))
     invalid_paths = sorted(FIXTURES.glob("*/invalid/*.json"))
     if len(valid_paths) != 3:
@@ -2117,7 +2475,7 @@ def self_test(available: dict[str, Draft202012Validator]) -> int:
         "PASS: review-only v3/v2/v2 schemas, 3 valid and "
         f"{len(invalid_paths)} named-invalid fixtures; "
         f"{len(EXPECTED_REFUSAL_FAMILIES)}/{len(EXPECTED_REFUSAL_FAMILIES)} "
-        "profile refusal families, 8/8 R2 adjudication findings and 3/3 R3 "
+        "profile refusal families, 8/8 R2, 3/3 R3 and 2/2 R4 "
         "adjudication findings covered; qualification "
         "remains fail-closed on absent accepted F100 validators"
     )

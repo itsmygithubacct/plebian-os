@@ -201,8 +201,16 @@ forbidden in P9 and has no permissive fallback.
 and `--write-hashes`.  Registration and workspace inputs cannot be qualified.
 The same exactly-one-mode rule applies to the public library function, not only
 to argparse.  Schema errors remain visible alongside safe structural path
-checks; if malformed input nevertheless aborts a deeper join, the validator
-returns `F120-V2-VALIDATOR-FAILURE` rather than exposing a traceback.  Missing
+checks.  The structural path check is scoped by contract role: it applies the
+frozen grammar only at the locations the published schemas declare a `path`,
+`staged_path` or `text_path`, so a user-chosen key inside the open
+`build_options` map is not a contract path.  If malformed input aborts any
+check that reads untrusted document shape -- the registration parser and the
+schema and path passes as well as the deeper joins -- the validator returns
+`F120-V2-VALIDATOR-FAILURE` rather than exposing a traceback.  Nesting beyond
+the safe canonicalization depth is `F120-V2-LOAD`, and a schema identity that
+is not a string is `F120-V2-SCHEMA-IDENTITY`: an identity is compared, never
+used as a dictionary or set key.  Missing
 or unreadable manifest-bound package members likewise return a named package
 inventory or hash-manifest refusal.
 
@@ -241,8 +249,13 @@ F120-C11 payload-only/zero-notice counterexample must name
 
 ## 6. Freeze boundary
 
-R3 was rejected by root adjudication at one High and two Low findings.  No R3
-review transfers to R4.  This R4 package becomes authority only if both fresh
+R4 was rejected by root adjudication at 0C/0H/1M/1L after its cross-family pair
+independently confirmed the R3 High closed.  R5 closes both: it scopes the
+supplemental path walk to the schema-declared contract path fields, leaving the
+path grammar and every normalized comparison join unchanged, and it makes the
+pre-semantic and registration boundaries abort into stable named refusals
+rather than tracebacks.  No R4 review transfers to R5.
+This R5 package becomes authority only if both fresh
 independent contract reviews
 accept the same complete `SHA256SUMS` bytes with zero open findings and the
 two-pass no-drift gate passes.  Local self-review or deterministic regeneration
