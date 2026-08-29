@@ -1,3 +1,5 @@
+import os
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -16,7 +18,85 @@ def _manifest(path):
     return values
 
 
+def _voice_validator_source():
+    source = (ROOT / "build" / "remaster-iso.sh").read_text(
+        encoding="utf-8"
+    )
+    start = source.index("is_hex_len() {")
+    end = source.index("validate_waydroid_release_closure() {")
+    return source[start:end]
+
+
+def _full_voice_closure():
+    return {
+        "PLEBIAN_OS_INSTALL_VOICE_MODEL": "1",
+        "KILIX_VOICE_REF": "1" * 40,
+        "KILIX_VOICE_LIB_VERSION": "1.0.0",
+        "KILIX_VOICE_LIB_URL": "https://example.invalid/lib.tar.gz",
+        "KILIX_VOICE_LIB_SHA256": "a" * 64,
+        "KILIX_VOICE_MODEL_URL": "https://example.invalid/model.bin",
+        "KILIX_VOICE_MODEL_SHA256": "b" * 64,
+    }
+
+
 class VoiceReleaseContractTests(unittest.TestCase):
+    def run_voice_validator(self, **settings):
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        env.update(settings)
+        return subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -u\n" + _voice_validator_source()
+                + "\nvalidate_voice_release_closure",
+            ],
+            env=env,
+            text=True,
+            capture_output=True,
+        )
+
+    def test_0_2_1_release_keeps_the_model_free_leg_open(self):
+        result = self.run_voice_validator(
+            PLEBIAN_OS_RELEASE_MODE="1",
+            PLEBIAN_OS_VERSION="0.2.1",
+            PLEBIAN_OS_INSTALL_VOICE_MODEL="0",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+
+    def test_0_2_1_release_refuses_legacy_pins_without_a_carrier(self):
+        settings = _full_voice_closure()
+        settings.update(
+            PLEBIAN_OS_RELEASE_MODE="1",
+            PLEBIAN_OS_VERSION="0.2.1",
+        )
+        result = self.run_voice_validator(**settings)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "Plebian-OS 0.2.1 release mode refuses "
+            "PLEBIAN_OS_INSTALL_VOICE_MODEL=1 until an accepted F100 "
+            "compliance-carrier interface and receipt are present\n",
+        )
+
+    def test_nonrelease_voice_development_retains_legacy_pin_validation(self):
+        settings = _full_voice_closure()
+        settings.update(
+            PLEBIAN_OS_RELEASE_MODE="0",
+            PLEBIAN_OS_VERSION="0.2.1",
+        )
+        result = self.run_voice_validator(**settings)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_historical_release_voice_closure_is_unchanged(self):
+        settings = _full_voice_closure()
+        settings.update(
+            PLEBIAN_OS_RELEASE_MODE="1",
+            PLEBIAN_OS_VERSION="0.1.7",
+        )
+        result = self.run_voice_validator(**settings)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_unpinned_install_defaults_to_read_aloud_only(self):
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()

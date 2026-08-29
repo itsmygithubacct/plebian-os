@@ -213,6 +213,17 @@ validate_voice_release_closure() {
             ;;
     esac
 
+    # F118-L04: 0.2.1 has no accepted F100 compliance-carrier interface yet.
+    # Legacy voice pins prove where bytes came from, but do not carry the
+    # content-policy artifact required to admit a model into a release image.
+    # Keep the model-free leg available and refuse the advertised model path
+    # until this guard can be replaced by validation of the accepted carrier.
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
+            && [ "${PLEBIAN_OS_VERSION:-}" = 0.2.1 ]; then
+        echo "Plebian-OS 0.2.1 release mode refuses PLEBIAN_OS_INSTALL_VOICE_MODEL=1 until an accepted F100 compliance-carrier interface and receipt are present" >&2
+        exit 1
+    fi
+
     local key missing=()
     for key in \
         KILIX_VOICE_REF KILIX_VOICE_LIB_VERSION KILIX_VOICE_LIB_URL \
