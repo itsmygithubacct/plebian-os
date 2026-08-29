@@ -129,6 +129,21 @@ by those receipts through a separate explicit list; use no glob:
 
 ```sh
 /external/accepted/f120-authority --subject /exact/export/tools/closure cli \
+  landing-template /private/p9/registration.json \
+  /private/p9/registration-assembly-report.json \
+  --output /private/p9/consumer-landing-templates.json \
+  --required-owner f106 --required-owner f110 --required-owner f111
+```
+
+This optional projection binds the registration and assembly digests and lists
+every required component test and staged edge for its mapped owner. Its null
+fields must be replaced only from retained owner evidence; the template itself
+is not a receipt and is refused by `landings`. Each owner extracts its matching
+`templates[].receipt` object as a standalone file, fills every null from the
+retained execution, and returns that file with its exact evidence-slot files.
+
+```sh
+/external/accepted/f120-authority --subject /exact/export/tools/closure cli \
   landings /private/p9/registration.json \
   /private/p9/registration-assembly-report.json \
   --output /private/p9/consumer-landing-report.json \

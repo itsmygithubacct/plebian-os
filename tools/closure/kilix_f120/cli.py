@@ -18,7 +18,7 @@ from .canonical import (
 from .contracts import frozen_validator, validate_path, verify_contract_package
 from .errors import ClosureError
 from .graph import reverse_dependencies
-from .landing import verify_consumer_landings
+from .landing import consumer_landing_templates, verify_consumer_landings
 from .manifest import emit_workspace_manifest
 from .registration import load_registration
 from .stage import retire_stage, stage_workspace
@@ -123,6 +123,17 @@ def _landings(arguments: argparse.Namespace) -> int:
         _named_paths(arguments.receipt, "consumer landing receipt"),
         arguments.required_owner,
         _named_paths(arguments.evidence, "consumer landing evidence"),
+        output=arguments.output,
+    )
+    _print_json(document)
+    return 0
+
+
+def _landing_template(arguments: argparse.Namespace) -> int:
+    document = consumer_landing_templates(
+        arguments.registration,
+        arguments.assembly_report,
+        arguments.required_owner,
         output=arguments.output,
     )
     _print_json(document)
@@ -318,6 +329,18 @@ def parser() -> argparse.ArgumentParser:
         "--evidence", action="append", default=[], metavar="ID=/ABSOLUTE/PATH"
     )
     landings.set_defaults(handler=_landings)
+
+    landing_template = commands.add_parser(
+        "landing-template",
+        help="project exact owner receipt populations without claiming evidence",
+    )
+    landing_template.add_argument("registration", type=Path)
+    landing_template.add_argument("assembly_report", type=Path)
+    landing_template.add_argument("--output", required=True, type=Path)
+    landing_template.add_argument(
+        "--required-owner", required=True, action="append", metavar="OWNER"
+    )
+    landing_template.set_defaults(handler=_landing_template)
 
     resolve = commands.add_parser("resolve", help="emit an observed workspace manifest")
     resolve.add_argument("registration", type=Path)

@@ -2,7 +2,7 @@
 
 **Candidate identity:** `kilix.f120.staged-dependencies/v1`
 
-**Status:** Track H R3 construction successor for P9-H2/P9-H1 mechanics. It is not accepted,
+**Status:** Track H R6 construction successor for P9-H2/P9-H1 mechanics. It is not accepted,
 refrozen or P9-usable until two independent exact-byte passes accept it and an
 accepted companion-semantics successor binds these bytes. It changes no byte
 under `contracts/` and does not reinterpret the frozen workspace-manifest/v1
@@ -134,6 +134,13 @@ regular non-symlink files form equal sets, and observed evidence hashes must
 match. The output report omits local paths and command text, publishes only as
 a new file and cannot accept the technical sufficiency of the owner evidence.
 That judgment remains outside this construction candidate.
+
+Before execution, `landing-template` may project the exact owner/component/edge
+population from the captured registration and assembly report. The output is a
+separate non-evidence template set: registered commits, recipe tokens and test
+IDs are filled, but every command, exit, evidence digest, linkage selection and
+private-API disposition remains null. An unfilled projection is deliberately
+not a consumer return and cannot satisfy `landings`.
 
 `kilix.f120.stage-evidence-report/v1` retains 2/2 exact per-component vectors
 without changing the default `kilix.f120.stage-report/v1` shape. Source

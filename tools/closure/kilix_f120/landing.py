@@ -21,6 +21,7 @@ from .registration import Registration, registration_from_document
 
 LANDING_RECEIPT_ID = "kilix.f120.consumer-landing/v1"
 LANDING_REPORT_ID = "kilix.f120.consumer-landing-report/v1"
+LANDING_TEMPLATE_SET_ID = "kilix.f120.consumer-landing-template-set/v1"
 ZERO_SHA256 = "0" * 64
 LINKAGE_KINDS = {
     "command-exec",
@@ -269,6 +270,187 @@ def _assembly_owners(
     if set(owners) != expected_instances or seen_fragment_owners != set(required_owners):
         raise RegistrationError("assembly report component-owner coverage differs")
     return owners
+
+
+def consumer_landing_templates(
+    registration_path: Path,
+    assembly_report_path: Path,
+    required_owners: Iterable[str],
+    *,
+    output: Path,
+) -> dict[str, Any]:
+    """Project exact owner receipt populations without claiming evidence."""
+
+    required = [require_identifier(owner, "required owner") for owner in required_owners]
+    if not required or len(set(required)) != len(required):
+        raise RegistrationError("required owners must be a non-empty unique set")
+    if not output.is_absolute():
+        raise RegistrationError("consumer landing template output path must be absolute")
+
+    registration_document, registration_sha256, registration_identity = _captured_json(
+        registration_path, "consumer landing template registration"
+    )
+    registration = registration_from_document(registration_document)
+    assembly, assembly_sha256, assembly_identity = _captured_json(
+        assembly_report_path, "consumer landing template assembly report"
+    )
+    if registration_identity == assembly_identity:
+        raise RegistrationError("registration and assembly report inputs must differ")
+    component_owners = _assembly_owners(
+        assembly, registration, registration_sha256, required
+    )
+
+    components = {component.instance_id: component for component in registration.components}
+    staged_edges: list[dict[str, Any]] = []
+    staged_edge_keys: set[tuple[str, str, str]] = set()
+    for edge in registration.dependencies:
+        if edge["consumption_mode"] != "staged-prefix":
+            continue
+        if edge["from"] not in components or edge["to"] not in components:
+            raise RegistrationError(
+                "registration staged-prefix edge names an unknown endpoint"
+            )
+        key = (edge["from"], edge["to"], edge["runtime_process"])
+        if key in staged_edge_keys:
+            raise RegistrationError("registration repeats a staged-prefix landing edge")
+        staged_edge_keys.add(key)
+        staged_edges.append(edge)
+    staged_edges.sort(
+        key=lambda edge: (edge["from"], edge["to"], edge["runtime_process"])
+    )
+    evidence_ids: set[str] = set()
+
+    def evidence_reference(kind: str, *identity: str) -> dict[str, object]:
+        encoded = "\0".join((LANDING_TEMPLATE_SET_ID, kind, *identity)).encode("utf-8")
+        evidence_id = f"evidence-{hashlib.sha256(encoded).hexdigest()}"
+        if evidence_id in evidence_ids:
+            raise RegistrationError("consumer landing template evidence slot collision")
+        evidence_ids.add(evidence_id)
+        return {"evidence_id": evidence_id, "sha256": None}
+
+    templates: list[dict[str, Any]] = []
+    for owner in sorted(required):
+        component_tests: list[dict[str, Any]] = []
+        for component in sorted(
+            (
+                item
+                for item in registration.components
+                if component_owners[item.instance_id] == owner
+            ),
+            key=lambda item: item.instance_id,
+        ):
+            tests = []
+            for test_id in component.required_tests:
+                tests.append(
+                    {
+                        "command": None,
+                        "evidence": evidence_reference(
+                            "component-test", owner, component.instance_id, test_id
+                        ),
+                        "exit_status": None,
+                        "producing_commit": component.expected_commit,
+                        "test_id": test_id,
+                    }
+                )
+            component_tests.append(
+                {"component_instance": component.instance_id, "tests": tests}
+            )
+
+        owner_landings: list[dict[str, Any]] = []
+        for edge in staged_edges:
+            consumer_id = edge["from"]
+            if component_owners[consumer_id] != owner:
+                continue
+            provider_id = edge["to"]
+            runtime_process = edge["runtime_process"]
+            consumer_commit = components[consumer_id].expected_commit
+            identity = (owner, consumer_id, provider_id, runtime_process)
+            installed_tests = []
+            for test_id in edge["required_tests"]:
+                installed_tests.append(
+                    {
+                        "command": None,
+                        "evidence": evidence_reference(
+                            "installed-test", *identity, test_id
+                        ),
+                        "exit_status": None,
+                        "producing_commit": consumer_commit,
+                        "test_id": test_id,
+                    }
+                )
+            owner_landings.append(
+                {
+                    "consumer_commit": consumer_commit,
+                    "consumer_instance": consumer_id,
+                    "installed_surface_tests": installed_tests,
+                    "linkage": {
+                        "evidence": evidence_reference("linkage", *identity),
+                        "kind": None,
+                        "producing_commit": consumer_commit,
+                    },
+                    "private_api": {
+                        "disposition": None,
+                        "evidence": evidence_reference("private-api", *identity),
+                        "producing_commit": consumer_commit,
+                    },
+                    "provider_commit": components[provider_id].expected_commit,
+                    "provider_instance": provider_id,
+                    "recipe_token": f"{{dependency:{provider_id}}}",
+                    "rollback": {
+                        "command": None,
+                        "evidence": evidence_reference("rollback", *identity),
+                        "exit_status": None,
+                        "producing_commit": consumer_commit,
+                    },
+                    "runtime_process": runtime_process,
+                }
+            )
+
+        templates.append(
+            {
+                "owner": owner,
+                "receipt": {
+                    "assembly_report_sha256": assembly_sha256,
+                    "component_tests": component_tests,
+                    "landings": owner_landings,
+                    "owner": owner,
+                    "registration_sha256": registration_sha256,
+                    "schema": LANDING_RECEIPT_ID,
+                },
+            }
+        )
+
+    def unfilled_values(value: object) -> int:
+        if value is None:
+            return 1
+        if isinstance(value, dict):
+            return sum(unfilled_values(item) for item in value.values())
+        if isinstance(value, list):
+            return sum(unfilled_values(item) for item in value)
+        return 0
+
+    document = {
+        "allowed_linkage_kinds": sorted(LINKAGE_KINDS),
+        "allowed_private_api_dispositions": sorted(PRIVATE_API_DISPOSITIONS),
+        "assembly_report_sha256": assembly_sha256,
+        "component_required_tests": sum(
+            len(component.required_tests) for component in registration.components
+        ),
+        "evidence_slots": len(evidence_ids),
+        "installed_surface_tests": sum(
+            len(edge["required_tests"]) for edge in staged_edges
+        ),
+        "owners": len(required),
+        "registration_sha256": registration_sha256,
+        "required_owners": sorted(required),
+        "schema": LANDING_TEMPLATE_SET_ID,
+        "staged_prefix_edges": len(staged_edges),
+        "status": "non-evidence-template",
+        "templates": templates,
+        "unfilled_values": unfilled_values(templates),
+    }
+    atomic_write_json_new(output, document)
+    return document
 
 
 def verify_consumer_landings(

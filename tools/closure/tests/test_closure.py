@@ -32,7 +32,7 @@ from kilix_f120.errors import (
 from kilix_f120.gitops import canonical_https_url
 from kilix_f120.graph import reverse_dependencies
 from kilix_f120.keys import build_key_sha256
-from kilix_f120.landing import verify_consumer_landings
+from kilix_f120.landing import consumer_landing_templates, verify_consumer_landings
 from kilix_f120.manifest import emit_workspace_manifest
 from kilix_f120.registration import load_registration
 from kilix_f120.source_cache import ensure_source
@@ -981,6 +981,114 @@ class ClosureIntegrationTest(unittest.TestCase):
             self.assertEqual(arguments.handler(arguments), 0)
         print_json.assert_called_once()
         self.assertEqual(load_json(output)["staged_prefix_edges"], 1)
+
+    def test_consumer_landing_templates_project_exact_unfilled_owner_populations(self) -> None:
+        registration, assembly, _, _, _ = self.landing_inputs("landing-template")
+        first_output = self.root / "landing-template-first.json"
+        second_output = self.root / "landing-template-second.json"
+        first = consumer_landing_templates(
+            registration,
+            assembly,
+            ["f111", "f106", "f110"],
+            output=first_output,
+        )
+        second = consumer_landing_templates(
+            registration,
+            assembly,
+            ["f106", "f110", "f111"],
+            output=second_output,
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(first_output.read_bytes(), second_output.read_bytes())
+        self.assertEqual(first["schema"], "kilix.f120.consumer-landing-template-set/v1")
+        self.assertEqual(first["status"], "non-evidence-template")
+        self.assertEqual(
+            (
+                first["owners"],
+                first["component_required_tests"],
+                first["staged_prefix_edges"],
+                first["installed_surface_tests"],
+                first["evidence_slots"],
+                first["unfilled_values"],
+            ),
+            (3, 3, 1, 1, 7, 19),
+        )
+        self.assertEqual(first["required_owners"], ["f106", "f110", "f111"])
+        self.assertEqual(
+            first["allowed_linkage_kinds"],
+            [
+                "command-exec",
+                "data-interface",
+                "dynamic-link",
+                "runtime-import",
+                "static-link",
+            ],
+        )
+        self.assertEqual(
+            first["allowed_private_api_dispositions"], ["not-used", "removed"]
+        )
+        self.assertEqual(
+            [item["owner"] for item in first["templates"]],
+            ["f106", "f110", "f111"],
+        )
+        f110 = first["templates"][1]["receipt"]
+        self.assertEqual(f110["component_tests"][0]["component_instance"], "f110")
+        self.assertEqual(f110["landings"][0]["recipe_token"], "{dependency:f106}")
+        self.assertIsNone(f110["landings"][0]["linkage"]["kind"])
+
+        paths: list[tuple[str, Path]] = []
+        for item in first["templates"]:
+            path = self.root / f"unfilled-{item['owner']}.json"
+            atomic_write_json(path, item["receipt"])
+            paths.append((item["owner"], path))
+        with self.assertRaises(RegistrationError):
+            verify_consumer_landings(
+                registration,
+                assembly,
+                paths,
+                ["f106", "f110", "f111"],
+                [],
+                output=self.root / "unfilled-template-report.json",
+            )
+
+    def test_consumer_landing_template_cli_refuses_drift_and_overwrite(self) -> None:
+        registration, assembly, _, _, _ = self.landing_inputs("landing-template-cli")
+        output = self.root / "landing-template-cli-output.json"
+        arguments = cli_parser().parse_args(
+            [
+                "landing-template",
+                str(registration),
+                str(assembly),
+                "--output",
+                str(output),
+                "--required-owner",
+                "f106",
+                "--required-owner",
+                "f110",
+                "--required-owner",
+                "f111",
+            ]
+        )
+        with mock.patch("kilix_f120.cli._print_json") as print_json:
+            self.assertEqual(arguments.handler(arguments), 0)
+        print_json.assert_called_once()
+        self.assertEqual(load_json(output)["evidence_slots"], 7)
+
+        with self.assertRaises(ContractError):
+            consumer_landing_templates(
+                registration,
+                assembly,
+                ["f106", "f110", "f111"],
+                output=output,
+            )
+        with self.assertRaisesRegex(RegistrationError, "required-owner set differs"):
+            consumer_landing_templates(
+                registration,
+                assembly,
+                ["f106", "f110"],
+                output=self.root / "landing-template-owner-drift.json",
+            )
+        self.assertEqual(load_json(output)["evidence_slots"], 7)
 
     def test_consumer_landings_refuse_owner_assembly_and_input_identity_drift(self) -> None:
         registration, assembly, receipts, evidence, _ = self.landing_inputs(

@@ -46,6 +46,11 @@ unavailable.
 f120-authority --subject SUBJECT cli contracts
 f120-authority --subject SUBJECT cli assemble OUTPUT --workspace-root ROOT
     --report REPORT --required-owner OWNER... --fragment OWNER=/absolute/path...
+f120-authority --subject SUBJECT cli landing-template REGISTRATION ASSEMBLY_REPORT
+    --output NEW_TEMPLATE_SET --required-owner OWNER...
+f120-authority --subject SUBJECT cli landings REGISTRATION ASSEMBLY_REPORT
+    --output NEW_REPORT --required-owner OWNER...
+    --receipt OWNER=/absolute/path... --evidence ID=/absolute/path...
 f120-authority --subject SUBJECT cli resolve REGISTRATION OUTPUT [--qualify]
     [--local-source INSTANCE=/absolute/path]
 f120-authority --subject SUBJECT cli validate DOCUMENT [--allow-development-state]
@@ -133,9 +138,19 @@ receipt must also cover every owned component and every component
 owner is not test-free. Evidence files are regular non-symlink inputs whose
 observed digests must match the receipt;
 the canonical report contains IDs, digests and byte counts but no operator
-paths or command text. This R5 surface records complete evidence coverage. It
+paths or command text. This R6 surface records complete evidence coverage. It
 does not decide whether the evidence is technically sufficient, accept an
 owner return, edit a consumer worktree or change the frozen contract.
+
+`landing-template` projects the exact component-test and staged-edge receipt
+population for every required owner from the captured registration and assembly
+report. It fills immutable identities, commits, recipe tokens, test IDs and
+deterministic evidence-slot IDs, while leaving commands, exits, evidence
+digests, linkage choice and private-API disposition explicitly null. The
+result is a `non-evidence-template`, cannot pass `landings` unfilled and never
+claims that a consumer conversion or test occurred. Each owner extracts its
+`templates[].receipt` object, fills only the null evidence slots from retained
+execution, and submits that standalone object with the named evidence files.
 
 Every registered executable is classified as `native`, `script`,
 `python-interpreter` or `python-script`; scripts bind a named registered
