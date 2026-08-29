@@ -40,7 +40,10 @@ ARTIFACT_ID = {
 RELATIVE_PATH = {
     "maxLength": 4096,
     "minLength": 1,
-    "pattern": r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^\u0000]+$",
+    "pattern": (
+        r"^(?:\.|(?!\.{1,2}(?:/|$))(?!.*\/\.{1,2}(?:/|$))"
+        r"[^/\u0000]+(?:/[^/\u0000]+)*)$"
+    ),
     "type": "string",
 }
 
@@ -410,6 +413,7 @@ def workspace_schema() -> dict[str, Any]:
     defs = schema["$defs"]
     defs["sha256"] = copy.deepcopy(SHA256)
     defs["artifactId"] = copy.deepcopy(ARTIFACT_ID)
+    defs["relativePath"] = copy.deepcopy(RELATIVE_PATH)
     defs["buildOptions"]["additionalProperties"]["type"] = [
         "string",
         "integer",
@@ -452,6 +456,7 @@ def release_schema() -> dict[str, Any]:
     defs = schema["$defs"]
     defs["sha256"] = copy.deepcopy(SHA256)
     defs["artifactId"] = copy.deepcopy(ARTIFACT_ID)
+    defs["relativePath"] = copy.deepcopy(RELATIVE_PATH)
     defs["buildOptions"]["additionalProperties"]["type"] = [
         "string",
         "integer",
@@ -1006,6 +1011,30 @@ def invalid_fixtures(
     duplicate_path = copy.deepcopy(release)
     duplicate_path["artifacts"][1]["path"] = duplicate_path["artifacts"][0]["path"]
     result["release-duplicate-artifact-path.json"] = duplicate_path
+
+    payload_licence_alias = copy.deepcopy(release)
+    alias_unit = payload_licence_alias["compliance_units"][0]
+    payload_reference = alias_unit["payloads"][0]
+    licence_path = alias_unit["license_texts"][0]["staged_path"]
+    aliased_path = f"./{licence_path}"
+    payload_reference["staged_path"] = aliased_path
+    for artifact in payload_licence_alias["artifacts"]:
+        if artifact["artifact_id"] == payload_reference["artifact_id"]:
+            artifact["path"] = aliased_path
+    binding_input = copy.deepcopy(alias_unit)
+    binding_input.pop("compliance_binding_sha256")
+    alias_binding = hashlib.sha256(
+        b"kilix.f120.compliance-unit/v1\0" + canonical_bytes(binding_input)
+    ).hexdigest()
+    alias_unit["compliance_binding_sha256"] = alias_binding
+    for artifact in payload_licence_alias["artifacts"]:
+        if artifact["artifact_id"] == payload_reference["artifact_id"]:
+            artifact["compliance_binding_sha256"] = alias_binding
+    result["release-payload-license-path-alias.json"] = payload_licence_alias
+
+    malformed_toolchain = copy.deepcopy(release)
+    malformed_toolchain["components"][0]["toolchain"] = "not-an-object"
+    result["release-malformed-toolchain.json"] = malformed_toolchain
 
     no_conveyance = copy.deepcopy(release)
     no_conveyance["compliance_units"][0]["notices"][0]["kind"] = "upstream"

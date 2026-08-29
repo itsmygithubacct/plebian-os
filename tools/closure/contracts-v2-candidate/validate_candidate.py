@@ -19,7 +19,7 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 from contextlib import redirect_stderr
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import urlsplit
 
@@ -227,10 +227,12 @@ EXPECTED_INVALID = {
     "release/invalid/duplicate-artifact-path.json": "F120-V2-DUPLICATE-ARTIFACT-PATH",
     "release/invalid/exclusive-artifact-shared.json": "F120-V2-EXCLUSIVE-COMPLIANCE-ARTIFACT",
     "release/invalid/licence-union-mismatch.json": "F120-V2-LICENCE-UNION-MISMATCH",
+    "release/invalid/malformed-toolchain.json": "F120-V2-VALIDATOR-FAILURE",
     "release/invalid/missing-conveyance.json": "F120-V2-CONVEYANCE-NOTICE-COUNT",
     "release/invalid/notice-tuple-mismatch.json": "F120-V2-NOTICE-TUPLE-MISMATCH",
     "release/invalid/notice-union-mismatch.json": "F120-V2-NOTICE-UNION-MISMATCH",
     "release/invalid/orphan-compliance-artifact.json": "F120-V2-ORPHAN-COMPLIANCE-ARTIFACT",
+    "release/invalid/payload-license-path-alias.json": "F120-V2-PATH",
     "release/invalid/payload-without-unit.json": "F120-V2-PAYLOAD-WITHOUT-UNIT",
     "release/invalid/role-mismatch.json": "F120-V2-ROLE-MISMATCH",
     "release/invalid/staged-artifact-mismatch.json": "F120-V2-STAGED-ARTIFACT-MISMATCH",
@@ -261,6 +263,9 @@ EXPECTED_REFUSAL_FAMILIES = {
     "F120-V2-STAGED-ARTIFACT-MISMATCH",
     "F120-V2-COMPLIANCE-BINDING-MISMATCH",
     "F120-V2-F100-VALIDATOR-UNAVAILABLE",
+    "F120-V2-PATH",
+    "F120-V2-VALIDATION-MODE",
+    "F120-V2-VALIDATOR-FAILURE",
 }
 
 
@@ -386,8 +391,12 @@ def valid_artifact_id(value: Any) -> bool:
 def valid_relative_path(value: Any) -> bool:
     if not isinstance(value, str) or not value or len(value) > 4096 or "\0" in value:
         return False
-    path = Path(value)
-    return not path.is_absolute() and ".." not in path.parts
+    path = PurePosixPath(value)
+    return (
+        not path.is_absolute()
+        and ".." not in path.parts
+        and value == path.as_posix()
+    )
 
 
 def canonical_url_error(value: Any) -> bool:
@@ -1100,6 +1109,8 @@ def unit_reference(
         errors.append(issue("F120-V2-CROSS-COMPONENT-REFERENCE", f"{unit_label}:{artifact_id}"))
     if artifact.get("artifact_role") != expected_role:
         errors.append(issue("F120-V2-ROLE-MISMATCH", f"{unit_label}:{artifact_id} expected {expected_role}"))
+    if not valid_relative_path(value.get("staged_path")):
+        errors.append(issue("F120-V2-PATH", f"{unit_label}:{artifact_id} staged_path"))
     if value.get("staged_path") != artifact.get("path") or value.get("artifact_sha256") != artifact.get("artifact_sha256"):
         errors.append(issue("F120-V2-STAGED-ARTIFACT-MISMATCH", f"{unit_label}:{artifact_id}"))
     return artifact
@@ -1130,9 +1141,12 @@ def release_semantic_errors(document: dict[str, Any], *, require_f100: bool) -> 
             errors.append(issue("F120-V2-DUPLICATE-ARTIFACT-ID", str(artifact_id)))
         else:
             artifacts[artifact_id] = artifact
-        if path in paths:
+        if not valid_relative_path(path):
+            errors.append(issue("F120-V2-PATH", f"{label}.path"))
+        elif path in paths:
             errors.append(issue("F120-V2-DUPLICATE-ARTIFACT-PATH", str(path)))
-        paths.add(path)
+        else:
+            paths.add(path)
         instance = artifact.get("component_instance")
         component = components.get(instance)
         if component is None:
@@ -1379,6 +1393,34 @@ def schema_errors(document: dict[str, Any], available: dict[str, Draft202012Vali
     ]
 
 
+def document_relative_path_errors(document: dict[str, Any]) -> list[str]:
+    """Apply the frozen POSIX path grammar without trusting document shape.
+
+    Registration has its own closed parser because it is not a published JSON
+    Schema.  Workspace and release documents use this small, type-safe pass in
+    addition to their schemas so a known path-alias attack receives a stable
+    refusal while malformed shapes remain outside the deeper semantic joins.
+    """
+
+    if document.get("schema") not in {WORKSPACE_ID, RELEASE_ID}:
+        return []
+    errors: list[str] = []
+
+    def visit(value: Any, label: str) -> None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_label = f"{label}.{key}"
+                if key in {"path", "staged_path", "text_path"} and not valid_relative_path(child):
+                    errors.append(issue("F120-V2-PATH", f"{child_label} is not normalized"))
+                visit(child, child_label)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                visit(child, f"{label}[{index}]")
+
+    visit(document, "document")
+    return errors
+
+
 def validate_document(
     path: Path,
     available: dict[str, Draft202012Validator],
@@ -1393,6 +1435,20 @@ def validate_document(
         return [issue("F120-V2-LOAD", str(exc))]
     if not isinstance(document, dict):
         return [issue("F120-V2-OBJECT-SHAPE", "document must be an object")]
+    if contract_preflight == release_qualification:
+        return [
+            issue(
+                "F120-V2-VALIDATION-MODE",
+                "choose exactly one of contract preflight and release qualification",
+            )
+        ]
+    if allow_development_state and not contract_preflight:
+        return [
+            issue(
+                "F120-V2-VALIDATION-MODE",
+                "development state is permitted only in contract preflight",
+            )
+        ]
     identity = document.get("schema")
     if release_qualification and identity != RELEASE_ID:
         return [
@@ -1403,16 +1459,24 @@ def validate_document(
         ]
     if isinstance(identity, str) and identity.startswith("kilix.f120.registration/"):
         return registration_errors(document)
-    errors = schema_errors(document, available)
-    if identity == WORKSPACE_ID:
-        errors.extend(
-            workspace_semantic_errors(
-                document, allow_development_state=allow_development_state
+    errors = [*schema_errors(document, available), *document_relative_path_errors(document)]
+    try:
+        if identity == WORKSPACE_ID:
+            errors.extend(
+                workspace_semantic_errors(
+                    document, allow_development_state=allow_development_state
+                )
             )
-        )
-    elif identity == RELEASE_ID:
-        errors.extend(
-            release_semantic_errors(document, require_f100=release_qualification)
+        elif identity == RELEASE_ID:
+            errors.extend(
+                release_semantic_errors(document, require_f100=release_qualification)
+            )
+    except Exception as exc:  # fail closed with the stable interface, never a traceback
+        errors.append(
+            issue(
+                "F120-V2-VALIDATOR-FAILURE",
+                f"semantic validation aborted safely: {type(exc).__name__}",
+            )
         )
     return errors
 
@@ -1469,11 +1533,25 @@ def observed_package_files() -> tuple[set[Path], list[str]]:
     return observed, errors
 
 
-def expected_hash_manifest() -> str:
-    return "".join(
-        f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(ROOT).as_posix()}\n"
-        for path in package_files()
-    )
+def hash_manifest_content(paths: Iterable[Path]) -> tuple[str | None, list[str]]:
+    lines: list[str] = []
+    errors: list[str] = []
+    for path in paths:
+        try:
+            payload = path.read_bytes()
+            relative = path.relative_to(ROOT).as_posix()
+        except (OSError, ValueError) as exc:
+            errors.append(
+                issue(
+                    "F120-V2-PACKAGE-INVENTORY",
+                    f"cannot hash required candidate member {path}: {exc}",
+                )
+            )
+            continue
+        lines.append(f"{hashlib.sha256(payload).hexdigest()}  {relative}\n")
+    if errors:
+        return None, errors
+    return "".join(lines), []
 
 
 def package_errors() -> list[str]:
@@ -1495,11 +1573,15 @@ def package_errors() -> list[str]:
             )
         )
     ratified = ROOT / "RATIFIED-AMENDMENT.md"
-    if (
-        not ratified.is_file()
-        or hashlib.sha256(ratified.read_bytes()).hexdigest()
-        != RATIFIED_AMENDMENT_SHA256
-    ):
+    try:
+        ratified_valid = (
+            ratified.is_file()
+            and hashlib.sha256(ratified.read_bytes()).hexdigest()
+            == RATIFIED_AMENDMENT_SHA256
+        )
+    except OSError:
+        ratified_valid = False
+    if not ratified_valid:
         errors.append(
             issue(
                 "F120-V2-RATIFICATION-DIGEST",
@@ -1515,11 +1597,19 @@ def package_errors() -> list[str]:
                 errors.append(issue("F120-V2-NONCANONICAL-BYTES", str(path.relative_to(ROOT))))
         except (OSError, CandidateFailure, json.JSONDecodeError) as exc:
             errors.append(issue("F120-V2-LOAD", f"{path.relative_to(ROOT)}: {exc}"))
+    expected_manifest, hash_errors = hash_manifest_content(package_files())
+    errors.extend(hash_errors)
     manifest = ROOT / "SHA256SUMS"
     if not manifest.is_file():
         errors.append(issue("F120-V2-HASH-MANIFEST", "SHA256SUMS is absent"))
-    elif manifest.read_text(encoding="ascii") != expected_hash_manifest():
-        errors.append(issue("F120-V2-HASH-MANIFEST", "SHA256SUMS does not bind candidate bytes"))
+    elif expected_manifest is not None:
+        try:
+            manifest_matches = manifest.read_text(encoding="ascii") == expected_manifest
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(issue("F120-V2-HASH-MANIFEST", f"cannot read SHA256SUMS: {exc}"))
+        else:
+            if not manifest_matches:
+                errors.append(issue("F120-V2-HASH-MANIFEST", "SHA256SUMS does not bind candidate bytes"))
     return errors
 
 
@@ -1710,14 +1800,165 @@ def adjudication_regression_errors(
     return failures
 
 
+def r3_adjudication_regression_errors(
+    available: dict[str, Draft202012Validator],
+) -> list[str]:
+    """Replay the R3 High and two Lows against the R4 acceptance boundary."""
+
+    failures: list[str] = []
+    registration = load_json(
+        FIXTURES / "registration" / "valid" / "two-obligation-units.json"
+    )
+    workspace = load_json(
+        FIXTURES / "workspace" / "valid" / "two-obligation-units.json"
+    )
+    release_path = FIXTURES / "release" / "valid" / "two-obligation-units.json"
+    release = load_json(release_path)
+    alias_path = FIXTURES / "release" / "invalid" / "payload-license-path-alias.json"
+    alias_release = load_json(alias_path)
+
+    def require_code(errors: list[str], code: str, label: str) -> None:
+        if not any(code in error for error in errors):
+            failures.append(f"R4 regression {label} missed {code}: {errors[:8]}")
+
+    # H-01: retain the frozen normalized-POSIX grammar in registration/v3 and
+    # both generated schemas.  These are the five aliases from the rejecting
+    # review, applied to both a component path and an artifact path.
+    aliases = (
+        "bin//payload-alpha",
+        "./bin/payload-alpha",
+        "bin/./payload-alpha",
+        "bin/payload-alpha/",
+        "bin/payload-alpha/.",
+    )
+    for alias in aliases:
+        component_alias = copy.deepcopy(registration)
+        component_alias["components"][0]["path"] = alias
+        require_code(
+            registration_errors(component_alias),
+            "F120-V2-PATH",
+            f"registration component alias {alias!r}",
+        )
+        artifact_alias = copy.deepcopy(registration)
+        artifact_alias["components"][0]["build"]["artifacts"][0]["path"] = alias
+        require_code(
+            registration_errors(artifact_alias),
+            "F120-V2-PATH",
+            f"registration artifact alias {alias!r}",
+        )
+        for identity, base, field in (
+            (
+                WORKSPACE_ID,
+                workspace,
+                ("components", 0, "artifact_declarations", 0, "path"),
+            ),
+            (RELEASE_ID, release, ("artifacts", 0, "path")),
+        ):
+            mutation = copy.deepcopy(base)
+            cursor: Any = mutation
+            for part in field[:-1]:
+                cursor = cursor[part]
+            cursor[field[-1]] = alias
+            if not list(available[identity].iter_errors(mutation)):
+                failures.append(f"R4 regression {identity} schema accepted path alias {alias!r}")
+
+    # The decisive fixture is internally re-bound after staging the payload at
+    # an alias of its own unit's readable licence path.  Both public modes and
+    # the direct release join must reject the acceptance.  Qualification may
+    # also report unavailable F100 authority, but that temporary condition can
+    # no longer be the only F120 refusal.
+    for mode, errors in (
+        (
+            "contract preflight",
+            validate_document(alias_path, available, contract_preflight=True),
+        ),
+        (
+            "release qualification",
+            validate_document(alias_path, available, release_qualification=True),
+        ),
+        (
+            "direct release joins",
+            release_semantic_errors(alias_release, require_f100=False),
+        ),
+    ):
+        require_code(errors, "F120-V2-PATH", f"payload/licence alias {mode}")
+    qualification_errors = validate_document(alias_path, available, release_qualification=True)
+    non_temporary = [
+        error
+        for error in qualification_errors
+        if "F120-V2-F100-VALIDATOR-UNAVAILABLE" not in error
+    ]
+    if not non_temporary:
+        failures.append("R4 regression payload/licence alias emitted only temporary F100 refusal")
+
+    # L-01: the library has no implicit permissive mode, even when a caller
+    # bypasses argparse.
+    require_code(
+        validate_document(release_path, available),
+        "F120-V2-VALIDATION-MODE",
+        "modeless library call",
+    )
+    require_code(
+        validate_document(
+            release_path,
+            available,
+            contract_preflight=True,
+            release_qualification=True,
+        ),
+        "F120-V2-VALIDATION-MODE",
+        "dual-mode library call",
+    )
+
+    # L-02: malformed release shapes stop after named schema/path refusals and
+    # never enter graph/release joins that assume validated types.
+    malformed_documents: list[tuple[str, dict[str, Any], str]] = []
+    string_toolchain = copy.deepcopy(release)
+    string_toolchain["components"][0]["toolchain"] = "not-an-object"
+    malformed_documents.append(
+        ("string toolchain", string_toolchain, "F120-V2-VALIDATOR-FAILURE")
+    )
+    list_toolchain = copy.deepcopy(release)
+    list_toolchain["components"][0]["toolchain"] = ["not", "an", "object"]
+    malformed_documents.append(
+        ("list toolchain", list_toolchain, "F120-V2-VALIDATOR-FAILURE")
+    )
+    list_path = copy.deepcopy(release)
+    list_path["artifacts"][0]["path"] = ["not", "a", "path"]
+    malformed_documents.append(("list artifact path", list_path, "F120-V2-PATH"))
+    with tempfile.TemporaryDirectory() as temporary:
+        for label, document, code in malformed_documents:
+            path = Path(temporary) / f"{label.replace(' ', '-')}.json"
+            path.write_bytes(canonical_bytes(document))
+            for mode, arguments in (
+                ("preflight", {"contract_preflight": True}),
+                ("qualification", {"release_qualification": True}),
+            ):
+                try:
+                    errors = validate_document(path, available, **arguments)
+                except Exception as exc:  # pragma: no cover - a regression sentinel
+                    failures.append(
+                        f"R4 regression {label} {mode} raised {type(exc).__name__}: {exc}"
+                    )
+                else:
+                    require_code(errors, code, f"{label} {mode}")
+
+    missing_member = ROOT / "fixtures" / "release" / "invalid" / "not-present.json"
+    content, errors = hash_manifest_content([missing_member])
+    if content is not None:
+        failures.append("R4 regression missing package member produced hash-manifest bytes")
+    require_code(errors, "F120-V2-PACKAGE-INVENTORY", "missing package member")
+    return failures
+
+
 def self_test(available: dict[str, Draft202012Validator]) -> int:
     failures = package_errors()
     failures.extend(adjudication_regression_errors(available))
+    failures.extend(r3_adjudication_regression_errors(available))
     valid_paths = sorted(FIXTURES.glob("*/valid/*.json"))
     invalid_paths = sorted(FIXTURES.glob("*/invalid/*.json"))
     if len(valid_paths) != 3:
         failures.append(issue("F120-V2-FIXTURE-INVENTORY", f"expected 3 valid fixtures, found {len(valid_paths)}"))
-    observed_refusal_families: set[str] = set()
+    observed_refusal_families: set[str] = {"F120-V2-VALIDATION-MODE"}
     for path in valid_paths:
         errors = validate_document(path, available, contract_preflight=True)
         if errors:
@@ -1782,8 +2023,10 @@ def self_test(available: dict[str, Draft202012Validator]) -> int:
         return 1
     print(
         "PASS: review-only v3/v2/v2 schemas, 3 valid and "
-        f"{len(invalid_paths)} named-invalid fixtures; 20/20 profile refusal "
-        "families and 8/8 R2 adjudication findings covered; qualification "
+        f"{len(invalid_paths)} named-invalid fixtures; "
+        f"{len(EXPECTED_REFUSAL_FAMILIES)}/{len(EXPECTED_REFUSAL_FAMILIES)} "
+        "profile refusal families, 8/8 R2 adjudication findings and 3/3 R3 "
+        "adjudication findings covered; qualification "
         "remains fail-closed on absent accepted F100 validators"
     )
     return 0
@@ -1823,8 +2066,14 @@ def main() -> int:
     if (args.self_test or args.write_hashes) and args.path is not None:
         parser.error("PATH cannot be combined with --self-test or --write-hashes")
     if args.write_hashes:
-        (ROOT / "SHA256SUMS").write_text(expected_hash_manifest(), encoding="ascii")
-        print(f"wrote SHA256SUMS for {len(package_files())} candidate files")
+        files = package_files()
+        manifest_content, errors = hash_manifest_content(files)
+        if errors or manifest_content is None:
+            for error in errors:
+                print(error, file=sys.stderr)
+            return 1
+        (ROOT / "SHA256SUMS").write_text(manifest_content, encoding="ascii")
+        print(f"wrote SHA256SUMS for {len(files)} candidate files")
         return 0
     available = schema_validators()
     if args.self_test:

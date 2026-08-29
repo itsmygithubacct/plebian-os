@@ -1,11 +1,13 @@
 # F120 v3/v2/v2 licence-carrier correction candidate
 
-This directory is the **R3 correction candidate, not contract authority and
+This directory is the **R4 correction candidate, not contract authority and
 not release qualification evidence**.  It implements the contract-design gate
 selected by Owner Decision 14 without changing one byte in the frozen v1
-package at `../contracts/`.  Root adjudication rejected R2 after one incomplete
-no-finding review and one independent review with four Medium and four Low
-findings.  Neither review transfers to these changed bytes.
+package at `../contracts/`.  Root adjudication rejected R3 after Review 1
+accepted at zero findings and Review 2 returned one High and two Low findings.
+The adjudication records all eight R2 return conditions closed; R4 retains those
+corrections and closes the three new findings.  No R2 or R3 review transfers to
+these changed bytes.
 
 The candidate is bound to the exact owner-ratified amendment copied as
 `RATIFIED-AMENDMENT.md`, whose required SHA-256 is
@@ -30,7 +32,8 @@ and emits canonical fixtures.  It never writes in `../contracts/`.  The valid
 corpus contains three distribution units in one component: two have different
 licence obligations, while the third deliberately groups two uniformly
 obligated payloads.  Invalid fixtures carry stable named refusals, including
-the former accepted zero-notice shape.
+the former accepted zero-notice shape and an internally re-bound release lock
+whose payload path aliases its own unit's readable licence path.
 
 Run the deterministic contract-only gate with:
 
@@ -41,7 +44,13 @@ uv run --locked python validate_candidate.py --self-test
 
 Individual validation has no implicit mode.  It requires exactly one of
 `--contract-preflight` and `--release-qualification`, so a successful preflight
-cannot be consumed as a release-qualification result by exit status alone.
+cannot be consumed as a release-qualification result by exit status alone at
+either the CLI or library boundary.  All relative paths use the frozen
+normalized POSIX grammar in the registration parser, both schemas and the
+release joins; alternate spellings cannot create distinct identities for one
+staged file.  Schema-invalid documents cannot escape through a traceback: deep
+semantic failures and package-census read failures return stable named
+refusals.
 Qualification is bound to an exact `kilix.f120.release-lock/v2` input and is
 mutually exclusive with construction and self-test actions.
 `--contract-preflight` is deliberately named and printed as non-qualifying.  An
