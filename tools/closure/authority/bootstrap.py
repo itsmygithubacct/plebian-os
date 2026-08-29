@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -23,6 +24,8 @@ RESERVED_NAMES = {"sitecustomize.py", "usercustomize.py"}
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_PROFILE_BYTES = 256 * 1024
 MAX_CAPTURE_BYTES = 4 * 1024 * 1024
+PR_GET_DUMPABLE = 3
+PR_SET_DUMPABLE = 4
 PROFILE_NAME = re.compile(r"[a-z][a-z0-9-]{0,63}")
 MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 FORBIDDEN_PROVIDER_ENVIRONMENT = {
@@ -58,6 +61,26 @@ FIXED_PROVIDER_ENVIRONMENT = {
 
 class Refusal(ValueError):
     """A stable fail-closed launch refusal."""
+
+
+def _seal_result_owner() -> None:
+    """Deny subject descendants procfs access to the outer process's fds."""
+    try:
+        process_control = ctypes.CDLL(None, use_errno=True).prctl
+        process_control.argtypes = [
+            ctypes.c_int,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+        ]
+        process_control.restype = ctypes.c_int
+    except (AttributeError, OSError) as exc:
+        raise Refusal("result owner procfs isolation is unavailable") from exc
+    if process_control(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise Refusal("result owner procfs isolation could not be established")
+    if process_control(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise Refusal("result owner procfs isolation did not remain active")
 
 
 def _sha256_fd(descriptor: int) -> str:
@@ -999,6 +1022,7 @@ def main() -> int:
         if modes != ["outer"]:
             raise Refusal("launch mode is absent, duplicated or invalid")
         arguments = outer_parser().parse_args()
+        _seal_result_owner()
         forwarded = arguments.forwarded
         if forwarded[:1] == ["--"]:
             forwarded = forwarded[1:]

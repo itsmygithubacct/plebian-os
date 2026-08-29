@@ -3,7 +3,10 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import subprocess
+import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -153,6 +156,67 @@ class TrustedLauncherProfileTest(unittest.TestCase):
         for path in (noncanonical, duplicate, nonfinite):
             with self.assertRaises(BUILDER.BundleError):
                 BUILDER.load_profile(path.resolve())
+
+    def test_outer_result_writer_cannot_be_reopened_by_descendant(self) -> None:
+        program = textwrap.dedent(
+            """
+            import importlib.util
+            import os
+            import sys
+
+            specification = importlib.util.spec_from_file_location(
+                "authority_bootstrap", sys.argv[1]
+            )
+            assert specification is not None and specification.loader is not None
+            bootstrap = importlib.util.module_from_spec(specification)
+            specification.loader.exec_module(bootstrap)
+
+            result_read, result_write = os.pipe()
+            status_read, status_write = os.pipe()
+            bootstrap._seal_result_owner()
+            owner = os.getpid()
+            child = os.fork()
+            if child == 0:
+                os.close(result_read)
+                os.close(result_write)
+                os.close(status_read)
+                try:
+                    reopened = os.open(
+                        f"/proc/{owner}/fd/{result_write}", os.O_WRONLY
+                    )
+                except PermissionError:
+                    outcome = b"DENIED"
+                except OSError as exc:
+                    outcome = f"OSERROR:{exc.errno}".encode("ascii")
+                else:
+                    os.close(reopened)
+                    outcome = b"REOPENED"
+                os.write(status_write, outcome)
+                os._exit(0)
+
+            os.close(status_write)
+            outcome = os.read(status_read, 64)
+            waited, status = os.waitpid(child, 0)
+            if waited != child or not os.WIFEXITED(status):
+                raise SystemExit("descendant did not terminate normally")
+            sys.stdout.buffer.write(outcome + b"\\n")
+            """
+        )
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                program,
+                str(AUTHORITY / "bootstrap.py"),
+            ],
+            check=False,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8"))
+        self.assertEqual(result.stdout, b"DENIED\n")
 
 
 if __name__ == "__main__":

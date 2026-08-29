@@ -23,9 +23,13 @@ The bootstrap independently rechecks the envelope, three closure manifests and
 profile digest. It recomputes the terminal-check-set digest from the selected
 command's ordered child IDs, executes every child through the same retained
 interpreter/bootstrap boundary, and rechecks all three closures after every
-child. The result descriptor is closed in children. The native launcher accepts
-only one bounded canonical result on that descriptor; child stdout, familiar
-PASS text and exit zero cannot authorize a run.
+child. Before any child is forked, the outer bootstrap makes itself
+non-dumpable and verifies that state; the result descriptor is also closed in
+children. Linux procfs access control therefore denies an unprivileged subject
+descendant that tries to resurrect the outer process's live writer through
+`/proc/<ancestor>/fd/<result-fd>`. The native launcher accepts only one bounded
+canonical result on that descriptor; child stdout, familiar PASS text and exit
+zero cannot authorize a run.
 
 ## Profile contract
 
