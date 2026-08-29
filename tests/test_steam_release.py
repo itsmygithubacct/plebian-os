@@ -371,6 +371,55 @@ exec "$@"
         verified = self.run_helper(root, "--verify", authorized=False)
         self.assertEqual(verified.returncode, 0, verified.stderr)
 
+    def test_verify_refuses_nonexact_or_unsafe_outcome_projection(self):
+        root = self.make_test_root()
+        self.addCleanup(shutil.rmtree, root, True)
+        installed = self.run_helper(root, "--install")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        outcome = root / "var/lib/plebian-os/steam/outcome"
+        exact = outcome.read_bytes()
+
+        outcome.write_bytes(exact.replace(
+            b"authorization_schema=kilix.install.authorization/v2",
+            b"authorization_schema=kilix.install.license/v1",
+        ))
+        wrong_authority = self.run_helper(root, "--verify", authorized=False)
+        self.assertNotEqual(wrong_authority.returncode, 0)
+        self.assertIn(
+            "verified Steam transaction outcome is absent or different",
+            wrong_authority.stderr,
+        )
+
+        outcome.write_bytes(exact + b"unexpected=scope-expansion\n")
+        extra = self.run_helper(root, "--verify", authorized=False)
+        self.assertNotEqual(extra.returncode, 0)
+        self.assertIn(
+            "verified Steam transaction outcome is absent or different",
+            extra.stderr,
+        )
+
+        outcome.write_bytes(exact)
+        outcome.chmod(0o666)
+        writable = self.run_helper(root, "--verify", authorized=False)
+        self.assertNotEqual(writable.returncode, 0)
+        self.assertIn(
+            "verified Steam transaction outcome is absent or different",
+            writable.stderr,
+        )
+
+        outcome.chmod(0o644)
+        outside = root / "outside-outcome"
+        outside.write_bytes(exact)
+        outcome.unlink()
+        outcome.symlink_to(outside)
+        symlinked = self.run_helper(root, "--verify", authorized=False)
+        self.assertNotEqual(symlinked.returncode, 0)
+        self.assertIn(
+            "verified Steam transaction outcome is absent or different",
+            symlinked.stderr,
+        )
+        self.assertEqual(outside.read_bytes(), exact)
+
     def test_update_failure_recovers_all_pre_package_mutations(self):
         root = self.make_test_root()
         self.addCleanup(shutil.rmtree, root, True)

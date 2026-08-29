@@ -468,13 +468,83 @@ verify_core() {
     [ "$failed" = 0 ]
 }
 
+state_file_safe() {
+    local path=$1 boundary trusted_uid resolved directory owner mode parent
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    resolved=$(readlink -e -- "$path" 2>/dev/null) || return 1
+    [ "$resolved" = "$path" ] || return 1
+    if [ "$TESTING" = 1 ]; then
+        boundary=$TEST_ROOT
+        trusted_uid=$(id -u)
+    else
+        boundary=/
+        trusted_uid=0
+    fi
+    directory=${path%/*}
+    if [ "$boundary" = / ]; then
+        case "$directory" in /*) ;; *) return 1 ;; esac
+    else
+        case "$directory" in
+            "$boundary"|"$boundary"/*) ;;
+            *) return 1 ;;
+        esac
+    fi
+    while :; do
+        [ -d "$directory" ] && [ ! -L "$directory" ] || return 1
+        owner=$(stat -c '%u' -- "$directory" 2>/dev/null) || return 1
+        mode=$(stat -c '%a' -- "$directory" 2>/dev/null) || return 1
+        [ "$owner" = "$trusted_uid" ] || return 1
+        (( (8#$mode & 8#022) == 0 )) || return 1
+        [ "$directory" != "$boundary" ] || break
+        parent=${directory%/*}
+        directory=${parent:-/}
+    done
+    owner=$(stat -c '%u' -- "$path" 2>/dev/null) || return 1
+    mode=$(stat -c '%a' -- "$path" 2>/dev/null) || return 1
+    [ "$owner" = "$trusted_uid" ] || return 1
+    [ "$mode" = 644 ]
+}
+
+verified_outcome_exact() {
+    local outcome=$1 index
+    local -a lines=()
+    state_file_safe "$outcome" || return 1
+    mapfile -t lines <"$outcome" || return 1
+    [ "${#lines[@]}" = 10 ] || return 1
+    [ "${lines[0]}" = 'schema=plebian-os.steam-transaction/v1' ] \
+        && [ "${lines[1]}" = 'state=VERIFIED' ] \
+        && [ "${lines[2]}" = "closure_sha256=$CLOSURE_SHA256" ] \
+        && [ "${lines[3]}" = \
+            'authorization_schema=kilix.install.authorization/v2' ] \
+        && [ "${lines[4]}" = 'license_schema=kilix.install.license/v1' ] \
+        && [ "${lines[5]}" = 'decisions_separate=1' ] \
+        || return 1
+    for index in 6 7 8 9; do
+        [[ "${lines[$index]}" =~ ^introduced_(source|pin|key|i386)=[01]$ ]] \
+            || return 1
+    done
+    [ "${lines[6]%%=*}" = introduced_source ] \
+        && [ "${lines[7]%%=*}" = introduced_pin ] \
+        && [ "${lines[8]%%=*}" = introduced_key ] \
+        && [ "${lines[9]%%=*}" = introduced_i386 ] \
+        || return 1
+    {
+        printf 'schema=plebian-os.steam-transaction/v1\n'
+        printf 'state=VERIFIED\n'
+        printf 'closure_sha256=%s\n' "$CLOSURE_SHA256"
+        printf 'authorization_schema=kilix.install.authorization/v2\n'
+        printf 'license_schema=kilix.install.license/v1\n'
+        printf 'decisions_separate=1\n'
+        printf '%s\n' "${lines[6]}" "${lines[7]}" \
+            "${lines[8]}" "${lines[9]}"
+    } | cmp -s - "$outcome"
+}
+
 verify_install() {
     local outcome
     verify_core || return 1
     outcome="$STATE_DIR/outcome"
-    if [ ! -f "$outcome" ] || [ -L "$outcome" ] \
-            || ! grep -Fxq 'state=VERIFIED' "$outcome" \
-            || ! grep -Fxq "closure_sha256=$CLOSURE_SHA256" "$outcome"; then
+    if ! verified_outcome_exact "$outcome"; then
         warn "verified Steam transaction outcome is absent or different"
         return 1
     fi
