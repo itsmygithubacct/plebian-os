@@ -2,7 +2,7 @@
 
 **Candidate identity:** `kilix.f120.staged-dependencies/v1`
 
-**Status:** Track H R2 construction successor for P9-H2/P9-H1 mechanics. It is not accepted,
+**Status:** Track H R3 construction successor for P9-H2/P9-H1 mechanics. It is not accepted,
 refrozen or P9-usable until two independent exact-byte passes accept it and an
 accepted companion-semantics successor binds these bytes. It changes no byte
 under `contracts/` and does not reinterpret the frozen workspace-manifest/v1
@@ -117,6 +117,38 @@ build count. The report also records the actual provider-first build order.
 The accepted tree-level source-cache and frozen build-key derivations are
 unchanged.
 
+## Retained three-leg proof transaction
+
+`stage-matrix` turns the required cold, warm and independent-clean exercise
+into one atomic retained result. Its output must be a new absolute directory
+outside the workspace. The command creates 2/2 new caches: cold and warm share
+1/2, while independent-clean uses the other 1/2. P9 supplies 0 local-source
+overrides.
+
+For both 2/2 initially empty caches, every distinct source-tree key must miss
+and fetch exactly 1/1 times and every distinct build key must miss and build
+exactly 1/1 times. Multiple component instances sharing a committed tree reuse
+that one source object; their denominated component receipts remain separate.
+The warm leg requires 0 source misses, 0 fetches, 0 fetch bytes, 0 build misses
+and 0 builds across its complete receipt populations. Cold and
+independent-clean detailed evidence must be byte-identical.
+
+Each 3/3 prefix is inventoried from retained no-follow descriptors. The
+inventory records every directory and regular file's normalized relative path
+and mode, plus every regular file's byte length and SHA-256; a symlink, special
+entry or changing inode refuses. The 3/3 validated locks must be byte-identical
+and the 3/3 canonical prefix inventories must be byte-identical before the
+matrix report is published.
+
+The `kilix.f120.stage-matrix-report/v1` result binds the captured registration
+and workspace-manifest SHA-256 values, release, common lock length/digest,
+common prefix-inventory digest, component/artifact populations, unique source
+and build key populations, provider-first order and the 3/3 per-leg
+report/evidence/lock/inventory digests. The complete candidate directory is
+published through an atomic no-replace rename. A failure moves only that
+candidate into a private sibling retirement directory; an existing or racing
+output is preserved byte-for-byte.
+
 ## Required acceptance evidence
 
 The focused causal population must include all 7/7 conditions:
@@ -138,7 +170,10 @@ also pass. Assembly review must cover all 6/6 mutation families: argument-order
 equality, missing/extra/duplicate owner, unresolved field, duplicate/unknown
 graph identity, API/ABI or recipe mismatch, and existing-output refusal with
 no partial pair. Report review must prove all 2/2 receipt vectors are complete
-for cold, warm and independent-clean legs. Review must verify the exact
-commit/tree/path hashes and state every
+for cold, warm and independent-clean legs. Matrix review must additionally
+cover all 6/6 new test populations: exact 3/3-leg CLI output, shared-tree
+fetch-once with a staged consumer, existing/dangling output refusal, no-follow
+prefix inventory, recoverable failed-candidate retirement and competing-writer
+publication. Review must verify the exact commit/tree/path hashes and state every
 assessed and unassessed population with denominators. No builder-authored pass
 or earlier F120/launcher review transfers to these bytes.

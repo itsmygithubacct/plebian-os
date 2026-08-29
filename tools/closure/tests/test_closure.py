@@ -36,6 +36,7 @@ from kilix_f120.manifest import emit_workspace_manifest
 from kilix_f120.registration import load_registration
 from kilix_f120.source_cache import ensure_source
 from kilix_f120.stage import _staged_build_order, retire_stage, stage_workspace
+from kilix_f120.stage_matrix import prefix_inventory, run_stage_matrix
 
 
 def concurrent_stage_worker(
@@ -1652,6 +1653,209 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertEqual(manifest["components"][0]["resolution_state"], "unresolved")
         with self.assertRaises(ContractError):
             validate_path(manifest_path)
+
+    def test_stage_matrix_cli_proves_three_exact_legs(self) -> None:
+        output = self.root / "matrix-cli"
+        arguments = cli_parser().parse_args(
+            [
+                "stage-matrix",
+                str(self.registration_path),
+                str(self.manifest_path),
+                "--output",
+                str(output),
+                "--release",
+                "0.2.1",
+                "--local-source",
+                f"provider={self.repository}",
+            ]
+        )
+        with mock.patch("kilix_f120.cli._print_json") as print_json:
+            self.assertEqual(arguments.handler(arguments), 0)
+        result = print_json.call_args.args[0]
+        self.assertEqual(result, load_json(output / "stage-matrix.json"))
+        self.assertEqual(result["schema"], "kilix.f120.stage-matrix-report/v1")
+        self.assertEqual(
+            (result["components"], result["unique_source_keys"], result["unique_build_keys"]),
+            (1, 1, 1),
+        )
+        self.assertEqual(
+            [item["name"] for item in result["legs"]],
+            ["cold", "warm", "independent"],
+        )
+        self.assertTrue(result["warm_zero_work"])
+        warm = load_json(output / "report-warm.json")
+        self.assertEqual(
+            (
+                warm["source_cache_misses"],
+                warm["fetches"],
+                warm["fetch_bytes"],
+                warm["build_cache_misses"],
+                warm["builds"],
+            ),
+            (0, 0, 0, 0, 0),
+        )
+        self.assertEqual(
+            (output / "lock-cold.json").read_bytes(),
+            (output / "lock-warm.json").read_bytes(),
+        )
+        self.assertEqual(
+            (output / "lock-cold.json").read_bytes(),
+            (output / "lock-independent.json").read_bytes(),
+        )
+        self.assertEqual(
+            load_json(output / "inventory-cold.json"),
+            load_json(output / "inventory-warm.json"),
+        )
+        self.assertEqual(
+            load_json(output / "inventory-cold.json"),
+            load_json(output / "inventory-independent.json"),
+        )
+
+    def test_stage_matrix_fetches_shared_tree_once_and_orders_consumers(self) -> None:
+        documents = self.owner_fragment_documents()
+        fragments = self.write_owner_fragments(documents, "matrix")
+        registration_path = self.root / "matrix-registration.json"
+        assemble_registration(
+            [(owner, path) for owner, path in fragments.items()],
+            ["f106", "f110", "f111"],
+            workspace_root=self.workspace,
+            output=registration_path,
+            report=self.root / "matrix-assembly.json",
+        )
+        registration = load_registration(registration_path)
+        overrides = {
+            owner: self.repository for owner in ("f106", "f110", "f111")
+        }
+        manifest_path = self.root / "matrix-workspace.json"
+        manifest = emit_workspace_manifest(
+            registration,
+            manifest_path,
+            local_sources=overrides,
+            qualify=True,
+        )
+        output = self.root / "matrix-three-owner"
+        result = run_stage_matrix(
+            registration,
+            manifest,
+            output=output,
+            release="0.2.1",
+            registration_sha256=file_sha256(registration_path),
+            workspace_manifest_sha256=file_sha256(manifest_path),
+            local_sources=overrides,
+        )
+        self.assertEqual(
+            (
+                result["components"],
+                result["unique_source_keys"],
+                result["unique_build_keys"],
+            ),
+            (3, 1, 3),
+        )
+        self.assertEqual(result["build_order"], ["f106", "f110", "f111"])
+        cold = load_json(output / "evidence-cold.json")
+        warm = load_json(output / "evidence-warm.json")
+        independent = load_json(output / "evidence-independent.json")
+        self.assertEqual(
+            sum(not item["cache_hit"] for item in cold["source_receipts"]), 1
+        )
+        self.assertEqual(sum(item["fetches"] for item in cold["source_receipts"]), 1)
+        self.assertEqual(sum(item["builds"] for item in cold["build_receipts"]), 3)
+        self.assertTrue(all(item["cache_hit"] for item in warm["source_receipts"]))
+        self.assertTrue(all(item["cache_hit"] for item in warm["build_receipts"]))
+        self.assertEqual(cold, independent)
+
+    def test_stage_matrix_refuses_existing_and_dangling_link_outputs(self) -> None:
+        existing = self.root / "matrix-existing"
+        existing.mkdir()
+        marker = existing / "marker"
+        marker.write_bytes(b"preserve\n")
+        with self.assertRaisesRegex(BuildError, "overwrite an existing stage matrix"):
+            run_stage_matrix(
+                self.registration,
+                self.manifest,
+                output=existing,
+                release="0.2.1",
+                registration_sha256=file_sha256(self.registration_path),
+                workspace_manifest_sha256=file_sha256(self.manifest_path),
+                local_sources={"provider": self.repository},
+            )
+        self.assertEqual(marker.read_bytes(), b"preserve\n")
+
+        dangling_target = self.root / "matrix-dangling-target"
+        dangling = self.root / "matrix-dangling"
+        dangling.symlink_to(dangling_target)
+        with self.assertRaisesRegex(BuildError, "overwrite an existing stage matrix"):
+            run_stage_matrix(
+                self.registration,
+                self.manifest,
+                output=dangling,
+                release="0.2.1",
+                registration_sha256=file_sha256(self.registration_path),
+                workspace_manifest_sha256=file_sha256(self.manifest_path),
+                local_sources={"provider": self.repository},
+            )
+        self.assertTrue(dangling.is_symlink())
+        self.assertFalse(dangling_target.exists())
+
+    def test_prefix_inventory_refuses_symlink_entries(self) -> None:
+        prefix = self.root / "inventory-special"
+        prefix.mkdir()
+        (prefix / "regular").write_bytes(b"regular\n")
+        (prefix / "alias").symlink_to("regular")
+        with self.assertRaisesRegex(BuildError, "symlink or special"):
+            prefix_inventory(prefix)
+
+    def test_failed_stage_matrix_is_recoverably_retired(self) -> None:
+        output = self.root / "matrix-failed"
+        with mock.patch(
+            "kilix_f120.stage_matrix._verify_reports",
+            side_effect=BuildError("calibrated matrix mismatch"),
+        ):
+            with self.assertRaisesRegex(BuildError, "calibrated matrix mismatch"):
+                run_stage_matrix(
+                    self.registration,
+                    self.manifest,
+                    output=output,
+                    release="0.2.1",
+                    registration_sha256=file_sha256(self.registration_path),
+                    workspace_manifest_sha256=file_sha256(self.manifest_path),
+                    local_sources={"provider": self.repository},
+                )
+        self.assertFalse(output.exists())
+        retired = list((self.root / ".kilix-f120-retired").iterdir())
+        self.assertEqual(len(retired), 1)
+        self.assertTrue((retired[0] / "prefix-cold").is_dir())
+        self.assertTrue((retired[0] / "prefix-warm").is_dir())
+        self.assertTrue((retired[0] / "prefix-independent").is_dir())
+
+    def test_stage_matrix_publication_race_preserves_other_writer(self) -> None:
+        output = self.root / "matrix-race"
+        from kilix_f120.cache import rename_directory_no_replace as real_rename
+
+        def race(candidate: Path, destination: Path) -> None:
+            if destination == output:
+                destination.mkdir()
+                (destination / "winner").write_bytes(b"other writer\n")
+                raise FileExistsError("calibrated publication race")
+            real_rename(candidate, destination)
+
+        with mock.patch(
+            "kilix_f120.stage_matrix.rename_directory_no_replace", side_effect=race
+        ):
+            with self.assertRaisesRegex(BuildError, "overwrite an existing stage matrix"):
+                run_stage_matrix(
+                    self.registration,
+                    self.manifest,
+                    output=output,
+                    release="0.2.1",
+                    registration_sha256=file_sha256(self.registration_path),
+                    workspace_manifest_sha256=file_sha256(self.manifest_path),
+                    local_sources={"provider": self.repository},
+                )
+        self.assertEqual((output / "winner").read_bytes(), b"other writer\n")
+        retired = list((self.root / ".kilix-f120-retired").iterdir())
+        self.assertEqual(len(retired), 1)
+        self.assertTrue((retired[0] / "stage-matrix.json").is_file())
 
 
 class ContractPolicyTest(unittest.TestCase):

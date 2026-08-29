@@ -81,10 +81,22 @@ impossible to mistake the scaffold for qualified release evidence.
    import choice, installed-surface tests, private-API disposition and walked
    rollback before changing the edge. Track H supplies the shared dependency
    token and derived key binding; it does not perform that consumer change.
-9. Run `stage` twice against one cache and once against an empty independent
-   cache. The warm run must report zero fetches, zero `fetch_bytes`, and zero
-   builds. All staged bytes and the validated locks must match the clean-cache
-   run.
+9. Run the 3/3-leg proof as one retained transaction:
+
+   ```sh
+   /external/accepted/f120-authority --subject /exact/export/tools/closure cli \
+     stage-matrix /private/p9/registration.json \
+     /private/p9/workspace-manifest.json \
+     --output /private/p9/new-stage-matrix --release 0.2.1
+   ```
+
+   The output directory must not exist. The command creates 2/2 new caches,
+   runs cold and warm against the shared cache and independent-clean against
+   the other, and emits 3/3 summaries, detailed receipt sets, locks and
+   no-follow prefix inventories. The warm leg must report 0 misses, 0 fetches,
+   0 `fetch_bytes` and 0 builds across its complete populations. All 3/3 locks
+   and 3/3 prefix inventories must be byte-identical. P9 supplies 0 local-source
+   overrides; the option exists only for development evidence.
 
 ## Exact owner-fragment assembly
 

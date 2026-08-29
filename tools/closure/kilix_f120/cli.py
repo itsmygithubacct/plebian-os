@@ -12,6 +12,7 @@ from .canonical import (
     atomic_write_json,
     atomic_write_json_new,
     canonical_bytes,
+    file_sha256,
     require_identifier,
 )
 from .contracts import frozen_validator, validate_path, verify_contract_package
@@ -20,6 +21,7 @@ from .graph import reverse_dependencies
 from .manifest import emit_workspace_manifest
 from .registration import load_registration
 from .stage import retire_stage, stage_workspace
+from .stage_matrix import run_stage_matrix
 
 
 def _local_sources(values: list[str]) -> dict[str, Path]:
@@ -170,6 +172,36 @@ def _stage(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _stage_matrix(arguments: argparse.Namespace) -> int:
+    for path, label in (
+        (arguments.registration, "registration"),
+        (arguments.workspace_manifest, "workspace manifest"),
+    ):
+        if path.is_symlink() or not path.is_file():
+            raise ClosureError(f"stage matrix {label} must be a regular non-symlink file")
+    registration_before = file_sha256(arguments.registration)
+    workspace_before = file_sha256(arguments.workspace_manifest)
+    registration = load_registration(arguments.registration)
+    workspace = validate_path(arguments.workspace_manifest)
+    registration_after = file_sha256(arguments.registration)
+    workspace_after = file_sha256(arguments.workspace_manifest)
+    if registration_before != registration_after:
+        raise ClosureError("stage matrix registration changed while being captured")
+    if workspace_before != workspace_after:
+        raise ClosureError("stage matrix workspace manifest changed while being captured")
+    document = run_stage_matrix(
+        registration,
+        workspace,
+        output=arguments.output,
+        release=arguments.release,
+        registration_sha256=registration_before,
+        workspace_manifest_sha256=workspace_before,
+        local_sources=_local_sources(arguments.local_source),
+    )
+    _print_json(document)
+    return 0
+
+
 def _reverse_dependencies(arguments: argparse.Namespace) -> int:
     document = validate_path(
         arguments.document,
@@ -260,6 +292,19 @@ def parser() -> argparse.ArgumentParser:
     stage.add_argument("--evidence-report", type=Path)
     stage.add_argument("--local-source", action="append", default=[], metavar="INSTANCE=PATH")
     stage.set_defaults(handler=_stage)
+
+    matrix = commands.add_parser(
+        "stage-matrix",
+        help="prove cold, warm and independent-clean staging as one transaction",
+    )
+    matrix.add_argument("registration", type=Path)
+    matrix.add_argument("workspace_manifest", type=Path)
+    matrix.add_argument("--output", required=True, type=Path)
+    matrix.add_argument("--release", required=True)
+    matrix.add_argument(
+        "--local-source", action="append", default=[], metavar="INSTANCE=PATH"
+    )
+    matrix.set_defaults(handler=_stage_matrix)
 
     reverse = commands.add_parser(
         "reverse-deps", help="select deterministic reverse dependencies"

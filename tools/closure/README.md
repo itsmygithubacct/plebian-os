@@ -53,6 +53,9 @@ f120-authority --subject SUBJECT cli stage REGISTRATION WORKSPACE_MANIFEST
     --cache CACHE --prefix PREFIX --release VERSION --release-lock LOCK
     [--report REPORT] [--evidence-report EVIDENCE]
     [--local-source INSTANCE=/absolute/path]
+f120-authority --subject SUBJECT cli stage-matrix REGISTRATION WORKSPACE_MANIFEST
+    --output NEW_DIRECTORY --release VERSION
+    [--local-source INSTANCE=/absolute/path]
 f120-authority --subject SUBJECT cli reverse-deps DOCUMENT INSTANCE... [--direct]
 f120-authority --subject SUBJECT cli evict --cache CACHE --namespace sources|builds --key SHA256
 f120-authority --subject SUBJECT cli retire --prefix PREFIX [--release-lock LOCK]
@@ -93,6 +96,20 @@ zero builds for every component. Its path must be new, outside the workspace,
 cache and staged prefix, and distinct from the inputs, lock and summary report.
 An evidence-publication failure recoverably retires the newly published prefix
 and lock.
+
+`stage-matrix` performs the required cold, warm and independent-clean legs as
+one new-directory transaction. The cold and warm legs share exactly one new
+cache; the independent leg uses a second new cache. It requires exactly one
+miss/fetch for every distinct cold and independent source key, exactly one
+miss/build for every distinct build key, and zero misses, fetches, fetch bytes
+or builds in the warm leg. It emits the 3/3 stage summaries, detailed receipts,
+validated locks and no-follow prefix inventories, then refuses unless all 3/3
+locks and all 3/3 inventories are byte-identical. The final report binds the
+captured registration/workspace hashes, common lock and inventory hashes,
+provider-first order and exact key populations. Success publishes the complete
+directory with an atomic no-replace rename. A failed candidate is moved to a
+private sibling retirement directory for inspection; an existing or racing
+output is never replaced. P9 uses no `--local-source` overrides.
 
 The P9-H2 candidate adds a deterministic `staged-prefix` build graph. Providers
 build before consumers; a consumer names each direct provider only through
