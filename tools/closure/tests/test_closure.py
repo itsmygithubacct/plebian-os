@@ -342,10 +342,13 @@ class ClosureIntegrationTest(unittest.TestCase):
         evidence_paths: dict[str, Path] = {}
         evidence_references: dict[str, dict[str, str]] = {}
         for evidence_id in (
+            "f106-component-unit",
+            "f110-component-unit",
             "f110-linkage",
             "f110-private-api",
             "f110-rollback",
             "f110-unit",
+            "f111-component-unit",
         ):
             path = self.root / f"{label}-{evidence_id}.txt"
             path.write_text(f"retained evidence for {evidence_id}\n", encoding="utf-8")
@@ -358,6 +361,25 @@ class ClosureIntegrationTest(unittest.TestCase):
         for owner in ("f106", "f110", "f111"):
             receipts[owner] = {
                 "assembly_report_sha256": file_sha256(assembly_report),
+                "component_tests": [
+                    {
+                        "component_instance": owner,
+                        "tests": [
+                            {
+                                "command": [
+                                    f"test-{owner}-component",
+                                    "--unit",
+                                ],
+                                "evidence": evidence_references[
+                                    f"{owner}-component-unit"
+                                ],
+                                "exit_status": 0,
+                                "producing_commit": commits[owner],
+                                "test_id": "unit",
+                            }
+                        ],
+                    }
+                ],
                 "landings": [],
                 "owner": owner,
                 "registration_sha256": file_sha256(registration),
@@ -840,11 +862,12 @@ class ClosureIntegrationTest(unittest.TestCase):
         self.assertEqual(
             (
                 first["owners"],
+                first["component_required_tests"],
                 first["staged_prefix_edges"],
                 first["installed_surface_tests"],
                 first["evidence_files"],
             ),
-            (3, 1, 1, 4),
+            (3, 3, 1, 1, 7),
         )
         self.assertEqual(first["required_owners"], ["f106", "f110", "f111"])
         self.assertEqual(first["registration_sha256"], file_sha256(registration))
@@ -865,12 +888,40 @@ class ClosureIntegrationTest(unittest.TestCase):
             report=zero_assembly,
         )
         zero_receipts: list[tuple[str, Path]] = []
+        zero_evidence: list[tuple[str, Path]] = []
+        zero_commits = {
+            component.instance_id: component.expected_commit
+            for component in load_registration(zero_registration).components
+        }
         for owner in ("f106", "f110", "f111"):
+            evidence_id = f"{owner}-zero-component-unit"
+            evidence_path = self.root / f"landing-zero-{owner}-component.txt"
+            evidence_path.write_text(
+                f"component evidence for {owner}\n", encoding="utf-8"
+            )
+            zero_evidence.append((evidence_id, evidence_path))
             path = self.root / f"landing-zero-{owner}.json"
             atomic_write_json(
                 path,
                 {
                     "assembly_report_sha256": file_sha256(zero_assembly),
+                    "component_tests": [
+                        {
+                            "component_instance": owner,
+                            "tests": [
+                                {
+                                    "command": [f"test-{owner}-component"],
+                                    "evidence": {
+                                        "evidence_id": evidence_id,
+                                        "sha256": file_sha256(evidence_path),
+                                    },
+                                    "exit_status": 0,
+                                    "producing_commit": zero_commits[owner],
+                                    "test_id": "unit",
+                                }
+                            ],
+                        }
+                    ],
                     "landings": [],
                     "owner": owner,
                     "registration_sha256": file_sha256(zero_registration),
@@ -883,12 +934,16 @@ class ClosureIntegrationTest(unittest.TestCase):
             zero_assembly,
             zero_receipts,
             ["f106", "f110", "f111"],
-            [],
+            zero_evidence,
             output=self.root / "landing-zero-report.json",
         )
         self.assertEqual(
-            (zero_report["staged_prefix_edges"], zero_report["evidence_files"]),
-            (0, 0),
+            (
+                zero_report["component_required_tests"],
+                zero_report["staged_prefix_edges"],
+                zero_report["evidence_files"],
+            ),
+            (3, 0, 3),
         )
 
     def test_consumer_landings_cli_requires_explicit_absolute_inputs(self) -> None:
@@ -1001,6 +1056,23 @@ class ClosureIntegrationTest(unittest.TestCase):
         def wrong_rollback_commit(receipt: dict[str, object]) -> None:
             receipt["landings"][0]["rollback"]["producing_commit"] = "3" * 40
 
+        def missing_component_record(receipt: dict[str, object]) -> None:
+            receipt["component_tests"] = []
+
+        def wrong_component_owner(receipt: dict[str, object]) -> None:
+            receipt["component_tests"][0]["component_instance"] = "f106"
+
+        def missing_component_test(receipt: dict[str, object]) -> None:
+            receipt["component_tests"][0]["tests"] = []
+
+        def failed_component_test(receipt: dict[str, object]) -> None:
+            receipt["component_tests"][0]["tests"][0]["exit_status"] = 1
+
+        def wrong_component_test_commit(receipt: dict[str, object]) -> None:
+            receipt["component_tests"][0]["tests"][0]["producing_commit"] = (
+                "4" * 40
+            )
+
         mutations = {
             "missing-edge": missing_edge,
             "unknown-edge": unknown_edge,
@@ -1011,6 +1083,11 @@ class ClosureIntegrationTest(unittest.TestCase):
             "failed-test": failed_test,
             "invalid-private-api": invalid_private_api,
             "wrong-rollback-commit": wrong_rollback_commit,
+            "missing-component-record": missing_component_record,
+            "wrong-component-owner": wrong_component_owner,
+            "missing-component-test": missing_component_test,
+            "failed-component-test": failed_component_test,
+            "wrong-component-test-commit": wrong_component_test_commit,
         }
         for index, (label, mutate) in enumerate(mutations.items()):
             with self.subTest(label=label):

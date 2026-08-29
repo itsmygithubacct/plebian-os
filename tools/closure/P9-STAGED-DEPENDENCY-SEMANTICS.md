@@ -116,6 +116,13 @@ exactly one landing filed by its consumer's mapped owner; non-staged edges have
 zero landing records. An owner with zero such edges still supplies one receipt
 with an empty array.
 
+The same receipt has exactly one component-test record for every component
+mapped to that owner. Its test IDs and order must equal the component's
+complete canonical `required_tests` list. Every component test binds non-empty
+argv, the component's exact registered commit, integer-zero exit and retained
+evidence. Thus an edge-free owner has 0 edge landings but still supplies N/N
+component receipts; neither test population can substitute for the other.
+
 Each edge landing binds the exact registered endpoint commits, runtime-process
 identity and `{dependency:PROVIDER}` token. Its installed-surface test IDs must
 equal the edge's complete canonical `required_tests` list. Linkage/import,

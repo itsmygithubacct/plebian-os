@@ -135,6 +135,9 @@ by those receipts through a separate explicit list; use no glob:
   --required-owner f106 --receipt f106=/reviewed/f106-landings.json \
   --required-owner f110 --receipt f110=/reviewed/f110-landings.json \
   --required-owner f111 --receipt f111=/reviewed/f111-landings.json \
+  --evidence f106-component-tests=/retained/f106-component-tests.txt \
+  --evidence f110-component-tests=/retained/f110-component-tests.txt \
+  --evidence f111-component-tests=/retained/f111-component-tests.txt \
   --evidence f110-telemetry-link=/retained/f110-telemetry-link.txt \
   --evidence f110-telemetry-installed=/retained/f110-telemetry-installed.txt \
   --evidence f110-telemetry-private=/retained/f110-telemetry-private.txt \
@@ -144,8 +147,12 @@ by those receipts through a separate explicit list; use no glob:
 The evidence names are illustrative; the owners return the actual exact set.
 Every owner receipt has schema `kilix.f120.consumer-landing/v1`, binds the
 registration and assembly-report SHA-256 values, and carries a canonically
-ordered `landings` array. Owners with 0 staged edges return an empty array,
-rather than disappearing from the owner population. Each landing contains:
+ordered `component_tests` array plus a canonically ordered `landings` array.
+`component_tests` contains exactly one record for every component mapped to
+that owner and one passing command/commit/evidence receipt for every canonical
+component `required_tests` ID. Owners with 0 staged edges return an empty
+`landings` array, rather than disappearing from the owner population or
+omitting their component tests. Each edge landing contains:
 
 - consumer/provider instance IDs and their exact registered commits;
 - `runtime_process` and the exact `{dependency:PROVIDER}` recipe token;

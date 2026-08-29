@@ -345,7 +345,14 @@ def verify_consumer_landings(
         structured_identities.add(identity)
         _keys(
             document,
-            {"assembly_report_sha256", "landings", "owner", "registration_sha256", "schema"},
+            {
+                "assembly_report_sha256",
+                "component_tests",
+                "landings",
+                "owner",
+                "registration_sha256",
+                "schema",
+            },
             f"consumer landing receipt {owner}",
         )
         if document["schema"] != LANDING_RECEIPT_ID:
@@ -356,6 +363,67 @@ def verify_consumer_landings(
             raise RegistrationError(f"consumer landing registration digest differs: {owner}")
         if document["assembly_report_sha256"] != assembly_sha256:
             raise RegistrationError(f"consumer landing assembly digest differs: {owner}")
+
+        component_test_reports: list[dict[str, Any]] = []
+        component_tests = _array(
+            document["component_tests"],
+            f"consumer landing receipt {owner}.component_tests",
+        )
+        expected_owner_components = sorted(
+            instance
+            for instance, component_owner in component_owners.items()
+            if component_owner == owner
+        )
+        observed_owner_components: list[str] = []
+        for component_index, raw_component_tests in enumerate(component_tests):
+            label = (
+                f"consumer landing receipt {owner}.component_tests"
+                f"[{component_index}]"
+            )
+            component_document = _object(raw_component_tests, label)
+            _keys(component_document, {"component_instance", "tests"}, label)
+            component_id = require_identifier(
+                component_document["component_instance"],
+                f"{label}.component_instance",
+            )
+            observed_owner_components.append(component_id)
+            component = components.get(component_id)
+            if component is None or component_owners.get(component_id) != owner:
+                raise RegistrationError(
+                    f"component test receipt is filed by the wrong owner: {component_id}"
+                )
+            expected_tests = list(component.required_tests)
+            raw_tests = _array(component_document["tests"], f"{label}.tests")
+            observed_test_ids = [
+                require_identifier(
+                    _object(value, f"{label}.tests[{test_index}]").get("test_id"),
+                    f"{label}.tests[{test_index}].test_id",
+                )
+                for test_index, value in enumerate(raw_tests)
+            ]
+            if observed_test_ids != expected_tests:
+                raise RegistrationError(
+                    f"component required-test set differs: {component_id}"
+                )
+            test_reports: list[dict[str, Any]] = []
+            for test_index, (test_id, raw_test) in enumerate(
+                zip(expected_tests, raw_tests, strict=True)
+            ):
+                test_report, test_evidence = _execution_claim(
+                    raw_test,
+                    f"{label}.tests[{test_index}]",
+                    expected_commit=component.expected_commit,
+                    test_id=test_id,
+                )
+                bind_reference(test_evidence)
+                test_reports.append(test_report)
+            component_test_reports.append(
+                {"component_instance": component_id, "tests": test_reports}
+            )
+        if observed_owner_components != expected_owner_components:
+            raise RegistrationError(
+                f"component test receipt coverage differs: {owner}"
+            )
 
         landing_reports: list[dict[str, Any]] = []
         landings = _array(document["landings"], f"consumer landing receipt {owner}.landings")
@@ -481,6 +549,7 @@ def verify_consumer_landings(
             raise RegistrationError(f"consumer landing edges are not in canonical order: {owner}")
         receipt_reports.append(
             {
+                "component_tests": component_test_reports,
                 "landings": landing_reports,
                 "owner": owner,
                 "sha256": receipt_sha256,
@@ -521,6 +590,9 @@ def verify_consumer_landings(
 
     report = {
         "assembly_report_sha256": assembly_sha256,
+        "component_required_tests": sum(
+            len(component.required_tests) for component in registration.components
+        ),
         "evidence": evidence_reports,
         "evidence_files": len(evidence_reports),
         "installed_surface_tests": sum(
