@@ -1,11 +1,11 @@
 # F120 v3/v2/v2 licence-carrier correction candidate
 
-This directory is a **fresh correction candidate, not contract authority and
+This directory is the **R3 correction candidate, not contract authority and
 not release qualification evidence**.  It implements the contract-design gate
 selected by Owner Decision 14 without changing one byte in the frozen v1
-package at `../contracts/`.  The preceding exact bytes were not accepted after
-two reviews found three open Low findings.  Reviews of those bytes do not
-transfer to this candidate.
+package at `../contracts/`.  Root adjudication rejected R2 after one incomplete
+no-finding review and one independent review with four Medium and four Low
+findings.  Neither review transfers to these changed bytes.
 
 The candidate is bound to the exact owner-ratified amendment copied as
 `RATIFIED-AMENDMENT.md`, whose required SHA-256 is
@@ -42,6 +42,8 @@ uv run --locked python validate_candidate.py --self-test
 Individual validation has no implicit mode.  It requires exactly one of
 `--contract-preflight` and `--release-qualification`, so a successful preflight
 cannot be consumed as a release-qualification result by exit status alone.
+Qualification is bound to an exact `kilix.f120.release-lock/v2` input and is
+mutually exclusive with construction and self-test actions.
 `--contract-preflight` is deliberately named and printed as non-qualifying.  An
 explicit release validation refuses with
 `F120-V2-F100-VALIDATOR-UNAVAILABLE` until F100 publishes accepted validator

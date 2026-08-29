@@ -182,6 +182,9 @@ release qualification.  Individual validation requires an explicit choice
 between `--contract-preflight` and `--release-qualification`; there is no
 implicit mode whose exit status could be mistaken for the other.  Preflight is
 forbidden in P9 and has no permissive fallback.
+`--release-qualification` accepts only an exact canonical
+`kilix.f120.release-lock/v2` input and is mutually exclusive with `--self-test`
+and `--write-hashes`.  Registration and workspace inputs cannot be qualified.
 
 ## 5. Stable named refusal families
 

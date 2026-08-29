@@ -39,11 +39,74 @@
               "expected_sha256"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "artifact_role": {
+                "const": "payload"
+              }
+            },
+            "required": [
+              "artifact_role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "artifact_kind": {
+                "enum": [
+                  "command",
+                  "data",
+                  "header",
+                  "library",
+                  "pkg-config",
+                  "python-package"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "artifact_role": {
+                "enum": [
+                  "artifact-descriptor",
+                  "carrier-archive",
+                  "carrier-manifest",
+                  "compliance-manifest",
+                  "conveyance-notice",
+                  "internal-sha256sums",
+                  "license-text",
+                  "modifications",
+                  "other-notice",
+                  "pair-digest",
+                  "pair-record",
+                  "upstream-notice",
+                  "upstream-notice-inventory"
+                ]
+              }
+            },
+            "required": [
+              "artifact_role"
+            ]
+          },
+          "then": {
+            "properties": {
+              "artifact_kind": {
+                "enum": [
+                  "data",
+                  "manifest",
+                  "notice"
+                ]
+              }
+            }
+          }
         }
       ],
       "properties": {
         "artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "artifact_kind": {
           "enum": [
@@ -75,6 +138,11 @@
       ],
       "type": "object"
     },
+    "artifactId": {
+      "maxLength": 128,
+      "pattern": "^(?!0+$)[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+      "type": "string"
+    },
     "artifactRole": {
       "enum": [
         "payload",
@@ -90,15 +158,13 @@
         "carrier-archive",
         "carrier-manifest",
         "pair-record",
-        "pair-digest",
-        "internal-stage-manifest"
+        "pair-digest"
       ]
     },
     "buildOptions": {
       "additionalProperties": {
         "type": [
           "string",
-          "number",
           "integer",
           "boolean"
         ]
@@ -117,19 +183,19 @@
           "$ref": "#/$defs/sha256"
         },
         "artifact_descriptor_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "carrier_archive_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "carrier_manifest_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "compliance_manifest_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "internal_sha256sums_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "license_texts": {
           "items": {
@@ -137,39 +203,54 @@
           },
           "maxItems": 256,
           "minItems": 1,
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "modifications_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "notices": {
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "conveyance"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
           "items": {
             "$ref": "#/$defs/noticeReference"
           },
+          "maxContains": 1,
           "maxItems": 4096,
+          "minContains": 1,
           "minItems": 1,
-          "type": "array"
+          "type": "array",
+          "uniqueItems": true
         },
         "other_notice_artifact_ids": {
           "items": {
-            "$ref": "#/$defs/id"
+            "$ref": "#/$defs/artifactId"
           },
           "maxItems": 4096,
           "type": "array",
           "uniqueItems": true
         },
         "pair_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "pair_digest_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "pair_sha256": {
           "$ref": "#/$defs/sha256"
         },
         "payload_artifact_ids": {
           "items": {
-            "$ref": "#/$defs/id"
+            "$ref": "#/$defs/artifactId"
           },
           "maxItems": 16384,
           "minItems": 1,
@@ -180,7 +261,7 @@
           "$ref": "#/$defs/id"
         },
         "upstream_notice_inventory_artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         }
       },
       "required": [
@@ -429,7 +510,7 @@
       "additionalProperties": false,
       "properties": {
         "artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "spdx": {
           "maxLength": 128,
@@ -475,7 +556,7 @@
       "additionalProperties": false,
       "properties": {
         "artifact_id": {
-          "$ref": "#/$defs/id"
+          "$ref": "#/$defs/artifactId"
         },
         "kind": {
           "enum": [
@@ -531,7 +612,7 @@
       ]
     },
     "sha256": {
-      "pattern": "^[0-9a-f]{64}$",
+      "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
       "type": "string"
     },
     "tests": {

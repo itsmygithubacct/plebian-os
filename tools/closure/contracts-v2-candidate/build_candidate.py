@@ -26,10 +26,15 @@ FROZEN_V1_SHA256SUMS_SHA256 = (
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
-SHA256 = {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+SHA256 = {"pattern": "^(?!0{64}$)[0-9a-f]{64}$", "type": "string"}
 ID = {
     "maxLength": 128,
     "pattern": "^[a-z0-9]+(?:[._-][a-z0-9]+)*$",
+    "type": "string",
+}
+ARTIFACT_ID = {
+    "maxLength": 128,
+    "pattern": "^(?!0+$)[a-z0-9]+(?:[._-][a-z0-9]+)*$",
     "type": "string",
 }
 RELATIVE_PATH = {
@@ -56,6 +61,18 @@ ARTIFACT_ROLES = [
     "pair-digest",
     "internal-stage-manifest",
 ]
+PAYLOAD_KINDS = {
+    "command",
+    "data",
+    "header",
+    "library",
+    "pkg-config",
+    "python-package",
+}
+COMPLIANCE_ROLES = set(ARTIFACT_ROLES) - {
+    "payload",
+    "internal-stage-manifest",
+}
 
 MANDATORY_UNIT_ROLES = {
     "artifact_descriptor": "artifact-descriptor",
@@ -119,8 +136,14 @@ def digest(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def role_schema() -> dict[str, Any]:
-    return {"enum": ARTIFACT_ROLES}
+def role_schema(*, include_internal: bool) -> dict[str, Any]:
+    return {
+        "enum": [
+            role
+            for role in ARTIFACT_ROLES
+            if include_internal or role != "internal-stage-manifest"
+        ]
+    }
 
 
 def artifact_declaration_schema() -> dict[str, Any]:
@@ -138,10 +161,28 @@ def artifact_declaration_schema() -> dict[str, Any]:
                     "required": ["artifact_role"],
                 },
                 "then": {"required": ["expected_sha256"]},
-            }
+            },
+            {
+                "if": {
+                    "properties": {"artifact_role": {"const": "payload"}},
+                    "required": ["artifact_role"],
+                },
+                "then": {"properties": {"artifact_kind": {"enum": sorted(PAYLOAD_KINDS)}}},
+            },
+            {
+                "if": {
+                    "properties": {"artifact_role": {"enum": sorted(COMPLIANCE_ROLES)}},
+                    "required": ["artifact_role"],
+                },
+                "then": {
+                    "properties": {
+                        "artifact_kind": {"enum": ["data", "manifest", "notice"]}
+                    }
+                },
+            },
         ],
         "properties": {
-            "artifact_id": {"$ref": "#/$defs/id"},
+            "artifact_id": {"$ref": "#/$defs/artifactId"},
             "artifact_kind": {
                 "enum": [
                     "command",
@@ -165,7 +206,7 @@ def artifact_declaration_schema() -> dict[str, Any]:
 
 def licence_reference_schema(*, expanded: bool) -> dict[str, Any]:
     properties: dict[str, Any] = {
-        "artifact_id": {"$ref": "#/$defs/id"},
+        "artifact_id": {"$ref": "#/$defs/artifactId"},
         "spdx": {"maxLength": 128, "minLength": 1, "type": "string"},
         "text_sha256": {"$ref": "#/$defs/sha256"},
     }
@@ -188,7 +229,7 @@ def licence_reference_schema(*, expanded: bool) -> dict[str, Any]:
 
 def notice_reference_schema(*, expanded: bool) -> dict[str, Any]:
     properties: dict[str, Any] = {
-        "artifact_id": {"$ref": "#/$defs/id"},
+        "artifact_id": {"$ref": "#/$defs/artifactId"},
         "kind": {"enum": ["conveyance", "upstream", "attribution", "other"]},
         "path": {"$ref": "#/$defs/relativePath"},
         "sha256": {"$ref": "#/$defs/sha256"},
@@ -224,7 +265,10 @@ def compliance_unit_declaration_schema() -> dict[str, Any]:
         "upstream_notice_inventory_artifact_id",
     ]
     properties: dict[str, Any] = {
-        name: {"$ref": "#/$defs/id"} for name in scalar_ids
+        name: {
+            "$ref": "#/$defs/id" if name == "unit_id" else "#/$defs/artifactId"
+        }
+        for name in scalar_ids
     }
     properties.update(
         {
@@ -234,22 +278,31 @@ def compliance_unit_declaration_schema() -> dict[str, Any]:
                 "maxItems": 256,
                 "minItems": 1,
                 "type": "array",
+                "uniqueItems": True,
             },
             "notices": {
+                "contains": {
+                    "properties": {"kind": {"const": "conveyance"}},
+                    "required": ["kind"],
+                    "type": "object",
+                },
                 "items": {"$ref": "#/$defs/noticeReference"},
                 "maxItems": 4096,
+                "maxContains": 1,
                 "minItems": 1,
+                "minContains": 1,
                 "type": "array",
+                "uniqueItems": True,
             },
             "other_notice_artifact_ids": {
-                "items": {"$ref": "#/$defs/id"},
+                "items": {"$ref": "#/$defs/artifactId"},
                 "maxItems": 4096,
                 "type": "array",
                 "uniqueItems": True,
             },
             "pair_sha256": {"$ref": "#/$defs/sha256"},
             "payload_artifact_ids": {
-                "items": {"$ref": "#/$defs/id"},
+                "items": {"$ref": "#/$defs/artifactId"},
                 "maxItems": 16384,
                 "minItems": 1,
                 "type": "array",
@@ -269,7 +322,7 @@ def expanded_artifact_schema() -> dict[str, Any]:
     return {
         "additionalProperties": False,
         "properties": {
-            "artifact_id": {"$ref": "#/$defs/id"},
+            "artifact_id": {"$ref": "#/$defs/artifactId"},
             "artifact_sha256": {"$ref": "#/$defs/sha256"},
             "staged_path": {"$ref": "#/$defs/relativePath"},
         },
@@ -288,17 +341,27 @@ def expanded_unit_schema() -> dict[str, Any]:
             "maxItems": 256,
             "minItems": 1,
             "type": "array",
+            "uniqueItems": True,
         },
         "notices": {
+            "contains": {
+                "properties": {"kind": {"const": "conveyance"}},
+                "required": ["kind"],
+                "type": "object",
+            },
             "items": {"$ref": "#/$defs/expandedNotice"},
             "maxItems": 4096,
+            "maxContains": 1,
             "minItems": 1,
+            "minContains": 1,
             "type": "array",
+            "uniqueItems": True,
         },
         "other_notices": {
             "items": {"$ref": "#/$defs/expandedArtifact"},
             "maxItems": 4096,
             "type": "array",
+            "uniqueItems": True,
         },
         "pair_sha256": {"$ref": "#/$defs/sha256"},
         "payloads": {
@@ -306,6 +369,7 @@ def expanded_unit_schema() -> dict[str, Any]:
             "maxItems": 16384,
             "minItems": 1,
             "type": "array",
+            "uniqueItems": True,
         },
         "unit_id": {"$ref": "#/$defs/id"},
     }
@@ -344,8 +408,15 @@ def workspace_schema() -> dict[str, Any]:
     schema["title"] = "Kilix F120 observed workspace manifest with compliance units"
     schema["properties"]["schema"]["const"] = "kilix.f120.workspace-manifest/v2"
     defs = schema["$defs"]
+    defs["sha256"] = copy.deepcopy(SHA256)
+    defs["artifactId"] = copy.deepcopy(ARTIFACT_ID)
+    defs["buildOptions"]["additionalProperties"]["type"] = [
+        "string",
+        "integer",
+        "boolean",
+    ]
     defs["license"] = v2_licence_schema()
-    defs["artifactRole"] = role_schema()
+    defs["artifactRole"] = role_schema(include_internal=False)
     defs["artifactDeclaration"] = artifact_declaration_schema()
     defs["licenseTextReference"] = licence_reference_schema(expanded=False)
     defs["noticeReference"] = notice_reference_schema(expanded=False)
@@ -379,8 +450,15 @@ def release_schema() -> dict[str, Any]:
     schema["title"] = "Kilix F120 exact release lock with distribution-unit carriers"
     schema["properties"]["schema"]["const"] = "kilix.f120.release-lock/v2"
     defs = schema["$defs"]
+    defs["sha256"] = copy.deepcopy(SHA256)
+    defs["artifactId"] = copy.deepcopy(ARTIFACT_ID)
+    defs["buildOptions"]["additionalProperties"]["type"] = [
+        "string",
+        "integer",
+        "boolean",
+    ]
     defs["license"] = v2_licence_schema()
-    defs["artifactRole"] = role_schema()
+    defs["artifactRole"] = role_schema(include_internal=True)
     defs["expandedArtifact"] = expanded_artifact_schema()
     defs["expandedLicenseText"] = licence_reference_schema(expanded=True)
     defs["expandedNotice"] = notice_reference_schema(expanded=True)
@@ -394,6 +472,7 @@ def release_schema() -> dict[str, Any]:
             "distribution_unit_id": {"$ref": "#/$defs/id"},
         }
     )
+    artifact["properties"]["artifact_id"] = {"$ref": "#/$defs/artifactId"}
     artifact["required"] = sorted([*artifact["required"], "artifact_role"])
     artifact["allOf"] = [
         {
@@ -412,7 +491,36 @@ def release_schema() -> dict[str, Any]:
                     ]
                 }
             },
-        }
+        },
+        {
+            "if": {
+                "properties": {"artifact_role": {"const": "payload"}},
+                "required": ["artifact_role"],
+            },
+            "then": {"properties": {"artifact_kind": {"enum": sorted(PAYLOAD_KINDS)}}},
+        },
+        {
+            "if": {
+                "properties": {
+                    "artifact_role": {"enum": sorted(COMPLIANCE_ROLES)}
+                },
+                "required": ["artifact_role"],
+            },
+            "then": {
+                "properties": {
+                    "artifact_kind": {"enum": ["data", "manifest", "notice"]}
+                }
+            },
+        },
+        {
+            "if": {
+                "properties": {
+                    "artifact_role": {"const": "internal-stage-manifest"}
+                },
+                "required": ["artifact_role"],
+            },
+            "then": {"properties": {"artifact_kind": {"const": "manifest"}}},
+        },
     ]
     schema["properties"]["compliance_units"] = {
         "items": {"$ref": "#/$defs/expandedComplianceUnit"},

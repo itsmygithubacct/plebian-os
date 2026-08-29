@@ -1,23 +1,32 @@
 # F120 v3/v2/v2 exact-byte independent contract review request
 
-**Status:** FRESH CORRECTION ROUND AFTER THREE LOW FINDINGS; CANDIDATE IS NOT
-AUTHORITY
+**Status:** R3 AFTER ROOT REJECTION AT 0C/0H/4M/4L; CANDIDATE IS NOT AUTHORITY
 
 Two independent reviewers are requested to review the exact package bound by
 `SHA256SUMS`.  Acceptance must name the SHA-256 of `SHA256SUMS`, the ratified
 amendment digest, the candidate HEAD/tree, every command run and every finding.
 A review of a later byte sequence does not accept an earlier or later one.
 
-The prior exact-byte round was rejected with zero Critical/High/Medium and
-three open Low findings.  This correction round claims only that it:
+R2 at commit `c995a21d7b743564556b0cd1f65e123b75532e34`, tree
+`28d8eb18cd5d9dbada1278a4107a332ff10e17e8`, and candidate-manifest SHA-256
+`c4b57ccb91ce238c453dac4991c5cdc21316c261437c188b3ca8910be0f6320b`
+was rejected by root adjudication.  Review 1's incomplete no-finding return was
+not an acceptance; Review 2 returned 0C/0H/4M/4L.  This R3 round claims only
+that it closes the eight adjudicated return conditions by:
 
-- separates `--contract-preflight` from `--release-qualification` with an
-  explicit mandatory CLI mode and retains fail-closed qualification;
-- routes registration-family identities through the v3 parser so
-  `F120-V3-SCHEMA-IDENTITY` is reachable and fixture-backed;
-- recursively rejects package additions outside the complete manifest; and
-- expands generated coverage from 10/20 to 20/20 profile-mandated refusal
-  families.
+- binding `--release-qualification` to an exact release-lock/v2 input and
+  making it exclusive with `--self-test` and `--write-hashes`;
+- retaining the closed registration/v2 dependency, enum, toolchain, build,
+  environment and array rules in the registration/v3 successor;
+- refusing non-canonical input bytes before schema or semantic joins;
+- carrying the frozen graph ordering and same-process native-provider
+  revision-conflict rules into workspace/release v2;
+- rejecting all-zero artifact/digest placeholders;
+- enforcing non-empty and per-unit registration bounds;
+- rejecting fractional build-option values in the parser and both schemas;
+  and
+- expressing declaration-only roles, compatible kind/role pairs, and exactly
+  one conveyance notice directly in Draft 2020-12 schemas.
 
 Those are claims for fresh reviewers to reproduce, not findings closed by this
 request.  Nothing here carries either earlier review to the changed bytes.
@@ -52,6 +61,10 @@ Each reviewer must independently establish:
 14. recursive package census refuses added root files and nested fixture bytes,
     while the explicit preflight/qualification modes cannot return a successful
     qualification result when F100 is absent.
+
+The candidate self-test must additionally replay all eight R2 adjudication
+counterexample families.  Reviewers must independently mutate them again;
+candidate-authored regression controls are evidence, not independent closure.
 
 ## Explicitly not yet claimable
 
