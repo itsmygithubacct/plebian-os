@@ -2,7 +2,7 @@
 
 **Candidate identity:** `kilix.f120.staged-dependencies/v1`
 
-**Status:** Track H R6 construction successor for P9-H2/P9-H1 mechanics. It is not accepted,
+**Status:** Track H R7 construction successor for P9-H2/P9-H1 mechanics. It is not accepted,
 refrozen or P9-usable until two independent exact-byte passes accept it and an
 accepted companion-semantics successor binds these bytes. It changes no byte
 under `contracts/` and does not reinterpret the frozen workspace-manifest/v1

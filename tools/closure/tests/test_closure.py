@@ -1214,6 +1214,57 @@ class ClosureIntegrationTest(unittest.TestCase):
                         output=self.root / f"landing-mutation-{index}-output.json",
                     )
 
+    def test_consumer_landings_require_exact_integer_zero_execution_status(self) -> None:
+        claim_paths = (
+            ("component-test", ("component_tests", 0, "tests", 0)),
+            (
+                "installed-surface-test",
+                ("landings", 0, "installed_surface_tests", 0),
+            ),
+            ("rollback", ("landings", 0, "rollback")),
+        )
+        for index, (label, claim_path) in enumerate(claim_paths):
+            with self.subTest(label=label):
+                registration, assembly, receipts, evidence, documents = self.landing_inputs(
+                    f"landing-exact-integer-{index}"
+                )
+                positive_output = self.root / f"landing-integer-positive-{index}.json"
+                verify_consumer_landings(
+                    registration,
+                    assembly,
+                    list(receipts.items()),
+                    ["f106", "f110", "f111"],
+                    list(evidence.items()),
+                    output=positive_output,
+                )
+                self.assertTrue(positive_output.is_file())
+
+                claim: object = documents["f110"]
+                for part in claim_path:
+                    if isinstance(part, int):
+                        self.assertIsInstance(claim, list)
+                        claim = claim[part]
+                    else:
+                        self.assertIsInstance(claim, dict)
+                        claim = claim[part]
+                self.assertIsInstance(claim, dict)
+                self.assertIs(type(claim["exit_status"]), int)
+                self.assertEqual(claim["exit_status"], 0)
+                claim["exit_status"] = 0.0
+                atomic_write_json(receipts["f110"], documents["f110"])
+
+                rejected_output = self.root / f"landing-float-zero-{index}.json"
+                with self.assertRaisesRegex(RegistrationError, "must be integer zero"):
+                    verify_consumer_landings(
+                        registration,
+                        assembly,
+                        list(receipts.items()),
+                        ["f106", "f110", "f111"],
+                        list(evidence.items()),
+                        output=rejected_output,
+                    )
+                self.assertFalse(rejected_output.exists())
+
     def test_consumer_landings_refuse_missing_extra_changed_or_aliased_evidence(self) -> None:
         registration, assembly, receipts, evidence, _ = self.landing_inputs(
             "landing-evidence"

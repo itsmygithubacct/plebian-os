@@ -199,7 +199,8 @@ def _execution_claim(
     if test_id is not None:
         expected_fields.add("test_id")
     _keys(document, expected_fields, label)
-    if document["exit_status"] != 0 or isinstance(document["exit_status"], bool):
+    exit_status = document["exit_status"]
+    if type(exit_status) is not int or exit_status != 0:
         raise RegistrationError(f"{label}.exit_status must be integer zero")
     producing_commit = _commit(document["producing_commit"], f"{label}.producing_commit")
     if producing_commit != expected_commit:

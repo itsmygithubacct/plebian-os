@@ -138,7 +138,7 @@ receipt must also cover every owned component and every component
 owner is not test-free. Evidence files are regular non-symlink inputs whose
 observed digests must match the receipt;
 the canonical report contains IDs, digests and byte counts but no operator
-paths or command text. This R6 surface records complete evidence coverage. It
+paths or command text. This R7 surface records complete evidence coverage. It
 does not decide whether the evidence is technically sufficient, accept an
 owner return, edit a consumer worktree or change the frozen contract.
 
