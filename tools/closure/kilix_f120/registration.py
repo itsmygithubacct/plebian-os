@@ -70,7 +70,12 @@ ARTIFACT_KINDS = {
     "notice",
     "manifest",
 }
-RESERVED_BUILD_OPTION = "f120_recipe_sha256"
+RESERVED_RECIPE_OPTION = "f120_recipe_sha256"
+RESERVED_STAGED_DEPENDENCIES_OPTION = "f120_staged_dependencies_sha256"
+RESERVED_BUILD_OPTIONS = {
+    RESERVED_RECIPE_OPTION,
+    RESERVED_STAGED_DEPENDENCIES_OPTION,
+}
 
 
 def _object(value: Any, label: str) -> dict[str, Any]:
@@ -276,7 +281,7 @@ class ComponentRegistration:
     def effective_build_options(self) -> dict[str, str | int | float | bool]:
         result = dict(self.build_options)
         if self.build is not None:
-            result[RESERVED_BUILD_OPTION] = self.build.digest
+            result[RESERVED_RECIPE_OPTION] = self.build.digest
         return result
 
 
@@ -482,8 +487,11 @@ def _parse_component(value: Any, index: int) -> ComponentRegistration:
     if publication not in PUBLICATION:
         raise RegistrationError(f"{label}.publication_disposition is invalid")
     options = _object(document["build_options"], f"{label}.build_options")
-    if RESERVED_BUILD_OPTION in options:
-        raise RegistrationError(f"{label}.build_options uses reserved field {RESERVED_BUILD_OPTION}")
+    reserved = sorted(set(options) & RESERVED_BUILD_OPTIONS)
+    if reserved:
+        raise RegistrationError(
+            f"{label}.build_options uses reserved field(s): {reserved}"
+        )
     for name, option in options.items():
         if not isinstance(name, str) or not isinstance(option, (str, int, float, bool)):
             raise RegistrationError(f"{label}.build_options has an invalid entry")
@@ -517,8 +525,10 @@ def _parse_component(value: Any, index: int) -> ComponentRegistration:
     )
 
 
-def load_registration(path: Path) -> Registration:
-    document = _object(load_json(path), "registration")
+def registration_from_document(value: Any) -> Registration:
+    """Parse one already-captured registration document without rereading it."""
+
+    document = _object(value, "registration")
     _keys(document, {"schema", "workspace_root", "components", "dependencies"}, {"schema", "workspace_root", "components", "dependencies"}, "registration")
     if document["schema"] != REGISTRATION_ID:
         raise RegistrationError(f"unknown registration schema: {document['schema']!r}")
@@ -594,3 +604,7 @@ def load_registration(path: Path) -> Registration:
     ):
         raise RegistrationError("dependencies must be in canonical edge order")
     return Registration(workspace_root.resolve(), components, tuple(dependencies))
+
+
+def load_registration(path: Path) -> Registration:
+    return registration_from_document(load_json(path))

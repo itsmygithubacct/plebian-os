@@ -40,12 +40,10 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_json(path: Path, *, maximum_bytes: int = MAX_DOCUMENT_BYTES) -> Any:
-    try:
-        size = path.stat().st_size
-    except OSError as exc:
-        raise ContractError(f"cannot stat JSON document: {exc.strerror}") from exc
-    if size > maximum_bytes:
+def load_json_bytes(payload: bytes, *, maximum_bytes: int = MAX_DOCUMENT_BYTES) -> Any:
+    """Parse one already captured bounded JSON byte string."""
+
+    if len(payload) > maximum_bytes:
         raise ContractError(f"document exceeds {maximum_bytes} bytes")
 
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -60,14 +58,22 @@ def load_json(path: Path, *, maximum_bytes: int = MAX_DOCUMENT_BYTES) -> Any:
         raise ContractError(f"non-finite JSON number is forbidden: {value}")
 
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            return json.load(
-                handle,
-                object_pairs_hook=reject_duplicates,
-                parse_constant=reject_nonfinite,
-            )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=reject_duplicates,
+            parse_constant=reject_nonfinite,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ContractError(f"cannot load JSON document: {exc}") from exc
+
+
+def load_json(path: Path, *, maximum_bytes: int = MAX_DOCUMENT_BYTES) -> Any:
+    try:
+        with path.open("rb") as handle:
+            payload = handle.read(maximum_bytes + 1)
+    except OSError as exc:
+        raise ContractError(f"cannot load JSON document: {exc.strerror}") from exc
+    return load_json_bytes(payload, maximum_bytes=maximum_bytes)
 
 
 def atomic_write(path: Path, payload: bytes, *, mode: int = 0o644) -> None:
@@ -100,6 +106,42 @@ def atomic_write(path: Path, payload: bytes, *, mode: int = 0o644) -> None:
 
 def atomic_write_json(path: Path, value: Any, *, mode: int = 0o644) -> None:
     atomic_write(path, canonical_bytes(value), mode=mode)
+
+
+def atomic_write_new(path: Path, payload: bytes, *, mode: int = 0o644) -> None:
+    """Atomically publish a new file while refusing every overwrite race."""
+
+    path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path, follow_symlinks=False)
+        except FileExistsError as exc:
+            raise ContractError(
+                f"refusing to overwrite an existing file: {path.name}"
+            ) from exc
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def atomic_write_json_new(path: Path, value: Any, *, mode: int = 0o644) -> None:
+    atomic_write_new(path, canonical_bytes(value), mode=mode)
 
 
 def require_sha256(value: object, label: str) -> str:

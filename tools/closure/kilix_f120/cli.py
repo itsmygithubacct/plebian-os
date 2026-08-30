@@ -6,14 +6,23 @@ import argparse
 import sys
 from pathlib import Path
 
+from .assembly import assemble_registration
 from .cache import evict_entry
-from .canonical import atomic_write_json, canonical_bytes, require_identifier
+from .canonical import (
+    atomic_write_json,
+    atomic_write_json_new,
+    canonical_bytes,
+    file_sha256,
+    require_identifier,
+)
 from .contracts import frozen_validator, validate_path, verify_contract_package
 from .errors import ClosureError
 from .graph import reverse_dependencies
+from .landing import consumer_landing_templates, verify_consumer_landings
 from .manifest import emit_workspace_manifest
 from .registration import load_registration
 from .stage import retire_stage, stage_workspace
+from .stage_matrix import run_stage_matrix
 
 
 def _local_sources(values: list[str]) -> dict[str, Path]:
@@ -32,6 +41,42 @@ def _local_sources(values: list[str]) -> dict[str, Path]:
     return result
 
 
+def _owner_fragments(values: list[str]) -> list[tuple[str, Path]]:
+    result: list[tuple[str, Path]] = []
+    owners: set[str] = set()
+    for value in values:
+        owner, separator, path_value = value.partition("=")
+        if not separator:
+            raise ClosureError("owner fragment must use OWNER=/absolute/path")
+        owner = require_identifier(owner, "fragment owner")
+        path = Path(path_value)
+        if not path.is_absolute():
+            raise ClosureError("owner fragment path must be absolute")
+        if owner in owners:
+            raise ClosureError(f"duplicate fragment owner: {owner}")
+        owners.add(owner)
+        result.append((owner, path))
+    return result
+
+
+def _named_paths(values: list[str], label: str) -> list[tuple[str, Path]]:
+    result: list[tuple[str, Path]] = []
+    names: set[str] = set()
+    for value in values:
+        name, separator, path_value = value.partition("=")
+        if not separator:
+            raise ClosureError(f"{label} must use ID=/absolute/path")
+        name = require_identifier(name, f"{label} ID")
+        path = Path(path_value)
+        if not path.is_absolute():
+            raise ClosureError(f"{label} path must be absolute")
+        if name in names:
+            raise ClosureError(f"duplicate {label} ID: {name}")
+        names.add(name)
+        result.append((name, path))
+    return result
+
+
 def _print_json(document: object) -> None:
     sys.stdout.buffer.write(canonical_bytes(document))
 
@@ -39,6 +84,18 @@ def _print_json(document: object) -> None:
 def _contracts(_: argparse.Namespace) -> int:
     verify_contract_package()
     return frozen_validator().self_test(frozen_validator().validators())
+
+
+def _assemble(arguments: argparse.Namespace) -> int:
+    document = assemble_registration(
+        _owner_fragments(arguments.fragment),
+        arguments.required_owner,
+        workspace_root=arguments.workspace_root,
+        output=arguments.output,
+        report=arguments.report,
+    )
+    _print_json(document)
+    return 0
 
 
 def _resolve(arguments: argparse.Namespace) -> int:
@@ -59,6 +116,30 @@ def _resolve(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _landings(arguments: argparse.Namespace) -> int:
+    document = verify_consumer_landings(
+        arguments.registration,
+        arguments.assembly_report,
+        _named_paths(arguments.receipt, "consumer landing receipt"),
+        arguments.required_owner,
+        _named_paths(arguments.evidence, "consumer landing evidence"),
+        output=arguments.output,
+    )
+    _print_json(document)
+    return 0
+
+
+def _landing_template(arguments: argparse.Namespace) -> int:
+    document = consumer_landing_templates(
+        arguments.registration,
+        arguments.assembly_report,
+        arguments.required_owner,
+        output=arguments.output,
+    )
+    _print_json(document)
+    return 0
+
+
 def _validate(arguments: argparse.Namespace) -> int:
     document = validate_path(
         arguments.document,
@@ -76,6 +157,39 @@ def _validate(arguments: argparse.Namespace) -> int:
 
 def _stage(arguments: argparse.Namespace) -> int:
     registration = load_registration(arguments.registration)
+    prefix = arguments.prefix.resolve()
+    release_lock = arguments.release_lock.resolve()
+    cache = arguments.cache.resolve()
+    workspace_root = registration.workspace_root.resolve()
+    protected_inputs = {
+        arguments.registration.resolve(),
+        arguments.workspace_manifest.resolve(),
+    }
+    reports = [
+        item
+        for item in (arguments.report, arguments.evidence_report)
+        if item is not None
+    ]
+    if len({item.resolve() for item in reports}) != len(reports):
+        raise ClosureError("stage report paths must be distinct")
+    for item in reports:
+        resolved = item.resolve()
+        if resolved == release_lock or resolved in protected_inputs:
+            raise ClosureError("stage report path collides with an input or release lock")
+        for container, label in (
+            (prefix, "staged prefix"),
+            (cache, "cache"),
+            (workspace_root, "workspace"),
+        ):
+            try:
+                resolved.relative_to(container)
+            except ValueError:
+                continue
+            raise ClosureError(f"stage report path must be outside the {label}")
+    if arguments.evidence_report is not None and (
+        arguments.evidence_report.exists() or arguments.evidence_report.is_symlink()
+    ):
+        raise ClosureError("refusing to overwrite an existing stage evidence report")
     workspace = validate_path(arguments.workspace_manifest)
     report = stage_workspace(
         registration,
@@ -87,8 +201,46 @@ def _stage(arguments: argparse.Namespace) -> int:
         local_sources=_local_sources(arguments.local_source),
     )
     document = report.document()
+    if arguments.evidence_report is not None:
+        try:
+            atomic_write_json_new(
+                arguments.evidence_report, report.evidence_document()
+            )
+        except BaseException:
+            retire_stage(arguments.prefix, arguments.release_lock)
+            raise
     if arguments.report is not None:
         atomic_write_json(arguments.report, document)
+    _print_json(document)
+    return 0
+
+
+def _stage_matrix(arguments: argparse.Namespace) -> int:
+    for path, label in (
+        (arguments.registration, "registration"),
+        (arguments.workspace_manifest, "workspace manifest"),
+    ):
+        if path.is_symlink() or not path.is_file():
+            raise ClosureError(f"stage matrix {label} must be a regular non-symlink file")
+    registration_before = file_sha256(arguments.registration)
+    workspace_before = file_sha256(arguments.workspace_manifest)
+    registration = load_registration(arguments.registration)
+    workspace = validate_path(arguments.workspace_manifest)
+    registration_after = file_sha256(arguments.registration)
+    workspace_after = file_sha256(arguments.workspace_manifest)
+    if registration_before != registration_after:
+        raise ClosureError("stage matrix registration changed while being captured")
+    if workspace_before != workspace_after:
+        raise ClosureError("stage matrix workspace manifest changed while being captured")
+    document = run_stage_matrix(
+        registration,
+        workspace,
+        output=arguments.output,
+        release=arguments.release,
+        registration_sha256=registration_before,
+        workspace_manifest_sha256=workspace_before,
+        local_sources=_local_sources(arguments.local_source),
+    )
     _print_json(document)
     return 0
 
@@ -146,6 +298,50 @@ def parser() -> argparse.ArgumentParser:
     contracts = commands.add_parser("contracts", help="verify the frozen v1 package")
     contracts.set_defaults(handler=_contracts)
 
+    assemble = commands.add_parser(
+        "assemble", help="assemble and preflight exact reviewed owner fragments"
+    )
+    assemble.add_argument("output", type=Path)
+    assemble.add_argument("--workspace-root", required=True, type=Path)
+    assemble.add_argument("--report", required=True, type=Path)
+    assemble.add_argument(
+        "--fragment", required=True, action="append", metavar="OWNER=/ABSOLUTE/PATH"
+    )
+    assemble.add_argument(
+        "--required-owner", required=True, action="append", metavar="OWNER"
+    )
+    assemble.set_defaults(handler=_assemble)
+
+    landings = commands.add_parser(
+        "landings",
+        help="bind every staged consumer edge to exact owner landing evidence",
+    )
+    landings.add_argument("registration", type=Path)
+    landings.add_argument("assembly_report", type=Path)
+    landings.add_argument("--output", required=True, type=Path)
+    landings.add_argument(
+        "--required-owner", required=True, action="append", metavar="OWNER"
+    )
+    landings.add_argument(
+        "--receipt", required=True, action="append", metavar="OWNER=/ABSOLUTE/PATH"
+    )
+    landings.add_argument(
+        "--evidence", action="append", default=[], metavar="ID=/ABSOLUTE/PATH"
+    )
+    landings.set_defaults(handler=_landings)
+
+    landing_template = commands.add_parser(
+        "landing-template",
+        help="project exact owner receipt populations without claiming evidence",
+    )
+    landing_template.add_argument("registration", type=Path)
+    landing_template.add_argument("assembly_report", type=Path)
+    landing_template.add_argument("--output", required=True, type=Path)
+    landing_template.add_argument(
+        "--required-owner", required=True, action="append", metavar="OWNER"
+    )
+    landing_template.set_defaults(handler=_landing_template)
+
     resolve = commands.add_parser("resolve", help="emit an observed workspace manifest")
     resolve.add_argument("registration", type=Path)
     resolve.add_argument("output", type=Path)
@@ -166,8 +362,22 @@ def parser() -> argparse.ArgumentParser:
     stage.add_argument("--release", required=True)
     stage.add_argument("--release-lock", required=True, type=Path)
     stage.add_argument("--report", type=Path)
+    stage.add_argument("--evidence-report", type=Path)
     stage.add_argument("--local-source", action="append", default=[], metavar="INSTANCE=PATH")
     stage.set_defaults(handler=_stage)
+
+    matrix = commands.add_parser(
+        "stage-matrix",
+        help="prove cold, warm and independent-clean staging as one transaction",
+    )
+    matrix.add_argument("registration", type=Path)
+    matrix.add_argument("workspace_manifest", type=Path)
+    matrix.add_argument("--output", required=True, type=Path)
+    matrix.add_argument("--release", required=True)
+    matrix.add_argument(
+        "--local-source", action="append", default=[], metavar="INSTANCE=PATH"
+    )
+    matrix.set_defaults(handler=_stage_matrix)
 
     reverse = commands.add_parser(
         "reverse-deps", help="select deterministic reverse dependencies"

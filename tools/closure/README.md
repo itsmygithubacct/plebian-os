@@ -44,12 +44,23 @@ unavailable.
 
 ```text
 f120-authority --subject SUBJECT cli contracts
+f120-authority --subject SUBJECT cli assemble OUTPUT --workspace-root ROOT
+    --report REPORT --required-owner OWNER... --fragment OWNER=/absolute/path...
+f120-authority --subject SUBJECT cli landing-template REGISTRATION ASSEMBLY_REPORT
+    --output NEW_TEMPLATE_SET --required-owner OWNER...
+f120-authority --subject SUBJECT cli landings REGISTRATION ASSEMBLY_REPORT
+    --output NEW_REPORT --required-owner OWNER...
+    --receipt OWNER=/absolute/path... --evidence ID=/absolute/path...
 f120-authority --subject SUBJECT cli resolve REGISTRATION OUTPUT [--qualify]
     [--local-source INSTANCE=/absolute/path]
 f120-authority --subject SUBJECT cli validate DOCUMENT [--allow-development-state]
 f120-authority --subject SUBJECT cli stage REGISTRATION WORKSPACE_MANIFEST
     --cache CACHE --prefix PREFIX --release VERSION --release-lock LOCK
-    [--report REPORT] [--local-source INSTANCE=/absolute/path]
+    [--report REPORT] [--evidence-report EVIDENCE]
+    [--local-source INSTANCE=/absolute/path]
+f120-authority --subject SUBJECT cli stage-matrix REGISTRATION WORKSPACE_MANIFEST
+    --output NEW_DIRECTORY --release VERSION
+    [--local-source INSTANCE=/absolute/path]
 f120-authority --subject SUBJECT cli reverse-deps DOCUMENT INSTANCE... [--direct]
 f120-authority --subject SUBJECT cli evict --cache CACHE --namespace sources|builds --key SHA256
 f120-authority --subject SUBJECT cli retire --prefix PREFIX [--release-lock LOCK]
@@ -65,6 +76,16 @@ become dirty/unresolved development records. `--qualify` additionally requires
 the exact expected commit, a clean checkout, an allowed ref, verified committed
 notice bytes, and the registered executable digests.
 
+`assemble` consumes an explicit named set of reviewed owner fragments and
+refuses a missing, unexpected or duplicate owner. It sorts the union,
+preflights final commits, tools, builds, licences, notices, edges, artifact
+names/paths and staged-dependency recipe tokens, and atomically publishes a new
+registration and its digest-bound assembly report as new files. The report is
+published first, so an interruption cannot expose an assembled registration
+without its receipt; a normal output refusal cleans the new report. Existing
+output/report files are never overwritten. The command cannot manufacture owner
+facts: F106, F110 and F111 owners still supply the exact fragments and receipts.
+
 `stage` accepts only a manifest that already qualifies. It fetches each exact
 commit into a content-addressed cache, builds each distinct frozen build key at
 most once, audits every declared output, publishes a new prefix atomically, and
@@ -72,8 +93,64 @@ emits a validated release lock. Existing prefixes and locks are never
 overwritten. Nested-source and recursive-submodule dependency modes block lock
 emission until the corresponding consumer conversion actually lands. Cache and
 prefix paths must be outside the registered workspace and disjoint from each
-other. The deterministic stage report includes retained Git-object
-`fetch_bytes`; a warm hit records zero.
+other. The default `kilix.f120.stage-report/v1` remains byte-shape compatible.
+The opt-in `kilix.f120.stage-evidence-report/v1` includes one exact source and
+build receipt per component, the provider-first build order and retained
+Git-object `fetch_bytes`; a warm hit records zero fetches, zero fetch bytes and
+zero builds for every component. Its path must be new, outside the workspace,
+cache and staged prefix, and distinct from the inputs, lock and summary report.
+An evidence-publication failure recoverably retires the newly published prefix
+and lock.
+
+`stage-matrix` performs the required cold, warm and independent-clean legs as
+one new-directory transaction. The cold and warm legs share exactly one new
+cache; the independent leg uses a second new cache. It requires exactly one
+miss/fetch for every distinct cold and independent source key, exactly one
+miss/build for every distinct build key, and zero misses, fetches, fetch bytes
+or builds in the warm leg. It emits the 3/3 stage summaries, detailed receipts,
+validated locks and no-follow prefix inventories, then refuses unless all 3/3
+locks and all 3/3 inventories are byte-identical. The final report binds the
+captured registration/workspace hashes, common lock and inventory hashes,
+provider-first order and exact key populations. Success publishes the complete
+directory with an atomic no-replace rename. A failed candidate is moved to a
+private sibling retirement directory for inspection; an existing or racing
+output is never replaced. P9 uses no `--local-source` overrides.
+
+The P9-H2 candidate adds a deterministic `staged-prefix` build graph. Providers
+build before consumers; a consumer names each direct provider only through
+`{dependency:INSTANCE_ID}`. Its key binds a canonical vector of the provider's
+instance, build key and artifact identities through the reserved
+`build_options.f120_staged_dependencies_sha256` scalar. This changed companion
+surface is construction-only until the independent review and refreeze stated
+in `P9-STAGED-DEPENDENCY-SEMANTICS.md`; it does not change frozen contract
+bytes or authorize a consumer migration.
+
+`landings` is the matching fail-closed consumer-return surface. It consumes the
+assembled registration and its exact assembly report, 2/2 independently named
+owner sets (required owners and owner receipt paths), and an exact set of
+retained evidence files. It requires one landing record for every
+`staged-prefix` edge and none for any other edge. Each record must bind the
+consumer/provider commits, exact dependency token, linkage/import choice,
+every edge `required_tests` identifier as a passing installed-surface receipt,
+a closed private-API disposition and a passing walked rollback. Every owner
+receipt must also cover every owned component and every component
+`required_tests` identifier with a passing commit-bound receipt; an edge-free
+owner is not test-free. Evidence files are regular non-symlink inputs whose
+observed digests must match the receipt;
+the canonical report contains IDs, digests and byte counts but no operator
+paths or command text. This R7 surface records complete evidence coverage. It
+does not decide whether the evidence is technically sufficient, accept an
+owner return, edit a consumer worktree or change the frozen contract.
+
+`landing-template` projects the exact component-test and staged-edge receipt
+population for every required owner from the captured registration and assembly
+report. It fills immutable identities, commits, recipe tokens, test IDs and
+deterministic evidence-slot IDs, while leaving commands, exits, evidence
+digests, linkage choice and private-API disposition explicitly null. The
+result is a `non-evidence-template`, cannot pass `landings` unfilled and never
+claims that a consumer conversion or test occurred. Each owner extracts its
+`templates[].receipt` object, fills only the null evidence slots from retained
+execution, and submits that standalone object with the named evidence files.
 
 Every registered executable is classified as `native`, `script`,
 `python-interpreter` or `python-script`; scripts bind a named registered
@@ -90,5 +167,7 @@ or cache root, and both remain recoverable for rollback inspection.
 
 See `SEMANTICS.md` for the exact clarifications,
 `SEMANTICS-REVIEW.md` for their freeze record, and `INTEGRATION.md` for the
-registration/freeze procedure. Files under `fixtures/registrations/` are
-development-only handoff scaffolds, not release facts.
+registration/freeze procedure. The unaccepted P9-H2 successor semantics are in
+`P9-STAGED-DEPENDENCY-SEMANTICS.md`. Files under
+`fixtures/registrations/` are development-only handoff scaffolds, not release
+facts.
