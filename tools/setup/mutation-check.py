@@ -132,6 +132,31 @@ MUTATIONS: tuple[Mutation, ...] = (
         claim="every offered browser comes from Debian main",
     ),
     Mutation(
+        label="empty-catalog-grows-a-row",
+        path=SRC / "syscenter.py",
+        old="    seen: set[str] = set()\n    entries: list[Entry] = []",
+        new=(
+            "    seen: set[str] = set()\n"
+            "    entries: list[Entry] = [Entry('optional-steam', 'Steam (coming soon)',"
+            " {'overview': 'coming soon'}, None)]"
+        ),
+        claim="an empty catalog generates no System Center row and no placeholder",
+    ),
+    Mutation(
+        label="entry-row-carries-authority",
+        path=SRC / "syscenter.py",
+        old="    offer: Offer = catalog.get(entry.offer_id)\n    return may_invoke_provider(offer, ledger)",
+        new="    offer: Offer = catalog.get(entry.offer_id)\n    return None",
+        claim="a System Center row is an index and re-enters the consent boundary",
+    ),
+    Mutation(
+        label="ability-row-hides-its-gate",
+        path=SRC / "syscenter.py",
+        old='        owners = "; ".join(f"{gate.gate_id} ({gate.owner})" for gate in refusal.gates)\n        overview = f"Fit unavailable — blocked on {owners}"',
+        new='        overview = "Fit unavailable"',
+        claim="the ability row names the blocking gate and its owner",
+    ),
+    Mutation(
         label="plan-path-is-consent",
         path=SRC / "plan.py",
         old='        if not confirmed:\n            return "the operator has not confirmed this plan"',

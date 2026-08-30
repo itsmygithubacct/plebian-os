@@ -56,6 +56,7 @@ what this packet is.
 | `licenses.py` | decision-scoped licence presentation; there is no receipt constructor |
 | `plan.py` | hardware report, fit view and plan review; unknown is never rendered as zero |
 | `sudoers.py` | the one-account passwordless-`sudo` drop-in |
+| `syscenter.py` | System Center entries **generated from catalog data**, never committed as code |
 | `browsers.py` | the default-browser question, Debian main only |
 | `wizard.py` | the eight-checkpoint driver, headless and deterministic |
 
@@ -88,23 +89,24 @@ uv run --locked --offline python run-checks.py
 uv run --locked --offline python mutation-check.py
 ```
 
-Without `F107B_CANDIDATE_ROOT` the runner does not pretend: **62/154** checks
-skip with a reason naming the variable, it prints `PARTIAL ... NOT a full pass`
+Without `F107B_CANDIDATE_ROOT` the runner does not pretend: the checks that need
+it skip with a reason naming the variable, it prints `PARTIAL ... NOT a full pass`
 and exits **3**. If the candidate is present but its bytes have moved, the
 runner refuses to run the suite at all and exits **2**.
 
 Recorded results:
 
-* **154/154** tests passed, **0/154** failed, **0/154** errored, **0/154** skipped.
-* **15/15** deliberate mutations caught, **0/15** escaped; the restored tree is
-  green again at 154/154.
-* The same **154/154** reproduces under **2/2** `uv` builds — the one on PATH
+* **177/177** tests passed, **0/177** failed, **0/177** errored, **0/177** skipped.
+* **18/18** deliberate mutations caught, **0/18** escaped; the restored tree is
+  green again at 177/177.
+* The same **177/177** reproduces under **2/2** `uv` builds — the one on PATH
   (0.12.3) and the release-pinned 0.12.5, digest
   `b65f23a420c4acc96427efb30e5ed9bc0f7e25d2d712000f6ede77c1a0de5f46` — and
   under **2/2** interpreters, CPython 3.13.5 and the 3.12.8 this packet's own
   lock resolves.
-* Without the candidate: **92/154** passed, **0/154** failed, **62/154**
-  skipped, exit **3**. Recorded so the partial run's shape is known in advance.
+* Without the candidate the run is partial by design and exits **3**; the
+  System Center, gate, state, catalog, licence, sudoers and browser checks
+  still run, because none of them consumes Track D's bytes.
 
 The mutation campaign is not decoration. Its first run caught **13/15** and let
 two escape — a group-`NOPASSWD` refusal that was passing only because the
