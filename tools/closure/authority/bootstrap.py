@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
-"""First-Python bootstrap for the external F120 authority launcher."""
+"""First-Python bootstrap for the external trusted launcher."""
 
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 import runpy
+import re
 import stat
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
 
-MANIFEST_HEADER = b"KILIX-F120-CLOSURE-MANIFEST-v1\n"
+MANIFEST_HEADER = b"KILIX-TRUSTED-CLOSURE-MANIFEST-v1\n"
+PROFILE_SCHEMA = "kilix.trusted-launcher.profile/v1"
 RESULT_SCHEMA = "kilix.trusted-launcher.result/v1"
 RESERVED_NAMES = {"sitecustomize.py", "usercustomize.py"}
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+MAX_PROFILE_BYTES = 256 * 1024
+MAX_CAPTURE_BYTES = 4 * 1024 * 1024
+PR_GET_DUMPABLE = 3
+PR_SET_DUMPABLE = 4
+PROFILE_NAME = re.compile(r"[a-z][a-z0-9-]{0,63}")
+MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 FORBIDDEN_PROVIDER_ENVIRONMENT = {
     "BASH_ENV",
     "ENV",
@@ -53,6 +63,26 @@ class Refusal(ValueError):
     """A stable fail-closed launch refusal."""
 
 
+def _seal_result_owner() -> None:
+    """Deny subject descendants procfs access to the outer process's fds."""
+    try:
+        process_control = ctypes.CDLL(None, use_errno=True).prctl
+        process_control.argtypes = [
+            ctypes.c_int,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+            ctypes.c_ulong,
+        ]
+        process_control.restype = ctypes.c_int
+    except (AttributeError, OSError) as exc:
+        raise Refusal("result owner procfs isolation is unavailable") from exc
+    if process_control(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise Refusal("result owner procfs isolation could not be established")
+    if process_control(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0:
+        raise Refusal("result owner procfs isolation did not remain active")
+
+
 def _sha256_fd(descriptor: int) -> str:
     digest = hashlib.sha256()
     offset = 0
@@ -75,6 +105,106 @@ def _read_fd(descriptor: int, limit: int) -> bytes:
         offset += len(block)
         if len(result) > limit:
             raise Refusal("manifest exceeds fixed size limit")
+
+
+def _exact_object(value: object, fields: set[str], label: str) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise Refusal(f"{label} has an unexpected shape")
+    return value
+
+
+def _profile_pairs(items: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in items:
+        if key in result:
+            raise Refusal("launch profile contains a duplicate JSON member")
+        result[key] = value
+    return result
+
+
+def _profile_constant(value: str) -> object:
+    raise Refusal(f"launch profile contains forbidden JSON constant {value}")
+
+
+def _relative_path(value: object, label: str, *, dot: bool = False) -> str:
+    if not isinstance(value, str) or not value:
+        raise Refusal(f"{label} is not a bounded relative path")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise Refusal(f"{label} is not Unicode scalar text") from exc
+    if len(encoded) > 1024:
+        raise Refusal(f"{label} is not a bounded relative path")
+    parts = value.split("/")
+    if value.startswith("/") or any(part in ("", "..") for part in parts):
+        raise Refusal(f"{label} is not a normalized relative path")
+    if not dot and value == ".":
+        raise Refusal(f"{label} does not name a member below its root")
+    if any(part == "." for part in parts[1:]):
+        raise Refusal(f"{label} contains a dot segment")
+    return value
+
+
+def _profile(arguments: argparse.Namespace) -> tuple[dict[str, object], dict[str, object]]:
+    raw = _read_fd(arguments.profile_fd, MAX_PROFILE_BYTES)
+    if hashlib.sha256(raw).hexdigest() != arguments.profile_sha256:
+        raise Refusal("launch profile digest differs from the native binding")
+    try:
+        value = json.loads(
+            raw, object_pairs_hook=_profile_pairs, parse_constant=_profile_constant
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise Refusal("launch profile is not duplicate-free UTF-8 JSON") from exc
+    canonical = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8") + b"\n"
+    if raw != canonical:
+        raise Refusal("launch profile is not canonical")
+    profile = _exact_object(
+        value,
+        {"commands", "launcher_name", "profile_id", "schema", "subject_hash_manifests"},
+        "launch profile",
+    )
+    if profile["schema"] != PROFILE_SCHEMA or profile["profile_id"] != arguments.profile_id:
+        raise Refusal("launch profile identity differs from the native binding")
+    commands = profile["commands"]
+    if not isinstance(commands, list) or not 1 <= len(commands) <= 16:
+        raise Refusal("launch profile command table is empty or oversized")
+    selected: dict[str, object] | None = None
+    names: set[str] = set()
+    for index, raw_command in enumerate(commands):
+        command = _exact_object(
+            raw_command, {"argument_mode", "children", "name"}, f"command {index}"
+        )
+        name = command["name"]
+        if not isinstance(name, str) or PROFILE_NAME.fullmatch(name) is None or name in names:
+            raise Refusal("launch profile command names are invalid or duplicate")
+        names.add(name)
+        if name == arguments.command:
+            selected = command
+    if selected is None:
+        raise Refusal("native-selected command is absent from the launch profile")
+    children = selected["children"]
+    if not isinstance(children, list) or not 1 <= len(children) <= 64:
+        raise Refusal("selected command child table is empty or oversized")
+    terminal_ids: list[str] = []
+    for index, child in enumerate(children):
+        if not isinstance(child, dict):
+            raise Refusal(f"child {index} is not an object")
+        child_id = child.get("id")
+        if (
+            not isinstance(child_id, str)
+            or PROFILE_NAME.fullmatch(child_id) is None
+            or child_id in terminal_ids
+        ):
+            raise Refusal("selected command child IDs are invalid or duplicate")
+        terminal_ids.append(child_id)
+    terminal = hashlib.sha256(
+        "".join(f"{child_id}\n" for child_id in terminal_ids).encode("utf-8")
+    ).hexdigest()
+    if terminal != arguments.terminal_check_set_sha256:
+        raise Refusal("selected child table differs from the native terminal binding")
+    return profile, selected
 
 
 def _entry_line(kind: str, mode: int, size: int, digest: str, relative: str) -> bytes:
@@ -390,6 +520,8 @@ def _provider_main(arguments: argparse.Namespace) -> int:
 
 
 def _verify_all(arguments: argparse.Namespace) -> None:
+    if _sha256_fd(arguments.profile_fd) != arguments.profile_sha256:
+        raise Refusal("launch profile changed after native verification")
     _verify_manifest(
         arguments.runtime_fd,
         arguments.runtime_manifest_fd,
@@ -413,19 +545,39 @@ def _verify_all(arguments: argparse.Namespace) -> None:
     )
 
 
-def _verify_companion_hashes(subject_fd: int) -> None:
+def _verify_subject_hash_manifest(
+    subject_fd: int, declaration: object, index: int
+) -> None:
+    entry = _exact_object(
+        declaration, {"members", "path"}, f"subject hash manifest {index}"
+    )
+    manifest_path = _relative_path(
+        entry["path"], f"subject hash manifest {index} path"
+    )
+    members = entry["members"]
+    if not isinstance(members, list) or not members:
+        raise Refusal("subject hash manifest member table is empty or malformed")
+    expected_names: list[str] = []
+    for member_index, member in enumerate(members):
+        name = _relative_path(
+            member, f"subject hash manifest {index} member {member_index}"
+        )
+        if name in expected_names:
+            raise Refusal("subject hash manifest declares a duplicate member")
+        expected_names.append(name)
     try:
         manifest_fd = os.open(
-            "SHA256SUMS", os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=subject_fd
+            manifest_path,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=subject_fd,
         )
         manifest = _read_fd(manifest_fd, 64 * 1024).decode("ascii")
         os.close(manifest_fd)
     except (OSError, UnicodeDecodeError) as exc:
         raise Refusal("cannot read companion-semantics hash manifest") from exc
-    expected_names = ["SEMANTICS-REVIEW.md", "SEMANTICS.md"]
     lines = manifest.splitlines()
     if len(lines) != len(expected_names):
-        raise Refusal("companion-semantics hash manifest has the wrong file set")
+        raise Refusal("subject hash manifest has the wrong file set")
     observed_names: list[str] = []
     for line in lines:
         digest, separator, name = line.partition("  ")
@@ -434,83 +586,327 @@ def _verify_companion_hashes(subject_fd: int) -> None:
             or len(digest) != 64
             or any(character not in "0123456789abcdef" for character in digest)
         ):
-            raise Refusal("companion-semantics hash manifest is malformed")
+            raise Refusal("subject hash manifest is malformed")
         observed_names.append(name)
         try:
             descriptor = os.open(
                 name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, dir_fd=subject_fd
             )
         except OSError as exc:
-            raise Refusal("companion-semantics file is absent or non-regular") from exc
+            raise Refusal("subject hash manifest member is absent or non-regular") from exc
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-                raise Refusal("companion-semantics member is not a regular file")
+                raise Refusal("subject hash manifest member is not a regular file")
             if _sha256_fd(descriptor) != digest:
-                raise Refusal("companion-semantics digest mismatch")
+                raise Refusal("subject hash manifest member digest mismatch")
         finally:
             os.close(descriptor)
     if observed_names != expected_names:
-        raise Refusal("companion-semantics hash manifest is not canonical")
+        raise Refusal("subject hash manifest is not canonical")
+
+
+def _verify_subject_hash_manifests(subject_fd: int, profile: dict[str, object]) -> None:
+    declarations = profile["subject_hash_manifests"]
+    if not isinstance(declarations, list) or len(declarations) > 16:
+        raise Refusal("subject hash manifest table is malformed or oversized")
+    observed_paths: set[str] = set()
+    for index, declaration in enumerate(declarations):
+        if not isinstance(declaration, dict) or not isinstance(declaration.get("path"), str):
+            raise Refusal("subject hash manifest declaration is malformed")
+        if declaration["path"] in observed_paths:
+            raise Refusal("subject hash manifest path is duplicated")
+        observed_paths.add(declaration["path"])
+        _verify_subject_hash_manifest(subject_fd, declaration, index)
+
+
+def _root_path(
+    declaration: object,
+    arguments: argparse.Namespace,
+    label: str,
+    *,
+    directory: bool | None = None,
+    allowed_roots: set[str] | None = None,
+) -> Path:
+    item = _exact_object(declaration, {"path", "root"}, label)
+    root_name = item["root"]
+    if not isinstance(root_name, str) or (
+        allowed_roots is not None and root_name not in allowed_roots
+    ):
+        raise Refusal(f"{label} names an unsupported retained root")
+    relative = _relative_path(item["path"], f"{label} path", dot=True)
+    roots = {
+        "dependency": _resolved_fd(arguments.dependency_fd),
+        "runtime": _resolved_fd(arguments.runtime_fd),
+        "subject": Path(arguments.subject_path).resolve(strict=True),
+        "temporary": Path(arguments.tmpdir).resolve(strict=True),
+    }
+    if root_name in ("launcher", "python"):
+        if relative != ".":
+            raise Refusal(f"{label} may only name the retained executable itself")
+        candidate = Path(
+            arguments.launcher_path if root_name == "launcher" else arguments.python_path
+        ).resolve(strict=True)
+    else:
+        if root_name not in roots:
+            raise Refusal(f"{label} names an unsupported retained root")
+        root = roots[root_name]
+        candidate = (root / relative).resolve(strict=True)
+        if not _inside(candidate, root) and candidate != root:
+            raise Refusal(f"{label} escapes its retained root")
+    if directory is True and not candidate.is_dir():
+        raise Refusal(f"{label} is not a directory")
+    if directory is False and not candidate.is_file():
+        raise Refusal(f"{label} is not a regular file")
+    return candidate
+
+
+def _python_paths(
+    value: object, arguments: argparse.Namespace, initial_path: tuple[str, ...]
+) -> list[str]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 16:
+        raise Refusal("child Python path table is empty or oversized")
+    result: list[str] = []
+    for index, declaration in enumerate(value):
+        path = str(
+            _root_path(
+                declaration,
+                arguments,
+                f"child Python path {index}",
+                directory=True,
+                allowed_roots={"dependency", "subject"},
+            )
+        )
+        if path in result:
+            raise Refusal("child Python path table contains a duplicate")
+        result.append(path)
+    return [*result, *initial_path]
+
+
+def _argv(
+    value: object,
+    forwarded: list[str],
+    forward_arguments: object,
+    arguments: argparse.Namespace,
+) -> list[str]:
+    if not isinstance(value, list) or len(value) > 64 or not isinstance(forward_arguments, bool):
+        raise Refusal("child argv declaration is malformed or oversized")
+    result: list[str] = []
+    for index, argument in enumerate(value):
+        if isinstance(argument, str):
+            try:
+                encoded = argument.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise Refusal("child argv literal is not Unicode scalar text") from exc
+            if not argument or len(encoded) > 256 or any(
+                character in argument for character in ("\0", "\n", "\r")
+            ):
+                raise Refusal("child argv contains an invalid literal")
+            result.append(argument)
+        else:
+            result.append(
+                str(
+                    _root_path(
+                        argument,
+                        arguments,
+                        f"child argv {index}",
+                        allowed_roots={
+                            "dependency",
+                            "launcher",
+                            "python",
+                            "runtime",
+                            "subject",
+                            "temporary",
+                        },
+                    )
+                )
+            )
+    if forward_arguments:
+        result.extend(forwarded)
+    return result
+
+
+def _run_python_target(
+    kind: str,
+    target: object,
+    argv: list[str],
+    arguments: argparse.Namespace,
+) -> int:
+    if kind == "python-script":
+        script = _root_path(
+            target,
+            arguments,
+            "child script",
+            directory=False,
+            allowed_roots={"dependency", "subject"},
+        )
+        sys.argv = [str(script), *argv]
+        try:
+            runpy.run_path(str(script), run_name="__main__")
+        except SystemExit as exc:
+            return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
+        return 0
+    if not isinstance(target, str) or MODULE_NAME.fullmatch(target) is None:
+        raise Refusal("child module is not a canonical dotted Python name")
+    sys.argv = [f"python -m {target}", *argv]
+    try:
+        runpy.run_module(target, run_name="__main__", alter_sys=False)
+    except SystemExit as exc:
+        return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
+    return 0
+
+
+def _expected_stream(
+    declaration: object, arguments: argparse.Namespace, label: str
+) -> bytes | None:
+    if not isinstance(declaration, dict) or "mode" not in declaration:
+        raise Refusal(f"{label} expectation is malformed")
+    mode = declaration["mode"]
+    if mode in ("empty", "passthrough"):
+        _exact_object(declaration, {"mode"}, label)
+        return b"" if mode == "empty" else None
+    if mode == "literal-utf8":
+        item = _exact_object(declaration, {"mode", "value"}, label)
+        if not isinstance(item["value"], str):
+            raise Refusal(f"{label} literal is not text")
+        try:
+            encoded = item["value"].encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise Refusal(f"{label} literal is not Unicode scalar text") from exc
+        if len(encoded) > 65536:
+            raise Refusal(f"{label} literal is oversized")
+        return encoded
+    if mode == "file":
+        item = _exact_object(declaration, {"mode", "path", "root"}, label)
+        path = _root_path(
+            {"path": item["path"], "root": item["root"]},
+            arguments,
+            label,
+            directory=False,
+            allowed_roots={"dependency", "subject"},
+        )
+        payload = path.read_bytes()
+        if len(payload) > MAX_CAPTURE_BYTES:
+            raise Refusal(f"{label} file is oversized")
+        return payload
+    raise Refusal(f"{label} expectation mode is unsupported")
+
+
+def _captured_case(
+    kind: str,
+    target: object,
+    case: dict[str, object],
+    forwarded: list[str],
+    arguments: argparse.Namespace,
+) -> int:
+    stdout_expected = _expected_stream(case["stdout"], arguments, "child stdout")
+    stderr_expected = _expected_stream(case["stderr"], arguments, "child stderr")
+    rendered = _argv(
+        case["argv"], forwarded, case["forward_arguments"], arguments
+    )
+    capture = stdout_expected is not None or stderr_expected is not None
+    stdout_file = tempfile.TemporaryFile(dir=arguments.tmpdir) if capture else None
+    stderr_file = tempfile.TemporaryFile(dir=arguments.tmpdir) if capture else None
+    child = os.fork()
+    if child < 0:
+        raise Refusal("cannot fork isolated profile case")
+    if child == 0:
+        try:
+            if capture:
+                assert stdout_file is not None and stderr_file is not None
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os.dup2(stdout_file.fileno(), 1)
+                os.dup2(stderr_file.fileno(), 2)
+            status = _run_python_target(kind, target, rendered, arguments)
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except BaseException:
+            traceback.print_exc(file=sys.stderr)
+            status = 255
+        os._exit(status)
+    while True:
+        try:
+            waited, wait_status = os.waitpid(child, 0)
+            break
+        except InterruptedError:
+            continue
+    if waited != child or not os.WIFEXITED(wait_status):
+        raise Refusal("profile case process did not terminate normally")
+    status = os.WEXITSTATUS(wait_status)
+    if not capture:
+        return status
+    assert stdout_file is not None and stderr_file is not None
+    stdout_fd = stdout_file.fileno()
+    stderr_fd = stderr_file.fileno()
+    try:
+        if os.fstat(stdout_fd).st_size > MAX_CAPTURE_BYTES or os.fstat(stderr_fd).st_size > MAX_CAPTURE_BYTES:
+            raise Refusal("child output exceeds the fixed capture limit")
+        stdout = _read_fd(stdout_fd, MAX_CAPTURE_BYTES)
+        stderr = _read_fd(stderr_fd, MAX_CAPTURE_BYTES)
+    finally:
+        stdout_file.close()
+        stderr_file.close()
+    if stdout_expected is not None and stdout != stdout_expected:
+        raise Refusal("child stdout differs from its profile expectation")
+    if stderr_expected is not None and stderr != stderr_expected:
+        raise Refusal("child stderr differs from its profile expectation")
+    if stdout_expected is None and stdout:
+        os.write(1, stdout)
+    if stderr_expected is None and stderr:
+        os.write(2, stderr)
+    return status
 
 
 def _child_main(
-    kind: str,
+    child: dict[str, object],
     forwarded: list[str],
     arguments: argparse.Namespace,
     initial_path: tuple[str, ...],
 ) -> int:
-    # The complete closure and path/fd identity were accepted before this
-    # intentional-execution child.  Use the verified absolute path so frozen
-    # validators whose own semantics compare __file__ and resolved roots retain
-    # their byte-frozen behavior.
-    subject_path = arguments.subject_path
-    dependency_path = f"/proc/self/fd/{arguments.dependency_fd}"
-    sys.path[:] = [subject_path, dependency_path, *initial_path]
-    # These retained, externally verified descriptors are inherited only after
-    # the outer closure gate.  The build dispatcher uses them to route a
-    # registered Python script back through this bootstrap.
-    os.environ["KILIX_F120_AUTHORITY_BOOTSTRAP_FD"] = str(arguments.bootstrap_fd)
-    os.environ["KILIX_F120_AUTHORITY_PYTHON_FD"] = str(arguments.python_fd)
-    if kind == "contracts":
-        sys.argv = [f"{subject_path}/contracts/validate_f120.py", "--self-test"]
-        try:
-            runpy.run_path(sys.argv[0], run_name="__main__")
-        except SystemExit as exc:
-            return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
-        return 0
-    if kind == "candidate-contracts":
-        # This is a review-candidate gate, not authority for the new schema
-        # identities.  It nevertheless runs behind the same externally
-        # verified first-process boundary so subject-root startup hooks cannot
-        # forge its self-test.  The candidate itself keeps release
-        # qualification fail-closed until the accepted F100 validator API is
-        # bound.
-        sys.argv = [
-            f"{subject_path}/contracts-v2-candidate/validate_candidate.py",
-            "--self-test",
-        ]
-        try:
-            runpy.run_path(sys.argv[0], run_name="__main__")
-        except SystemExit as exc:
-            return int(exc.code or 0) if isinstance(exc.code, (int, type(None))) else 2
-        return 0
-    if kind == "tests":
+    kind = child.get("kind")
+    common = {"id", "kind", "python_paths"}
+    if kind == "python-script":
+        item = _exact_object(child, common | {"cases", "script"}, "script child")
+        target = item["script"]
+    elif kind == "python-module":
+        item = _exact_object(child, common | {"cases", "module"}, "module child")
+        target = item["module"]
+    elif kind == "python-unittest":
+        item = _exact_object(child, common | {"start", "top"}, "unittest child")
+        sys.path[:] = _python_paths(item["python_paths"], arguments, initial_path)
         import unittest
 
-        suite = unittest.defaultTestLoader.discover(
-            f"{subject_path}/tests", top_level_dir=subject_path
+        start = _root_path(
+            item["start"], arguments, "unittest start", directory=True, allowed_roots={"subject"}
         )
+        top = _root_path(
+            item["top"], arguments, "unittest top", directory=True, allowed_roots={"subject"}
+        )
+        suite = unittest.defaultTestLoader.discover(str(start), top_level_dir=str(top))
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
-    if kind == "cli":
-        sys.argv = ["python -m kilix_f120", *forwarded]
-        from kilix_f120.cli import main
-
-        return int(main())
-    return 2
+    else:
+        raise Refusal("child kind is unsupported")
+    sys.path[:] = _python_paths(item["python_paths"], arguments, initial_path)
+    cases = item["cases"]
+    if not isinstance(cases, list) or not 1 <= len(cases) <= 64:
+        raise Refusal("child case table is empty or oversized")
+    for index, raw_case in enumerate(cases):
+        case = _exact_object(
+            raw_case,
+            {"argv", "expected_exit", "forward_arguments", "stderr", "stdout"},
+            f"child case {index}",
+        )
+        expected_exit = case["expected_exit"]
+        if type(expected_exit) is not int or not 0 <= expected_exit <= 255:
+            raise Refusal("child case expected exit is invalid")
+        status = _captured_case(kind, target, case, forwarded, arguments)
+        if status != expected_exit:
+            raise Refusal("child case exit status differs from its profile expectation")
+    return 0
 
 
 def _run_separate_child(
-    kind: str,
+    child_specification: dict[str, object],
     forwarded: list[str],
     arguments: argparse.Namespace,
     initial_path: tuple[str, ...],
@@ -519,7 +915,7 @@ def _run_separate_child(
     if child == 0:
         try:
             os.close(arguments.result_fd)
-            code = _child_main(kind, forwarded, arguments, initial_path)
+            code = _child_main(child_specification, forwarded, arguments, initial_path)
             sys.stdout.flush()
             sys.stderr.flush()
         except BaseException:
@@ -533,7 +929,8 @@ def _run_separate_child(
         except InterruptedError:
             continue
     if waited != child or not os.WIFEXITED(status) or os.WEXITSTATUS(status) != 0:
-        raise Refusal(f"{kind} child did not complete successfully")
+        child_id = child_specification.get("id", "unnamed")
+        raise Refusal(f"{child_id} child did not complete successfully")
     _verify_all(arguments)
 
 
@@ -563,6 +960,8 @@ def outer_parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(add_help=False)
     result.add_argument("--mode", choices=("outer",), required=True)
     result.add_argument("--profile-id", required=True)
+    result.add_argument("--profile-fd", type=int, required=True)
+    result.add_argument("--profile-sha256", required=True)
     result.add_argument("--case-id", required=True)
     result.add_argument("--launcher-sha256", required=True)
     result.add_argument("--first-process-json", required=True)
@@ -570,6 +969,7 @@ def outer_parser() -> argparse.ArgumentParser:
     result.add_argument("--bootstrap-fd", type=int, required=True)
     result.add_argument("--bootstrap-sha256", required=True)
     result.add_argument("--python-fd", type=int, required=True)
+    result.add_argument("--python-path", required=True)
     result.add_argument("--python-sha256", required=True)
     result.add_argument("--runtime-fd", type=int, required=True)
     result.add_argument("--runtime-manifest-fd", type=int, required=True)
@@ -584,9 +984,10 @@ def outer_parser() -> argparse.ArgumentParser:
     result.add_argument("--subject-manifest-fd", type=int, required=True)
     result.add_argument("--subject-manifest-sha256", required=True)
     result.add_argument("--result-fd", type=int, required=True)
+    result.add_argument("--launcher-path", required=True)
     result.add_argument("--run-id", required=True)
     result.add_argument("--tmpdir", required=True)
-    result.add_argument("--command", choices=("check", "cli"), required=True)
+    result.add_argument("--command", required=True)
     result.add_argument("forwarded", nargs=argparse.REMAINDER)
     return result
 
@@ -621,32 +1022,40 @@ def main() -> int:
         if modes != ["outer"]:
             raise Refusal("launch mode is absent, duplicated or invalid")
         arguments = outer_parser().parse_args()
+        _seal_result_owner()
         forwarded = arguments.forwarded
         if forwarded[:1] == ["--"]:
             forwarded = forwarded[1:]
-        if arguments.command == "check" and forwarded:
-            raise Refusal("check command accepts no forwarded arguments")
-        if arguments.command == "cli" and not forwarded:
-            raise Refusal("cli command requires a resolver subcommand")
         subject, initial_path = _initial_guard(arguments)
         if str(subject) != str(Path(arguments.subject_path).resolve(strict=True)):
             raise Refusal("subject descriptor resolves to an unexpected path")
         _verify_all(arguments)
-        _verify_companion_hashes(arguments.subject_fd)
+        profile, command = _profile(arguments)
+        argument_mode = command["argument_mode"]
+        if argument_mode not in ("forbidden", "required"):
+            raise Refusal("selected command argument mode is invalid")
+        if argument_mode == "forbidden" and forwarded:
+            raise Refusal("selected command forbids forwarded arguments")
+        if argument_mode == "required" and not forwarded:
+            raise Refusal("selected command requires forwarded arguments")
+        _verify_subject_hash_manifests(arguments.subject_fd, profile)
         os.set_inheritable(arguments.result_fd, False)
-        if arguments.command == "check":
-            _run_separate_child("contracts", [], arguments, initial_path)
-            _run_separate_child("candidate-contracts", [], arguments, initial_path)
-            _run_separate_child("tests", [], arguments, initial_path)
-        else:
-            _run_separate_child("cli", forwarded, arguments, initial_path)
+        os.environ["KILIX_TRUSTED_LAUNCH_BOOTSTRAP_FD"] = str(arguments.bootstrap_fd)
+        os.environ["KILIX_TRUSTED_LAUNCH_PYTHON_FD"] = str(arguments.python_fd)
+        children = command["children"]
+        if not isinstance(children, list):
+            raise Refusal("selected command child table is malformed")
+        for child in children:
+            if not isinstance(child, dict):
+                raise Refusal("selected command child entry is malformed")
+            _run_separate_child(child, forwarded, arguments, initial_path)
         _verify_all(arguments)
         _write_result(arguments)
     except Refusal as exc:
-        print(f"F120_AUTHORITY_REFUSAL: {exc}", file=sys.stderr)
+        print(f"TRUSTED_LAUNCH_BOOTSTRAP_REFUSAL: {exc}", file=sys.stderr)
         return 2
     except BaseException:
-        print("F120_AUTHORITY_REFUSAL: bootstrap operation failed", file=sys.stderr)
+        print("TRUSTED_LAUNCH_BOOTSTRAP_REFUSAL: bootstrap operation failed", file=sys.stderr)
         return 2
     return 0
 
