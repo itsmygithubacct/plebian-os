@@ -1,0 +1,17 @@
+# F107-B test inventory - the independent denominator for run-checks.py.
+# Finding F107B-01: discovery used to be compared to itself, so deleting a
+# module was a green pass. Changing a count here is a deliberate act, and
+# this file is guarded by SHA256SUMS.
+# module	tests
+test_admission	17
+test_browsers	6
+test_catalog	14
+test_f106_client	23
+test_gates	6
+test_licenses	17
+test_plan	24
+test_runner	17
+test_state	19
+test_sudoers	8
+test_syscenter	23
+test_wizard	20

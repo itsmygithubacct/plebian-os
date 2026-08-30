@@ -57,6 +57,7 @@ what this packet is.
 | `plan.py` | hardware report, fit view and plan review; unknown is never rendered as zero |
 | `sudoers.py` | the one-account passwordless-`sudo` drop-in |
 | `syscenter.py` | System Center entries **generated from catalog data**, never committed as code |
+| `TEST-INVENTORY.tsv` | the independent denominator for discovery — the F107B-01 fix |
 | `browsers.py` | the default-browser question, Debian main only |
 | `wizard.py` | the eight-checkpoint driver, headless and deterministic |
 
@@ -85,9 +86,14 @@ not assumed**:
 ```sh
 cd tools/setup
 export F107B_CANDIDATE_ROOT=/path/to/track-d-p1-candidate
-uv run --locked --offline python run-checks.py
-uv run --locked --offline python mutation-check.py
+uv run --locked --offline python run-checks.py      # exit 0 only on a full pass
+uv run --locked --offline python mutation-check.py  # do the tests catch a bug?
+uv run --locked --offline python control-check.py   # do the controls catch a gutted suite?
 ```
+
+`run-checks.py` exit statuses are distinct on purpose: **0** full pass, **1**
+test failure, **2** Track D candidate mismatch, **3** partial (something
+skipped), **4** the packet's own controls failed.
 
 Without `F107B_CANDIDATE_ROOT` the runner does not pretend: the checks that need
 it skip with a reason naming the variable, it prints `PARTIAL ... NOT a full pass`
@@ -96,17 +102,62 @@ runner refuses to run the suite at all and exits **2**.
 
 Recorded results:
 
-* **177/177** tests passed, **0/177** failed, **0/177** errored, **0/177** skipped.
-* **18/18** deliberate mutations caught, **0/18** escaped; the restored tree is
-  green again at 177/177.
-* The same **177/177** reproduces under **2/2** `uv` builds — the one on PATH
+* **194/194** tests passed, **0/194** failed, **0/194** errored, **0/194**
+  skipped — against the **194** the committed inventory expects, not against
+  itself.
+* **18/18** deliberate source mutations caught, **0/18** escaped; the restored
+  tree is green again at 194/194.
+* **11/11** control breaches caught, **0/11** escaped (`control-check.py`).
+* The same **194/194** reproduces under **2/2** `uv` builds — the one on PATH
   (0.12.3) and the release-pinned 0.12.5, digest
   `b65f23a420c4acc96427efb30e5ed9bc0f7e25d2d712000f6ede77c1a0de5f46` — and
   under **2/2** interpreters, CPython 3.13.5 and the 3.12.8 this packet's own
   lock resolves.
-* Without the candidate the run is partial by design and exits **3**; the
-  System Center, gate, state, catalog, licence, sudoers and browser checks
-  still run, because none of them consumes Track D's bytes.
+* Without the candidate: **132/194** passed, **0/194** failed, **62/194**
+  skipped, exit **3**. The control checks still run and still pass at
+  **25/25** guarded files and **12/12** modules, so a reviewer who does not
+  have Track D's bytes still gets the full suite-integrity guarantee.
+
+## Two campaigns, because there are two things to prove
+
+`mutation-check.py` proves the **tests** catch a broken behaviour.
+`control-check.py` proves the **runner** catches a broken suite. They are
+separate because they answer separate questions, and the second exists because
+of a finding against this packet.
+
+**Finding F107B-01, and what it cost.** The runner used to print `tests
+discovered: N/N` — a number compared to itself. Deleting a test module made `N`
+smaller and the run stayed green: the loudest possible failure produced a clean
+pass. The fix is two always-on controls, neither waivable:
+
+* `SHA256SUMS` is verified for every control file — tests, fixtures, schemas,
+  the inventory, the runner — before anything runs;
+* `TEST-INVENTORY.tsv` gives discovery an **independent denominator**, so a
+  missing module, an unexpected module or a changed count is a hard failure.
+
+`src/f107b_setup/` is excluded from the *content* check alone, because the
+mutation campaign rewrites it on purpose and a waivable control is the defect
+being fixed. The division of labour is deliberate: the manifest and inventory
+guard **the controls**, the tests guard **the source**, `mutation-check.py`
+proves the tests do, and `control-check.py` proves the controls do.
+
+Four of the eleven control cases **regenerate `SHA256SUMS` after tampering**, so
+the content check passes and only the inventory can catch them. That is the
+attack worth testing — someone who deletes a test and tidies up after
+themselves — and it is the one the old runner lost to. Each case requires the
+**exact** exit status naming the control that should fire (`4` for a control
+failure, distinct from `1` for a test failure); "nonzero" would let an
+unrelated red run masquerade as proof.
+
+The eleventh case asserts the inverse: a source mutation must surface as a
+**test** failure, not a control one. Without it, the `src/` exclusion could
+silently stop holding and every mutation would score as "caught" with no test
+having noticed anything.
+
+This packet is not self-authenticating and does not claim to be. Someone who
+rewrites a test *and* regenerates `SHA256SUMS` defeats the content check; what
+they cannot do is change the published commit, which covers every byte
+including the manifest. The git SHA is the anchor.
 
 The mutation campaign is not decoration. Its first run caught **13/15** and let
 two escape — a group-`NOPASSWD` refusal that was passing only because the

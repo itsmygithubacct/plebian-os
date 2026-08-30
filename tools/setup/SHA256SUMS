@@ -1,9 +1,10 @@
+6aab117deeaed3abf5655e2f9e02ebf0c1672732e7ef616a5e70ce6439cf849a  ./control-check.py
 4f64f88a304e3993157ebedb78a6cc16dea22ba1202d6cae71e92b9b373217ec  ./fixtures/catalog/generic-vendor-client.json
 472f568478bff9056ec56b5c5e8a7ca3d280c651d527321e1eb80892801164be  ./.gitignore
 e41371dc1012658b78a598389177e52f113e8f8b0f8dc7287b8cf6501147b57e  ./mutation-check.py
 23eafdd7f140ecd35e2313b2bf8bd966c393e405a72bf176381b489f64630a58  ./pyproject.toml
-ecad6d5c2016a7668276c5f50ba6ee4055dfde7ff3b47c8ebe4cd7f536ccefbe  ./README.md
-890e0056f92b864dbeaaff54024a39671d91036946e8816bed164dd4a49997a0  ./run-checks.py
+92ff09e2460d61a8642b5f65bd1359de5ba475ddab28652b7ebfd63dabc1c575  ./README.md
+66caefbafab42bf9edfd396c384761f80052bb5e8e741e393fcd763ef5e6c91d  ./run-checks.py
 58152e515444c17f4a97b69f5f4fe170e33ea7fd92053a410855f576b8fe42d7  ./schemas/plebian.setup.optional-component-v1.schema.json
 346e838e623db42177c81fe7d4f866509f6e819f4a7cbb8207e621264546b70d  ./schemas/plebian.setup-v1.schema.json
 514157a5ee580fdf6677d9bc54bdfee17e6f122332d7292e4ce21c70f37aedf0  ./src/f107b_setup/admission.py
@@ -18,6 +19,7 @@ a829da8d2229ecf33a60470c8f5943c58c14e6af029f8444831117325a89c0ab  ./src/f107b_se
 4318a54f7bfe1584184023adf311ce9a2cae32cd75030885480be9f1f33c5346  ./src/f107b_setup/sudoers.py
 bb1d28279f13d8761381d829af60a5db25699de46f75218395c016c9b4911ae3  ./src/f107b_setup/syscenter.py
 6530b146ffdbcd9b4dd80f64ccf1a3c21aa8d02a7bf40e7bcbf62423df251e17  ./src/f107b_setup/wizard.py
+6ebda5c6779376bfcf8fbd2544046ba33154260fa8bf61c3d2d2b8e1963d5835  ./TEST-INVENTORY.tsv
 3b8e2af867dbe4982255981d11fccaacdd10056ad135addcd594ad6b0b0d2766  ./tests/support.py
 0b7138c786bcbbde63227ce43924e2989c61d6eea17d23b2374ea007f2849624  ./tests/test_admission.py
 73e533b1c9594d1a606add275de92bb6d13d057abdc33618466141cb2ce3e55f  ./tests/test_browsers.py
@@ -26,6 +28,7 @@ bb1d28279f13d8761381d829af60a5db25699de46f75218395c016c9b4911ae3  ./src/f107b_se
 2be952c9f67715f39b7e8c3d284a7ce4dde29e8d3172b88ecda1ba40f0ae7f9e  ./tests/test_gates.py
 e5b2b6ecd1d13fc91a6b8e0a4ffd925c5d32936910c099fba676ebb3b4c1c04a  ./tests/test_licenses.py
 488988ad92d63fda99a7cf2886676a66fd9dff7d5abf024389df0a069a8e1911  ./tests/test_plan.py
+e5220fc8d8bb7874397ca915aba75450f6989c129a3d80f79bb9d047ad34d45e  ./tests/test_runner.py
 085ec6ec31281610da1708f1f896650f8b133915f0584eaa38079395b16922d8  ./tests/test_state.py
 018ca6878ab4b756d16d752e0e0487ff3e80a948775db13bc4364866ff76eda9  ./tests/test_sudoers.py
 bc2462d0d4ba30cdd2f1755be204d835d3c43975db2fa0abfbfee178ee3fcbdd  ./tests/test_syscenter.py
