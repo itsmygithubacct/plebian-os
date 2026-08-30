@@ -54,7 +54,7 @@ class TrustedLauncherProfileTest(unittest.TestCase):
             commands["cli"]["children"][0]["cases"][0]["forward_arguments"]
         )
 
-    def test_td_p1_encodes_three_children_and_seven_exact_replays(self) -> None:
+    def test_td_p1_encodes_three_children_and_nine_exact_replays(self) -> None:
         profile = self.load("track-d-td-p1-v1.json")
         command = profile["commands"][0]
         children = command["children"]
@@ -71,7 +71,60 @@ class TrustedLauncherProfileTest(unittest.TestCase):
         replay_cases = [
             case for child in children[1:] for case in child["cases"]
         ]
-        self.assertEqual(len(replay_cases), 7)
+        self.assertEqual(len(replay_cases), 9)
+        self.assertEqual(
+            [case["argv"] for case in replay_cases],
+            [
+                ["show"],
+                ["inventory", "--json"],
+                ["gpu", "--json"],
+                ["recommend", "tts", "--json"],
+                ["plan", "local-ai-balanced", "--json"],
+                [
+                    "install",
+                    {
+                        "path": (
+                            "contracts/p1-candidate/fixtures/plans/"
+                            "blocked-no-f100-c0.json"
+                        ),
+                        "root": "subject",
+                    },
+                    "--expected-plan-sha256",
+                    "bdf8e8d9afb0fac85b252a5d63f78507bc03b2ef9ed25cac9926ef7641d7a317",
+                    "--json",
+                ],
+                ["install-status", "TRANSACTION_ID", "--json"],
+                ["cancel", "TRANSACTION_ID", "--json"],
+                ["snapshot", "--json"],
+            ],
+        )
+        self.assertEqual(
+            [case["stdout"]["path"] for case in replay_cases],
+            [
+                "contracts/p1-candidate/fixtures/responses/hardware-show.txt",
+                "contracts/p1-candidate/fixtures/responses/hardware-inventory.json",
+                "contracts/p1-candidate/fixtures/responses/hardware-gpu.json",
+                "contracts/p1-candidate/fixtures/responses/sizer-recommend-tts.json",
+                "contracts/p1-candidate/fixtures/responses/sizer-plan.json",
+                "contracts/p1-candidate/fixtures/responses/sizer-install-blocked.json",
+                (
+                    "contracts/p1-candidate/fixtures/responses/"
+                    "sizer-install-status-blocked.json"
+                ),
+                (
+                    "contracts/p1-candidate/fixtures/responses/"
+                    "sizer-install-cancel-blocked.json"
+                ),
+                "contracts/p1-candidate/fixtures/responses/sizer-snapshot.json",
+            ],
+        )
+        validator_argv = children[0]["cases"][0]["argv"]
+        self.assertEqual(
+            validator_argv[
+                validator_argv.index("--expected-candidate-manifest-sha256") + 1
+            ],
+            "a21897870cdbc980dff0f611033848f489ac8cc3dec568560a275640188eb6ab",
+        )
         for case in replay_cases:
             self.assertEqual(case["expected_exit"], 0)
             self.assertEqual(case["stdout"]["mode"], "file")

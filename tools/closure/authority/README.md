@@ -67,8 +67,10 @@ re-derives the same digest from `launch-profile.json` before running a child.
   surfaces while moving all hard-coded children into data.
 - `profiles/track-d-td-p1-v1.json` encodes TD-P1's external candidate validator,
   bound-interpreter hardware replay and bound-interpreter model-sizer replay.
-  Its two replay children compare all 7/7 F107-B argv/fixture pairs byte for
-  byte. It does not freeze or accept the P1 candidate.
+  Its two replay children compare all 9/9 F107-B argv/fixture pairs byte for
+  byte, including install's exact reviewed-plan digest binding and the status
+  and cancellation lifecycle calls. It does not freeze or accept the P1
+  candidate.
 - `profiles/track-d-td-hw-v1.json` encodes the hardware unittest leg, three
   staged `plebian-hardware` console invocations and exact invalid-argv refusal.
   Staged children expose only the dependency-stage site-packages root, so the
