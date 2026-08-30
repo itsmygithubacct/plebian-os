@@ -1,0 +1,11 @@
+[project]
+name = "plebian-os-setup-f107b"
+version = "0.0.0"
+description = "F107-B first-login setup wizard and model-aware plan — pre-gate, fixture-backed construction"
+requires-python = ">=3.11"
+dependencies = [
+  "jsonschema[format]==4.25.1",
+]
+
+[tool.uv]
+package = false
