@@ -329,6 +329,63 @@ validate_f120_release_roots() {
 
 # Run before fetch_netinst or mkdir: a release build must verify its immutable
 # closure and checkout before it causes any cache/output filesystem changes.
+# Every ref in the closure is fetched from its remote by the *installed*
+# machine at first boot, never from this build host.  A ref that resolves here
+# and not there produces media that installs, boots, and then fails
+# provisioning on every machine it touches -- the worst possible place to learn
+# a ref was wrong, and invisible to anyone who only watches the build.
+#
+# This is not hypothetical.  PLEBIAN_OS_REF was written as `v0.2.1` before that
+# tag existed.  The resolution check in release_preflight is real but runs only
+# under PLEBIAN_OS_RELEASE_MODE=1 and only against the local checkout, so a
+# prerelease image shipped carrying it.  First boot retried the clone three
+# times, gave up, and the installed machine came up as a stock Debian desktop
+# with none of the product on it.
+#
+# Refuse the build instead.  PLEBIAN_OS_SKIP_REMOTE_REF_CHECK=1 exists for a
+# deliberately offline build and disables the only check that looks at what the
+# target will actually see; it says so out loud when used.
+validate_release_refs_resolve_on_their_remotes() {
+    if [ "${PLEBIAN_OS_SKIP_REMOTE_REF_CHECK:-0}" = 1 ]; then
+        echo "WARNING: PLEBIAN_OS_SKIP_REMOTE_REF_CHECK=1 - not verifying that closure refs resolve on their remotes" >&2
+        return 0
+    fi
+    local ref_key repo_key ref repo probe
+    local -a unresolved=()
+    for ref_key in $(compgen -v | grep -E '_REF$' | sort); do
+        repo_key="${ref_key%_REF}_REPO"
+        ref="${!ref_key:-}"
+        repo="${!repo_key:-}"
+        # A ref with no repository beside it is resolved by something other
+        # than a clone; this check has nothing to say about it.
+        [ -n "$ref" ] && [ -n "$repo" ] || continue
+        if git ls-remote --exit-code "$repo" "$ref" >/dev/null 2>&1; then
+            continue
+        fi
+        if is_hex_len "$ref" 40; then
+            # ls-remote lists tips only, so a SHA that is merely an ancestor
+            # looks missing.  Ask the remote to hand it over before believing
+            # that; --depth 1 keeps it cheap.
+            probe="$(mktemp -d)"
+            if git init -q "$probe" >/dev/null 2>&1 \
+                && git -C "$probe" fetch -q --depth 1 "$repo" "$ref" >/dev/null 2>&1; then
+                rm -rf "$probe"
+                continue
+            fi
+            rm -rf "$probe"
+            unresolved+=("$ref_key=$ref is not fetchable from $repo")
+        else
+            unresolved+=("$ref_key=$ref does not exist on $repo")
+        fi
+    done
+    [ "${#unresolved[@]}" -eq 0 ] || {
+        echo "closure refs do not resolve on their remotes:" >&2
+        printf '  %s\n' "${unresolved[@]}" >&2
+        echo "the installed machine fetches these at first boot; media built now would fail provisioning" >&2
+        exit 1
+    }
+}
+
 release_preflight() {
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
     local key missing=() actual_commit expected_commit
@@ -394,6 +451,7 @@ release_preflight() {
         || { echo "release mode refuses a dirty Plebian-OS checkout" >&2; exit 1; }
 }
 release_preflight
+validate_release_refs_resolve_on_their_remotes
 
 SRC_ISO="${1:-}"
 default_iso_name=plebian-os-netinst-amd64.iso
