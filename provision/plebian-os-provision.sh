@@ -131,6 +131,7 @@ OPTIONAL_DESKTOP_AUTO_INSTALL_KEYS=(
 # The release manifest supplies these as fresh-image defaults. Once installed,
 # they are operator policy persisted in /etc/default/plebian-os; a closure hop
 # validates but never moves them. The selector carries the identical list.
+# shellcheck disable=SC2034  # Static contract mirror checked by the test suite.
 OPERATOR_INSTALL_POLICY_KEYS=(
     PLEBIAN_OS_DESKTOP
     PLEBIAN_OS_KIOSK
