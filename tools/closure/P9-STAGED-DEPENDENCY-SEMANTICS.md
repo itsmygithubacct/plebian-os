@@ -208,9 +208,10 @@ equality, missing/extra/duplicate owner, unresolved field, duplicate/unknown
 graph identity, API/ABI or recipe mismatch, and existing-output refusal with
 no partial pair. Report review must prove all 2/2 receipt vectors are complete
 for cold, warm and independent-clean legs. Matrix review must additionally
-cover all 6/6 new test populations: exact 3/3-leg CLI output, shared-tree
-fetch-once with a staged consumer, existing/dangling output refusal, no-follow
-prefix inventory, recoverable failed-candidate retirement and competing-writer
-publication. Review must verify the exact commit/tree/path hashes and state every
-assessed and unassessed population with denominators. No builder-authored pass
-or earlier F120/launcher review transfers to these bytes.
+cover all 7/7 new test populations: the exact OD-28c F106/F110 assembly,
+template, landing and 3/3-leg matrix population; exact 3/3-leg CLI output;
+shared-tree fetch-once with a staged consumer; existing/dangling output refusal;
+no-follow prefix inventory; recoverable failed-candidate retirement; and
+competing-writer publication. Review must verify the exact commit/tree/path
+hashes and state every assessed and unassessed population with denominators. No
+builder-authored pass or earlier F120/launcher review transfers to these bytes.

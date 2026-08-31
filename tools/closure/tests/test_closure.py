@@ -461,6 +461,45 @@ class ClosureIntegrationTest(unittest.TestCase):
             (2, 1, 1, 2),
         )
 
+        three_owner_fragments = self.write_owner_fragments(
+            self.owner_fragment_documents(("f106", "f110", "f111")),
+            "od28c-three-owner-refusal",
+        )
+        owner_set_refusals = (
+            (
+                "unexpected-f111",
+                tuple(
+                    (owner, three_owner_fragments[owner])
+                    for owner in ("f106", "f110", "f111")
+                ),
+                owners,
+            ),
+            (
+                "missing-f111",
+                tuple(
+                    (owner, three_owner_fragments[owner])
+                    for owner in ("f106", "f110")
+                ),
+                ("f106", "f110", "f111"),
+            ),
+        )
+        for label, fragments, required in owner_set_refusals:
+            with self.subTest(label=label):
+                refused_registration = self.root / f"od28c-{label}.json"
+                refused_report = self.root / f"od28c-{label}-report.json"
+                with self.assertRaisesRegex(
+                    RegistrationError, "owner fragment set differs"
+                ):
+                    assemble_registration(
+                        fragments,
+                        required,
+                        workspace_root=self.workspace,
+                        output=refused_registration,
+                        report=refused_report,
+                    )
+                self.assertFalse(refused_registration.exists())
+                self.assertFalse(refused_report.exists())
+
         templates_path = self.root / "od28c-two-owner-templates.json"
         templates = consumer_landing_templates(
             registration_path,
@@ -476,9 +515,21 @@ class ClosureIntegrationTest(unittest.TestCase):
                 templates["staged_prefix_edges"],
                 templates["installed_surface_tests"],
                 templates["evidence_slots"],
+                templates["unfilled_values"],
             ),
-            (2, 2, 1, 1, 6),
+            (2, 2, 1, 1, 6, 16),
         )
+        refused_templates = self.root / "od28c-f111-templates.json"
+        with self.assertRaisesRegex(
+            RegistrationError, "assembly report required-owner set differs"
+        ):
+            consumer_landing_templates(
+                registration_path,
+                assembly_path,
+                ("f106", "f110", "f111"),
+                output=refused_templates,
+            )
+        self.assertFalse(refused_templates.exists())
 
         landings_path = self.root / "od28c-two-owner-landings.json"
         landings = verify_consumer_landings(
@@ -500,6 +551,23 @@ class ClosureIntegrationTest(unittest.TestCase):
             ),
             (2, 2, 1, 1, 6),
         )
+        refused_landings = self.root / "od28c-f111-landings.json"
+        with self.assertRaisesRegex(
+            RegistrationError, "consumer landing receipt set differs"
+        ):
+            verify_consumer_landings(
+                registration_path,
+                assembly_path,
+                [
+                    ("f106", receipts["f106"]),
+                    ("f110", receipts["f110"]),
+                    ("f111", receipts["f110"]),
+                ],
+                owners,
+                list(evidence.items()),
+                output=refused_landings,
+            )
+        self.assertFalse(refused_landings.exists())
 
         registration = load_registration(registration_path)
         overrides = {owner: self.repository for owner in owners}

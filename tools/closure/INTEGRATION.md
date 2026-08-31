@@ -116,8 +116,8 @@ The 2/2 names above are the complete 0.2.1 release owner population after
 OD-28c deferred F111 and its F120 consumer requirement to 0.2.2. F111 must not
 be supplied or expected in a 0.2.1 P9 run. These names are release coordination
 identities, not inferred product truth. The output is order-independent and
-refuses a missing/extra owner,
-duplicate component or edge, unknown endpoint, unresolved final field,
+refuses a missing/extra owner, duplicate component or edge, unknown endpoint,
+unresolved final field,
 API/ABI mismatch, artifact collision, staged cycle, or recipe/edge mismatch.
 The report binds every fragment digest, the exact component set, provider-first
 build order and assembled registration digest. It is private evidence and does
@@ -184,8 +184,8 @@ An evidence reference is exactly `evidence_id` plus lowercase nonzero SHA-256.
 Every referenced ID must be supplied, no unreferenced ID is accepted, and all
 input files must be distinct regular non-symlinks that remain unchanged while
 captured. Output is new-file-only and omits local paths and command arguments.
-The report proves exact mechanical coverage for 3/3 owner returns and all N/N
-staged edges; it grants acceptance for 0/3 owners. Independent owner/release
+The report proves exact mechanical coverage for 2/2 owner returns and all N/N
+staged edges; it grants acceptance for 0/2 owners. Independent owner/release
 review still decides whether each retained result actually proves its claim.
 
 Consumers compile only from the staged public prefix: headers beneath
