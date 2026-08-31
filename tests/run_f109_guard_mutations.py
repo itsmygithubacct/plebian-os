@@ -95,6 +95,12 @@ MUTATIONS = (
         "    : # mutation: running selector identity not checked",
         (CASE + "test_selector_must_match_the_exact_target_commit",),
     ),
+    Mutation(
+        "operator install-policy validation",
+        '        require_manifest_format "$key" \'^[01]$\' \\\n            "0 or 1 (an image default; an installed operator choice is preserved)"',
+        "        : # mutation: invalid operator-policy image default accepted",
+        (CASE + "test_image_policy_defaults_are_validated_but_never_selected",),
+    ),
 )
 
 

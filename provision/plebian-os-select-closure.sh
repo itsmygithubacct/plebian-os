@@ -184,6 +184,15 @@ BUILD_ONLY_RELEASE_KEYS=(
     PLEBIAN_OS_NETINST_MAX_BYTES
 )
 
+# A release manifest supplies these defaults when an image is built, but an
+# installed machine owns the resulting policy in /etc/default/plebian-os.
+# Selecting a later closure validates and reports them without moving them into
+# closure.env or overriding the operator's installed choice.
+OPERATOR_INSTALL_POLICY_KEYS=(
+    PLEBIAN_OS_DESKTOP
+    PLEBIAN_OS_KIOSK
+)
+
 # Must be present in the manifest and non-empty.
 REQUIRED_VALUE_KEYS=(
     PLEBIAN_OS_VERSION
@@ -475,6 +484,11 @@ validate_release_closure() {
         require_manifest_format PLEBIAN_OS_NETINST_MAX_BYTES \
             '^[1-9][0-9]*$' "a positive byte count"
     fi
+    for key in "${OPERATOR_INSTALL_POLICY_KEYS[@]}"; do
+        [ -n "${MANIFEST[$key]+x}" ] || continue
+        require_manifest_format "$key" '^[01]$' \
+            "0 or 1 (an image default; an installed operator choice is preserved)"
+    done
     require_manifest_format KILIX_PREBUILT_VERSION \
         '^[0-9][0-9A-Za-z.+-]*$' "an engine version"
     require_manifest_format KILIX_PREBUILT_SHA256 '^[0-9a-f]{64}$' \
@@ -1164,6 +1178,10 @@ announce_closure_move() {
     for key in "${BUILD_ONLY_RELEASE_KEYS[@]}"; do
         [ -n "${MANIFEST[$key]+x}" ] || continue
         log "  $key: validated, image-build input only (not persisted on an installed machine)"
+    done
+    for key in "${OPERATOR_INSTALL_POLICY_KEYS[@]}"; do
+        [ -n "${MANIFEST[$key]+x}" ] || continue
+        log "  $key: validated image default only (installed operator policy is unchanged)"
     done
 }
 

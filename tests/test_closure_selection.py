@@ -749,6 +749,35 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("PLEB_RESPAWN=0   # operator note, deliberately unguarded",
                           after_lines)
 
+    def test_image_policy_defaults_are_validated_but_never_selected(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            policy = base / "root" / "etc" / "default" / "plebian-os"
+            policy.parent.mkdir(parents=True)
+            policy.write_text('PLEBIAN_OS_DESKTOP="0"\nPLEBIAN_OS_KIOSK="1"\n')
+            before = policy.read_bytes()
+            self._source(base)
+            selected = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertEqual(policy.read_bytes(), before)
+            values = self._values(env)
+            self.assertNotIn("PLEBIAN_OS_DESKTOP", values)
+            self.assertNotIn("PLEBIAN_OS_KIOSK", values)
+            self.assertIn(
+                "PLEBIAN_OS_DESKTOP: validated image default only",
+                selected.stdout,
+            )
+            self.assertIn(
+                "PLEBIAN_OS_KIOSK: validated image default only",
+                selected.stdout,
+            )
+
+            base = Path(td) / "invalid"
+            self._machine(base)
+            self._source(base, self._manifest_text(PLEBIAN_OS_DESKTOP="2"))
+            self._refuses(base, "PLEBIAN_OS_DESKTOP must be 0 or 1")
+
     # ── an incomplete or malformed closure is refused, by name ──────────────
     def _refuses(self, base: Path, expected: str, *args, target="0.1.8"):
         env = base / "root" / "etc" / "pleb" / "session.env"

@@ -226,6 +226,10 @@ directly installed Git checkouts and verifies the five additional 0.2.1 release
 roots through private advertised-ref mirrors before rendering the new
 configuration, so a higher coordinated version cannot hide a component
 downgrade or an unpublished pin.
+`PLEBIAN_OS_DESKTOP` and `PLEBIAN_OS_KIOSK` are explicitly classified
+differently: their manifest values are fresh-image defaults. The selector
+validates and reports them, but never writes them to `closure.env`; the
+installed operator policy in `/etc/default/plebian-os` remains unchanged.
 It is installed on PATH as part of
 the twelve-file transactional OS layer beginning with 0.1.9. The selection
 transaction also installs the exact target updater and backs up the prior

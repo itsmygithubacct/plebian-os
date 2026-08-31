@@ -56,6 +56,10 @@ beside operator choices. Image installs use root-owned mode-0644
 comments, unknown keys, paths, providers, kiosk policy, and appearance choices.
 Both readers load the pair in the same order, and the selector migrates an old
 mixed file transactionally and idempotently. Do not edit `closure.env` by hand.
+`PLEBIAN_OS_DESKTOP` and `PLEBIAN_OS_KIOSK` are fresh-image defaults, not
+release-controlled hop inputs: after installation their values are operator
+policy in `/etc/default/plebian-os`, and selecting a closure validates the
+target defaults without changing the installed choices.
 
 ### The 0.2.0 shared-credential transition
 

@@ -172,6 +172,17 @@ class ReleaseControlledClassificationTests(unittest.TestCase):
     def test_the_provisioner_and_the_selector_agree_on_what_a_release_controls(self):
         self.assertEqual(selector_release_keys(), provisioner_release_keys())
 
+    def test_install_policy_defaults_are_explicit_operator_choices(self):
+        expected = ["PLEBIAN_OS_DESKTOP", "PLEBIAN_OS_KIOSK"]
+        selector_policy = declared_bash_array(
+            SELECT.read_text(), "OPERATOR_INSTALL_POLICY_KEYS")
+        provisioner_policy = bash_array(PROVISION, "OPERATOR_INSTALL_POLICY_KEYS")
+        self.assertEqual(selector_policy, expected)
+        self.assertEqual(provisioner_policy, expected)
+        self.assertTrue(set(expected).isdisjoint(selector_release_keys()))
+        persisted_policy = bash_array(PROVISION, "PERSISTED_POLICY")[::3]
+        self.assertTrue(set(expected).issubset(persisted_policy))
+
     def test_the_provisioner_owns_only_the_version_marker(self):
         # PLEBIAN_OS_VERSION is release-controlled but comes from the VERSION
         # marker deployed beside this script: reading it back out of session.env

@@ -128,6 +128,14 @@ OPTIONAL_DESKTOP_AUTO_INSTALL_KEYS=(
     KILIX_LAND_DESKTOP_AUTO_INSTALL
 )
 
+# The release manifest supplies these as fresh-image defaults. Once installed,
+# they are operator policy persisted in /etc/default/plebian-os; a closure hop
+# validates but never moves them. The selector carries the identical list.
+OPERATOR_INSTALL_POLICY_KEYS=(
+    PLEBIAN_OS_DESKTOP
+    PLEBIAN_OS_KIOSK
+)
+
 # Release-controlled, but this run is its authority rather than its reader: the
 # installed version comes from the VERSION marker deployed beside this script,
 # and plebian-os-update replaces the two together. Reading it back out of
@@ -553,10 +561,11 @@ restore_installed_closure() {
 # file is never sourced. An explicit environment value or command-line flag
 # still wins — those are how you deliberately change policy.
 #
-# Two of these keys are release-controlled as well, and for those this file is
+# Some of these keys are release-controlled as well, and for those this file is
 # the older witness: it records the install, while a closure selection moves the
-# same key in session.env and never touches /etc/default. So a value the
-# installed closure already answered for is left alone below.
+# same key in closure.env and never touches /etc/default. The two keys in
+# OPERATOR_INSTALL_POLICY_KEYS are different: their manifest values are image
+# defaults only, and /etc/default remains authoritative after installation.
 PLEBIAN_OS_FIRSTBOOT_ENV="${PLEBIAN_OS_FIRSTBOOT_ENV:-/etc/default/plebian-os}"
 
 # key, the variable it feeds, and the only values accepted for it.
