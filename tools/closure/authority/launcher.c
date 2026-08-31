@@ -914,11 +914,46 @@ int main(int argc, char **argv, char **envp) {
         "\"validator_started\":true}\n",
         TL_BOOTSTRAP_SHA256, tl_case_id, tl_first_process, TL_PYTHON_SHA256,
         tl_launcher_sha256, run_id, TL_SUBJECT_MANIFEST_SHA256, terminal_digest);
+    static const char interpreter_identity_code[] =
+        "TL-INTERPRETER-IDENTITY/live-executable-unavailable";
+    char expected_refusal[2048];
+    int expected_refusal_size = snprintf(
+        expected_refusal, sizeof(expected_refusal),
+        "{\"bootstrap_sha256\":\"%s\","
+        "\"case_id\":\"%s\","
+        "\"first_process_identity\":%s,"
+        "\"interpreter_sha256\":\"%s\","
+        "\"launcher_sha256\":\"%s\","
+        "\"outcome\":\"refused\","
+        "\"profile_id\":\"" TL_PROFILE_ID "\","
+        "\"refusal_code\":\"%s\","
+        "\"run_id\":\"%s\","
+        "\"schema\":\"" TL_RESULT_SCHEMA "\","
+        "\"subject_manifest_sha256\":\"%s\","
+        "\"validator_started\":false}\n",
+        TL_BOOTSTRAP_SHA256, tl_case_id, tl_first_process, TL_PYTHON_SHA256,
+        tl_launcher_sha256, interpreter_identity_code, run_id,
+        TL_SUBJECT_MANIFEST_SHA256);
     bool accepted = supervised == 0 && WIFEXITED(child_status) &&
                     WEXITSTATUS(child_status) == 0 && expected_size > 0 &&
+                    (size_t)expected_size < sizeof(expected) &&
                     (size_t)expected_size == result_size &&
                     memcmp(expected, result, result_size) == 0;
-    if (rmdir(temporary) < 0) accepted = false;
+    bool typed_refusal = supervised == 0 && WIFEXITED(child_status) &&
+                         WEXITSTATUS(child_status) == 2 &&
+                         expected_refusal_size > 0 &&
+                         (size_t)expected_refusal_size < sizeof(expected_refusal) &&
+                         (size_t)expected_refusal_size == result_size &&
+                         memcmp(expected_refusal, result, result_size) == 0;
+    if (rmdir(temporary) < 0) {
+        accepted = false;
+        typed_refusal = false;
+    }
+    if (typed_refusal) {
+        refusal(interpreter_identity_code,
+                "authority child could not bind its live interpreter identity");
+        goto fail;
+    }
     if (!accepted) {
         if (supervised == -2)
             refusal("TL-RESULT-MISSING/supervision",

@@ -31,6 +31,14 @@ descendant that tries to resurrect the outer process's live writer through
 canonical result on that descriptor; child stdout, familiar PASS text and exit
 zero cannot authorize a run.
 
+If the authority child cannot stat its live `/proc/self/exe` or
+`sys.executable` identity, it writes one canonical refused result carrying
+`TL-INTERPRETER-IDENTITY/live-executable-unavailable` on that same descriptor.
+The native launcher relays the typed refusal only when every result field binds
+the current run and the authority child exits 2. An absent, truncated, extra,
+malformed or differently bound record remains `TL-RESULT-MISSING` or
+`TL-RESULT-SHAPE`; it is never inferred to be an interpreter-identity failure.
+
 ## Profile contract
 
 `kilix.trusted-launcher.profile/v1` is canonical, duplicate-free UTF-8 JSON:

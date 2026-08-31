@@ -24,10 +24,15 @@ RESERVED_NAMES = {"sitecustomize.py", "usercustomize.py"}
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 MAX_PROFILE_BYTES = 256 * 1024
 MAX_CAPTURE_BYTES = 4 * 1024 * 1024
+MAX_RESULT_BYTES = 4096
 PR_GET_DUMPABLE = 3
 PR_SET_DUMPABLE = 4
 PROFILE_NAME = re.compile(r"[a-z][a-z0-9-]{0,63}")
 MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+INTERPRETER_IDENTITY_UNAVAILABLE = (
+    "TL-INTERPRETER-IDENTITY/live-executable-unavailable"
+)
+TYPED_REFUSAL_CODES = frozenset({INTERPRETER_IDENTITY_UNAVAILABLE})
 FORBIDDEN_PROVIDER_ENVIRONMENT = {
     "BASH_ENV",
     "ENV",
@@ -61,6 +66,12 @@ FIXED_PROVIDER_ENVIRONMENT = {
 
 class Refusal(ValueError):
     """A stable fail-closed launch refusal."""
+
+    def __init__(self, message: str, *, refusal_code: str | None = None) -> None:
+        if refusal_code is not None and refusal_code not in TYPED_REFUSAL_CODES:
+            raise ValueError("refusal code is outside the closed catalogue")
+        super().__init__(message)
+        self.refusal_code = refusal_code
 
 
 def _seal_result_owner() -> None:
@@ -378,7 +389,10 @@ def _python_startup_guard(
         executable_information = Path("/proc/self/exe").stat()
         sys_executable_information = Path(sys.executable).stat()
     except OSError as exc:
-        raise Refusal("cannot bind live interpreter identity") from exc
+        raise Refusal(
+            "cannot bind live interpreter identity",
+            refusal_code=INTERPRETER_IDENTITY_UNAVAILABLE,
+        ) from exc
     if not stat.S_ISREG(python_information.st_mode):
         raise Refusal("pinned interpreter is not a regular file")
     if not _same_file(python_information, executable_information):
@@ -934,6 +948,14 @@ def _run_separate_child(
     _verify_all(arguments)
 
 
+def _write_result_record(arguments: argparse.Namespace, record: dict[str, object]) -> None:
+    encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+    if len(encoded) > MAX_RESULT_BYTES:
+        raise Refusal("canonical result exceeds fixed bound")
+    if os.write(arguments.result_fd, encoded) != len(encoded):
+        raise Refusal("canonical result channel short write")
+
+
 def _write_result(arguments: argparse.Namespace) -> None:
     record = {
         "bootstrap_sha256": arguments.bootstrap_sha256,
@@ -949,11 +971,27 @@ def _write_result(arguments: argparse.Namespace) -> None:
         "terminal_check_set_sha256": arguments.terminal_check_set_sha256,
         "validator_started": True,
     }
-    encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
-    if len(encoded) > 8192:
-        raise Refusal("canonical result exceeds fixed bound")
-    if os.write(arguments.result_fd, encoded) != len(encoded):
-        raise Refusal("canonical result channel short write")
+    _write_result_record(arguments, record)
+
+
+def _write_refusal(arguments: argparse.Namespace, refusal_code: str) -> None:
+    if refusal_code not in TYPED_REFUSAL_CODES:
+        raise Refusal("refusal code is outside the closed catalogue")
+    record = {
+        "bootstrap_sha256": arguments.bootstrap_sha256,
+        "case_id": arguments.case_id,
+        "first_process_identity": json.loads(arguments.first_process_json),
+        "interpreter_sha256": arguments.python_sha256,
+        "launcher_sha256": arguments.launcher_sha256,
+        "outcome": "refused",
+        "profile_id": arguments.profile_id,
+        "refusal_code": refusal_code,
+        "run_id": arguments.run_id,
+        "schema": RESULT_SCHEMA,
+        "subject_manifest_sha256": arguments.subject_manifest_sha256,
+        "validator_started": False,
+    }
+    _write_result_record(arguments, record)
 
 
 def outer_parser() -> argparse.ArgumentParser:
@@ -1011,6 +1049,7 @@ def provider_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    arguments: argparse.Namespace | None = None
     try:
         modes = [
             sys.argv[index + 1]
@@ -1052,6 +1091,13 @@ def main() -> int:
         _verify_all(arguments)
         _write_result(arguments)
     except Refusal as exc:
+        if arguments is not None and exc.refusal_code is not None:
+            try:
+                _write_refusal(arguments, exc.refusal_code)
+            except BaseException:
+                # The native launcher retains fail-closed ownership when the
+                # result channel itself is absent, closed or malformed.
+                pass
         print(f"TRUSTED_LAUNCH_BOOTSTRAP_REFUSAL: {exc}", file=sys.stderr)
         return 2
     except BaseException:
