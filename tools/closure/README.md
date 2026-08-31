@@ -84,7 +84,10 @@ registration and its digest-bound assembly report as new files. The report is
 published first, so an interruption cannot expose an assembled registration
 without its receipt; a normal output refusal cleans the new report. Existing
 output/report files are never overwritten. The command cannot manufacture owner
-facts: F106, F110 and F111 owners still supply the exact fragments and receipts.
+facts: for 0.2.1, F106 and F110 supply the exact 2/2 fragments and receipts.
+OD-28c deferred F111 and its F120 consumer requirement to 0.2.2; the generic
+owner-set mechanism remains capable of accepting F111 when that release names
+it again.
 
 `stage` accepts only a manifest that already qualifies. It fetches each exact
 commit into a content-addressed cache, builds each distinct frozen build key at

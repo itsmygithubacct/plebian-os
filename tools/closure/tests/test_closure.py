@@ -267,9 +267,11 @@ class ClosureIntegrationTest(unittest.TestCase):
             local_sources={"provider": self.repository},
         )
 
-    def owner_fragment_documents(self) -> dict[str, dict[str, object]]:
+    def owner_fragment_documents(
+        self, owners: tuple[str, ...] = ("f106", "f110", "f111")
+    ) -> dict[str, dict[str, object]]:
         documents: dict[str, dict[str, object]] = {}
-        for owner in ("f106", "f110", "f111"):
+        for owner in owners:
             component = copy.deepcopy(self.registration_document["components"][0])
             component.update(
                 {
@@ -322,14 +324,24 @@ class ClosureIntegrationTest(unittest.TestCase):
         return paths
 
     def landing_inputs(
-        self, label: str
-    ) -> tuple[Path, Path, dict[str, Path], dict[str, Path], dict[str, dict[str, object]]]:
-        fragments = self.write_owner_fragments(self.owner_fragment_documents(), label)
+        self,
+        label: str,
+        owners: tuple[str, ...] = ("f106", "f110", "f111"),
+    ) -> tuple[
+        Path,
+        Path,
+        dict[str, Path],
+        dict[str, Path],
+        dict[str, dict[str, object]],
+    ]:
+        fragments = self.write_owner_fragments(
+            self.owner_fragment_documents(owners), label
+        )
         registration = self.root / f"{label}-registration.json"
         assembly_report = self.root / f"{label}-assembly.json"
         assemble_registration(
-            [(owner, fragments[owner]) for owner in ("f106", "f110", "f111")],
-            ["f106", "f110", "f111"],
+            [(owner, fragments[owner]) for owner in owners],
+            owners,
             workspace_root=self.workspace,
             output=registration,
             report=assembly_report,
@@ -341,15 +353,17 @@ class ClosureIntegrationTest(unittest.TestCase):
         }
         evidence_paths: dict[str, Path] = {}
         evidence_references: dict[str, dict[str, str]] = {}
-        for evidence_id in (
-            "f106-component-unit",
-            "f110-component-unit",
-            "f110-linkage",
-            "f110-private-api",
-            "f110-rollback",
-            "f110-unit",
-            "f111-component-unit",
-        ):
+        evidence_ids = [f"{owner}-component-unit" for owner in owners]
+        if "f106" in owners and "f110" in owners:
+            evidence_ids.extend(
+                (
+                    "f110-linkage",
+                    "f110-private-api",
+                    "f110-rollback",
+                    "f110-unit",
+                )
+            )
+        for evidence_id in evidence_ids:
             path = self.root / f"{label}-{evidence_id}.txt"
             path.write_text(f"retained evidence for {evidence_id}\n", encoding="utf-8")
             evidence_paths[evidence_id] = path
@@ -358,7 +372,7 @@ class ClosureIntegrationTest(unittest.TestCase):
                 "sha256": file_sha256(path),
             }
         receipts: dict[str, dict[str, object]] = {}
-        for owner in ("f106", "f110", "f111"):
+        for owner in owners:
             receipts[owner] = {
                 "assembly_report_sha256": file_sha256(assembly_report),
                 "component_tests": [
@@ -385,47 +399,153 @@ class ClosureIntegrationTest(unittest.TestCase):
                 "registration_sha256": file_sha256(registration),
                 "schema": "kilix.f120.consumer-landing/v1",
             }
-        receipts["f110"]["landings"] = [
-            {
-                "consumer_commit": commits["f110"],
-                "consumer_instance": "f110",
-                "installed_surface_tests": [
-                    {
-                        "command": ["test-f110-installed-surface", "--unit"],
-                        "evidence": evidence_references["f110-unit"],
+        if "f106" in owners and "f110" in owners:
+            receipts["f110"]["landings"] = [
+                {
+                    "consumer_commit": commits["f110"],
+                    "consumer_instance": "f110",
+                    "installed_surface_tests": [
+                        {
+                            "command": ["test-f110-installed-surface", "--unit"],
+                            "evidence": evidence_references["f110-unit"],
+                            "exit_status": 0,
+                            "producing_commit": commits["f110"],
+                            "test_id": "unit",
+                        }
+                    ],
+                    "linkage": {
+                        "evidence": evidence_references["f110-linkage"],
+                        "kind": "runtime-import",
+                        "producing_commit": commits["f110"],
+                    },
+                    "private_api": {
+                        "disposition": "not-used",
+                        "evidence": evidence_references["f110-private-api"],
+                        "producing_commit": commits["f110"],
+                    },
+                    "provider_commit": commits["f106"],
+                    "provider_instance": "f106",
+                    "recipe_token": "{dependency:f106}",
+                    "rollback": {
+                        "command": ["test-f110-rollback", "--provider", "f106"],
+                        "evidence": evidence_references["f110-rollback"],
                         "exit_status": 0,
                         "producing_commit": commits["f110"],
-                        "test_id": "unit",
-                    }
-                ],
-                "linkage": {
-                    "evidence": evidence_references["f110-linkage"],
-                    "kind": "runtime-import",
-                    "producing_commit": commits["f110"],
-                },
-                "private_api": {
-                    "disposition": "not-used",
-                    "evidence": evidence_references["f110-private-api"],
-                    "producing_commit": commits["f110"],
-                },
-                "provider_commit": commits["f106"],
-                "provider_instance": "f106",
-                "recipe_token": "{dependency:f106}",
-                "rollback": {
-                    "command": ["test-f110-rollback", "--provider", "f106"],
-                    "evidence": evidence_references["f110-rollback"],
-                    "exit_status": 0,
-                    "producing_commit": commits["f110"],
-                },
-                "runtime_process": "none",
-            }
-        ]
+                    },
+                    "runtime_process": "none",
+                }
+            ]
         receipt_paths: dict[str, Path] = {}
         for owner, receipt in receipts.items():
             path = self.root / f"{label}-{owner}-landing.json"
             atomic_write_json(path, receipt)
             receipt_paths[owner] = path
         return registration, assembly_report, receipt_paths, evidence_paths, receipts
+
+    def test_od28c_release_scope_runs_exact_two_owner_closure(self) -> None:
+        owners = ("f106", "f110")
+        registration_path, assembly_path, receipts, evidence, _ = (
+            self.landing_inputs("od28c-two-owner", owners)
+        )
+
+        assembly = load_json(assembly_path)
+        self.assertEqual(assembly["required_owners"], ["f106", "f110"])
+        self.assertEqual(assembly["build_order"], ["f106", "f110"])
+        self.assertEqual(
+            (
+                assembly["components"],
+                assembly["dependencies"],
+                assembly["staged_prefix_edges"],
+                assembly["artifacts"],
+            ),
+            (2, 1, 1, 2),
+        )
+
+        templates_path = self.root / "od28c-two-owner-templates.json"
+        templates = consumer_landing_templates(
+            registration_path,
+            assembly_path,
+            owners,
+            output=templates_path,
+        )
+        self.assertEqual(templates["required_owners"], ["f106", "f110"])
+        self.assertEqual(
+            (
+                templates["owners"],
+                templates["component_required_tests"],
+                templates["staged_prefix_edges"],
+                templates["installed_surface_tests"],
+                templates["evidence_slots"],
+            ),
+            (2, 2, 1, 1, 6),
+        )
+
+        landings_path = self.root / "od28c-two-owner-landings.json"
+        landings = verify_consumer_landings(
+            registration_path,
+            assembly_path,
+            [(owner, receipts[owner]) for owner in owners],
+            owners,
+            list(evidence.items()),
+            output=landings_path,
+        )
+        self.assertEqual(landings["required_owners"], ["f106", "f110"])
+        self.assertEqual(
+            (
+                landings["owners"],
+                landings["component_required_tests"],
+                landings["staged_prefix_edges"],
+                landings["installed_surface_tests"],
+                landings["evidence_files"],
+            ),
+            (2, 2, 1, 1, 6),
+        )
+
+        registration = load_registration(registration_path)
+        overrides = {owner: self.repository for owner in owners}
+        manifest_path = self.root / "od28c-two-owner-workspace.json"
+        manifest = emit_workspace_manifest(
+            registration,
+            manifest_path,
+            local_sources=overrides,
+            qualify=True,
+        )
+        matrix_path = self.root / "od28c-two-owner-stage-matrix"
+        matrix = run_stage_matrix(
+            registration,
+            manifest,
+            output=matrix_path,
+            release="0.2.1",
+            registration_sha256=file_sha256(registration_path),
+            workspace_manifest_sha256=file_sha256(manifest_path),
+            local_sources=overrides,
+        )
+        self.assertEqual(matrix["build_order"], ["f106", "f110"])
+        self.assertEqual(
+            (
+                matrix["components"],
+                matrix["unique_source_keys"],
+                matrix["unique_build_keys"],
+                matrix["warm_zero_work"],
+            ),
+            (2, 1, 2, True),
+        )
+        cold = load_json(matrix_path / "evidence-cold.json")
+        warm = load_json(matrix_path / "evidence-warm.json")
+        independent = load_json(matrix_path / "evidence-independent.json")
+        self.assertEqual(
+            sum(item["fetches"] for item in cold["source_receipts"]), 1
+        )
+        self.assertEqual(
+            sum(item["builds"] for item in cold["build_receipts"]), 2
+        )
+        self.assertEqual(
+            sum(item["fetches"] for item in warm["source_receipts"]), 0
+        )
+        self.assertEqual(
+            sum(item["builds"] for item in warm["build_receipts"]), 0
+        )
+        self.assertEqual(cold, independent)
 
     def test_cold_warm_and_clean_cache_are_exact(self) -> None:
         cache = self.root / "cache"

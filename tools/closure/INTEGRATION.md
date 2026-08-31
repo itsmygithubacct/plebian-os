@@ -109,12 +109,14 @@ explicit absolute path for each reviewed return; do not use a glob:
   --workspace-root /private/p9/workspace \
   --report /private/p9/registration-assembly-report.json \
   --required-owner f106 --fragment f106=/reviewed/f106.json \
-  --required-owner f110 --fragment f110=/reviewed/f110.json \
-  --required-owner f111 --fragment f111=/reviewed/f111.json
+  --required-owner f110 --fragment f110=/reviewed/f110.json
 ```
 
-The 3/3 names above are release coordination identities, not inferred product
-truth. The output is order-independent and refuses a missing/extra owner,
+The 2/2 names above are the complete 0.2.1 release owner population after
+OD-28c deferred F111 and its F120 consumer requirement to 0.2.2. F111 must not
+be supplied or expected in a 0.2.1 P9 run. These names are release coordination
+identities, not inferred product truth. The output is order-independent and
+refuses a missing/extra owner,
 duplicate component or edge, unknown endpoint, unresolved final field,
 API/ABI mismatch, artifact collision, staged cycle, or recipe/edge mismatch.
 The report binds every fragment digest, the exact component set, provider-first
@@ -123,7 +125,7 @@ not accept a fragment or authorize a consumer conversion.
 
 ## Exact consumer-landing evidence
 
-After the 3/3 owner fragments are assembled, name those same 3/3 owners again
+After the 2/2 owner fragments are assembled, name those same 2/2 owners again
 and supply one receipt file per owner. Also supply every evidence ID referenced
 by those receipts through a separate explicit list; use no glob:
 
@@ -132,7 +134,7 @@ by those receipts through a separate explicit list; use no glob:
   landing-template /private/p9/registration.json \
   /private/p9/registration-assembly-report.json \
   --output /private/p9/consumer-landing-templates.json \
-  --required-owner f106 --required-owner f110 --required-owner f111
+  --required-owner f106 --required-owner f110
 ```
 
 This optional projection binds the registration and assembly digests and lists
@@ -149,10 +151,8 @@ retained execution, and returns that file with its exact evidence-slot files.
   --output /private/p9/consumer-landing-report.json \
   --required-owner f106 --receipt f106=/reviewed/f106-landings.json \
   --required-owner f110 --receipt f110=/reviewed/f110-landings.json \
-  --required-owner f111 --receipt f111=/reviewed/f111-landings.json \
   --evidence f106-component-tests=/retained/f106-component-tests.txt \
   --evidence f110-component-tests=/retained/f110-component-tests.txt \
-  --evidence f111-component-tests=/retained/f111-component-tests.txt \
   --evidence f110-telemetry-link=/retained/f110-telemetry-link.txt \
   --evidence f110-telemetry-installed=/retained/f110-telemetry-installed.txt \
   --evidence f110-telemetry-private=/retained/f110-telemetry-private.txt \

@@ -84,9 +84,11 @@ Even byte-identical duplicate final paths refuse. Build and source cache hits
 are fully revalidated, and a consumer cannot publish if a dependency view or
 cache entry changes during its build.
 
-F106, F110 and F111 owners remain responsible for landing their actual consumer
-conversion: the recipe token, linkage/import choice, installed-surface tests,
-private-API disposition and walked rollback. Track H supplies one shared
+For 0.2.1, the F106 and F110 owners remain responsible for landing their actual
+consumer conversion: the recipe token, linkage/import choice,
+installed-surface tests, private-API disposition and walked rollback. OD-28c
+deferred F111 and its F120 consumer requirement to 0.2.2, so the exact current
+owner population is 2/2 and contains no F111 return. Track H supplies one shared
 mechanism and does not edit consumer worktrees or invent final registration
 facts. An edge may be changed to `staged-prefix` only after that owner evidence
 lands.
@@ -105,8 +107,9 @@ commits/digests, non-exact refs, missing recipes/tools, `NOASSERTION`, duplicate
 components/edges/artifacts/paths, missing/self endpoints, API/ABI disagreement
 and staged-prefix cycles or recipe-token disagreement. Output and report use
 atomic new-file publication and never overwrite an existing byte. This is a
-mechanical landing surface; only F106/F110/F111 owners can supply or review
-their facts.
+mechanical landing surface; only F106/F110 owners can supply or review their
+0.2.1 facts. The generic mechanism and its three-owner fixtures retain F111
+coverage for 0.2.2 without adding F111 to the current release population.
 
 `landings` closes the mechanical gap between those owner facts and the
 assembled graph. The required-owner set and receipt-owner set must match
