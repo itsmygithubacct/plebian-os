@@ -418,6 +418,28 @@ class ReleaseVersioningTests(unittest.TestCase):
         with mock.patch("subprocess.run", side_effect=FileNotFoundError):
             self.assertFalse(_exact_release_tag_points_at_head(self.version))
 
+    def test_release_tag_detection_accepts_exact_tag(self):
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f"v{self.version}\n", stderr="")
+        with mock.patch("subprocess.run", return_value=completed):
+            self.assertTrue(_exact_release_tag_points_at_head(self.version))
+
+    def test_working_set_divergence_disclosures_are_bounded(self):
+        manifest = self.manifest
+        notes = _read("releases", f"{self.version}-notes.md")
+        for value in (
+            "71a096a409135098d2d0f823d64602f875d12977",
+            "2/2 successor commits are outside",
+            "ea45b9abf13688154fdb4146cdfa4ffdef4399f1",
+            "7/7 successor commits are outside",
+        ):
+            self.assertIn(value, manifest)
+        self.assertIn(
+            "bounded historical context, not a\ncomplete branch-tip inventory",
+            notes,
+        )
+        self.assertIn("re-derive all 10/10 ref\nfields", notes)
+
     def test_upgrade_policy_starts_with_0_1_7_and_requires_preservation(self):
         policy = json.loads(
             _read("releases", "upgrade-policy.json")
