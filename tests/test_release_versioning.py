@@ -451,6 +451,21 @@ class ReleaseVersioningTests(unittest.TestCase):
         )
         self.assertIn("re-derive all 10/10 ref\nfields", notes)
 
+    def test_0_2_1_env_key_names_match_the_no_later_additions_freeze(self):
+        names = []
+        for line in _read("releases", "0.2.1.env").splitlines():
+            if not line or line.startswith("#"):
+                continue
+            self.assertRegex(line, r"^[A-Z][A-Z0-9_]*=")
+            names.append(line.split("=", 1)[0])
+        self.assertEqual(len(names), 59)
+        self.assertEqual(len(set(names)), 59)
+        encoded = "".join(f"{name}\n" for name in sorted(names)).encode()
+        self.assertEqual(
+            hashlib.sha256(encoded).hexdigest(),
+            "11711aee8c9409c2af9efa73c1904109ffc20bc45d74f871b5dbc55aef2dca43",
+        )
+
     def test_upgrade_policy_starts_with_0_1_7_and_requires_preservation(self):
         policy = json.loads(
             _read("releases", "upgrade-policy.json")
