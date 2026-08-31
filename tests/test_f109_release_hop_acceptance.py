@@ -28,6 +28,7 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
             'test ! -e /usr/local/bin/plebian-os-update',
             '"installed-pleb-entrypoint-is-tested"',
             '"entrypoint-matches-participating-pleb-checkout"',
+            '${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}',
             '"successful_hop_command_denominator": 1',
         ):
             self.assertIn(token, source)

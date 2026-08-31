@@ -249,12 +249,15 @@ for item in "$pleb_dir/README.md:pleb" "$kilix_dir/README.md:kilix"; do
     path="${item%:*}"; label="${item##*:}"
     git -C "$(dirname "$path")" ls-files --error-unmatch "$(basename "$path")" >/dev/null \
         || die "tracked sentinel fixture is missing: $path"
+    if [ -e "$path.local" ] || [ -L "$path.local" ]; then
+        die "tracked sentinel recovery path already exists: $path.local"
+    fi
     printf '\nF109-QUALIFICATION-%s-LOCAL\n' "$label" >>"$path"
     printf '%s\t%s\tmodified-tracked\n' "$path" \
         "$(sha256sum "$path" | awk '{print $1}')" >>"$sentinels"
 done
 
-app_state="$HOME/.local/share/gpu_terminal/f109-qualification"
+app_state="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}/f109-qualification-app-state"
 [ ! -e "$app_state" ] || die "application sentinel path already exists: $app_state"
 mkdir -p -- "$app_state"
 printf '{"schema":"kilix.install.license/v1","qualification":true}\n' >"$app_state/license-receipt.json"
