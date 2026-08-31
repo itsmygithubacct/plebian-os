@@ -424,12 +424,23 @@ class ReleaseVersioningTests(unittest.TestCase):
         with mock.patch("subprocess.run", return_value=completed):
             self.assertTrue(_exact_release_tag_points_at_head(self.version))
 
-    def test_working_set_divergence_disclosures_are_bounded(self):
-        manifest = self.manifest
-        notes = _read("releases", f"{self.version}-notes.md")
-        for value in (
-            "71a096a409135098d2d0f823d64602f875d12977",
+    def test_0_2_1_working_set_pins_accepted_pleb_and_bounds_divergence(self):
+        manifest = _read("releases", "0.2.1.env")
+        notes = _read("releases", "0.2.1-notes.md")
+        for line in (
+            "PLEB_REF=71a096a409135098d2d0f823d64602f875d12977",
+            "PLEB_REPO=https://github.com/itsmygithubacct/pleb.git",
+            "PLEB_BRANCH=",
+        ):
+            self.assertEqual(manifest.count(f"{line}\n"), 1, line)
+        self.assertIn("71a096a409135098d2d0f823d64602f875d12977", notes)
+        for stale in (
+            "00f578a26021f3b6bbfcaf2c3c660bf3bef65917",
             "2/2 successor commits are outside",
+        ):
+            self.assertNotIn(stale, manifest)
+            self.assertNotIn(stale, notes)
+        for value in (
             "ea45b9abf13688154fdb4146cdfa4ffdef4399f1",
             "7/7 successor commits are outside",
         ):
@@ -460,6 +471,21 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertEqual(
             policy["upgrade_entrypoint"],
             "installed_updater_with_target_release_closure",
+        )
+        self.assertEqual(
+            policy["image_release_hop_entrypoint"],
+            "pleb update --to <x.y.z>",
+        )
+        self.assertEqual(
+            policy["standalone_release_hop_entrypoint"],
+            "pleb update --to <x.y.z>",
+        )
+        self.assertEqual(
+            policy["release_hop_dry_run"],
+            "pleb update --to <x.y.z> --dry-run",
+        )
+        self.assertEqual(
+            policy["closure_layout"]["operator_choices"], "session.env"
         )
         self.assertEqual(
             policy["release_controlled_keys_move_as"],

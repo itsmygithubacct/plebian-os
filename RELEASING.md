@@ -215,13 +215,21 @@ identifier and the release commit's `VERSION`. Selecting is the same discipline
 `load_release_manifest` applies at build time, one step earlier in the operator's
 hands. If a release introduces a new release-controlled key, add it to
 `RELEASE_CONTROLLED_KEYS` in the selector (and to the required lists if the
-release cannot build without it) in the same commit that adds it to the manifest;
+release cannot build without it), to Pleb's F109 key-ledger/read surface, and
+to the rendered `closure.env` contract in the same coordinated release change
+that adds it to the manifest;
 the selector adds keys the installed release never had, but only ones it knows
-are release-controlled. The selector must fetch and compare all four directly
-installed Git checkouts before rendering the new configuration, so a higher
-coordinated version cannot hide a component downgrade. Additional release-root
-tuples are preserved byte-for-value for the release graph verifier, which
-reconstructs their selected trees and gitlinks from the public exact commits.
+are release-controlled. The selector must prove that every selected component
+commit is reachable from an advertised public head or tag; a server accepting
+a fetch-by-SHA is not sufficient publication evidence. It compares the four
+directly installed Git checkouts and verifies the five additional 0.2.1 release
+roots through private advertised-ref mirrors before rendering the new
+configuration, so a higher coordinated version cannot hide a component
+downgrade or an unpublished pin.
+`PLEBIAN_OS_DESKTOP` and `PLEBIAN_OS_KIOSK` are explicitly classified
+differently: their manifest values are fresh-image defaults. The selector
+validates and reports them, but never writes them to `closure.env`; the
+installed operator policy in `/etc/default/plebian-os` remains unchanged.
 It is installed on PATH as part of
 the twelve-file transactional OS layer beginning with 0.1.9. The selection
 transaction also installs the exact target updater and backs up the prior
@@ -229,6 +237,15 @@ updater, selector, and session together. This is required whenever the target
 changes the updater's payload set, dependency policy, validation, or final
 provenance contract: replacing an already-running source-release updater later
 cannot change the process which is performing that hop.
+
+The target release notes put the operator's
+`pleb update --to <x.y.z> --dry-run` and `pleb update --to <x.y.z>` block beside
+the selector recovery block. The release gate exercises both shapes: an image
+delegates through the installed OS updater, while a standalone Pleb install
+uses its private Plebian-OS object cache and deploys no OS-layer tools. A new
+release key is incomplete unless the manifest, selector classification,
+Pleb read/ledger surface, split-closure rendering, and both-shape fixtures move
+together.
 
 ## Cutting `<x.y.z>`
 
@@ -454,6 +471,37 @@ cannot change the process which is performing that hop.
    them. Perform this using the path documented for installed users, not an
    unpublished developer checkout. A failed or missing upgrade run blocks
    publication.
+
+   Run F109's two-VM controller after preparing two public-key-SSH guests: an
+   image guest installed from the immediately previous published ISO and a
+   standalone Debian guest pinned to that ISO's exact Pleb and Kilix commits.
+   Both guests must permit non-interactive reboot through the qualification
+   account. Keep their host keys in a dedicated known-hosts file:
+
+   ```sh
+   build/acceptance-release-hop-host.sh \
+     --from <previous-x.y.z> --target <x.y.z> \
+     --source-iso plebian-os-<previous-x.y.z>-amd64.iso \
+     --source-sha256sums SHA256SUMS \
+     --image-guest releaseci@<image-host> \
+     --standalone-guest releaseci@<standalone-host> \
+     --known-hosts <qualification-known-hosts> \
+     --report <host-evidence-directory>
+   ```
+
+   The controller verifies the published ISO checksum, compares its embedded
+   build information byte-for-byte with the image guest, derives all four
+   starting commits from that artifact, and requires 2/2 distinct VM machine
+   identities. In each guest it streams `acceptance-release-hop.sh`, which
+   refuses a dirty or wrong-shaped installation, proves the exact starting
+   closure, runs the target dry-run before mutation, plants 13/13 modified,
+   untracked, license, asset, and catalog sentinels, induces a closure-commit
+   failure, proves compensation, and then executes exactly one successful
+   `pleb update --to` command. The controller retrieves and verifies both
+   `SHA256SUMS`, reboots each successful guest, and verifies the target release
+   after reboot. Retain the combined report and both 2/2 guest evidence sets;
+   any runner, retrieval, checksum, reboot, or post-reboot failure leaves that
+   lane at 0/1.
 7. Re-check that every local tag resolves to the reviewed commit and that all
    worktrees remain clean. Only then push the four tags and publish the strict
    release artifact, its checksum, and a checksummed release source archive

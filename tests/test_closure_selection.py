@@ -8,6 +8,7 @@ touching a single operator-controlled choice.
 """
 
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -209,17 +210,30 @@ class ClosureSelectionTests(unittest.TestCase):
             if not any(line.startswith(f"{key}=") for key in drop)
         ) + "\n"
 
-    def _run(self, base: Path, *args, fail_after=None, check_ancestry=False):
+    def _run(self, base: Path, *args, fail_after=None, check_ancestry=False,
+             env_extra=None, trust_tag=True):
         env = {
             "HOME": str(base / "home"),
             "PATH": os.environ["PATH"],
             "LANG": "C",
             "PLEBIAN_OS_CLOSURE_TEST_ROOT": str(base / "root"),
+            "PLEBIAN_OS_COMPONENT_CACHE_HOME": str(base / "cache/components"),
         }
         if not check_ancestry:
             env["PLEBIAN_OS_SELECT_TEST_SKIP_COMPONENT_ANCESTRY"] = "1"
         if fail_after is not None:
             env["PLEBIAN_OS_SELECT_TEST_FAIL_AFTER"] = fail_after
+        if env_extra:
+            env.update(env_extra)
+        target = next((arg for arg in args if re.fullmatch(r"\d+\.\d+\.\d+", arg)), None)
+        source = base / "src"
+        if trust_tag and target is not None and (source / ".git").is_dir():
+            tag = subprocess.run(
+                ["git", "-C", str(source), "rev-parse", f"refs/tags/v{target}"],
+                capture_output=True, text=True, check=False,
+            )
+            if tag.returncode == 0:
+                env["PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA"] = tag.stdout.strip()
         return subprocess.run([str(SELECT), *args], env=env, text=True,
                               capture_output=True, check=False)
 
@@ -242,12 +256,49 @@ class ClosureSelectionTests(unittest.TestCase):
         return commits
 
     @staticmethod
+    def _seed_public_cache(base: Path, name: str, repo: str, source: Path,
+                           public_commit=None):
+        """Populate the exact advertised-ref namespace used by offline proof."""
+        cache = base / "cache/components" / f"{name}.git"
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", "--bare", str(cache)], check=True)
+        subprocess.run(
+            ["git", "-C", str(cache), "remote", "add", "origin", repo],
+            check=True,
+        )
+        if public_commit is None:
+            public_commit = subprocess.run(
+                ["git", "-C", str(source), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+        subprocess.run(
+            ["git", "-C", str(cache), "fetch", "-q", str(source), public_commit],
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(cache), "update-ref",
+             "refs/plebian-os-public/heads/main", public_commit],
+            check=True,
+        )
+
+    def _seed_core_public_caches(self, base: Path, pleb: Path,
+                                 kilix: Path, kilix95: Path):
+        values = dict(INSTALLED_RELEASE_VALUES)
+        self._seed_public_cache(
+            base, "plebian-os", values["PLEBIAN_OS_REPO"], base / "src")
+        self._seed_public_cache(base, "pleb", values["PLEB_REPO"], pleb)
+        self._seed_public_cache(base, "kilix", values["KILIX_REPO"], kilix)
+        self._seed_public_cache(
+            base, "kilix-95", values["KILIX95_REPO"], kilix95)
+
+    @staticmethod
     def _values(env_path: Path) -> dict:
         """Read the file the way pleb-session does — by sourcing it."""
         script = (
             'set -e\n'
             'pre=" $(compgen -v | tr "\\n" " ") "\n'
             '. "$1"\n'
+            '[ ! -f "$2" ] || . "$2"\n'
             'for n in $(compgen -v); do\n'
             '  case "$pre" in *" $n "*) continue ;; esac\n'
             '  case "$n" in pre|n) continue ;; esac\n'
@@ -256,7 +307,7 @@ class ClosureSelectionTests(unittest.TestCase):
         )
         out = subprocess.run(
             ["env", "-i", "bash", "--noprofile", "--norc", "-c", script,
-             "bash", str(env_path)],
+             "bash", str(env_path), str(env_path.with_name("closure.env"))],
             capture_output=True, text=True, check=True).stdout
         return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
 
@@ -328,6 +379,88 @@ class ClosureSelectionTests(unittest.TestCase):
                 result.stdout,
             )
             self.assertEqual(after["PLEBIAN_OS_REF"], commit)
+            closure = env.with_name("closure.env")
+            self.assertTrue(closure.is_file())
+            self.assertEqual(closure.stat().st_mode & 0o777, 0o644)
+            self.assertIn("hand editing is unsupported", closure.read_text())
+            session_text = env.read_text()
+            self.assertNotIn("${PLEB_REF+x}", session_text)
+            self.assertNotIn("${KILIX_REF+x}", session_text)
+            self.assertIn(
+                "PLEB_RESPAWN=0   # operator note, deliberately unguarded",
+                session_text,
+            )
+            pair_before = (env.read_bytes(), closure.read_bytes())
+            repeated = self._run(base, "0.2.1", "--offline")
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+            self.assertEqual((env.read_bytes(), closure.read_bytes()), pair_before)
+
+    def test_0_2_1_proves_all_nine_component_public_refs(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sources = base / "home/.local/gpu_terminal/sources"
+            pleb_dir = sources / "pleb"
+            kilix_dir = sources / "kilix"
+            kilix95_dir = sources / "kilix-desktops/kilix-95"
+            pleb = self._component_history(pleb_dir, count=1)
+            kilix = self._component_history(kilix_dir, count=1)
+            kilix95 = self._component_history(kilix95_dir, count=1)
+            root_specs = (
+                ("kilix-system-monitor", "KILIX_SYSTEM_MONITOR", "Kilix System Monitor"),
+                ("kilix-desktop-sdk", "KILIX_DESKTOP_SDK", "Kilix Desktop SDK"),
+                ("kilix-icewm", "KILIX_ICEWM", "Kilix IceWM"),
+                ("kilix-media-sdk", "KILIX_MEDIA_SDK", "Kilix Media SDK"),
+                ("kilix-waydroid", "KILIX_WAYDROID", "Kilix Waydroid"),
+            )
+            changes = {
+                "PLEB_REF": pleb[0],
+                "KILIX_REF": kilix[0],
+                "KILIX95_REF": kilix95[0],
+            }
+            root_sources = {}
+            for cache_name, prefix, _ in root_specs:
+                source = base / "component-sources" / cache_name
+                commit = self._component_history(source, count=1)[0]
+                changes[f"{prefix}_REF"] = commit
+                root_sources[cache_name] = source
+            os_commit = self._source(
+                base,
+                self._f120_manifest_text(**changes),
+                version="0.2.1",
+                release="0.2.1",
+                tag="v0.2.1",
+                requirements_text=(
+                    ROOT / "releases/0.2.1.requirements"
+                ).read_text(),
+            )
+            self._seed_core_public_caches(
+                base, pleb_dir, kilix_dir, kilix95_dir)
+            for cache_name, prefix, _ in root_specs:
+                self._seed_public_cache(
+                    base, cache_name, F120_ROOT_VALUES[f"{prefix}_REPO"],
+                    root_sources[cache_name],
+                )
+            installed = dict(INSTALLED_RELEASE_VALUES)
+            installed.update({
+                "PLEBIAN_OS_REF": os_commit,
+                "PLEB_REF": pleb[0],
+                "KILIX_REF": kilix[0],
+                "KILIX95_REF": kilix95[0],
+            })
+            self._machine(base, release=list(installed.items()))
+
+            result = self._run(
+                base, "0.2.1", "--offline", "--dry-run", check_ancestry=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = result.stdout + result.stderr
+            labels = (
+                "Plebian-OS", "Pleb", "Kilix", "Kilix 95",
+                *(item[2] for item in root_specs),
+            )
+            for label in labels:
+                self.assertIn(f"component {label}:", report)
+            self.assertEqual(report.count("component "), 9)
 
     def test_0_2_1_requirements_refuse_different_debian_inputs(self):
         mutations = {
@@ -426,6 +559,153 @@ class ClosureSelectionTests(unittest.TestCase):
                 target="0.2.1",
             )
 
+    def test_0_2_1_split_transaction_restores_every_write_boundary(self):
+        boundaries = ("backup", "stage", "selector", "updater", "session", "closure")
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base)
+                before = env.read_bytes()
+                self._source(
+                    base,
+                    self._f120_manifest_text(),
+                    version="0.2.1",
+                    release="0.2.1",
+                    tag="v0.2.1",
+                    requirements_text=(
+                        ROOT / "releases" / "0.2.1.requirements"
+                    ).read_text(),
+                )
+                result = self._run(
+                    base, "0.2.1", "--offline", fail_after=boundary)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertEqual(env.read_bytes(), before)
+                self.assertFalse(env.with_name("closure.env").exists())
+                self.assertFalse(
+                    (base / "root/usr/local/bin/plebian-os-select-closure").exists())
+                self.assertFalse(
+                    (base / "root/usr/local/bin/plebian-os-update").exists())
+                self.assertEqual(self._recovery_records(base), [])
+
+    def test_split_migration_refuses_an_ambiguous_release_pin_edit(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session = self._machine(base)
+            with session.open("a") as stream:
+                stream.write(f"if true; then PLEB_REF={'e' * 40}; fi\n")
+            self._source(
+                base,
+                self._f120_manifest_text(),
+                version="0.2.1",
+                release="0.2.1",
+                tag="v0.2.1",
+                requirements_text=(
+                    ROOT / "releases" / "0.2.1.requirements"
+                ).read_text(),
+            )
+            self._refuses(
+                base, "sets release-controlled key PLEB_REF in an ambiguous form",
+                target="0.2.1",
+            )
+
+    def test_0_2_1_split_rollback_retains_selected_pair_at_every_boundary(self):
+        boundaries = (
+            "rollback-stage", "rollback-closure", "rollback-session",
+            "rollback-updater", "rollback-selector",
+        )
+        for boundary in boundaries:
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                session = self._machine(base)
+                self._source(
+                    base,
+                    self._f120_manifest_text(),
+                    version="0.2.1",
+                    release="0.2.1",
+                    tag="v0.2.1",
+                    requirements_text=(
+                        ROOT / "releases" / "0.2.1.requirements"
+                    ).read_text(),
+                )
+                selected = self._run(base, "0.2.1", "--offline")
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                closure = session.with_name("closure.env")
+                selector = base / "root/usr/local/bin/plebian-os-select-closure"
+                updater = base / "root/usr/local/bin/plebian-os-update"
+                selected_bytes = tuple(
+                    path.read_bytes() for path in (session, closure, selector, updater)
+                )
+                failed = self._run(base, "--rollback", fail_after=boundary)
+                self.assertNotEqual(failed.returncode, 0, failed.stdout)
+                self.assertIn("retained", failed.stderr)
+                self.assertEqual(
+                    tuple(path.read_bytes() for path in (session, closure, selector, updater)),
+                    selected_bytes,
+                )
+                retried = self._run(base, "--rollback")
+                self.assertEqual(retried.returncode, 0, retried.stderr)
+
+    def test_standalone_split_selects_and_rolls_back_without_os_tooling(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            system_env = self._machine(base)
+            user_env = base / "home/.local/gpu_terminal/pleb/config/session.env"
+            user_env.parent.mkdir(parents=True)
+            legacy = "\n".join(
+                line for line in system_env.read_text().splitlines()
+                if "${PLEB_REF+x}" not in line and "${KILIX_REF+x}" not in line
+            )
+            legacy += (
+                "\n# Legacy standalone release pins used plain assignments.\n"
+                f"PLEB_REF={dict(INSTALLED_RELEASE_VALUES)['PLEB_REF']}\n"
+                f"KILIX_REF={dict(INSTALLED_RELEASE_VALUES)['KILIX_REF']}\n"
+            )
+            user_env.write_text(legacy)
+            user_env.chmod(0o600)
+            before = user_env.read_bytes()
+            system_env.unlink()
+            self._source(
+                base,
+                self._f120_manifest_text(),
+                version="0.2.1",
+                release="0.2.1",
+                tag="v0.2.1",
+                requirements_text=(
+                    ROOT / "releases" / "0.2.1.requirements"
+                ).read_text(),
+            )
+            closure = user_env.with_name("closure.env")
+            recovery = base / "home/.local/gpu_terminal/pleb/state/release-hop"
+            env_extra = {
+                "PLEBIAN_OS_SELECTOR_MODE": "standalone",
+                "PLEBIAN_OS_CLOSURE_LAYOUT": "split",
+                "PLEBIAN_OS_SESSION_ENV": str(user_env),
+                "PLEBIAN_OS_CLOSURE_ENV": str(closure),
+                "PLEBIAN_OS_RECOVERY_BASE": str(recovery),
+                "PLEBIAN_OS_SELECTOR_DST": "",
+                "PLEBIAN_OS_UPDATER_DST": "",
+            }
+            selected = self._run(
+                base, "0.2.1", "--offline", env_extra=env_extra)
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertTrue(closure.is_file())
+            self.assertEqual(closure.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(user_env.stat().st_mode & 0o777, 0o600)
+            self.assertIn("did not deploy it", selected.stdout)
+            self.assertFalse((base / "root/etc/pleb/session.env").exists())
+            self.assertFalse(
+                (base / "root/usr/local/bin/plebian-os-select-closure").exists())
+            self.assertFalse(
+                (base / "root/usr/local/bin/plebian-os-update").exists())
+            values = self._values(user_env)
+            self.assertEqual(values["PLEBIAN_OS_VERSION"], "0.2.1")
+            self.assertEqual(values["PLEB_RESPAWN"], "0")
+
+            rolled_back = self._run(base, "--rollback", env_extra=env_extra)
+            self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
+            self.assertEqual(user_env.read_bytes(), before)
+            self.assertFalse(closure.exists())
+
     def test_selection_adds_a_pin_the_installed_release_never_had(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -468,6 +748,35 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(kept_before, kept_after)
             self.assertIn("PLEB_RESPAWN=0   # operator note, deliberately unguarded",
                           after_lines)
+
+    def test_image_policy_defaults_are_validated_but_never_selected(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            policy = base / "root" / "etc" / "default" / "plebian-os"
+            policy.parent.mkdir(parents=True)
+            policy.write_text('PLEBIAN_OS_DESKTOP="0"\nPLEBIAN_OS_KIOSK="1"\n')
+            before = policy.read_bytes()
+            self._source(base)
+            selected = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertEqual(policy.read_bytes(), before)
+            values = self._values(env)
+            self.assertNotIn("PLEBIAN_OS_DESKTOP", values)
+            self.assertNotIn("PLEBIAN_OS_KIOSK", values)
+            self.assertIn(
+                "PLEBIAN_OS_DESKTOP: validated image default only",
+                selected.stdout,
+            )
+            self.assertIn(
+                "PLEBIAN_OS_KIOSK: validated image default only",
+                selected.stdout,
+            )
+
+            base = Path(td) / "invalid"
+            self._machine(base)
+            self._source(base, self._manifest_text(PLEBIAN_OS_DESKTOP="2"))
+            self._refuses(base, "PLEBIAN_OS_DESKTOP must be 0 or 1")
 
     # ── an incomplete or malformed closure is refused, by name ──────────────
     def _refuses(self, base: Path, expected: str, *args, target="0.1.8"):
@@ -599,7 +908,27 @@ class ClosureSelectionTests(unittest.TestCase):
             self._machine(base)
             self._source(base, tag="v0.1.7", release="0.1.8")
             result = self._refuses(base, "release tag v0.1.8 is not in")
-            self.assertIn("--offline forbids fetching it", result.stderr)
+
+    def test_offline_tag_requires_an_exact_trusted_tag_object(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            self._source(base)
+            missing = self._run(
+                base, "0.1.8", "--offline", trust_tag=False)
+            self.assertNotEqual(missing.returncode, 0, missing.stdout)
+            self.assertIn(
+                "--offline requires PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA",
+                missing.stderr,
+            )
+            wrong = self._run(
+                base, "0.1.8", "--offline", trust_tag=False,
+                env_extra={"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": "f" * 40},
+            )
+            self.assertNotEqual(wrong.returncode, 0, wrong.stdout)
+            self.assertIn("not trusted object", wrong.stderr)
+            self.assertEqual(env.read_bytes(), before)
 
     # ── a hand edit outside the managed form is refused ─────────────────────
     def test_unmanaged_release_key_edit_is_refused_by_name(self):
@@ -696,16 +1025,20 @@ class ClosureSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             sources = base / "home" / ".local" / "gpu_terminal" / "sources"
-            pleb = self._component_history(sources / "pleb")
-            kilix = self._component_history(sources / "kilix")
-            kilix95 = self._component_history(
-                sources / "kilix-desktops" / "kilix-95", count=1)
+            pleb_dir = sources / "pleb"
+            kilix_dir = sources / "kilix"
+            kilix95_dir = sources / "kilix-desktops" / "kilix-95"
+            pleb = self._component_history(pleb_dir)
+            kilix = self._component_history(kilix_dir)
+            kilix95 = self._component_history(kilix95_dir, count=1)
             manifest = self._manifest_text(
                 PLEB_REF=pleb[0],
                 KILIX_REF=kilix[1],
                 KILIX95_REF=kilix95[0],
             )
             os_commit = self._source(base, manifest)
+            self._seed_core_public_caches(
+                base, pleb_dir, kilix_dir, kilix95_dir)
             installed = dict(INSTALLED_RELEASE_VALUES)
             installed.update({
                 "PLEBIAN_OS_REF": os_commit,
@@ -729,21 +1062,81 @@ class ClosureSelectionTests(unittest.TestCase):
                 result.stdout,
             )
 
-    def test_offline_selection_refuses_missing_component_target(self):
+    def test_component_sideways_move_is_announced_as_diverged(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
-            sources = base / "home" / ".local" / "gpu_terminal" / "sources"
-            pleb = self._component_history(sources / "pleb", count=1)
-            kilix = self._component_history(sources / "kilix", count=1)
-            kilix95 = self._component_history(
-                sources / "kilix-desktops" / "kilix-95", count=1)
-            missing = "f" * 40
+            sources = base / "home/.local/gpu_terminal/sources"
+            pleb_dir = sources / "pleb"
+            pleb = self._component_history(pleb_dir)
+            git = ["git", "-C", str(pleb_dir)]
+            subprocess.run(git + ["checkout", "-q", "HEAD^"], check=True)
+            (pleb_dir / "sideways").write_text("sideways\n")
+            subprocess.run(git + ["add", "sideways"], check=True)
+            subprocess.run(git + ["commit", "-qm", "sideways"], check=True)
+            sideways = subprocess.run(
+                git + ["rev-parse", "HEAD"], capture_output=True,
+                text=True, check=True,
+            ).stdout.strip()
+            kilix_dir = sources / "kilix"
+            kilix95_dir = sources / "kilix-desktops/kilix-95"
+            kilix = self._component_history(kilix_dir, count=1)
+            kilix95 = self._component_history(kilix95_dir, count=1)
             manifest = self._manifest_text(
-                PLEB_REF=missing,
+                PLEB_REF=sideways,
                 KILIX_REF=kilix[0],
                 KILIX95_REF=kilix95[0],
             )
             os_commit = self._source(base, manifest)
+            self._seed_core_public_caches(
+                base, pleb_dir, kilix_dir, kilix95_dir)
+            installed = dict(INSTALLED_RELEASE_VALUES)
+            installed.update({
+                "PLEBIAN_OS_REF": os_commit,
+                "PLEB_REF": pleb[1],
+                "KILIX_REF": kilix[0],
+                "KILIX95_REF": kilix95[0],
+            })
+            self._machine(base, release=list(installed.items()))
+
+            result = self._run(
+                base, "0.1.8", "--offline", "--dry-run", check_ancestry=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                f"component Pleb: {pleb[1][:12]} -> {sideways[:12]} "
+                "(DIVERGED, neither commit is an ancestor;",
+                result.stderr,
+            )
+
+    def test_component_commit_must_be_reachable_from_an_advertised_ref(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sources = base / "home/.local/gpu_terminal/sources"
+            pleb_dir = sources / "pleb"
+            kilix_dir = sources / "kilix"
+            kilix95_dir = sources / "kilix-desktops/kilix-95"
+            pleb = self._component_history(pleb_dir)
+            kilix = self._component_history(kilix_dir, count=1)
+            kilix95 = self._component_history(kilix95_dir, count=1)
+            manifest = self._manifest_text(
+                PLEB_REF=pleb[1],
+                KILIX_REF=kilix[0],
+                KILIX95_REF=kilix95[0],
+            )
+            os_commit = self._source(base, manifest)
+            values = dict(INSTALLED_RELEASE_VALUES)
+            self._seed_public_cache(
+                base, "plebian-os", values["PLEBIAN_OS_REPO"], base / "src")
+            # The target object exists in the checkout, but only its parent is
+            # represented by the cached public-ref snapshot.
+            self._seed_public_cache(
+                base, "pleb", values["PLEB_REPO"], pleb_dir,
+                public_commit=pleb[0],
+            )
+            self._seed_public_cache(
+                base, "kilix", values["KILIX_REPO"], kilix_dir)
+            self._seed_public_cache(
+                base, "kilix-95", values["KILIX95_REPO"], kilix95_dir)
             installed = dict(INSTALLED_RELEASE_VALUES)
             installed.update({
                 "PLEBIAN_OS_REF": os_commit,
@@ -759,8 +1152,50 @@ class ClosureSelectionTests(unittest.TestCase):
 
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn(
-                f"Pleb target PLEB_REF={missing} is not in", result.stderr)
-            self.assertIn("--offline forbids fetching it", result.stderr)
+                f"Pleb target PLEB_REF={pleb[1]} is not reachable from any "
+                "advertised head or tag",
+                result.stderr,
+            )
+            self.assertEqual(env.read_bytes(), before)
+
+    def test_offline_selection_refuses_missing_component_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sources = base / "home" / ".local" / "gpu_terminal" / "sources"
+            pleb_dir = sources / "pleb"
+            kilix_dir = sources / "kilix"
+            kilix95_dir = sources / "kilix-desktops" / "kilix-95"
+            pleb = self._component_history(pleb_dir, count=1)
+            kilix = self._component_history(kilix_dir, count=1)
+            kilix95 = self._component_history(kilix95_dir, count=1)
+            missing = "f" * 40
+            manifest = self._manifest_text(
+                PLEB_REF=missing,
+                KILIX_REF=kilix[0],
+                KILIX95_REF=kilix95[0],
+            )
+            os_commit = self._source(base, manifest)
+            self._seed_core_public_caches(
+                base, pleb_dir, kilix_dir, kilix95_dir)
+            installed = dict(INSTALLED_RELEASE_VALUES)
+            installed.update({
+                "PLEBIAN_OS_REF": os_commit,
+                "PLEB_REF": pleb[0],
+                "KILIX_REF": kilix[0],
+                "KILIX95_REF": kilix95[0],
+            })
+            env = self._machine(base, release=list(installed.items()))
+            before = env.read_bytes()
+
+            result = self._run(
+                base, "0.1.8", "--offline", check_ancestry=True)
+
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn(
+                f"Pleb target PLEB_REF={missing} is not reachable from any "
+                "advertised head or tag",
+                result.stderr,
+            )
             self.assertEqual(env.read_bytes(), before)
             self.assertEqual(self._recovery_records(base), [])
 

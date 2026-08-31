@@ -51,6 +51,10 @@ candidate line and must not be used to revise 0.2.0 artifacts.
 
 ### Fixed
 
+- Classify `PLEBIAN_OS_DESKTOP` and `PLEBIAN_OS_KIOSK` as fresh-image
+  defaults and installed operator policy. Release selection now validates and
+  reports their manifest values without moving them into `closure.env` or
+  overriding `/etc/default/plebian-os`.
 - Contain the 0.2.0 starter credential during upgrade without changing local
   identity or password state. If the historical hash remains, password-based
   SSH is disabled for that account only through a validated transactional
