@@ -17,6 +17,7 @@ __all__ = [
     "plan",
     "state",
     "sudoers",
+    "tiers",
     "syscenter",
     "wizard",
 ]

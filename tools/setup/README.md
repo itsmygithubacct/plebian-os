@@ -56,6 +56,7 @@ what this packet is.
 | `licenses.py` | decision-scoped licence presentation; there is no receipt constructor |
 | `plan.py` | hardware report, fit view and plan review; unknown is never rendered as zero |
 | `execution.py` | Phase 8 — supervised provider-owned execution, a durable journal, cancel/resume, and a rollback that cannot take a shared artifact |
+| `tiers.py` | H0–H2 classification against the F100-C0 fixture freeze, and the binding H2 load-pair rule made structural |
 | `sudoers.py` | the one-account passwordless-`sudo` drop-in |
 | `syscenter.py` | System Center entries **generated from catalog data**, never committed as code |
 | `TEST-INVENTORY.tsv` | the independent denominator for discovery — the F107B-01 fix |
@@ -104,21 +105,64 @@ runner refuses to run the suite at all and exits **2**.
 
 Recorded results:
 
-* **235/235** tests passed, **0/235** failed, **0/235** errored, **0/235**
-  skipped — against the **235** the committed inventory expects, not against
+* **264/264** tests passed, **0/264** failed, **0/264** errored, **0/264**
+  skipped — against the **264** the committed inventory expects, not against
   itself.
-* **23/23** deliberate source mutations caught, **0/23** escaped; the restored
-  tree is green again at 235/235.
+* **29/29** deliberate source mutations caught, **0/29** escaped; the restored
+  tree is green again at 264/264.
 * **11/11** control breaches caught, **0/11** escaped (`control-check.py`).
-* The same **235/235** reproduces under **2/2** `uv` builds — the one on PATH
+* The same **264/264** reproduces under **2/2** `uv` builds — the one on PATH
   (0.12.3) and the release-pinned 0.12.5, digest
   `b65f23a420c4acc96427efb30e5ed9bc0f7e25d2d712000f6ede77c1a0de5f46` — and
   under **2/2** interpreters, CPython 3.13.5 and the 3.12.8 this packet's own
   lock resolves.
 * Without the candidate the run is partial by design and exits **3**. The
-  control checks still run and still pass at **26/26** guarded files and
-  **13/13** modules, so a reviewer who does not
+  control checks still run and still pass at **27/27** guarded files and
+  **14/14** modules, so a reviewer who does not
   have Track D's bytes still gets the full suite-integrity guarantee.
+
+## Capacity tiers — against the F100-C0 freeze of 2026-08-31
+
+`tiers.py` classifies a `plebian.hardware/v1` document into H0, H1 or H2. The
+thresholds are transcribed from the frozen fixture definitions and nowhere
+else, and a test asserts each one against that document rather than against the
+module's memory of it.
+
+Four rules, each from the freeze's own text:
+
+* **A missing fact is not a failing fact.** Unmeasured VRAM makes the tier
+  `unknown` with the field named — never "below 8 GiB".
+* **Device absence is a determination; only a missing measurement is
+  undetermined.** A machine with no NVIDIA card is H1, not a mystery. This
+  ordering was a real bug, caught by a test: null VRAM on a machine with no
+  NVIDIA GPU was being reported as undetermined.
+* **Meeting a bar is a pass, not a margin.** the H2 reference host's 8192 MiB is exactly at
+  H2's 8 GiB bar, so thresholds met *exactly* are flagged as such and a caller
+  needing headroom can see it.
+* **H3 is excluded** under OD-9, and AMD/Intel GPUs are detected and reported
+  honestly but never counted toward a tier.
+
+The classified fixture matrix, measured over all **6/6** candidate hardware
+fixtures:
+
+| Fixture | Tier | Why |
+| --- | --- | --- |
+| `h2-nvidia-synthetic` | **H2** | clears every bar with margin |
+| `hybrid-backend-unavailable` | **H0** | H1 not reached: free storage below bar |
+| `arm64-unqualified` | below-H0 | free storage below bar |
+| `h0-cpu-only` | below-H0 | free storage below bar — the name is not evidence |
+| `virtual-machine-unknown` | below-H0 | free storage below bar |
+| `current-host-redacted` | unknown | free storage not measured |
+
+A definite lower failure beats an undetermined higher one: a fixture that fails
+H1 on a *known* storage number settles at H0 rather than going `unknown` on a
+VRAM field it never needed to consult.
+
+**The H2 load-pair rule is structural, not remembered.** The freeze binds every
+H2 reference-host measurement to publish `/proc/loadavg` at the start and end of its
+window, because the host is frequency-pinned but not quiesced. There is no
+constructor for a measurement record that omits either reading, and closing a
+window that was never opened is refused.
 
 ## Phase 8 — what execution does and does not do
 

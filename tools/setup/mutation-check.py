@@ -212,6 +212,70 @@ MUTATIONS: tuple[Mutation, ...] = (
         claim="an artifact already present is not redownloaded",
     ),
     Mutation(
+        label="h2-vram-threshold-lowered",
+        path=SRC / "tiers.py",
+        old='        Threshold("gpu.vram_bytes", "NVIDIA VRAM", 8 * GIB),',
+        new='        Threshold("gpu.vram_bytes", "NVIDIA VRAM", 4 * GIB),',
+        claim="tier thresholds match the F100-C0 freeze, not this module's memory of it",
+    ),
+    Mutation(
+        label="unmeasured-treated-as-failing",
+        path=SRC / "tiers.py",
+        old="        if self.observed is None:\n            return None\n        return self.observed >= self.required",
+        new="        if self.observed is None:\n            return False\n        return self.observed >= self.required",
+        claim="a fact that was never measured is unknown, not below the bar",
+    ),
+    Mutation(
+        label="exactly-at-bar-not-flagged",
+        path=SRC / "tiers.py",
+        old="        return self.observed is not None and self.observed == self.required",
+        new="        return False",
+        claim="a threshold met exactly is recorded as exact, since it is a pass without margin",
+    ),
+    Mutation(
+        label="amd-counts-toward-h2",
+        path=SRC / "tiers.py",
+        old='        if gpu.get("vendor") != "nvidia":\n            continue',
+        new='        if gpu.get("vendor") not in ("nvidia", "amd"):\n            continue',
+        claim="only NVIDIA counts toward H2; AMD is reported but never an accelerated target",
+    ),
+    Mutation(
+        label="device-absence-confused-with-unmeasured",
+        path=SRC / "tiers.py",
+        old=(
+            "        if tier in TIERS_REQUIRING_NVIDIA and not nvidia_seen:\n"
+            "            reasons.append(f\"{tier} requires an NVIDIA GPU and none was detected\")\n"
+            "            break\n"
+            "        if any(result.met is None for result in tier_results):\n"
+            "            unknown_fields = [r.label for r in tier_results if r.met is None]\n"
+            "            reasons.append(\n"
+            "                f\"{tier} undetermined: \" + \", \".join(unknown_fields) + \" not measured\"\n"
+            "            )\n"
+            "            reached = UNKNOWN\n"
+            "            break"
+        ),
+        new=(
+            "        if any(result.met is None for result in tier_results):\n"
+            "            unknown_fields = [r.label for r in tier_results if r.met is None]\n"
+            "            reasons.append(\n"
+            "                f\"{tier} undetermined: \" + \", \".join(unknown_fields) + \" not measured\"\n"
+            "            )\n"
+            "            reached = UNKNOWN\n"
+            "            break\n"
+            "        if tier in TIERS_REQUIRING_NVIDIA and not nvidia_seen:\n"
+            "            reasons.append(f\"{tier} requires an NVIDIA GPU and none was detected\")\n"
+            "            break"
+        ),
+        claim="a machine with no NVIDIA card is classified, not called a mystery",
+    ),
+    Mutation(
+        label="h2-number-without-its-load-pair",
+        path=SRC / "tiers.py",
+        old='        if self._start is None:\n            raise TierRefusal(',
+        new='        if False:\n            raise TierRefusal(',
+        claim="an H2 number cannot be produced without the load pair the freeze binds",
+    ),
+    Mutation(
         label="plan-path-is-consent",
         path=SRC / "plan.py",
         old='        if not confirmed:\n            return "the operator has not confirmed this plan"',

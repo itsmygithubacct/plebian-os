@@ -1,9 +1,9 @@
 6aab117deeaed3abf5655e2f9e02ebf0c1672732e7ef616a5e70ce6439cf849a  ./control-check.py
 4f64f88a304e3993157ebedb78a6cc16dea22ba1202d6cae71e92b9b373217ec  ./fixtures/catalog/generic-vendor-client.json
 472f568478bff9056ec56b5c5e8a7ca3d280c651d527321e1eb80892801164be  ./.gitignore
-de7bee2ba5802684aff866cb6fffa3672b6fe080ecc6d644f26c8ef75d6af211  ./mutation-check.py
+f93f3a76bb79b2da975c95c0278af7c4191c45a0de1394aee6da510c8ba926cb  ./mutation-check.py
 804d8350ebd5463119f3ffe0cdc6dda75d96a1be98c082765a6ba5624d75760a  ./pyproject.toml
-a548160f1b3815f3bad971bbb0805a54057e511835d1a3eca18ada487b1fc152  ./README.md
+ba1e871b88ef45fd7535e99621a5a2439cf3a26ba84ab0983bd90dd2218ad734  ./README.md
 66caefbafab42bf9edfd396c384761f80052bb5e8e741e393fcd763ef5e6c91d  ./run-checks.py
 58152e515444c17f4a97b69f5f4fe170e33ea7fd92053a410855f576b8fe42d7  ./schemas/plebian.setup.optional-component-v1.schema.json
 346e838e623db42177c81fe7d4f866509f6e819f4a7cbb8207e621264546b70d  ./schemas/plebian.setup-v1.schema.json
@@ -13,14 +13,15 @@ b5c69245a54bbb21c6f6c2c2cb93691e7e744c84b580553d283ba20164b76c98  ./src/f107b_se
 0b71de2b0729a2967981abc5bb19f355e2331341d30dc572b09ceaca59119aa2  ./src/f107b_setup/execution.py
 8cec0988e640832d1979632a427f0a2a085fb45ac10782df5d4c07c2053bf33f  ./src/f107b_setup/f106_client.py
 988966959b72704453f8ebaee8c67fbf558630f5cfe5219446a3a6e3d77bf3b0  ./src/f107b_setup/gates.py
-c24a2e3f867de3169e10316df0d90f888ff69f1327fb5c2f20b1e1a2d1e522fb  ./src/f107b_setup/__init__.py
+939f136a72079c51c782f527f2f1233e50a7e1c7e3f9a3bdec47536a9eb70ffc  ./src/f107b_setup/__init__.py
 7afbe78055a91a81d4e854e3f3af0c74d17f27a68c52788efeec7c7de35bac3e  ./src/f107b_setup/licenses.py
 ba89ccdc98d820335a8f4ab61e62cb40b769f9570f0c1be679cc961282b3ec26  ./src/f107b_setup/plan.py
 a829da8d2229ecf33a60470c8f5943c58c14e6af029f8444831117325a89c0ab  ./src/f107b_setup/state.py
 4318a54f7bfe1584184023adf311ce9a2cae32cd75030885480be9f1f33c5346  ./src/f107b_setup/sudoers.py
 bb1d28279f13d8761381d829af60a5db25699de46f75218395c016c9b4911ae3  ./src/f107b_setup/syscenter.py
+eaf650dcb67bb9f6afa7d1bd3b16c73d9c7efd1fc1e31213e76d6735f6ac7ad3  ./src/f107b_setup/tiers.py
 6530b146ffdbcd9b4dd80f64ccf1a3c21aa8d02a7bf40e7bcbf62423df251e17  ./src/f107b_setup/wizard.py
-c38d5f1aaa0b77bbf51e62843070f74f929b2073f703ba010d1cdb95c8a11ed8  ./TEST-INVENTORY.tsv
+50baf8c943ec6545efb939309414b612cd50644c1c367a5207d4d725a80fdf37  ./TEST-INVENTORY.tsv
 3b8e2af867dbe4982255981d11fccaacdd10056ad135addcd594ad6b0b0d2766  ./tests/support.py
 0b7138c786bcbbde63227ce43924e2989c61d6eea17d23b2374ea007f2849624  ./tests/test_admission.py
 73e533b1c9594d1a606add275de92bb6d13d057abdc33618466141cb2ce3e55f  ./tests/test_browsers.py
@@ -34,6 +35,7 @@ e5220fc8d8bb7874397ca915aba75450f6989c129a3d80f79bb9d047ad34d45e  ./tests/test_r
 085ec6ec31281610da1708f1f896650f8b133915f0584eaa38079395b16922d8  ./tests/test_state.py
 018ca6878ab4b756d16d752e0e0487ff3e80a948775db13bc4364866ff76eda9  ./tests/test_sudoers.py
 bc2462d0d4ba30cdd2f1755be204d835d3c43975db2fa0abfbfee178ee3fcbdd  ./tests/test_syscenter.py
+0602e511d28b10911225940c7d7db8a05f3140a8b36377080c9ebeed1b39b898  ./tests/test_tiers.py
 ca60ae487a735b2dea6dc9a3c19f32076daf96f203b941f770a2c7f4a2e312af  ./tests/test_wizard.py
 9759775776895ebe9cef82478ea136072adda205ef0abd0b207d7d99baea2cf7  ./TRANSCRIPT.txt
 916112c6033bd1cf5e0feb114ff903a11080a32fbb08d0cb5e9e14f72a3bebcb  ./uv.lock
