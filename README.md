@@ -67,6 +67,15 @@ Vulkan shader cache. None of these commands runs during provisioning,
 qualification, preseed, or a plain Vulkan install. These closures remain 0.2.1
 candidates, not accepted release schemas or model-publication authorization.
 
+Steam is staged separately and remains fail-closed. Provisioning fetches the
+published F102 `kilix-game-sdk` work ref, verifies its exact commit and tree,
+builds `kilix-valve-client` in a private directory, and installs the client with
+its license and version metadata. It installs no Steam package, adds no Valve
+source, enables no foreign architecture, and cannot substitute this build step
+for the later license and trust decisions. The packaged transaction policy
+remains deliberately unqualified until its external closure and mediation
+contracts are accepted.
+
 The patched Ollama/Vulkan service runtime follows the same small-image policy.
 Plebian OS carries only
 `plebian-os-install-kilix-ollama-runtime` and the auditable Unix-listener patch,

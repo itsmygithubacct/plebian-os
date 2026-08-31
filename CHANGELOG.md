@@ -34,6 +34,10 @@ closure and must not be used to revise 0.2.0 artifacts.
   closure installer. It installs no model bytes and exposes no download URL
   while the 119,645,888-byte runtime carrier remains owner-reserved and
   unaccepted.
+- Add the inert Steam policy and fixed transaction helper, and build the
+  unprivileged `kilix-valve-client` only from its exact published F102 commit
+  and tree. Provisioning installs the client, license, and version metadata but
+  performs no Steam package or trust mutation.
 
 ### Required before release
 

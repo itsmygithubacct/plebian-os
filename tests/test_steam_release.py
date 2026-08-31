@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVISION = ROOT / "provision"
+PROVISIONER = PROVISION / "plebian-os-provision.sh"
 SETUP = PROVISION / "plebian-os-steam-setup"
 CLOSURE = PROVISION / "steam-closure.env"
 CLOSURE_PIN = PROVISION / "steam-closure.sha256"
@@ -96,9 +97,7 @@ class SteamReleaseTests(unittest.TestCase):
         self.assertIn("export PATH HOME USER LOGNAME LANG LC_ALL TZ", text)
 
     def test_provisioning_installs_policy_but_never_invokes_the_helper(self):
-        provision = (PROVISION / "plebian-os-provision.sh").read_text(
-            encoding="utf-8"
-        )
+        provision = PROVISIONER.read_text(encoding="utf-8")
         self.assertIn("/usr/libexec/plebian-os-steam-setup", provision)
         for name in (
             "steam-closure.env",
@@ -113,6 +112,132 @@ class SteamReleaseTests(unittest.TestCase):
             provision,
             r"plebian-os-steam-setup[\"']?\s+--(?:install|repair)",
         )
+
+    def test_provisioning_builds_the_client_from_one_fixed_published_tree(self):
+        provision = PROVISIONER.read_text(encoding="utf-8")
+        self.assertIn(
+            "KILIX_VALVE_CLIENT_REPO="
+            "https://github.com/itsmygithubacct/kilix-game-sdk.git",
+            provision,
+        )
+        self.assertIn(
+            "KILIX_VALVE_CLIENT_REMOTE_REF=refs/heads/work/0.2.1-steam",
+            provision,
+        )
+        self.assertIn(
+            "KILIX_VALVE_CLIENT_COMMIT="
+            "14c8bfbd6e91e05df0bb593a51fc8a8174445e13",
+            provision,
+        )
+        self.assertIn(
+            "KILIX_VALVE_CLIENT_TREE="
+            "3d800e41d028104adbf5d096bdf7c40b781a982a",
+            provision,
+        )
+        self.assertIn(
+            "KILIX_VALVE_CLIENT_TARGET=/usr/bin/kilix-valve-client",
+            provision,
+        )
+        self.assertIn("install_kilix_valve_client", provision)
+        self.assertIn(
+            '[ "$commit" = "$KILIX_VALVE_CLIENT_COMMIT" ]', provision
+        )
+        self.assertIn('[ "$tree" = "$KILIX_VALVE_CLIENT_TREE" ]', provision)
+        self.assertIn(
+            '"$candidate" "$KILIX_VALVE_CLIENT_TARGET"', provision
+        )
+        self.assertNotIn(
+            'KILIX_VALVE_CLIENT_REPO="${KILIX_VALVE_CLIENT_REPO', provision
+        )
+
+    def test_fixed_client_build_installs_exact_runtime_metadata(self):
+        temporary = Path(tempfile.mkdtemp(prefix="valve-client-package-"))
+        self.addCleanup(shutil.rmtree, temporary, True)
+        source = temporary / "source"
+        component = source / "kilix-valve-client"
+        component.mkdir(parents=True)
+        (component / "LICENSE").write_text("fixture license\n", encoding="utf-8")
+        (component / "VERSION").write_text("0.1.0\n", encoding="ascii")
+        client = component / "client"
+        client.write_text(
+            "#!/bin/sh\n"
+            "[ \"${1:-}\" = --help ] || exit 64\n"
+            "printf 'fixed client help\\n'\n",
+            encoding="utf-8",
+        )
+        client.chmod(0o755)
+        (component / "Makefile").write_text(
+            "all:\n"
+            "\tmkdir -p build\n"
+            "\tcp client build/kilix-valve-client\n"
+            "\tchmod 0755 build/kilix-valve-client\n"
+            "clean:\n"
+            "\trm -rf build\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "init", "-q", "-b", "main", str(source)], check=True)
+        subprocess.run(
+            ["git", "-C", str(source), "config", "user.name", "itsmygithubacct"],
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git", "-C", str(source), "config", "user.email",
+                "itsmygithubacct@users.noreply.github.com",
+            ],
+            check=True,
+        )
+        subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", str(source), "commit", "-q", "-m", "fixture"],
+            check=True,
+        )
+        commit = subprocess.check_output(
+            ["git", "-C", str(source), "rev-parse", "HEAD"], text=True
+        ).strip()
+        tree = subprocess.check_output(
+            ["git", "-C", str(source), "rev-parse", "HEAD^{tree}"], text=True
+        ).strip()
+
+        build_base = temporary / "build-base"
+        target = temporary / "root/usr/bin/kilix-valve-client"
+        license_target = temporary / "root/usr/share/doc/client/copyright"
+        version_target = temporary / "root/usr/share/doc/client/VERSION"
+        build_base.mkdir()
+        script = r'''
+set -euo pipefail
+PLEBIAN_OS_PROVISION_LIB_ONLY=1 source "$1"
+KILIX_VALVE_CLIENT_REPO="$2"
+KILIX_VALVE_CLIENT_REMOTE_REF=refs/heads/main
+KILIX_VALVE_CLIENT_COMMIT="$3"
+KILIX_VALVE_CLIENT_TREE="$4"
+KILIX_VALVE_CLIENT_BUILD_BASE="$5"
+KILIX_VALVE_CLIENT_BUILD_DIR=""
+KILIX_VALVE_CLIENT_TARGET="$6"
+KILIX_VALVE_CLIENT_LICENSE_TARGET="$7"
+KILIX_VALVE_CLIENT_VERSION_TARGET="$8"
+DRY_RUN=0
+install_kilix_valve_client
+'''
+        completed = subprocess.run(
+            [
+                "bash", "-c", script, "bash", str(PROVISIONER), str(source),
+                commit, tree, str(build_base), str(target), str(license_target),
+                str(version_target),
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("installed kilix-valve-client 0.1.0", completed.stdout)
+        self.assertEqual(target.read_bytes(), client.read_bytes())
+        self.assertEqual(license_target.read_text(), "fixture license\n")
+        self.assertEqual(version_target.read_text(), "0.1.0\n")
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(license_target.stat().st_mode), 0o644)
+        self.assertEqual(stat.S_IMODE(version_target.stat().st_mode), 0o644)
+        self.assertEqual(list(build_base.iterdir()), [])
 
     def test_license_and_archive_authorization_are_distinct_records(self):
         text = SETUP.read_text(encoding="utf-8")

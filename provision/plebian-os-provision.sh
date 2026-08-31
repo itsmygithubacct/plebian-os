@@ -231,6 +231,17 @@ PLEB_BRANCH="${PLEB_BRANCH:-}"                 # empty = repo default
 PLEB_REF="${PLEB_REF:-}"                       # optional exact commit/tag
 KILIX_BRANCH="${KILIX_BRANCH:-}"
 KILIX_REF="${KILIX_REF:-}"
+# F102's read-only system probe is part of the image, not part of the later
+# privileged Steam transaction.  Keep its source identity fixed here rather
+# than accepting a caller-selected repository, ref, tree, or install path.
+KILIX_VALVE_CLIENT_REPO=https://github.com/itsmygithubacct/kilix-game-sdk.git
+KILIX_VALVE_CLIENT_REMOTE_REF=refs/heads/work/0.2.1-steam
+KILIX_VALVE_CLIENT_COMMIT=14c8bfbd6e91e05df0bb593a51fc8a8174445e13
+KILIX_VALVE_CLIENT_TREE=3d800e41d028104adbf5d096bdf7c40b781a982a
+KILIX_VALVE_CLIENT_TARGET=/usr/bin/kilix-valve-client
+KILIX_VALVE_CLIENT_LICENSE_TARGET=/usr/share/doc/kilix-valve-client/copyright
+KILIX_VALVE_CLIENT_VERSION_TARGET=/usr/share/doc/kilix-valve-client/VERSION
+KILIX_VALVE_CLIENT_BUILD_BASE=/var/lib/plebian-os
 KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-0.47.4}" # verified amd64 fallback
 KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
 # Read-aloud/dictation. Empty pins mean "use the ones the Kilix checkout carries"
@@ -851,6 +862,7 @@ allocate_coordinated_private_storage() {
 PROVISION_LOCK_FD=""
 KILIX_PROVISION_LOCK_FD=""
 KILIX_PROVISION_LOCK_PATH=""
+KILIX_VALVE_CLIENT_BUILD_DIR=""
 DESKTOP_WALLPAPER_TMP=""
 DESKTOP_WALLPAPER_CREATED_DIRS=()
 VERSION_MARKER_TMP=""
@@ -887,6 +899,9 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/share/plebian-os/steam/steam-source.sources
     /usr/share/plebian-os/steam/steam-pin.pref
     /usr/share/plebian-os/steam/policy-v1.manifest
+    "$KILIX_VALVE_CLIENT_TARGET"
+    "$KILIX_VALVE_CLIENT_LICENSE_TARGET"
+    "$KILIX_VALVE_CLIENT_VERSION_TARGET"
     /usr/local/bin/plebian-os-nvidia-driver
     /usr/local/sbin/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
@@ -921,11 +936,13 @@ PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
     /etc/lightdm
     /etc/sudoers.d
     /usr
+    /usr/bin
     /usr/local
     /usr/local/bin
     /usr/local/sbin
     /usr/local/share
     /usr/share
+    /usr/share/doc
     /var
     /var/lib
 )
@@ -943,6 +960,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /usr/libexec
     /usr/share/plebian-os
     /usr/share/plebian-os/steam
+    /usr/share/doc/kilix-valve-client
     /usr/local/share/plebian-os
     /usr/local/share/plebian-os/wallpapers
     /usr/local/share/doc
@@ -1259,6 +1277,25 @@ commit_provision_root_transaction() {
     fi
 }
 
+cleanup_kilix_valve_client_build() {
+    local path="${KILIX_VALVE_CLIENT_BUILD_DIR:-}" owner
+    [ -n "$path" ] || return 0
+    case "$path" in
+        "$KILIX_VALVE_CLIENT_BUILD_BASE"/kilix-valve-client-build.*) ;;
+        *)
+            warn "refusing unexpected Kilix Valve client build path: $path"
+            return 1
+            ;;
+    esac
+    if [ -e "$path" ] || [ -L "$path" ]; then
+        [ -d "$path" ] && [ ! -L "$path" ] || return 1
+        owner="$(stat -c '%u' -- "$path" 2>/dev/null)" || return 1
+        [ "$owner" = "$(id -u)" ] || return 1
+        rm -rf -- "$path" || return 1
+    fi
+    KILIX_VALVE_CLIENT_BUILD_DIR=""
+}
+
 cleanup() {
     local cleanup_failed=0
     if [ "$DRY_RUN" != 1 ]; then
@@ -1272,6 +1309,7 @@ cleanup() {
             || rm -f -- "$VERSION_MARKER_TMP"
         [ -z "${ARTWORK_NOTICE_TMP:-}" ] \
             || rm -f -- "$ARTWORK_NOTICE_TMP"
+        cleanup_kilix_valve_client_build || cleanup_failed=1
         local i
         for ((i=${#DESKTOP_WALLPAPER_CREATED_DIRS[@]}-1; i>=0; i--)); do
             rmdir -- "${DESKTOP_WALLPAPER_CREATED_DIRS[$i]}" 2>/dev/null || true
@@ -3664,6 +3702,157 @@ build_kilix_fork() {
     verify_kilix_fork_build
 }
 
+kilix_valve_client_git() {
+    /usr/bin/env -i \
+        HOME=/nonexistent \
+        PATH=/usr/bin:/bin \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8 \
+        TZ=UTC \
+        GIT_TERMINAL_PROMPT=0 \
+        HTTPS_PROXY="${HTTPS_PROXY:-}" \
+        HTTP_PROXY="${HTTP_PROXY:-}" \
+        NO_PROXY="${NO_PROXY:-}" \
+        /usr/bin/git -c core.hooksPath=/dev/null "$@"
+}
+
+install_kilix_valve_client() {
+    local commit tree dirty component candidate source_digest installed_digest
+    local source_date_epoch
+    local metadata expected_metadata license version tracked installed_document
+
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + fetch $KILIX_VALVE_CLIENT_REMOTE_REF from $KILIX_VALVE_CLIENT_REPO"
+        echo "    + verify commit $KILIX_VALVE_CLIENT_COMMIT and tree $KILIX_VALVE_CLIENT_TREE"
+        echo "    + build the fixed kilix-valve-client component in a root-private directory"
+        echo "    + install 3/3 files: $KILIX_VALVE_CLIENT_TARGET, $KILIX_VALVE_CLIENT_LICENSE_TARGET, $KILIX_VALVE_CLIENT_VERSION_TARGET"
+        return 0
+    fi
+
+    for command in /usr/bin/env /usr/bin/git /usr/bin/make /usr/bin/install \
+            /usr/bin/mktemp /usr/bin/sha256sum /usr/bin/stat; do
+        [ -x "$command" ] || die "required Kilix Valve client build command is missing: $command"
+    done
+    [ -x /usr/bin/cc ] \
+        || die "the fixed Kilix Valve client build requires /usr/bin/cc"
+    [ -d "$KILIX_VALVE_CLIENT_BUILD_BASE" ] \
+        && [ ! -L "$KILIX_VALVE_CLIENT_BUILD_BASE" ] \
+        || die "Kilix Valve client build base is missing or unsafe"
+
+    cleanup_kilix_valve_client_build \
+        || die "could not remove a previous Kilix Valve client build"
+    KILIX_VALVE_CLIENT_BUILD_DIR="$(/usr/bin/mktemp -d \
+        "$KILIX_VALVE_CLIENT_BUILD_BASE/kilix-valve-client-build.XXXXXX")" \
+        || die "could not allocate the Kilix Valve client build directory"
+    chmod 0700 -- "$KILIX_VALVE_CLIENT_BUILD_DIR" \
+        || die "could not secure the Kilix Valve client build directory"
+
+    kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" init --quiet \
+        || die "could not initialize the Kilix Valve client source checkout"
+    kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" remote add origin \
+        "$KILIX_VALVE_CLIENT_REPO" \
+        || die "could not bind the Kilix Valve client source origin"
+    kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" fetch --quiet \
+        --depth=1 --no-tags origin "$KILIX_VALVE_CLIENT_REMOTE_REF" \
+        || die "could not fetch the fixed Kilix Valve client source ref"
+    commit="$(kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" \
+        rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
+        || die "could not resolve the fetched Kilix Valve client commit"
+    [ "$commit" = "$KILIX_VALVE_CLIENT_COMMIT" ] \
+        || die "Kilix Valve client ref resolved to $commit, expected $KILIX_VALVE_CLIENT_COMMIT"
+    tree="$(kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" \
+        rev-parse --verify 'FETCH_HEAD^{tree}' 2>/dev/null)" \
+        || die "could not resolve the fetched Kilix Valve client tree"
+    [ "$tree" = "$KILIX_VALVE_CLIENT_TREE" ] \
+        || die "Kilix Valve client tree resolved to $tree, expected $KILIX_VALVE_CLIENT_TREE"
+    source_date_epoch="$(kilix_valve_client_git \
+        -C "$KILIX_VALVE_CLIENT_BUILD_DIR" show -s --format=%ct "$commit")" \
+        || die "could not resolve the Kilix Valve client source timestamp"
+    [[ "$source_date_epoch" =~ ^[0-9]{1,12}$ ]] \
+        || die "the Kilix Valve client source timestamp is invalid"
+    kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" checkout \
+        --quiet --detach "$commit" \
+        || die "could not check out the fixed Kilix Valve client source"
+    dirty="$(kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" \
+        status --porcelain --untracked-files=normal)" \
+        || die "could not inspect the Kilix Valve client source checkout"
+    [ -z "$dirty" ] || die "the fixed Kilix Valve client source checkout is dirty"
+
+    component="$KILIX_VALVE_CLIENT_BUILD_DIR/kilix-valve-client"
+    for tracked in kilix-valve-client/Makefile kilix-valve-client/LICENSE \
+            kilix-valve-client/VERSION; do
+        kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" \
+            ls-files --error-unmatch -- "$tracked" >/dev/null 2>&1 \
+            || die "the fixed Kilix Valve client source omits $tracked"
+    done
+    /usr/bin/env -i \
+        HOME=/nonexistent \
+        PATH=/usr/bin:/bin \
+        LANG=C.UTF-8 \
+        LC_ALL=C.UTF-8 \
+        TZ=UTC \
+        TMPDIR="$KILIX_VALVE_CLIENT_BUILD_DIR" \
+        SOURCE_DATE_EPOCH="$source_date_epoch" \
+        /usr/bin/make -C "$component" clean all \
+        || die "the fixed Kilix Valve client build failed"
+    kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" \
+        diff --quiet -- \
+        || die "the Kilix Valve client build changed its tracked source"
+    kilix_valve_client_git -C "$KILIX_VALVE_CLIENT_BUILD_DIR" \
+        diff --cached --quiet -- \
+        || die "the Kilix Valve client build changed its tracked index"
+
+    candidate="$component/build/kilix-valve-client"
+    license="$component/LICENSE"
+    version="$component/VERSION"
+    [ -f "$candidate" ] && [ ! -L "$candidate" ] && [ -x "$candidate" ] \
+        || die "the Kilix Valve client build did not produce one safe executable"
+    [ -f "$license" ] && [ ! -L "$license" ] \
+        || die "the Kilix Valve client license source is unsafe"
+    [ -f "$version" ] && [ ! -L "$version" ] \
+        || die "the Kilix Valve client version source is unsafe"
+    [ "$(cat "$version")" = 0.1.0 ] \
+        || die "the Kilix Valve client version is not the expected 0.1.0"
+    "$candidate" --help >/dev/null \
+        || die "the built Kilix Valve client did not execute its fixed help path"
+
+    /usr/bin/install -d -m 0755 -- \
+        "$(dirname -- "$KILIX_VALVE_CLIENT_TARGET")" \
+        "$(dirname -- "$KILIX_VALVE_CLIENT_LICENSE_TARGET")"
+    /usr/bin/install -m 0755 -- "$candidate" "$KILIX_VALVE_CLIENT_TARGET" \
+        || die "could not install $KILIX_VALVE_CLIENT_TARGET"
+    /usr/bin/install -m 0644 -- "$license" "$KILIX_VALVE_CLIENT_LICENSE_TARGET" \
+        || die "could not install $KILIX_VALVE_CLIENT_LICENSE_TARGET"
+    /usr/bin/install -m 0644 -- "$version" "$KILIX_VALVE_CLIENT_VERSION_TARGET" \
+        || die "could not install $KILIX_VALVE_CLIENT_VERSION_TARGET"
+
+    source_digest="$(/usr/bin/sha256sum "$candidate")" \
+        || die "could not digest the built Kilix Valve client"
+    source_digest="${source_digest%% *}"
+    installed_digest="$(/usr/bin/sha256sum "$KILIX_VALVE_CLIENT_TARGET")" \
+        || die "could not digest the installed Kilix Valve client"
+    installed_digest="${installed_digest%% *}"
+    [ "$installed_digest" = "$source_digest" ] \
+        || die "the installed Kilix Valve client differs from the fixed build"
+    expected_metadata="$(id -u):$(id -g):755:1"
+    metadata="$(/usr/bin/stat -c '%u:%g:%a:%h' -- \
+        "$KILIX_VALVE_CLIENT_TARGET" 2>/dev/null)" \
+        || die "could not inspect the installed Kilix Valve client"
+    [ "$metadata" = "$expected_metadata" ] \
+        || die "the installed Kilix Valve client has unsafe metadata: $metadata"
+    for installed_document in "$KILIX_VALVE_CLIENT_LICENSE_TARGET" \
+            "$KILIX_VALVE_CLIENT_VERSION_TARGET"; do
+        metadata="$(/usr/bin/stat -c '%u:%g:%a:%h' -- \
+            "$installed_document" 2>/dev/null)" \
+            || die "could not inspect $installed_document"
+        [ "$metadata" = "$(id -u):$(id -g):644:1" ] \
+            || die "installed Kilix Valve client metadata is unsafe: $installed_document ($metadata)"
+    done
+    cleanup_kilix_valve_client_build \
+        || die "could not remove the Kilix Valve client build directory"
+    log "installed kilix-valve-client 0.1.0 from $KILIX_VALVE_CLIENT_COMMIT (3/3 files)"
+}
+
 # Tests source the path-agnostic transaction/version helpers without running the
 # root provisioning workflow. Normal execution never sets this internal flag.
 if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then
@@ -3971,6 +4160,12 @@ else
         fi
     done
 fi
+
+# The unprivileged client is useful before Steam exists: status, doctor, and
+# install planning all fail closed against the inert policy installed above.
+# Build it only from the published F102 commit/tree and place the runtime at the
+# one path the Kilix integration admits.
+install_kilix_valve_client
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same
