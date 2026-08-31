@@ -471,6 +471,24 @@ together.
    them. Perform this using the path documented for installed users, not an
    unpublished developer checkout. A failed or missing upgrade run blocks
    publication.
+
+   Run F109's checksummed guest control once in each installed shape, using
+   separate disposable VMs and report directories outside the guest's home:
+
+   ```sh
+   build/acceptance-release-hop.sh --shape image --target <x.y.z> \
+     --report /var/tmp/f109-image-hop --disposable-vm
+   build/acceptance-release-hop.sh --shape standalone --target <x.y.z> \
+     --report /var/tmp/f109-standalone-hop --disposable-vm
+   ```
+
+   The runner refuses a non-VM host, a dirty checkout, a report under `$HOME`,
+   or a shape with the wrong installed-tool boundary. It plants modified and
+   untracked checkout state plus license, asset, and catalog sentinels; induces
+   a closure-commit failure; proves the prior checkout and env state; then
+   executes exactly one successful `pleb update --to` command. Retain all 2/2
+   report directories with their `SHA256SUMS`; a runner or checksum failure
+   leaves the corresponding lane at 0/1.
 7. Re-check that every local tag resolves to the reviewed commit and that all
    worktrees remain clean. Only then push the four tags and publish the strict
    release artifact, its checksum, and a checksummed release source archive
