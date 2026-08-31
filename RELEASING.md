@@ -472,23 +472,36 @@ together.
    unpublished developer checkout. A failed or missing upgrade run blocks
    publication.
 
-   Run F109's checksummed guest control once in each installed shape, using
-   separate disposable VMs and report directories outside the guest's home:
+   Run F109's two-VM controller after preparing two public-key-SSH guests: an
+   image guest installed from the immediately previous published ISO and a
+   standalone Debian guest pinned to that ISO's exact Pleb and Kilix commits.
+   Both guests must permit non-interactive reboot through the qualification
+   account. Keep their host keys in a dedicated known-hosts file:
 
    ```sh
-   build/acceptance-release-hop.sh --shape image --target <x.y.z> \
-     --report /var/tmp/f109-image-hop --disposable-vm
-   build/acceptance-release-hop.sh --shape standalone --target <x.y.z> \
-     --report /var/tmp/f109-standalone-hop --disposable-vm
+   build/acceptance-release-hop-host.sh \
+     --from <previous-x.y.z> --target <x.y.z> \
+     --source-iso plebian-os-<previous-x.y.z>-amd64.iso \
+     --source-sha256sums SHA256SUMS \
+     --image-guest releaseci@<image-host> \
+     --standalone-guest releaseci@<standalone-host> \
+     --known-hosts <qualification-known-hosts> \
+     --report <host-evidence-directory>
    ```
 
-   The runner refuses a non-VM host, a dirty checkout, a report under `$HOME`,
-   or a shape with the wrong installed-tool boundary. It plants modified and
-   untracked checkout state plus license, asset, and catalog sentinels; induces
-   a closure-commit failure; proves the prior checkout and env state; then
-   executes exactly one successful `pleb update --to` command. Retain all 2/2
-   report directories with their `SHA256SUMS`; a runner or checksum failure
-   leaves the corresponding lane at 0/1.
+   The controller verifies the published ISO checksum, compares its embedded
+   build information byte-for-byte with the image guest, derives all four
+   starting commits from that artifact, and requires 2/2 distinct VM machine
+   identities. In each guest it streams `acceptance-release-hop.sh`, which
+   refuses a dirty or wrong-shaped installation, proves the exact starting
+   closure, runs the target dry-run before mutation, plants 13/13 modified,
+   untracked, license, asset, and catalog sentinels, induces a closure-commit
+   failure, proves compensation, and then executes exactly one successful
+   `pleb update --to` command. The controller retrieves and verifies both
+   `SHA256SUMS`, reboots each successful guest, and verifies the target release
+   after reboot. Retain the combined report and both 2/2 guest evidence sets;
+   any runner, retrieval, checksum, reboot, or post-reboot failure leaves that
+   lane at 0/1.
 7. Re-check that every local tag resolves to the reviewed commit and that all
    worktrees remain clean. Only then push the four tags and publish the strict
    release artifact, its checksum, and a checksummed release source archive
