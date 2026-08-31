@@ -215,13 +215,17 @@ identifier and the release commit's `VERSION`. Selecting is the same discipline
 `load_release_manifest` applies at build time, one step earlier in the operator's
 hands. If a release introduces a new release-controlled key, add it to
 `RELEASE_CONTROLLED_KEYS` in the selector (and to the required lists if the
-release cannot build without it) in the same commit that adds it to the manifest;
+release cannot build without it), to Pleb's F109 key-ledger/read surface, and
+to the rendered `closure.env` contract in the same coordinated release change
+that adds it to the manifest;
 the selector adds keys the installed release never had, but only ones it knows
-are release-controlled. The selector must fetch and compare all four directly
-installed Git checkouts before rendering the new configuration, so a higher
-coordinated version cannot hide a component downgrade. Additional release-root
-tuples are preserved byte-for-value for the release graph verifier, which
-reconstructs their selected trees and gitlinks from the public exact commits.
+are release-controlled. The selector must prove that every selected component
+commit is reachable from an advertised public head or tag; a server accepting
+a fetch-by-SHA is not sufficient publication evidence. It compares the four
+directly installed Git checkouts and verifies the five additional 0.2.1 release
+roots through private advertised-ref mirrors before rendering the new
+configuration, so a higher coordinated version cannot hide a component
+downgrade or an unpublished pin.
 It is installed on PATH as part of
 the twelve-file transactional OS layer beginning with 0.1.9. The selection
 transaction also installs the exact target updater and backs up the prior
@@ -229,6 +233,15 @@ updater, selector, and session together. This is required whenever the target
 changes the updater's payload set, dependency policy, validation, or final
 provenance contract: replacing an already-running source-release updater later
 cannot change the process which is performing that hop.
+
+The target release notes put the operator's
+`pleb update --to <x.y.z> --dry-run` and `pleb update --to <x.y.z>` block beside
+the selector recovery block. The release gate exercises both shapes: an image
+delegates through the installed OS updater, while a standalone Pleb install
+uses its private Plebian-OS object cache and deploys no OS-layer tools. A new
+release key is incomplete unless the manifest, selector classification,
+Pleb read/ledger surface, split-closure rendering, and both-shape fixtures move
+together.
 
 ## Cutting `<x.y.z>`
 

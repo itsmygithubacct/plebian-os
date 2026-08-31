@@ -49,6 +49,14 @@ source refs, the Debian snapshot and installer input, the Kilix engine and Go
 pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
 one reviewed target closure; mixing old and new release pins is unsupported.
 
+Beginning with 0.2.1, release-controlled pins live in `closure.env` rather than
+beside operator choices. Image installs use root-owned mode-0644
+`/etc/pleb/closure.env`; standalone Pleb installs use user-owned mode-0600
+`$PLEB_CONFIG_HOME/closure.env`. The adjacent `session.env` retains operator
+comments, unknown keys, paths, providers, kiosk policy, and appearance choices.
+Both readers load the pair in the same order, and the selector migrates an old
+mixed file transactionally and idempotently. Do not edit `closure.env` by hand.
+
 ### The 0.2.0 shared-credential transition
 
 The 0.2.0 image created the fixed `pleb` account with a documented starter
@@ -137,6 +145,40 @@ ships it is the **target** release, not the installed one: it reads
 immutable ones that release was accepted with, whatever the machine is running
 now.
 
+### One-command release hop
+
+For both an installed Plebian-OS image and a standalone `pleb install` machine,
+the supported operator entrypoint is:
+
+```sh
+pleb update --to 0.2.1 --dry-run
+pleb update --to 0.2.1
+```
+
+Substitute the published adjacent target release. `pleb update --latest` is
+also available, but refuses when the newest tag would skip a published release
+and prints the adjacent hop it accepts. `pleb update --show` reports the active
+closure and each value's source file; `pleb update --rollback` restores one
+prior closure and stack generation.
+
+Pleb fetches the target's exact tag into a private bare cache, records the
+remote tag-object identity, extracts that target's selector, and lets it perform
+all manifest and component validation. For every component commit, the selector
+refreshes a private mirror of the remote's advertised heads and tags and proves
+the commit is reachable from at least one of them; fetch-by-SHA alone is not
+treated as publication. The tags are unsigned, so the explicit
+trust anchor is the tag object advertised by the configured HTTPS repository;
+offline use refuses unless that exact object was recorded earlier. On an image,
+Pleb then delegates to the target `plebian-os-update`. On a standalone machine,
+it deploys no OS updater and applies only the component closure through Pleb's
+checksummed preservation and rollback transaction. The standalone path needs
+no `/etc/pleb/session.env`, Plebian-OS working checkout, or installed
+`plebian-os-select-closure` / `plebian-os-update` command.
+
+The explicit selector procedure below remains the image recovery/bootstrap
+primitive. Normal operators should use the Pleb entrypoint so closure selection
+and stack application share its outer lock and durable transition record.
+
 ### Selecting a target closure
 
 Run this as the Pleb user on the installed machine — never through `sudo`; the
@@ -180,17 +222,18 @@ incomplete, malformed, still holds a placeholder, pins a branch instead of a
 commit, half-pins an optional closure such as Kilix Voice, or declares a version
 which disagrees with the release identifier or with the release commit's
 `VERSION`, is refused and the refusal names what was wrong. It then reports every
-release-controlled key it will move. It fetches each exact Plebian-OS, Pleb,
-Kilix, and Kilix-95 target commit without moving a checkout, compares it with
-the installed commit, and announces `DOWNGRADE` or `DIVERGED` per component;
+release-controlled key it will move. It proves advertised-ref reachability for
+all nine 0.2.1 component roots, fetches each exact target without moving a
+checkout, compares available installed identities, and announces `DOWNGRADE`
+or `DIVERGED` per component;
 a rising release number cannot hide a falling pin. It then proves the rendered
 configuration changes nothing else. It prepares the exact target selector,
 target updater, and new `/etc/pleb/session.env` beside their destinations before
 replacing any of them. Either the complete selected set moves or none does; a
 write that fails part way restores the previous session and both tools and says
-so. `--offline`
-performs the same proof only when every target object and the complete histories
-are already present locally.
+so. `--offline` performs the same proof only when every target object, complete
+history, and previously refreshed advertised-ref snapshot are already present
+locally.
 
 Useful before and after — `SEL` being whichever copy of the selector the block
 above put in your hands:

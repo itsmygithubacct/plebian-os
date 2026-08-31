@@ -415,6 +415,21 @@ class ReleaseVersioningTests(unittest.TestCase):
             "installed_updater_with_target_release_closure",
         )
         self.assertEqual(
+            policy["image_release_hop_entrypoint"],
+            "pleb update --to <x.y.z>",
+        )
+        self.assertEqual(
+            policy["standalone_release_hop_entrypoint"],
+            "pleb update --to <x.y.z>",
+        )
+        self.assertEqual(
+            policy["release_hop_dry_run"],
+            "pleb update --to <x.y.z> --dry-run",
+        )
+        self.assertEqual(
+            policy["closure_layout"]["operator_choices"], "session.env"
+        )
+        self.assertEqual(
             policy["release_controlled_keys_move_as"],
             "one_coordinated_closure",
         )
