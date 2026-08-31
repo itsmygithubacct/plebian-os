@@ -10,6 +10,7 @@ __all__ = [
     "admission",
     "browsers",
     "catalog",
+    "execution",
     "f106_client",
     "gates",
     "licenses",

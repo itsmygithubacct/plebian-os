@@ -157,6 +157,61 @@ MUTATIONS: tuple[Mutation, ...] = (
         claim="the ability row names the blocking gate and its owner",
     ),
     Mutation(
+        label="rollback-takes-shared-artifacts",
+        path=SRC / "execution.py",
+        old=(
+            "        return tuple(\n"
+            "            item\n"
+            "            for item in self.journal.items\n"
+            "            if item.installed_by_this_run and not item.shared\n"
+            "        )"
+        ),
+        new=(
+            "        return tuple(\n"
+            "            item\n"
+            "            for item in self.journal.items\n"
+            "            if item.installed_by_this_run\n"
+            "        )"
+        ),
+        claim="a rollback never removes a shared artifact something else depends on",
+    ),
+    Mutation(
+        label="one-failure-aborts-the-run",
+        path=SRC / "execution.py",
+        old="            self._run_one(item)\n\n        if self._cancel_requested:",
+        new=(
+            "            self._run_one(item)\n"
+            "            if self.journal.get(item.artifact_id).state == FAILED:\n"
+            "                break\n\n        if self._cancel_requested:"
+        ),
+        claim="one item failing does not abort the rest of the run",
+    ),
+    Mutation(
+        label="journal-persisted-only-at-the-end",
+        path=SRC / "execution.py",
+        old=(
+            "    def _persist(self) -> None:\n"
+            "        if self.journal_path is not None:\n"
+            "            save_journal(self.journal, self.journal_path)"
+        ),
+        new="    def _persist(self) -> None:\n        return",
+        claim="progress is persisted after every transition, so it survives a closed tab",
+    ),
+    Mutation(
+        label="unknown-bytes-report-within-tolerance",
+        path=SRC / "execution.py",
+        old="    if predicted is None or actual is None:\n        return None",
+        new="    if predicted is None or actual is None:\n        return True",
+        claim="an unmeasured byte count is unknown, never within tolerance",
+    ),
+    Mutation(
+        label="present-artifact-redownloaded",
+        path=SRC / "execution.py",
+        old="            if provider.already_present(item.artifact_id):",
+        new="            if False:",
+        claim="an artifact already present is not redownloaded",
+    ),
+    Mutation(
         label="plan-path-is-consent",
         path=SRC / "plan.py",
         old='        if not confirmed:\n            return "the operator has not confirmed this plan"',

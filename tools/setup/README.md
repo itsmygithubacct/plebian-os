@@ -55,9 +55,11 @@ what this packet is.
 | `catalog.py` | the generic `plebian.setup.optional-component/v1` offer and its two-act consent boundary |
 | `licenses.py` | decision-scoped licence presentation; there is no receipt constructor |
 | `plan.py` | hardware report, fit view and plan review; unknown is never rendered as zero |
+| `execution.py` | Phase 8 — supervised provider-owned execution, a durable journal, cancel/resume, and a rollback that cannot take a shared artifact |
 | `sudoers.py` | the one-account passwordless-`sudo` drop-in |
 | `syscenter.py` | System Center entries **generated from catalog data**, never committed as code |
 | `TEST-INVENTORY.tsv` | the independent denominator for discovery — the F107B-01 fix |
+| `control-check.py` | proves the controls above can actually fail |
 | `browsers.py` | the default-browser question, Debian main only |
 | `wizard.py` | the eight-checkpoint driver, headless and deterministic |
 
@@ -102,21 +104,53 @@ runner refuses to run the suite at all and exits **2**.
 
 Recorded results:
 
-* **194/194** tests passed, **0/194** failed, **0/194** errored, **0/194**
-  skipped — against the **194** the committed inventory expects, not against
+* **235/235** tests passed, **0/235** failed, **0/235** errored, **0/235**
+  skipped — against the **235** the committed inventory expects, not against
   itself.
-* **18/18** deliberate source mutations caught, **0/18** escaped; the restored
-  tree is green again at 194/194.
+* **23/23** deliberate source mutations caught, **0/23** escaped; the restored
+  tree is green again at 235/235.
 * **11/11** control breaches caught, **0/11** escaped (`control-check.py`).
-* The same **194/194** reproduces under **2/2** `uv` builds — the one on PATH
+* The same **235/235** reproduces under **2/2** `uv` builds — the one on PATH
   (0.12.3) and the release-pinned 0.12.5, digest
   `b65f23a420c4acc96427efb30e5ed9bc0f7e25d2d712000f6ede77c1a0de5f46` — and
   under **2/2** interpreters, CPython 3.13.5 and the 3.12.8 this packet's own
   lock resolves.
-* Without the candidate: **132/194** passed, **0/194** failed, **62/194**
-  skipped, exit **3**. The control checks still run and still pass at
-  **25/25** guarded files and **12/12** modules, so a reviewer who does not
+* Without the candidate the run is partial by design and exits **3**. The
+  control checks still run and still pass at **26/26** guarded files and
+  **13/13** modules, so a reviewer who does not
   have Track D's bytes still gets the full suite-integrity guarantee.
+
+## Phase 8 — what execution does and does not do
+
+The scoping plan's Phase 8 acceptance list is exercised in full against fake
+providers: cancel, resume, corrupt-mirror, low-disk, offline and partial
+failure; shared artifacts neither redownloaded nor destructively rolled back;
+byte accounting within a recorded tolerance; and progress surviving a closed
+tab.
+
+Three properties are structural rather than remembered:
+
+* **A failed 20 GB download leaves a bootable, setup-complete OS.** The
+  controller holds **no** reference to setup or core state — there is no field
+  to reach through and no function that could roll core back. Tests assert the
+  absence, not the intention.
+* **A per-item failure is an outcome, not an abort.** One item failing records
+  a named cause and the run continues. Optional model work is optional item by
+  item, not only as a whole.
+* **A rollback removes only what this run installed and owns.** A shared
+  artifact is excluded even when this run installed it, because something else
+  depends on it.
+
+The journal is written atomically after **every** transition, not at the end: a
+controller that persists only on success loses exactly the runs you most needed
+a record of. A test kills a provider mid-install and requires the on-disk
+journal to already know.
+
+Invoking a real provider stays gated on F100-A3 and F106-P1. The mechanics are
+gate-free, which is why they could be built now; tests drive them through an
+explicitly **hypothetical** ledger — the shape F107-B will have once the gates
+close — while a separate test asserts the **real** ledger still refuses and
+that a refused run touches **0** providers.
 
 ## Two campaigns, because there are two things to prove
 
