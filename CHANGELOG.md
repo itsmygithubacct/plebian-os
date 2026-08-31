@@ -4,11 +4,11 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.2.1] — in development
+## [0.2.1] — 2026-08-31
 
-0.2.1 is not integrated, qualified, tagged, or published. This section records
-source work present on the development line; it does not create a release
-closure and must not be used to revise 0.2.0 artifacts.
+The 0.2.1 candidate working set is integrated but not owner-frozen, qualified,
+tagged, or published as a release. This section records source work on the
+candidate line and must not be used to revise 0.2.0 artifacts.
 
 ### Added
 
