@@ -120,7 +120,7 @@ refuses a missing/extra owner, duplicate component or edge, unknown endpoint,
 unresolved final field, API/ABI mismatch, artifact collision, staged cycle, or
 recipe/edge mismatch. The report binds every fragment digest, the exact
 component set, provider-first build order and assembled registration digest.
-It accepts no fragment and authorizes no consumer conversion.
+Private evidence: it accepts no fragment and authorizes no consumer conversion.
 
 ## Exact consumer-landing evidence
 
