@@ -64,6 +64,10 @@ class VoiceReleaseContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stderr, "")
 
+    def test_0_2_1_release_manifest_is_explicitly_model_free(self):
+        values = _manifest(ROOT / "releases" / "0.2.1.env")
+        self.assertEqual(values["PLEBIAN_OS_INSTALL_VOICE_MODEL"], "0")
+
     def test_0_2_1_release_refuses_legacy_pins_without_a_carrier(self):
         settings = _full_voice_closure()
         settings.update(
@@ -87,6 +91,21 @@ class VoiceReleaseContractTests(unittest.TestCase):
         )
         result = self.run_voice_validator(**settings)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_future_release_voice_closure_fails_closed_without_a_carrier(self):
+        settings = _full_voice_closure()
+        settings.update(
+            PLEBIAN_OS_RELEASE_MODE="1",
+            PLEBIAN_OS_VERSION="0.2.2",
+        )
+        result = self.run_voice_validator(**settings)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "Plebian-OS 0.2.2 release mode refuses "
+            "PLEBIAN_OS_INSTALL_VOICE_MODEL=1 until an accepted F100 "
+            "compliance-carrier interface and receipt are present\n",
+        )
 
     def test_historical_release_voice_closure_is_unchanged(self):
         settings = _full_voice_closure()

@@ -941,6 +941,21 @@ class RemasterContractTests(unittest.TestCase):
                     self.assertFalse((root / "etc" / "apt" /
                                       "apt.conf.new").exists())
 
+    def test_snapshot_generator_stops_apt_setup_on_bad_arity(self):
+        generator = ROOT / "provision" / "plebian-os-apt-snapshot-generator"
+        for label, arguments in (
+            ("missing-output", ()),
+            ("extra-argument", ("output", "carrier", "unexpected")),
+        ):
+            with self.subTest(label=label):
+                result = subprocess.run(
+                    ["sh", str(generator), *arguments],
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(result.returncode, 10, result.stderr)
+                self.assertIn("usage:", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

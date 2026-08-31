@@ -6,12 +6,14 @@
 # the immutable installer media.
 set -eu
 
-output="${1:?missing apt-setup output path}"
-snapshot_file="${2:-/cdrom/plebian-os/apt-snapshot}"
-[ "$#" -le 2 ] || {
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || {
     echo "usage: $0 OUTPUT [SNAPSHOT_FILE]" >&2
-    exit 2
+    # apt-setup discards arbitrary generator failures. Its special rc 10
+    # stops the component, so a bad invocation must fail closed too.
+    exit 10
 }
+output="$1"
+snapshot_file="${2:-/cdrom/plebian-os/apt-snapshot}"
 [ -f "$snapshot_file" ] || {
     echo "missing installer apt snapshot carrier: $snapshot_file" >&2
     # apt-setup discards arbitrary generator failures and continues. Its

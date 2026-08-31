@@ -382,11 +382,24 @@ class ReleaseVersioningTests(unittest.TestCase):
 
         changelog = _read("CHANGELOG.md")
         heading = re.search(
-            rf"(?m)^## \[{re.escape(self.version)}\](?: — ([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}))?$",
+            rf"(?m)^## \[{re.escape(self.version)}\] — "
+            rf"(?:([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}})|(in development))$",
             changelog,
         )
         self.assertIsNotNone(heading)
-        self.assertIsNotNone(heading.group(1))
+        tagged = subprocess.run(
+            ["git", "-C", str(ROOT), "tag", "--points-at", "HEAD"],
+            text=True,
+            capture_output=True,
+        )
+        exact_release_tag = (
+            tagged.returncode == 0
+            and f"v{self.version}" in tagged.stdout.splitlines()
+        )
+        if exact_release_tag:
+            self.assertIsNotNone(heading.group(1))
+        else:
+            self.assertEqual(heading.group(2), "in development")
         section_end = changelog.find("\n## ", heading.end())
         current_section = changelog[
             heading.start():section_end if section_end != -1 else None

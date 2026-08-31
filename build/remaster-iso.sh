@@ -203,6 +203,18 @@ is_hex_len() {
     [[ "$value" =~ ^[0-9a-f]+$ ]] && [ "${#value}" -eq "$length" ]
 }
 
+release_requires_voice_carrier() {
+    local version="${PLEBIAN_OS_VERSION:-}" major minor patch
+    # Unknown release identities fail closed. Historical releases through
+    # 0.2.0 predate the carrier contract; every release from 0.2.1 onward must
+    # retain the refusal until this guard is replaced by accepted validation.
+    [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || return 0
+    major=$((10#${BASH_REMATCH[1]}))
+    minor=$((10#${BASH_REMATCH[2]}))
+    patch=$((10#${BASH_REMATCH[3]}))
+    ((major > 0 || minor > 2 || (minor == 2 && patch >= 1)))
+}
+
 validate_voice_release_closure() {
     case "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}" in
         0) return 0 ;;
@@ -219,8 +231,8 @@ validate_voice_release_closure() {
     # Keep the model-free leg available and refuse the advertised model path
     # until this guard can be replaced by validation of the accepted carrier.
     if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
-            && [ "${PLEBIAN_OS_VERSION:-}" = 0.2.1 ]; then
-        echo "Plebian-OS 0.2.1 release mode refuses PLEBIAN_OS_INSTALL_VOICE_MODEL=1 until an accepted F100 compliance-carrier interface and receipt are present" >&2
+            && release_requires_voice_carrier; then
+        echo "Plebian-OS ${PLEBIAN_OS_VERSION:-unknown} release mode refuses PLEBIAN_OS_INSTALL_VOICE_MODEL=1 until an accepted F100 compliance-carrier interface and receipt are present" >&2
         exit 1
     fi
 
@@ -484,7 +496,7 @@ resolve_target_layout() {
         for key in netcfg/get_hostname passwd/user-fullname passwd/username \
             passwd/user-password passwd/user-password-again \
             passwd/user-password-crypted user-setup/allow-password-weak; do
-            ! grep -Eq "^[[:space:]]*d-i[[:space:]]+$key[[:space:]]" "$PRESEED" || {
+            ! grep -Eq "^[[:space:]]*d-i[[:space:]]+${key}[[:space:]]" "$PRESEED" || {
                 echo "normal preseed must leave $key unanswered" >&2
                 exit 1
             }
