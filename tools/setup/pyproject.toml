@@ -1,5 +1,5 @@
 [project]
-name = "plebian-os-setup-f107b"
+name = "f107b-setup"
 version = "0.0.0"
 description = "F107-B first-login setup wizard and model-aware plan — pre-gate, fixture-backed construction"
 requires-python = ">=3.11"

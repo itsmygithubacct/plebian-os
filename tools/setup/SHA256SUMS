@@ -2,7 +2,7 @@
 4f64f88a304e3993157ebedb78a6cc16dea22ba1202d6cae71e92b9b373217ec  ./fixtures/catalog/generic-vendor-client.json
 472f568478bff9056ec56b5c5e8a7ca3d280c651d527321e1eb80892801164be  ./.gitignore
 e41371dc1012658b78a598389177e52f113e8f8b0f8dc7287b8cf6501147b57e  ./mutation-check.py
-23eafdd7f140ecd35e2313b2bf8bd966c393e405a72bf176381b489f64630a58  ./pyproject.toml
+804d8350ebd5463119f3ffe0cdc6dda75d96a1be98c082765a6ba5624d75760a  ./pyproject.toml
 92ff09e2460d61a8642b5f65bd1359de5ba475ddab28652b7ebfd63dabc1c575  ./README.md
 66caefbafab42bf9edfd396c384761f80052bb5e8e741e393fcd763ef5e6c91d  ./run-checks.py
 58152e515444c17f4a97b69f5f4fe170e33ea7fd92053a410855f576b8fe42d7  ./schemas/plebian.setup.optional-component-v1.schema.json
@@ -34,4 +34,4 @@ e5220fc8d8bb7874397ca915aba75450f6989c129a3d80f79bb9d047ad34d45e  ./tests/test_r
 bc2462d0d4ba30cdd2f1755be204d835d3c43975db2fa0abfbfee178ee3fcbdd  ./tests/test_syscenter.py
 ca60ae487a735b2dea6dc9a3c19f32076daf96f203b941f770a2c7f4a2e312af  ./tests/test_wizard.py
 9759775776895ebe9cef82478ea136072adda205ef0abd0b207d7d99baea2cf7  ./TRANSCRIPT.txt
-415ec7093174f62a8db146cfec4b4e23c361738daa260b33ebff8d70132c766f  ./uv.lock
+916112c6033bd1cf5e0feb114ff903a11080a32fbb08d0cb5e9e14f72a3bebcb  ./uv.lock

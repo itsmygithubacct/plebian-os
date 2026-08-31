@@ -103,7 +103,7 @@ wheels = [
 ]
 
 [[package]]
-name = "plebian-os-setup-f107b"
+name = "f107b-setup"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [
