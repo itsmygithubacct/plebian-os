@@ -65,15 +65,16 @@ if [ -z "$virt" ] || [ "$virt" = none ]; then
     die "this host is not detected as a VM; use a disposable VM"
 fi
 
-if [ -z "$pleb_bin" ]; then
-    pleb_bin="$(command -v pleb 2>/dev/null || true)"
-fi
+installed_pleb="$(command -v pleb 2>/dev/null || true)"
+if [ -z "$pleb_bin" ]; then pleb_bin="$installed_pleb"; fi
 if [ -z "$pleb_bin" ] || [ ! -x "$pleb_bin" ]; then
     die "no executable pleb command found"
 fi
 pleb_bin="$(readlink -f -- "$pleb_bin")"
+installed_pleb="$(readlink -f -- "$installed_pleb" 2>/dev/null || true)"
+pleb_code_root="$(cd "$(dirname -- "$pleb_bin")/.." && pwd -P)"
 if [ -z "$pleb_dir" ]; then
-    pleb_dir="$(cd "$(dirname -- "$pleb_bin")/.." && pwd -P)"
+    pleb_dir="$pleb_code_root"
 fi
 source_home="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}"
 if [ -z "$kilix_dir" ]; then
@@ -189,6 +190,10 @@ git_snapshot() {
 }
 
 must "guest-is-disposable-vm" "$virt" test -n "$virt"
+must "installed-pleb-entrypoint-is-tested" "$installed_pleb" \
+    test -n "$installed_pleb" -a "$pleb_bin" = "$installed_pleb"
+must "entrypoint-matches-participating-pleb-checkout" "$pleb_dir" \
+    test "$pleb_code_root" = "$pleb_dir"
 must "pleb-checkout-starts-clean" "$pleb_dir" test -z \
     "$(git -C "$pleb_dir" status --porcelain=v1 --untracked-files=all)"
 must "kilix-checkout-starts-clean" "$kilix_dir" test -z \

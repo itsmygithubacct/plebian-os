@@ -26,6 +26,8 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
             'test ! -e /etc/pleb/session.env',
             'test ! -e "$source_home/plebian-os"',
             'test ! -e /usr/local/bin/plebian-os-update',
+            '"installed-pleb-entrypoint-is-tested"',
+            '"entrypoint-matches-participating-pleb-checkout"',
             '"successful_hop_command_denominator": 1',
         ):
             self.assertIn(token, source)
