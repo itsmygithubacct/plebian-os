@@ -5,6 +5,7 @@ import re
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +13,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _read(*parts):
     return (ROOT.joinpath(*parts)).read_text()
+
+
+def _exact_release_tag_points_at_head(version):
+    try:
+        tagged = subprocess.run(
+            ["git", "-C", str(ROOT), "tag", "--points-at", "HEAD"],
+            text=True,
+            capture_output=True,
+        )
+    except OSError:
+        return False
+    return (
+        tagged.returncode == 0
+        and f"v{version}" in tagged.stdout.splitlines()
+    )
 
 
 class ReleaseVersioningTests(unittest.TestCase):
@@ -387,15 +403,7 @@ class ReleaseVersioningTests(unittest.TestCase):
             changelog,
         )
         self.assertIsNotNone(heading)
-        tagged = subprocess.run(
-            ["git", "-C", str(ROOT), "tag", "--points-at", "HEAD"],
-            text=True,
-            capture_output=True,
-        )
-        exact_release_tag = (
-            tagged.returncode == 0
-            and f"v{self.version}" in tagged.stdout.splitlines()
-        )
+        exact_release_tag = _exact_release_tag_points_at_head(self.version)
         if exact_release_tag:
             self.assertIsNotNone(heading.group(1))
         else:
@@ -405,6 +413,10 @@ class ReleaseVersioningTests(unittest.TestCase):
             heading.start():section_end if section_end != -1 else None
         ]
         self.assertNotRegex(current_section, r"(?i)\bunreleased\b")
+
+    def test_release_tag_detection_fails_closed_without_git(self):
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError):
+            self.assertFalse(_exact_release_tag_points_at_head(self.version))
 
     def test_upgrade_policy_starts_with_0_1_7_and_requires_preservation(self):
         policy = json.loads(
