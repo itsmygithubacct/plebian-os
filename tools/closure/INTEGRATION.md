@@ -117,11 +117,10 @@ OD-28c deferred F111 and its F120 consumer requirement to 0.2.2. F111 must not
 be supplied or expected in a 0.2.1 P9 run. These names are release coordination
 identities, not inferred product truth. The output is order-independent and
 refuses a missing/extra owner, duplicate component or edge, unknown endpoint,
-unresolved final field,
-API/ABI mismatch, artifact collision, staged cycle, or recipe/edge mismatch.
-The report binds every fragment digest, the exact component set, provider-first
-build order and assembled registration digest. It is private evidence and does
-not accept a fragment or authorize a consumer conversion.
+unresolved final field, API/ABI mismatch, artifact collision, staged cycle, or
+recipe/edge mismatch. The report binds every fragment digest, the exact
+component set, provider-first build order and assembled registration digest.
+It accepts no fragment and authorizes no consumer conversion.
 
 ## Exact consumer-landing evidence
 
