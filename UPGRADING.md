@@ -210,3 +210,36 @@ recovery entrypoint, then `rm -f "$SEL"`.
 Do not assemble pins from several releases or run a bare privileged provisioner
 between closure selection and the updater. Back up irreplaceable personal data
 even though preservation and rollback are release requirements.
+
+### Precondition: every source checkout must be clean
+
+`plebian-os-update` refuses to start unless each source checkout it manages has
+no local changes, and **untracked files count**:
+
+```
+[plebian-os] kilix checkout at <dir> has local changes; refusing a whole-stack
+update whose rollback could overwrite them
+```
+
+One stray untracked file — an interrupted build, a debug file, a copied log — is
+enough, with no tracked modification anywhere. The refusal is deliberate: the
+update's rollback restores checkout positions, and it will not risk writing over
+something it did not put there.
+
+Check before selecting a closure, not after:
+
+```sh
+for d in "$HOME"/.local/gpu_terminal/sources/*/; do
+    [ -d "$d/.git" ] || continue
+    printf '%s %s\n' "$(git -C "$d" status --porcelain \
+        --untracked-files=normal --ignore-submodules=none | wc -l)" "$d"
+done
+```
+
+**Move such files out of the checkout; do not delete them.** They are yours, the
+updater is refusing precisely so they survive, and deleting them to get the
+upgrade moving throws away the thing being protected.
+
+Note that this is the OS-layer whole-stack updater. It is a different mechanism
+from `pleb update`, whose own handling of untracked files and development
+worktrees is described in the release notes and does not apply here.
