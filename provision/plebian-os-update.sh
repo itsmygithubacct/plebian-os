@@ -3022,7 +3022,23 @@ fi
 # Pleb does its system writes via sudo; on a non-passwordless box a clickable
 # "update" action would silently prompt or fail. Warn early rather than hang.
 if [ "$(id -u)" != 0 ] && ! sudo -n true 2>/dev/null; then
-    warn "passwordless sudo unavailable — 'pleb install'/OS-layer redeploy may prompt for a password or fail in a non-interactive (Start-menu) context"
+    # A warning is enough only if something can answer the prompt. With no
+    # terminal there is nothing to answer it: sudo prompts into the void, the
+    # step fails, and the failure lands MID-TRANSACTION -- which is how a real
+    # bare-metal upgrade ended pinned-new/installed-old. Refusing here leaves
+    # the machine untouched; proceeding risks splitting it. The update also
+    # elevates repeatedly over several minutes, so even an answered prompt can
+    # be followed by an expired timestamp later in the run.
+    if [ ! -t 0 ] && [ "${PLEBIAN_OS_ALLOW_UNATTENDED_SUDO:-0}" != 1 ]; then
+        echo "plebian-os-update: sudo needs a password and there is no terminal to ask on." >&2
+        echo "  This update elevates repeatedly over several minutes; starting it now would" >&2
+        echo "  fail part-way and leave the closure selected but not installed." >&2
+        echo "  Run it from a terminal, or grant passwordless sudo, or set" >&2
+        echo "  PLEBIAN_OS_ALLOW_UNATTENDED_SUDO=1 to accept that risk deliberately." >&2
+        exit 1
+    fi
+    warn "passwordless sudo unavailable — this update elevates repeatedly; if the sudo"
+    warn "timestamp expires part-way it will fail mid-transaction. Keep this terminal focused."
 fi
 
 # Refuse before taking the privileged snapshot rather than discovering a missing
