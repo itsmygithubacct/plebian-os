@@ -202,6 +202,15 @@ DEP_GROUPS=(
     # payload copy is indistinguishable from a hung one, and the usual reaction
     # to that is to kill it and start again.
     "cli utilities|tmux ncdu rsync ufw jq glances ripgrep progress"
+    # LicheeRV-Nano / SG2002 SDK host build dependencies. Taken from the
+    # SDK's own host/debian and host/ubuntu Dockerfiles, minus the
+    # developer-convenience packages those images carry (neovim,
+    # asciinema, cscope, bzr, mercurial, cvs, subversion), and with the
+    # Debian 13 substitutions the SDK predates: python3-setuptools for
+    # python3-distutils, lz4 for liblz4-tool. tcl, openssh-client and
+    # libncurses-dev are named directly rather than via their virtual
+    # names so the install does not depend on Provides resolution.
+    "licheerv-nano SDK host build|android-libext4-utils android-sdk-libsparse-utils autoconf autoconf-archive automake bc bison ccache chrpath ckermit clang cpio debianutils device-tree-compiler diffstat dosfstools erofs-utils fakechroot fakeroot fatcat file flex gcc genext2fs gettext iputils-ping libacl1 libconfuse-dev libncurses-dev libtool locales lz4 mtools ninja-build openssh-client parallel parted picocom proot python3-flake8 python3-git python3-jinja2 python3-nose2 python3-pexpect python3-pip python3-setuptools python3-subunit scons slib socat squashfs-tools tcl texinfo tio tree u-boot-tools wget"
 )
 
 # Additive qualification-image packages. The distinct separator keeps these
