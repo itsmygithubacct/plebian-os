@@ -61,11 +61,14 @@ class ReleaseVersioningTests(unittest.TestCase):
         # on "0.1.9 / next is 0.2.0" through the whole of 0.2.0 and 0.2.1
         # because correcting it broke this test. Derive them from VERSION so the
         # check stays strong and the document stays true.
-        self.assertIn(
-            f"last published coordinated release is **{self.version}**",
-            releasing)
+        # VERSION names the release IN DEVELOPMENT, so it is the NEXT planned
+        # one, not the last published one. Binding "last published" to VERSION
+        # (an earlier attempt at this) demands that the version being developed
+        # has already shipped, which is false the moment a new line opens.
         self.assertRegex(
-            releasing, r"next planned release is\s+\*\*\d+\.\d+\.\d+\*\*")
+            releasing,
+            r"last published coordinated release is\s+\*\*\d+\.\d+\.\d+\*\*")
+        self.assertIn(f"next planned release is\n**{self.version}**", releasing)
 
     def test_0_2_0_release_notes_define_the_candidate_contract(self):
         notes = _read("releases", "0.2.0-notes.md")

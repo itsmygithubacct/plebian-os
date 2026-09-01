@@ -4,6 +4,33 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.2.2] — in development
+
+0.2.2 is not integrated, qualified, tagged, or published. This section records
+source work present on the development line; it does not create a release
+closure and must not be used to revise 0.2.1 artifacts.
+
+### Changed
+
+- A whole-stack update refuses to start when sudo needs a password and no
+  terminal can answer it, rather than failing mid-transaction and leaving the
+  closure selected but not installed.
+- A failed update records `failure-reason` beside its retained recovery state:
+  exit status, the command that tripped the trap, whether the rollback
+  completed, and the commands that restore coherence.
+- An incomplete rollback names `plebian-os-select-closure --rollback` instead of
+  printing retained paths and stopping.
+- The artifact's build-info records `PLEBIAN_OS_NETINST_MAX_BYTES`, without
+  which `build/acceptance-release-iso.sh` fails its first manifest check — true
+  of every release ISO since 0.2.0.
+- `KILIX_DESKTOP_SDK_REF` advances to `3da47dec`, pending two independent
+  review seats.
+
+### Added
+
+- `build/remaster-iso.sh` refuses media whose closure submodule gitlinks do not
+  resolve on their remotes, not merely whose refs do.
+
 ## [0.2.1] — 2026-09-01
 
 0.2.1 is not integrated, qualified, tagged, or published. This section records
