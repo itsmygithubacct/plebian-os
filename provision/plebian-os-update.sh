@@ -1607,6 +1607,24 @@ stack_transaction_cleanup() {
         [ "$rollback_ok" = 0 ] || rm -rf -- "${_STACK_TXN_DIR:-}"
     fi
     if [ "$rollback_ok" = 0 ] || [ "${_STACK_TXN_RETAIN:-0}" = 1 ]; then
+        # Retaining STATE without retaining the REASON is what made a real
+        # bare-metal failure undiagnosable: the retained directory held engine
+        # identity, heads and parked generations, and nothing saying why the
+        # update stopped. The reason lived only on the terminal, and that
+        # terminal was reused. Write what we still know into the directory the
+        # operator is told to inspect.
+        if [ -n "${_STACK_TXN_DIR:-}" ] && [ -d "$_STACK_TXN_DIR" ]; then
+            {
+                printf 'exit-status: %s\n' "$rc"
+                printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+                printf 'failing-command: %s\n' "${_STACK_FAIL_COMMAND:-<not captured>}"
+                printf 'rollback-complete: %s\n' \
+                    "$([ "$rollback_ok" = 1 ] && echo yes || echo no)"
+                printf 'recover-with: plebian-os-select-closure --rollback\n'
+                printf 'then: plebian-os-update --restart\n'
+            } > "$_STACK_TXN_DIR/failure-reason" 2>/dev/null || true
+            warn "why it stopped: $_STACK_TXN_DIR/failure-reason"
+        fi
         warn "stack update recovery data was retained for manual inspection"
         [ "$rollback_ok" = 1 ] || rc=70
     fi
@@ -2127,6 +2145,9 @@ cleanup_transaction_files() {
 
 rollback() {
     local rc=$? i rollback_ok=1
+    # BASH_COMMAND still names the command that tripped the trap; it is the only
+    # description of the failure this script ever has, so capture it first.
+    _STACK_FAIL_COMMAND="${BASH_COMMAND:-<unknown>}"
     [ "$rc" -ne 0 ] || rc=1
     trap - ERR INT TERM HUP PIPE
     trap '' PIPE
@@ -2849,6 +2870,9 @@ cleanup_transaction_files() {
 }
 rollback() {
     local rc=$? i rollback_ok=1
+    # BASH_COMMAND still names the command that tripped the trap; it is the only
+    # description of the failure this script ever has, so capture it first.
+    _STACK_FAIL_COMMAND="${BASH_COMMAND:-<unknown>}"
     [ "$rc" -ne 0 ] || rc=1
     trap - ERR INT TERM HUP PIPE
     trap '' PIPE
