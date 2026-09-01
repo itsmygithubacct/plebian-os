@@ -345,6 +345,55 @@ validate_f120_release_roots() {
 # Refuse the build instead.  PLEBIAN_OS_SKIP_REMOTE_REF_CHECK=1 exists for a
 # deliberately offline build and disables the only check that looks at what the
 # target will actually see; it says so out loud when used.
+# A pinned ref can resolve perfectly while a submodule commit recorded UNDER it
+# has been orphaned by a rewrite in that submodule's own repository. The upgrade
+# then fails at `git submodule update`, on a release whose refs all checked out
+# clean. Observed 2026-09-01: kitty-frame-presenter had dropped a gitlink that
+# three Kilix ancestors still named, and the 0.1.9 -> 0.2.0 upgrade failed and
+# rolled back. Check the gitlinks the release will actually initialize.
+validate_release_submodule_gitlinks_resolve() {
+    if [ "${PLEBIAN_OS_SKIP_REMOTE_REF_CHECK:-0}" = 1 ]; then
+        echo "WARNING: PLEBIAN_OS_SKIP_REMOTE_REF_CHECK=1 - not verifying submodule gitlinks" >&2
+        return 0
+    fi
+    local ref_key repo_key ref repo probe mods sub_path sub_url gl inner
+    local -a unresolved=()
+    for ref_key in $(compgen -v | grep -E '_REF$' | sort); do
+        repo_key="${ref_key%_REF}_REPO"
+        ref="${!ref_key:-}"
+        repo="${!repo_key:-}"
+        [ -n "$ref" ] && [ -n "$repo" ] || continue
+        probe="$(mktemp -d)"
+        if ! { git init -q "$probe" >/dev/null 2>&1             && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true timeout 120 git -C "$probe" fetch -q --depth 1 "$repo" "$ref" >/dev/null 2>&1; }; then
+            # Unfetchable refs are already reported by the ref check above; this
+            # function must not double-report them as gitlink failures.
+            rm -rf "$probe"
+            continue
+        fi
+        mods="$probe/.gitmodules.probe"
+        git -C "$probe" show 'FETCH_HEAD:.gitmodules' >"$mods" 2>/dev/null || { rm -rf "$probe"; continue; }
+        while read -r _mode _type gl sub_path; do
+            [ "$_type" = commit ] || continue
+            sub_url="$(git config -f "$mods" --get "submodule.$sub_path.url" 2>/dev/null || true)"
+            [ -n "$sub_url" ] || continue
+            case "$sub_url" in https://*) ;; *) continue ;; esac
+            inner="$(mktemp -d)"
+            if ! { git init -q "$inner" >/dev/null 2>&1 \
+                && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true timeout 60 git -C "$inner" fetch -q --depth 1 "$sub_url" "$gl" >/dev/null 2>&1; }; then
+                unresolved+=("$ref_key -> $sub_path gitlink ${gl:0:12} is not fetchable from $sub_url")
+            fi
+            rm -rf "$inner"
+        done < <(git -C "$probe" ls-tree -r FETCH_HEAD)
+        rm -rf "$probe"
+    done
+    [ "${#unresolved[@]}" -eq 0 ] || {
+        echo "closure submodule gitlinks do not resolve on their remotes:" >&2
+        printf '  %s\n' "${unresolved[@]}" >&2
+        exit 1
+    }
+    echo "    submodule gitlinks: every pinned closure gitlink is fetchable"
+}
+
 validate_release_refs_resolve_on_their_remotes() {
     if [ "${PLEBIAN_OS_SKIP_REMOTE_REF_CHECK:-0}" = 1 ]; then
         echo "WARNING: PLEBIAN_OS_SKIP_REMOTE_REF_CHECK=1 - not verifying that closure refs resolve on their remotes" >&2
@@ -452,6 +501,7 @@ release_preflight() {
 }
 release_preflight
 validate_release_refs_resolve_on_their_remotes
+validate_release_submodule_gitlinks_resolve
 
 SRC_ISO="${1:-}"
 default_iso_name=plebian-os-netinst-amd64.iso
