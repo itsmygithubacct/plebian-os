@@ -427,6 +427,33 @@ log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Keep a copy of this script's own output where it cannot be lost.
+#
+# Measured on two independently installed machines: a failed first boot leaves
+# 1517 journal lines for plebian-os-firstboot.service containing *zero* of this
+# script's messages, while its children's output (git, pleb, the Kilix build)
+# comes through normally. The line naming the cause is among the missing ones,
+# so an operator is left with `status=1/FAILURE` and nothing to act on. The one
+# real blocker in the 0.2.1 candidate -- `kilix reports '0.2.0', expected
+# exactly '0.2.1'` -- was recoverable only by re-running this script by hand
+# with the unit's EnvironmentFile loaded and stdout redirected to a file.
+#
+# Rather than depend on why the journal loses it, write our own copy. Appended,
+# not truncated, because the retry runner makes three attempts and the first
+# failure is usually the informative one.
+PROVISION_LOG="${PLEBIAN_OS_PROVISION_LOG:-/var/log/plebian-os-provision.log}"
+if [ "${PLEBIAN_OS_PROVISION_LOG_ACTIVE:-0}" != 1 ] \
+    && mkdir -p -- "$(dirname "$PROVISION_LOG")" 2>/dev/null \
+    && touch -- "$PROVISION_LOG" 2>/dev/null; then
+    chmod 0600 -- "$PROVISION_LOG" 2>/dev/null || true
+    printf '\n===== %s plebian-os-provision starting (pid %s) =====\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" >>"$PROVISION_LOG" 2>/dev/null || true
+    # Marked in the environment so a nested invocation does not tee twice.
+    export PLEBIAN_OS_PROVISION_LOG_ACTIVE=1
+    exec > >(tee -a -- "$PROVISION_LOG") 2>&1
+    log "provisioning output is also being written to $PROVISION_LOG"
+fi
+
 # Modern uv binaries append their Rust target triple to `uv --version` (for
 # example, `uv 0.12.3 (x86_64-unknown-linux-gnu)`). Keep release provenance
 # bound to the exact semantic pin while accepting only that structured suffix.
