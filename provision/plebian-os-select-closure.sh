@@ -576,7 +576,16 @@ build_selected_closure() {
 # ── resolving the immutable closure source ──────────────────────────────────
 resolve_closure_source() {
     local remote expected
-    [ -d "$SOURCE_DIR/.git" ] \
+    # A bare repository is a source too, and is in fact what Pleb hands us:
+    # `_pleb_release_cache_prepare` builds the hop cache with `git init --bare`
+    # and then *validates* that it is bare. Requiring a `.git` directory here
+    # therefore rejected every real caller, and `pleb update --to`/`--latest`
+    # could not complete on any machine -- it died at
+    # "no Plebian-OS source checkout" after fetching the target tag, leaving the
+    # installed closure untouched. Nothing below needs a working tree: this
+    # function reads the object store only, as the comment further down says.
+    { [ -d "$SOURCE_DIR/.git" ] \
+        || [ "$(git -C "$SOURCE_DIR" rev-parse --is-bare-repository 2>/dev/null)" = true ]; } \
         || die "no Plebian-OS source checkout at $SOURCE_DIR — pass --source DIR"
     expected="${BEFORE[PLEBIAN_OS_REPO]:-}"
     remote="$(git -C "$SOURCE_DIR" config --get remote.origin.url 2>/dev/null || true)"

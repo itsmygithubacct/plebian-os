@@ -268,6 +268,58 @@ class ClosureSelectionTests(unittest.TestCase):
                       if p.name.startswith("closure-rollback."))
 
     # ── a complete closure selects ──────────────────────────────────────────
+    def test_a_bare_repository_is_an_acceptable_source(self):
+        """Pleb hands the selector a bare repo, so the selector must take one.
+
+        `_pleb_release_cache_prepare` builds the release-hop cache with
+        `git init --bare` and then validates that it *is* bare, and every hop
+        passes that cache as `--source`. The guard here required a `.git`
+        directory, which a bare repository never has, so `pleb update --to` and
+        `--latest` died at "no Plebian-OS source checkout" on every machine --
+        after fetching the target tag, before moving anything. Reproduced on a
+        fresh 0.2.1 install: `pleb update --to 0.2.0` failed with
+        "target closure selection failed with status 1".
+
+        Nothing in resolve_closure_source needs a working tree; it reads the
+        object store only, which is exactly what a bare repository serves.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            commit = self._source(base)
+            bare = base / "hop" / "plebian-os.git"
+            bare.parent.mkdir(parents=True)
+            subprocess.run(["git", "clone", "-q", "--bare", str(base / "src"),
+                            str(bare)], check=True)
+            # `git clone --bare` already set origin to the local fixture path;
+            # point it at the real remote the manifest names.
+            subprocess.run(["git", "-C", str(bare), "remote", "set-url", "origin",
+                            "https://github.com/itsmygithubacct/plebian-os.git"],
+                           check=True)
+            self.assertEqual(
+                subprocess.run(["git", "-C", str(bare), "rev-parse",
+                                "--is-bare-repository"], capture_output=True,
+                               text=True, check=True).stdout.strip(),
+                "true", "the fixture must actually be bare or this proves nothing")
+
+            result = self._run(base, "0.1.8", "--offline", "--source", str(bare))
+            self.assertEqual(result.returncode, 0,
+                             "a bare source was rejected:\n" + result.stderr)
+            self.assertNotIn("no Plebian-OS source checkout", result.stderr)
+            self.assertEqual(self._values(env)["PLEBIAN_OS_REF"], commit)
+
+    def test_a_directory_that_is_not_a_repository_is_still_refused(self):
+        """Widening the guard must not turn it off."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            self._source(base)
+            empty = base / "not-a-repo"
+            empty.mkdir()
+            result = self._run(base, "0.1.8", "--offline", "--source", str(empty))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("no Plebian-OS source checkout", result.stderr)
+
     def test_complete_closure_selects_every_release_controlled_key(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
