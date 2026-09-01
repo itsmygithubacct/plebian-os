@@ -63,15 +63,25 @@ never logged and is expired after verification.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The last published coordinated release is **0.1.9**. The next planned release
-is **0.2.0**; its closure is finalized only after the four final component
-commits are known.
-0.2.1 development is a separate, post-0.2.0 integration line. Its source or
-planning work must not be folded into, or used to rebuild, a 0.2.0 candidate or
-release worktree. Before 0.2.1 release preparation begins, freeze a distinct
-0.2.1 manifest from the exact accepted parent, then advance all four coordinated
-`VERSION` files together. Partial 0.2.1 prerequisites and planning documents do
-not constitute that closure.
+The last published coordinated release is **0.2.1**, tagged at
+`83837599bf4a1f4eeb3338fbc448d908c909d1c9` and accepted 2026-09-01: fresh-install
+on both BIOS and UEFI, and the adjacent upgrade from 0.2.0. See
+[`releases/0.2.1-provenance.md`](releases/0.2.1-provenance.md) for the artifact
+hash and the coordinated commits it records. The next planned release is
+**0.2.2**.
+
+Two things 0.2.1 established that this procedure did not previously state, and
+which bind every release after it:
+
+- The release closure is no longer four components. 0.2.1 coordinates **nine**
+  `*_REF` pins, including the system-monitor, desktop-SDK, IceWM, media-SDK and
+  Waydroid roots. Advancing "all four coordinated `VERSION` files" is necessary
+  and no longer sufficient.
+- `PLEBIAN_OS_REF` in the release manifest must be the tag name itself
+  (`v<x.y.z>`). The selector accepts only `v$TARGET` or the exact `$OS_COMMIT`,
+  and no commit can contain its own SHA, so **a release-candidate commit is never
+  promotable to the release tag** — finalizing always requires a new commit that
+  sets this field.
 0.1.7 is the fresh-install upgrade baseline: no pre-0.1.7 in-place path is
 supported. Every release after it must pass the adjacent published-release
 upgrade gate in [UPGRADING.md](UPGRADING.md) as well as fresh-install

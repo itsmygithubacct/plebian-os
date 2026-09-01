@@ -56,8 +56,16 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("kilix.speech.models/v1", notes)
         self.assertIn("PLEBIAN_OS_INSTALL_VOICE_MODEL=1", notes)
         releasing = _read("RELEASING.md")
-        self.assertIn("last published coordinated release is **0.1.9**", releasing)
-        self.assertIn("next planned release\nis **0.2.0**", releasing)
+        # These two facts move every release. Pinning them to a literal version
+        # inside a 0.1.9 test made RELEASING.md unupdatable: the document stayed
+        # on "0.1.9 / next is 0.2.0" through the whole of 0.2.0 and 0.2.1
+        # because correcting it broke this test. Derive them from VERSION so the
+        # check stays strong and the document stays true.
+        self.assertIn(
+            f"last published coordinated release is **{self.version}**",
+            releasing)
+        self.assertRegex(
+            releasing, r"next planned release is\s+\*\*\d+\.\d+\.\d+\*\*")
 
     def test_0_2_0_release_notes_define_the_candidate_contract(self):
         notes = _read("releases", "0.2.0-notes.md")
