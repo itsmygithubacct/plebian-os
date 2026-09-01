@@ -823,6 +823,11 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_GPL2_LICENSE_SHA256 "$gpl2_license_sha"
         manifest_kv PLEBIAN_OS_NETINST_URL "$PLEBIAN_OS_NETINST_URL"
         manifest_kv PLEBIAN_OS_NETINST_SHA256 "${PLEBIAN_OS_NETINST_SHA256:-}"
+        # acceptance-release-iso.sh requires the artifact's build-info to record
+        # EVERY key the release manifest declares. This one was declared from
+        # 0.2.0 onward and never recorded, so every release ISO since has failed
+        # that gate on a build input it does carry but does not state.
+        manifest_kv PLEBIAN_OS_NETINST_MAX_BYTES "${PLEBIAN_OS_NETINST_MAX_BYTES:-}"
         manifest_kv PLEBIAN_OS_RELEASE_MODE "${PLEBIAN_OS_RELEASE_MODE:-0}"
         manifest_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         manifest_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
