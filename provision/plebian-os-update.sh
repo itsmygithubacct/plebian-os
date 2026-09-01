@@ -1572,6 +1572,14 @@ rollback_stack_transaction() {
         log "restored the pre-update OS layer, checkout positions, engine, shared settings, and Pleb install outputs"
     else
         warn "automatic stack rollback was incomplete; recovery data retained at $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
+        # Naming the retained data is not a recovery procedure. When the stack
+        # rollback cannot finish, session.env can still advertise the target
+        # closure while the checkouts sit at the previous one -- installed-old,
+        # pinned-new -- and the operator is left with no stated next step.
+        # Say which command restores coherence.
+        warn "the selected closure was NOT rolled back; /etc/pleb/session.env may still name the target"
+        warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
+        warn "then 'plebian-os-update --restart' to put the machine back on it"
     fi
     return "$failed"
 }
