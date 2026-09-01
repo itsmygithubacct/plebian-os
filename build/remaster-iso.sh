@@ -378,9 +378,26 @@ validate_release_submodule_gitlinks_resolve() {
             [ -n "$sub_url" ] || continue
             case "$sub_url" in https://*) ;; *) continue ;; esac
             inner="$(mktemp -d)"
-            if ! { git init -q "$inner" >/dev/null 2>&1 \
+            # Fast path: fetch-by-SHA, which our own repositories allow.
+            if { git init -q "$inner" >/dev/null 2>&1 \
                 && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true timeout 60 git -C "$inner" fetch -q --depth 1 "$sub_url" "$gl" >/dev/null 2>&1; }; then
-                unresolved+=("$ref_key -> $sub_path gitlink ${gl:0:12} is not fetchable from $sub_url")
+                rm -rf "$inner"
+                continue
+            fi
+            rm -rf "$inner"
+            # A refusal above says NOTHING about whether the commit exists:
+            # GitHub rejects fetch-by-SHA unless a repository enables
+            # uploadpack.allowReachableSHA1InWant, which most third-party
+            # repositories do not. Treating that as "missing" reports healthy
+            # submodules as broken -- it failed the 0.2.1 build on icewm, whose
+            # gitlink was present all along. Fall back to a blobless mirror:
+            # credential-free, carries every commit, and answers the question
+            # actually being asked.
+            inner="$(mktemp -d)"
+            if ! { GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true timeout 300 \
+                    git clone -q --filter=blob:none --bare "$sub_url" "$inner/m.git" >/dev/null 2>&1 \
+                && git -C "$inner/m.git" cat-file -e "$gl^{commit}" >/dev/null 2>&1; }; then
+                unresolved+=("$ref_key -> $sub_path gitlink ${gl:0:12} is not present in $sub_url")
             fi
             rm -rf "$inner"
         done < <(git -C "$probe" ls-tree -r FETCH_HEAD)

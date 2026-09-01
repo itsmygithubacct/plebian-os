@@ -324,8 +324,15 @@ if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
         if [ "$uv_ok" = 1 ]; then
             [ -n "$uv_sha" ] \
                 || warn "uv installer NOT pinned — set PLEBIAN_OS_UV_INSTALLER_SHA256 to verify it"
-            if ! env UV_INSTALL_DIR="$uv_stage" UV_NO_MODIFY_PATH=1 sh "$uv_tmp"; then
-                warn "uv install failed"
+            # The installer we just verified runs its OWN curl to fetch the uv
+            # tarball, and that curl carries no timeout. On a degraded link it
+            # blocks forever, so first boot hangs silently instead of failing:
+            # observed 2026-09-01, a 10-minute stall with no output while the
+            # tunnel clamped the MSS. bounded_curl covers what WE fetch; it
+            # cannot reach inside a third-party script, so bound the script.
+            if ! timeout "${PLEBIAN_OS_UV_INSTALL_TIMEOUT:-300}" \
+                env UV_INSTALL_DIR="$uv_stage" UV_NO_MODIFY_PATH=1 sh "$uv_tmp"; then
+                warn "uv install failed or exceeded ${PLEBIAN_OS_UV_INSTALL_TIMEOUT:-300}s"
                 uv_ok=0
             fi
         fi
