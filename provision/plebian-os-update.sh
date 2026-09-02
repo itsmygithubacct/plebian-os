@@ -27,7 +27,11 @@ set -euo pipefail
 
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+# `exit` does not trigger the ERR trap, so a die() -- the convention at 152 call
+# sites here -- would otherwise reach the EXIT-trap cleanup with no record of
+# what went wrong, and the retained failure-reason would read "<not captured>".
+# The message die() is already printing IS the diagnosis; keep it.
+die()  { _STACK_FAIL_COMMAND="die: $*"; printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
 
 require_unprivileged_updater() {
     [ "${1:-$EUID}" -ne 0 ] \
