@@ -135,10 +135,17 @@ load_release_manifest() {
         esac
         export "$key=$val"
     done < "$manifest"
-    if [ "$rel" = 0.1.9 ] || [ "$rel" = 0.2.1 ]; then
+    # Requiring the file by an explicit version list means every new release
+    # silently opts out of this check until someone remembers to extend the
+    # list -- 0.2.2 was opened with no requirements file and this test skipped
+    # entirely, enforcing none of the uv, installer-checksum, byte-limit or
+    # Waydroid-closure pins. 0.1.9 was the first release to carry one, so the
+    # rule is "0.1.9 and everything after it", expressed as a comparison rather
+    # than a list that has to be maintained.
+    if [ "$(printf '%s\n0.1.9\n' "$rel" | sort -V | head -n 1)" = 0.1.9 ]; then
         [ -f "$requirements" ] || {
-        echo "release $rel is missing releases/$rel.requirements" >&2
-        exit 1
+            echo "release $rel is missing releases/$rel.requirements" >&2
+            exit 1
         }
     fi
     if [ -f "$requirements" ]; then

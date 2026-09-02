@@ -1,0 +1,29 @@
+# Plebian-OS 0.2.2 release requirements.
+#
+# These are not a partial release manifest. The final releases/0.2.2.env must
+# declare these exact values in addition to the complete coordinated closure.
+# Both the release-image loader and closure selector reject a mismatch.
+#
+# uv 0.12.5 was released by Astral on 2026-08-14. The installer checksum was
+# independently derived from both official versioned installer endpoints:
+#   https://astral.sh/uv/0.12.5/install.sh
+#   https://releases.astral.sh/github/uv/releases/download/0.12.5/uv-installer.sh
+
+# The 2026-08-25 latest-stable recheck retained Debian 13.5.0 as the newest
+# immutable archived amd64 netinst. Debian 13.6.0 is current, but has no
+# archive URL yet. The signed snapshot remains the accepted 13.6-era package
+# closure, independent of the bootstrap media version.
+PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/cdimage/archive/13.5.0/amd64/iso-cd/debian-13.5.0-amd64-netinst.iso
+PLEBIAN_OS_NETINST_SHA256=95838884f5ea6c82421dfe6baaa5a639dbbe6756c1e380f9fe7a7cb0c1949d2a
+PLEBIAN_OS_NETINST_MAX_BYTES=791674880
+PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z
+
+PLEBIAN_OS_INSTALL_UV=1
+PLEBIAN_OS_UV_VERSION=0.12.5
+PLEBIAN_OS_UV_INSTALLER_SHA256=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111
+PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
+
+# Preserve the accepted privileged first-use helper without putting Android,
+# Weston, or their large image closure in the base package set.
+PLEBIAN_OS_INSTALL_WAYDROID=1
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175
