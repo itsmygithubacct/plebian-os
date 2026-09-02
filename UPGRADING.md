@@ -211,6 +211,31 @@ Do not assemble pins from several releases or run a bare privileged provisioner
 between closure selection and the updater. Back up irreplaceable personal data
 even though preservation and rollback are release requirements.
 
+### A local release tag can be stale, and `--offline` will trust it
+
+The online path fetches the target tag with `--force`, so a tag that moved on the
+remote is refreshed before use. **`--offline` does not.** It resolves
+`refs/tags/v<x.y.z>` straight out of the local object store, so if that tag was
+fetched earlier and has since moved — or was installed from a bundle — the
+selector will validate and select the **old** closure without saying anything.
+The version string matches, the selection succeeds, and the machine lands on
+bytes nobody intended.
+
+`v0.2.1` was force-moved during its release, so any checkout that fetched it
+before the move holds a different commit under the same name.
+
+Before selecting a closure on a machine that has seen this tag before, refresh
+it explicitly:
+
+```sh
+git -C "$SRC" fetch --force origin 'refs/tags/v<x.y.z>:refs/tags/v<x.y.z>'
+git -C "$SRC" rev-parse "v<x.y.z>^{commit}"   # compare with the published commit
+```
+
+If you are using `--offline` deliberately because the machine has no network,
+verify that second command against the release's provenance record before
+trusting the selection.
+
 ### Precondition: every source checkout must be clean
 
 `plebian-os-update` refuses to start unless each source checkout it manages has
