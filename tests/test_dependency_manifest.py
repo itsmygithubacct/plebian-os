@@ -41,6 +41,12 @@ BASE_BROWSER_PACKAGES = {"chromium"}
 LAZY_BROWSER_PACKAGES = {"firefox-esr"}
 DESKTOP_SCREENSHOT_PACKAGES = {"xfce4-screenshooter"}
 
+# X keeps no clipboard store: a selection lives only as long as the client that
+# owns it, so without a manager, copying in an app and closing it loses the
+# content. autocutsel holds the selection on the session's behalf; xclip is not
+# required for that, but it is how the next clipboard report gets diagnosed.
+CLIPBOARD_PACKAGES = {"autocutsel", "xclip"}
+
 F115_EXCLUDED_BASE_PACKAGES = {
     "libvips42t64",
     "gir1.2-vips-8.0",
@@ -219,6 +225,14 @@ class DependencyManifestTests(unittest.TestCase):
                              install_deps_packages())
         self.assertLessEqual(DESKTOP_SCREENSHOT_PACKAGES,
                              preseed_packages())
+
+    def test_clipboard_manager_is_on_both_paths(self):
+        # A fresh install that took the preseed path and one that ran
+        # install-deps must both end up able to keep a selection alive; a
+        # clipboard that works only on one of the two install routes is worse
+        # than one that works on neither, because it is not reproducible.
+        self.assertLessEqual(CLIPBOARD_PACKAGES, install_deps_packages())
+        self.assertLessEqual(CLIPBOARD_PACKAGES, preseed_packages())
 
     def test_f115_excluded_engines_are_not_explicit_base_packages(self):
         self.assertTrue(

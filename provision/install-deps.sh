@@ -113,6 +113,15 @@ uv_version_matches_pin() {
 # dependency manifest.
 DEP_GROUPS=(
     "X + display manager + window manager|xserver-xorg xinit lightdm openbox x11-xserver-utils x11-utils xterm"
+    # X has no clipboard *store*: a selection is owned by a live client and
+    # transferred on demand, so it ceases to exist when that client exits.
+    # Full desktops hide this with a clipboard manager; a bare openbox
+    # session has none, which is why copying in one app and pasting after
+    # closing it yields nothing. autocutsel supplies the missing owner and
+    # can also keep PRIMARY and CLIPBOARD in step, which are otherwise
+    # entirely independent here. xclip is not required for that, but it is
+    # how anyone diagnoses the next clipboard report.
+    "clipboard ownership + inspection|autocutsel xclip"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
