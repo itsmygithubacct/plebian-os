@@ -170,6 +170,15 @@ DEP_GROUPS=(
     # screenshot tool. It must be explicit because no XFCE desktop task is
     # installed and --no-install-recommends cannot supply it incidentally.
     "desktop screenshots|xfce4-screenshooter"
+    # The audio server is PulseAudio (the "audio" group above). xdg-desktop-portal
+    # depends on libpipewire and probes for a PipeWire daemon at start; none is
+    # installed, so its ScreenCast/Screenshot interfaces are unavailable and it
+    # logs "Failed connect to PipeWire" once per session. That is the intended
+    # state, declared in /etc/xdg-desktop-portal/pleb-portals.conf, not a
+    # half-install: adding pipewire+wireplumber would put two audio servers on
+    # one machine, and the libraries cannot be dropped while the portal needs
+    # them. libpipewire-0.3-dev arrives through libfluidsynth-dev in the build
+    # toolchain, for the same reason.
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     # F100's sandbox must not depend on portal/systemd dependency accidents.
     # These exact versions are the frozen F118-S0 package identities.

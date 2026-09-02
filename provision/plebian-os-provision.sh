@@ -1017,6 +1017,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/share/pleb/openbox/rc.xml
     /etc/lightdm/lightdm.conf.d/50-plebian-os.conf
     /etc/lightdm/lightdm.conf.d/50-pleb-autologin.conf
+    /etc/xdg-desktop-portal/pleb-portals.conf
     /etc/pleb/session.env
     /etc/sudoers.d/plebian-os-nopasswd
     /var/lib/plebian-os/packages.list
@@ -1051,6 +1052,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /etc/systemd/system.conf.d
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/lightdm/lightdm.conf.d
+    /etc/xdg-desktop-portal
     /etc/pleb
     /usr/share/xsessions
     /usr/local/share/plebian-os
@@ -4450,6 +4452,30 @@ else
 # Managed by plebian-os-provision. Plebian-OS default session: Pleb.
 [Seat:*]
 user-session=pleb
+EOF
+fi
+
+# pleb-session exports XDG_CURRENT_DESKTOP=Pleb, and xdg-desktop-portal picks
+# its backends from <desktop>-portals.conf. With no such file every interface
+# fell to a "last-resort fallback" the portal logs as such, and the Settings
+# interface timed out on the way. Name the backend explicitly: gtk, for every
+# interface it implements. ScreenCast and Screenshot are deliberately unmapped
+# -- gtk does not provide them and this image runs PulseAudio, not a PipeWire
+# daemon, so nothing here could serve them; leaving them absent is the honest
+# declaration rather than a fallback that changes with the portal's version.
+PORTALS_CONF=/etc/xdg-desktop-portal/pleb-portals.conf
+log "declaring the portal backends for the Pleb desktop"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + write $PORTALS_CONF ([preferred] default=gtk)"
+else
+    mkdir -p "$(dirname "$PORTALS_CONF")"
+    cat > "$PORTALS_CONF" <<EOF
+# Managed by plebian-os-provision. Portal backends for XDG_CURRENT_DESKTOP=Pleb.
+# gtk implements FileChooser, AppChooser, Print, Notification, Inhibit, Access,
+# Account, Email, DynamicLauncher, Lockdown and Settings. ScreenCast and
+# Screenshot are intentionally not provided on this desktop.
+[preferred]
+default=gtk
 EOF
 fi
 

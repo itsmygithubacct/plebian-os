@@ -211,6 +211,7 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             "/usr/local/bin/pleb",
             "/etc/lightdm/lightdm.conf.d/50-plebian-os.conf",
             "/etc/lightdm/lightdm.conf.d/50-pleb-autologin.conf",
+            "/etc/xdg-desktop-portal/pleb-portals.conf",
             "/etc/pleb/session.env",
             "/etc/sudoers.d/plebian-os-nopasswd",
             "/var/lib/plebian-os/packages.list",
@@ -222,6 +223,7 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         self.assertIn("/usr/local/share/doc/plebian-os/installer", dirs)
         self.assertIn("/usr/lib/plebian-os/waydroid", dirs)
         self.assertIn("/etc/pleb", dirs)
+        self.assertIn("/etc/xdg-desktop-portal", dirs)
 
         account = self._run(
             "TARGET_USER=pleb\n"
