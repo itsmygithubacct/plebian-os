@@ -182,6 +182,14 @@ class ReleaseVersioningTests(unittest.TestCase):
                 "PLEBIAN_OS_RELEASE_MODE=1\n"
                 "PLEB_REF=" + "a" * 40 + "\n"
             )
+            # Every release from 0.1.9 onward must carry a requirements file;
+            # the shell loader refuses without one. A synthetic release is still
+            # a release, so the fixture supplies it -- otherwise this test would
+            # be exercising the requirements gate rather than the ambient-bypass
+            # override it is named for.
+            (repo / "releases" / "9.8.7.requirements").write_text(
+                "# synthetic fixture\n"
+            )
             harness = (
                 "set -euo pipefail\n"
                 f"HERE={repo!s}\n"
