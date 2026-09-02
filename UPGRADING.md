@@ -3,11 +3,11 @@
 This policy starts with **Plebian-OS 0.1.7**. It is also encoded for tooling in
 [`releases/upgrade-policy.json`](releases/upgrade-policy.json).
 
-An in-development 0.2.1 checkout is not a supported upgrade destination. A
+An in-development 0.2.2 checkout is not a supported upgrade destination. A
 target becomes supported only when its immutable release manifest, notes,
 artifacts, and adjacent-version acceptance evidence are published together.
-Never point the installed updater at a development branch or use 0.2.1 source
-work to modify a 0.2.0 release worktree.
+Never point the installed updater at a development branch or use 0.2.2 source
+work to modify a 0.2.1 release worktree.
 
 ## Baseline and supported paths
 
@@ -44,9 +44,11 @@ the old and new representation, the migration is tested, and rollback restores
 the previous representation. Unknown keys and newer-schema data must not be
 silently discarded.
 
-Release-controlled keys include the coordinated version/release mode, the four
-source refs, the Debian snapshot and installer input, the Kilix engine and Go
-pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
+Release-controlled keys include the coordinated version/release mode, every
+`*_REF` source pin in the release manifest (ten as of 0.2.2, since the
+system-monitor, desktop-SDK, IceWM, media-SDK and Waydroid components joined
+the closure in 0.2.1), the Debian snapshot and installer input, the Kilix
+engine and Go pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
 one reviewed target closure; mixing old and new release pins is unsupported.
 
 ### The 0.2.0 shared-credential transition
@@ -71,6 +73,28 @@ the legacy helper or its narrow sudo grant. The updater treats a malformed
 identity record, ambiguous root-run legacy account, unsafe SSH path, invalid
 effective SSH policy, or reload failure as an update failure. Its outer
 transaction restores both the prior drop-in state and the running SSH policy.
+
+### The 0.2.1 to 0.2.2 transition
+
+Nothing migrates. Four things change under an upgrader, all preserved or
+release-controlled by the rules above:
+
+- `/etc/xdg-desktop-portal/pleb-portals.conf` is a new **release-managed** file,
+  written inside the OS-layer transaction beside the LightDM session pin and
+  removed by a rollback. It is not an operator file.
+- The session now starts two `autocutsel` holders so copied text outlives the
+  app that copied it. Opting out is an **operator choice**: `PLEB_CLIPBOARD=off`
+  (or `=clipboard`) in `/etc/pleb/session.env` or the user's
+  `~/.local/gpu_terminal/pleb/config/session.env`, both of which an upgrade
+  preserves.
+- `KILIX_RUN_BROWSER_PROFILE` in Kilix's `kilix.env` names a persistent browser
+  profile for contained browsers. Operator choice, preserved; the profile
+  directory it names lives under `~/.local/gpu_terminal` and is application
+  state.
+- Throwaway browser profiles under `~/.local/gpu_terminal/kilix/session/app-profiles`
+  are now reaped as soon as their owning process is gone. An upgrader who had
+  accumulated them will see that directory shrink on the first browser launch;
+  nothing a live process owns is touched.
 
 ## Failure and rollback contract
 
