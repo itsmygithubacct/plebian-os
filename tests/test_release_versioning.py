@@ -387,6 +387,21 @@ class ReleaseVersioningTests(unittest.TestCase):
             (ROOT / "releases" / f"{self.version}-notes.md").exists()
         )
 
+    def test_notes_closure_table_mirrors_every_pin_in_the_manifest(self):
+        # The notes say their table "is generated from that manifest, which
+        # stays the single authority". Nothing enforced that beyond three keys,
+        # and the table shipped a row short of the manifest once. Every *_REF
+        # must appear with its exact value, and no row may name a pin the
+        # manifest does not have.
+        manifest = self.manifest
+        notes = _read("releases", f"{self.version}-notes.md")
+        refs = dict(re.findall(r"(?m)^([A-Z0-9_]+_REF)=(\S+)$", manifest))
+        rows = dict(re.findall(r"(?m)^\| `([A-Z0-9_]+_REF)` \| `([^`]+)` \|$", notes))
+        self.assertTrue(refs, "manifest declares no *_REF keys")
+        for key, value in refs.items():
+            self.assertEqual(rows.get(key), value, f"{key}: table has {rows.get(key)!r}")
+        self.assertEqual(set(rows) - set(refs), set(), "rows naming pins the manifest lacks")
+
     def test_current_release_notes_track_the_exact_source_closure(self):
         notes = _read("releases", f"{self.version}-notes.md")
         manifest = self.manifest
