@@ -23,8 +23,30 @@ closure and must not be used to revise 0.2.1 artifacts.
 - The artifact's build-info records `PLEBIAN_OS_NETINST_MAX_BYTES`, without
   which `build/acceptance-release-iso.sh` fails its first manifest check — true
   of every release ISO since 0.2.0.
-- `KILIX_DESKTOP_SDK_REF` advances to `3da47dec`, pending two independent
-  review seats.
+- `KILIX_DESKTOP_SDK_REF` advances to `401b8ef9`, one commit past the graded
+  `3da47dec`, which both independent seats state their reviews cover.
+- `KILIX_ICEWM_REF` advances to `ea45b9ab`, the revision the desktop SDK is
+  conformance-bound against; the 0.2.1 pin was seven commits behind it and
+  lacked the bridge module the SDK imports.
+- `KILIX_VOICE_REF` advances to `ba15d849`: one test read the operator's own
+  selected model through the shared settings file and failed on any machine
+  whose choice was not the default.
+- Copied text survives closing the app that copied it. X keeps no clipboard
+  store and the desktop shipped no clipboard manager; the session now holds
+  CLIPBOARD and PRIMARY through `autocutsel` (`PLEB_CLIPBOARD` opts out).
+- The desktop declares its portal backends in
+  `/etc/xdg-desktop-portal/pleb-portals.conf` instead of leaving every
+  interface to a last-resort fallback. ScreenCast and Screenshot are stated as
+  not provided: the audio server is PulseAudio and no PipeWire daemon runs.
+- `kilix voice doctor` says when the server's default sink is a null device and
+  which of speak and dictate that silences, instead of reporting both healthy.
+- Throwaway browser profiles are reaped as soon as their owning process is
+  gone, not a week later; ten dead ones made 1.2 GB on one 0.2.1 machine.
+- A pane may send text to another pane in the same window; broadcast, windowless
+  and cross-window sends stay refused.
+- Kilix 95 Settings surfaces `KILIX_CHROME_TAB_BAR_EDGE`, a shared setting it
+  had never exposed — a gap that shipped in 0.2.1 because CI tested against a
+  Kilix predating the setting.
 
 ### Added
 
