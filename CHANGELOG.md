@@ -34,8 +34,10 @@ closure and must not be used to revise 0.2.1 artifacts.
 - Keys in a `kilix run` pane no longer turn into Alt chords after leaving the
   pane with an Alt binding: modifiers are injected with the key that needs
   them and released with it, and the pane releases everything on focus-out.
-- `KILIX_RUN_BROWSER_PROFILE` gives contained browsers one persistent profile
-  instead of a disposable one per launch, so logins survive the pane.
+- `KILIX_RUN_BROWSER_PROFILE` gives contained browsers -- including the
+  desktop's Web Browser menu, which opens in a `kilix run` tab -- one
+  persistent profile instead of a disposable one per launch, so logins survive
+  the pane.
 - Copied text survives closing the app that copied it. X keeps no clipboard
   store and the desktop shipped no clipboard manager; the session now holds
   CLIPBOARD and PRIMARY through `autocutsel` (`PLEB_CLIPBOARD` opts out).
