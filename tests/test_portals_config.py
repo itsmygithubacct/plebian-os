@@ -8,12 +8,22 @@ CONF = "/etc/xdg-desktop-portal/pleb-portals.conf"
 
 
 class PortalsConfigTests(unittest.TestCase):
-    def test_the_file_matches_the_desktop_identity_pleb_session_exports(self):
-        session = (ROOT.parent / "pleb" / "bin" / "pleb-session")
-        if session.exists():
-            self.assertIn("XDG_CURRENT_DESKTOP=Pleb", session.read_text())
-        # xdg-desktop-portal lowercases the desktop name to find its file
+    def test_the_file_is_named_for_the_desktop_the_portal_will_look_up(self):
+        # portals.conf(5): the file is <desktop>-portals.conf with the desktop
+        # name "in lower-case", and the portal binary carries the literal
+        # "%s-portals.conf". pleb-session exports XDG_CURRENT_DESKTOP=Pleb.
         self.assertIn("PORTALS_CONF=" + CONF, PROVISION)
+        self.assertTrue(CONF.endswith("/pleb-portals.conf"))
+
+    def test_the_desktop_identity_pleb_session_exports_matches(self):
+        # pleb-session lives in the sibling pleb repository, installed by
+        # provisioning from the closure's PLEB_REF. A checkout without that
+        # sibling cannot run this comparison; say so instead of passing on
+        # nothing -- the first version of this test did exactly that.
+        session = ROOT.parent / "pleb" / "bin" / "pleb-session"
+        if not session.exists():
+            self.skipTest(f"no sibling pleb checkout at {session.parent.parent}")
+        self.assertIn("XDG_CURRENT_DESKTOP=Pleb", session.read_text())
 
     def test_gtk_is_named_explicitly_and_nothing_is_left_to_fallback(self):
         block = PROVISION[PROVISION.index("PORTALS_CONF="):PROVISION.index("# ── 5. session mode")]
