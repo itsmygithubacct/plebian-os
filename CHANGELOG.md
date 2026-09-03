@@ -31,6 +31,11 @@ closure and must not be used to revise 0.2.1 artifacts.
 - `KILIX_VOICE_REF` advances to `ba15d849`: one test read the operator's own
   selected model through the shared settings file and failed on any machine
   whose choice was not the default.
+- Keys in a `kilix run` pane no longer turn into Alt chords after leaving the
+  pane with an Alt binding: modifiers are injected with the key that needs
+  them and released with it, and the pane releases everything on focus-out.
+- `KILIX_RUN_BROWSER_PROFILE` gives contained browsers one persistent profile
+  instead of a disposable one per launch, so logins survive the pane.
 - Copied text survives closing the app that copied it. X keeps no clipboard
   store and the desktop shipped no clipboard manager; the session now holds
   CLIPBOARD and PRIMARY through `autocutsel` (`PLEB_CLIPBOARD` opts out).
