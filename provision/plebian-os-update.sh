@@ -1586,6 +1586,15 @@ rollback_stack_transaction() {
 
     if [ "$failed" = 0 ]; then
         log "restored the pre-update OS layer, checkout positions, engine, shared settings, and Pleb install outputs"
+        # The stack rolled back, but the closure selection did not: it was
+        # committed before this transaction opened. Saying "restored" and
+        # stopping would tell the operator the machine is coherent when it is
+        # pinned-new and installed-old.
+        if [ -n "${PLEBIAN_OS_RELEASE_HOP_FROM:-}" ]; then
+            warn "this run had already advanced the selected closure from ${PLEBIAN_OS_RELEASE_HOP_FROM} before it failed"
+            warn "the stack is back on ${PLEBIAN_OS_RELEASE_HOP_FROM}, but /etc/pleb/session.env still names the target"
+            warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
+        fi
     else
         warn "automatic stack rollback was incomplete; recovery data retained at $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
         # Naming the retained data is not a recovery procedure. When the stack
@@ -2058,6 +2067,13 @@ select_latest_release_if_needed() {
         relaunch_env+=(-u "$key")
     done <<<"$release_keys"
     log "release $latest selected; relaunching its updater"
+    # Tell the relaunched updater that the closure was already moved. Selection
+    # commits before any rollback boundary exists, so a later failure -- even
+    # one whose stack rollback succeeds completely -- leaves the machine pinned
+    # to the target with the previous release still installed. Without this the
+    # successful-rollback path reports full restoration and says nothing about
+    # the closure, which is the one thing it did not restore.
+    relaunch_env+=("PLEBIAN_OS_RELEASE_HOP_FROM=$PLEBIAN_OS_VERSION")
     # shellcheck disable=SC2093 -- replacing this process is the transaction boundary
     exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update "${relaunch_args[@]}"
     die "could not relaunch the $latest updater"
@@ -2238,10 +2254,18 @@ PY
 # exits nonzero; success is logged only after systemd has reloaded the new unit.
 deploy_staged_os_layer() {
     local stage="$1"
-    shift
+    local staged_count="$2"
+    shift 2
     local -a expected_hashes=("$@")
     local -a root_command
-    [ "${#expected_hashes[@]}" -eq 13 ] \
+    # One expected hash per staged file. The count comes from the caller's own
+    # staged-name list instead of a number typed here: this guard was a
+    # hand-maintained literal, and adding a file to the staged set without also
+    # editing it made every plebian-os-update die on this line before deploying
+    # anything. The root block below independently checks the same count
+    # against its own file list, and tests/test_os_layer_deploy_set.py checks
+    # that the two lists agree at source level.
+    [ "${#expected_hashes[@]}" -eq "$staged_count" ] \
         || die "OS-layer deployment requires one expected hash per staged file"
     if [ "$EUID" = 0 ]; then
         # A root-run updater stages root-owned files. Clear inherited sudo
@@ -2600,7 +2624,7 @@ self_update_os_layer() {
         stage_hashes+=("$(sha256sum "$stage/$file" | awk '{print $1}')")
     done
     log "atomically redeploying the validated OS layer (needs root)"
-    deploy_staged_os_layer "$stage" "${stage_hashes[@]}" \
+    deploy_staged_os_layer "$stage" "${#stage_names[@]}" "${stage_hashes[@]}" \
         || die "OS-layer deployment failed and was rolled back"
     _DEPLOYED_DESKTOP_WALLPAPER_SHA256="${stage_hashes[7]}"
     rm -rf "$stage"

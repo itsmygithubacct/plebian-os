@@ -3,7 +3,7 @@
 # Plebian-OS release closure on an already-installed machine.
 #
 # Release images keep exact refs in /etc/pleb/session.env.  Beginning with
-# 0.2.1, plebian-os-update resolves the newest published stable release and
+# 0.2.2, plebian-os-update resolves the newest published stable release and
 # bootstraps this selector from that target's immutable tag before refreshing
 # the stack.  This tool remains the atomic boundary that validates and selects
 # every release-controlled key together; it is also available directly for an

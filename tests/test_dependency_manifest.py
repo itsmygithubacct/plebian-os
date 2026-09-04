@@ -293,7 +293,12 @@ class DependencyManifestTests(unittest.TestCase):
         optional_names = {item.split("=", 1)[0] for item in converter | build}
         for other in (install_deps_packages(), preseed_packages(),
                       qualification_packages()):
-            self.assertTrue(optional_names.isdisjoint(other))
+            # Strip on both sides. A base set may itself carry a versioned
+            # entry, and comparing a bare name against a versioned string is
+            # disjoint from everything, which is how this assertion was
+            # vacuous in the first place.
+            self.assertTrue(optional_names.isdisjoint(
+                {item.split("=", 1)[0] for item in other}))
 
     def test_vulkan_tts_selects_the_converter_and_implies_the_runtime(self):
         installer = ROOT / "provision" / "install-deps.sh"

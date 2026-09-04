@@ -634,7 +634,7 @@ desktop_wallpaper_matches_expected_hash \
         self.assertIn('wallpaper_actual" = "$wallpaper_expected', update)
         self.assertIn('wallpaper_actual" = "$wallpaper_update_expected', update)
         self.assertGreaterEqual(update.count(destination), 3)
-        self.assertIn('[ "${#expected_hashes[@]}" -eq 13 ]', update)
+        self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
         for source, installed in (
             (
                 "assets/installer/ATTRIBUTION.md",

@@ -207,7 +207,7 @@ or passing fresh-install acceptance does not satisfy this gate.
 
 ### Every release ships its own closure selector
 
-Beginning with 0.2.1, `plebian-os-update` resolves the highest published stable
+Beginning with 0.2.2, `plebian-os-update` resolves the highest published stable
 `vX.Y.Z` tag by default, extracts that target's
 [`provision/plebian-os-select-closure.sh`](provision/plebian-os-select-closure.sh),
 uses it to atomically select the target closure, and relaunches the target's

@@ -143,7 +143,7 @@ and documented.
 
 ## Operator procedure
 
-Release images keep exact refs in `/etc/pleb/session.env`. Beginning with 0.2.1,
+Release images keep exact refs in `/etc/pleb/session.env`. Beginning with 0.2.2,
 plain `plebian-os-update` queries the published stable `vX.Y.Z` tags, selects the
 highest version through that target release's own immutable closure selector,
 and then runs the newly installed updater. The normal upgrade is therefore one
