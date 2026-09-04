@@ -96,9 +96,20 @@ class OsLayerDeploySetTests(unittest.TestCase):
 
     def _guard(self):
         """The real guard, lifted verbatim from the function up to the root
-        invocation. Lifting it means these tests measure the shipped code."""
+        invocation. Lifting it means these tests measure the shipped code.
+
+        The split marker is asserted: if the function is reformatted so the
+        marker no longer matches, this must say so rather than lift the entire
+        function -- which would run the real `sudo bash -s` from a unit test."""
         body = function_body("deploy_staged_os_layer", self.text)
-        return "guard_only() {\n" + body.split('    if [ "$EUID"')[0] + "\n}\n"
+        marker = '    if [ "$EUID"'
+        self.assertIn(marker, body,
+                      "cannot find where the guard ends; refusing to lift the "
+                      "whole function, which would invoke sudo from a test")
+        lifted = body.split(marker)[0]
+        self.assertNotIn("sudo", lifted)
+        self.assertIn("expected_hashes", lifted)
+        return "guard_only() {\n" + lifted + "\n}\n"
 
     def _run(self, count, hashes):
         script = ('set -euo pipefail\n'
@@ -108,6 +119,15 @@ class OsLayerDeploySetTests(unittest.TestCase):
                   + " ".join(["a" * 64] * hashes) + "\necho GUARD-PASSED\n")
         return subprocess.run(["bash", "-c", script], capture_output=True,
                               text=True, check=False)
+
+    def test_the_call_site_passes_the_count_before_the_hashes(self):
+        """The guard reads $2 as the count. If the call site ever passes the
+        hashes first, or omits the count, the guard compares a hash against a
+        number -- the same class of failure as the 15-against-13 literal, and
+        the argv the tests below build would not notice it."""
+        self.assertIn(
+            'deploy_staged_os_layer "$stage" "${#stage_names[@]}" '
+            '"${stage_hashes[@]}"', self.text)
 
     def test_the_guard_accepts_the_count_the_caller_actually_passes(self):
         staged = len(array("stage_names", self.text))
@@ -124,3 +144,81 @@ class OsLayerDeploySetTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReleaseHopSplitStateTests(unittest.TestCase):
+    """The closure hop commits before any rollback boundary exists, so a later
+    failure leaves the machine pinned to the target with the previous release
+    installed. Two mechanisms report that, and neither had a test: an EXIT trap
+    covering the window before the target updater takes over, and a marker
+    carried across the exec so the relaunched updater's rollback can name it.
+    """
+
+    def setUp(self):
+        self.text = UPDATE.read_text()
+
+    def _reporting_tail(self):
+        body = function_body("rollback_stack_transaction", self.text)
+        marker = '    if [ "$failed" = 0 ]; then'
+        self.assertIn(marker, body)
+        return marker + body.split(marker, 1)[1]
+
+    def _run(self, snippet, **env):
+        prelude = ('set -uo pipefail\n'
+                   'log()  { printf "LOG %s\\n" "$*"; }\n'
+                   'warn() { printf "WARN %s\\n" "$*"; }\n')
+        return subprocess.run(["bash", "-c", prelude + snippet],
+                              capture_output=True, text=True, check=False,
+                              env={"PATH": "/usr/bin:/bin", **env})
+
+    def test_a_clean_rollback_after_a_hop_still_names_the_split_state(self):
+        tail = "failed=0\n" + self._reporting_tail()
+        out = self._run(tail, PLEBIAN_OS_RELEASE_HOP_FROM="0.2.1").stdout
+        self.assertIn("LOG restored", out)
+        self.assertIn("0.2.1", out)
+        self.assertIn("plebian-os-select-closure --rollback", out)
+
+    def test_a_clean_rollback_without_a_hop_stays_quiet(self):
+        tail = "failed=0\n" + self._reporting_tail()
+        out = self._run(tail).stdout
+        self.assertIn("LOG restored", out)
+        self.assertNotIn("plebian-os-select-closure --rollback", out)
+
+    def test_the_marker_is_appended_after_every_unset_so_it_survives_exec(self):
+        body = function_body("select_latest_release_if_needed", self.text)
+        assign = body.index('relaunch_env+=("PLEBIAN_OS_RELEASE_HOP_FROM=')
+        unset = body.rindex('relaunch_env+=(-u "$key")')
+        self.assertLess(unset, assign,
+                        "the marker assignment must come after the -u flags, "
+                        "or env unsets it again")
+        # env applies unsets before assignments, so this really does survive.
+        out = self._run('env -u M M=kept bash -c \'echo "M=[${M:-UNSET}]"\'')
+        self.assertIn("M=[kept]", out.stdout)
+
+    def test_a_failure_between_selection_and_relaunch_warns(self):
+        source = function_body("warn_release_hop_split_state", self.text)
+        script = ("warn_release_hop_split_state() {\n" + source + "\n}\n"
+                  '_RELEASE_HOP_FROM=0.2.1; _RELEASE_HOP_TO=0.2.2\n'
+                  "trap 'warn_release_hop_split_state $?' EXIT\n"
+                  'exit 1\n')
+        result = self._run(script)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("0.2.1 -> 0.2.2", result.stdout)
+        self.assertIn("plebian-os-select-closure --rollback", result.stdout)
+
+    def test_that_warning_is_silent_on_a_successful_hop(self):
+        source = function_body("warn_release_hop_split_state", self.text)
+        script = ("warn_release_hop_split_state() {\n" + source + "\n}\n"
+                  '_RELEASE_HOP_FROM=0.2.1; _RELEASE_HOP_TO=0.2.2\n'
+                  "trap 'warn_release_hop_split_state $?' EXIT\n"
+                  'exit 0\n')
+        result = self._run(script)
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn("rollback", result.stdout)
+
+    def test_the_trap_is_armed_only_after_the_closure_is_committed(self):
+        body = function_body("select_latest_release_if_needed", self.text)
+        commit = body.index('"$selector" "$latest" --source')
+        armed = body.index("trap 'warn_release_hop_split_state")
+        self.assertLess(commit, armed)
+        self.assertLess(armed, body.index('exec "${relaunch_env[@]}"'))

@@ -2010,6 +2010,18 @@ ensure_os_source_checkout_for_selection() {
         || die "could not clone Plebian-OS release source"
 }
 
+# Called from the EXIT trap armed once the closure has been selected but the
+# target updater has not yet taken over. A non-zero exit there means the machine
+# is pinned to the new release with the old one installed, which is the state
+# an operator most needs named.
+warn_release_hop_split_state() {
+    [ "${1:-0}" -eq 0 ] && return 0
+    warn "the selected closure was already advanced ${_RELEASE_HOP_FROM:-?} -> ${_RELEASE_HOP_TO:-?} before this failure"
+    warn "the previous release is still installed; /etc/pleb/session.env now names the target"
+    warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
+    return 0
+}
+
 select_latest_release_if_needed() {
     local latest target_commit stage selector rc release_keys key
     local -a relaunch_args=() relaunch_env=(env)
@@ -2057,6 +2069,15 @@ select_latest_release_if_needed() {
     rm -rf -- "$stage"
     [ "$rc" -eq 0 ] \
         || die "target release $latest closure selection failed (status $rc)"
+    # From here the closure IS selected while the previous release is still
+    # installed. Every failure between this point and the exec below leaves the
+    # machine in that split state, and each one is a plain `die` that exits
+    # before any rollback boundary exists. Warn from an EXIT trap so no future
+    # failure added in this window can be silent about it. The trap does not
+    # survive the exec, so a successful hop says nothing.
+    _RELEASE_HOP_FROM="$PLEBIAN_OS_VERSION"
+    _RELEASE_HOP_TO="$latest"
+    trap 'warn_release_hop_split_state $?' EXIT
     [ -x /usr/local/bin/plebian-os-update ] \
         || die "target release $latest did not deploy an executable updater"
     [ "$restart_arg" != --restart ] || relaunch_args+=(--restart)
