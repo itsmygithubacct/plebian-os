@@ -6,17 +6,17 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — in development
 
-0.2.2 is not integrated, qualified, tagged, or published. This section records
-source work present on the development line; it does not create a release
-closure and must not be used to revise 0.2.1 artifacts.
+0.2.2 is a source integration candidate. Required F101/F104 qualification,
+artifact acceptance and final human review remain open; no release is tagged
+or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
 - The Kilix content catalog offers Kilix Techno (F124) and Kilix Graphs:
-  `KILIX_REF` advances to `3891c234`, one commit that moves only the
-  content-catalog gitlink; `KILIX95_REF` follows to `c8f99576`, its CI pin
-  moved to the same Kilix commit. Each application entered behind independent
-  review, and the pin move behind its own seat (`releases/0.2.2-notes.md`).
+  catalog admission at `3891c234` is retained in the integrated `KILIX_REF`
+  `79519e95`, together with the contained-app fixes below. `KILIX95_REF`
+  follows to `ca5a734b`, pairing its CI with the same Kilix commit. Each
+  application entered behind independent review (`releases/0.2.2-notes.md`).
 - A whole-stack update refuses to start when sudo needs a password and no
   terminal can answer it, rather than failing mid-transaction and leaving the
   closure selected but not installed.
@@ -42,7 +42,8 @@ closure and must not be used to revise 0.2.1 artifacts.
 - `KILIX_RUN_BROWSER_PROFILE` gives contained browsers -- including the
   desktop's Web Browser menu, which opens in a `kilix run` tab -- one
   persistent profile instead of a disposable one per launch, so logins survive
-  the pane.
+  the pane. Unsafe shared or symlink ancestors are refused; an owned profile
+  below safe parents is made private without changing its parents.
 - Copied text survives closing the app that copied it. X keeps no clipboard
   store and the desktop shipped no clipboard manager; the session now holds
   CLIPBOARD and PRIMARY through `autocutsel` (`PLEB_CLIPBOARD` opts out).
@@ -50,18 +51,19 @@ closure and must not be used to revise 0.2.1 artifacts.
   `/etc/xdg-desktop-portal/pleb-portals.conf` instead of leaving every
   interface to a last-resort fallback. ScreenCast and Screenshot are stated as
   not provided: the audio server is PulseAudio and no PipeWire daemon runs.
-- `kilix voice doctor` says when the server's default sink is a null device and
-  which of speak and dictate that silences, instead of reporting both healthy.
+- Modified mouse clicks and drags retain Ctrl, Shift and Alt in contained apps;
+  releasing the gesture or losing focus releases their modifier ownership.
+- `kilix voice doctor` diagnoses input and output independently, identifying
+  null output, missing input and monitor capture from the selected routes.
 - Throwaway browser profiles are reaped as soon as their owning process is
   gone, not a week later; ten dead ones made 1.2 GB on one 0.2.1 machine.
+  A live owner's profile survives regardless of age, including legacy names
+  and cases where the process start time cannot be read.
 - A pane may send text to another pane in the same window; broadcast, windowless
   and cross-window sends stay refused.
 - Kilix 95 Settings surfaces `KILIX_CHROME_TAB_BAR_EDGE`, a shared setting it
   had never exposed — a gap that shipped in 0.2.1 because CI tested against a
   Kilix predating the setting.
-
-### Changed
-
 - Plain `plebian-os-update` advances to the newest published stable release
   before refreshing the stack. It bootstraps the target tag's own closure
   selector and updater, fails instead of silently remaining behind, and keeps

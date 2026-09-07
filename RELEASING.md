@@ -233,7 +233,7 @@ coordinated version cannot hide a component downgrade. Additional release-root
 tuples are preserved byte-for-value for the release graph verifier, which
 reconstructs their selected trees and gitlinks from the public exact commits.
 It is installed on PATH as part of
-the twelve-file transactional OS layer beginning with 0.1.9. The selection
+the transactional OS layer beginning with 0.1.9. The selection
 transaction also installs the exact target updater and backs up the prior
 updater, selector, and session together. This is required whenever the target
 changes the updater's payload set, dependency policy, validation, or final
@@ -441,7 +441,7 @@ cannot change the process which is performing that hop.
      under a conventional umask, confirm its categories remain private, verify
      an external desktop override is not chmodded, and confirm a root invocation
      of `plebian-os-update` fails immediately with “run without sudo” guidance;
-   - exercise a successful twelve-file OS-layer update and an induced failure,
+   - exercise an update of every staged OS-layer file and an induced failure,
      confirming rollback restores the prior wallpaper, LightDM greeter
      override, attribution, license, scripts, Pleb recovery guide (or removes
      newly introduced files/directories), and state;
