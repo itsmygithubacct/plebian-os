@@ -44,6 +44,54 @@ def cfg(**overrides):
     return vm.Config(**values)
 
 
+class SourceProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.path = self.root / "versions.env"
+
+    def write_provenance(self, values):
+        arguments = [item for pair in values.items() for item in pair]
+        result = subprocess.run([
+            "bash", "-c",
+            'while [ "$#" -gt 0 ]; do printf "%s=%q\\n" "$1" "$2"; shift 2; done',
+            "bash", *arguments,
+        ], text=True, capture_output=True, check=True)
+        self.path.write_text(result.stdout)
+
+    def verify(self, expected):
+        command = vm.source_provenance_command(expected, str(self.path))
+        return subprocess.run(["bash", "-c", command], text=True, capture_output=True)
+
+    def test_empty_and_quoted_records_match_without_executing_data(self):
+        sentinel = self.root / "must-not-exist"
+        values = {
+            "KILIX_SYSTEM_MONITOR_BRANCH": "",
+            "PLEBIAN_OS_COMMIT": "a" * 40,
+            "QUOTED": "spaces, quote' and newline\n",
+            "LITERAL": f"$(touch {shlex.quote(str(sentinel))})",
+        }
+        self.write_provenance(values)
+        self.assertIn("KILIX_SYSTEM_MONITOR_BRANCH=''\n", self.path.read_text())
+        result = self.verify(values)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(sentinel.exists())
+
+    def test_each_mismatched_record_refuses(self):
+        values = {"EMPTY": "", "COMMIT": "b" * 40, "ORDINARY": "selected"}
+        self.write_provenance(values)
+        for key in values:
+            with self.subTest(key=key):
+                self.assertNotEqual(self.verify({**values, key: "different"}).returncode, 0)
+
+    def test_missing_and_noncanonical_empty_records_refuse(self):
+        for payload in ("UNRELATED=value\n", "EMPTY=\n"):
+            with self.subTest(payload=payload):
+                self.path.write_text(payload)
+                self.assertNotEqual(self.verify({"EMPTY": ""}).returncode, 0)
+
+
 class SelectedClosureGateTests(unittest.TestCase):
     """Exercise acceptance-generated options against real release selection."""
 

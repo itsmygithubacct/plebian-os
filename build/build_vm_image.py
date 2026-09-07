@@ -1454,6 +1454,17 @@ def _transcript_acceptance_command() -> str:
     )
 
 
+def source_provenance_command(values: dict[str, str], path: str = "/var/lib/plebian-os/versions.env") -> str:
+    """Compare the writer's Bash %q records without evaluating their contents."""
+    commands = []
+    for key, value in values.items():
+        commands.append(
+            f"printf -v provenance_record '%s=%q' {shlex.quote(key)} {shlex.quote(value)}\n"
+            f'grep -Fqx -- "$provenance_record" {shlex.quote(path)} || exit 1'
+        )
+    return "bash -c " + shlex.quote("\n".join(commands))
+
+
 def verify_provisioning(cfg: Config, askpass: str) -> None:
     """Prove the real installer→firstboot→session boundary: check the markers a
     correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
@@ -1688,11 +1699,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
             "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES", ""),
         **{key: os.environ.get(key, "") for key in F120_ROOT_KEYS},
     }
-    exact_source_provenance = " && ".join(
-        f"grep -Fqx {shlex.quote(key + '=' + value)} "
-        "/var/lib/plebian-os/versions.env"
-        for key, value in provenance_values.items()
-    )
+    exact_source_provenance = source_provenance_command(provenance_values)
     uv_contract = (
         f'test {shlex.quote(expected_uv_policy)} = 0 || ('
         'test -x /usr/local/bin/uv && test -x /usr/local/bin/uvx && '
