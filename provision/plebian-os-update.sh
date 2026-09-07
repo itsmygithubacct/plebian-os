@@ -1965,6 +1965,8 @@ release_is_newer() {
 # exactly those variables at the relaunch boundary.  The target updater then
 # reloads their newly selected values from the root-owned session file while
 # operator-controlled environment choices remain intact.
+# The optional selector argument supports isolated fixture callers.
+# shellcheck disable=SC2120
 selected_release_environment_keys() {
     local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
     local output keys
@@ -2095,7 +2097,8 @@ select_latest_release_if_needed() {
     # successful-rollback path reports full restoration and says nothing about
     # the closure, which is the one thing it did not restore.
     relaunch_env+=("PLEBIAN_OS_RELEASE_HOP_FROM=$PLEBIAN_OS_VERSION")
-    # shellcheck disable=SC2093 -- replacing this process is the transaction boundary
+    # Replacing this process is the transaction boundary.
+    # shellcheck disable=SC2093
     exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update "${relaunch_args[@]}"
     die "could not relaunch the $latest updater"
 }

@@ -605,7 +605,7 @@ resolve_target_layout() {
         for key in netcfg/get_hostname passwd/user-fullname passwd/username \
             passwd/user-password passwd/user-password-again \
             passwd/user-password-crypted user-setup/allow-password-weak; do
-            ! grep -Eq "^[[:space:]]*d-i[[:space:]]+$key[[:space:]]" "$PRESEED" || {
+            ! grep -Eq "^[[:space:]]*d-i[[:space:]]+${key}[[:space:]]" "$PRESEED" || {
                 echo "normal preseed must leave $key unanswered" >&2
                 exit 1
             }
