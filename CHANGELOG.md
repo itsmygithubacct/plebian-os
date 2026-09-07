@@ -12,6 +12,11 @@ closure and must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- The Kilix content catalog offers Kilix Techno (F124) and Kilix Graphs:
+  `KILIX_REF` advances to `3891c234`, one commit that moves only the
+  content-catalog gitlink; `KILIX95_REF` follows to `c8f99576`, its CI pin
+  moved to the same Kilix commit. Each application entered behind independent
+  review, and the pin move behind its own seat (`releases/0.2.2-notes.md`).
 - A whole-stack update refuses to start when sudo needs a password and no
   terminal can answer it, rather than failing mid-transaction and leaving the
   closure selected but not installed.
