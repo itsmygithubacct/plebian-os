@@ -1,9 +1,8 @@
-"""Release-closure selection: the mechanism UPGRADING.md's operator procedure
-requires every release after 0.1.7 to ship.
+"""Release-closure selection: the atomic mechanism used directly and by the
+updater's default latest-release hop.
 
-The updater deliberately revalidates the installed release. These tests cover
-the other half — validating a target release's complete closure and moving all
-of its release-controlled keys into /etc/pleb/session.env as one unit, without
+These tests validate a target release's complete closure and move all of its
+release-controlled keys into /etc/pleb/session.env as one unit, without
 touching a single operator-controlled choice.
 """
 
@@ -1034,6 +1033,25 @@ class ClosureSelectionContractTests(unittest.TestCase):
         text = RELEASING.read_text()
         self.assertIn("plebian-os-select-closure", text)
 
+    def test_plain_updater_selects_latest_before_the_stack_transaction(self):
+        source = UPDATE.read_text()
+        invocation = source.rindex("\nselect_latest_release_if_needed\n")
+        transaction = source.rindex("\nbegin_stack_transaction\n")
+        self.assertLess(invocation, transaction)
+        self.assertIn("select_latest_release=1", source)
+        self.assertIn("--revalidate-current) select_latest_release=0", source)
+        self.assertIn("git ls-remote --refs --tags", source)
+        self.assertIn(
+            'exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update',
+            source,
+        )
+
+    def test_upgrade_docs_make_latest_the_default(self):
+        text = UPGRADING.read_text()
+        self.assertIn("plain `plebian-os-update`", text)
+        self.assertIn("highest version", text)
+        self.assertIn("--revalidate-current", text)
+
     def test_target_release_notes_name_the_operator_command(self):
         text = NOTES.read_text()
         self.assertIn("plebian-os-select-closure", text)
@@ -1048,7 +1066,7 @@ class ClosureSelectionContractTests(unittest.TestCase):
         for text in (update, provision, preseed):
             self.assertIn(destination, text)
         self.assertIn("plebian-os-select-closure.sh", remaster)
-        self.assertIn('[ "${#expected_hashes[@]}" -eq 12 ]', update)
+        self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
 
 
 if __name__ == "__main__":

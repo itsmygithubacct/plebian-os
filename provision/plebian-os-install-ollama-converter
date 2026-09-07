@@ -1,0 +1,793 @@
+#!/usr/bin/python3
+"""Install the opt-in, source-only Pocket TTS conversion closure.
+
+The release image carries this small installer, not llama.cpp source, Python
+inference packages, model weights, voices, or generated GGUF files.  On an
+explicit invocation it downloads one immutable llama.cpp source archive from
+GitHub, verifies its exact byte identity, extracts only the files needed by the
+Pocket converter, and publishes a root-controlled wrapper.
+
+The independently selected model installer remains responsible for obtaining
+model bytes directly from its approved upstream and for verifying both inputs
+and locally derived outputs.  This helper never downloads model artifacts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+from pathlib import Path, PurePosixPath
+import shutil
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+
+
+ARCHIVE_URL = (
+    "https://github.com/ggml-org/llama.cpp/archive/"
+    "7e4c0a96880dae4fc4268ad441f8a6446bd5460a.tar.gz"
+)
+ARCHIVE_SIZE = 36_889_653
+ARCHIVE_SHA256 = (
+    "8759ab3d3a92d86ba3ba24fab7e6adde0"
+    "8eaf2f941e6c79118373e4f41e0af8c"
+)
+ARCHIVE_ROOT = "llama.cpp-7e4c0a96880dae4fc4268ad441f8a6446bd5460a"
+CONVERTER_TREE_FILES = 116
+CONVERTER_TREE_SHA256 = (
+    "fb562f74847e9ecde49e1b16b190c6f4"
+    "f9a40cd22a4e612361f5f3b36ba8a0ba"
+)
+MAX_EXTRACTED_BYTES = 8 * 1024 * 1024
+
+SESSION_ROOT = Path("/var/lib/plebian-os/session")
+INSTALL_ROOT = Path("/usr/lib/plebian-os/ollama")
+GENERATION_NAME = "converter-b10434-pocket-r1"
+GENERATION = INSTALL_ROOT / GENERATION_NAME
+CONVERTER_PATH = INSTALL_ROOT / "pocket-tts-convert-hf-to-gguf"
+
+# These direct pins reproduced both catalog outputs on the release's Debian
+# snapshot.  apt resolves their transitive closure from that same snapshot.
+# They stay out of the base manifest because python3-torch makes this optional
+# conversion environment materially larger than the two runtime GGUF files.
+PACKAGE_VERSIONS = {
+    "python3-torch": "2.6.0+dfsg-7",
+    "python3-numpy": "1:2.2.4+ds-1",
+    "python3-sentencepiece": "0.2.0-1+b3",
+    "python3-protobuf": "3.21.12-11+deb13u1",
+    "python3-yaml": "6.0.2-1+b2",
+    "python3-tqdm": "4.67.1-5",
+}
+
+STUB_SOURCE = '''"""Pocket-only converter sentinel; generic Transformers loading is disabled."""
+
+
+class AutoConfig:
+    """Preserve llama.cpp's no-config fallback without importing Transformers."""
+
+    @staticmethod
+    def from_pretrained(*_args, **_kwargs):
+        raise RuntimeError(
+            "generic Transformers configuration loading is disabled in the "
+            "Pocket-only converter closure"
+        )
+'''
+
+NOTICE_SOURCE = """Pocket-only llama.cpp conversion closure
+
+Upstream source: llama.cpp b10434, commit
+7e4c0a96880dae4fc4268ad441f8a6446bd5460a.
+Source archive: {url}
+Archive SHA-256: {archive_sha256}
+
+The extracted llama.cpp files retain the upstream MIT LICENSE in this
+directory. Plebian-OS adds runner.py and a minimal transformers/__init__.py
+sentinel. The sentinel deliberately disables generic Transformers model
+loading so this closure can enter only llama.cpp's local Pocket TTS fallback.
+
+No model weights, speaker embeddings, voices, GGUF files, or generated audio
+are part of this closure.
+""".format(url=ARCHIVE_URL, archive_sha256=ARCHIVE_SHA256)
+
+WRAPPER_SOURCE = f'''#!/bin/sh
+set -eu
+exec /usr/bin/python3 -I {GENERATION}/runner.py "$@"
+'''
+
+# This runner is installed only after its surrounding upstream source tree has
+# matched CONVERTER_TREE_SHA256.  It validates the only two source artifacts
+# and the only two output names admitted by the Pocket catalog before invoking
+# upstream code in isolated, offline Python mode.
+RUNNER_SOURCE = r'''#!/usr/bin/python3
+from __future__ import annotations
+
+import hashlib
+import os
+from pathlib import Path
+import runpy
+import stat
+import subprocess
+import sys
+
+
+GENERATION = Path("/usr/lib/plebian-os/ollama/converter-b10434-pocket-r1")
+TREE_FILE_COUNT = 116
+TREE_SHA256 = "fb562f74847e9ecde49e1b16b190c6f4f9a40cd22a4e612361f5f3b36ba8a0ba"
+PACKAGE_VERSIONS = {
+    "python3-torch": "2.6.0+dfsg-7",
+    "python3-numpy": "1:2.2.4+ds-1",
+    "python3-sentencepiece": "0.2.0-1+b3",
+    "python3-protobuf": "3.21.12-11+deb13u1",
+    "python3-yaml": "6.0.2-1+b2",
+    "python3-tqdm": "4.67.1-5",
+}
+SOURCE_ARTIFACTS = {
+    "model.safetensors": (
+        219_029_196,
+        "be9c6b4876d3f30740a8225dfcaa2e43dc4aeb753c15272735bee16bbb4abb0a",
+    ),
+    "tokenizer.model": (
+        59_339,
+        "d461765ae179566678c93091c5fa6f2984c31bbe990bf1aa62d92c64d91bc3f6",
+    ),
+}
+OUTPUT_ARTIFACTS = {
+    False: (
+        "pocket-tts-english-q8_0.gguf",
+        84_769_056,
+        "87c310bfeae4ba8a9e4016c01114013823d08451d10292c2bd64a8e7b9b529c6",
+    ),
+    True: (
+        "mmproj-pocket-tts-english-q8_0.gguf",
+        38_860_000,
+        "174653c6675289fc1a12f6fbd60a6352741cf95ce71c94f3dc1d42dd90a62b00",
+    ),
+}
+
+
+def die(message: str) -> None:
+    print(f"pocket-tts-converter: {message}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def require_real_directory(path: Path, owner: int) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        die(f"cannot inspect directory {path}: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        die(f"directory is not a real directory: {path}")
+    if info.st_uid != owner or stat.S_IMODE(info.st_mode) != 0o700:
+        die(f"directory is not private to uid {owner}: {path}")
+
+
+def validate_tree() -> None:
+    expected_top = {
+        "LICENSE",
+        "NOTICE",
+        "convert_hf_to_gguf.py",
+        "conversion",
+        "gguf-py",
+        "runner.py",
+        "transformers",
+    }
+    try:
+        top = {entry.name for entry in os.scandir(GENERATION)}
+    except OSError as error:
+        die(f"cannot inspect installed converter tree: {error}")
+    if top != expected_top:
+        die("installed converter tree has unexpected entries")
+
+    paths = [GENERATION / "LICENSE", GENERATION / "convert_hf_to_gguf.py"]
+    for name in ("conversion", "gguf-py", "transformers"):
+        root = GENERATION / name
+        for directory, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames.sort()
+            filenames.sort()
+            for item in dirnames:
+                candidate = Path(directory) / item
+                info = candidate.lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    die(f"unsafe converter directory: {candidate}")
+                if info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+                    die(f"converter directory is not root-controlled: {candidate}")
+            paths.extend(Path(directory) / item for item in filenames)
+
+    records = bytearray()
+    for path in sorted(paths, key=lambda item: item.relative_to(GENERATION).as_posix()):
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            die(f"unsafe converter file: {path}")
+        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+            die(f"converter file is not root-controlled: {path}")
+        relative = path.relative_to(GENERATION).as_posix()
+        records.extend(relative.encode("utf-8"))
+        records.extend(b"\0")
+        records.extend(sha256(path).encode("ascii"))
+        records.extend(b"\n")
+    if len(paths) != TREE_FILE_COUNT:
+        die("installed converter tree has the wrong file count")
+    if hashlib.sha256(records).hexdigest() != TREE_SHA256:
+        die("installed converter tree failed its aggregate SHA-256 check")
+
+
+def validate_packages() -> None:
+    for package, expected in PACKAGE_VERSIONS.items():
+        result = subprocess.run(
+            ["/usr/bin/dpkg-query", "-W", "-f=${Version}", package],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            check=False,
+        )
+        if result.returncode != 0 or result.stdout != expected:
+            die(
+                f"{package} must be exactly {expected}; run "
+                "plebian-os-install-deps --vulkan-tts"
+            )
+
+
+def validate_regular_file(path: Path, size: int, expected_hash: str, uid: int) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        die(f"cannot inspect input {path}: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        die(f"input is not a regular file: {path}")
+    if info.st_uid != uid or stat.S_IMODE(info.st_mode) & 0o077:
+        die(f"input is not private to uid {uid}: {path}")
+    if info.st_size != size or sha256(path) != expected_hash:
+        die(f"input failed its exact size/SHA-256 pin: {path.name}")
+
+
+def parse_fixed_arguments() -> tuple[Path, Path, bool]:
+    args = sys.argv[1:]
+    if len(args) not in (5, 6):
+        die("expected SOURCE --outtype q8_0 --outfile OUTPUT [--mmproj]")
+    mmproj = len(args) == 6
+    if args[1:5:2] != ["--outtype", "--outfile"]:
+        die("converter options must use the fixed Pocket argument order")
+    if args[2] != "q8_0" or (mmproj and args[5] != "--mmproj"):
+        die("only Pocket Q8_0 main and projector conversion is admitted")
+
+    source = Path(args[0])
+    output = Path(args[4])
+    if not source.is_absolute() or not output.is_absolute():
+        die("source and output paths must be absolute")
+    try:
+        if source.resolve(strict=True) != source:
+            die("source path must be canonical and symlink-free")
+        if output.parent.resolve(strict=True) != output.parent:
+            die("output directory must be canonical and symlink-free")
+    except OSError as error:
+        die(f"cannot resolve source/output paths: {error}")
+    if source.name != "source" or output.parent.name != "runtime":
+        die("source/runtime directories do not match the Kilix staging layout")
+    if source.parent != output.parent.parent:
+        die("source and runtime directories must share one private stage")
+    if os.path.lexists(output):
+        die(f"refusing to replace an existing output: {output}")
+    expected_name = OUTPUT_ARTIFACTS[mmproj][0]
+    if output.name != expected_name:
+        die(f"output name must be {expected_name}")
+    return source, output, mmproj
+
+
+def main() -> None:
+    source, output, mmproj = parse_fixed_arguments()
+    uid = os.geteuid()
+    require_real_directory(source.parent, uid)
+    require_real_directory(source, uid)
+    require_real_directory(output.parent, uid)
+    if {entry.name for entry in os.scandir(source)} != set(SOURCE_ARTIFACTS):
+        die("Pocket source directory must contain exactly two pinned inputs")
+    for name, (size, expected_hash) in SOURCE_ARTIFACTS.items():
+        validate_regular_file(source / name, size, expected_hash, uid)
+
+    validate_tree()
+    validate_packages()
+
+    private_home = source.parent / ".converter-home"
+    temporary = source.parent / ".converter-tmp"
+    require_real_directory(private_home, uid)
+    require_real_directory(temporary, uid)
+    os.environ.clear()
+    os.environ.update(
+        {
+            "HOME": str(private_home),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PYTHONHASHSEED": "0",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "HF_HUB_OFFLINE": "1",
+            "TRANSFORMERS_OFFLINE": "1",
+            "NO_PROXY": "*",
+            "no_proxy": "*",
+            "TMPDIR": str(temporary),
+        }
+    )
+    os.umask(0o077)
+    sys.path.insert(0, str(GENERATION))
+    sys.argv = [
+        str(GENERATION / "convert_hf_to_gguf.py"),
+        str(source),
+        "--outtype",
+        "q8_0",
+        "--outfile",
+        str(output),
+    ] + (["--mmproj"] if mmproj else [])
+    os.chdir(output.parent)
+    runpy.run_path(str(GENERATION / "convert_hf_to_gguf.py"), run_name="__main__")
+
+    expected_name, expected_size, expected_hash = OUTPUT_ARTIFACTS[mmproj]
+    if output.name != expected_name:
+        die("converter returned an unexpected output name")
+    validate_regular_file(output, expected_size, expected_hash, uid)
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+class InstallFailure(RuntimeError):
+    """A safe, actionable refusal from the closure installer."""
+
+
+def fail(message: str) -> None:
+    raise InstallFailure(message)
+
+
+def sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def require_root_directory(path: Path, *, private: bool = False) -> None:
+    try:
+        info = path.lstat()
+    except OSError as error:
+        fail(f"cannot inspect {path}: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        fail(f"not a real directory: {path}")
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid != 0 or mode & 0o022:
+        fail(f"directory is not root-controlled: {path}")
+    if private and mode & 0o077:
+        fail(f"privileged staging directory is not private: {path}")
+
+
+def ensure_root_path(path: Path, *, final_mode: int) -> None:
+    current = Path("/")
+    require_root_directory(current)
+    for part in path.parts[1:]:
+        current = current / part
+        if not os.path.lexists(current):
+            os.mkdir(current, final_mode if current == path else 0o755)
+        require_root_directory(current, private=current == path and final_mode == 0o700)
+    if stat.S_IMODE(path.stat().st_mode) != final_mode:
+        os.chmod(path, final_mode)
+        require_root_directory(path, private=final_mode == 0o700)
+
+
+def verify_packages() -> None:
+    for package, expected in PACKAGE_VERSIONS.items():
+        result = subprocess.run(
+            ["/usr/bin/dpkg-query", "-W", "-f=${Version}", package],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            check=False,
+        )
+        if result.returncode != 0 or result.stdout != expected:
+            fail(
+                f"{package} must be exactly {expected}; first run "
+                "plebian-os-install-deps --vulkan-tts"
+            )
+
+
+def copy_and_verify_archive(source: Path, destination: Path) -> None:
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+    try:
+        source_descriptor = os.open(source, flags)
+    except OSError as error:
+        fail(f"cannot open local archive {source}: {error}")
+    destination_descriptor = -1
+    try:
+        info = os.fstat(source_descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size != ARCHIVE_SIZE:
+            fail("local archive is not the exact pinned regular file")
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+        digest = hashlib.sha256()
+        count = 0
+        with os.fdopen(source_descriptor, "rb") as input_stream, os.fdopen(
+            destination_descriptor, "wb"
+        ) as output_stream:
+            source_descriptor = -1
+            destination_descriptor = -1
+            for block in iter(lambda: input_stream.read(1024 * 1024), b""):
+                count += len(block)
+                digest.update(block)
+                output_stream.write(block)
+            output_stream.flush()
+            os.fsync(output_stream.fileno())
+        if count != ARCHIVE_SIZE or digest.hexdigest() != ARCHIVE_SHA256:
+            destination.unlink(missing_ok=True)
+            fail("local archive failed its exact size/SHA-256 pin")
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
+
+
+def download_archive(destination: Path, private_home: Path) -> None:
+    result = subprocess.run(
+        [
+            "/usr/bin/curl",
+            "--fail",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            "600",
+            "--silent",
+            "--show-error",
+            "--output",
+            str(destination),
+            ARCHIVE_URL,
+        ],
+        stdin=subprocess.DEVNULL,
+        env={
+            "HOME": str(private_home),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "C",
+            "LC_ALL": "C",
+            "NO_PROXY": "*",
+            "no_proxy": "*",
+        },
+        check=False,
+    )
+    if result.returncode != 0:
+        fail(f"source archive download failed with status {result.returncode}")
+    try:
+        info = destination.lstat()
+    except OSError as error:
+        fail(f"downloaded archive is unavailable: {error}")
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        fail("downloaded archive is not a regular file")
+    if info.st_size != ARCHIVE_SIZE or sha256(destination) != ARCHIVE_SHA256:
+        fail("downloaded archive failed its exact size/SHA-256 pin")
+    os.chmod(destination, 0o600)
+
+
+def selected_member_path(member_name: str) -> PurePosixPath | None:
+    member = PurePosixPath(member_name)
+    if member.is_absolute() or ".." in member.parts or not member.parts:
+        fail(f"unsafe archive member: {member_name}")
+    if member.parts[0] != ARCHIVE_ROOT:
+        return None
+    relative = PurePosixPath(*member.parts[1:])
+    if relative in (PurePosixPath("LICENSE"), PurePosixPath("convert_hf_to_gguf.py")):
+        return relative
+    if relative.parts and relative.parts[0] in ("conversion", "gguf-py"):
+        return relative
+    return None
+
+
+def write_exclusive(path: Path, data: bytes, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        mode,
+    )
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def extract_selected_tree(archive: Path, target: Path) -> None:
+    extracted: set[PurePosixPath] = set()
+    total = 0
+    with tarfile.open(archive, mode="r:gz") as source:
+        for member in source:
+            relative = selected_member_path(member.name)
+            if relative is None or member.isdir():
+                continue
+            if relative in extracted:
+                fail(f"duplicate selected archive member: {relative}")
+            if not member.isfile() or member.size < 0:
+                fail(f"selected archive member is not a regular file: {relative}")
+            total += member.size
+            if total > MAX_EXTRACTED_BYTES:
+                fail("selected archive content exceeds its extraction bound")
+            stream = source.extractfile(member)
+            if stream is None:
+                fail(f"cannot read selected archive member: {relative}")
+            destination = target.joinpath(*relative.parts)
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+            descriptor = os.open(
+                destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o644,
+            )
+            with stream, os.fdopen(descriptor, "wb") as output:
+                shutil.copyfileobj(stream, output, length=1024 * 1024)
+            extracted.add(relative)
+    required = {PurePosixPath("LICENSE"), PurePosixPath("convert_hf_to_gguf.py")}
+    if not required.issubset(extracted):
+        fail("source archive is missing required converter files")
+
+
+def selected_tree_records(
+    root: Path, *, expected_owner: int | None = None
+) -> tuple[int, str]:
+    paths = [root / "LICENSE", root / "convert_hf_to_gguf.py"]
+    for name in ("conversion", "gguf-py", "transformers"):
+        selected_root = root / name
+        root_info = selected_root.lstat()
+        if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+            fail(f"selected source directory is missing or unsafe: {name}")
+        if expected_owner is not None and (
+            root_info.st_uid != expected_owner
+            or stat.S_IMODE(root_info.st_mode) & 0o022
+        ):
+            fail(f"selected source directory is not root-controlled: {selected_root}")
+        for directory, dirnames, filenames in os.walk(selected_root, followlinks=False):
+            dirnames.sort()
+            filenames.sort()
+            for item in dirnames:
+                candidate = Path(directory) / item
+                info = candidate.lstat()
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    fail(f"unsafe selected source directory: {candidate}")
+                if expected_owner is not None and (
+                    info.st_uid != expected_owner
+                    or stat.S_IMODE(info.st_mode) & 0o022
+                ):
+                    fail(f"selected source directory is not root-controlled: {candidate}")
+            paths.extend(Path(directory) / item for item in filenames)
+    records = bytearray()
+    for path in sorted(paths, key=lambda item: item.relative_to(root).as_posix()):
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            fail(f"unsafe selected source file: {path}")
+        if expected_owner is not None and (
+            info.st_uid != expected_owner or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            fail(f"selected source file is not root-controlled: {path}")
+        relative = path.relative_to(root).as_posix()
+        records.extend(relative.encode("utf-8"))
+        records.extend(b"\0")
+        records.extend(sha256(path).encode("ascii"))
+        records.extend(b"\n")
+    return len(paths), hashlib.sha256(records).hexdigest()
+
+
+def verify_generation(path: Path = GENERATION) -> None:
+    require_root_directory(path)
+    expected_top = {
+        "LICENSE",
+        "NOTICE",
+        "convert_hf_to_gguf.py",
+        "conversion",
+        "gguf-py",
+        "runner.py",
+        "transformers",
+    }
+    if {entry.name for entry in os.scandir(path)} != expected_top:
+        fail("installed converter generation has unexpected entries")
+    runner = path / "runner.py"
+    notice = path / "NOTICE"
+    for target, expected in (
+        (runner, RUNNER_SOURCE.encode("utf-8")),
+        (notice, NOTICE_SOURCE.encode("utf-8")),
+    ):
+        info = target.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            fail(f"installed closure file is unsafe: {target}")
+        if info.st_uid != 0 or stat.S_IMODE(info.st_mode) & 0o022:
+            fail(f"installed closure file is not root-controlled: {target}")
+        if target.read_bytes() != expected:
+            fail(f"installed closure file has changed: {target}")
+    count, digest = selected_tree_records(path, expected_owner=0)
+    if count != CONVERTER_TREE_FILES or digest != CONVERTER_TREE_SHA256:
+        fail("installed converter source tree failed its aggregate pin")
+
+
+def verify_wrapper(path: Path = CONVERTER_PATH) -> None:
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        fail(f"installed converter wrapper is unsafe: {path}")
+    if info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o755:
+        fail(f"installed converter wrapper has unsafe ownership/mode: {path}")
+    if path.read_bytes() != WRAPPER_SOURCE.encode("utf-8"):
+        fail("installed converter wrapper has changed")
+
+
+def publish_generation(staged: Path) -> None:
+    destination_stage = Path(
+        tempfile.mkdtemp(prefix=f".{GENERATION_NAME}.stage-", dir=INSTALL_ROOT)
+    )
+    try:
+        shutil.rmtree(destination_stage)
+        shutil.copytree(staged, destination_stage, symlinks=False)
+        for directory, dirnames, filenames in os.walk(destination_stage):
+            os.chmod(directory, 0o755)
+            for name in dirnames:
+                os.chmod(Path(directory) / name, 0o755)
+            for name in filenames:
+                os.chmod(Path(directory) / name, 0o644)
+        verify_staged_count, verify_staged_digest = selected_tree_records(
+            destination_stage, expected_owner=0
+        )
+        if (
+            verify_staged_count != CONVERTER_TREE_FILES
+            or verify_staged_digest != CONVERTER_TREE_SHA256
+        ):
+            fail("destination-side converter stage failed verification")
+        os.rename(destination_stage, GENERATION)
+        fsync_directory(INSTALL_ROOT)
+    finally:
+        if os.path.lexists(destination_stage):
+            shutil.rmtree(destination_stage)
+
+
+def publish_wrapper() -> None:
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".pocket-wrapper-", dir=INSTALL_ROOT)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(WRAPPER_SOURCE.encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, 0o755)
+        os.rename(temporary, CONVERTER_PATH)
+        fsync_directory(INSTALL_ROOT)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def install(archive: Path | None) -> bool:
+    verify_packages()
+    ensure_root_path(SESSION_ROOT, final_mode=0o700)
+    ensure_root_path(INSTALL_ROOT, final_mode=0o755)
+
+    generation_exists = os.path.lexists(GENERATION)
+    wrapper_exists = os.path.lexists(CONVERTER_PATH)
+    if generation_exists:
+        verify_generation()
+    if wrapper_exists:
+        verify_wrapper()
+    if generation_exists and wrapper_exists:
+        return False
+    if wrapper_exists and not generation_exists:
+        fail("converter wrapper exists without its generation; refusing to replace it")
+
+    work = Path(tempfile.mkdtemp(prefix="pocket-converter.", dir=SESSION_ROOT))
+    os.chmod(work, 0o700)
+    try:
+        if not generation_exists:
+            archive_stage = work / "llama.cpp.tar.gz"
+            if archive is None:
+                download_archive(archive_stage, work)
+            else:
+                copy_and_verify_archive(archive, archive_stage)
+            source_stage = work / GENERATION_NAME
+            source_stage.mkdir(mode=0o700)
+            extract_selected_tree(archive_stage, source_stage)
+            (source_stage / "transformers").mkdir(mode=0o755)
+            write_exclusive(
+                source_stage / "transformers" / "__init__.py",
+                STUB_SOURCE.encode("utf-8"),
+            )
+            write_exclusive(source_stage / "runner.py", RUNNER_SOURCE.encode("utf-8"))
+            write_exclusive(source_stage / "NOTICE", NOTICE_SOURCE.encode("utf-8"))
+            count, digest = selected_tree_records(source_stage)
+            if count != CONVERTER_TREE_FILES or digest != CONVERTER_TREE_SHA256:
+                fail("selected converter tree failed its aggregate pin")
+            publish_generation(source_stage)
+            verify_generation()
+        publish_wrapper()
+        verify_wrapper()
+        return True
+    finally:
+        shutil.rmtree(work)
+
+
+def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="install the optional Pocket-only llama.cpp converter closure"
+    )
+    parser.add_argument(
+        "--archive",
+        type=Path,
+        help="use an already downloaded exact source archive instead of the network",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="describe exact inputs and destinations without changing the system",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="verify the installed converter and direct Debian package pins",
+    )
+    return parser.parse_args(argv)
+
+
+def print_plan() -> None:
+    print("Pocket TTS converter closure (optional; no model weights)")
+    print(f"  source: {ARCHIVE_URL}")
+    print(f"  bytes: {ARCHIVE_SIZE}")
+    print(f"  sha256: {ARCHIVE_SHA256}")
+    print(f"  generation: {GENERATION}")
+    print(f"  converter: {CONVERTER_PATH}")
+    print("  Debian direct pins:")
+    for package, version in PACKAGE_VERSIONS.items():
+        print(f"    {package}={version}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_arguments(sys.argv[1:] if argv is None else argv)
+    if args.dry_run:
+        print_plan()
+        return 0
+    try:
+        if args.verify:
+            verify_packages()
+            verify_generation()
+            verify_wrapper()
+            print(f"verified {CONVERTER_PATH}")
+            return 0
+        if os.geteuid() != 0:
+            fail("installation must run as root (try sudo)")
+        changed = install(args.archive.resolve(strict=True) if args.archive else None)
+        print(("installed" if changed else "already verified"), CONVERTER_PATH)
+        return 0
+    except (InstallFailure, OSError, tarfile.TarError) as error:
+        print(f"plebian-os-install-ollama-converter: {error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

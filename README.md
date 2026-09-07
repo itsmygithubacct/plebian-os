@@ -30,7 +30,61 @@ This checkout contains early source work for 0.2.1; it is not a release
 artifact or an accepted release closure. The current dependency manifest adds
 the same compression providers, read-only hardware-discovery tools, and
 `linux-perf` qualification package to the preseed and standalone provisioning
-paths. Their manifest parity is covered by repository tests.
+paths. Their manifest parity is covered by repository tests. Vulkan inference
+remains opt-in: `plebian-os-install-deps --vulkan` installs the loader and Mesa
+ICDs, while `--vulkan-nouveau` adds the Nouveau firmware closure. Combining a
+Vulkan mode with `--qualification` adds `vulkaninfo`; none of these packages is
+added to the base-image manifest by this codepath.
+
+Pocket TTS conversion and its persistent Vulkan runtime are separate explicit
+opt-ins. The image ships neither model weights, generated GGUF files, nor
+native runtime binaries. Prepare their exact Debian prerequisites and install
+the two source closures with:
+
+```sh
+sudo plebian-os-install-deps --vulkan-tts
+sudo plebian-os-install-ollama-converter
+sudo plebian-os-install-kilix-vulkan-tts
+```
+
+On Nouveau, combine `--vulkan-tts` with `--vulkan-nouveau` so the firmware
+closure is present too. The dependency command selects the common Vulkan
+runtime, six direct Pocket-converter pins, and the two Vulkan build pins. The
+converter installer verifies one immutable llama.cpp archive, extracts a
+1.6 MiB Pocket-only source tree, retains its MIT license and modification
+notice, and installs a fixed offline wrapper. The measured Debian converter
+closure is roughly 150 MiB to download and 0.8 GiB installed. Those Python
+packages are needed only for local conversion and are not automatically
+removed because another local application may share them.
+
+The runtime installer fetches the same 36,889,653-byte source archive, builds
+locally with two jobs, and admits only an independently reproduced exact
+66,532,472-byte runtime closure. It needs at least 1 GiB of temporary free
+space; its source archive and build tree are discarded after atomic
+installation. `--archive PATH` lets both installers reuse an already downloaded
+exact archive. A first request may also spend substantial time compiling the
+Vulkan shader cache. None of these commands runs during provisioning,
+qualification, preseed, or a plain Vulkan install. These closures remain 0.2.2
+candidates, not accepted release schemas or model-publication authorization.
+
+The patched Ollama/Vulkan service runtime follows the same small-image policy.
+Plebian OS carries only
+`plebian-os-install-kilix-ollama-runtime` and the auditable Unix-listener patch,
+not the 119,645,888-byte native closure. Its public carrier remains
+owner-reserved and unaccepted, so this development installer deliberately has
+no download URL and fails closed unless an operator supplies the exact local
+closure:
+
+```sh
+sudo plebian-os-install-deps --vulkan-nouveau
+sudo plebian-os-install-kilix-ollama-runtime --closure /path/to/exact/closure
+```
+
+It verifies all 25 executable/library files, ten relative library links, the
+complete bounded third-party notice set, the exact Debian/NVK runtime tuple,
+and the tracked listener delta before atomic installation. This local-closure
+path supports development without publishing the binary candidate or implying
+that a release carrier has been approved.
 
 The wider 0.2.1 program—including interactive identity setup, the Debian and
 Kilix/kitty refresh, expanded system monitoring and model sizing, coordinated
@@ -178,24 +232,26 @@ the policy to `0` for native Openbox windows, extend it with
 `KILIX_RUN_ALIAS_EXCLUDE_APPS="gimp"`.
 
 **Updating later** — refresh the whole stack with **`plebian-os-update`**. It
-pulls `~/.local/gpu_terminal/sources/pleb`, re-runs `pleb install`, then delegates the Kilix, submodule,
-engine, and optional desktop-provider update to `pleb update --no-restart`.
+first resolves the highest published stable Plebian-OS release, runs that target
+tag's own closure selector, and relaunches the newly installed updater. It then
+pulls `~/.local/gpu_terminal/sources/pleb`, re-runs `pleb install`, and delegates
+the Kilix, submodule, engine, and optional desktop-provider update to
+`pleb update --no-restart`.
 It **also refreshes the Plebian-OS layer itself** as one validated, rollback-safe
 transaction (provisioner, dependency installer, closure selector, unit, helpers,
 version, branded wallpaper, and artwork notices) from a `plebian-os` checkout, so OS-layer fixes reach
 installed systems too — pinned
 by `PLEBIAN_OS_REF` and disablable with
 `PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
-`KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, the update helper keeps using
-those exact refs instead of drifting to branch heads. Moving an installed machine
-to another release is therefore a separate, deliberate step: the selector
-extracted from the target release's immutable tag validates that release's complete closure,
-fetches every exact target component commit, reports each component's ancestry
-direction, and selects every release-controlled pin at once while leaving
-operator choices alone. It also installs the exact target selector and updater
-as part of that same recoverable selection. It runs **before**
-`plebian-os-update --restart` — see
-[UPGRADING.md](UPGRADING.md) for the exact commands. Updates are serialized;
+`KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, those exact refs remain the
+authority within the selected release instead of drifting to branch heads. The
+target selector validates the complete closure, fetches every exact component
+commit, reports each component's ancestry direction, and moves every
+release-controlled pin at once while leaving operator choices alone. It also
+installs the exact target selector and updater as part of that same recoverable
+selection. Use `--revalidate-current` only when you explicitly need to refresh
+the already-selected release without hopping. See [UPGRADING.md](UPGRADING.md)
+for the exact contract. Updates are serialized;
 participating checkouts with local changes are refused. Before the first change,
 the updater snapshots the deployed OS/Pleb files, checkout positions, engine
 artifacts, system uv binaries, and final provenance. It reconciles the selected

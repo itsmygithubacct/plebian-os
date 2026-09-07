@@ -16,9 +16,12 @@
 # install` outputs.
 # Disable OS-layer refresh with PLEBIAN_OS_SELF_UPDATE=0.
 #
-# Usage: plebian-os-update [--restart]
+# Usage: plebian-os-update [--restart] [--revalidate-current]
 # By default the running graphical session is left alone. Pass --restart to ask
 # Pleb to restart it only after the stack update has completed successfully.
+# By default the newest published stable Plebian-OS release is selected before
+# the stack is refreshed. Pass --revalidate-current only for recovery or
+# diagnostics when the selected release must not change.
 #
 # Run as the Pleb user; `pleb install` elevates via sudo where it needs root.
 # Deployed to the target as /usr/local/bin/plebian-os-update and offered by
@@ -540,14 +543,17 @@ PLEBIAN_OS_UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
 PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
 
 restart_arg=--no-restart
-[ "$#" -le 1 ] || die "expected at most one option (try --help)"
-case "${1:-}" in
-    --version|-V) echo "plebian-os-update $PLEBIAN_OS_VERSION"; exit 0 ;;
-    -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
-    --restart) restart_arg=--restart ;;
-    "") ;;
-    *) die "unknown option: $1 (try --help)" ;;
-esac
+select_latest_release=1
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --version|-V) echo "plebian-os-update $PLEBIAN_OS_VERSION"; exit 0 ;;
+        -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+        --restart) restart_arg=--restart ;;
+        --revalidate-current) select_latest_release=0 ;;
+        *) die "unknown option: $1 (try --help)" ;;
+    esac
+    shift
+done
 
 # Repair the complete coordinated data tree before the update lock is the first
 # writer on an older or freshly created installation.
@@ -819,6 +825,9 @@ txn="$(mktemp -d "$base/update-rollback.XXXXXX")"
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
+    /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /usr/local/bin/plebian-os-update
@@ -939,6 +948,9 @@ fi
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
+    /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /usr/local/bin/plebian-os-update
@@ -1574,6 +1586,15 @@ rollback_stack_transaction() {
 
     if [ "$failed" = 0 ]; then
         log "restored the pre-update OS layer, checkout positions, engine, shared settings, and Pleb install outputs"
+        # The stack rolled back, but the closure selection did not: it was
+        # committed before this transaction opened. Saying "restored" and
+        # stopping would tell the operator the machine is coherent when it is
+        # pinned-new and installed-old.
+        if [ -n "${PLEBIAN_OS_RELEASE_HOP_FROM:-}" ]; then
+            warn "this run had already advanced the selected closure from ${PLEBIAN_OS_RELEASE_HOP_FROM} before it failed"
+            warn "the stack is back on ${PLEBIAN_OS_RELEASE_HOP_FROM}, but /etc/pleb/session.env still names the target"
+            warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
+        fi
     else
         warn "automatic stack rollback was incomplete; recovery data retained at $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
         # Naming the retained data is not a recovery procedure. When the stack
@@ -1907,6 +1928,178 @@ update_os_checkout() {
     git -C "$PLEBIAN_OS_DIR" pull --ff-only || return 1
 }
 
+# Resolve only stable semantic release tags.  A plain update is a release
+# update, not merely a revalidation of whatever closure happens to be selected
+# already.  Non-release tags such as media-v1 and prerelease spellings are
+# deliberately ignored.
+latest_published_release() {
+    local refs latest
+    refs="$(git ls-remote --refs --tags "$PLEBIAN_OS_REPO" 'refs/tags/v*')" \
+        || die "could not query published Plebian-OS releases from $PLEBIAN_OS_REPO"
+    latest="$(printf '%s\n' "$refs" \
+        | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ {
+                   sub(/^refs\/tags\/v/, "", $2); print $2
+               }' \
+        | LC_ALL=C sort -V \
+        | tail -n 1)"
+    [ -n "$latest" ] \
+        || die "no published stable vX.Y.Z release tags were found at $PLEBIAN_OS_REPO"
+    printf '%s\n' "$latest"
+}
+
+release_is_newer() {
+    local candidate="$1" installed="$2" highest
+    [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [[ "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [ "$candidate" != "$installed" ] || return 1
+    highest="$(printf '%s\n%s\n' "$installed" "$candidate" \
+        | LC_ALL=C sort -V | tail -n 1)"
+    [ "$highest" = "$candidate" ]
+}
+
+# The shell which starts an update can belong to the previous release.  Pleb's
+# configuration contract deliberately gives explicit environment values
+# precedence over /etc/pleb/session.env, so exec alone would let an old pane's
+# exported refs override the closure which was just selected.  Ask the
+# installed target selector for its own release-key classification and remove
+# exactly those variables at the relaunch boundary.  The target updater then
+# reloads their newly selected values from the root-owned session file while
+# operator-controlled environment choices remain intact.
+selected_release_environment_keys() {
+    local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
+    local output keys
+    [ -x "$selector" ] || {
+        warn "target closure selector is not executable: $selector"
+        return 1
+    }
+    output="$("$selector" --show)" || {
+        warn "could not read the target selector's release-controlled keys"
+        return 1
+    }
+    keys="$(printf '%s\n' "$output" | sed -n \
+        -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' \
+        -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
+    [ -n "$keys" ] || {
+        warn "target selector reported no release-controlled keys"
+        return 1
+    }
+    printf '%s\n' "$keys"
+}
+
+ensure_os_source_checkout_for_selection() {
+    local parent remote
+    case "$PLEBIAN_OS_DIR" in
+        /*) ;;
+        *) die "PLEBIAN_OS_DIR must be absolute before selecting a release: $PLEBIAN_OS_DIR" ;;
+    esac
+    if [ -d "$PLEBIAN_OS_DIR/.git" ]; then
+        remote="$(git -C "$PLEBIAN_OS_DIR" config --get remote.origin.url 2>/dev/null || true)"
+        if [ "$remote" != "$PLEBIAN_OS_REPO" ] \
+            && [ "${PLEBIAN_OS_TRUST_EXISTING_CHECKOUT:-0}" != 1 ]; then
+            die "Plebian-OS checkout at $PLEBIAN_OS_DIR has origin '${remote:-unset}', expected '$PLEBIAN_OS_REPO' (set PLEBIAN_OS_TRUST_EXISTING_CHECKOUT=1 to override)"
+        fi
+        return 0
+    fi
+    [ ! -e "$PLEBIAN_OS_DIR" ] \
+        || die "Plebian-OS source path exists but is not a git checkout: $PLEBIAN_OS_DIR"
+    parent="$(dirname -- "$PLEBIAN_OS_DIR")"
+    mkdir -p -- "$parent" \
+        || die "could not create Plebian-OS source parent: $parent"
+    log "cloning Plebian-OS release source -> $PLEBIAN_OS_DIR"
+    git clone --no-recurse-submodules "$PLEBIAN_OS_REPO" "$PLEBIAN_OS_DIR" \
+        || die "could not clone Plebian-OS release source"
+}
+
+# Called from the EXIT trap armed once the closure has been selected but the
+# target updater has not yet taken over. A non-zero exit there means the machine
+# is pinned to the new release with the old one installed, which is the state
+# an operator most needs named.
+warn_release_hop_split_state() {
+    [ "${1:-0}" -eq 0 ] && return 0
+    warn "the selected closure was already advanced ${_RELEASE_HOP_FROM:-?} -> ${_RELEASE_HOP_TO:-?} before this failure"
+    warn "the previous release is still installed; /etc/pleb/session.env now names the target"
+    warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
+    return 0
+}
+
+select_latest_release_if_needed() {
+    local latest target_commit stage selector rc release_keys key
+    local -a relaunch_args=() relaunch_env=(env)
+    [ "$select_latest_release" = 1 ] || {
+        log "explicitly revalidating selected release $PLEBIAN_OS_VERSION"
+        return 0
+    }
+    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not semantic; use --revalidate-current only for recovery"
+    latest="$(latest_published_release)"
+    if [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
+        log "Plebian-OS $PLEBIAN_OS_VERSION is the latest published release"
+        return 0
+    fi
+    if ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
+        die "published release $latest is not newer than selected release $PLEBIAN_OS_VERSION; refusing an implicit downgrade"
+    fi
+
+    log "new published release found: $PLEBIAN_OS_VERSION -> $latest"
+    ensure_os_source_checkout_for_selection
+    git -C "$PLEBIAN_OS_DIR" fetch --force origin "refs/tags/v$latest" \
+        || die "could not fetch target release tag v$latest"
+    target_commit="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
+        || die "target release tag v$latest did not resolve to a commit"
+    stage="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-latest.XXXXXX")" \
+        || die "could not allocate target-selector staging"
+    selector="$stage/plebian-os-select-closure"
+    if ! git -C "$PLEBIAN_OS_DIR" show \
+            "$target_commit:provision/plebian-os-select-closure.sh" >"$selector"; then
+        rm -rf -- "$stage"
+        die "published release v$latest does not contain its closure selector"
+    fi
+    chmod 0700 -- "$selector"
+    if ! bash -n "$selector"; then
+        rm -rf -- "$stage"
+        die "published release v$latest contains an invalid closure selector"
+    fi
+
+    log "validating and selecting the complete $latest release closure"
+    if "$selector" "$latest" --source "$PLEBIAN_OS_DIR"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    rm -rf -- "$stage"
+    [ "$rc" -eq 0 ] \
+        || die "target release $latest closure selection failed (status $rc)"
+    # From here the closure IS selected while the previous release is still
+    # installed. Every failure between this point and the exec below leaves the
+    # machine in that split state, and each one is a plain `die` that exits
+    # before any rollback boundary exists. Warn from an EXIT trap so no future
+    # failure added in this window can be silent about it. The trap does not
+    # survive the exec, so a successful hop says nothing.
+    _RELEASE_HOP_FROM="$PLEBIAN_OS_VERSION"
+    _RELEASE_HOP_TO="$latest"
+    trap 'warn_release_hop_split_state $?' EXIT
+    [ -x /usr/local/bin/plebian-os-update ] \
+        || die "target release $latest did not deploy an executable updater"
+    [ "$restart_arg" != --restart ] || relaunch_args+=(--restart)
+    release_keys="$(selected_release_environment_keys)" \
+        || die "could not prepare a clean target-release environment"
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        relaunch_env+=(-u "$key")
+    done <<<"$release_keys"
+    log "release $latest selected; relaunching its updater"
+    # Tell the relaunched updater that the closure was already moved. Selection
+    # commits before any rollback boundary exists, so a later failure -- even
+    # one whose stack rollback succeeds completely -- leaves the machine pinned
+    # to the target with the previous release still installed. Without this the
+    # successful-rollback path reports full restoration and says nothing about
+    # the closure, which is the one thing it did not restore.
+    relaunch_env+=("PLEBIAN_OS_RELEASE_HOP_FROM=$PLEBIAN_OS_VERSION")
+    # shellcheck disable=SC2093 -- replacing this process is the transaction boundary
+    exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update "${relaunch_args[@]}"
+    die "could not relaunch the $latest updater"
+}
+
 # Copy every required OS-layer file into an unprivileged staging directory and
 # validate the complete set before any privileged destination is touched.
 stage_and_validate_os_layer() {
@@ -1917,6 +2110,9 @@ stage_and_validate_os_layer() {
     local required=(
         "$prov/plebian-os-provision.sh"
         "$prov/install-deps.sh"
+        "$prov/plebian-os-install-ollama-converter"
+        "$prov/plebian-os-install-kilix-vulkan-tts"
+        "$prov/plebian-os-install-kilix-ollama-runtime"
         "$prov/plebian-os-passwd"
         "$prov/plebian-os-update.sh"
         "$prov/plebian-os-firstboot.service"
@@ -1942,6 +2138,12 @@ stage_and_validate_os_layer() {
 
     install -m 0755 "$prov/plebian-os-provision.sh" "$stage/plebian-os-provision"
     install -m 0755 "$prov/install-deps.sh" "$stage/plebian-os-install-deps"
+    install -m 0755 "$prov/plebian-os-install-ollama-converter" \
+        "$stage/plebian-os-install-ollama-converter"
+    install -m 0755 "$prov/plebian-os-install-kilix-vulkan-tts" \
+        "$stage/plebian-os-install-kilix-vulkan-tts"
+    install -m 0755 "$prov/plebian-os-install-kilix-ollama-runtime" \
+        "$stage/plebian-os-install-kilix-ollama-runtime"
     install -m 0755 "$prov/plebian-os-passwd" "$stage/plebian-os-passwd"
     install -m 0755 "$prov/plebian-os-update.sh" "$stage/plebian-os-update"
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
@@ -1957,11 +2159,15 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
         "$stage/plebian-os-select-closure" \
         || die "staged OS-layer shell validation failed"
-    python3 - "$stage/plebian-os-passwd" <<'PY' \
-        || die "staged password helper Python validation failed"
+    python3 - "$stage/plebian-os-passwd" \
+        "$stage/plebian-os-install-ollama-converter" \
+        "$stage/plebian-os-install-kilix-vulkan-tts" \
+        "$stage/plebian-os-install-kilix-ollama-runtime" <<'PY' \
+        || die "staged Python helper validation failed"
 import pathlib
 import sys
-compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
+for name in sys.argv[1:]:
+    compile(pathlib.Path(name).read_text(), name, "exec")
 PY
     if ! grep -q '^\[Unit\]$' "$stage/plebian-os-firstboot.service" \
         || ! grep -q '^\[Service\]$' "$stage/plebian-os-firstboot.service" \
@@ -2069,10 +2275,18 @@ PY
 # exits nonzero; success is logged only after systemd has reloaded the new unit.
 deploy_staged_os_layer() {
     local stage="$1"
-    shift
+    local staged_count="$2"
+    shift 2
     local -a expected_hashes=("$@")
     local -a root_command
-    [ "${#expected_hashes[@]}" -eq 12 ] \
+    # One expected hash per staged file. The count comes from the caller's own
+    # staged-name list instead of a number typed here: this guard was a
+    # hand-maintained literal, and adding a file to the staged set without also
+    # editing it made every plebian-os-update die on this line before deploying
+    # anything. The root block below independently checks the same count
+    # against its own file list, and tests/test_os_layer_deploy_set.py checks
+    # that the two lists agree at source level.
+    [ "${#expected_hashes[@]}" -eq "$staged_count" ] \
         || die "OS-layer deployment requires one expected hash per staged file"
     if [ "$EUID" = 0 ]; then
         # A root-run updater stages root-owned files. Clear inherited sudo
@@ -2111,6 +2325,9 @@ names=(
     COPYING.GPL-2
     lightdm-gtk-greeter.conf
     plebian-os-select-closure
+    plebian-os-install-ollama-converter
+    plebian-os-install-kilix-vulkan-tts
+    plebian-os-install-kilix-ollama-runtime
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -2125,9 +2342,12 @@ dests=(
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/plebian-os-select-closure
+    /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -2301,10 +2521,11 @@ for i in "${!new_paths[@]}"; do
 done
 bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
     "${new_paths[5]}" "${new_paths[11]}"
-python3 - "${new_paths[2]}" <<'PY'
+python3 - "${new_paths[2]}" "${new_paths[12]}" <<'PY'
 import pathlib
 import sys
-compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")
+for name in sys.argv[1:]:
+    compile(pathlib.Path(name).read_text(), name, "exec")
 PY
 grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^\[Service\]$' "${new_paths[4]}" \
@@ -2412,6 +2633,9 @@ self_update_os_layer() {
         COPYING.GPL-2
         lightdm-gtk-greeter.conf
         plebian-os-select-closure
+        plebian-os-install-ollama-converter
+        plebian-os-install-kilix-vulkan-tts
+        plebian-os-install-kilix-ollama-runtime
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
@@ -2421,7 +2645,7 @@ self_update_os_layer() {
         stage_hashes+=("$(sha256sum "$stage/$file" | awk '{print $1}')")
     done
     log "atomically redeploying the validated OS layer (needs root)"
-    deploy_staged_os_layer "$stage" "${stage_hashes[@]}" \
+    deploy_staged_os_layer "$stage" "${#stage_names[@]}" "${stage_hashes[@]}" \
         || die "OS-layer deployment failed and was rolled back"
     _DEPLOYED_DESKTOP_WALLPAPER_SHA256="${stage_hashes[7]}"
     rm -rf "$stage"
@@ -3022,6 +3246,13 @@ write_final_provenance() {
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
     return 0
 fi
+
+# A normal update first moves to the newest published coordinated closure.  Do
+# this before the outer stack transaction: the target selector has its own
+# atomic configuration/tool transaction, then exec above starts the target
+# updater from a fresh environment.  If no newer release exists, this returns
+# and the already-selected closure is revalidated normally.
+select_latest_release_if_needed
 
 # Pleb does its system writes via sudo; on a non-passwordless box a clickable
 # "update" action would silently prompt or fail. Warn early rather than hang.

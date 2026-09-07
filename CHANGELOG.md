@@ -60,10 +60,40 @@ closure and must not be used to revise 0.2.1 artifacts.
   had never exposed — a gap that shipped in 0.2.1 because CI tested against a
   Kilix predating the setting.
 
+### Changed
+
+- Plain `plebian-os-update` advances to the newest published stable release
+  before refreshing the stack. It bootstraps the target tag's own closure
+  selector and updater, fails instead of silently remaining behind, and keeps
+  exact-current revalidation behind an explicit `--revalidate-current` flag.
+- The target updater is relaunched with the previous session's
+  release-controlled environment values cleared, so an update started inside an
+  older Kilix pane cannot override the newly selected closure with stale
+  component refs.
+
 ### Added
 
 - `build/remaster-iso.sh` refuses media whose closure submodule gitlinks do not
   resolve on their remotes, not merely whose refs do.
+- Opt-in Vulkan runtime closures for Mesa and Nouveau that leave the base image
+  unchanged: `plebian-os-install-deps --vulkan` installs the loader and Mesa
+  ICDs, `--vulkan-nouveau` adds the Nouveau firmware, and `vulkaninfo` arrives
+  only when a Vulkan lane is combined with `--qualification`. The CPU-only,
+  generic, Nouveau and qualified selections are each tested independently, and
+  each additive array is read by name so no lane can silently merge into
+  another.
+- A source-only Pocket TTS converter installer with immutable source and output
+  pins. No model or converted weight bytes are carried.
+- A local-build installer for the persistent Kilix Vulkan TTS worker. It
+  verifies the immutable llama.cpp archive, the worker source, the Debian build
+  inputs and a byte-reproducible 66,532,472-byte runtime closure before atomic
+  publication, then discards its temporary source and build tree.
+- The exact private-Unix Ollama listener patch and a fail-closed local closure
+  installer. It installs no model bytes and exposes no download URL; the
+  119,645,888-byte runtime carrier remains owner-reserved and unaccepted.
+- Both optional installers are carried through fresh ISO, standalone
+  provisioning, transactional update and rollback, and VM acceptance without
+  being invoked by any of them.
 
 ## [0.2.1] — 2026-09-01
 
