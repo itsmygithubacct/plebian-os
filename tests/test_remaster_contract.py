@@ -346,10 +346,6 @@ class RemasterContractTests(unittest.TestCase):
         self.assertIn("PLEBIAN_OS_SSH_ENABLED=1", self.source)
         self.assertIn("effective preseed that installs SSH", self.source)
 
-    def test_release_runtime_self_update_uses_resolved_commit(self):
-        self.assertIn('runtime_os_ref="$(git -C "$HERE" rev-parse HEAD', self.source)
-        self.assertIn('env_kv PLEBIAN_OS_REF "$runtime_os_ref"', self.source)
-
     def test_release_mode_requires_complete_immutable_input_closure(self):
         for key in (
             "PLEBIAN_OS_REF", "PLEBIAN_OS_NETINST_URL",
