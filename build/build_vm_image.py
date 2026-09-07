@@ -1065,7 +1065,7 @@ snapshot_acceptance_update() {{
 }}
 snapshot_acceptance_update >"$before"
 set +e
-PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER=os-layer timeout 900 /usr/local/bin/plebian-os-update >"$update_log" 2>&1
+PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER=os-layer timeout 900 /usr/local/bin/plebian-os-update --revalidate-current >"$update_log" 2>&1
 update_rc=$?
 set -e
 if [ "$update_rc" -eq 0 ] || [ "$update_rc" -eq 124 ] \
@@ -1118,7 +1118,9 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
         if _RECORDER is not None:
             _RECORDER.check("successful whole-stack update and restart", False, detail)
         die("whole-stack update/restart verification FAILED:\n" + detail)
-    command = "timeout 3500 /usr/local/bin/plebian-os-update --restart"
+    # Validate the selected candidate before its public release tag exists.
+    # Default latest-release discovery is a separate adjacent-upgrade check.
+    command = "timeout 3500 /usr/local/bin/plebian-os-update --restart --revalidate-current"
     result = ssh(cfg, command, askpass, timeout=3600)
     ok = result is not None and result.returncode == 0
     if result is None:

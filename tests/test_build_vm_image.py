@@ -1,6 +1,8 @@
 import hashlib
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -40,6 +42,71 @@ def cfg(**overrides):
     )
     values.update(overrides)
     return vm.Config(**values)
+
+
+class SelectedClosureGateTests(unittest.TestCase):
+    """Exercise acceptance-generated options against real release selection."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.remote = self.root / "published"
+        subprocess.run(["git", "init", "-q", str(self.remote)], check=True)
+        subprocess.run([
+            "git", "-C", str(self.remote), "-c", "user.name=Fixture",
+            "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty",
+            "-qm", "published release fixture",
+        ], check=True)
+        subprocess.run(["git", "-C", str(self.remote), "tag", "v0.2.1"], check=True)
+
+    def select(self, options):
+        environment = {
+            "PATH": os.defpath, "HOME": str(self.root),
+            "PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1",
+            "PLEBIAN_OS_REPO": str(self.remote),
+            "PLEBIAN_OS_VERSION": "0.2.2",
+        }
+        return subprocess.run([
+            "bash", "-c",
+            'update_path=$1; shift; source "$update_path"; '
+            'select_latest_release_if_needed; '
+            'printf "SELECTED:%s:%s\\n" "$PLEBIAN_OS_VERSION" "$restart_arg"',
+            "bash", str(ROOT / "provision" / "plebian-os-update.sh"), *options,
+        ], env=environment, text=True, capture_output=True)
+
+    def generated_options(self, gate):
+        success = SimpleNamespace(returncode=0, stdout="", stderr="")
+        before = SimpleNamespace(returncode=0, stdout="fixture-invocation\n", stderr="")
+        replies = [success] if gate == "rollback" else [before, success, success]
+        with mock.patch.object(vm, "ssh", side_effect=replies) as remote, \
+                mock.patch.object(vm, "info"), mock.patch.object(vm, "_RECORDER", None):
+            if gate == "rollback":
+                vm.verify_update_rollback(cfg(), "askpass")
+            else:
+                vm.verify_successful_update(cfg(), "askpass")
+        commands = [call.args[1] for call in remote.call_args_list]
+        pattern = r"\btimeout [0-9]+ /usr/local/bin/plebian-os-update((?: --[a-z-]+)*)"
+        matches = [re.search(pattern, command) for command in commands]
+        options = [shlex.split(match.group(1)) for match in matches if match]
+        self.assertEqual(len(options), 1)
+        return options[0]
+
+    def test_rollback_reaches_the_unpublished_selected_closure(self):
+        result = self.select(self.generated_options("rollback"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SELECTED:0.2.2:--no-restart", result.stdout)
+
+    def test_successful_update_keeps_selected_closure_and_restart(self):
+        result = self.select(self.generated_options("success"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("SELECTED:0.2.2:--restart", result.stdout)
+
+    def test_plain_update_still_refuses_an_implicit_downgrade(self):
+        result = self.select([])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing an implicit downgrade", result.stderr)
+        self.assertNotIn("SELECTED:", result.stdout)
 
 
 class VmBuilderEnvTests(unittest.TestCase):
