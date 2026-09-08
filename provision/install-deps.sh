@@ -199,6 +199,10 @@ DEP_GROUPS=(
     # F100's sandbox must not depend on portal/systemd dependency accidents.
     # These exact versions are the frozen F118-S0 package identities.
     "F100 sandbox runtime|bubblewrap=0.11.0-2+deb13u1 libseccomp2=2.6.0-2"
+    # F101 shares one native codec library between Amp and the multiplexer.
+    # ORT API21 is selected explicitly; no model or converter environment is
+    # installed by this package group. Crypto headers remain in build toolchain.
+    "F101 native codec dependencies|libonnxruntime1.21=1.21.0+dfsg-1 libonnxruntime-dev=1.21.0+dfsg-1 libsamplerate0=0.2.2-4+b2 libsamplerate0-dev=0.2.2-4+b2 libssl3t64=3.5.6-1~deb13u2"
     "disk management|gparted"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     # Native Wayland applications reuse Kilix's existing X surfaces through a

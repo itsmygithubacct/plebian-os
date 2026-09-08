@@ -405,6 +405,21 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(NVR_BUILD_PACKAGES, install_deps_packages())
         self.assertLessEqual(NVR_BUILD_PACKAGES, preseed_packages())
 
+    def test_f101_native_dependency_closure_is_explicit_on_both_paths(self):
+        expected = {
+            "libonnxruntime1.21=1.21.0+dfsg-1",
+            "libonnxruntime-dev=1.21.0+dfsg-1",
+            "libsamplerate0=0.2.2-4+b2",
+            "libsamplerate0-dev=0.2.2-4+b2",
+            "libssl3t64=3.5.6-1~deb13u2",
+        }
+        self.assertLessEqual(expected, install_deps_packages())
+        self.assertLessEqual(expected, preseed_packages())
+        self.assertIn("libssl-dev", install_deps_packages())
+        # These are ordinary native packages, never converter/model payloads.
+        for item in expected:
+            self.assertNotIn("python3-onnxruntime", item)
+
     def test_021_compression_prerequisites_are_on_both_paths(self):
         self.assertLessEqual(COMPRESSION_PREREQUISITE_PACKAGES,
                              install_deps_packages())
