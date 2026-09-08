@@ -12,16 +12,22 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- Kilix Start and status widgets open anchored drop-downs above the panes.
+  Panes keep their size and live contents; popups fit the window, restore
+  focus and consume outside clicks used to dismiss them. The release selects
+  host `62cb5760` with engine `8f423846` and desktop `598c0ef8`, whose CI tests
+  that exact host. Existing host and desktop content-root integration is
+  retained; the other release and feature qualification gates remain open.
 - The closure selector can explicitly select one full development source commit
   with `--development-commit` for an untagged diagnostic transaction. Origin,
   complete manifest, component ancestry, exact target-tool and atomic rollback
   checks still apply; recovery metadata distinguishes this from release
   acceptance. Normal release selection continues to use tags.
 - The Kilix content catalog offers Kilix Techno (F124) and Kilix Graphs:
-  catalog admission at `3891c234` is retained in the integrated `KILIX_REF`
-  `79519e95`, together with the contained-app fixes below. `KILIX95_REF`
-  follows to `ca5a734b`, pairing its CI with the same Kilix commit. Each
-  application entered behind independent review (`releases/0.2.2-notes.md`).
+  catalog admission at `3891c234` and the contained-app fixes from `79519e95`
+  are retained in the current host selection. `KILIX95_REF` pairs its CI with
+  the same Kilix commit. Each application entered behind independent review
+  (`releases/0.2.2-notes.md`).
 - A whole-stack update refuses to start when sudo needs a password and no
   terminal can answer it, rather than failing mid-transaction and leaving the
   closure selected but not installed.
