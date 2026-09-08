@@ -18,10 +18,14 @@ jobs:
         run: python3 -m unittest discover -s tests -v
       - name: Parse and lint scripts
         run: |
-          bash -n bootstrap.sh build/*.sh provision/*.sh \
+          for shell_script in bootstrap.sh build/*.sh provision/*.sh \
             provision/plebian-os-firstboot-attempt \
-            provision/plebian-os-apt-snapshot-generator
-          python3 -m py_compile build/*.py provision/plebian-os-passwd tests/*.py
+            provision/plebian-os-apt-snapshot-generator \
+            provision/plebian-os-native-runtime; do
+            bash -n "$shell_script"
+          done
+          python3 -m py_compile build/*.py provision/plebian-os-passwd provision/native_*.py tests/*.py
           shellcheck -S warning bootstrap.sh build/*.sh provision/*.sh \
             provision/plebian-os-firstboot-attempt \
-            provision/plebian-os-apt-snapshot-generator
+            provision/plebian-os-apt-snapshot-generator \
+            provision/plebian-os-native-runtime

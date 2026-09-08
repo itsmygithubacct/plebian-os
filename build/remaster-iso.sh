@@ -111,6 +111,13 @@ load_release_manifest() {
     [ -f "$manifest" ] || { echo "no release manifest: releases/$rel.env" >&2; exit 1; }
     echo "==> release $rel: applying pins from releases/$rel.env"
     local line key val
+    # A named older closure must clear this new selection as well; ambient
+    # values cannot supply fields omitted by the authoritative manifest.
+    PLEBIAN_OS_NATIVE_DEB_URL=
+    PLEBIAN_OS_NATIVE_DEB_SHA256=
+    PLEBIAN_OS_NATIVE_DEB_BYTES=
+    PLEBIAN_OS_NATIVE_SOURCE_REF=
+    PLEBIAN_OS_NATIVE_CONTENT_REF=
     declare -A seen=()
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in ''|\#*) continue ;; esac
@@ -247,6 +254,57 @@ validate_voice_release_closure() {
     for key in KILIX_VOICE_LIB_SHA256 KILIX_VOICE_MODEL_SHA256; do
         is_hex_len "${!key}" 64 \
             || { echo "release mode requires a 64-character $key" >&2; exit 1; }
+    done
+}
+
+# One externally selected inert .deb, never a checkpoint or a native build.
+# Older closures may omit it; a strict 0.2.2 closure may not. Any partial
+# selection is invalid in development too. Keep the three standalone callers
+# identical; tests execute the complete boundary on each copy.
+validate_native_release_closure() {
+    local version="$1" mode="$2" key present=0
+    local authority port
+    local url_pattern='^https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*$'
+    for key in PLEBIAN_OS_NATIVE_DEB_URL PLEBIAN_OS_NATIVE_DEB_SHA256 \
+        PLEBIAN_OS_NATIVE_DEB_BYTES PLEBIAN_OS_NATIVE_SOURCE_REF \
+        PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [ -z "${!key:-}" ] || present=$((present + 1))
+    done
+    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+        return 0
+    fi
+    [ "$present" = 5 ] || {
+        echo "native runtime closure requires all five exact PLEBIAN_OS_NATIVE_* fields" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_URL}" =~ $url_pattern ]] \
+        && [ "${#PLEBIAN_OS_NATIVE_DEB_URL}" -le 2048 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_URL must be a bounded HTTPS URL without credentials" >&2
+        return 1
+    }
+    authority="${PLEBIAN_OS_NATIVE_DEB_URL#https://}"
+    authority="${authority%%[/?]*}"
+    if [[ "$authority" == *:* ]]; then
+        port="${authority#*:}"
+        [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$port" -le 65535 ] || {
+            echo "native HTTPS port must be a canonical decimal integer in 1..65535" >&2
+            return 1
+        }
+    fi
+    [[ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" =~ ^[1-9][0-9]{0,6}$ ]] \
+        && [ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" -le 8388608 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_BYTES must be an exact byte count in 1..8388608" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_SHA256}" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_SHA256 must be a lowercase SHA-256" >&2
+        return 1
+    }
+    for key in PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [[ "${!key}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "$key must be a full lowercase commit SHA" >&2
+            return 1
+        }
     done
 }
 
@@ -473,6 +531,8 @@ validate_release_refs_resolve_on_their_remotes() {
 }
 
 release_preflight() {
+    validate_native_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" \
+        "${PLEBIAN_OS_RELEASE_MODE:-0}" || exit 1
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
     local key missing=() actual_commit expected_commit
     for key in \
@@ -849,6 +909,11 @@ write_build_info() {
         # that gate on a build input it does carry but does not state.
         manifest_kv PLEBIAN_OS_NETINST_MAX_BYTES "${PLEBIAN_OS_NETINST_MAX_BYTES:-}"
         manifest_kv PLEBIAN_OS_RELEASE_MODE "${PLEBIAN_OS_RELEASE_MODE:-0}"
+        manifest_kv PLEBIAN_OS_NATIVE_DEB_URL "${PLEBIAN_OS_NATIVE_DEB_URL:-}"
+        manifest_kv PLEBIAN_OS_NATIVE_DEB_SHA256 "${PLEBIAN_OS_NATIVE_DEB_SHA256:-}"
+        manifest_kv PLEBIAN_OS_NATIVE_DEB_BYTES "${PLEBIAN_OS_NATIVE_DEB_BYTES:-}"
+        manifest_kv PLEBIAN_OS_NATIVE_SOURCE_REF "${PLEBIAN_OS_NATIVE_SOURCE_REF:-}"
+        manifest_kv PLEBIAN_OS_NATIVE_CONTENT_REF "${PLEBIAN_OS_NATIVE_CONTENT_REF:-}"
         manifest_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         manifest_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
         manifest_kv PLEBIAN_OS_KIOSK "${PLEBIAN_OS_KIOSK:-0}"
@@ -991,6 +1056,11 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
         env_kv PLEBIAN_OS_RELEASE "${PLEBIAN_OS_RELEASE:-}"
         env_kv PLEBIAN_OS_RELEASE_MODE "${PLEBIAN_OS_RELEASE_MODE:-0}"
+        env_kv PLEBIAN_OS_NATIVE_DEB_URL "${PLEBIAN_OS_NATIVE_DEB_URL:-}"
+        env_kv PLEBIAN_OS_NATIVE_DEB_SHA256 "${PLEBIAN_OS_NATIVE_DEB_SHA256:-}"
+        env_kv PLEBIAN_OS_NATIVE_DEB_BYTES "${PLEBIAN_OS_NATIVE_DEB_BYTES:-}"
+        env_kv PLEBIAN_OS_NATIVE_SOURCE_REF "${PLEBIAN_OS_NATIVE_SOURCE_REF:-}"
+        env_kv PLEBIAN_OS_NATIVE_CONTENT_REF "${PLEBIAN_OS_NATIVE_CONTENT_REF:-}"
         env_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         env_kv PLEBIAN_OS_REPO "${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
         env_kv PLEBIAN_OS_BRANCH "${PLEBIAN_OS_BRANCH:-}"
@@ -1422,6 +1492,10 @@ cp "$HERE/provision/install-deps.sh"             "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-ollama-converter" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-vulkan-tts" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-ollama-runtime" "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-native-runtime" "$EXTRACT/plebian-os/"
+for native_module in native_package.py native_state.py native_process.py native_runtime.py; do
+    install -m 0644 "$HERE/provision/$native_module" "$EXTRACT/plebian-os/$native_module"
+done
 cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-select-closure.sh" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-record-installed-user" "$EXTRACT/plebian-os/"

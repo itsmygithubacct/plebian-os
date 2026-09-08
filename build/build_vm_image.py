@@ -198,6 +198,39 @@ def default_iso_filename(name: str) -> str:
     return f"plebian-os-{name}.iso"
 
 
+NATIVE_RELEASE_KEYS = (
+    "PLEBIAN_OS_NATIVE_DEB_URL", "PLEBIAN_OS_NATIVE_DEB_SHA256",
+    "PLEBIAN_OS_NATIVE_DEB_BYTES", "PLEBIAN_OS_NATIVE_SOURCE_REF",
+    "PLEBIAN_OS_NATIVE_CONTENT_REF",
+)
+
+
+def validate_native_release_closure(values: dict[str, str], release: str,
+                                    mode: str) -> None:
+    """Validate the selected inert package; no archive/model/network operation."""
+    selected = [values.get(key, "") for key in NATIVE_RELEASE_KEYS]
+    if not any(selected) and (release != "0.2.2" or mode != "1"):
+        return
+    if not all(selected):
+        die("native runtime closure requires all five exact PLEBIAN_OS_NATIVE_* fields")
+    url, digest, size, source, content = selected
+    if len(url) > 2048 or not re.fullmatch(
+            r"https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*", url):
+        die("PLEBIAN_OS_NATIVE_DEB_URL must be a bounded HTTPS URL without credentials")
+    authority = url[len("https://"):].split("/", 1)[0].split("?", 1)[0]
+    if ":" in authority:
+        port = authority.split(":", 1)[1]
+        if not re.fullmatch(r"[1-9][0-9]{0,4}", port) or int(port) > 65535:
+            die("native HTTPS port must be a canonical decimal integer in 1..65535")
+    if not re.fullmatch(r"[1-9][0-9]{0,6}", size) or int(size) > 8388608:
+        die("PLEBIAN_OS_NATIVE_DEB_BYTES must be an exact byte count in 1..8388608")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        die("PLEBIAN_OS_NATIVE_DEB_SHA256 must be a lowercase SHA-256")
+    for key, value in zip(NATIVE_RELEASE_KEYS[3:], (source, content)):
+        if not re.fullmatch(r"[0-9a-f]{40}", value):
+            die(f"{key} must be a full lowercase commit SHA")
+
+
 def apply_release_manifest(release: str | None = None) -> None:
     """If PLEBIAN_OS_RELEASE is set, load releases/<ver>.env into os.environ
     authoritatively, mirroring remaster-iso.sh. Ambient values never override a
@@ -237,6 +270,9 @@ def apply_release_manifest(release: str | None = None) -> None:
         return values
 
     manifest_values = read_assignments(manifest, "release manifest")
+    validate_native_release_closure(manifest_values, release, "1")
+    for key in NATIVE_RELEASE_KEYS:
+        os.environ[key] = manifest_values.get(key, "")
     for key, val in manifest_values.items():
         os.environ[key] = val
 

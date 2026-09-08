@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fixed root-owned entry point. No caller-selected import path or alternate root.
+set -eu
+exec /usr/bin/python3 -I -B /usr/local/libexec/plebian-os/native_runtime.py "$@"

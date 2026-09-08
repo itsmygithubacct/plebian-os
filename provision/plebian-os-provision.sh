@@ -74,6 +74,11 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_WAYDROID_BRANCH
     KILIX_WAYDROID_REF
     PLEBIAN_OS_APT_SNAPSHOT
+    PLEBIAN_OS_NATIVE_DEB_URL
+    PLEBIAN_OS_NATIVE_DEB_SHA256
+    PLEBIAN_OS_NATIVE_DEB_BYTES
+    PLEBIAN_OS_NATIVE_SOURCE_REF
+    PLEBIAN_OS_NATIVE_CONTENT_REF
     PLEBIAN_OS_INSTALL_UV
     PLEBIAN_OS_UV_VERSION
     PLEBIAN_OS_UV_INSTALLER_SHA256
@@ -258,6 +263,11 @@ KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-bc230142b2bd27f2a4bf1b1b67575f3d
 # outside release mode. A release with dictation enabled must state the entire
 # network-fetched closure explicitly, including both URLs and checksums.
 KILIX_VOICE_REF="${KILIX_VOICE_REF:-}"
+PLEBIAN_OS_NATIVE_DEB_URL="${PLEBIAN_OS_NATIVE_DEB_URL:-}"
+PLEBIAN_OS_NATIVE_DEB_SHA256="${PLEBIAN_OS_NATIVE_DEB_SHA256:-}"
+PLEBIAN_OS_NATIVE_DEB_BYTES="${PLEBIAN_OS_NATIVE_DEB_BYTES:-}"
+PLEBIAN_OS_NATIVE_SOURCE_REF="${PLEBIAN_OS_NATIVE_SOURCE_REF:-}"
+PLEBIAN_OS_NATIVE_CONTENT_REF="${PLEBIAN_OS_NATIVE_CONTENT_REF:-}"
 KILIX_VOICE_LIB_VERSION="${KILIX_VOICE_LIB_VERSION:-}"
 KILIX_VOICE_LIB_URL="${KILIX_VOICE_LIB_URL:-}"
 KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
@@ -628,11 +638,155 @@ restore_persisted_policy() {
     log "restored install policy from $PLEBIAN_OS_FIRSTBOOT_ENV: ${restored[*]}"
 }
 
+# The package operation belongs to the enclosing OS transaction. Record a
+# caller-chosen token BEFORE prepare; never infer ownership from another
+# process's active journal. A failed outer rollback keeps the deployed helper.
+NATIVE_TRANSACTION_TOKEN=
+NATIVE_TRANSACTION_STARTED=0
+
+native_download_archive() {
+    local output="$1"
+    # Fixed tools, no curlrc, HTTPS-only redirects, one bounded attempt. The
+    # kernel file-size limit applies even to an unannounced/chunked response.
+    /usr/bin/prlimit --fsize="$PLEBIAN_OS_NATIVE_DEB_BYTES:$PLEBIAN_OS_NATIVE_DEB_BYTES" -- \
+        /usr/bin/timeout --signal=TERM --kill-after=5s 125s \
+        /usr/bin/curl --disable --fail --silent --show-error --location \
+        --proto '=https' --proto-redir '=https' --max-redirs 5 \
+        --connect-timeout 20 --max-time 120 \
+        --max-filesize "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
+        --output "$output" --url "$PLEBIAN_OS_NATIVE_DEB_URL"
+}
+
+apply_selected_native_runtime() {
+    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual
+    [ -n "$version" ] || version="$PLEBIAN_OS_VERSION"
+    validate_native_release_closure "$version" "$PLEBIAN_OS_RELEASE_MODE" || return 1
+    [ -n "$PLEBIAN_OS_NATIVE_DEB_URL" ] || return 0
+    if [ "$dry_run" = 1 ]; then
+        log "would prepare and apply the exact selected native package inside the OS transaction"
+        return 0
+    fi
+    [ "$NATIVE_TRANSACTION_STARTED" = 0 ] || return 1
+    [ -d "$outer" ] && [ ! -L "$outer" ] \
+        && [ "$(stat -c '%u:%a' -- "$outer")" = "$(id -u):700" ] || {
+        warn "native staging requires the caller's private outer transaction directory"
+        return 1
+    }
+    stage="$(mktemp "$outer/native-deb.XXXXXX")" || return 1
+    chmod 0600 -- "$stage" || return 1
+    native_download_archive "$stage" || return 1
+    [ "$(wc -c < "$stage")" = "$PLEBIAN_OS_NATIVE_DEB_BYTES" ] || {
+        warn "native archive byte count differs from the selected closure"
+        return 1
+    }
+    actual="$(sha256sum -- "$stage" | awk '{print $1}')" || return 1
+    [ "$actual" = "$PLEBIAN_OS_NATIVE_DEB_SHA256" ] || {
+        warn "native archive checksum differs from the selected closure"
+        return 1
+    }
+    NATIVE_TRANSACTION_TOKEN="$(/usr/bin/python3 -I -B -c 'import secrets; print(secrets.token_hex(16))')" \
+        || return 1
+    [[ "$NATIVE_TRANSACTION_TOKEN" =~ ^[0-9a-f]{32}$ ]] || return 1
+    (umask 077; set -C; printf '%s\n' "$NATIVE_TRANSACTION_TOKEN" >"$outer/native-transaction") \
+        || return 1
+    NATIVE_TRANSACTION_STARTED=1
+    # The root helper independently reads held bytes and validates all embedded
+    # content; the download's shell checksum alone never authorizes execution.
+    native_runtime_command prepare --transaction "$NATIVE_TRANSACTION_TOKEN" \
+        --artifact "$stage" --sha256 "$PLEBIAN_OS_NATIVE_DEB_SHA256" \
+        --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
+        --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
+        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" >/dev/null || return 1
+    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN"
+}
+
+rollback_native_runtime_transaction() {
+    [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
+    native_runtime_command rollback "$NATIVE_TRANSACTION_TOKEN" --allow-unpublished || {
+        warn "native recovery refused for attempted token $NATIVE_TRANSACTION_TOKEN; this token may have no journal"
+        warn "retain deployed helpers and native/outer recovery state; inspect /usr/local/sbin/plebian-os-native-runtime status as root for the active owner"
+        return 1
+    }
+    NATIVE_TRANSACTION_STARTED=0
+}
+
+commit_native_runtime_transaction() {
+    [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
+    native_runtime_command commit "$NATIVE_TRANSACTION_TOKEN"
+}
+
+finish_native_runtime_transaction() {
+    [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
+    native_runtime_command finish "$NATIVE_TRANSACTION_TOKEN" || {
+        warn "outer stack is committed; native cleanup is pending for token $NATIVE_TRANSACTION_TOKEN"
+        warn "inspect /var/lib/plebian-os/native-runtime; do not roll back an already committed outer stack"
+        return 1
+    }
+    NATIVE_TRANSACTION_STARTED=0
+}
+
+native_runtime_command() {
+    /usr/local/sbin/plebian-os-native-runtime "$@"
+}
+
 release_requires_f120_roots() {
     [ "${PLEBIAN_OS_RELEASE:-}" = 0.2.1 ]
 }
 
+# One externally selected inert .deb, never a checkpoint or a native build.
+# Older closures may omit it; a strict 0.2.2 closure may not. Any partial
+# selection is invalid in development too. Keep the three standalone callers
+# identical; tests execute the complete boundary on each copy.
+validate_native_release_closure() {
+    local version="$1" mode="$2" key present=0
+    local authority port
+    local url_pattern='^https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*$'
+    for key in PLEBIAN_OS_NATIVE_DEB_URL PLEBIAN_OS_NATIVE_DEB_SHA256 \
+        PLEBIAN_OS_NATIVE_DEB_BYTES PLEBIAN_OS_NATIVE_SOURCE_REF \
+        PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [ -z "${!key:-}" ] || present=$((present + 1))
+    done
+    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+        return 0
+    fi
+    [ "$present" = 5 ] || {
+        echo "native runtime closure requires all five exact PLEBIAN_OS_NATIVE_* fields" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_URL}" =~ $url_pattern ]] \
+        && [ "${#PLEBIAN_OS_NATIVE_DEB_URL}" -le 2048 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_URL must be a bounded HTTPS URL without credentials" >&2
+        return 1
+    }
+    authority="${PLEBIAN_OS_NATIVE_DEB_URL#https://}"
+    authority="${authority%%[/?]*}"
+    if [[ "$authority" == *:* ]]; then
+        port="${authority#*:}"
+        [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$port" -le 65535 ] || {
+            echo "native HTTPS port must be a canonical decimal integer in 1..65535" >&2
+            return 1
+        }
+    fi
+    [[ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" =~ ^[1-9][0-9]{0,6}$ ]] \
+        && [ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" -le 8388608 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_BYTES must be an exact byte count in 1..8388608" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_SHA256}" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_SHA256 must be a lowercase SHA-256" >&2
+        return 1
+    }
+    for key in PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [[ "${!key}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "$key must be a full lowercase commit SHA" >&2
+            return 1
+        }
+    done
+}
+
 validate_release_inputs() {
+    validate_native_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" \
+        "${PLEBIAN_OS_RELEASE_MODE:-0}" || die "invalid native runtime closure"
     [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
     local key
     for key in PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF; do
@@ -1000,6 +1154,11 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/libexec/plebian-os/native_package.py
+    /usr/local/libexec/plebian-os/native_state.py
+    /usr/local/libexec/plebian-os/native_process.py
+    /usr/local/libexec/plebian-os/native_runtime.py
     /usr/local/bin/plebian-os-nvidia-driver
     /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
@@ -1051,6 +1210,8 @@ PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
 # files are removed. rmdir is intentional: unexpected contents are retained
 # and turn the rollback into a reported, inspectable failure.
 PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
+    /usr/local/libexec
+    /usr/local/libexec/plebian-os
     /etc/modprobe.d
     /etc/systemd/system.conf.d
     /etc/lightdm/lightdm-gtk-greeter.conf.d
@@ -1350,6 +1511,10 @@ remove_provision_root_transaction() {
 rollback_provision_root_transaction() {
     local txn="$PROVISION_ROOT_TRANSACTION_DIR"
     warn "provisioning failed; restoring the previous root-managed OS/Pleb files"
+    rollback_native_runtime_transaction || {
+        warn "retaining the current OS helper and root recovery data at $txn"
+        return 1
+    }
     if restore_provision_root_transaction \
             && remove_provision_root_transaction "$txn"; then
         PROVISION_ROOT_TRANSACTION_ACTIVE=0
@@ -1366,8 +1531,13 @@ commit_provision_root_transaction() {
     [ "$DRY_RUN" != 1 ] || return 0
     [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
         || die "no active provisioning root transaction to commit"
+    commit_native_runtime_transaction || die "could not commit the selected native runtime"
     PROVISION_ROOT_TRANSACTION_COMMITTED=1
     PROVISION_ROOT_TRANSACTION_ACTIVE=0
+    finish_native_runtime_transaction || {
+        warn "coherent provision committed; retaining root recovery data at $txn"
+        return 0
+    }
     if remove_provision_root_transaction "$txn"; then
         PROVISION_ROOT_TRANSACTION_DIR=""
         log "committed the root filesystem transaction"
@@ -2375,6 +2545,135 @@ install_artwork_notices() {
         "$INSTALLER_ATTRIBUTION_SHA256" "installer artwork attribution" attribution
 }
 
+install_native_runtime_helpers() {
+    # The media/updater paths already deploy this complete set. Bootstrap from
+    # a checkout installs the same set inside the outer root-file transaction.
+    # This only deploys source helpers; it does not run dpkg or native code.
+    /usr/bin/python3 -I -B - "$SELF_DIR" "$DRY_RUN" <<'PY' \
+        || die "native runtime helper deployment failed"
+import os
+from pathlib import Path
+import signal
+import stat
+import subprocess
+import sys
+import tempfile
+
+source_dir = Path(sys.argv[1])
+dry_run = sys.argv[2] == '1'
+required_uid = 0
+entry_dir = Path('/usr/local/sbin')
+module_dir = Path('/usr/local/libexec/plebian-os')
+modules = ('native_package.py', 'native_state.py', 'native_process.py', 'native_runtime.py')
+names = ('plebian-os-native-runtime', *modules)
+deployed = source_dir == entry_dir
+limit = 131072
+if not dry_run and os.geteuid() != required_uid:
+    raise RuntimeError('native helper deployment requires root')
+
+def interrupted(signum, frame):
+    raise RuntimeError('native helper deployment interrupted')
+
+for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGPIPE):
+    signal.signal(signum, interrupted)
+
+def identity(info):
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mode, info.st_nlink,
+            info.st_uid, info.st_gid, info.st_mtime_ns, info.st_ctime_ns)
+
+def source_bytes(path):
+    held = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        before = os.fstat(held)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_mode & 0o022 or not 0 < before.st_size <= limit):
+            raise RuntimeError('unsafe or oversized native helper source: ' + str(path))
+        if deployed and before.st_uid != required_uid:
+            raise RuntimeError('installed native helper is not root-owned')
+        reading = os.open('/proc/self/fd/' + str(held), os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+        try:
+            data = bytearray()
+            while len(data) <= limit:
+                chunk = os.read(reading, min(65536, limit + 1 - len(data)))
+                if not chunk:
+                    break
+                data.extend(chunk)
+        finally:
+            os.close(reading)
+        if (len(data) != before.st_size or identity(os.fstat(held)) != identity(before)
+                or identity(path.lstat()) != identity(before)):
+            raise RuntimeError('native helper source changed while reading')
+        return bytes(data)
+    finally:
+        os.close(held)
+
+def trusted_directory(path, *, optional=False):
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        if optional:
+            return
+        raise
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != required_uid
+            or info.st_mode & 0o022 or not info.st_mode & 0o001):
+        raise RuntimeError('unsafe native helper destination directory: ' + str(path))
+
+for path in (Path('/'), Path('/usr'), Path('/usr/local'), entry_dir):
+    trusted_directory(path)
+for path in (module_dir.parent, module_dir):
+    trusted_directory(path, optional=True)
+
+payload = {}
+destinations = {}
+for name in names:
+    destination = (entry_dir if name == names[0] else module_dir) / name
+    source = destination if deployed else source_dir / name
+    data = source_bytes(source)
+    if name in modules:
+        compile(data, str(source), 'exec')
+    else:
+        subprocess.run(['/bin/sh', '-n'], input=data, check=True, timeout=5)
+    if destination.exists() or destination.is_symlink():
+        info = destination.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != required_uid
+                or info.st_nlink != 1 or info.st_mode & 0o022):
+            raise RuntimeError('unsafe existing native helper: ' + str(destination))
+    payload[name] = data
+    destinations[name] = destination
+
+if dry_run:
+    print('native helper set validated; dry-run did not deploy files')
+elif deployed:
+    print('complete installed native helper set validated')
+else:
+    for path in (module_dir.parent, module_dir):
+        if not path.exists():
+            path.mkdir(mode=0o755)
+            path.chmod(0o755)
+        trusted_directory(path)
+    with tempfile.TemporaryDirectory(prefix='.native-helpers-', dir=module_dir) as temporary:
+        stage = Path(temporary)
+        for name, data in payload.items():
+            with (stage / name).open('xb') as output:
+                os.chmod(stage / name, 0o600)
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+        # All five sources were bounded and validated before the first rename.
+        # Any ordinary partial publication fails the enclosing root transaction.
+        for name in names:
+            os.chmod(stage / name, 0o755 if name == names[0] else 0o644)
+            os.replace(stage / name, destinations[name])
+        for path in (entry_dir, module_dir):
+            fd = os.open(path, os.O_DIRECTORY | os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+    print('complete native helper set deployed; no package operation performed')
+PY
+}
+
 install_lightdm_greeter_branding() {
     local repo_root="$SELF_DIR/.." source path owner mode config_dir
     config_dir="$(dirname "$LIGHTDM_GREETER_CONFIG_DST")"
@@ -2927,6 +3226,11 @@ write_source_tool_manifest() {
         provenance_kv PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
         provenance_kv PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
         provenance_kv PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
+        provenance_kv PLEBIAN_OS_NATIVE_DEB_URL "$PLEBIAN_OS_NATIVE_DEB_URL"
+        provenance_kv PLEBIAN_OS_NATIVE_DEB_SHA256 "$PLEBIAN_OS_NATIVE_DEB_SHA256"
+        provenance_kv PLEBIAN_OS_NATIVE_DEB_BYTES "$PLEBIAN_OS_NATIVE_DEB_BYTES"
+        provenance_kv PLEBIAN_OS_NATIVE_SOURCE_REF "$PLEBIAN_OS_NATIVE_SOURCE_REF"
+        provenance_kv PLEBIAN_OS_NATIVE_CONTENT_REF "$PLEBIAN_OS_NATIVE_CONTENT_REF"
         provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
         provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
         provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
@@ -4115,6 +4419,9 @@ install_desktop_wallpaper
 install_version_marker
 install_lightdm_greeter_branding
 install_artwork_notices
+install_native_runtime_helpers
+apply_selected_native_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
+    || die "selected native runtime could not be prepared/applied"
 
 # Ship only the small source-closure installer. It is never invoked during
 # provisioning: the large Python converter dependencies and all model bytes
@@ -4689,6 +4996,11 @@ EOF
     write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
     write_session_default PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
     write_session_default PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
+    write_session_default PLEBIAN_OS_NATIVE_DEB_URL "$PLEBIAN_OS_NATIVE_DEB_URL"
+    write_session_default PLEBIAN_OS_NATIVE_DEB_SHA256 "$PLEBIAN_OS_NATIVE_DEB_SHA256"
+    write_session_default PLEBIAN_OS_NATIVE_DEB_BYTES "$PLEBIAN_OS_NATIVE_DEB_BYTES"
+    write_session_default PLEBIAN_OS_NATIVE_SOURCE_REF "$PLEBIAN_OS_NATIVE_SOURCE_REF"
+    write_session_default PLEBIAN_OS_NATIVE_CONTENT_REF "$PLEBIAN_OS_NATIVE_CONTENT_REF"
     write_session_default PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
     write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
     write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"

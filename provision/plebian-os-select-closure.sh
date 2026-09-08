@@ -132,6 +132,11 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_WAYDROID_BRANCH
     KILIX_WAYDROID_REF
     PLEBIAN_OS_APT_SNAPSHOT
+    PLEBIAN_OS_NATIVE_DEB_URL
+    PLEBIAN_OS_NATIVE_DEB_SHA256
+    PLEBIAN_OS_NATIVE_DEB_BYTES
+    PLEBIAN_OS_NATIVE_SOURCE_REF
+    PLEBIAN_OS_NATIVE_CONTENT_REF
     PLEBIAN_OS_INSTALL_UV
     PLEBIAN_OS_UV_VERSION
     PLEBIAN_OS_UV_INSTALLER_SHA256
@@ -377,7 +382,64 @@ is_f120_root_key() {
     esac
 }
 
+# One externally selected inert .deb, never a checkpoint or a native build.
+# Older closures may omit it; a strict 0.2.2 closure may not. Any partial
+# selection is invalid in development too. Keep the three standalone callers
+# identical; tests execute the complete boundary on each copy.
+validate_native_release_closure() {
+    local version="$1" mode="$2" key present=0
+    local authority port
+    local url_pattern='^https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*$'
+    for key in PLEBIAN_OS_NATIVE_DEB_URL PLEBIAN_OS_NATIVE_DEB_SHA256 \
+        PLEBIAN_OS_NATIVE_DEB_BYTES PLEBIAN_OS_NATIVE_SOURCE_REF \
+        PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [ -z "${!key:-}" ] || present=$((present + 1))
+    done
+    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+        return 0
+    fi
+    [ "$present" = 5 ] || {
+        echo "native runtime closure requires all five exact PLEBIAN_OS_NATIVE_* fields" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_URL}" =~ $url_pattern ]] \
+        && [ "${#PLEBIAN_OS_NATIVE_DEB_URL}" -le 2048 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_URL must be a bounded HTTPS URL without credentials" >&2
+        return 1
+    }
+    authority="${PLEBIAN_OS_NATIVE_DEB_URL#https://}"
+    authority="${authority%%[/?]*}"
+    if [[ "$authority" == *:* ]]; then
+        port="${authority#*:}"
+        [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$port" -le 65535 ] || {
+            echo "native HTTPS port must be a canonical decimal integer in 1..65535" >&2
+            return 1
+        }
+    fi
+    [[ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" =~ ^[1-9][0-9]{0,6}$ ]] \
+        && [ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" -le 8388608 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_BYTES must be an exact byte count in 1..8388608" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_SHA256}" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_SHA256 must be a lowercase SHA-256" >&2
+        return 1
+    }
+    for key in PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [[ "${!key}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "$key must be a full lowercase commit SHA" >&2
+            return 1
+        }
+    done
+}
+
 validate_release_closure() {
+    local PLEBIAN_OS_NATIVE_DEB_URL="${MANIFEST[PLEBIAN_OS_NATIVE_DEB_URL]:-}"
+    local PLEBIAN_OS_NATIVE_DEB_SHA256="${MANIFEST[PLEBIAN_OS_NATIVE_DEB_SHA256]:-}"
+    local PLEBIAN_OS_NATIVE_DEB_BYTES="${MANIFEST[PLEBIAN_OS_NATIVE_DEB_BYTES]:-}"
+    local PLEBIAN_OS_NATIVE_SOURCE_REF="${MANIFEST[PLEBIAN_OS_NATIVE_SOURCE_REF]:-}"
+    local PLEBIAN_OS_NATIVE_CONTENT_REF="${MANIFEST[PLEBIAN_OS_NATIVE_CONTENT_REF]:-}"
+    validate_native_release_closure "$TARGET" 1 || closure_reject "invalid native runtime closure"
     local key value missing=() present=()
 
     # The precedent is load_release_manifest: a manifest whose version disagrees

@@ -406,6 +406,11 @@ KILIX_REF="${KILIX_REF:-}"
 KILIX_PREBUILT_VERSION="${KILIX_PREBUILT_VERSION:-0.47.4}"
 KILIX_PREBUILT_SHA256="${KILIX_PREBUILT_SHA256:-bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693}"
 KILIX_VOICE_REF="${KILIX_VOICE_REF:-}"
+PLEBIAN_OS_NATIVE_DEB_URL="${PLEBIAN_OS_NATIVE_DEB_URL:-}"
+PLEBIAN_OS_NATIVE_DEB_SHA256="${PLEBIAN_OS_NATIVE_DEB_SHA256:-}"
+PLEBIAN_OS_NATIVE_DEB_BYTES="${PLEBIAN_OS_NATIVE_DEB_BYTES:-}"
+PLEBIAN_OS_NATIVE_SOURCE_REF="${PLEBIAN_OS_NATIVE_SOURCE_REF:-}"
+PLEBIAN_OS_NATIVE_CONTENT_REF="${PLEBIAN_OS_NATIVE_CONTENT_REF:-}"
 KILIX_VOICE_LIB_VERSION="${KILIX_VOICE_LIB_VERSION:-}"
 KILIX_VOICE_LIB_URL="${KILIX_VOICE_LIB_URL:-}"
 KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
@@ -825,6 +830,11 @@ txn="$(mktemp -d "$base/update-rollback.XXXXXX")"
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
+    /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/libexec/plebian-os/native_package.py
+    /usr/local/libexec/plebian-os/native_state.py
+    /usr/local/libexec/plebian-os/native_process.py
+    /usr/local/libexec/plebian-os/native_runtime.py
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
@@ -859,6 +869,8 @@ paths=(
     /var/lib/plebian-os/apt-sources.list
 )
 managed_dirs=(
+    /usr/local/libexec
+    /usr/local/libexec/plebian-os
     /usr/local/share/plebian-os
     /usr/local/share/plebian-os/wallpapers
     /usr/local/share/doc
@@ -948,6 +960,11 @@ fi
 paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
+    /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/libexec/plebian-os/native_package.py
+    /usr/local/libexec/plebian-os/native_state.py
+    /usr/local/libexec/plebian-os/native_process.py
+    /usr/local/libexec/plebian-os/native_runtime.py
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
@@ -982,6 +999,8 @@ paths=(
     /var/lib/plebian-os/apt-sources.list
 )
 managed_dirs=(
+    /usr/local/libexec
+    /usr/local/libexec/plebian-os
     /usr/local/share/plebian-os
     /usr/local/share/plebian-os/wallpapers
     /usr/local/share/doc
@@ -1532,9 +1551,153 @@ commit_kilix_engine_generation() {
     fi
 }
 
+validate_native_release_closure() {
+    local version="$1" mode="$2" key present=0
+    local authority port
+    local url_pattern='^https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*$'
+    for key in PLEBIAN_OS_NATIVE_DEB_URL PLEBIAN_OS_NATIVE_DEB_SHA256 \
+        PLEBIAN_OS_NATIVE_DEB_BYTES PLEBIAN_OS_NATIVE_SOURCE_REF \
+        PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [ -z "${!key:-}" ] || present=$((present + 1))
+    done
+    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+        return 0
+    fi
+    [ "$present" = 5 ] || {
+        echo "native runtime closure requires all five exact PLEBIAN_OS_NATIVE_* fields" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_URL}" =~ $url_pattern ]] \
+        && [ "${#PLEBIAN_OS_NATIVE_DEB_URL}" -le 2048 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_URL must be a bounded HTTPS URL without credentials" >&2
+        return 1
+    }
+    authority="${PLEBIAN_OS_NATIVE_DEB_URL#https://}"
+    authority="${authority%%[/?]*}"
+    if [[ "$authority" == *:* ]]; then
+        port="${authority#*:}"
+        [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$port" -le 65535 ] || {
+            echo "native HTTPS port must be a canonical decimal integer in 1..65535" >&2
+            return 1
+        }
+    fi
+    [[ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" =~ ^[1-9][0-9]{0,6}$ ]] \
+        && [ "${PLEBIAN_OS_NATIVE_DEB_BYTES}" -le 8388608 ] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_BYTES must be an exact byte count in 1..8388608" >&2
+        return 1
+    }
+    [[ "${PLEBIAN_OS_NATIVE_DEB_SHA256}" =~ ^[0-9a-f]{64}$ ]] || {
+        echo "PLEBIAN_OS_NATIVE_DEB_SHA256 must be a lowercase SHA-256" >&2
+        return 1
+    }
+    for key in PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_NATIVE_CONTENT_REF; do
+        [[ "${!key}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "$key must be a full lowercase commit SHA" >&2
+            return 1
+        }
+    done
+}
+
+# The package operation belongs to the enclosing OS transaction. Record a
+# caller-chosen token BEFORE prepare; never infer ownership from another
+# process's active journal. A failed outer rollback keeps the deployed helper.
+NATIVE_TRANSACTION_TOKEN=
+NATIVE_TRANSACTION_STARTED=0
+
+native_download_archive() {
+    local output="$1"
+    # Fixed tools, no curlrc, HTTPS-only redirects, one bounded attempt. The
+    # kernel file-size limit applies even to an unannounced/chunked response.
+    /usr/bin/prlimit --fsize="$PLEBIAN_OS_NATIVE_DEB_BYTES:$PLEBIAN_OS_NATIVE_DEB_BYTES" -- \
+        /usr/bin/timeout --signal=TERM --kill-after=5s 125s \
+        /usr/bin/curl --disable --fail --silent --show-error --location \
+        --proto '=https' --proto-redir '=https' --max-redirs 5 \
+        --connect-timeout 20 --max-time 120 \
+        --max-filesize "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
+        --output "$output" --url "$PLEBIAN_OS_NATIVE_DEB_URL"
+}
+
+apply_selected_native_runtime() {
+    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual
+    [ -n "$version" ] || version="$PLEBIAN_OS_VERSION"
+    validate_native_release_closure "$version" "$PLEBIAN_OS_RELEASE_MODE" || return 1
+    [ -n "$PLEBIAN_OS_NATIVE_DEB_URL" ] || return 0
+    if [ "$dry_run" = 1 ]; then
+        log "would prepare and apply the exact selected native package inside the OS transaction"
+        return 0
+    fi
+    [ "$NATIVE_TRANSACTION_STARTED" = 0 ] || return 1
+    [ -d "$outer" ] && [ ! -L "$outer" ] \
+        && [ "$(stat -c '%u:%a' -- "$outer")" = "$(id -u):700" ] || {
+        warn "native staging requires the caller's private outer transaction directory"
+        return 1
+    }
+    stage="$(mktemp "$outer/native-deb.XXXXXX")" || return 1
+    chmod 0600 -- "$stage" || return 1
+    native_download_archive "$stage" || return 1
+    [ "$(wc -c < "$stage")" = "$PLEBIAN_OS_NATIVE_DEB_BYTES" ] || {
+        warn "native archive byte count differs from the selected closure"
+        return 1
+    }
+    actual="$(sha256sum -- "$stage" | awk '{print $1}')" || return 1
+    [ "$actual" = "$PLEBIAN_OS_NATIVE_DEB_SHA256" ] || {
+        warn "native archive checksum differs from the selected closure"
+        return 1
+    }
+    NATIVE_TRANSACTION_TOKEN="$(/usr/bin/python3 -I -B -c 'import secrets; print(secrets.token_hex(16))')" \
+        || return 1
+    [[ "$NATIVE_TRANSACTION_TOKEN" =~ ^[0-9a-f]{32}$ ]] || return 1
+    (umask 077; set -C; printf '%s\n' "$NATIVE_TRANSACTION_TOKEN" >"$outer/native-transaction") \
+        || return 1
+    NATIVE_TRANSACTION_STARTED=1
+    # The root helper independently reads held bytes and validates all embedded
+    # content; the download's shell checksum alone never authorizes execution.
+    native_runtime_command prepare --transaction "$NATIVE_TRANSACTION_TOKEN" \
+        --artifact "$stage" --sha256 "$PLEBIAN_OS_NATIVE_DEB_SHA256" \
+        --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
+        --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
+        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" >/dev/null || return 1
+    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN"
+}
+
+rollback_native_runtime_transaction() {
+    [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
+    native_runtime_command rollback "$NATIVE_TRANSACTION_TOKEN" --allow-unpublished || {
+        warn "native recovery refused for attempted token $NATIVE_TRANSACTION_TOKEN; this token may have no journal"
+        warn "retain deployed helpers and native/outer recovery state; inspect /usr/local/sbin/plebian-os-native-runtime status as root for the active owner"
+        return 1
+    }
+    NATIVE_TRANSACTION_STARTED=0
+}
+
+commit_native_runtime_transaction() {
+    [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
+    native_runtime_command commit "$NATIVE_TRANSACTION_TOKEN"
+}
+
+finish_native_runtime_transaction() {
+    [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
+    native_runtime_command finish "$NATIVE_TRANSACTION_TOKEN" || {
+        warn "outer stack is committed; native cleanup is pending for token $NATIVE_TRANSACTION_TOKEN"
+        warn "inspect /var/lib/plebian-os/native-runtime; do not roll back an already committed outer stack"
+        return 1
+    }
+    NATIVE_TRANSACTION_STARTED=0
+}
+
+native_runtime_command() {
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    "${elevate[@]}" /usr/local/sbin/plebian-os-native-runtime "$@"
+}
+
 rollback_stack_transaction() {
     local failed=0 kilix_rollback_ready=0
     warn "stack update failed; restoring the previous coherent installation"
+    rollback_native_runtime_transaction || {
+        warn "retaining the current OS helper and whole-stack recovery snapshots"
+        return 1
+    }
 
     # Deinitialize every submodule introduced by the failed parent update while
     # the new index still names it.  The snapshot is recursive and path-driven,
@@ -1710,10 +1873,18 @@ begin_stack_transaction() {
 }
 
 commit_stack_transaction() {
+    commit_native_runtime_transaction || die "could not commit the selected native runtime"
     commit_kilix_engine_generation \
         || die "could not commit the coherent Kilix generation transaction"
     _STACK_TXN_COMMITTED=1
     _STACK_TXN_ACTIVE=0
+    if ! finish_native_runtime_transaction; then
+        _STACK_TXN_RETAIN=1
+        warn "coherent stack committed; retaining $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
+        trap - EXIT INT TERM HUP PIPE
+        release_kilix_transaction_lock
+        return 0
+    fi
     if ! remove_root_stack_snapshot "$_STACK_ROOT_TXN_DIR"; then
         warn "updated stack is coherent, but root recovery data could not be removed: $_STACK_ROOT_TXN_DIR"
     else
@@ -2116,6 +2287,11 @@ stage_and_validate_os_layer() {
         "$prov/plebian-os-install-ollama-converter"
         "$prov/plebian-os-install-kilix-vulkan-tts"
         "$prov/plebian-os-install-kilix-ollama-runtime"
+        "$prov/plebian-os-native-runtime"
+        "$prov/native_package.py"
+        "$prov/native_state.py"
+        "$prov/native_process.py"
+        "$prov/native_runtime.py"
         "$prov/plebian-os-passwd"
         "$prov/plebian-os-update.sh"
         "$prov/plebian-os-firstboot.service"
@@ -2147,6 +2323,12 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-install-kilix-vulkan-tts"
     install -m 0755 "$prov/plebian-os-install-kilix-ollama-runtime" \
         "$stage/plebian-os-install-kilix-ollama-runtime"
+    [ ! -L "$prov/plebian-os-native-runtime" ] || die "unsafe native helper entry-point symlink"
+    install -m 0755 "$prov/plebian-os-native-runtime" "$stage/plebian-os-native-runtime"
+    for file in native_package.py native_state.py native_process.py native_runtime.py; do
+        [ ! -L "$prov/$file" ] || die "unsafe native helper source symlink: $file"
+        install -m 0644 "$prov/$file" "$stage/$file"
+    done
     install -m 0755 "$prov/plebian-os-passwd" "$stage/plebian-os-passwd"
     install -m 0755 "$prov/plebian-os-update.sh" "$stage/plebian-os-update"
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
@@ -2161,11 +2343,14 @@ stage_and_validate_os_layer() {
     bash -n "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
         "$stage/plebian-os-select-closure" \
+        "$stage/plebian-os-native-runtime" \
         || die "staged OS-layer shell validation failed"
     python3 - "$stage/plebian-os-passwd" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-kilix-vulkan-tts" \
-        "$stage/plebian-os-install-kilix-ollama-runtime" <<'PY' \
+        "$stage/plebian-os-install-kilix-ollama-runtime" \
+        "$stage/native_package.py" "$stage/native_state.py" \
+        "$stage/native_process.py" "$stage/native_runtime.py" <<'PY' \
         || die "staged Python helper validation failed"
 import pathlib
 import sys
@@ -2331,6 +2516,11 @@ names=(
     plebian-os-install-ollama-converter
     plebian-os-install-kilix-vulkan-tts
     plebian-os-install-kilix-ollama-runtime
+    plebian-os-native-runtime
+    native_package.py
+    native_state.py
+    native_process.py
+    native_runtime.py
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -2348,9 +2538,14 @@ dests=(
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/libexec/plebian-os/native_package.py
+    /usr/local/libexec/plebian-os/native_state.py
+    /usr/local/libexec/plebian-os/native_process.py
+    /usr/local/libexec/plebian-os/native_runtime.py
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0644 0644 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 131072 131072 131072 131072 131072)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -2422,6 +2617,8 @@ done
 # The managed children may be created here, but must remain root-controlled and
 # traversable by the desktop user.
 for dir in \
+    /usr/local/libexec \
+    /usr/local/libexec/plebian-os \
     /usr/local/share/plebian-os \
     /usr/local/share/plebian-os/wallpapers \
     /usr/local/share/doc \
@@ -2523,8 +2720,10 @@ for i in "${!new_paths[@]}"; do
     }
 done
 bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}"
-python3 - "${new_paths[2]}" "${new_paths[12]}" <<'PY'
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[15]}"
+python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" \
+    "${new_paths[14]}" "${new_paths[16]}" "${new_paths[17]}" \
+    "${new_paths[18]}" "${new_paths[19]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
@@ -2639,6 +2838,11 @@ self_update_os_layer() {
         plebian-os-install-ollama-converter
         plebian-os-install-kilix-vulkan-tts
         plebian-os-install-kilix-ollama-runtime
+        plebian-os-native-runtime
+        native_package.py
+        native_state.py
+        native_process.py
+        native_runtime.py
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
@@ -2766,6 +2970,11 @@ refresh_os_dependencies() {
 }
 
 stack_env=(
+    "PLEBIAN_OS_NATIVE_DEB_URL=$PLEBIAN_OS_NATIVE_DEB_URL"
+    "PLEBIAN_OS_NATIVE_DEB_SHA256=$PLEBIAN_OS_NATIVE_DEB_SHA256"
+    "PLEBIAN_OS_NATIVE_DEB_BYTES=$PLEBIAN_OS_NATIVE_DEB_BYTES"
+    "PLEBIAN_OS_NATIVE_SOURCE_REF=$PLEBIAN_OS_NATIVE_SOURCE_REF"
+    "PLEBIAN_OS_NATIVE_CONTENT_REF=$PLEBIAN_OS_NATIVE_CONTENT_REF"
     "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
     "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
     "GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"
@@ -2921,6 +3130,11 @@ stage_final_provenance() {
         provenance_kv PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
         provenance_kv PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
         provenance_kv PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
+        provenance_kv PLEBIAN_OS_NATIVE_DEB_URL "$PLEBIAN_OS_NATIVE_DEB_URL"
+        provenance_kv PLEBIAN_OS_NATIVE_DEB_SHA256 "$PLEBIAN_OS_NATIVE_DEB_SHA256"
+        provenance_kv PLEBIAN_OS_NATIVE_DEB_BYTES "$PLEBIAN_OS_NATIVE_DEB_BYTES"
+        provenance_kv PLEBIAN_OS_NATIVE_SOURCE_REF "$PLEBIAN_OS_NATIVE_SOURCE_REF"
+        provenance_kv PLEBIAN_OS_NATIVE_CONTENT_REF "$PLEBIAN_OS_NATIVE_CONTENT_REF"
         provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
         provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
         provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
@@ -3256,6 +3470,8 @@ fi
 # updater from a fresh environment.  If no newer release exists, this returns
 # and the already-selected closure is revalidated normally.
 select_latest_release_if_needed
+validate_native_release_closure "${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" \
+    "$PLEBIAN_OS_RELEASE_MODE" || die "invalid native runtime closure"
 
 # Pleb does its system writes via sudo; on a non-passwordless box a clickable
 # "update" action would silently prompt or fail. Warn early rather than hang.
@@ -3296,6 +3512,9 @@ reconcile_legacy_remote_login
 test_fail_after_boundary os-layer
 refresh_os_dependencies
 test_fail_after_boundary dependencies
+apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
+    || die "selected native runtime could not be prepared/applied"
+test_fail_after_boundary native-runtime
 
 log "updating pleb   ($PLEB_DIR)"
 update_pleb_checkout

@@ -78,6 +78,13 @@ INSTALLED_CLOSURE = {
     "KILIX_WAYDROID_BRANCH": "",
     "KILIX_WAYDROID_REF": "a" * 40,
     "PLEBIAN_OS_APT_SNAPSHOT": "20260727T000000Z",
+    # 0.2.1 had no managed native-package selection. Re-provision must retain
+    # these empty values just as 0.2.2 must retain its five exact values.
+    "PLEBIAN_OS_NATIVE_DEB_URL": "",
+    "PLEBIAN_OS_NATIVE_DEB_SHA256": "",
+    "PLEBIAN_OS_NATIVE_DEB_BYTES": "",
+    "PLEBIAN_OS_NATIVE_SOURCE_REF": "",
+    "PLEBIAN_OS_NATIVE_CONTENT_REF": "",
     "PLEBIAN_OS_INSTALL_UV": "1",
     "PLEBIAN_OS_UV_VERSION": "0.12.5",
     "PLEBIAN_OS_UV_INSTALLER_SHA256":
