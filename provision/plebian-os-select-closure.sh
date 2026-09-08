@@ -11,6 +11,7 @@
 #
 # Usage:
 #   plebian-os-select-closure <x.y.z> [--source DIR] [--offline] [--dry-run]
+#   plebian-os-select-closure <x.y.z> --development-commit SHA [other options]
 #   plebian-os-select-closure --show
 #   plebian-os-select-closure --rollback
 #
@@ -18,6 +19,12 @@
 #                 releases/<x.y.z>.env inside the published v<x.y.z> tag, never
 #                 from a working tree, so the pins are the immutable ones the
 #                 release was accepted with.
+#   --development-commit SHA
+#                 explicitly select an untagged development source commit for
+#                 diagnostics. SHA must be a full lowercase 40-character commit.
+#                 Exact manifest, origin, ancestry and target-tool checks still
+#                 apply. This is not release or published-image acceptance;
+#                 no release tag is created or fetched by this selection.
 #   --source DIR  the Plebian-OS source checkout to read the tag from
 #                 (default: PLEBIAN_OS_DIR, i.e. the checkout the installed
 #                 system already uses). Only its object store is read; the
@@ -224,6 +231,7 @@ declare -A COMPONENT_TARGET=()
 declare -A COMPONENT_DIRECTION=()
 
 TARGET=""
+DEVELOPMENT_COMMIT=""
 SOURCE_DIR=""
 OFFLINE=0
 DRY_RUN=0
@@ -592,7 +600,24 @@ resolve_closure_source() {
         && [ "${PLEBIAN_OS_TRUST_EXISTING_CHECKOUT:-0}" != 1 ]; then
         die "Plebian-OS checkout at $SOURCE_DIR has origin '$remote', expected '$expected' (set PLEBIAN_OS_TRUST_EXISTING_CHECKOUT=1 to override)"
     fi
-    if [ "$OFFLINE" = 1 ]; then
+    if [ -n "$DEVELOPMENT_COMMIT" ]; then
+        if [ "$OFFLINE" = 1 ]; then
+            OS_COMMIT="$(git -C "$SOURCE_DIR" rev-parse --verify --quiet "$DEVELOPMENT_COMMIT^{commit}")" \
+                || die "development commit $DEVELOPMENT_COMMIT is not in $SOURCE_DIR and --offline forbids fetching it"
+        else
+            log "fetching exact development commit $DEVELOPMENT_COMMIT into $SOURCE_DIR"
+            # A normal fetch can accept an already-local SHA even when origin
+            # lacks it. Refetch makes the online lane check the remote object.
+            git -C "$SOURCE_DIR" -c fetch.recurseSubmodules=false fetch \
+                --refetch --no-tags --no-recurse-submodules origin "$DEVELOPMENT_COMMIT" \
+                || die "could not fetch development commit $DEVELOPMENT_COMMIT from origin"
+            OS_COMMIT="$(git -C "$SOURCE_DIR" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
+                || die "development source fetch did not resolve to a commit"
+        fi
+        [ "$OS_COMMIT" = "$DEVELOPMENT_COMMIT" ] \
+            || die "development source resolved to '$OS_COMMIT', not exact commit $DEVELOPMENT_COMMIT"
+        warn "DEVELOPMENT source selection: this is not release or published-image acceptance"
+    elif [ "$OFFLINE" = 1 ]; then
         OS_COMMIT="$(git -C "$SOURCE_DIR" rev-parse --verify --quiet "refs/tags/v$TARGET^{commit}")" \
             || die "release tag v$TARGET is not in $SOURCE_DIR and --offline forbids fetching it"
     else
@@ -1119,6 +1144,10 @@ write_closure_record() {
         printf 'os_commit=%s\n' "$OS_COMMIT"
         printf 'source=%s\n' "$SOURCE_DIR"
         printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if [ -n "$DEVELOPMENT_COMMIT" ]; then
+            printf 'selection_kind=development-commit\n'
+            printf 'release_acceptance=not-claimed\n'
+        fi
     } >"$STAGE/meta"
 }
 
@@ -1363,9 +1392,17 @@ select_closure() {
     fi
     write_closure_record
     apply_selected_closure
-    log "release $TARGET closure selected in $SESSION_ENV."
+    if [ -n "$DEVELOPMENT_COMMIT" ]; then
+        log "development $TARGET closure selected in $SESSION_ENV at $OS_COMMIT; no release acceptance claimed."
+    else
+        log "release $TARGET closure selected in $SESSION_ENV."
+    fi
     log "Next, and only next, run:"
-    log "    plebian-os-update --restart"
+    if [ -n "$DEVELOPMENT_COMMIT" ]; then
+        log "    plebian-os-update --revalidate-current --restart"
+    else
+        log "    plebian-os-update --restart"
+    fi
     log "Do not run plebian-os-provision or any other privileged provisioner between this selection and the updater."
     log "To put the previous closure back before updating, run this tool again with --rollback."
 }
@@ -1385,6 +1422,12 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die "--source needs a directory"
             SOURCE_DIR="$2"; shift ;;
         --source=*) SOURCE_DIR="${1#--source=}" ;;
+        --development-commit)
+            [ "$#" -ge 2 ] || die "--development-commit needs a full commit"
+            [ -z "$DEVELOPMENT_COMMIT" ] || die "select one development commit at a time"
+            [[ "$2" =~ ^[0-9a-f]{40}$ ]] \
+                || die "--development-commit requires a lowercase 40-character commit"
+            DEVELOPMENT_COMMIT="$2"; shift ;;
         [0-9]*.[0-9]*.[0-9]*)
             [ -z "$TARGET" ] || die "select one release at a time (already given $TARGET)"
             TARGET="$1" ;;
@@ -1392,6 +1435,9 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
+
+[ -z "$DEVELOPMENT_COMMIT" ] || [ "$MODE" = select ] \
+    || die "--development-commit requires a target selection, not --show or --rollback"
 
 umask 077
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-closure.XXXXXX")"

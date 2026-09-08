@@ -12,6 +12,11 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- The closure selector can explicitly select one full development source commit
+  with `--development-commit` for an untagged diagnostic transaction. Origin,
+  complete manifest, component ancestry, exact target-tool and atomic rollback
+  checks still apply; recovery metadata distinguishes this from release
+  acceptance. Normal release selection continues to use tags.
 - The Kilix content catalog offers Kilix Techno (F124) and Kilix Graphs:
   catalog admission at `3891c234` is retained in the integrated `KILIX_REF`
   `79519e95`, together with the contained-app fixes below. `KILIX95_REF`

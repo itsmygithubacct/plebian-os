@@ -152,7 +152,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 release="0.1.8", tag="v0.1.8",
                 requirements_text=None, selector_bytes=None,
                 updater_bytes=None) -> str:
-        """A Plebian-OS checkout carrying the published release tag."""
+        """A Plebian-OS checkout, optionally carrying a release tag."""
         src = base / "src"
         (src / "releases").mkdir(parents=True)
         (src / "provision").mkdir(parents=True)
@@ -175,9 +175,10 @@ class ClosureSelectionTests(unittest.TestCase):
                    "https://github.com/itsmygithubacct/plebian-os.git"], check=True)
         subprocess.run(git + ["add", "-A"], check=True)
         subprocess.run(git + ["commit", "-qm", "release"], check=True)
-        subprocess.run(git + ["tag", "-a", tag, "-m", tag], check=True)
+        if tag is not None:
+            subprocess.run(git + ["tag", "-a", tag, "-m", tag], check=True)
         return subprocess.run(
-            git + ["rev-parse", f"{tag}^{{commit}}"],
+            git + ["rev-parse", "HEAD"],
             capture_output=True, text=True, check=True).stdout.strip()
 
     def _f120_manifest_text(self, drop=(), **changes) -> str:
@@ -345,6 +346,205 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(after["PLEBIAN_OS_REF"], commit)
             self.assertIn("plebian-os-update --restart", result.stdout)
             self.assertIn("Do not run plebian-os-provision", result.stdout)
+            meta = (self._recovery_records(base)[0] / "meta").read_text()
+            self.assertNotIn("selection_kind=development-commit", meta)
+
+    def test_development_commit_selects_untagged_source_and_restores_old_tools(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            values_before = self._values(env)
+            commit = self._source(base, tag=None)
+            tools = base / "root" / "usr" / "local" / "bin"
+            originals = {}
+            for name in ("plebian-os-select-closure", "plebian-os-update"):
+                path = tools / name
+                originals[name] = f"#!/bin/sh\necho old-{name}\n".encode()
+                path.write_bytes(originals[name])
+                path.chmod(0o710)
+            default = self._run(base, "0.1.8", "--offline")
+            self.assertNotEqual(default.returncode, 0)
+            self.assertIn("release tag v0.1.8 is not in", default.stderr)
+            selected = self._run(base, "0.1.8", "--offline",
+                                 "--development-commit", commit)
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertIn("DEVELOPMENT source selection", selected.stderr)
+            self.assertIn("plebian-os-update --revalidate-current --restart",
+                          selected.stdout)
+            values = self._values(env)
+            self.assertEqual(values["PLEBIAN_OS_REF"], commit)
+            self.assertEqual(values["PLEBIAN_OS_VERSION"], "0.1.8")
+            for key, value in OPERATOR_VALUES:
+                self.assertEqual(values[key], value)
+            self.assertEqual(values["PLEB_RESPAWN"], values_before["PLEB_RESPAWN"])
+            self.assertIn(b"PLEB_RESPAWN=0   # operator note, deliberately unguarded", env.read_bytes())
+            self.assertEqual((tools / "plebian-os-select-closure").read_bytes(), SELECT.read_bytes())
+            self.assertEqual((tools / "plebian-os-update").read_bytes(), UPDATE.read_bytes())
+            meta = (self._recovery_records(base)[0] / "meta").read_text()
+            self.assertIn("selection_kind=development-commit\n", meta)
+            self.assertIn("release_acceptance=not-claimed\n", meta)
+            self.assertIn(f"os_commit={commit}\n", meta)
+            git = ["git", "-C", str(base / "src")]
+            self.assertEqual(subprocess.check_output(git + ["tag", "--list"]), b"")
+            self.assertEqual(subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip(), commit)
+            rolled_back = self._run(base, "--rollback")
+            self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
+            self.assertEqual(env.read_bytes(), before)
+            for name, content in originals.items():
+                self.assertEqual((tools / name).read_bytes(), content)
+                self.assertEqual((tools / name).stat().st_mode & 0o777, 0o710)
+
+    def test_development_commit_fetches_exact_object_without_fetching_tags(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            commit = self._source(base)
+            cache = base / "cache.git"
+            git = ["git", "-C", str(cache)]
+            subprocess.run(["git", "init", "--bare", "-q", str(cache)], check=True)
+            origin = "https://github.com/itsmygithubacct/plebian-os.git"
+            subprocess.run(git + ["remote", "add", "origin", origin], check=True)
+            # This private repository rewrites only its fixture origin. No
+            # global config, public network or product ancestry bypass changes.
+            subprocess.run(git + ["config", f"url.{base / 'src'}.insteadOf", origin], check=True)
+            missing = self._run(base, "0.1.8", "--source", str(cache), "--offline",
+                                "--development-commit", commit)
+            self.assertNotEqual(missing.returncode, 0)
+            self.assertIn("--offline forbids fetching", missing.stderr)
+            selected = self._run(base, "0.1.8", "--source", str(cache),
+                                 "--development-commit", commit)
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertEqual(self._values(env)["PLEBIAN_OS_REF"], commit)
+            self.assertEqual(subprocess.check_output(git + ["tag", "--list"]), b"")
+            self.assertNotEqual(subprocess.run(git + ["rev-parse", "--verify", "HEAD"],
+                                              capture_output=True).returncode, 0)
+
+    def test_development_commit_refuses_bad_identifiers_and_noncommit_objects(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            commit = self._source(base)
+            git = ["git", "-C", str(base / "src")]
+            tag = subprocess.check_output(git + ["rev-parse", "refs/tags/v0.1.8"], text=True).strip()
+            tree = subprocess.check_output(git + ["rev-parse", "HEAD^{tree}"], text=True).strip()
+            for value in ("", "main", commit[:12], commit.upper(), "g" * 40,
+                          f"$(touch {shlex.quote(str(base / 'invalid-source-marker'))})",
+                          "0" * 40, tag, tree):
+                with self.subTest(value=value):
+                    result = self._run(base, "0.1.8", "--offline", "--development-commit", value)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(env.read_bytes(), before)
+                    self.assertEqual(self._recovery_records(base), [])
+            self.assertFalse((base / "invalid-source-marker").exists())
+            self.assertNotEqual(self._run(base, "0.1.8", "--development-commit").returncode, 0)
+            self.assertNotEqual(self._run(base, "0.1.8", "--development-commit", commit,
+                                          "--development-commit", commit).returncode, 0)
+            for mode in ("--show", "--rollback"):
+                result = self._run(base, mode, "--development-commit", commit)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("requires a target selection", result.stderr)
+
+    def test_development_commit_failed_fetch_does_not_use_a_local_object(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            commit = self._source(base, tag=None)
+            empty = base / "unpublished.git"
+            subprocess.run(["git", "init", "--bare", "-q", str(empty)], check=True)
+            origin = "https://github.com/itsmygithubacct/plebian-os.git"
+            subprocess.run(["git", "-C", str(base / "src"), "config",
+                            f"url.{empty}.insteadOf", origin], check=True)
+            result = self._run(base, "0.1.8", "--development-commit", commit)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("could not fetch development commit", result.stderr)
+            self.assertEqual(env.read_bytes(), before)
+            self.assertEqual(self._recovery_records(base), [])
+
+    def test_development_commit_preserves_origin_manifest_and_tool_guards(self):
+        for kind in ("origin", "manifest", "selector", "updater", "version"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base)
+                before = env.read_bytes()
+                options = {"tag": None}
+                if kind == "manifest":
+                    options["manifest_text"] = self._manifest_text(drop=("KILIX_REF",))
+                elif kind == "selector":
+                    options["selector_bytes"] = SELECT.read_bytes() + b"\n# different target\n"
+                elif kind == "updater":
+                    options["updater_bytes"] = b"#!/bin/bash\nif then\n"
+                elif kind == "version":
+                    options["version"] = "0.1.7"
+                commit = self._source(base, **options)
+                if kind == "origin":
+                    subprocess.run(["git", "-C", str(base / "src"), "remote", "set-url", "origin",
+                                    "https://example.invalid/foreign.git"], check=True)
+                result = self._run(base, "0.1.8", "--offline", "--development-commit", commit)
+                self.assertNotEqual(result.returncode, 0)
+                expected = {"origin": "expected", "manifest": "KILIX_REF",
+                            "selector": "running selector does not match",
+                            "updater": "invalid target updater", "version": "VERSION reads"}
+                self.assertIn(expected[kind], result.stderr)
+                self.assertEqual(env.read_bytes(), before)
+                self.assertEqual(self._recovery_records(base), [])
+
+    def test_development_commit_still_checks_real_component_histories(self):
+        for missing in (False, True):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                sources = base / "home" / ".local" / "gpu_terminal" / "sources"
+                pleb = self._component_history(sources / "pleb")
+                kilix = self._component_history(sources / "kilix")
+                kilix95 = self._component_history(sources / "kilix-desktops" / "kilix-95")
+                manifest = self._manifest_text(PLEB_REF="f" * 40 if missing else pleb[0],
+                                               KILIX_REF=kilix[1], KILIX95_REF=kilix95[1])
+                commit = self._source(base, manifest, tag=None)
+                installed = dict(INSTALLED_RELEASE_VALUES, PLEBIAN_OS_REF=commit,
+                                 PLEB_REF=pleb[1], KILIX_REF=kilix[0], KILIX95_REF=kilix95[0])
+                env = self._machine(base, release=list(installed.items()))
+                before = env.read_bytes()
+                result = self._run(base, "0.1.8", "--offline", "--dry-run",
+                                   "--development-commit", commit, check_ancestry=True)
+                self.assertEqual(env.read_bytes(), before)
+                self.assertEqual(self._recovery_records(base), [])
+                if missing:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("--offline forbids fetching", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"component Pleb: {pleb[1][:12]} -> {pleb[0][:12]} (DOWNGRADE;", result.stderr)
+                    self.assertIn(f"component Kilix: {kilix[0][:12]} -> {kilix[1][:12]} (forward;", result.stdout)
+
+    def test_development_commit_dry_run_and_failed_transaction_preserve_state(self):
+        for boundary in (None, "render", "verify", "backup", "stage", "selector", "updater"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base)
+                before = env.read_bytes()
+                commit = self._source(base, tag=None)
+                tools = base / "root" / "usr" / "local" / "bin"
+                originals = {}
+                for name in ("plebian-os-select-closure", "plebian-os-update"):
+                    originals[name] = f"#!/bin/sh\necho {name}\n".encode()
+                    (tools / name).write_bytes(originals[name])
+                    (tools / name).chmod(0o710)
+                args = ("--dry-run",) if boundary is None else ()
+                result = self._run(base, "0.1.8", "--offline", "--development-commit", commit,
+                                   *args, fail_after=boundary)
+                if boundary is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("nothing was written", result.stdout)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("injected", result.stderr)
+                self.assertEqual(env.read_bytes(), before)
+                self.assertEqual(self._recovery_records(base), [])
+                for name, content in originals.items():
+                    self.assertEqual((tools / name).read_bytes(), content)
+                    self.assertEqual((tools / name).stat().st_mode & 0o777, 0o710)
 
     def test_0_2_1_selects_every_f120_root_tuple_and_bound_input(self):
         with tempfile.TemporaryDirectory() as td:

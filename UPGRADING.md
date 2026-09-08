@@ -242,6 +242,50 @@ Do not assemble pins from several releases or run a bare privileged provisioner
 between closure selection and the updater. Back up irreplaceable personal data
 even though preservation and rollback are release requirements.
 
+### Untagged development transaction
+
+On an owned development fixture, `--development-commit <40-character SHA>`
+selects the manifest and tools from one exact source commit without creating or
+fetching a release tag. This explicit diagnostic option retains the normal
+origin, manifest, component ancestry, running-tool identity and atomic recovery
+checks. A branch, shortened hash or annotated-tag object is refused. Offline
+selection still requires the exact objects and complete component histories.
+
+Use a reviewed source commit available from the configured origin and extract
+that commit's own selector. Run from a fresh login or SSH session so an earlier
+graphical session does not supply stale release-variable overrides.
+
+The online selector refetches the exact object so a cached local commit cannot
+hide its absence from the origin. A failed fetch leaves the selection intact;
+use `--offline` explicitly when remote availability is not being checked.
+
+For example:
+
+```sh
+DEV_SRC="$HOME/.local/gpu_terminal/sources/plebian-os"
+DEV_COMMIT='REPLACE_WITH_REVIEWED_40_CHARACTER_COMMIT'
+DEV_SEL="$(mktemp)"
+git -C "$DEV_SRC" fetch --no-tags origin "$DEV_COMMIT"
+git -C "$DEV_SRC" show "$DEV_COMMIT:provision/plebian-os-select-closure.sh" >"$DEV_SEL"
+bash "$DEV_SEL" 0.2.2 --source "$DEV_SRC" --development-commit "$DEV_COMMIT" --dry-run
+bash "$DEV_SEL" 0.2.2 --source "$DEV_SRC" --development-commit "$DEV_COMMIT"
+plebian-os-update --revalidate-current --restart
+```
+
+Replace the commit placeholder and target version together. The selector
+labels the operation as development and records
+`selection_kind=development-commit` and `release_acceptance=not-claimed` in its
+recovery metadata. The explicit updater option keeps the selected development
+closure instead of querying published releases. `--rollback` restores the
+previous selected environment and both tools through the existing recovery
+path. No privileged provisioner belongs between selection and the updater.
+
+Retain the original fixture/media identity, starting and target commits,
+sentinels, induced failures and results as development evidence. This path does
+not satisfy the required adjacent upgrade from the previous published image,
+qualify a feature or authorize release publication. The normal release path
+continues to resolve the target's immutable release tag.
+
 ### A local release tag can be stale, and `--offline` will trust it
 
 The online path fetches the target tag with `--force`, so a tag that moved on the
