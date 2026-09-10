@@ -75,6 +75,26 @@ class NativeClosureTests(unittest.TestCase):
         for key in VALUES:
             self.boundary({k: v for k, v in VALUES.items() if k != key}, expected=1)
 
+    def _native_keys_from_022_env(self):
+        present = {}
+        for raw in (ROOT / 'releases' / '0.2.2.env').read_text().splitlines():
+            line = raw.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, value = line.split('=', 1)
+            if key in VALUES and value:
+                present[key] = value
+        return present
+
+    def test_actual_022_manifest_native_selection_is_complete_or_absent(self):
+        present = self._native_keys_from_022_env()
+        self.assertIn(len(present), (0, 5), present)
+        if not present:
+            self.boundary({}, '0.2.2', '0')
+            self.boundary({}, '0.2.2', '1', expected=1)
+            return
+        self.boundary(present, '0.2.2', '1')
+
     def test_partial_selection_refuses_even_outside_release_mode(self):
         for key, value in VALUES.items():
             self.boundary({key: value}, '0.2.1', expected=1)
