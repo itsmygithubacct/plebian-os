@@ -761,6 +761,12 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "KILIX_VOICE_LIB_SHA256": digest,
             "KILIX_VOICE_MODEL_URL": "https://example.invalid/model.zip",
             "KILIX_VOICE_MODEL_SHA256": digest,
+            # Same synthetic native shape as tests/test_native_closure.py VALUES.
+            "PLEBIAN_OS_NATIVE_DEB_URL": "https://example.invalid/releases/native.deb",
+            "PLEBIAN_OS_NATIVE_DEB_SHA256": "a" * 64,
+            "PLEBIAN_OS_NATIVE_DEB_BYTES": "405204",
+            "PLEBIAN_OS_NATIVE_SOURCE_REF": "b" * 40,
+            "PLEBIAN_OS_NATIVE_CONTENT_REF": "c" * 40,
         }
         valid = self._run_library("validate_release_inputs\n", env)
         self.assertEqual(valid.returncode, 0, valid.stderr)
