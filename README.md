@@ -217,7 +217,7 @@ https://github.com/user-attachments/assets/4c3f0796-6023-41ad-975e-853ade4125af
    the greeter. `Ctrl+Alt+F2` is always a plain text console.
 
 **GUI apps** — ordinary graphical commands (`chromium`, `firefox-esr`,
-`evince`, …) are
+`evince`, `feh`, …) are
 routed through `kilix run`, so their windows remain controlled inside Kilix
 tabs and panes. The session still runs a deliberately bare **Openbox** safety
 net underneath Kilix — one desktop, no panel, no root menu, no launcher keys —

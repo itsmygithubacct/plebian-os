@@ -79,6 +79,8 @@ transaction restores both the prior drop-in state and the running SSH policy.
 Nothing migrates. Four things change under an upgrader, all preserved or
 release-controlled by the rules above:
 
+- `feh` is newly installed as the still-image viewer. An upgrader who already
+  has another image viewer keeps it; this only adds the package.
 - `/etc/xdg-desktop-portal/pleb-portals.conf` is a new **release-managed** file,
   written inside the OS-layer transaction beside the LightDM session pin and
   removed by a rollback. It is not an operator file.

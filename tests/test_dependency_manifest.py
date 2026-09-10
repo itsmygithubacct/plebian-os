@@ -89,6 +89,11 @@ PDF_RUNTIME_PREREQUISITE_PACKAGES = {"python3", "python3-venv"}
 # PDF file handler with printing, forms, and annotation support.
 DEFAULT_PDF_VIEWER_PACKAGES = {"evince"}
 
+# Evince does not open raster images. The desktop needs a still-image viewer
+# on both install paths so a PNG or JPEG from a file manager is not handed
+# only to the browser.
+DEFAULT_IMAGE_VIEWER_PACKAGES = {"feh"}
+
 # Pleb preinstalls the catalog-pinned terminal viewer. These packages let its
 # native Poppler/Cairo core build during provisioning; the wrapper retains
 # Evince and CPU-rendering fallbacks if GPU presentation is unavailable.
@@ -393,6 +398,12 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(DEFAULT_PDF_VIEWER_PACKAGES,
                              install_deps_packages())
         self.assertLessEqual(DEFAULT_PDF_VIEWER_PACKAGES,
+                             preseed_packages())
+
+    def test_default_image_viewer_is_installed_on_both_paths(self):
+        self.assertLessEqual(DEFAULT_IMAGE_VIEWER_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(DEFAULT_IMAGE_VIEWER_PACKAGES,
                              preseed_packages())
 
     def test_native_pdf_viewer_builds_on_both_paths(self):

@@ -165,6 +165,11 @@ DEP_GROUPS=(
     # local-document handler for file associations, printing, forms, and
     # annotations. Evince is the GTK viewer shipped by the image from 0.1.9.
     "documents|evince"
+    # feh is the still-image viewer. Evince is PDF, mpv is video, and
+    # xfce4-screenshooter captures rather than opens an existing file. A file
+    # manager or desktop link handing off a PNG or JPEG needs a viewer present
+    # on a fresh install. 3.10.3-1 is in the 0.2.2 apt snapshot.
+    "images|feh"
     "session-log archiving|zstd"
     # F103 exposes the common archive formats from both its TUI and app. Keep
     # the command providers and their runtime libraries present independently
