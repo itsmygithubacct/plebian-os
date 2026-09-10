@@ -54,6 +54,9 @@ ISO_SOURCE_DATE_EPOCH="$(iso_source_date_epoch)"
     || { echo "could not resolve ISO source date epoch" >&2; exit 1; }
 ISO_SOURCE_DATE_UTC="$(date -u -d "@$ISO_SOURCE_DATE_EPOCH" +%Y-%m-%dT%H:%M:%SZ)"
 ISO_SOURCE_DATE_XORRISO="$(date -u -d "@$ISO_SOURCE_DATE_EPOCH" +%Y%m%d%H%M%S00)"
+# xorriso derives GPT/MBR unique IDs from SOURCE_DATE_EPOCH. Two remasters of
+# the same commit differed in 112 GPT header bytes without this export.
+export SOURCE_DATE_EPOCH="$ISO_SOURCE_DATE_EPOCH"
 [ -f "$INSTALLER_BRANDER" ] || {
     echo "installer branding helper not found: $INSTALLER_BRANDER" >&2
     exit 1

@@ -391,6 +391,10 @@ class RemasterContractTests(unittest.TestCase):
             '--set_all_file_dates "$ISO_SOURCE_DATE_XORRISO"',
             self.source,
         )
+        self.assertIn(
+            'export SOURCE_DATE_EPOCH="$ISO_SOURCE_DATE_EPOCH"',
+            self.source,
+        )
 
     def test_output_is_same_filesystem_staged_and_boot_validated(self):
         self.assertIn('refusing to overwrite the source ISO', self.source)
