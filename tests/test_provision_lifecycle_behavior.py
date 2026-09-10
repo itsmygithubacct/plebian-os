@@ -745,6 +745,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         env = {
             **os.environ,
             "PLEBIAN_OS_PROVISION_LIB_ONLY": "1",
+            "PLEBIAN_OS_VERSION": "0.2.2",
             "PLEBIAN_OS_RELEASE_MODE": "1",
             "PLEBIAN_OS_REF": ref,
             "PLEB_REF": ref,
@@ -754,6 +755,15 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "PLEBIAN_OS_KILIX_GO_VERSION": "go1.26.5",
             "PLEBIAN_OS_KILIX_GO_SHA256_AMD64": digest,
             "PLEBIAN_OS_KILIX_GO_SHA256_ARM64": digest,
+            # Strict 0.2.2 release mode refuses before voice pins unless all
+            # five native-runtime fields are present. These values are the
+            # synthetic shape tests/test_native_closure.py already uses; they
+            # are not a selected 0.2.2.env pin (none is supplied yet).
+            "PLEBIAN_OS_NATIVE_DEB_URL": "https://example.invalid/releases/native.deb",
+            "PLEBIAN_OS_NATIVE_DEB_SHA256": "c" * 64,
+            "PLEBIAN_OS_NATIVE_DEB_BYTES": "405204",
+            "PLEBIAN_OS_NATIVE_SOURCE_REF": "d" * 40,
+            "PLEBIAN_OS_NATIVE_CONTENT_REF": "e" * 40,
             "PLEBIAN_OS_INSTALL_VOICE_MODEL": "1",
             "KILIX_VOICE_REF": ref,
             "KILIX_VOICE_LIB_VERSION": "0.3.45",
