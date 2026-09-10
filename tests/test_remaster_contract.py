@@ -371,6 +371,27 @@ class RemasterContractTests(unittest.TestCase):
             "install -m 0755 /cdrom/plebian-os/plebian-os-apt-snapshot-generator")
         self.assertLess(mkdir, install)
 
+    def test_iso_timestamps_come_from_source_date_or_commit_not_the_clock(self):
+        self.assertIn("iso_source_date_epoch() {", self.source)
+        self.assertIn('[[ "${SOURCE_DATE_EPOCH:-}" =~ ^[1-9][0-9]{8,11}$ ]]', self.source)
+        self.assertIn("git -C \"$HERE\" log -1 --format=%ct", self.source)
+        self.assertIn(
+            'manifest_kv PLEBIAN_OS_BUILD_TIME_UTC "$ISO_SOURCE_DATE_UTC"',
+            self.source,
+        )
+        self.assertNotIn(
+            'manifest_kv PLEBIAN_OS_BUILD_TIME_UTC "$(date -u +%Y-%m-%dT%H:%M:%SZ)"',
+            self.source,
+        )
+        self.assertIn(
+            '--modification-date="$ISO_SOURCE_DATE_XORRISO"',
+            self.source,
+        )
+        self.assertIn(
+            '--set_all_file_dates "$ISO_SOURCE_DATE_XORRISO"',
+            self.source,
+        )
+
     def test_output_is_same_filesystem_staged_and_boot_validated(self):
         self.assertIn('refusing to overwrite the source ISO', self.source)
         self.assertIn('refusing to use a block device as ISO output', self.source)
@@ -753,6 +774,8 @@ class RemasterContractTests(unittest.TestCase):
         refresh = 'python3 "$INSTALLER_BRANDER" refresh-md5 "$EXTRACT"'
         repack = (
             'xorriso -as mkisofs -V "$PLEBIAN_OS_ISO_VOLUME_ID" '
+            '\\\n    --modification-date="$ISO_SOURCE_DATE_XORRISO" '
+            '\\\n    --set_all_file_dates "$ISO_SOURCE_DATE_XORRISO" '
             '\\\n    "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"'
         )
         self.assertEqual(self.source.count(refresh), 1)
