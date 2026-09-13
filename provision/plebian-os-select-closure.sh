@@ -1138,7 +1138,7 @@ show_installed_closure() {
 }
 
 rollback_previous_closure() {
-    local rc=0 record
+    local rc=0 record prev
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$SELECTOR_DST" "$UPDATER_DST" "$RECOVERY_BASE" \
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
@@ -1170,6 +1170,42 @@ if [ "$EUID" = 0 ]; then
     [ "$(stat -c '%u' -- "$record")" = 0 ] || exit 2
     record_mode="$(stat -c '%a' -- "$record")"
     (( (8#$record_mode & 8#22) == 0 )) || exit 2
+fi
+# A machine that Plebian-OS has moved off the Debian install snapshot cannot
+# return to a release older than 0.2.2: its updater accepts only snapshot
+# indexes, and its exact package pins predate the security updates now
+# installed. Only what a committed Plebian-OS migration leaves counts (the
+# retired installer source or the managed live source, with the snapshot source
+# gone). The security policy is written before a switch that can still roll
+# back, so it is not evidence, and a machine an administrator unpinned by hand
+# can still undo a selection. The record is read as data, never sourced.
+record_release_value() {
+    local line value=""
+    while IFS= read -r line; do
+        line="${line#"if [ -z \"\${$1+x}\" ]; then "}"
+        case "$line" in
+            "$1="*) value="${line#"$1="}"; value="${value%"; fi"}" ;;
+        esac
+    done <"$record/session.env"
+    value="${value#\'}"
+    printf '%s\n' "${value%\'}"
+}
+apt_root="${env_path%/etc/pleb/session.env}/etc/apt"
+migrated=0
+if [ ! -e "$apt_root/sources.list.d/plebian-os-snapshot.sources" ]; then
+    for evidence in "$apt_root/sources.list.plebian-os-installer-snapshot" \
+        "$apt_root/sources.list.d/plebian-os-debian.sources"; do
+        if [ -e "$evidence" ]; then migrated=1; fi
+    done
+fi
+record_version="$(record_release_value PLEBIAN_OS_VERSION)"
+if [ "$migrated" = 1 ] \
+    && [ "$(record_release_value PLEBIAN_OS_RELEASE_MODE)" = 1 ] \
+    && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    && [ "$record_version" != 0.2.2 ] \
+    && [ "$(printf '%s\n%s\n' "$record_version" 0.2.2 | sort -V | head -n 1)" = "$record_version" ]; then
+    printf '%s\n' "$record_version"
+    exit 5
 fi
 manage_selector=0
 selector_before_selection=""
@@ -1328,6 +1364,9 @@ ROOT_ROLLBACK
     case "$rc" in
         0) ;;
         4) die "no closure to roll back to under $RECOVERY_BASE — this tool has not replaced a closure on this machine" ;;
+        5)
+            prev="$(cat "$STAGE/record")"
+            die "this machine has left the Debian install snapshot; release $prev predates live security sources and its updater would refuse live Debian indexes. Select a release >= 0.2.2 instead" ;;
         *) die "could not restore the previous closure (status $rc); the selected session and installed tools were retained" ;;
     esac
     record="$(cat "$STAGE/record")"

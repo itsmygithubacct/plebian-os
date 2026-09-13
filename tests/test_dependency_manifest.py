@@ -1,6 +1,9 @@
 import os
 import re
+import shlex
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -235,7 +238,91 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertTrue(NESTED_WAYLAND_PACKAGES.isdisjoint(install_deps_packages()))
         self.assertTrue(NESTED_WAYLAND_PACKAGES.isdisjoint(preseed_packages()))
         setup = (ROOT / "provision" / "plebian-os-waydroid-setup").read_text()
-        self.assertIn('"weston=${VALUES[WAYDROID_WESTON_VERSION]}"', setup)
+        self.assertIn('"${VALUES[WAYDROID_WESTON_VERSION]}"', setup)
+        self.assertIn("weston_request=(weston)", setup)
+
+    def test_security_updates_are_installed_on_both_paths(self):
+        self.assertIn("unattended-upgrades", preseed_packages())
+        self.assertIn("unattended-upgrades", install_deps_packages())
+
+    def test_exact_debian_versions_are_release_floors(self):
+        deps = ROOT / "provision" / "install-deps.sh"
+        result = subprocess.run(
+            ["bash", str(deps), "--dry-run"],
+            text=True,
+            capture_output=True,
+            check=False,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "LC_ALL": "C"},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        sandbox = [line for line in result.stdout.splitlines()
+                   if "+ apt-get install" in line and "bubblewrap" in line]
+        self.assertEqual(len(sandbox), 1, result.stdout)
+        self.assertIn("bubblewrap libseccomp2", sandbox[0])
+        self.assertNotIn("=", sandbox[0])
+        self.assertIn("+ require bubblewrap >= 0.11.0-2+deb13u1", result.stdout)
+        self.assertIn("+ require libseccomp2 >= 2.6.0-2", result.stdout)
+        source = deps.read_text()
+        self.assertIn("dpkg --compare-versions", source)
+        self.assertIn("DPkg::Lock::Timeout=600", source)
+
+    def test_release_floors_are_enforced_by_a_real_install_run(self):
+        dpkg = shutil.which("dpkg")
+        real_id = shutil.which("id")
+        if dpkg is None or real_id is None:
+            self.skipTest("dpkg --compare-versions is required")
+        deps = ROOT / "provision" / "install-deps.sh"
+        cases = (
+            ("below", {"bubblewrap": "0.11.0-2", "libseccomp2": "2.6.0-2"}, 1),
+            ("at", {"bubblewrap": "0.11.0-2+deb13u1", "libseccomp2": "2.6.0-2"}, 0),
+            ("above", {"bubblewrap": "0.11.0-2+deb13u2", "libseccomp2": "2.6.1-1"}, 0),
+            ("absent", {"libseccomp2": "2.6.0-2"}, 1),
+        )
+        for label, versions, expected in cases:
+            with self.subTest(label), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                bindir = base / "bin"
+                bindir.mkdir()
+                log = base / "apt.log"
+                installed = "".join(
+                    f"  {name}) printf 'install ok installed\\t%s' {shlex.quote(version)} ;;\n"
+                    for name, version in versions.items()
+                )
+                stubs = {
+                    # The script only believes it is root; nothing is installed.
+                    "id": f'#!/bin/sh\n[ "${{1:-}}" != -u ] || {{ echo 0; exit 0; }}\n'
+                          f'exec {real_id} "$@"\n',
+                    "apt-get": f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {str(log)!r}\n",
+                    "dpkg-query": "#!/bin/sh\nfor package; do :; done\n"
+                                  f'case "$package" in\n{installed}  *) exit 1 ;;\nesac\n',
+                    "dpkg": f'#!/bin/sh\n[ "${{1:-}}" = --compare-versions ] || exit 2\n'
+                            f'exec {dpkg} "$@"\n',
+                }
+                for name, text in stubs.items():
+                    (bindir / name).write_text(text)
+                    (bindir / name).chmod(0o755)
+                result = subprocess.run(
+                    ["bash", str(deps)],
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                    env={"PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+                         "HOME": td, "LC_ALL": "C"},
+                )
+                self.assertEqual(result.returncode, expected, result.stderr)
+                calls = log.read_text().splitlines()
+                self.assertEqual(calls[0], "-o DPkg::Lock::Timeout=600 update -y")
+                for call in calls[1:]:
+                    self.assertTrue(call.startswith(
+                        "-o DPkg::Lock::Timeout=600 install -y --no-install-recommends "), call)
+                self.assertIn("-o DPkg::Lock::Timeout=600 install -y --no-install-recommends "
+                              "bubblewrap libseccomp2", calls)
+                if expected:
+                    self.assertIn("GROUP FAILED: F100 sandbox runtime (bubblewrap is below "
+                                  "the release floor 0.11.0-2+deb13u1)", result.stderr)
+                else:
+                    self.assertNotIn("GROUP FAILED", result.stderr)
 
     def test_local_build_prerequisites_are_installed(self):
         self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,

@@ -203,7 +203,10 @@ target dependency policy, including any required uv pin, and rewrites
 `packages.list`, `versions.env`, and `apt-sources.list` only after the completed
 stack validates. A failure after the OS/dependency refresh, Pleb refresh,
 install, component update, or provenance write restores that previous coherent
-stack. Apt package additions may remain installed but inactive. The OS-layer stage is also bound
+stack. Apt package additions may remain installed but inactive. Debian package
+upgrades are never rolled back, and the update moves a release machine from the
+install snapshot to live Debian sources only after the stack has committed. The
+OS-layer stage is also bound
 to pre-sudo SHA-256 values and revalidated as root before any destination is
 replaced; success is reported only after the entire outer transaction commits.
 Pass `--restart` to restart the graphical session after a successful update.
@@ -397,6 +400,10 @@ repo/ref/provider knobs used for that image; the firstboot env is what
 After provisioning finishes, `/var/lib/plebian-os/packages.list`,
 `versions.env`, and `apt-sources.list` record the final installed packages,
 resolved source commits, tool/engine versions, and apt indexes actually used.
+On a release machine `apt-sources.list` lists only snapshot indexes at the
+install timestamp until the machine leaves the snapshot; updates and
+re-provisioning after that record the live Debian indexes they resolved
+against.
 
 ## Optional NVIDIA driver
 
@@ -517,8 +524,15 @@ Go version/architecture checksums before building. Simpler: set
 `PLEBIAN_OS_RELEASE=0.1.7` to load the coordinated pin manifest from
 [`releases/0.1.7.env`](releases/0.1.7.env) (see
 [RELEASING.md](RELEASING.md)). The snapshot pin covers Debian Installer and
-firstboot resolution. Snapshot switching inventories and transactionally
-restores only the sources Plebian-OS disabled, preserving operator-owned files.
+firstboot resolution, so every installation of a release resolves the same
+package closure. Once that closure is committed, release machines leave the
+snapshot: apt tracks the live Debian `trixie`, `trixie-updates`, and
+`trixie-security` suites with replay protection enabled, and
+`unattended-upgrades` applies Debian security updates daily without rebooting.
+The installer's snapshot `sources.list` is retired to
+`/etc/apt/sources.list.plebian-os-installer-snapshot`; sources Plebian-OS
+disabled for the install are restored, and operator sources that already
+provide live Debian are used as they are.
 Enabled release-mode `uv` installs require exact version/checksum pins and are
 verified after installation. The 0.1.9 policy requires `uv` 0.12.3 and rejects
 a final manifest that disables it or changes its verified installer checksum.

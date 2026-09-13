@@ -715,6 +715,9 @@ class FirstbootBoundTests(unittest.TestCase):
             "ExecStartPost=/usr/local/sbin/plebian-os-firstboot-attempt success")
         self.assertLess(marker, clear, "attempt state must not clear before the success marker")
 
+    def test_firstboot_holds_daily_apt_jobs(self):
+        self.assertIn("Before=apt-daily.service apt-daily-upgrade.service", FIRSTBOOT)
+
     def test_retry_runner_stays_in_one_invocation_until_success(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -851,6 +854,8 @@ class ProvisioningLifecycleTests(unittest.TestCase):
         self.assertIn("release mode requires PLEBIAN_OS_APT_SNAPSHOT", PROVISION)
         self.assertIn("apt-get update against snapshot", PROVISION)
         self.assertIn("refusing an unpinned/stale package closure", PROVISION)
+        self.assertIn("release install closure resolved from an index other than snapshot",
+                      PROVISION)
 
     def test_final_provenance_is_written_after_builds(self):
         package_call = PROVISION.rindex("\nwrite_package_manifest\n")
@@ -876,6 +881,209 @@ class ProvisioningLifecycleTests(unittest.TestCase):
             self.assertIn(f"write_session_default {key}", PROVISION)
         self.assertIn('"GO_VERSION=$KILIX_GO_VERSION"', PROVISION)
         self.assertIn('"GO_SHA256=$sha"', PROVISION)
+
+
+def _shell_function(source: str, name: str) -> str:
+    start = source.index(f"\n{name}() {{\n") + 1
+    return source[start:source.index("\n}\n", start) + 3]
+
+
+class ReleaseAptProvenanceTests(unittest.TestCase):
+    SNAPSHOT = "20260727T000000Z"
+
+    def _gate(self, lines, phase):
+        with tempfile.TemporaryDirectory() as td:
+            index = Path(td) / "apt-sources.list"
+            index.write_text("".join(f"{line}\n" for line in lines))
+            script = (
+                "set -euo pipefail\n"
+                + _shell_function(PROVISION, "validate_release_apt_provenance")
+                + 'validate_release_apt_provenance "$@"\n'
+            )
+            return subprocess.run(
+                ["bash", "-c", script, "gate", str(index), phase, self.SNAPSHOT, "trixie"],
+                text=True, capture_output=True, check=False,
+            )
+
+    def test_release_apt_provenance_gate_is_identical_in_both_scripts(self):
+        self.assertEqual(
+            _shell_function(PROVISION, "validate_release_apt_provenance"),
+            _shell_function(UPDATE, "validate_release_apt_provenance"),
+        )
+
+    def test_release_apt_provenance_gate_rules(self):
+        ts = self.SNAPSHOT
+        cases = (
+            ("install", [
+                f"https://snapshot.debian.org/archive/debian/{ts} trixie main amd64",
+                f"https://snapshot.debian.org/archive/debian-security/{ts} trixie-security main amd64",
+            ], 0),
+            ("install", [
+                "https://snapshot.debian.org/archive/debian/20260712T000000Z trixie main amd64",
+            ], 1),
+            ("install", ["https://deb.debian.org/debian trixie main amd64"], 1),
+            ("lifetime", [
+                "https://deb.debian.org/debian trixie main amd64",
+                "https://deb.debian.org/debian trixie-updates main $(ARCHITECTURE)",
+                "https://security.debian.org/debian-security trixie-security main amd64",
+                f"https://snapshot.debian.org/archive/debian/{ts} trixie main amd64",
+            ], 0),
+            ("lifetime", ["https://dl.google.com/linux/chrome/deb stable main amd64"], 1),
+            ("lifetime", ["https://deb.debian.org/debian sid main amd64"], 1),
+            ("lifetime", ["http://deb.debian.org.evil.example/debian trixie main amd64"], 1),
+            ("lifetime", [], 2),
+        )
+        for phase, lines, expected in cases:
+            with self.subTest(phase=phase, lines=lines):
+                result = self._gate(lines, phase)
+                self.assertEqual(result.returncode, expected, result.stderr)
+                if expected == 1:
+                    self.assertIn(lines[0], result.stderr)
+
+    @staticmethod
+    def _run_updater_library(home: Path, body: str, path_prefix=None, extra_env=None):
+        env = {**os.environ, "HOME": str(home), **(extra_env or {})}
+        if path_prefix is not None:
+            env["PATH"] = f"{path_prefix}:{os.environ['PATH']}"
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            f"PLEB_STATE_HOME={str(home / 'state')!r}\n"
+            f"source {str(UPDATE_PATH)!r}\n"
+            + body
+        )
+        return subprocess.run(
+            ["bash", "-c", script], env=env, text=True, capture_output=True, check=False
+        )
+
+    def test_updater_reconciles_apt_with_the_provisioner_it_deploys(self):
+        helper = re.search(r"^PROVISION_HELPER_DST=(\S+)$", UPDATE, re.M)
+        self.assertIsNotNone(helper)
+        # The root OS-layer install pairs each staged name with its destination.
+        install = UPDATE[UPDATE.index("\nnames=(\n"):]
+        names = re.search(r"^names=\(\n(.*?)^\)", install, re.M | re.S)
+        dests = re.search(r"^dests=\(\n(.*?)^\)", install, re.M | re.S)
+        self.assertIsNotNone(names)
+        self.assertIsNotNone(dests)
+        installed = dict(zip(names.group(1).split(), dests.group(1).split(), strict=True))
+        self.assertEqual(installed["plebian-os-provision"], helper.group(1))
+        self.assertIn(
+            'install -m 0755 "$prov/plebian-os-provision.sh" "$stage/plebian-os-provision"',
+            UPDATE,
+        )
+
+    def test_updater_post_commit_reconcile_calls_the_provisioner(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bindir = root / "bin"
+            bindir.mkdir()
+            calls = root / "calls"
+            sudo = bindir / "sudo"
+            sudo.write_text(
+                f"#!/bin/sh\nprintf 'sudo %s\\n' \"$*\" >> {str(calls)!r}\nexec \"$@\"\n"
+            )
+            helper = root / "plebian-os-provision"
+            helper.write_text(
+                f"#!/bin/sh\nprintf 'helper %s\\n' \"$*\" >> {str(calls)!r}\n"
+                'exit "${HELPER_RC:-0}"\n'
+            )
+            for stub in (sudo, helper):
+                stub.chmod(0o755)
+            body = (
+                'PLEBIAN_OS_RELEASE_MODE="$MODE"\n'
+                'PROVISION_HELPER_DST="$HELPER"\n'
+                "rc=0\nreconcile_release_apt_sources_after_commit || rc=$?\n"
+                'printf "rc=%s\\n" "$rc"\n'
+            )
+            elevated = [] if os.geteuid() == 0 else [f"sudo {helper} --reconcile-apt-sources"]
+            cases = (
+                ({"MODE": "1", "HELPER": str(helper)}, "rc=0",
+                 elevated + ["helper --reconcile-apt-sources"], None),
+                ({"MODE": "1", "HELPER": str(helper), "HELPER_RC": "3"}, "rc=1",
+                 elevated + ["helper --reconcile-apt-sources"],
+                 "apt could not be moved to live Debian security sources"),
+                ({"MODE": "1", "HELPER": str(root / "missing")}, "rc=1", [],
+                 "is missing or unsafe"),
+                ({"MODE": "0", "HELPER": str(helper)}, "rc=0", [], None),
+            )
+            for extra, status, expected_calls, warning in cases:
+                with self.subTest(**extra):
+                    calls.unlink(missing_ok=True)
+                    result = self._run_updater_library(root, body, bindir, extra)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(status, result.stdout)
+                    recorded = calls.read_text().splitlines() if calls.exists() else []
+                    self.assertEqual(recorded, expected_calls)
+                    if warning is not None:
+                        self.assertIn(warning, result.stderr)
+
+    def test_updater_gate_accepts_live_debian_indexes_after_install(self):
+        codename = subprocess.run(
+            ["bash", "-c", '. /etc/os-release 2>/dev/null; printf %s "${VERSION_CODENAME:-trixie}"'],
+            text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertIn('require_lifetime_release_apt_provenance "$stage/apt-sources.list"', UPDATE)
+        cases = (
+            ([f"http://deb.debian.org/debian {codename} main amd64",
+              f"https://deb.debian.org/debian {codename}-updates main amd64",
+              f"https://security.debian.org/debian-security {codename}-security main amd64"],
+             None),
+            (["https://dl.google.com/linux/chrome/deb stable main amd64"],
+             "release apt provenance contains an index outside the Debian archive"),
+            ([], "release apt index provenance is empty"),
+        )
+        for lines, refusal in cases:
+            with self.subTest(lines=lines), tempfile.TemporaryDirectory() as td:
+                index = Path(td) / "apt-sources.list"
+                index.write_text("".join(f"{line}\n" for line in lines))
+                result = self._run_updater_library(
+                    Path(td), f"require_lifetime_release_apt_provenance {str(index)!r}\n"
+                )
+                if refusal is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(refusal, result.stderr)
+
+    def test_updater_reports_apt_reconcile_failure_after_restarting(self):
+        start = UPDATE.index("\ncommit_stack_transaction\napt_reconcile_rc=0\n") + 1
+        tail = UPDATE[start:]
+        self.assertTrue(tail.rstrip().endswith('exit "$apt_reconcile_rc"'))
+        for reconcile_rc in (1, 0):
+            with self.subTest(reconcile_rc=reconcile_rc), tempfile.TemporaryDirectory() as td:
+                calls = Path(td) / "calls"
+                script = (
+                    "set -euo pipefail\n"
+                    f"calls={str(calls)!r}\n"
+                    "log() { :; }\nwarn() { :; }\n"
+                    'commit_stack_transaction() { echo commit >>"$calls"; }\n'
+                    "reconcile_release_apt_sources_after_commit() "
+                    f'{{ echo reconcile >>"$calls"; return {reconcile_rc}; }}\n'
+                    'seed_desktop_wallpaper_after_commit() { echo wallpaper >>"$calls"; }\n'
+                    'restart_session_after_commit() { echo restart >>"$calls"; }\n'
+                    "restart_arg=--restart\n"
+                    + tail
+                )
+                result = subprocess.run(
+                    ["bash", "-c", script], text=True, capture_output=True, check=False
+                )
+                self.assertEqual(result.returncode, reconcile_rc, result.stderr)
+                self.assertEqual(calls.read_text().split(),
+                                 ["commit", "reconcile", "wallpaper", "restart"])
+
+    def test_updater_reconciles_apt_sources_only_after_commit(self):
+        committed = UPDATE.index("\ncommit_stack_transaction\n")
+        reconciled = UPDATE.index(
+            "reconcile_release_apt_sources_after_commit || apt_reconcile_rc=1")
+        restarted = UPDATE.index("\nrestart_session_after_commit\n")
+        self.assertLess(committed, reconciled)
+        self.assertLess(reconciled, restarted)
+        self.assertIn("--reconcile-apt-sources", UPDATE)
+        self.assertIn('exit "$apt_reconcile_rc"', UPDATE)
+        # apt sources change only after commit, so the rollback set has no apt.
+        start = UPDATE.index("<<'ROOT_SNAPSHOT'\n")
+        end = UPDATE.index("\nROOT_SNAPSHOT\n", start)
+        self.assertNotIn("/etc/apt/", UPDATE[start:end])
 
 
 class KilixEngineParkTests(unittest.TestCase):

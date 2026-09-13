@@ -172,7 +172,7 @@ DEP_GROUPS=(
     "desktop screenshots|xfce4-screenshooter"
     "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     # F100's sandbox must not depend on portal/systemd dependency accidents.
-    # These exact versions are the frozen F118-S0 package identities.
+    # These are the minimum F118-S0 identities; newer Debian security builds are accepted.
     "F100 sandbox runtime|bubblewrap=0.11.0-2+deb13u1 libseccomp2=2.6.0-2"
     "disk management|gparted"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
@@ -202,6 +202,9 @@ DEP_GROUPS=(
     # payload copy is indistinguishable from a hung one, and the usual reaction
     # to that is to kill it and start again.
     "cli utilities|tmux ncdu rsync ufw jq glances ripgrep progress"
+    # Release machines track live Debian once first boot commits; this applies
+    # its security updates daily (policy written by plebian-os-provision).
+    "security updates|unattended-upgrades"
     # LicheeRV-Nano / SG2002 SDK host build dependencies. Taken from the
     # SDK's own host/debian and host/ubuntu Dockerfiles, minus the
     # developer-convenience packages those images carry (neovim,
@@ -227,23 +230,48 @@ export DEBIAN_FRONTEND=noninteractive
 if [ "$DRY_RUN" = 1 ]; then
     echo "    + apt-get update -y"
 else
-    apt-get update -y || warn "apt-get update failed (continuing; installs may still work)"
+    apt-get -o DPkg::Lock::Timeout=600 update -y || warn "apt-get update failed (continuing; installs may still work)"
 fi
 
 failed=()
 for entry in "${DEP_GROUPS[@]}"; do
     name="${entry%%|*}"; pkgs="${entry#*|}"
+    # A name=version token is a release floor: apt installs the current Debian
+    # build, which must be at least that version. Background security upgrades
+    # therefore never turn a re-run into a refused downgrade.
+    request=(); floors=()
+    # shellcheck disable=SC2086  # deliberate word-splitting of the package list
+    for pkg in $pkgs; do
+        request+=("${pkg%%=*}")
+        [ "$pkg" = "${pkg%%=*}" ] || floors+=("$pkg")
+    done
     log "installing group: $name"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + apt-get install -y --no-install-recommends $pkgs"
+        echo "    + apt-get install -y --no-install-recommends ${request[*]}"
+        for floor in "${floors[@]}"; do
+            echo "    + require ${floor%%=*} >= ${floor#*=}"
+        done
         continue
     fi
-    # shellcheck disable=SC2086  # deliberate word-splitting of the package list
-    if ! apt-get install -y --no-install-recommends $pkgs; then
+    # Wait for the dpkg lock rather than fail while unattended-upgrades holds it.
+    if ! apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "${request[@]}"; then
         warn "GROUP FAILED: $name"
         warn "    packages: $pkgs"
         failed+=("$name")
+        continue
     fi
+    for floor in "${floors[@]}"; do
+        pkg="${floor%%=*}"
+        # dpkg-query expands these package fields; the shell must not.
+        # shellcheck disable=SC2016
+        installed="$(dpkg-query -W -f='${Status}\t${Version}' "$pkg" 2>/dev/null || true)"
+        if [ "${installed%%$'\t'*}" != "install ok installed" ] \
+            || ! dpkg --compare-versions "${installed#*$'\t'}" ge "${floor#*=}"; then
+            warn "GROUP FAILED: $name ($pkg is below the release floor ${floor#*=})"
+            failed+=("$name")
+            break
+        fi
+    done
 done
 
 if [ "$QUALIFICATION" -eq 1 ]; then
@@ -256,7 +284,7 @@ if [ "$QUALIFICATION" -eq 1 ]; then
             continue
         fi
         # shellcheck disable=SC2086  # deliberate package-list splitting
-        if ! apt-get install -y --no-install-recommends $pkgs; then
+        if ! apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends $pkgs; then
             warn "GROUP FAILED: $name"
             warn "    packages: $pkgs"
             failed+=("$name")

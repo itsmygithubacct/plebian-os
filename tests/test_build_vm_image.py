@@ -1,6 +1,8 @@
+import ast
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -119,6 +121,67 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('KILIX95_REF=', source[source.index("def verify_provisioning"):])
         for checkout in ("PLEBIAN_OS_DIR", "PLEB_DIR", "KILIX_DIR", "KILIX95_DIR"):
             self.assertIn(checkout, source[source.index("def verify_provisioning"):])
+
+    def test_acceptance_checks_live_debian_security_contract(self):
+        source = (ROOT / "build" / "build_vm_image.py").read_text()
+        verify = source[source.index("def verify_provisioning"):]
+        for name in ("live Debian security source", "apt validity checks enabled",
+                     "security upgrades enabled"):
+            self.assertIn(f'("{name}",', verify)
+        self.assertIn("/etc/apt/sources.list.d/plebian-os-debian.sources", verify)
+        self.assertIn("/etc/apt/apt.conf.d/52plebian-os-security-upgrades", verify)
+        validity = next(
+            node.elts[1].value
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Tuple) and len(node.elts) == 2
+            and all(isinstance(elt, ast.Constant) for elt in node.elts)
+            and node.elts[0].value == "apt validity checks enabled"
+        )
+        cases = (
+            ({}, 0),
+            ({"FAKE_CHECK_VALID_UNTIL": "true", "FAKE_CHECK_DATE": "1"}, 0),
+            ({"FAKE_CHECK_VALID_UNTIL": "false"}, 1),
+            ({"FAKE_CHECK_VALID_UNTIL": "0x0"}, 1),
+            ({"FAKE_CHECK_DATE": "No"}, 1),
+            ({"FAKE_CHECK_DATE": "00"}, 1),
+            # apt also reads a signed or space-padded zero as false.
+            ({"FAKE_CHECK_DATE": "+0"}, 1),
+            ({"FAKE_CHECK_DATE": "-0"}, 1),
+            ({"FAKE_CHECK_DATE": " 0"}, 1),
+            ({"FAKE_APT_CONFIG_RC": "100"}, 1),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            # The real apt-config answers from an isolated configuration that
+            # holds only the FAKE_* keys, so apt itself reads each spelling and
+            # nothing under this host's /etc/apt is consulted.
+            real_config = shutil.which("apt-config") or "/usr/bin/apt-config"
+            isolated = Path(td) / "apt.conf"
+            parts = Path(td) / "apt.conf.d"
+            parts.mkdir()
+            config = Path(td) / "apt-config"
+            config.write_text(
+                "#!/bin/sh\n"
+                '[ -z "${FAKE_APT_CONFIG_RC:-}" ] || exit "$FAKE_APT_CONFIG_RC"\n'
+                "{\n"
+                f"  printf 'Dir::Etc::main \"%s\";\\nDir::Etc::parts \"%s\";\\n' "
+                f"{str(isolated) + '.none'!r} {str(parts)!r}\n"
+                '  [ -z "${FAKE_CHECK_VALID_UNTIL:-}" ] '
+                "|| printf 'Acquire::Check-Valid-Until \"%s\";\\n' \"$FAKE_CHECK_VALID_UNTIL\"\n"
+                '  [ -z "${FAKE_CHECK_DATE:-}" ] '
+                "|| printf 'Acquire::Check-Date \"%s\";\\n' \"$FAKE_CHECK_DATE\"\n"
+                f"}} > {str(isolated)!r}\n"
+                f"APT_CONFIG={str(isolated)!r} exec {real_config!r} \"$@\"\n"
+            )
+            config.chmod(0o755)
+            for shell in ("bash", "sh"):
+                for extra, expected in cases:
+                    with self.subTest(shell=shell, extra=extra):
+                        result = subprocess.run(
+                            [shell, "-c", validity],
+                            env={**os.environ, "PATH": f"{td}:{os.environ['PATH']}", **extra},
+                            text=True, capture_output=True, check=False,
+                        )
+                        self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_acceptance_checks_coherent_canonical_kilix_generation(self):
         source = (ROOT / "build" / "build_vm_image.py").read_text()

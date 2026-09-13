@@ -193,6 +193,16 @@ verify_package() {
     local package="$1" expected actual
     expected="$(package_version "$package")"
     actual="$(dpkg-query -W -f='${Status}\t${Version}' "$package" 2>/dev/null || true)"
+    if [ "$package" = weston ]; then
+        # Weston comes from Debian, so its security builds satisfy the closure's
+        # floor; the four verified local packages stay exact.
+        if [ "${actual%%$'\t'*}" != "install ok installed" ] \
+            || ! dpkg --compare-versions "${actual#*$'\t'}" ge "$expected"; then
+            warn "weston is not installed at version $expected or newer"
+            return 1
+        fi
+        return 0
+    fi
     [ "$actual" = $'install ok installed\t'"$expected" ] \
         || { warn "$package is not installed at exact version $expected"; return 1; }
 }
@@ -325,7 +335,7 @@ if [ "$DRY_RUN" = 1 ]; then
         WAYDROID_SYSTEM_IMAGE_URL WAYDROID_VENDOR_IMAGE_URL; do
         printf '    + download and verify %s\n' "${VALUES[$key]}"
     done
-    printf '    + apt-install exact Weston from the OS snapshot and four verified local packages\n'
+    printf '    + apt-install Weston >= the closure floor from Debian and four verified local packages\n'
     printf '    + safely publish system.img + vendor.img as generation %s\n' "$CLOSURE_SHA256"
     printf '    + initialize Waydroid from the preinstalled image generation\n'
     printf '    + enable and start waydroid-container.service\n'
@@ -600,8 +610,11 @@ for index in "${!package_files[@]}"; do
 done
 
 log "installing the exact Waydroid package closure"
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    "weston=${VALUES[WAYDROID_WESTON_VERSION]}" \
+weston_request=()
+verify_package weston >/dev/null 2>&1 || weston_request=(weston)
+# Wait for the dpkg lock rather than fail while unattended-upgrades holds it.
+DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
+    "${weston_request[@]}" \
     "${package_files[@]}" \
     || die "Waydroid package closure installation failed"
 for package in weston libglibutil libgbinder python3-gbinder waydroid; do

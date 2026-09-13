@@ -112,6 +112,11 @@ class ClosureSelectionTests(unittest.TestCase):
         etc.mkdir(parents=True)
         (base / "root" / "var" / "lib").mkdir(parents=True)
         (base / "root" / "usr" / "local" / "bin").mkdir(parents=True)
+        # Every release this fixture installs still resolves apt from its Debian
+        # install snapshot, as a machine does until a 0.2.2 update commits.
+        snapshot = base / "root" / "etc" / "apt" / "sources.list.d"
+        snapshot.mkdir(parents=True)
+        (snapshot / "plebian-os-snapshot.sources").write_text("Types: deb\n")
         home = base / "home" / ".local" / "gpu_terminal" / "sources"
         lines = ["# Managed by plebian-os-provision — Plebian-OS Pleb session config."]
         lines.append(guarded("GPU_TERMINAL_SOURCE_HOME", str(home)))
@@ -896,6 +901,126 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(selector.stat().st_mode & 0o777, 0o700)
             self.assertEqual(updater.read_bytes(), old_updater)
             self.assertEqual(updater.stat().st_mode & 0o777, 0o710)
+
+    @staticmethod
+    def _release_values(version="0.2.1", mode="1"):
+        overrides = {"PLEBIAN_OS_VERSION": version, "PLEBIAN_OS_RELEASE": version,
+                     "PLEBIAN_OS_RELEASE_MODE": mode}
+        return [(k, overrides.get(k, v)) for k, v in INSTALLED_RELEASE_VALUES]
+
+    # What Plebian-OS leaves under /etc/apt when it moves a machine off its
+    # install snapshot; each one is evidence of that migration on its own.
+    MIGRATION_EVIDENCE = (
+        "sources.list.plebian-os-installer-snapshot",
+        "sources.list.d/plebian-os-debian.sources",
+    )
+    # Written before a live switch that can still roll back, so never evidence.
+    SECURITY_POLICY = "apt.conf.d/52plebian-os-security-upgrades"
+
+    @staticmethod
+    def _leave_install_snapshot(base: Path, evidence=MIGRATION_EVIDENCE):
+        apt = base / "root" / "etc" / "apt"
+        (apt / "sources.list.d" / "plebian-os-snapshot.sources").unlink()
+        for name in evidence:
+            (apt / name).parent.mkdir(parents=True, exist_ok=True)
+            (apt / name).write_text("# written by Plebian-OS\n")
+
+    def _assert_rollback_restores_selection(self, release, prepare):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base, release=release)
+            before = env.read_bytes()
+            self._source(base)
+            selected = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            prepare(base)
+
+            result = self._run(base, "--rollback")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(env.read_bytes(), before)
+
+    def test_rollback_below_live_apt_contract_is_refused_after_migration(self):
+        for evidence in self.MIGRATION_EVIDENCE:
+            with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base, release=self._release_values())
+                selector = (base / "root" / "usr" / "local" / "bin" /
+                            "plebian-os-select-closure")
+                updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
+                self._source(base)
+                selected = self._run(base, "0.1.8", "--offline")
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                # No update runs here: the selector reads only the apt files that
+                # Plebian-OS's own move to live Debian leaves behind.
+                self._leave_install_snapshot(base, (evidence,))
+                before = (env.read_bytes(), selector.read_bytes(), updater.read_bytes())
+
+                refused = self._run(base, "--rollback")
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("left the Debian install snapshot", refused.stderr)
+                self.assertIn("release 0.2.1 predates live security sources", refused.stderr)
+                self.assertNotIn("by hand", refused.stderr)
+                self.assertEqual(
+                    (env.read_bytes(), selector.read_bytes(), updater.read_bytes()), before)
+                records = self._recovery_records(base)
+                self.assertEqual(len(records), 1)
+                self.assertFalse((records[0] / "restored").exists())
+
+    def test_rollback_to_a_0_2_2_record_works_after_migration(self):
+        self._assert_rollback_restores_selection(
+            self._release_values("0.2.2"), self._leave_install_snapshot)
+
+    def test_rollback_to_a_development_record_works_after_migration(self):
+        self._assert_rollback_restores_selection(
+            self._release_values("0.2.1", mode="0"), self._leave_install_snapshot)
+
+    def test_rollback_works_on_a_machine_unpinned_by_hand_but_never_migrated(self):
+        def unpin_by_hand(base: Path):
+            sources = base / "root" / "etc" / "apt" / "sources.list.d"
+            (sources / "plebian-os-snapshot.sources").unlink()
+            (sources / "debian.sources").write_text(
+                "Types: deb\nURIs: https://deb.debian.org/debian\n")
+
+        self._assert_rollback_restores_selection(self._release_values(), unpin_by_hand)
+
+    def test_rollback_before_update_still_works_while_snapshot_sources_remain(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base, release=self._release_values())
+            before = env.read_bytes()
+            self._source(base)
+            selected = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertTrue((base / "root" / "etc" / "apt" / "sources.list.d" /
+                             "plebian-os-snapshot.sources").exists())
+
+            result = self._run(base, "--rollback")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(env.read_bytes(), before)
+
+    def test_rollback_works_when_a_failed_reconcile_left_only_the_security_policy(self):
+        # A hand-unpinned host whose 0.2.2 post-commit reconcile wrote the
+        # security policy and then rolled its live switch back.
+        def failed_reconcile(base: Path):
+            apt = base / "root" / "etc" / "apt"
+            (apt / "sources.list.d" / "plebian-os-snapshot.sources").unlink()
+            (apt / "sources.list.d" / "debian.sources").write_text(
+                "Types: deb\nURIs: https://deb.debian.org/debian\n")
+            (apt / self.SECURITY_POLICY).parent.mkdir(parents=True, exist_ok=True)
+            (apt / self.SECURITY_POLICY).write_text("# written by Plebian-OS\n")
+
+        self._assert_rollback_restores_selection(self._release_values(), failed_reconcile)
+
+    def test_rollback_works_while_snapshot_sources_remain_beside_migration_files(self):
+        def evidence_beside_snapshot(base: Path):
+            apt = base / "root" / "etc" / "apt"
+            for name in (*self.MIGRATION_EVIDENCE, self.SECURITY_POLICY):
+                (apt / name).parent.mkdir(parents=True, exist_ok=True)
+                (apt / name).write_text("# written by Plebian-OS\n")
+            self.assertTrue((apt / "sources.list.d" / "plebian-os-snapshot.sources").exists())
+
+        self._assert_rollback_restores_selection(
+            self._release_values(), evidence_beside_snapshot)
 
     def test_target_updater_must_be_valid_shell(self):
         with tempfile.TemporaryDirectory() as td:

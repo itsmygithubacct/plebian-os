@@ -16,6 +16,9 @@ Wants=network-online.target
 # Condition below skips this unit (and it has disabled itself), so the ordering
 # is a no-op and normal boots are never delayed.
 Before=display-manager.service
+# The daily apt and unattended-upgrades jobs wait the same way, so a background
+# upgrade never contends with provisioning for the dpkg lock. Also ordering only.
+Before=apt-daily.service apt-daily-upgrade.service
 # Don't run if provisioning already completed.
 ConditionPathExists=!/var/lib/plebian-os/provisioned
 # First boot depends on network, mirrors, and GitHub. The attempt runner keeps
