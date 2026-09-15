@@ -129,7 +129,10 @@ DEP_GROUPS=(
     "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
     # Playalong links SDL2 for output and libsndfile for stem decode. Keep the
     # runtime libraries explicit rather than relying on the -dev toolchain.
-    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm libsdl2-2.0-0 libsndfile1"
+    # Kilix Amp links libfluidsynth and reads the GM SoundFont; the `fluidsynth`
+    # player package is not needed, and it enables a per-user daemon that holds
+    # the default sound card open for every login.
+    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils libfluidsynth3 fluid-soundfont-gm libsdl2-2.0-0 libsndfile1"
     # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
     # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free. The
     # image now enables the non-free component, so they are installable — but

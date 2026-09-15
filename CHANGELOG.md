@@ -42,6 +42,11 @@ closure and must not be used to revise 0.2.1 artifacts.
   helper does the same for `weston` on fresh 0.2.2 installs and reprovisioned
   machines; machines upgraded from 0.2.1 keep the previous helper until they
   are reprovisioned.
+- Stop installing the `fluidsynth` player. Its Debian package enables a
+  per-user daemon that holds the default sound card open for every login, and
+  nothing runs it: Kilix Amp links `libfluidsynth3` and reads the General MIDI
+  SoundFont, which the installer preseed and `install-deps` now install
+  instead. Machines that already have `fluidsynth` keep it.
 
 ## [0.2.1] — 2026-09-01
 
