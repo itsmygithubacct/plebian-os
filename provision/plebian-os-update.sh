@@ -2528,6 +2528,23 @@ refresh_os_dependencies() {
         || die "selected OS dependency closure could not be installed"
 }
 
+# Mirrors refuse_amd64_only_inputs in plebian-os-provision.sh for the pins this
+# update hands to `pleb install`. On any other architecture the x86_64 Vosk
+# wheel and the fallback amd64 kitty bundle checksum fail late, inside the
+# component update; refuse them before the stack transaction begins.
+refuse_amd64_only_stack_inputs() {
+    local machine
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64) return 0 ;;
+    esac
+    if [ "$PLEBIAN_OS_INSTALL_VOICE_MODEL" = 1 ] && [[ "$KILIX_VOICE_LIB_URL" == *_x86_64.whl ]]; then
+        die "KILIX_VOICE_LIB_URL is the x86_64 Vosk wheel, but this machine is $machine; set KILIX_VOICE_LIB_URL and KILIX_VOICE_LIB_SHA256 to the wheel for $machine"
+    fi
+    [ "$KILIX_PREBUILT_SHA256" != bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693 ] \
+        || die "KILIX_PREBUILT_SHA256 is the amd64 kitty $KILIX_PREBUILT_VERSION bundle checksum, but this machine is $machine; set KILIX_PREBUILT_VERSION and KILIX_PREBUILT_SHA256 for the $machine bundle"
+}
+
 stack_env=(
     "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
     "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
@@ -3067,6 +3084,7 @@ fi
 # Capture the complete old runtime boundary before the first checkout or
 # deployed file is changed. The inherited fd keeps Pleb's nested component
 # transaction under the same serialization lock.
+refuse_amd64_only_stack_inputs
 begin_stack_transaction
 
 # Refresh the OS layer itself (provisioner/deps/update helper) first, then pleb.

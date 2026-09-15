@@ -47,6 +47,11 @@ closure and must not be used to revise 0.2.1 artifacts.
   nothing runs it: Kilix Amp links `libfluidsynth3` and reads the General MIDI
   SoundFont, which the installer preseed and `install-deps` now install
   instead. Machines that already have `fluidsynth` keep it.
+- Refuse amd64-only release inputs on other architectures before anything is
+  downloaded: an enabled Waydroid closure, the x86_64 Vosk wheel when
+  dictation is on, and the provisioner's fallback amd64 kitty bundle checksum.
+  The provisioner and the updater name the per-architecture override instead
+  of failing later inside `pleb install` with a checksum or ELF mismatch.
 
 ## [0.2.1] — 2026-09-01
 

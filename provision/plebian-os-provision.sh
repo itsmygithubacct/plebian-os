@@ -718,6 +718,26 @@ validate_release_inputs() {
     esac
 }
 
+# Release closures pin amd64 artifacts: the Waydroid runtime and images, the
+# x86_64 Vosk wheel, and this script's fallback kitty bundle checksum. On any
+# other architecture they fail late, as a checksum or ELF mismatch deep inside
+# `pleb install`. Refuse them before anything is downloaded, and name the
+# per-architecture override instead.
+refuse_amd64_only_inputs() {
+    local machine
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64) return 0 ;;
+    esac
+    [ "$INSTALL_WAYDROID" != 1 ] \
+        || die "PLEBIAN_OS_INSTALL_WAYDROID=1 selects the amd64-only Waydroid closure, but this machine is $machine; set PLEBIAN_OS_INSTALL_WAYDROID=0 and an empty PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"
+    if [ "$INSTALL_VOICE_MODEL" = 1 ] && [[ "$KILIX_VOICE_LIB_URL" == *_x86_64.whl ]]; then
+        die "KILIX_VOICE_LIB_URL is the x86_64 Vosk wheel, but this machine is $machine; set KILIX_VOICE_LIB_URL and KILIX_VOICE_LIB_SHA256 to the wheel for $machine"
+    fi
+    [ "$KILIX_PREBUILT_SHA256" != bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693 ] \
+        || die "KILIX_PREBUILT_SHA256 is the amd64 kitty $KILIX_PREBUILT_VERSION bundle checksum, but this machine is $machine; set KILIX_PREBUILT_VERSION and KILIX_PREBUILT_SHA256 for the $machine bundle"
+}
+
 as_user() {
     if [ "$DRY_RUN" = 1 ]; then echo "    + (as $TARGET_USER) $*"; return 0; fi
     command -v setpriv >/dev/null 2>&1 \
@@ -4404,6 +4424,7 @@ if [ -n "$WAYDROID_CLOSURE_SHA256" ] \
     die "invalid PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"
 fi
 validate_release_inputs
+refuse_amd64_only_inputs
 
 [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "must run as root (try: sudo $0)"
 
