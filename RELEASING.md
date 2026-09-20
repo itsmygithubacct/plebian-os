@@ -6,6 +6,32 @@ Plebian-OS, [pleb](https://github.com/itsmygithubacct/pleb),
 stack. A release uses one version across all four repositories and pins every
 network-fetched build input.
 
+## Release media is not unattended VM media
+
+Build publishable installation media only from the clean annotated release tag
+and its authoritative manifest:
+
+```sh
+version=0.2.1
+git clone --branch "v${version}" https://github.com/itsmygithubacct/plebian-os.git os
+cd os
+PLEBIAN_OS_RELEASE="${version}" build/remaster-iso.sh '' \
+    "plebian-os-${version}-amd64.iso"
+sha256sum "plebian-os-${version}-amd64.iso"
+```
+
+The empty source argument makes the builder fetch and hash-check the exact
+netinst URL from `releases/<x.y.z>.env`; a local netinst path may be supplied
+instead, but it must match that manifest checksum. For 0.2.1 the controlling
+requirements retain archived Debian 13.5.0 media independently of the newer
+package snapshot.
+
+Do not substitute an ISO from `artifacts/acceptance/`. Those images are
+non-publishable test derivatives: they boot unattended, erase the target disk,
+carry volume label `PLEBIAN-TEST-ERASES-DISK`, and have sibling warning files.
+The release image retains the `PLEBIAN-OS <version> AMD64` volume identity and
+interactive disk selection for real hardware.
+
 ## Installer personas and identity inventory
 
 The 0.2.1 installer has four deliberately separate personas. Identity never

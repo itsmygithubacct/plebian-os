@@ -1,5 +1,16 @@
 # `build_vm_image.py` — build a Plebian-OS VM image from scratch
 
+> [!WARNING]
+> **Which ISO do you want?**
+>
+> - **Installation media for real hardware** — use
+>   [`build/remaster-iso.sh`](remaster-iso.sh) and follow
+>   [`RELEASING.md`](../RELEASING.md). It produces an interactive image whose
+>   boot menu waits and whose partitioning choices stay with the operator.
+> - **An ISO for automated VM testing** — this document. It produces an image
+>   that boots straight into an unattended installation and **erases the target
+>   disk**. Never write it to a USB stick or boot it on real hardware.
+
 `build/build_vm_image.py` builds a complete, ready-to-run **Plebian-OS virtual
 machine** end to end. It asks a few questions (username, password, RAM, disk,
 …), builds a customized installer ISO with the repo's own tooling, creates a
@@ -124,6 +135,13 @@ rejected. A generated credential also requires waiting and
 > identity collection. This path needs neither xorriso nor openssl.
 
 ## What you get
+
+Generated VM media defaults to the dedicated
+`~/.local/gpu_terminal/plebian-os/artifacts/acceptance/` directory. The tool
+writes both a directory warning and an exact sibling `.WARNING.txt`, prints a
+final VM-only/disk-erasure warning, and gives every generated ISO the durable
+volume label `PLEBIAN-TEST-ERASES-DISK`. None of these artifacts is publishable
+installation media.
 
 A registered VirtualBox VM configured with:
 

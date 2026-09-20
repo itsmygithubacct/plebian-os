@@ -1,8 +1,33 @@
 #!/bin/sh
 # Debian-Installer apt-setup generator installed by a snapshot-pinned image.
 # apt-setup exports ROOT (empty for the installer, /target for the installed
-# system) and builds apt.conf.new before validating mirror entries.
+# system) and supplies the temporary sources fragment as argv[1]. The optional
+# argv[2] is an explicit test seam; production always reads the timestamp from
+# the immutable installer media.
 set -eu
+
+output="${1:?missing apt-setup output path}"
+snapshot_file="${2:-/cdrom/plebian-os/apt-snapshot}"
+[ "$#" -le 2 ] || {
+    echo "usage: $0 OUTPUT [SNAPSHOT_FILE]" >&2
+    exit 2
+}
+[ -f "$snapshot_file" ] || {
+    echo "missing installer apt snapshot carrier: $snapshot_file" >&2
+    # apt-setup discards arbitrary generator failures and continues. Its
+    # special rc 10 stops the component, so an incomplete snapshot cannot be
+    # silently reduced to the base suite.
+    exit 10
+}
+snapshot="$(cat "$snapshot_file")"
+case "$snapshot" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *)
+        echo "invalid installer apt snapshot carrier: $snapshot_file" >&2
+        exit 10
+        ;;
+esac
 
 root="${ROOT:-}"
 conf="$root/etc/apt/apt.conf.new"
@@ -11,6 +36,12 @@ if ! grep -q 'Acquire::Check-Valid-Until' "$conf" 2>/dev/null; then
     printf '%s\n' 'Acquire::Check-Valid-Until "false";' >> "$conf"
 fi
 
-# Every apt-setup generator receives a temporary sources fragment to populate.
-# A comment keeps verification harmless while making this generator observable.
-printf '%s\n' '# Plebian-OS snapshot validity policy' > "${1:?missing apt-setup output path}"
+# The primary mirror generator emits trixie from the transformed preseed. Add
+# both supplemental suites from the same frozen timestamp; never fall back to
+# live repositories when the carrier is absent or malformed.
+{
+    printf '%s\n' \
+        "deb http://snapshot.debian.org/archive/debian/$snapshot trixie-updates main contrib non-free non-free-firmware"
+    printf '%s\n' \
+        "deb http://snapshot.debian.org/archive/debian-security/$snapshot trixie-security main contrib non-free non-free-firmware"
+} > "$output"

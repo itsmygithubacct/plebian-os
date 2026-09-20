@@ -38,6 +38,11 @@ REPO = Path(__file__).resolve().parent.parent
 PRESEED_TEMPLATE = REPO / "preseed" / "preseed.cfg"
 REMASTER = REPO / "build" / "remaster-iso.sh"
 DEFAULT_PROVISION_TIMEOUT_MINUTES = 120
+UNATTENDED_VOLUME_ID = "PLEBIAN-TEST-ERASES-DISK"
+UNATTENDED_WARNING = (
+    "VM testing only; this ISO auto-installs and erases the target disk. "
+    "Never write it to a USB stick or boot it on real hardware."
+)
 F120_ROOT_REPOS = {
     "KILIX_SYSTEM_MONITOR":
         "https://github.com/itsmygithubacct/kilix-system-monitor.git",
@@ -170,6 +175,102 @@ def storage_dir(kind: str) -> Path:
         "session": "PLEBIAN_OS_SESSION_HOME",
     }.get(kind)
     return Path(os.environ.get(env_name, root / kind)) if env_name else root / kind
+
+
+def acceptance_artifacts_dir() -> Path:
+    """Keep unattended VM media out of the publishable artifact directory."""
+    return storage_dir("artifacts") / "acceptance"
+
+
+def unattended_warning_paths(out_iso: Path) -> tuple[Path, Path]:
+    """Return the directory warning and the warning that travels beside an ISO."""
+    return (
+        out_iso.parent / "UNATTENDED-VM-IMAGES-README.txt",
+        out_iso.with_name(out_iso.name + ".WARNING.txt"),
+    )
+
+
+def unattended_directory_warning_content() -> str:
+    return (
+        "UNATTENDED VM TEST IMAGES — NOT INSTALLATION MEDIA\n\n"
+        f"{UNATTENDED_WARNING}\n"
+        f"Every unattended ISO carries volume label {UNATTENDED_VOLUME_ID}.\n"
+    )
+
+
+def unattended_sibling_warning_content(out_iso: Path) -> str:
+    return (
+        f"{out_iso.name}\n\n{UNATTENDED_WARNING}\n"
+        f"Expected ISO 9660 volume label: {UNATTENDED_VOLUME_ID}\n"
+    )
+
+
+def _is_exact_regular_warning(path: Path, content: str) -> bool:
+    """Accept only the ordinary warning file this builder would write."""
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        return path.read_text(encoding="utf-8") == content
+    except (OSError, UnicodeError):
+        return False
+
+
+def preflight_unattended_output(out_iso: Path) -> None:
+    """Refuse output collisions while allowing the shared safety carrier."""
+    directory_warning, sibling_warning = unattended_warning_paths(out_iso)
+    for path in (out_iso, sibling_warning):
+        if path.exists() or path.is_symlink():
+            die(f"VM artifact output already exists: {path}; "
+                "pass --replace explicitly")
+
+    # This warning belongs to the directory, not to one ISO. A later build
+    # with a different output name must retain and reuse the exact safe file.
+    # Anything else remains a collision; the writer repeats this validation
+    # immediately before its atomic write, so a later substitution is refused.
+    if (directory_warning.exists() or directory_warning.is_symlink()) \
+            and not _is_exact_regular_warning(
+                directory_warning, unattended_directory_warning_content()):
+        die(f"VM artifact output already exists: {directory_warning}; "
+            "pass --replace explicitly")
+
+
+def _write_warning_file(path: Path, content: str, *, replace: bool) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        die(f"refusing unsafe unattended-media warning path: {path}")
+    if path.exists():
+        if path.read_text(encoding="utf-8") == content:
+            return
+        if not replace:
+            die(f"unattended-media warning already exists with different content: {path}")
+
+    fd, temporary = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    temporary_path = Path(temporary)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary_path, 0o644)
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def write_unattended_media_warnings(out_iso: Path, *, replace: bool = False) -> None:
+    directory_warning, sibling_warning = unattended_warning_paths(out_iso)
+    _write_warning_file(
+        directory_warning,
+        unattended_directory_warning_content(),
+        replace=replace,
+    )
+    _write_warning_file(
+        sibling_warning,
+        unattended_sibling_warning_content(out_iso),
+        replace=replace,
+    )
 
 
 def repo_version() -> str:
@@ -774,7 +875,8 @@ def runtime_build_env(cfg: Config) -> dict[str, str]:
     }
 
 
-def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool) -> Path:
+def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool,
+              *, replace_warnings: bool = False) -> Path:
     info(f"building installer ISO via {REMASTER.name} (custom preseed baked in)")
     # AUTOBOOT makes the ISO's boot menu auto-select the install entry — a VM
     # build has no one to press a key at the menu.
@@ -794,6 +896,7 @@ def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool) -
     run([REMASTER, "", str(out_iso)], env=env)
     if not out_iso.exists():
         die(f"ISO build did not produce {out_iso}")
+    write_unattended_media_warnings(out_iso, replace=replace_warnings)
     return out_iso
 
 # ── VirtualBox ───────────────────────────────────────────────────────────────
@@ -1893,6 +1996,8 @@ def final_summary(cfg: Config, iso: Path) -> None:
     if _RECORDER is not None:
         print(f"  report    : {_RECORDER.path}")
         print(f"  report sha: {_RECORDER.path}.sha256")
+    if not cfg.interactive_installer:
+        print(f"  WARNING   : {UNATTENDED_WARNING}")
     print()
 
 
@@ -2098,7 +2203,7 @@ def main() -> None:
         if not iso.exists() and not args.dry_run:
             die(f"--iso not found: {iso}")
     else:
-        out = (args.out or (storage_dir("artifacts") /
+        out = (args.out or (acceptance_artifacts_dir() /
                             default_iso_filename(cfg.name))).resolve()
         iso = out
 
@@ -2112,8 +2217,8 @@ def main() -> None:
     # explicit operation covering the VM and generated evidence for this run.
     if vbox_exists(cfg.name) and not args.replace:
         die(f"a VM named {cfg.name!r} already exists; pass --replace explicitly")
-    if out is not None and out.exists() and not args.replace:
-        die(f"ISO output already exists: {out}; pass --replace explicitly")
+    if out is not None and not args.replace:
+        preflight_unattended_output(out)
     report_path = args.report.resolve() if args.report else None
     if report_path is not None and not args.replace:
         existing_report_outputs = [
@@ -2131,7 +2236,9 @@ def main() -> None:
 
     if out is not None:
         preseed = generate_preseed(cfg, enable_ssh=True)
-        iso = build_iso(cfg, preseed, out, False)
+        iso = build_iso(
+            cfg, preseed, out, False, replace_warnings=args.replace
+        )
         if _RECORDER is not None:
             _RECORDER.stage("instrumented ISO built")
     if _RECORDER is not None:
