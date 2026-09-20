@@ -12,6 +12,10 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- The image ships `feh` as the still-image viewer, on both the Debian-installer
+  path and `install-deps.sh`. Evince remains the PDF handler and mpv the video
+  player; without `feh` a PNG or JPEG from a file manager had no dedicated
+  viewer on a fresh install.
 - Kilix Start and status widgets open anchored drop-downs above the panes.
   Panes keep their size and live contents; popups fit the window, restore
   focus and consume outside clicks used to dismiss them. The release selects
