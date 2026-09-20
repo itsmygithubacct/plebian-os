@@ -1,0 +1,91 @@
+== Welcome
+Your system is already installed and running. Nothing below is required.
+You can skip any step, close this tab, or log out; setup resumes where you left it.
+
+== Your account
+Signed in as: operator
+Setup never displays or stores a password or its hash.
+
+== Administrator password policy
+Drop-in 90-plebian-os-setup-operator, mode 0o440, one account only.
+Validation: unavailable — visudo is not installed on this host; the fragment was not machine-checked
+
+== What this machine can do
+  warning [FIXTURE_ONLY] Synthetic redacted fixture; not qualification evidence.
+CPU: x86_64, 4 effective of 4 logical
+Memory: 8.0 GiB total, 4.0 GiB available
+Model store free: 20.0 GiB
+GPU 0: intel integrated, VRAM unknown; opencl=unknown, vulkan=unknown
+Not determined (3): gpu.0.opencl, gpu.0.vram, gpu.0.vulkan
+This report is not qualification evidence: capture source is synthetic-contract.
+
+== What you want to use it for
+Goal: tts
+  warning [ENTRY_GATE_CLOSED] F100-C0 is missing and this fixture has no measured profile.
+  Task profile: fixture-tts-small-cpu
+  Verdict: unknown
+  Capacity reserves: missing
+    ram: needs 2.0 GiB, available unknown, reserve unknown -> unknown
+    disk: needs 1.0 GiB, available unknown, reserve unknown -> unknown
+    temporary-disk: needs 1.0 GiB, available unknown, reserve unknown -> unknown
+    performance: unknown (comparable: None)
+    why: [F100_C0_MISSING] Capacity reserves are not frozen; no fit or recommendation verdict is available.
+    why: [PROFILE_UNQUALIFIED] The synthetic profile has no comparable measured performance evidence.
+  No recommendation: the sizer reported 'unknown', not a recommendation
+
+== Optional components
+[ ] Example vendor client  (example-vendor-client)
+      [third-party-repository] Example Vendor stable APT repository: This grants Example Vendor standing package-signing authority for future APT operations until the repository is removed.
+      [foreign-architecture] i386: This enables i386 system-wide and changes APT dependency resolution and index downloads.
+      [self-update] Example vendor client payload: The installed launcher downloads and updates a larger client payload outside the initial APT transaction.
+      Two separate decisions are required: accept the vendor terms, and separately grant standing package authority.
+  BLOCKED: invoke_provider
+    gate      F100-A3
+    owner     Track A / F100 owner
+    condition F100 freezes the F100-C0 capacity-reserve contract and publishes its exact identity, path, version and digest
+    evidence  a capacity-contract artifact whose identity, source_commit and source_sha256 are all non-null, so plebian.models.* documents can report capacity_contract status 'resolved'
+    observed  F100 is at U1 R16 serial integration; 0 of 17 R16 rows admitted and U5 not entered. Every F106 fixture reports capacity status 'missing'.
+    gate      F106-P1
+    owner     Track D / F106 owner (joint signatories include F107-B)
+    condition the F106 P1 joint freeze of the plebian-hardware / plebian-model-sizer schemas and invocation contract, signed identical-byte by every named signatory
+    evidence  a successor identical-byte P1 manifest disposing the open Track C findings, followed by the named joint review and signatures over that exact manifest
+    observed  The current Track D input is the R2 handoff at CANDIDATE-SHA256SUMS 2341c763c4ee7958387335f01a5274155311239e3c82572b1855521dc85d37f4, which states in its own text that it is NOT the P1 joint freeze.
+
+== Default browser
+  chromium (Chromium) — Debian main, installed
+  firefox-esr (Firefox ESR) — Debian main, installed on request
+Default browser: firefox-esr
+  would write alternatives:x-www-browser
+  would write alternatives:gnome-www-browser
+  would write xdg-settings:default-web-browser
+  would write mimeapps:x-scheme-handler/http
+  would write mimeapps:x-scheme-handler/https
+  would write mimeapps:text/html
+
+== Review and confirm
+Plan fixture:blocked-plan (preset local-ai-balanced): blocked
+Capacity reserves: missing
+Download: unknown   Installed: unknown
+Temporary: unknown   Shared: unknown
+  No items are selected.
+  Authorization receipts: 0/0 present
+  Confirmation: required=True, granted=False (setup never grants this on the operator's behalf)
+  blocked: [F100_C0_MISSING] Capacity reserves are not frozen; the plan cannot be executed.
+  blocked: [NO_QUALIFIED_SELECTION] No qualified model profile is selected by this fixture.
+  Optional model setup will not run. The core system is complete and unaffected.
+No licence decisions are pending: the plan selects no items.
+  BLOCKED: write_license_receipt
+    gate      F100-A3
+    owner     Track A / F100 owner
+    condition F100 freezes the F100-C0 capacity-reserve contract and publishes its exact identity, path, version and digest
+    evidence  a capacity-contract artifact whose identity, source_commit and source_sha256 are all non-null, so plebian.models.* documents can report capacity_contract status 'resolved'
+    observed  F100 is at U1 R16 serial integration; 0 of 17 R16 rows admitted and U5 not entered. Every F106 fixture reports capacity status 'missing'.
+Not executed: the plan is blocked, not executable
+
+== Setup summary
+Checkpoints: 4 complete, 0 skipped, 4 blocked, 0 pending, of 8 total.
+Core system: complete and unaffected by anything above.
+  blocked: sudo-policy — drop-in validation unavailable: visudo is not installed on this host; the fragment was not machine-checked
+  blocked: goals-and-fit — tts: the sizer reported 'unknown', not a recommendation
+  blocked: optional-components — 1/1 selected; provider invocation is gated
+  blocked: plan-review — the plan is blocked, not executable

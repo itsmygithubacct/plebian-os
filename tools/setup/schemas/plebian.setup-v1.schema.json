@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "plebian.setup/v1",
+  "title": "Plebian first-login setup state v1 (F107-B pre-gate draft)",
+  "$comment": "Pre-gate draft. Records decisions only: never a password, hash, licence text, receipt or model payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "state_version", "account", "core_complete", "checkpoints"],
+  "properties": {
+    "schema": { "const": "plebian.setup/v1" },
+    "state_version": { "type": "integer", "minimum": 1, "maximum": 1 },
+    "account": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z_][a-z0-9_-]*$"
+    },
+    "core_complete": { "type": "boolean" },
+    "checkpoints": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "title", "status", "detail"],
+        "properties": {
+          "id": {
+            "enum": [
+              "welcome",
+              "account-summary",
+              "sudo-policy",
+              "hardware-report",
+              "goals-and-fit",
+              "optional-components",
+              "default-browser",
+              "plan-review"
+            ]
+          },
+          "title": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "status": { "enum": ["pending", "complete", "skipped", "blocked"] },
+          "detail": { "type": "string", "maxLength": 512 }
+        }
+      }
+    }
+  }
+}

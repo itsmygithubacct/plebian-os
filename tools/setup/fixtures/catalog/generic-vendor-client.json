@@ -1,0 +1,33 @@
+{
+  "schema": "plebian.setup.optional-component/v1",
+  "id": "example-vendor-client",
+  "label": "Example vendor client",
+  "disclosures": [
+    {
+      "kind": "third-party-repository",
+      "subject": "Example Vendor stable APT repository",
+      "text": "This grants Example Vendor standing package-signing authority for future APT operations until the repository is removed."
+    },
+    {
+      "kind": "foreign-architecture",
+      "subject": "i386",
+      "text": "This enables i386 system-wide and changes APT dependency resolution and index downloads."
+    },
+    {
+      "kind": "self-update",
+      "subject": "Example vendor client payload",
+      "text": "The installed launcher downloads and updates a larger client payload outside the initial APT transaction."
+    }
+  ],
+  "authorization_ref": {
+    "schema": "kilix.install.authorization/v2",
+    "authorization_id": "example-vendor-trust"
+  },
+  "license_ref": {
+    "schema": "kilix.install.license/v1",
+    "license_id": "example-vendor-terms",
+    "license_text_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "decision_class": "affirmative"
+  },
+  "provider": "example-vendor-client.install"
+}
