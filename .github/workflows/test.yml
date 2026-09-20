@@ -16,6 +16,10 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y shellcheck
       - name: Python tests
         run: python3 -m unittest discover -s tests -v
+      - name: F120 authority profile tests
+        # `discover -s tests` never looks under tools/, so the accepted OS0
+        # test imported from 019e4116 would otherwise be carried ungated.
+        run: python3 -m unittest discover -s tools/closure/tests -t tools/closure -v
       - name: Parse and lint scripts
         run: |
           for shell_script in bootstrap.sh build/*.sh provision/*.sh \
