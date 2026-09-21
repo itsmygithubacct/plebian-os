@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import re
@@ -37,7 +38,10 @@ CONTENT_CATALOG_PATH = "src/kilix_content/catalog/plebian.json"
 REQUIRED_MODEL_RECORD = "vosk-model-small-en-us-0.15"
 RECEIPT_GATE_SYMBOL = "require_covering_receipt"
 RECEIPT_GATE_ROUTE = "kilix-stt"
-LICENCE_REFUSED_DEFINITION = "LICENCE_REFUSED_EXIT = 3"
+LICENCE_REFUSED_SYMBOL = "LICENCE_REFUSED_EXIT"
+LICENCE_REFUSED_VALUE = 3
+LICENCE_REFUSED_DEFINITION = (
+    f"{LICENCE_REFUSED_SYMBOL} = {LICENCE_REFUSED_VALUE}")
 
 # The two commits that do carry these things today, on branches that have not
 # been merged or released. They are fixtures for the probes' pass path — the
@@ -70,12 +74,22 @@ def _git(repo, *args):
     Only object-store reads are used, never a command that touches an index or
     a working tree: kilix, kilix-content and kilix-voice are read-only to this
     repository's tests.
+
+    `--no-replace-objects` is not decoration. OS-V-FIX2-VERIFY VF7 showed that
+    a `refs/replace/<sha>` entry in whichever sibling checkout the probes
+    happen to find rewrites what a pinned SHA resolves to, so a checkout this
+    repository does not control could turn a gap into a pass while the pins
+    stayed exactly as they are. These probes must answer for the commit the
+    release pins, not for whatever a local ref says should stand in for it.
+    `test_a_replacement_object_cannot_green_the_content_probe` proves the flag
+    is what closes that, with a control showing the replacement really does
+    redirect when git is allowed to honour it.
     """
     try:
         done = subprocess.run(
-            ("git", "-C", str(repo)) + tuple(args),
+            ("git", "-C", str(repo), "--no-replace-objects") + tuple(args),
             capture_output=True, text=True, timeout=120, check=False)
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, UnicodeDecodeError):
         return None
     if done.returncode != 0:
         return None
@@ -220,12 +234,112 @@ def content_chain_gap(kilix_ref, *, kilix_repos=None, content_repos=None):
     return None
 
 
+def _paths_mentioning(repo, commit, needle, *pathspec):
+    """Tracked paths at `commit` whose content mentions `needle`.
+
+    A cheap narrowing pass: the parse below is the thing that decides, and it
+    only has to look at files that contain the word at all.
+    """
+    found = _git(repo, "grep", "-l", "-F", "-e", needle, commit, "--",
+                 *pathspec)
+    if found is None:
+        return []
+    prefix = commit + ":"
+    return [line[len(prefix):] for line in found.splitlines()
+            if line.startswith(prefix)]
+
+
+def _parsed_source(repo, commit, path):
+    """`path` at `commit` parsed as a Python module, or None if it is not one."""
+    blob = _git(repo, "show", f"{commit}:{path}")
+    if blob is None:
+        return None
+    try:
+        return ast.parse(blob)
+    except (SyntaxError, ValueError):
+        return None
+
+
+def _called_name(call):
+    """The bare name a Call node invokes: `f()` and `m.f()` both give `f`."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def _route_calls_the_gate(repo, commit):
+    """Does something under the advertised route really *call* the gate?
+
+    OS-V-FIX2-VERIFY VF3: the old check was `git grep -F
+    require_covering_receipt -- kilix-stt`, which a tree satisfies with the
+    comment `# require_covering_receipt is NOT called here` sitting above an
+    ungated `install(model)`. A string is not a call, so the candidate files
+    are parsed and a real `ast.Call` node is required. A mention in a comment,
+    in a docstring or in any other string literal is invisible to the parser,
+    which is exactly the point.
+
+    The route may be the `kilix-stt` file or a `kilix-stt/` package directory —
+    OS-V-FIX2-VERIFY's V7 judged the directory shape correctly *present*, and
+    the pathspec keeps treating it that way. A route whose files do not parse
+    as Python is reported as a gap: the call cannot be shown, and an unprovable
+    capability is worth exactly what an absent one is.
+    """
+    for path in _paths_mentioning(repo, commit, RECEIPT_GATE_SYMBOL,
+                                  RECEIPT_GATE_ROUTE):
+        module = _parsed_source(repo, commit, path)
+        if module is None:
+            continue
+        for node in ast.walk(module):
+            if (isinstance(node, ast.Call)
+                    and _called_name(node) == RECEIPT_GATE_SYMBOL):
+                return True
+    return False
+
+
+def _defines_the_refusal_exit(repo, commit):
+    """Does a Python module really *define* LICENCE_REFUSED_EXIT = 3?
+
+    OS-V-FIX2-VERIFY VF3 again: `git grep -F 'LICENCE_REFUSED_EXIT = 3'` over
+    the whole tree was satisfied by the line "Someday LICENCE_REFUSED_EXIT = 3"
+    in a Markdown design note. What the probe's docstring promises is the
+    *definition* of the refusal exit code, so the constant is required from a
+    `.py` module that parses, as a binding of the name to the value — not as a
+    sentence somewhere that happens to contain those characters.
+    """
+    for path in _paths_mentioning(repo, commit, LICENCE_REFUSED_SYMBOL):
+        if not path.endswith(".py"):
+            continue
+        module = _parsed_source(repo, commit, path)
+        if module is None:
+            continue
+        for node in ast.walk(module):
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            else:
+                continue
+            if not any(isinstance(target, ast.Name)
+                       and target.id == LICENCE_REFUSED_SYMBOL
+                       for target in targets):
+                continue
+            value = node.value
+            if (isinstance(value, ast.Constant)
+                    and value.value == LICENCE_REFUSED_VALUE):
+                return True
+    return False
+
+
 def receipt_gate_gap(voice_ref, *, voice_repos=None):
     """What the pinned kilix-voice tree still lacks, or None if it lacks none.
 
     The gate has to be on the route the catalog row advertises, so the
     `require_covering_receipt` call is required in `kilix-stt` itself and not
     merely somewhere in the tree, and the refusal's exit code has to be defined.
+    Both are read as code and not as text: see `_route_calls_the_gate` and
+    `_defines_the_refusal_exit` for why a substring was not enough.
     """
     if voice_repos is None:
         voice_repos = kilix_voice_repo_candidates()
@@ -239,13 +353,11 @@ def receipt_gate_gap(voice_ref, *, voice_repos=None):
                 f"install action (searched {_searched(voice_repos)}; set "
                 "PLEBIAN_OS_KILIX_VOICE_REPO to a checkout that has it)")
     missing = []
-    if _git(voice, "grep", "-q", "-F", "-e", RECEIPT_GATE_SYMBOL,
-            voice_ref, "--", RECEIPT_GATE_ROUTE) is None:
+    if not _route_calls_the_gate(voice, voice_ref):
         missing.append(
             f"{RECEIPT_GATE_SYMBOL} call in {RECEIPT_GATE_ROUTE}, the route "
             "the catalog row's own action runs")
-    if _git(voice, "grep", "-q", "-F", "-e", LICENCE_REFUSED_DEFINITION,
-            voice_ref) is None:
+    if not _defines_the_refusal_exit(voice, voice_ref):
         missing.append(
             f"definition of the refusal exit code "
             f"({LICENCE_REFUSED_DEFINITION})")
@@ -284,9 +396,19 @@ _RECEIPT_GATE_OWED = (
 # The two halves of the route, as a table the deliberate test iterates over.
 # Both must be here: OS-V-FIX-VERIFY's MV-04 deleted one of them and the suite
 # stayed silent because the other was still failing. The table's shape is
-# asserted by test_the_gap_test_requires_both_halves_of_the_route, and each
-# probe is required there to actually report a gap on a tree that lacks its
-# half, so an entry cannot become a no-op either.
+# asserted by test_the_gap_test_requires_both_halves_of_the_route, which also
+# runs each probe against a tree lacking precisely that probe's own half.
+#
+# That guard test binds its probes **out of this table**, by key, and never by
+# the module-level names below. OS-V-FIX2-IMPL.md §2 claimed an entry could not
+# become a no-op, and OS-V-FIX2-VERIFY VF1 showed that claim was false: its
+# mutants MU-12 and MU-13 replaced one entry with `lambda ref, **kw: None`,
+# left the key and the module-level function untouched, and survived the whole
+# suite with the failing set, the test count and the skip count all unchanged;
+# doing it to both entries greened the deliberate failure outright. The guard
+# test asserted the table's keys and then called the functions, so the table
+# and the code it was supposed to guard could drift apart. Binding from the
+# table is what makes the claim true.
 FIRST_USE_REQUIREMENTS = (
     ("1. THE CONTENT CHAIN", "KILIX_REF", content_chain_gap,
      _CONTENT_CHAIN_OWED),
@@ -721,22 +843,83 @@ class VoiceReleaseContractTests(unittest.TestCase):
             json.dumps({"schema_version": 3, "assets": assets}))
         return repo, self._commit_worktree(repo)
 
-    def _kilix_voice(self, base, *, gate=True, exit_code=True):
+    def _kilix_voice(self, base, *, gate=True, exit_code=True, route="file"):
+        """A synthetic kilix-voice tree.
+
+        `gate` is True (a real call on the route), False (no mention at all),
+        `"comment"` (the symbol named in a comment above an ungated install —
+        OS-V-FIX2-VERIFY VF3's V5), `"referenced"` (the symbol bound to a name
+        on the route but never called) or `"elsewhere"` (a real call, but in
+        another file: the gate exists and the advertised route does not reach
+        it). `exit_code` is True, False, or `"doc"` (the constant only in a
+        design note — VF3's V6; written so that it *would* satisfy a parser,
+        which is why the probe also requires a `.py` module). `route` is
+        `"file"` or `"dir"`, the `kilix-stt` package directory the verifier's
+        V7 judged, correctly, to be the route.
+        """
         repo = self._git_init(base)
         (repo / "voicelib").mkdir()
         (repo / "voicelib" / "licensing.py").write_text(
-            (f"{LICENCE_REFUSED_DEFINITION}\n" if exit_code else "")
+            (f"{LICENCE_REFUSED_DEFINITION}\n" if exit_code is True else "")
             + f"def {RECEIPT_GATE_SYMBOL}(model):\n    return None\n"
         )
-        (repo / RECEIPT_GATE_ROUTE).write_text(
-            "#!/usr/bin/env python3\n"
-            + (f"licensing.{RECEIPT_GATE_SYMBOL}(model)\n" if gate else
-               "install(model)\n")
-        )
+        if exit_code == "doc":
+            (repo / "docs").mkdir()
+            # A design note that a bare parse would accept: the heading reads
+            # as a Python comment and the line below it as a real binding. Only
+            # "the definition lives in a .py module" rejects this.
+            (repo / "docs" / "NOTES.md").write_text(
+                "# Design note: someday the refusal exit code\n"
+                f"{LICENCE_REFUSED_DEFINITION}\n")
+        if gate == "elsewhere":
+            (repo / "voicelib" / "other_route.py").write_text(
+                "import licensing\n\n\n"
+                "def install_from_somewhere_else(model):\n"
+                f"    licensing.{RECEIPT_GATE_SYMBOL}(model)\n")
+        if gate is True:
+            body = f"licensing.{RECEIPT_GATE_SYMBOL}(model)\n"
+        elif gate == "comment":
+            body = (f"# {RECEIPT_GATE_SYMBOL} is NOT called here\n"
+                    "install(model)\n")
+        elif gate == "referenced":
+            body = (f"_gate = licensing.{RECEIPT_GATE_SYMBOL}\n"
+                    "install(model)\n")
+        else:
+            body = "install(model)\n"
+        source = "#!/usr/bin/env python3\n" + body
+        if route == "dir":
+            (repo / RECEIPT_GATE_ROUTE).mkdir()
+            (repo / RECEIPT_GATE_ROUTE / "__init__.py").write_text(source)
+        else:
+            (repo / RECEIPT_GATE_ROUTE).write_text(source)
         return repo, self._commit_worktree(repo)
 
+    def _one_commit_repo(self, base, marker):
+        """A git repository holding exactly one commit, unique to `marker`.
+
+        Distinct content and a distinct message, so two of these can never
+        collide on a commit id however fast they are built in succession.
+        """
+        repo = self._git_init(base)
+        (repo / "MARKER").write_text(marker + "\n")
+        return repo, self._commit_worktree(repo, message=marker)
+
+    @staticmethod
+    def _requirement_probes():
+        """The probes the deliberate gap test will actually call, by pin key.
+
+        OS-V-FIX2-VERIFY VF1. Reading them out of FIRST_USE_REQUIREMENTS rather
+        than closing over the module-level `content_chain_gap` and
+        `receipt_gate_gap` is the whole of that fix: MU-12 and MU-13 replaced a
+        table entry with a no-op and left the module-level function alone, and
+        every test that mattered went on exercising the function nobody was
+        going to run.
+        """
+        return {key: probe
+                for _heading, key, probe, _owed in FIRST_USE_REQUIREMENTS}
+
     def test_the_gap_test_requires_both_halves_of_the_route(self):
-        """OS-V-FIX-VERIFY V1 / mutant MV-04: half of it could be deleted.
+        """OS-V-FIX-VERIFY V1 / MV-04, and OS-V-FIX2-VERIFY VF1 / MU-12, MU-13.
 
         MV-04 removed the receipt-gate requirement from the gap test and
         survived the whole suite, because the other requirement was still
@@ -744,13 +927,27 @@ class VoiceReleaseContractTests(unittest.TestCase):
         named table, and this test asserts both that the table names both pins
         and that neither entry is a no-op: each probe is run against a tree
         that lacks precisely its own half and is required to report it.
+
+        The probes under test are taken **from the table**, by key. The first
+        version of this test asserted the table's keys and then called
+        `content_chain_gap` and `receipt_gate_gap` by their module-level names,
+        so the table and the functions could drift: MU-12 and MU-13 swapped one
+        entry for `lambda ref, **kw: None`, the deliberate test stopped
+        checking that half, and nothing anywhere objected.
         """
+        table = self._requirement_probes()
         self.assertEqual(
-            {key for _heading, key, _probe, _owed in FIRST_USE_REQUIREMENTS},
+            set(table),
             {"KILIX_REF", "KILIX_VOICE_REF"},
             "the route has two halves and both must be checked: deleting one "
             "is what MV-04 did, and it went unnoticed",
         )
+        self.assertEqual(
+            len(table), len(FIRST_USE_REQUIREMENTS),
+            "two requirements sharing one pin key would hide one of them",
+        )
+        content_probe = table["KILIX_REF"]
+        voice_probe = table["KILIX_VOICE_REF"]
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             for label, first_use, record, wanted in (
@@ -764,32 +961,103 @@ class VoiceReleaseContractTests(unittest.TestCase):
                         first_use=first_use, record=record)
                     kilix, kilix_ref = self._kilix_pinning(
                         base / f"kilix-{first_use}-{record}", content_ref)
-                    gap = content_chain_gap(
+                    gap = content_probe(
                         kilix_ref, kilix_repos=[kilix],
                         content_repos=[content])
                     self.assertIsNotNone(
                         gap, "a closure missing the flow must be reported")
                     self.assertIn(wanted, gap)
-            for label, gate, exit_code, wanted in (
-                ("no gate", False, True, RECEIPT_GATE_SYMBOL),
-                ("no exit code", True, False, LICENCE_REFUSED_DEFINITION),
+            # OS-V-FIX2-VERIFY VF2 / mutant MU-05: the third of the probe's
+            # three lookups — "the gitlink names a kilix-content commit no
+            # checkout holds" — had no arm, because every fixture above is
+            # found. Turning that branch into a pass survived the whole suite.
+            with self.subTest(content="gitlink nobody holds"):
+                held, held_ref = self._kilix_content(base / "content-unheld")
+                kilix, kilix_ref = self._kilix_pinning(
+                    base / "kilix-unheld", held_ref)
+                gap = content_probe(
+                    kilix_ref, kilix_repos=[kilix], content_repos=[])
+                self.assertIsNotNone(
+                    gap,
+                    "a gitlink no checkout holds is an unprovable capability, "
+                    "which this probe must report as a gap and not as a pass")
+                self.assertIn(held_ref[:8], gap)
+                self.assertIn("no kilix-content checkout holding it", gap)
+                # …and the control: with the checkout present, the same
+                # gitlink is a pass, so the arm above is about the lookup and
+                # not about the fixture being broken.
+                self.assertIsNone(
+                    content_probe(kilix_ref, kilix_repos=[kilix],
+                                  content_repos=[held]))
+            for label, gate, exit_code, route, wanted in (
+                ("no gate", False, True, "file", RECEIPT_GATE_SYMBOL),
+                ("no exit code", True, False, "file",
+                 LICENCE_REFUSED_DEFINITION),
+                # OS-V-FIX2-VERIFY VF3: the two shapes a substring probe
+                # accepted. A comment naming the symbol is not a call, and a
+                # design note quoting the constant is not a definition.
+                ("gate named only in a comment", "comment", True, "file",
+                 RECEIPT_GATE_SYMBOL),
+                ("exit code only in a design note", True, "doc", "file",
+                 LICENCE_REFUSED_DEFINITION),
+                # Bound to a name and never invoked. A reference is no more
+                # the mechanism than a comment is, and it is what a check
+                # that accepted any mention of the symbol would fall for.
+                ("gate referenced but never called", "referenced", True,
+                 "file", RECEIPT_GATE_SYMBOL),
+                # The gate exists, and the advertised route does not reach it.
+                # This is what keeps the `-- kilix-stt` pathspec load-bearing
+                # now that the check parses rather than greps: a `def
+                # require_covering_receipt` elsewhere in the tree is not a
+                # call, so without this arm dropping the pathspec would have
+                # stopped being detectable.
+                ("gate called only off the route", "elsewhere", True, "file",
+                 RECEIPT_GATE_SYMBOL),
             ):
                 with self.subTest(voice=label):
                     voice, voice_ref = self._kilix_voice(
                         base / f"voice-{gate}-{exit_code}",
-                        gate=gate, exit_code=exit_code)
-                    gap = receipt_gate_gap(voice_ref, voice_repos=[voice])
+                        gate=gate, exit_code=exit_code, route=route)
+                    gap = voice_probe(voice_ref, voice_repos=[voice])
                     self.assertIsNotNone(
                         gap, "a tree missing the gate must be reported")
                     self.assertIn(wanted, gap)
             # An unresolvable ref is a gap, never a pass: otherwise the gap
             # test could be greened by removing a checkout.
-            self.assertIsNotNone(content_chain_gap(
+            self.assertIsNotNone(content_probe(
                 "0" * 40, kilix_repos=[], content_repos=[]))
-            self.assertIsNotNone(receipt_gate_gap("0" * 40, voice_repos=[]))
-            self.assertIsNotNone(content_chain_gap(
+            self.assertIsNotNone(voice_probe("0" * 40, voice_repos=[]))
+            self.assertIsNotNone(content_probe(
                 "", kilix_repos=[], content_repos=[]))
-            self.assertIsNotNone(receipt_gate_gap("", voice_repos=[]))
+            self.assertIsNotNone(voice_probe("", voice_repos=[]))
+
+    PASS_PATH_ARMS = ("synthetic", "real-trees")
+
+    @staticmethod
+    def _assert_every_pass_path_arm_accounted_for(ran):
+        """Every arm of the pass-path test must have run or declared itself.
+
+        OS-V-FIX2-VERIFY VF4 / mutant MU-16: a `return` inserted before the
+        real-trees arm deleted it, and `Ran 694`, `failures=2` and `skipped=4`
+        were all *identical* to the baseline. OS-V-FIX2-IMPL.md §2 offered
+        "skipped=4 is unchanged" as the evidence that the arm ran; that
+        evidence cannot tell a run from a deletion, because an arm that never
+        executes neither fails nor skips.
+
+        So the arms keep a ledger, and this is registered with `addCleanup`
+        before the first one starts. A cleanup runs even when the test body
+        returns early or skips, so deleting an arm — by a `return`, by an
+        excision, by any edit that stops it executing — now raises here.
+        """
+        for arm in VoiceReleaseContractTests.PASS_PATH_ARMS:
+            if arm in ran or f"{arm}:unavailable" in ran:
+                continue
+            raise AssertionError(
+                f"the {arm!r} arm of the pass-path test neither ran nor "
+                f"reported itself unavailable (ledger: {sorted(ran)}). An "
+                "arm that quietly stops executing leaves the failing set, "
+                "the test count and the skip count all unchanged, which is "
+                "exactly how OS-V-FIX2-VERIFY's MU-16 survived.")
 
     def test_the_gap_test_passes_when_the_route_is_really_there(self):
         """The pass path, exercised — the release's own pins never reach it.
@@ -802,25 +1070,46 @@ class VoiceReleaseContractTests(unittest.TestCase):
         work/0.2.2-v-acc — so the probe is also known to accept the actual
         commits this release is waiting for. Arm 2 is skipped, and only arm 2,
         where those read-only checkouts are not present.
+
+        Both arms record themselves in `ran`, and the cleanup registered
+        before either of them starts requires both to be accounted for: see
+        `_assert_every_pass_path_arm_accounted_for` for why "skipped=4 is
+        unchanged" was not evidence that arm 2 ran.
         """
+        ran = set()
+        self.addCleanup(self._assert_every_pass_path_arm_accounted_for, ran)
+        table = self._requirement_probes()
+        content_probe = table["KILIX_REF"]
+        voice_probe = table["KILIX_VOICE_REF"]
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             content, content_ref = self._kilix_content(base / "content")
             kilix, kilix_ref = self._kilix_pinning(base / "kilix", content_ref)
             self.assertIsNone(
-                content_chain_gap(kilix_ref, kilix_repos=[kilix],
-                                  content_repos=[content]),
+                content_probe(kilix_ref, kilix_repos=[kilix],
+                              content_repos=[content]),
                 "a closure that carries the flow and the record must pass")
             voice, voice_ref = self._kilix_voice(base / "voice")
             self.assertIsNone(
-                receipt_gate_gap(voice_ref, voice_repos=[voice]),
+                voice_probe(voice_ref, voice_repos=[voice]),
                 "a tree that carries the gate and the exit code must pass")
+            # OS-V-FIX2-VERIFY's V7, kept deliberately: a `kilix-stt` package
+            # directory with the call inside it is still the advertised route,
+            # and git's pathspec matching is right to accept it.
+            package, package_ref = self._kilix_voice(
+                base / "voice-package", route="dir")
+            self.assertIsNone(
+                voice_probe(package_ref, voice_repos=[package]),
+                "a kilix-stt package directory carrying the call is the route "
+                "just as much as a kilix-stt file is")
+            ran.add("synthetic")
 
             real_content = repo_holding(
                 kilix_content_repo_candidates(), CONTENT_REF_WITH_FIRST_USE)
             real_voice = repo_holding(
                 kilix_voice_repo_candidates(), VOICE_REF_WITH_RECEIPT_GATE)
             if real_content is None or real_voice is None:
+                ran.add("real-trees:unavailable")
                 self.skipTest(
                     "no read-only checkout holding kilix-content "
                     f"{CONTENT_REF_WITH_FIRST_USE[:8]} and kilix-voice "
@@ -829,15 +1118,107 @@ class VoiceReleaseContractTests(unittest.TestCase):
             real_kilix, real_kilix_ref = self._kilix_pinning(
                 base / "kilix-real", CONTENT_REF_WITH_FIRST_USE)
             self.assertIsNone(
-                content_chain_gap(real_kilix_ref, kilix_repos=[real_kilix],
-                                  content_repos=[real_content]),
+                content_probe(real_kilix_ref, kilix_repos=[real_kilix],
+                              content_repos=[real_content]),
                 f"kilix-content {CONTENT_REF_WITH_FIRST_USE[:8]} carries the "
                 "flow and the record, so a Kilix pinning it must pass")
             self.assertIsNone(
-                receipt_gate_gap(VOICE_REF_WITH_RECEIPT_GATE,
-                                 voice_repos=[real_voice]),
+                voice_probe(VOICE_REF_WITH_RECEIPT_GATE,
+                            voice_repos=[real_voice]),
                 f"kilix-voice {VOICE_REF_WITH_RECEIPT_GATE[:8]} carries the "
                 "gate, so it must pass")
+            ran.add("real-trees")
+        self._assert_every_pass_path_arm_accounted_for(ran)
+
+    def test_repo_holding_returns_a_checkout_that_really_holds_the_commit(self):
+        """OS-V-FIX2-VERIFY VF5 / mutant MU-11: the contract was untested.
+
+        `repo_holding` promises "the first candidate checkout whose object
+        store has `commit`". MU-11 made it return the first candidate that had
+        a `.git` at all, without checking, and survived the whole suite: the
+        consequence was fail-safe (the next read fails and the probe reports a
+        gap), but a contract nothing tests is a contract that can change
+        without anyone deciding to change it.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            stranger, stranger_ref = self._one_commit_repo(
+                base / "stranger", "a repository that holds something else")
+            wanted, wanted_ref = self._one_commit_repo(
+                base / "wanted", "the repository that holds the commit")
+            self.assertNotEqual(stranger_ref, wanted_ref)
+            not_a_repo = base / "not-a-repo"
+            not_a_repo.mkdir()
+            self.assertEqual(
+                repo_holding([stranger, wanted], wanted_ref), wanted,
+                "a checkout that does not hold the commit must be passed "
+                "over, not returned because it happens to be a git repository")
+            self.assertEqual(
+                repo_holding([not_a_repo, wanted], wanted_ref), wanted,
+                "a directory that is not a checkout is skipped")
+            self.assertEqual(
+                repo_holding([wanted, stranger], wanted_ref), wanted)
+            self.assertIsNone(
+                repo_holding([stranger], wanted_ref),
+                "no candidate holds it, so there is no checkout to name")
+            self.assertIsNone(repo_holding([], wanted_ref))
+            for malformed in (None, "", "HEAD", wanted_ref[:39],
+                              wanted_ref.upper(), wanted_ref + "0"):
+                with self.subTest(commit=malformed):
+                    self.assertIsNone(
+                        repo_holding([wanted], malformed),
+                        "only a 40-character object id names a pinned commit")
+
+    def test_a_replacement_object_cannot_green_the_content_probe(self):
+        """OS-V-FIX2-VERIFY VF7: `refs/replace` redirected the probes.
+
+        The probes read sibling checkouts this repository does not control. A
+        `refs/replace/<sha>` entry in one of them rewrites what a pinned SHA
+        resolves to, so a tree that lacks the route could answer for one that
+        has it while `releases/0.2.2.env` stayed exactly as it is. `_git` now
+        passes `--no-replace-objects`, and this is the proof: the same
+        replacement that makes plain git report the good tree leaves the probe
+        reporting the gap.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            content, without_route = self._kilix_content(
+                base / "content", first_use=False, record=False)
+            package = content / "src" / "kilix_content"
+            (package / "first_use.py").write_text(
+                "def show_licence_and_accept():\n    raise NotImplementedError\n")
+            (package / "catalog" / "plebian.json").write_text(json.dumps(
+                {"schema_version": 3,
+                 "assets": [{"id": REQUIRED_MODEL_RECORD}]}))
+            with_route = self._commit_worktree(content, "the route landed")
+            kilix, kilix_ref = self._kilix_pinning(
+                base / "kilix", without_route)
+            table = self._requirement_probes()
+            content_probe = table["KILIX_REF"]
+            self.assertIsNotNone(
+                content_probe(kilix_ref, kilix_repos=[kilix],
+                              content_repos=[content]),
+                "the pinned gitlink names the commit without the route")
+            subprocess.run(
+                ["git", "-C", str(content), "replace", "-f", without_route,
+                 with_route],
+                check=True, capture_output=True, text=True)
+            # The control: without the flag git really does redirect, so this
+            # test is about --no-replace-objects and not about a replacement
+            # that never took effect.
+            redirected = subprocess.run(
+                ["git", "-C", str(content), "cat-file", "-e",
+                 f"{without_route}:{CONTENT_FIRST_USE_PATH}"],
+                capture_output=True, text=True).returncode
+            self.assertEqual(
+                redirected, 0,
+                "control: with replacement honoured, the commit without the "
+                "flow answers with the tree that has it")
+            self.assertIsNotNone(
+                content_probe(kilix_ref, kilix_repos=[kilix],
+                              content_repos=[content]),
+                "a refs/replace entry in a checkout this repository does not "
+                "control must not turn the gap into a pass")
 
     def test_the_carried_over_allowance_claims_no_acceptance_it_cannot_see(
             self):
@@ -866,6 +1247,20 @@ class VoiceReleaseContractTests(unittest.TestCase):
         self.assertIn(
             "whether its user accepted that model at first use or 0.2.1's "
             "firstboot fetched it before the upgrade", upgrading)
+        # OS-V-FIX2-VERIFY VF6: two lines further down the same paragraph, the
+        # rollback sentence still asserted flatly that a model could be "an
+        # accepted model installed under 0.2.2" — eight lines after the same
+        # paragraph says 0.2.2 cannot acquire one at all. It is the same
+        # overclaim the sentence above was rewritten to remove, so it is
+        # removed the same way: by naming what the check can see (a model the
+        # machine carries) instead of who consented to it.
+        self.assertNotIn("an accepted model installed under 0.2.2", upgrading)
+        self.assertIn(
+            "a model the machine already carries — whichever release put it "
+            "there — satisfies 0.2.1's firstboot check", upgrading)
+        self.assertIn(
+            "It cannot be a model 0.2.2 installed: 0.2.2 installs none",
+            upgrading)
 
     @staticmethod
     def _shipped_surface_files():
