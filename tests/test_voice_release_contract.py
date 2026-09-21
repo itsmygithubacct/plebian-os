@@ -57,6 +57,12 @@ SHIPPED_SURFACE_DIRECTORIES = ("provision", "build", "preseed", "tools")
 SHIPPED_SURFACE_FILES = ("bootstrap.sh",)
 SPEECH_TOOL_PATTERN = re.compile(r"\bstt\b")
 
+# The kilix-stt flags a provisioning or build path may run. Every one of them
+# reports; none of them changes installed or default state. Widening this to
+# admit the install action is the whole of what item 6 forbids, so the set is
+# named here and its read-only-ness asserted, not just its membership.
+READ_ONLY_STT_FLAGS = ("--version", "--print", "--models")
+
 
 def _git(repo, *args):
     """Read-only git plumbing; stdout, or None when the command failed.
@@ -980,7 +986,14 @@ class VoiceReleaseContractTests(unittest.TestCase):
             with self.subTest(script=name, requirement="read-only only"):
                 self.assertTrue(invocations)
                 for flag in sorted(set(invocations)):
-                    self.assertIn(flag, ("--version", "--print", "--models"))
+                    self.assertIn(flag, READ_ONLY_STT_FLAGS)
+        # OS-V-FIX-VERIFY's MV-19 widened that set to admit `--install` and
+        # survived. The set is read-only by definition, so say so: a widening
+        # now fails here whether or not a caller has been added yet.
+        self.assertNotIn("--install", READ_ONLY_STT_FLAGS)
+        for flag in READ_ONLY_STT_FLAGS:
+            with self.subTest(flag=flag):
+                self.assertNotIn("install", flag)
 
     def test_the_stamp_assertions_are_anchored_to_whole_lines(self):
         """OS-V-VERIFY F4: mutant MU-09 unanchored these and survived.
@@ -1008,6 +1021,43 @@ class VoiceReleaseContractTests(unittest.TestCase):
             encoding="utf-8")
         self.assertIn("grep -Fqx 'libvosk=skipped'", builder)
         self.assertIn("grep -Fqx 'model-small-en-us=skipped'", builder)
+
+    def test_the_completion_marker_is_authenticated_like_the_stamp(self):
+        """OS-V-FIX-VERIFY V3, and V2's mutant MV-09.
+
+        The marker is the hinge of the re-provision allowance, and it used to
+        be checked for existence and shape and nothing else while the install
+        stamp in the same function was checked with stat(1). All four guards
+        are pinned here, for two reasons. The first is the ordinary one: the
+        weakening should be visible in the diff, the way the stamp's anchoring
+        already is. The second is specific. Adding the mode check made the
+        `! -L` guard behaviourally redundant — a symlink's own mode is 0777 on
+        Linux and GNU stat does not dereference, so a symlinked marker is
+        refused by the mode check even with `! -L` removed (MV-09 is now an
+        equivalent mutant, and the whole suite is unchanged under it). The
+        behavioural refusal is proved by
+        test_a_symlinked_completion_marker_is_not_a_completed_run; this keeps
+        the explicit guard from being deleted as dead code, which it is not:
+        it is what makes the refusal legible, and the order of the two checks
+        is what keeps the refusal's reason right.
+        """
+        provision = (
+            ROOT / "provision" / "plebian-os-provision.sh"
+        ).read_text(encoding="utf-8")
+        for guard in (
+            'machine_already_provisioned() {',
+            '    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1',
+            '''    metadata="$(stat -c '%u:%a' -- "$marker" 2>/dev/null)" '''
+            '''|| return 1''',
+            '    [ "${metadata%%:*}" = "$EUID" ] || return 1',
+            '    (( (8#$mode & 8#22) == 0 )) || return 1',
+        ):
+            with self.subTest(guard=guard.strip()):
+                self.assertIn(guard, provision)
+        # And it is still not seedable from the environment.
+        self.assertIn("PROVISION_COMPLETED_MARKER=/var/lib/plebian-os/"
+                      "provisioned", provision)
+        self.assertNotIn("PROVISION_COMPLETED_MARKER=${", provision)
 
     def test_the_advertised_digest_check_is_present_in_the_verifier(self):
         """OS-V-VERIFY F5: mutant MU-15 deleted this and survived.
