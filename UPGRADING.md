@@ -119,8 +119,11 @@ release-controlled by the rules above:
   cannot tell those apart and does not claim to: what it checks is that this
   run installed nothing, not who consented to what an earlier release
   installed. Rollback to 0.2.1
-  restores the previous behaviour, and an accepted model installed under 0.2.2
-  satisfies 0.2.1's firstboot check, so a downgrade does not re-download it.
+  restores the previous behaviour, and a model the machine already carries —
+  whichever release put it there — satisfies 0.2.1's firstboot check, so a
+  downgrade does not re-download it. (It cannot be a model 0.2.2 installed:
+  0.2.2 installs none, and the route to acquire one is the gap this section
+  opens with.)
   `PLEBIAN_OS_INSTALL_VOICE_MODEL` stays a release-controlled key and keeps its
   value; it now declares that the release advertises that first-use pull. This
   is the migration owner decision OD-BB requires the notes to name, and
