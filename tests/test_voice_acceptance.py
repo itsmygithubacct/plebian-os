@@ -26,55 +26,59 @@ class VoiceAcceptanceTests(unittest.TestCase):
         self.assertIn("model-small-en-us=skipped", command)
         self.assertNotIn("lib/current/libvosk.so", command)
 
-    def test_dictation_policy_requires_verified_runtime_artifacts(self):
+    def test_every_policy_requires_the_guest_to_hold_no_model_weights(self):
+        """OD-S, as a guest check, under both policies.
+
+        Before OD-BB the dictation policy demanded an installed model and its
+        promoted symlink. It now demands their absence, under the promoted name
+        and under any immutable `vosk-model-*` generation, so a fetch that
+        landed but was never promoted is caught too.
+        """
+        for policy in ("0", "1"):
+            command = vm._voice_acceptance_command(policy)
+            with self.subTest(policy=policy):
+                self.assertIn('m="$d/voice/models/small-en-us"', command)
+                self.assertIn('test ! -e "$m" && test ! -L "$m"', command)
+                self.assertIn("-name 'vosk-model-*'", command)
+                self.assertIn('test ! -e "$l" && test ! -L "$l"', command)
+                self.assertIn("libvosk=skipped", command)
+                self.assertIn("model-small-en-us=skipped", command)
+                # The recognition smoke needed weights, so it cannot survive
+                # their removal: a guest check that loaded a model would pass
+                # only on an image that broke the decision.
+                self.assertNotIn("VoskStt", command)
+                self.assertNotIn("recognizer", command)
+                self.assertNotIn("dictation=ready", command)
+                self.assertNotIn('$l/libvosk.so', command)
+                self.assertNotIn("Extracted member: vosk/libvosk.so", command)
+                self.assertNotIn(
+                    "Archive directory: vosk-model-small-en-us-0.15", command)
+                # Read-aloud still has to work out of the box.
+                self.assertIn("EspeakTts", command)
+                self.assertIn("kilix voice is working", command)
+                self.assertIn('KILIX_DATA_HOME="$d" PYTHONPATH=', command)
+
+    def test_dictation_policy_requires_the_advertised_first_use_pins(self):
+        """Policy 1 now means "this release advertises a first-use pull"."""
         command = vm._voice_acceptance_command("1")
         self.assertIn('l="$d/voice/lib/current"', command)
-        self.assertIn('m="$d/voice/models/small-en-us"', command)
-        self.assertIn('$l/libvosk.so', command)
-        self.assertIn('readlink -- "$l"', command)
-        self.assertIn(
-            'vosk-$KILIX_VOICE_LIB_VERSION-$KILIX_VOICE_LIB_SHA256', command
-        )
-        self.assertIn('readlink -- "$m"', command)
-        self.assertIn(
-            'vosk-model-small-en-us-0.15-$KILIX_VOICE_MODEL_SHA256', command
-        )
+        self.assertIn('kilix-voice-$KILIX_VOICE_REF', command)
         self.assertIn('KILIX_VOICE_LIB_URL', command)
         self.assertIn('KILIX_VOICE_MODEL_URL', command)
+        self.assertIn('KILIX_VOICE_MODEL_SHA256', command)
         self.assertIn('kilix-voice=$KILIX_VOICE_REF', command)
-        self.assertIn(
+        # The stamp records the pins as advertised and the assets as skipped —
+        # never as an installed closure.
+        self.assertNotIn(
             'libvosk=$KILIX_VOICE_LIB_VERSION+$KILIX_VOICE_LIB_SHA256',
             command,
         )
-        self.assertIn(
+        self.assertNotIn(
             'model-small-en-us=$KILIX_VOICE_MODEL_SHA256', command
         )
-        self.assertIn("README.kilix-provenance", command)
-        self.assertIn("LICENSE.Apache-2.0", command)
-        self.assertIn("/usr/share/common-licenses/Apache-2.0", command)
-        self.assertIn("Upstream: https://github.com/alphacep/vosk-api", command)
-        self.assertIn(
-            "Upstream catalog: https://alphacephei.com/vosk/models", command
-        )
-        self.assertIn("Extracted member: vosk/libvosk.so", command)
-        self.assertIn("Archive directory: vosk-model-small-en-us-0.15", command)
         self.assertIn("/etc/plebian-os/build-info.env", command)
-        self.assertIn("dictation=ready", command)
-        self.assertIn("EspeakTts", command)
-        self.assertIn("VoskStt", command)
-        self.assertIn("lib_path=library_path", command)
-        self.assertIn("model_path=model_path", command)
-        self.assertIn('os.environ["KILIX_DATA_HOME"]', command)
-        self.assertIn("recognizer.lib_path", command)
-        self.assertIn("recognizer.model_path", command)
-        self.assertIn("kilix voice is working", command)
-        self.assertIn("start_utterance", command)
-        self.assertIn("end_utterance", command)
-        self.assertIn("recognized", command)
         self.assertIn('kilix-stt" --models --json', command)
         self.assertIn("install_and_default_argv", command)
-        self.assertIn('KILIX_DATA_HOME="$d" PYTHONPATH=', command)
-        self.assertNotIn("libvosk=skipped", command)
 
     def test_unknown_voice_policy_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -176,11 +180,12 @@ class VoiceAcceptanceTests(unittest.TestCase):
 
     def test_dictation_acceptance_is_one_valid_fail_closed_shell_chain(self):
         command = vm._voice_acceptance_command("1")
-        self.assertEqual(command.count("dictation=ready"), 1)
+        self.assertEqual(command.count("model-small-en-us=skipped"), 2)
         self.assertIn("= 1 && for tool", command)
         self.assertIn("done && timeout", command)
         self.assertIn(
-            "dictation=ready' && KILIX_DATA_HOME=\"$d\" PYTHONPATH=",
+            "/etc/plebian-os/build-info.env && KILIX_DATA_HOME=\"$d\" "
+            "PYTHONPATH=",
             command,
         )
         syntax = subprocess.run(

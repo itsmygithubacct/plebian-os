@@ -896,182 +896,203 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                     refused = validate(invalid)
                     self.assertNotEqual(refused.returncode, 0)
 
-    def test_release_voice_verification_executes_tools_and_checks_attribution(self):
-        user = pwd.getpwuid(os.getuid())
-        voice_ref = "f05b64a7b2bc25fa9a7e2c3ae1e0b848f04a23f6"
-        library_version = "0.3.45"
-        library_url = (
-            "https://files.pythonhosted.org/packages/fc/ca/83398cfcd557360a3d7b2d732aee1c5f6999f68618d1645f38d53e14c9ff/"
-            "vosk-0.3.45-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.whl"
-        )
-        library_sha = (
-            "25e025093c4399d7278f543568ed8cc5460ac3a4bf48c23673ace1e25d26619f"
-        )
-        model_url = (
-            "https://alphacephei.com/vosk/models/"
-            "vosk-model-small-en-us-0.15.zip"
-        )
-        model_sha = (
-            "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
-        )
-        with tempfile.TemporaryDirectory() as td:
-            base = Path(td)
-            home = base / "home"
-            data = base / "data"
-            binaries = home / ".local" / "bin"
-            binaries.mkdir(parents=True)
-            catalog_records = []
-            for model, engine, supported, size, human_size in (
-                ("small-en-us", "vosk", True, 41205931, "39.3 MiB"),
-                ("lgraph-en-us", "vosk", True, 130557655, "124.5 MiB"),
-                (
-                    "vibevoice-asr-bitnet", "vibevoice", False,
-                    1705771590, "1.6 GiB",
-                ),
-            ):
-                catalog_records.append({
-                    "id": model,
-                    "engine": engine,
-                    "runtime_supported": supported,
-                    "download_bytes": size,
-                    "download_size": human_size,
-                    "installed": model == "small-en-us",
-                    "selected": model == "small-en-us",
-                    "path": str(data / "voice" / "models" / model),
-                    "summary": f"{model} release fixture",
-                    "install_and_default_argv": [
-                        "kilix", "stt", "--install", model,
-                        "--default", model,
-                    ],
-                })
-            catalog = json.dumps({
-                "schema": "kilix.speech.models/v1",
-                "default_model": "small-en-us",
-                "models": catalog_records,
-            }, separators=(",", ":"))
-            for tool in ("kilix-tts", "kilix-stt", "kilix-voiced"):
-                executable = binaries / tool
-                executable.write_text(
-                    "#!/bin/sh\n"
-                    "if [ \"${1:-}\" = --version ]; then\n"
-                    f"  printf '%s\\n' '{tool} 0.1.3'\n"
-                    "elif [ \"${1:-}\" = --print ]; then\n"
-                    + (
-                        "  printf '%s\\n' 'dictation=ready'\n"
-                        if tool == "kilix-stt"
-                        else "  printf '%s\\n' 'voice=ready'\n"
-                    )
-                    + (
-                        "elif [ \"${1:-}\" = --models ] "
-                        "&& [ \"${2:-}\" = --json ]; then\n"
-                        f"  printf '%s\\n' '{catalog}'\n"
-                        if tool == "kilix-stt"
-                        else ""
-                    )
-                    + "fi\n"
+    # ── OD-BB: the image acquires no speech-model weights ────────────────
+    # This used to be one test that built the fully provisioned dictation
+    # closure and required the verifier to accept it. The decision inverted it:
+    # the same fixture is now the defect, and the model-free image is the pass.
+    # Both directions are kept, so neither can be satisfied by a verifier that
+    # simply stopped looking.
+
+    VOICE_REF = "f05b64a7b2bc25fa9a7e2c3ae1e0b848f04a23f6"
+    LIBRARY_VERSION = "0.3.45"
+    LIBRARY_URL = (
+        "https://files.pythonhosted.org/packages/fc/ca/"
+        "83398cfcd557360a3d7b2d732aee1c5f6999f68618d1645f38d53e14c9ff/"
+        "vosk-0.3.45-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.whl"
+    )
+    LIBRARY_SHA = (
+        "25e025093c4399d7278f543568ed8cc5460ac3a4bf48c23673ace1e25d26619f"
+    )
+    MODEL_URL = (
+        "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip"
+    )
+    MODEL_SHA = (
+        "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
+    )
+
+    def _first_use_voice_fixture(self, base):
+        """A correctly provisioned 0.2.2 image: read-aloud, and no weights."""
+        home = base / "home"
+        data = base / "data"
+        state = base / "state"
+        binaries = home / ".local" / "bin"
+        binaries.mkdir(parents=True)
+        state.mkdir()
+        # The models root exists and is empty: the catalog can name a model
+        # nobody has installed, which is the whole point of a first-use pull.
+        (data / "voice" / "models").mkdir(parents=True)
+        catalog_records = []
+        for model, engine, supported, size, human_size in (
+            ("small-en-us", "vosk", True, 41205931, "39.3 MiB"),
+            ("lgraph-en-us", "vosk", True, 130557655, "124.5 MiB"),
+            (
+                "vibevoice-asr-bitnet", "vibevoice", False,
+                1705771590, "1.6 GiB",
+            ),
+        ):
+            catalog_records.append({
+                "id": model,
+                "engine": engine,
+                "runtime_supported": supported,
+                "download_bytes": size,
+                "download_size": human_size,
+                "installed": False,
+                "selected": model == "small-en-us",
+                "path": str(data / "voice" / "models" / model),
+                "summary": f"{model} first-use fixture",
+                "install_and_default_argv": [
+                    "kilix", "stt", "--install", model, "--default", model,
+                ],
+            })
+        catalog = json.dumps({
+            "schema": "kilix.speech.models/v1",
+            "default_model": "small-en-us",
+            "models": catalog_records,
+        }, separators=(",", ":"))
+        for tool in ("kilix-tts", "kilix-stt", "kilix-voiced"):
+            executable = binaries / tool
+            executable.write_text(
+                "#!/bin/sh\n"
+                "if [ \"${1:-}\" = --version ]; then\n"
+                f"  printf '%s\\n' '{tool} 0.1.3'\n"
+                "elif [ \"${1:-}\" = --print ]; then\n"
+                + (
+                    "  printf '%s\\n' 'dictation=install-on-first-use'\n"
+                    if tool == "kilix-stt"
+                    else "  printf '%s\\n' 'voice=ready'\n"
                 )
-                executable.chmod(0o755)
+                + (
+                    "elif [ \"${1:-}\" = --models ] "
+                    "&& [ \"${2:-}\" = --json ]; then\n"
+                    f"  printf '%s\\n' '{catalog}'\n"
+                    if tool == "kilix-stt"
+                    else ""
+                )
+                + "fi\n"
+            )
+            executable.chmod(0o755)
+        stamp = state / "kilix-voice-install.refs"
+        stamp.write_text(
+            f"kilix-voice={self.VOICE_REF}\n"
+            "libvosk=skipped\n"
+            "model-small-en-us=skipped\n"
+        )
+        stamp.chmod(0o600)
+        source_home = base / "sources"
+        voice_source = (
+            source_home / ".kilix-voice-sources"
+            / f"kilix-voice-{self.VOICE_REF}"
+        )
+        (voice_source / ".git").mkdir(parents=True)
+        (voice_source / "VERSION").write_text("0.1.3\n")
+        body = (
+            f"TARGET_USER={pwd.getpwuid(os.getuid()).pw_name!r}\n"
+            f"TARGET_UID={os.getuid()}\nTARGET_GID={os.getgid()}\n"
+            "DRY_RUN=0\nPLEBIAN_OS_RELEASE_MODE=1\n"
+            "INSTALL_VOICE_MODEL=1\ninstall_env=()\n"
+            "as_user() {\n"
+            "  if [ \"${1:-}\" = git ] && [ \"${4:-}\" = rev-parse ]; then\n"
+            f"    printf '%s\\n' {self.VOICE_REF!r}; return 0\n"
+            "  fi\n"
+            "  if [ \"${1:-}\" = git ] && [ \"${4:-}\" = show ]; then\n"
+            "    printf '%s\\n' 0.1.3; return 0\n"
+            "  fi\n"
+            "  \"$@\"\n"
+            "}\n"
+            "run_voice_read_aloud_smoke() { return 0; }\n"
+            f"USER_HOME={str(home)!r}\n"
+            f"GPU_TERMINAL_SOURCE_HOME={str(source_home)!r}\n"
+            f"KILIX_DATA_HOME={str(data)!r}\n"
+            f"KILIX_STATE_DIRECTORY={str(state)!r}\n"
+            f"KILIX_VOICE_REF={self.VOICE_REF!r}\n"
+            f"KILIX_VOICE_LIB_VERSION={self.LIBRARY_VERSION!r}\n"
+            f"KILIX_VOICE_LIB_URL={self.LIBRARY_URL!r}\n"
+            f"KILIX_VOICE_LIB_SHA256={self.LIBRARY_SHA!r}\n"
+            f"KILIX_VOICE_MODEL_URL={self.MODEL_URL!r}\n"
+            f"KILIX_VOICE_MODEL_SHA256={self.MODEL_SHA!r}\n"
+            "verify_kilix_voice_install\n"
+        )
+        return data, body
 
-            library_parent = data / "voice" / "lib"
-            model_parent = data / "voice" / "models"
-            library_parent.mkdir(parents=True)
-            model_parent.mkdir(parents=True)
-            library_generation = (
-                library_parent / f"vosk-{library_version}-{library_sha}"
-            )
-            model_generation = (
-                model_parent / f"vosk-model-small-en-us-0.15-{model_sha}"
-            )
-            library_generation.mkdir()
-            model_generation.mkdir()
-            (library_parent / "current").symlink_to(library_generation.name)
-            (model_parent / "small-en-us").symlink_to(model_generation.name)
-            library = library_parent / "current"
-            model = model_parent / "small-en-us"
-            (library / "libvosk.so").write_bytes(b"fixture\n")
-            (model_generation / "conf").mkdir()
-            (model_generation / "am").mkdir()
-            (model_generation / "conf" / "model.conf").write_text(
-                "fixture\n"
-            )
-            (model_generation / "am" / "final.mdl").write_bytes(
-                b"fixture\n"
-            )
-            license_text = Path(
-                "/usr/share/common-licenses/Apache-2.0"
-            ).read_bytes()
-            for directory in (library, model):
-                (directory / "LICENSE.Apache-2.0").write_bytes(license_text)
-            (library / "README.kilix-provenance").write_text(
-                "Kilix Voice native speech-recognition library\n"
-                "Upstream: https://github.com/alphacep/vosk-api\n"
-                f"Version: {library_version}\n"
-                f"Wheel: {library_url}\n"
-                f"Wheel SHA-256: {library_sha}\n"
-                "Extracted member: vosk/libvosk.so\n"
-                "License: Apache-2.0 (see LICENSE.Apache-2.0)\n"
-            )
-            model_notice = model / "README.kilix-provenance"
-            model_notice.write_text(
-                "Vosk small US English acoustic model\n"
-                "Upstream catalog: https://alphacephei.com/vosk/models\n"
-                f"Archive: {model_url}\n"
-                f"Archive SHA-256: {model_sha}\n"
-                "Archive directory: vosk-model-small-en-us-0.15\n"
-                "License: Apache-2.0 (see LICENSE.Apache-2.0)\n"
-            )
-            state = base / "state"
-            state.mkdir()
-            voice_stamp = state / "kilix-voice-install.refs"
-            voice_stamp.write_text(
-                f"kilix-voice={voice_ref}\n"
-                f"libvosk={library_version}+{library_sha}\n"
-                f"model-small-en-us={model_sha}\n"
-            )
-            voice_stamp.chmod(0o600)
-            source_home = base / "sources"
-            voice_source = (
-                source_home
-                / ".kilix-voice-sources"
-                / f"kilix-voice-{voice_ref}"
-            )
-            (voice_source / ".git").mkdir(parents=True)
-            (voice_source / "VERSION").write_text("0.1.3\n")
+    def test_release_voice_verification_accepts_a_model_free_first_use_image(
+            self):
+        with tempfile.TemporaryDirectory() as td:
+            _data, body = self._first_use_voice_fixture(Path(td))
             env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
-            body = (
-                f"TARGET_USER={user.pw_name!r}\n"
-                f"TARGET_UID={user.pw_uid}\nTARGET_GID={user.pw_gid}\n"
-                "DRY_RUN=0\nPLEBIAN_OS_RELEASE_MODE=1\n"
-                "INSTALL_VOICE_MODEL=1\ninstall_env=()\n"
-                "as_user() {\n"
-                "  if [ \"${1:-}\" = git ] && [ \"${4:-}\" = rev-parse ]; then\n"
-                f"    printf '%s\\n' {voice_ref!r}; return 0\n"
-                "  fi\n"
-                "  if [ \"${1:-}\" = git ] && [ \"${4:-}\" = show ]; then\n"
-                "    printf '%s\\n' 0.1.3; return 0\n"
-                "  fi\n"
-                "  \"$@\"\n"
-                "}\n"
-                "run_voice_functional_smoke() { return 0; }\n"
-                f"USER_HOME={str(home)!r}\n"
-                f"GPU_TERMINAL_SOURCE_HOME={str(source_home)!r}\n"
-                f"KILIX_DATA_HOME={str(data)!r}\n"
-                f"KILIX_STATE_DIRECTORY={str(state)!r}\n"
-                f"KILIX_VOICE_REF={voice_ref!r}\n"
-                f"KILIX_VOICE_LIB_VERSION={library_version!r}\n"
-                f"KILIX_VOICE_LIB_URL={library_url!r}\n"
-                f"KILIX_VOICE_LIB_SHA256={library_sha!r}\n"
-                f"KILIX_VOICE_MODEL_URL={model_url!r}\n"
-                f"KILIX_VOICE_MODEL_SHA256={model_sha!r}\n"
-                "verify_kilix_voice_install\n"
-            )
-            valid = self._run_library(body, env)
-            self.assertEqual(valid.returncode, 0, valid.stderr)
+            accepted = self._run_library(body, env)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
 
-            model_notice.write_text("opaque model\n")
-            refused = self._run_library(body, env)
-            self.assertNotEqual(refused.returncode, 0)
-            self.assertIn("model provenance", refused.stderr)
+    def test_release_voice_verification_refuses_a_planted_firstboot_model(self):
+        """Plant exactly what firstboot used to leave behind, and require a refusal.
+
+        Each arm plants one thing and nothing else, so a refusal is attributable:
+        the promoted symlink alone, an unpromoted immutable generation alone,
+        the dictation library alone, and the stamp that records a completed
+        dictation install alone.
+        """
+        generation_name = f"vosk-model-small-en-us-0.15-{self.MODEL_SHA}"
+
+        def plant_promoted(data, _state):
+            generation = data / "voice" / "models" / generation_name
+            (generation / "am").mkdir(parents=True)
+            (generation / "conf").mkdir()
+            (generation / "am" / "final.mdl").write_bytes(b"planted\n")
+            (generation / "conf" / "model.conf").write_text("planted\n")
+            (data / "voice" / "models" / "small-en-us").symlink_to(
+                generation.name)
+            return "speech-model weights"
+
+        def plant_unpromoted(data, _state):
+            # A fetch that landed but was never promoted is still model bytes
+            # on the image, so the check must not look only at the link.
+            generation = data / "voice" / "models" / generation_name
+            (generation / "am").mkdir(parents=True)
+            (generation / "am" / "final.mdl").write_bytes(b"planted\n")
+            return "speech-model weights"
+
+        def plant_library(data, _state):
+            library = data / "voice" / "lib" / f"vosk-0.3.45-{self.LIBRARY_SHA}"
+            library.mkdir(parents=True)
+            (library / "libvosk.so").write_bytes(b"planted\n")
+            (data / "voice" / "lib" / "current").symlink_to(library.name)
+            return "Vosk dictation library"
+
+        def plant_stamp(_data, state):
+            stamp = state / "kilix-voice-install.refs"
+            stamp.write_text(
+                f"kilix-voice={self.VOICE_REF}\n"
+                f"libvosk={self.LIBRARY_VERSION}+{self.LIBRARY_SHA}\n"
+                f"model-small-en-us={self.MODEL_SHA}\n"
+            )
+            stamp.chmod(0o600)
+            return "skipped Vosk model"
+
+        for plant in (plant_promoted, plant_unpromoted, plant_library,
+                      plant_stamp):
+            with self.subTest(plant=plant.__name__):
+                with tempfile.TemporaryDirectory() as td:
+                    base = Path(td)
+                    data, body = self._first_use_voice_fixture(base)
+                    env = {
+                        **os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+                    self.assertEqual(
+                        self._run_library(body, env).returncode, 0,
+                        "the control arm must pass before anything is planted",
+                    )
+                    expected = plant(data, base / "state")
+                    refused = self._run_library(body, env)
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn(expected, refused.stderr)
 
 
 class PersistedPinTests(unittest.TestCase):

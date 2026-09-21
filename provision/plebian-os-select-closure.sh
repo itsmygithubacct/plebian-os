@@ -555,7 +555,12 @@ validate_release_closure() {
 
     # The Kilix Voice closure is optional, but "enabled" and "complete" are the
     # only two acceptable states; a half-pinned optional closure is the mixture
-    # the upgrade policy forbids.
+    # the upgrade policy forbids. Since OD-BB, enabled means "this release
+    # advertises the dictation model as a first-use pull", not "install it while
+    # provisioning" — so what these keys must pin is the advertisement the
+    # user's later, licence-accepted install verifies against. The completeness
+    # rule is unchanged, and matters more: an advertisement missing its URL or
+    # digest would be an unverifiable download.
     value="${MANIFEST[PLEBIAN_OS_INSTALL_VOICE_MODEL]:-0}"
     case "$value" in
         0|1) ;;

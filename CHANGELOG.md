@@ -51,6 +51,20 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - `KILIX_VOICE_REF` advances to `ba15d849`: one test read the operator's own
   selected model through the shared settings file and failed on any machine
   whose choice was not the default.
+- The speech-recognition model is no longer downloaded by the image. Through
+  0.2.1 firstboot fetched the Vosk `small-en-us` acoustic model and required it
+  installed before provisioning finished, with no licence shown and no
+  acceptance asked for. The image now ships no model bytes and performs no
+  unattended model download: read-aloud still works out of the box, and the
+  dictation model is acquired the first time it is wanted, through
+  kilix-content's first-use flow, which shows the model, its upstream source,
+  its size, its licence and its licensor and records an acceptance receipt
+  **before** anything is fetched (`kilix models install
+  vosk-model-small-en-us-0.15`). `PLEBIAN_OS_INSTALL_VOICE_MODEL` keeps its
+  name and changes meaning, to "this release advertises a first-use pull"; its
+  pins stay, as the identity that later download is verified against. The Vosk
+  library is code, not weights, and stays pinned for the same reason. Owner
+  decision OD-BB, under OD-S.
 - Keys in a `kilix run` pane no longer turn into Alt chords after leaving the
   pane with an Alt binding: modifiers are injected with the key that needs
   them and released with it, and the pane releases everything on focus-out.

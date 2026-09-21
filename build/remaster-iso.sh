@@ -241,6 +241,14 @@ is_hex_len() {
     [[ "$value" =~ ^[0-9a-f]+$ ]] && [ "${#value}" -eq "$length" ]
 }
 
+# PLEBIAN_OS_INSTALL_VOICE_MODEL=1 does not put a model in the image, and has
+# not since OD-BB (OQ-C1): it declares that this release advertises the
+# dictation model as a first-use pull, acquired by the user through
+# kilix-content's licence-and-acceptance flow. These pins are that
+# advertisement — the source, version and digests a later user-initiated
+# install verifies its download against — and they are baked into
+# build-info.env and the firstboot environment for exactly that purpose. The
+# ISO carries no model bytes and firstboot fetches none.
 validate_voice_release_closure() {
     case "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}" in
         0) return 0 ;;

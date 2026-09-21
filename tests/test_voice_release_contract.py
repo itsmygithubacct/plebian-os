@@ -86,20 +86,155 @@ class VoiceReleaseContractTests(unittest.TestCase):
             "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
         )
 
-    def test_firstboot_runs_a_real_synthesis_recognition_smoke(self):
+    def test_firstboot_smoke_is_read_aloud_only_and_loads_no_model(self):
+        """Read-aloud still works out of the box; recognition is not smoked.
+
+        Recognition cannot be smoke-tested at firstboot any more, because under
+        OD-BB the image holds no acoustic model. Keeping the Vosk half would
+        mean either an honest image that fails its own acceptance, or a green
+        image that still downloads weights unattended. So the smoke proves what
+        is really provisioned, and is asserted never to reach for a model.
+        """
         provision = (
             ROOT / "provision" / "plebian-os-provision.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("run_voice_functional_smoke", provision)
+        self.assertIn("run_voice_read_aloud_smoke", provision)
+        self.assertNotIn("run_voice_functional_smoke", provision)
         self.assertIn('EspeakTts(voice="en-us", rate=135)', provision)
-        self.assertIn("lib_path=library_path", provision)
-        self.assertIn("model_path=model_path", provision)
-        self.assertIn('os.environ["KILIX_DATA_HOME"]', provision)
-        self.assertIn("recognizer.lib_path", provision)
-        self.assertIn("recognizer.model_path", provision)
         self.assertIn("kilix voice is working", provision)
-        self.assertIn("recognizer.start_utterance()", provision)
-        self.assertIn("recognizer.end_utterance().strip()", provision)
+        self.assertIn("espeak produced no PCM", provision)
+        for forbidden in (
+            "from voicelib.stt import VoskStt",
+            "recognizer.start_utterance()",
+            "recognizer.end_utterance().strip()",
+            "lib_path=library_path",
+            "model_path=model_path",
+            'voice/models/small-en-us"',
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, provision)
+
+    def test_no_provisioning_path_asks_for_model_weights(self):
+        """The image's only lever on the weights is the `pleb` handoff.
+
+        `pleb install` reads PLEB_INSTALL_VOICE_MODEL: 1 downloads and installs
+        the whole dictation closure, 0 takes the read-aloud-only leg. Both
+        provisioning entrypoints must hand over a literal 0. Forwarding the
+        release flag — which is what they used to do — is exactly the
+        unattended firstboot download OD-BB removed.
+        """
+        for name in (
+            "provision/plebian-os-provision.sh",
+            "provision/plebian-os-update.sh",
+        ):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            with self.subTest(script=name):
+                self.assertEqual(
+                    text.count("PLEB_INSTALL_VOICE_MODEL="), 1, name)
+                self.assertNotIn(
+                    "PLEB_INSTALL_VOICE_MODEL=$INSTALL_VOICE_MODEL", text)
+                self.assertNotIn(
+                    "PLEB_INSTALL_VOICE_MODEL=$PLEBIAN_OS_INSTALL_VOICE_MODEL",
+                    text,
+                )
+                self.assertNotIn("PLEB_INSTALL_VOICE_MODEL=1", text)
+        provision = (
+            ROOT / "provision" / "plebian-os-provision.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("readonly PROVISION_VOICE_WEIGHTS=0", provision)
+        self.assertIn(
+            '"PLEB_INSTALL_VOICE_MODEL=$PROVISION_VOICE_WEIGHTS"', provision)
+        self.assertIn('"PLEB_INSTALL_VOICE_MODEL=0"', (
+            ROOT / "provision" / "plebian-os-update.sh"
+        ).read_text(encoding="utf-8"))
+
+    def test_no_model_weight_path_is_written_during_provisioning(self):
+        """Provisioning verification asserts the weights are absent.
+
+        The old verifier required the promoted `small-en-us` symlink, its
+        immutable generation, `libvosk.so` and their provenance files. Every
+        one of those is now a refusal instead.
+        """
+        provision = (
+            ROOT / "provision" / "plebian-os-provision.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "provisioning left speech-model weights on the image", provision)
+        self.assertIn('for generation in "$models_root"/vosk-model-*',
+                      provision)
+        self.assertIn(
+            "provisioning installed the Vosk dictation library", provision)
+        self.assertIn(
+            "provisioning did not record the skipped Vosk model", provision)
+        for forbidden in (
+            "verified Vosk small-en-us model is missing",
+            "Vosk model small-en-us path is not a generation symlink",
+            "Vosk library current path is not a generation symlink",
+            "verified Vosk library is missing",
+            "kilix-stt did not report dictation=ready",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, provision)
+
+    def test_documents_describe_the_first_use_route_the_code_takes(self):
+        """The documents must describe acquisition, not provisioning.
+
+        A document that still says the image installs the model would be the
+        false-delivery failure the carrier design calls D6, so each document is
+        checked for the route it must describe and against the claim it must no
+        longer make. The advertised identity is compared against
+        `releases/0.2.2.env` rather than retyped, so the two cannot drift.
+        """
+        manifest = _manifest(ROOT / "releases" / "0.2.2.env")
+        self.assertEqual(manifest["PLEBIAN_OS_INSTALL_VOICE_MODEL"], "1")
+        documents = {
+            name: (ROOT / name).read_text(encoding="utf-8")
+            for name in (
+                "CHANGELOG.md",
+                "UPGRADING.md",
+                "releases/0.2.2-notes.md",
+                "RELEASING.md",
+                "build/build_vm_image.md",
+            )
+        }
+        for name, text in documents.items():
+            with self.subTest(document=name, requirement="first-use route"):
+                self.assertIn("first-use", text)
+                self.assertIn("advertis", text)
+        for name in ("CHANGELOG.md", "UPGRADING.md", "releases/0.2.2-notes.md",
+                     "RELEASING.md"):
+            with self.subTest(document=name, requirement="the command"):
+                self.assertIn(
+                    "kilix models install vosk-model-small-en-us-0.15",
+                    " ".join(documents[name].split()),
+                )
+        for name in ("CHANGELOG.md", "releases/0.2.2-notes.md"):
+            with self.subTest(document=name, requirement="acceptance first"):
+                collapsed = " ".join(documents[name].split())
+                self.assertIn("licence", collapsed)
+                self.assertIn("licensor", collapsed)
+                self.assertIn("before", collapsed)
+                self.assertIn("no unattended model download", collapsed)
+
+        # The notes carry the advertised identity; the manifest is the source.
+        notes = documents["releases/0.2.2-notes.md"]
+        for key in ("KILIX_VOICE_MODEL_URL", "KILIX_VOICE_MODEL_SHA256"):
+            with self.subTest(pin=key):
+                self.assertIn(manifest[key], notes)
+        self.assertIn("vosk-model-small-en-us-0.15", notes)
+        self.assertIn(
+            "vosk-model-small-en-us-0.15.zip", manifest["KILIX_VOICE_MODEL_URL"])
+
+        # And the claim that is now false.
+        for name, text in documents.items():
+            collapsed = " ".join(text.split())
+            for forbidden in (
+                "require the model installed and verified at firstboot",
+                "firstboot installs the acoustic model",
+                "the image provisions the dictation model",
+            ):
+                with self.subTest(document=name, forbidden=forbidden):
+                    self.assertNotIn(forbidden, collapsed)
 
 
 if __name__ == "__main__":

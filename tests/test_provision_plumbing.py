@@ -306,10 +306,20 @@ class ProvisionPlumbingTests(unittest.TestCase):
         self.assertIn(
             f'provenance_kv {policy} "$INSTALL_VOICE_MODEL"', provision
         )
+        # OD-BB: the policy flag still reaches session.env and the provenance
+        # record, because it is the release's advertisement of a first-use
+        # pull. It must NOT reach `pleb`'s installer switch, which means
+        # "download and install the dictation closure now". Both entrypoints
+        # hand over a literal 0, so no provisioning path can fetch weights.
         self.assertIn(
+            '"PLEB_INSTALL_VOICE_MODEL=$PROVISION_VOICE_WEIGHTS"', provision
+        )
+        self.assertIn("readonly PROVISION_VOICE_WEIGHTS=0", provision)
+        self.assertNotIn(
             '"PLEB_INSTALL_VOICE_MODEL=$INSTALL_VOICE_MODEL"', provision
         )
-        self.assertIn(
+        self.assertIn('"PLEB_INSTALL_VOICE_MODEL=0"', update)
+        self.assertNotIn(
             '"PLEB_INSTALL_VOICE_MODEL=$PLEBIAN_OS_INSTALL_VOICE_MODEL"',
             update,
         )

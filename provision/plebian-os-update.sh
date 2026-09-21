@@ -3021,7 +3021,13 @@ stack_env=(
     "KILIX_VOICE_LIB_SHA256=$KILIX_VOICE_LIB_SHA256"
     "KILIX_VOICE_MODEL_URL=$KILIX_VOICE_MODEL_URL"
     "KILIX_VOICE_MODEL_SHA256=$KILIX_VOICE_MODEL_SHA256"
-    "PLEB_INSTALL_VOICE_MODEL=$PLEBIAN_OS_INSTALL_VOICE_MODEL"
+    # OD-BB: PLEBIAN_OS_INSTALL_VOICE_MODEL advertises a first-use pull; it is
+    # not an instruction to download weights. An update must not acquire a
+    # model the user was never shown a licence for, so the handoff is 0 — the
+    # same read-aloud-only leg firstboot takes. A model the user already
+    # accepted and installed is untouched: `kilix voice install
+    # --without-dictation` leaves an existing dictation closure in place.
+    "PLEB_INSTALL_VOICE_MODEL=0"
     "PLEBIAN_OS_BUILD_KILIX_FORK=$PLEBIAN_OS_BUILD_KILIX_FORK"
     "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$PLEBIAN_OS_KILIX_GO_MIN_VERSION"
     "PLEBIAN_OS_KILIX_GO_VERSION=$PLEBIAN_OS_KILIX_GO_VERSION"

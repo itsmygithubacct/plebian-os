@@ -202,12 +202,18 @@ actually cutting.
 - pinned installer versions/checksums and a positive download byte bound for
   any optional network installers that are enabled (currently `uv`);
 - when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
-  library version/URL/SHA-256, and acoustic-model URL/SHA-256. Both installed
-  Vosk assets must retain readable upstream provenance and Apache-2.0 license
-  material; a checksum-matching opaque binary or model is not releasable. The
-  pinned Voice source must expose the exact `kilix.speech.models/v1` document
-  through download-free `kilix-stt --models --json`; a consumer-specific
-  copied catalog is not a release substitute.
+  library version/URL/SHA-256, and acoustic-model URL/SHA-256. Since OD-BB the
+  flag declares that **the release advertises the dictation model as a
+  first-use pull**, not that the image installs it: these pins are the
+  advertised identity — the source and digests the user's later, licence-
+  accepted install verifies its download against — and the image ships no model
+  bytes and downloads none unattended. The advertised model URL and SHA-256
+  must be the ones kilix-content's `vosk-model-small-en-us-0.15` asset record
+  carries, because that record is what the first-use screen and the F100
+  carrier read. The pinned Voice source must expose the exact
+  `kilix.speech.models/v1` document through download-free
+  `kilix-stt --models --json`; a consumer-specific copied catalog is not a
+  release substitute.
 
 Release mode fails closed when a required value is empty, still a placeholder,
 malformed, dirty, or does not resolve to the checked-out Plebian-OS commit. The
@@ -400,17 +406,25 @@ cannot change the process which is performing that hop.
 
    - confirm VirtualBox audio input and output are enabled; run
      `kilix-tts --version`, `kilix-stt --version`, and
-     `kilix-voiced --version`, then require `kilix-stt --print` to report
-     `dictation=ready`. Require `kilix-stt --models --json` to pass the
+     `kilix-voiced --version`, then require `kilix-stt --print` to produce a
+     dictation report. Require `kilix-stt --models --json` to pass the
      `kilix.speech.models/v1` schema gate with all three 0.1.9 models, exactly
      one selected default, truthful runtime-support flags, positive exact byte
      sizes, and the shared explicit install-and-default argv. This listing must
      not open the network or change installed/default state. Require the
-     device-free acceptance smoke to synthesize
-     a phrase with real espeak, load the pinned Vosk library/model, and
-     recognize nonempty text. Verify the installed library/model match the exact
-     release stamp and each has regular, non-symlink provenance and
-     Apache-2.0 license material. Grant VirtualBox host microphone permission
+     device-free acceptance smoke to synthesize a phrase with real espeak.
+     **Require the guest to hold no speech-model weights**: no
+     `voice/models/small-en-us`, no `voice/models/vosk-model-*` generation, no
+     `voice/lib/current`, and an install stamp recording `libvosk=skipped` and
+     `model-small-en-us=skipped`. A model present on a fresh image is a release
+     failure, not a convenience. Then acquire the model the way a user does:
+     run `kilix models install vosk-model-small-en-us-0.15`, require the
+     first-use screen to show the model id, upstream source URL and host,
+     download bytes, licence and licensor before any fetch, **decline once and
+     prove no bytes were downloaded and no model directory appeared**, then
+     accept and require a recorded receipt, checksum-verified download and
+     atomic install. Verify the installed model matches the advertised
+     `KILIX_VOICE_MODEL_SHA256`. Grant VirtualBox host microphone permission
      and perform one click-to-talk dictation turn; the microphone must remain
      closed before that explicit action;
    - on the pristine guest, exercise all five model-management surfaces against

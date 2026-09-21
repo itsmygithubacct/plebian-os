@@ -1349,36 +1349,21 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
     info("  [ok] whole-stack update and restart")
 
 
-def _voice_functional_smoke_script() -> str:
-    """Exercise real espeak synthesis and Vosk recognition without a device."""
-    return """\
-import os
+def _voice_read_aloud_smoke_script() -> str:
+    """Exercise real espeak synthesis, device-free, and nothing else.
 
-from voicelib.stt import VoskStt
+    The recognition half of this smoke is gone with the weights it needed. Under
+    OD-BB a provisioned image holds no acoustic model, so a guest check that
+    loaded one would either fail on an honest image or pass only on an image
+    that broke the decision. What remains is what the image really ships: the
+    pinned voicelib runtime and espeak.
+    """
+    return """\
 from voicelib.tts import EspeakTts
 
 pcm, rate = EspeakTts(voice="en-us", rate=135).synth("kilix voice is working")
 if not pcm or rate <= 0:
     raise SystemExit("espeak produced no PCM")
-data_home = os.environ["KILIX_DATA_HOME"]
-library_path = os.path.join(data_home, "voice/lib/current/libvosk.so")
-model_path = os.path.join(data_home, "voice/models/small-en-us")
-recognizer = VoskStt(
-    rate=rate, lib_path=library_path, model_path=model_path
-)
-try:
-    if recognizer.lib_path != os.path.abspath(library_path):
-        raise SystemExit("Vosk did not open the pinned library path")
-    if recognizer.model_path != os.path.abspath(model_path):
-        raise SystemExit("Vosk did not open the pinned model path")
-    recognizer.start_utterance()
-    for offset in range(0, len(pcm), 4096):
-        recognizer.feed(pcm[offset:offset + 4096])
-    recognized = recognizer.end_utterance().strip()
-    if not recognized:
-        raise SystemExit("Vosk recognized no text from synthesized speech")
-finally:
-    recognizer.close()
 """
 
 
@@ -1463,10 +1448,22 @@ def _voice_acceptance_command(expected_policy: str) -> str:
     """Return a guest check for the declared read-aloud/dictation closure."""
     if expected_policy not in ("0", "1"):
         raise ValueError("voice policy must be 0 or 1")
-    functional_smoke = (
+    read_aloud_smoke = (
         'KILIX_DATA_HOME="$d" '
         'PYTHONPATH="$d/voice/runtime/current/lib/kilix-voice" '
-        f'timeout 180 python3 -c {shlex.quote(_voice_functional_smoke_script())}'
+        f'timeout 180 python3 -c {shlex.quote(_voice_read_aloud_smoke_script())}'
+    )
+    # OD-S, as a guest check: a provisioned image carries no speech-model
+    # weights, under the promoted name or any immutable generation, and no
+    # dictation library, because at the pinned Kilix Voice ref the installer
+    # fetches that library only on the same leg that fetches the model.
+    no_weights = (
+        'test ! -e "$m" && test ! -L "$m" && '
+        'test -z "$(find "$d/voice/models" -maxdepth 1 -name \'vosk-model-*\' '
+        '-print -quit 2>/dev/null)" && '
+        'test ! -e "$l" && test ! -L "$l" && '
+        "grep -Fqx 'libvosk=skipped' \"$r\" && "
+        "grep -Fqx 'model-small-en-us=skipped' \"$r\""
     )
     catalog_validation = shlex.quote(
         _voice_model_catalog_validation_script())
@@ -1496,11 +1493,13 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         'test "$(stat -c \'%u:%a:%h\' "$r")" = "$(id -u):600:1" && '
     )
     if expected_policy == "0":
-        return command + (
-            "grep -Fqx 'libvosk=skipped' \"$r\" && "
-            "grep -Fqx 'model-small-en-us=skipped' \"$r\""
-        )
-    return command + (
+        return command + no_weights + " && " + read_aloud_smoke
+    # Policy 1 no longer means "the image installed dictation". It means the
+    # release advertises the dictation model as a first-use pull, so the guest
+    # must show the advertisement intact *and* the weights absent. Both halves
+    # matter: an image that quietly provisioned the model would pass the first
+    # half alone, and an image that dropped the pins would pass the second.
+    return command + no_weights + " && " + (
         'printf \'%s\\n\' "$KILIX_VOICE_REF" | grep -Eq \'^[0-9a-f]{40}$\' && '
         'vsrc="${GPU_TERMINAL_SOURCE_HOME:-$g/sources}/.kilix-voice-sources/'
         'kilix-voice-$KILIX_VOICE_REF"; '
@@ -1515,55 +1514,17 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         'for tool in kilix-tts kilix-stt kilix-voiced; do '
         'test "$(timeout 15 "$HOME/.local/bin/$tool" --version)" = '
         '"$tool $voice_version" || exit 1; done && '
+        'test -n "$stt_report" && '
         'printf \'%s\\n\' "$KILIX_VOICE_LIB_VERSION" | '
         "grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$' && "
         'case "$KILIX_VOICE_LIB_URL" in https://*) true ;; *) false ;; esac && '
         'printf \'%s\\n\' "$KILIX_VOICE_LIB_SHA256" | grep -Eq \'^[0-9a-f]{64}$\' && '
         'case "$KILIX_VOICE_MODEL_URL" in https://*) true ;; *) false ;; esac && '
         'printf \'%s\\n\' "$KILIX_VOICE_MODEL_SHA256" | grep -Eq \'^[0-9a-f]{64}$\' && '
-        'test -L "$l" && '
-        'library_generation="vosk-$KILIX_VOICE_LIB_VERSION-'
-        '$KILIX_VOICE_LIB_SHA256" && '
-        'test "$(readlink -- "$l")" = "$library_generation" && '
-        'test -d "$d/voice/lib/$library_generation" && '
-        'test ! -L "$d/voice/lib/$library_generation" && '
-        'test -L "$m" && '
-        'model_generation="vosk-model-small-en-us-0.15-'
-        '$KILIX_VOICE_MODEL_SHA256" && '
-        'test "$(readlink -- "$m")" = "$model_generation" && '
-        'test -d "$d/voice/models/$model_generation" && '
-        'test ! -L "$d/voice/models/$model_generation" && '
-        'test -f "$l/libvosk.so" && test ! -L "$l/libvosk.so" && '
-        'test -d "$m" && '
-        'for artifact in "$l/README.kilix-provenance" '
-        '"$l/LICENSE.Apache-2.0" "$m/README.kilix-provenance" '
-        '"$m/LICENSE.Apache-2.0"; do '
-        'test -f "$artifact" && test ! -L "$artifact" || exit 1; done && '
-        'cmp -s /usr/share/common-licenses/Apache-2.0 '
-        '"$l/LICENSE.Apache-2.0" && '
-        'cmp -s /usr/share/common-licenses/Apache-2.0 '
-        '"$m/LICENSE.Apache-2.0" && '
-        "printf '%s\\n' "
-        "'Kilix Voice native speech-recognition library' "
-        "'Upstream: https://github.com/alphacep/vosk-api' "
-        '"Version: $KILIX_VOICE_LIB_VERSION" '
-        '"Wheel: $KILIX_VOICE_LIB_URL" '
-        '"Wheel SHA-256: $KILIX_VOICE_LIB_SHA256" '
-        "'Extracted member: vosk/libvosk.so' "
-        "'License: Apache-2.0 (see LICENSE.Apache-2.0)' "
-        '| cmp -s - "$l/README.kilix-provenance" && '
-        "printf '%s\\n' "
-        "'Vosk small US English acoustic model' "
-        "'Upstream catalog: https://alphacephei.com/vosk/models' "
-        '"Archive: $KILIX_VOICE_MODEL_URL" '
-        '"Archive SHA-256: $KILIX_VOICE_MODEL_SHA256" '
-        "'Archive directory: vosk-model-small-en-us-0.15' "
-        "'License: Apache-2.0 (see LICENSE.Apache-2.0)' "
-        '| cmp -s - "$m/README.kilix-provenance" && '
-        "printf '%s\\n' "
+        'printf \'%s\\n\' '
         '"kilix-voice=$KILIX_VOICE_REF" '
-        '"libvosk=$KILIX_VOICE_LIB_VERSION+$KILIX_VOICE_LIB_SHA256" '
-        '"model-small-en-us=$KILIX_VOICE_MODEL_SHA256" '
+        "'libvosk=skipped' "
+        "'model-small-en-us=skipped' "
         '| cmp -s - "$r" && '
         'grep -Fqx "KILIX_VOICE_REF=$KILIX_VOICE_REF" '
         '/etc/plebian-os/build-info.env && '
@@ -1576,9 +1537,8 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         'grep -Fqx "KILIX_VOICE_MODEL_URL=$KILIX_VOICE_MODEL_URL" '
         '/etc/plebian-os/build-info.env && '
         'grep -Fqx "KILIX_VOICE_MODEL_SHA256=$KILIX_VOICE_MODEL_SHA256" '
-        '/etc/plebian-os/build-info.env && '
-        'printf \'%s\\n\' "$stt_report" | grep -Fqx \'dictation=ready\''
-    ) + " && " + functional_smoke
+        '/etc/plebian-os/build-info.env'
+    ) + " && " + read_aloud_smoke
 
 
 def _transcript_acceptance_command() -> str:

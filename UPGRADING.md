@@ -97,6 +97,22 @@ release-controlled by the rules above:
   are now reaped as soon as their owning process is gone. An upgrader who had
   accumulated them will see that directory shrink on the first browser launch;
   nothing a live process owns is touched.
+- **The dictation model is now acquired on first use, not by the image.** An
+  upgrade to 0.2.2 stops provisioning the Vosk `small-en-us` acoustic model and
+  stops downloading it unattended; the update hands `pleb` the read-aloud-only
+  leg. A model you already have is **application state and is preserved**: it
+  lives under `~/.local/gpu_terminal`, the update does not remove it, and
+  dictation keeps working across the upgrade. A machine that did not have one
+  will not acquire one silently. The first time dictation is wanted, Kilix
+  shows the model, its upstream source, its size, its licence and its licensor
+  and records an acceptance before downloading anything —
+  `kilix models install vosk-model-small-en-us-0.15`. Rollback to 0.2.1
+  restores the previous behaviour, and an accepted model installed under 0.2.2
+  satisfies 0.2.1's firstboot check, so a downgrade does not re-download it.
+  `PLEBIAN_OS_INSTALL_VOICE_MODEL` stays a release-controlled key and keeps its
+  value; it now declares that the release advertises that first-use pull. This
+  is the migration owner decision OD-BB requires the notes to name, and
+  `releases/0.2.2-notes.md` names the old and new representation in full.
 
 ## Failure and rollback contract
 

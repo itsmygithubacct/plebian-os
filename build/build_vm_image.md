@@ -229,6 +229,16 @@ At build time these come from `--session` / `--kiosk` /
 `KILIX95_REPO`, `KILIX95_BRANCH`, and `KILIX95_REF`
 are also copied into the first-boot environment when present.
 
+`PLEBIAN_OS_INSTALL_VOICE_MODEL=1` does **not** make firstboot install a speech
+model, and has not since owner decision OD-BB. It declares that the release
+advertises the dictation model as a first-use pull, and the `KILIX_VOICE_MODEL_*`
+and `KILIX_VOICE_LIB_*` values beside it are that advertisement: the source and
+digests the user's later, licence-accepted install verifies its download
+against. They are copied into the first-boot environment and recorded in
+`/etc/plebian-os/build-info.env` for exactly that reason. Firstboot installs
+read-aloud only; the guest acceptance check requires the built image to hold no
+speech-model weights and no Vosk dictation library, under either policy value.
+
 Fresh guests default all coordinated checkouts to siblings under
 `~/.local/gpu_terminal/sources/` and all runtime state to siblings under
 `~/.local/gpu_terminal/`. The builder records those target paths in both the
