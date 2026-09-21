@@ -238,6 +238,18 @@ against. They are copied into the first-boot environment and recorded in
 `/etc/plebian-os/build-info.env` for exactly that reason. Firstboot installs
 read-aloud only; the guest acceptance check requires the built image to hold no
 speech-model weights and no Vosk dictation library, under either policy value.
+That check runs against a freshly built image, which is always a machine's
+first provisioning run, so it stays an unconditional absence check: the
+allowance for a model a user accepted later belongs to
+`plebian-os-provision.sh`'s re-provision path and never to a build.
+
+The advertised pull is **not reachable on a 0.2.2 image**, and the builder
+cannot make it so. `KILIX_REF=62cb5760` pins `third_party/kilix-content` at
+`c275334`, which carries no `first_use.py` and no
+`vosk-model-small-en-us-0.15` record, so a built 0.2.2 image has read-aloud and
+no way to acquire dictation. Do not add an install step to a build or an
+acceptance run to compensate; the gap is recorded in
+`releases/0.2.2-notes.md` and held open by a deliberately failing test.
 
 Fresh guests default all coordinated checkouts to siblings under
 `~/.local/gpu_terminal/sources/` and all runtime state to siblings under

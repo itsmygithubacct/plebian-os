@@ -920,8 +920,18 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498"
     )
 
-    def _first_use_voice_fixture(self, base):
-        """A correctly provisioned 0.2.2 image: read-aloud, and no weights."""
+    def _first_use_voice_fixture(self, base, *, already_provisioned=False,
+                                 during_install="", model_sha=None,
+                                 accepted_model=False):
+        """A correctly provisioned 0.2.2 image: read-aloud, and no weights.
+
+        The body reproduces the provisioner's own order: the dictation census
+        is taken, then `pleb install` runs (``during_install`` stands in for
+        it), then the closure is verified.  ``PROVISION_COMPLETED_MARKER``
+        points at a path that exists only when the caller asks for it, which is
+        what tells a re-provision of a used machine from the first provisioning
+        run of a fresh image.
+        """
         home = base / "home"
         data = base / "data"
         state = base / "state"
@@ -931,6 +941,11 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         # The models root exists and is empty: the catalog can name a model
         # nobody has installed, which is the whole point of a first-use pull.
         (data / "voice" / "models").mkdir(parents=True)
+        if accepted_model:
+            # The machine a user left behind after accepting the licence at
+            # first use: the model, its library, and the installer's full
+            # stamp. Identical on disk to an image that shipped them.
+            self._plant_accepted_dictation_closure(data)
         catalog_records = []
         for model, engine, supported, size, human_size in (
             ("small-en-us", "vosk", True, 41205931, "39.3 MiB"),
@@ -946,7 +961,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 "runtime_supported": supported,
                 "download_bytes": size,
                 "download_size": human_size,
-                "installed": False,
+                "installed": accepted_model and model == "small-en-us",
                 "selected": model == "small-en-us",
                 "path": str(data / "voice" / "models" / model),
                 "summary": f"{model} first-use fixture",
@@ -981,13 +996,16 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 + "fi\n"
             )
             executable.chmod(0o755)
-        stamp = state / "kilix-voice-install.refs"
-        stamp.write_text(
-            f"kilix-voice={self.VOICE_REF}\n"
-            "libvosk=skipped\n"
-            "model-small-en-us=skipped\n"
-        )
-        stamp.chmod(0o600)
+        if accepted_model:
+            self._accepted_install_stamp(state)
+        else:
+            stamp = state / "kilix-voice-install.refs"
+            stamp.write_text(
+                f"kilix-voice={self.VOICE_REF}\n"
+                "libvosk=skipped\n"
+                "model-small-en-us=skipped\n"
+            )
+            stamp.chmod(0o600)
         source_home = base / "sources"
         voice_source = (
             source_home / ".kilix-voice-sources"
@@ -995,6 +1013,9 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         )
         (voice_source / ".git").mkdir(parents=True)
         (voice_source / "VERSION").write_text("0.1.3\n")
+        marker = base / "provisioned"
+        if already_provisioned:
+            marker.write_text("")
         body = (
             f"TARGET_USER={pwd.getpwuid(os.getuid()).pw_name!r}\n"
             f"TARGET_UID={os.getuid()}\nTARGET_GID={os.getgid()}\n"
@@ -1019,10 +1040,49 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             f"KILIX_VOICE_LIB_URL={self.LIBRARY_URL!r}\n"
             f"KILIX_VOICE_LIB_SHA256={self.LIBRARY_SHA!r}\n"
             f"KILIX_VOICE_MODEL_URL={self.MODEL_URL!r}\n"
-            f"KILIX_VOICE_MODEL_SHA256={self.MODEL_SHA!r}\n"
+            "KILIX_VOICE_MODEL_SHA256="
+            f"{(self.MODEL_SHA if model_sha is None else model_sha)!r}\n"
+            f"PROVISION_COMPLETED_MARKER={str(marker)!r}\n"
+            "record_voice_dictation_census\n"
+            + during_install +
             "verify_kilix_voice_install\n"
         )
         return data, body
+
+    def _plant_accepted_dictation_closure(self, data):
+        """What a user's accepted first-use install leaves on the machine."""
+        generation = (
+            data / "voice" / "models"
+            / f"vosk-model-small-en-us-0.15-{self.MODEL_SHA}"
+        )
+        (generation / "am").mkdir(parents=True)
+        (generation / "conf").mkdir()
+        (generation / "am" / "final.mdl").write_bytes(b"accepted\n")
+        (generation / "conf" / "model.conf").write_text("accepted\n")
+        (data / "voice" / "models" / "small-en-us").symlink_to(generation.name)
+        library = (
+            data / "voice" / "lib"
+            / f"vosk-{self.LIBRARY_VERSION}-{self.LIBRARY_SHA}"
+        )
+        library.mkdir(parents=True)
+        (library / "libvosk.so").write_bytes(b"accepted\n")
+        (data / "voice" / "lib" / "current").symlink_to(library.name)
+
+    def _accepted_install_stamp(self, state):
+        """The stamp such a machine still carries.
+
+        `kilix voice install --without-dictation` accepts an existing full
+        stamp instead of rewriting it to `skipped`
+        (install-kilix-voice.sh:242, full_stamp_satisfies_runtime), so a
+        re-provision of an accepted machine does not get the skipped form.
+        """
+        stamp = state / "kilix-voice-install.refs"
+        stamp.write_text(
+            f"kilix-voice={self.VOICE_REF}\n"
+            f"libvosk={self.LIBRARY_VERSION}+{self.LIBRARY_SHA}\n"
+            f"model-small-en-us={self.MODEL_SHA}\n"
+        )
+        stamp.chmod(0o600)
 
     def test_release_voice_verification_accepts_a_model_free_first_use_image(
             self):
@@ -1068,17 +1128,26 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             return "Vosk dictation library"
 
         def plant_stamp(_data, state):
+            self._accepted_install_stamp(state)
+            return "skipped Vosk model"
+
+        def plant_half_skipped_stamp(_data, state):
+            # OS-V-VERIFY F4, as a behavioural arm. Mutant MU-09 replaced both
+            # anchored stamp assertions with an unanchored `grep -q skipped`
+            # and survived, because a stamp like this one contains the word
+            # twice over. No weights are planted, so the absence scan cannot
+            # take the credit: only the anchored model assertion can fail this.
             stamp = state / "kilix-voice-install.refs"
             stamp.write_text(
                 f"kilix-voice={self.VOICE_REF}\n"
-                f"libvosk={self.LIBRARY_VERSION}+{self.LIBRARY_SHA}\n"
+                "libvosk=skipped\n"
                 f"model-small-en-us={self.MODEL_SHA}\n"
             )
             stamp.chmod(0o600)
-            return "skipped Vosk model"
+            return "provisioning did not record the skipped Vosk model"
 
         for plant in (plant_promoted, plant_unpromoted, plant_library,
-                      plant_stamp):
+                      plant_stamp, plant_half_skipped_stamp):
             with self.subTest(plant=plant.__name__):
                 with tempfile.TemporaryDirectory() as td:
                     base = Path(td)
@@ -1093,6 +1162,113 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                     refused = self._run_library(body, env)
                     self.assertNotEqual(refused.returncode, 0)
                     self.assertIn(expected, refused.stderr)
+
+    def test_reprovisioning_a_machine_whose_user_accepted_the_model_succeeds(
+            self):
+        """OS-V-VERIFY F3: OD-BB's success state must stay re-provisionable.
+
+        The provisioner's header promises idempotence. An image-shipped model
+        and a model the user accepted at first use land in the same directory,
+        so the refusal that enforces OD-BB refused both — which made an
+        accepted model, the decision's own goal, a machine that could never be
+        re-provisioned again.
+
+        The two arms differ in exactly one thing: whether this machine has
+        already completed a provisioning run. Nothing else, including the
+        weights and the stamp, differs between them.
+        """
+        env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+        for already_provisioned, expect_zero in ((False, False), (True, True)):
+            with self.subTest(already_provisioned=already_provisioned):
+                with tempfile.TemporaryDirectory() as td:
+                    base = Path(td)
+                    _control_data, control_body = (
+                        self._first_use_voice_fixture(
+                            base / "control",
+                            already_provisioned=already_provisioned))
+                    self.assertEqual(
+                        self._run_library(control_body, env).returncode, 0,
+                        "the model-free control must pass at this marker "
+                        "state before an accepted model is judged",
+                    )
+                    _data, body = self._first_use_voice_fixture(
+                        base / "accepted",
+                        already_provisioned=already_provisioned,
+                        accepted_model=True)
+                    result = self._run_library(body, env)
+                    if expect_zero:
+                        self.assertEqual(
+                            result.returncode, 0,
+                            "a re-provision of a machine whose user accepted "
+                            "the model must succeed: " + result.stderr,
+                        )
+                        self.assertNotIn("speech-model weights", result.stderr)
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(
+                            "provisioning left speech-model weights on the "
+                            "image", result.stderr)
+
+    def test_a_reprovision_may_not_launder_weights_this_run_installed(self):
+        """The carried-over allowance is about the census, not the marker.
+
+        A machine that has already been provisioned is allowed to *keep* the
+        model its user accepted. It is not allowed to acquire one: anything
+        that appears between the census and the verification was installed by
+        this provisioning run, and is refused on a re-provision exactly as on a
+        first boot. Without this, F3's fix would be a way to turn the OD-BB
+        check off by booting twice.
+        """
+        generation = f"vosk-model-small-en-us-0.15-{self.MODEL_SHA}"
+        env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+        for already_provisioned in (False, True):
+            with self.subTest(already_provisioned=already_provisioned):
+                with tempfile.TemporaryDirectory() as td:
+                    base = Path(td)
+                    data, control_body = self._first_use_voice_fixture(
+                        base, already_provisioned=already_provisioned)
+                    self.assertEqual(
+                        self._run_library(control_body, env).returncode, 0,
+                        "the control arm must pass before anything is planted",
+                    )
+                    models = data / "voice" / "models"
+                    during = (
+                        f"mkdir -p {str(models / generation)!r}/am\n"
+                        "printf 'fetched\\n' > "
+                        f"{str(models / generation)!r}/am/final.mdl\n"
+                    )
+                    marker = "record_voice_dictation_census\n"
+                    self.assertIn(marker, control_body)
+                    body = control_body.replace(marker, marker + during, 1)
+                    refused = self._run_library(body, env)
+                    self.assertNotEqual(refused.returncode, 0)
+                    self.assertIn(
+                        "provisioning installed speech-model dictation assets "
+                        "during this run", refused.stderr)
+
+    def test_release_voice_verification_requires_a_well_formed_advertisement(
+            self):
+        """OS-V-VERIFY F5: mutant MU-15 deleted this check and survived.
+
+        With the flag at 1 the release advertises a first-use pull, and the
+        advertised digest is what that later download is verified against. A
+        malformed digest is an unverifiable download, so the verifier refuses
+        it. Only the digest differs between the control and the arm.
+        """
+        env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+        for bad in ("", "30f26242", "not-a-digest",
+                    self.MODEL_SHA + "0"):
+            with self.subTest(digest=bad):
+                with tempfile.TemporaryDirectory() as td:
+                    _data, body = self._first_use_voice_fixture(
+                        Path(td), model_sha=bad)
+                    refused = self._run_library(body, env)
+                    self.assertNotEqual(
+                        refused.returncode, 0,
+                        "a malformed advertised digest must be refused")
+                    self.assertIn(
+                        "advertised first-use model digest must be a full "
+                        "SHA-256", refused.stderr)
 
 
 class PersistedPinTests(unittest.TestCase):

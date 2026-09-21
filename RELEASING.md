@@ -417,16 +417,28 @@ cannot change the process which is performing that hop.
      `voice/models/small-en-us`, no `voice/models/vosk-model-*` generation, no
      `voice/lib/current`, and an install stamp recording `libvosk=skipped` and
      `model-small-en-us=skipped`. A model present on a fresh image is a release
-     failure, not a convenience. Then acquire the model the way a user does:
-     run `kilix models install vosk-model-small-en-us-0.15`, require the
-     first-use screen to show the model id, upstream source URL and host,
-     download bytes, licence and licensor before any fetch, **decline once and
-     prove no bytes were downloaded and no model directory appeared**, then
-     accept and require a recorded receipt, checksum-verified download and
-     atomic install. Verify the installed model matches the advertised
-     `KILIX_VOICE_MODEL_SHA256`. Grant VirtualBox host microphone permission
-     and perform one click-to-talk dictation turn; the microphone must remain
-     closed before that explicit action;
+     failure, not a convenience. **The first-use acceptance leg is deferred and
+     must not be attempted on a 0.2.2 image**: the route is not reachable on a
+     0.2.2 image, because `KILIX_REF=62cb5760` pins `third_party/kilix-content`
+     at `c275334`, which has no `first_use.py` and no
+     `vosk-model-small-en-us-0.15` record, so
+     `kilix models install vosk-model-small-en-us-0.15` cannot resolve the
+     asset and there is no licence screen to decline or accept. Record it as a
+     known gap against this candidate rather than as a passed step (see
+     `releases/0.2.2-notes.md`, *Known limitation*, and the deliberately
+     failing `test_the_pinned_closure_can_acquire_the_model_with_acceptance`).
+     When `KILIX_REF` and `KILIX_VOICE_REF` advance to a closure that carries
+     the flow and the covering-receipt gate, this step becomes: acquire the
+     model the way a user does, require the first-use screen to show the model
+     id, upstream source URL and host, download bytes, licence and licensor
+     before any fetch, **decline once and prove no bytes were downloaded and no
+     model directory appeared**, then accept and require a recorded receipt,
+     checksum-verified download and atomic install, and verify the installed
+     model matches the advertised `KILIX_VOICE_MODEL_SHA256`. Dictation itself
+     cannot be exercised on a 0.2.2 image: there is no acoustic model and no
+     sanctioned way to install one, so the click-to-talk turn is deferred with
+     the acceptance leg. Grant VirtualBox host microphone permission and
+     confirm the microphone stays closed with no explicit action;
    - on the pristine guest, exercise all five model-management surfaces against
      the same catalog. `kilix stt --models` and the Models tab must show the two
      runnable Vosk models plus the installable-but-not-yet-runnable VibeVoice

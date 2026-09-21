@@ -292,6 +292,42 @@ INSTALL_VOICE_MODEL_EXPLICIT="${PLEBIAN_OS_INSTALL_VOICE_MODEL:+1}"
 # an acceptance receipt before any byte is fetched. Nothing may make this 1:
 # a value of 1 here is exactly the unattended firstboot download OD-BB removed.
 readonly PROVISION_VOICE_WEIGHTS=0
+# ── telling an image-shipped model from one the user accepted ────────────────
+# OD-BB asks two different things of this machine, and presence alone cannot
+# answer both, because an image-shipped model and a model the user accepted at
+# first use land in exactly the same place under $KILIX_DATA_HOME/voice:
+#
+#   * the image must ship no speech-model weights and provisioning must fetch
+#     none — what a *first* provisioning run proves by finding none;
+#   * this script documents itself as idempotent (see the header), so a
+#     re-provision of a machine whose user accepted the licence and installed
+#     the model must still succeed. OD-BB's own success state is a machine with
+#     an accepted model on it.
+#
+# Two pieces of evidence separate them, and both are things this codebase can
+# honestly check.
+#
+#   1. The census. record_voice_dictation_census runs immediately before
+#      `pleb install`, and records the dictation assets already on the machine.
+#      Anything present afterwards that was not in the census was installed by
+#      this provisioning run, and is refused whatever else is true. That is the
+#      direct check of "provisioning performs no unattended model download".
+#   2. The completion marker. plebian-os-firstboot.service is gated on
+#      ConditionPathExists=!/var/lib/plebian-os/provisioned and writes that file
+#      from ExecStartPost, i.e. only after the provisioner has already succeeded
+#      once. Absent, this is the machine's first provisioning run and nothing
+#      but the image can have put a model there. Present, the machine has
+#      already booted and been used, so assets carried into this run are the
+#      user's, acquired through the first-use licence flow.
+#
+# Assets that appeared during the run are therefore always a refusal; assets
+# that predate it are a refusal on a first run (the image shipped them) and are
+# left alone on a re-provision (the user accepted them). A plain assignment,
+# not "${VAR:-}": the environment must not be able to relax this, while a test
+# that sources this file can still point it at an isolated tree.
+PROVISION_COMPLETED_MARKER=/var/lib/plebian-os/provisioned
+PROVISION_VOICE_ASSETS_BEFORE=()
+PROVISION_VOICE_CENSUS_TAKEN=0
 # Android is an explicit release feature because its verified images are large.
 # The 0.2.0 release requirements enable it; uncoordinated provisioning stays
 # opt-in instead of silently downloading roughly a gigabyte.
@@ -3799,6 +3835,63 @@ run_voice_tool() {
     fi
 }
 
+# Every dictation asset on this machine, one absolute path per line, sorted so
+# two censuses are comparable. `small-en-us` is the promoted name, every
+# immutable generation the installer publishes is `vosk-model-*`, and
+# `voice/lib/current` is the Vosk shared object — code, not weights, but at the
+# pinned KILIX_VOICE_REF it is fetched only on the same all-or-nothing leg that
+# fetches the model, so its arrival means that leg ran.
+voice_dictation_asset_paths() {
+    local models_root="$KILIX_DATA_HOME/voice/models" entry
+    local library_root="$KILIX_DATA_HOME/voice/lib/current"
+    {
+        if [ -e "$models_root/small-en-us" ] || [ -L "$models_root/small-en-us" ]; then
+            printf '%s\n' "$models_root/small-en-us"
+        fi
+        if [ -d "$models_root" ]; then
+            for entry in "$models_root"/vosk-model-*; do
+                [ -e "$entry" ] || [ -L "$entry" ] || continue
+                printf '%s\n' "$entry"
+            done
+        fi
+        if [ -e "$library_root" ] || [ -L "$library_root" ]; then
+            printf '%s\n' "$library_root"
+        fi
+    } | LC_ALL=C sort
+}
+
+# Called immediately before `pleb install`. What it records is the "before"
+# half of the only evidence that distinguishes weights this run installed from
+# weights that were already here.
+record_voice_dictation_census() {
+    PROVISION_VOICE_ASSETS_BEFORE=()
+    if [ -n "${KILIX_DATA_HOME:-}" ]; then
+        mapfile -t PROVISION_VOICE_ASSETS_BEFORE < <(voice_dictation_asset_paths)
+    fi
+    PROVISION_VOICE_CENSUS_TAKEN=1
+}
+
+# Fail closed: with no census this cannot tell, so it never claims an asset is
+# new, and first_use_dictation_is_the_users below never claims it is the user's.
+# A caller that skipped the census therefore gets exactly the strict rule.
+voice_asset_predates_this_run() {
+    local candidate="$1" known
+    [ "$PROVISION_VOICE_CENSUS_TAKEN" = 1 ] || return 0
+    for known in ${PROVISION_VOICE_ASSETS_BEFORE+"${PROVISION_VOICE_ASSETS_BEFORE[@]}"}; do
+        [ "$known" = "$candidate" ] && return 0
+    done
+    return 1
+}
+
+machine_already_provisioned() {
+    [ -f "$PROVISION_COMPLETED_MARKER" ] && [ ! -L "$PROVISION_COMPLETED_MARKER" ]
+}
+
+first_use_dictation_is_the_users() {
+    [ "$PROVISION_VOICE_CENSUS_TAKEN" = 1 ] || return 1
+    machine_already_provisioned
+}
+
 # The firstboot functional smoke is read-aloud only, and deliberately so.
 # Recognition cannot be smoke-tested here without the acoustic model, and under
 # OD-BB the image has no model: the weights arrive later, through the first-use
@@ -3910,14 +4003,13 @@ if default not in {item[0] for item in expected} or selected != [default]:
 # behind — while still proving that the read-aloud closure is real and that the
 # advertised first-use pull is fully pinned.
 verify_kilix_voice_install() {
-    local tool path stamp stt_report="" model_catalog="" library_root model_root
-    local models_root generation
+    local tool path stamp stt_report="" model_catalog="" library_root
+    local models_root asset stamp_value carried_is_the_users=0
     local voice_source="" voice_head="" voice_version="" version_report=""
-    local -a problems=() weight_paths=()
+    local -a problems=() weight_paths=() carried_paths=() new_paths=()
     stamp="$KILIX_STATE_DIRECTORY/kilix-voice-install.refs"
     library_root="$KILIX_DATA_HOME/voice/lib/current"
     models_root="$KILIX_DATA_HOME/voice/models"
-    model_root="$models_root/small-en-us"
 
     # The pinned Kilix Voice checkout is source code, not weights, and
     # `kilix voice install` makes it on the read-aloud leg too, so it is
@@ -3979,11 +4071,56 @@ verify_kilix_voice_install() {
         fi
     fi
 
-    # The stamp is now the same in both policies, because provisioning takes
-    # the same leg in both: read-aloud installed, dictation assets skipped.
+    # OD-S, enforced rather than described: provisioning installs no
+    # speech-model weights, and an image ships none. Every dictation asset on
+    # the machine is classified against the census taken before `pleb install`
+    # ran, because presence alone cannot say who put it there.
+    while IFS= read -r asset; do
+        [ -n "$asset" ] || continue
+        if voice_asset_predates_this_run "$asset"; then
+            carried_paths+=("$asset")
+        else
+            new_paths+=("$asset")
+        fi
+    done < <(voice_dictation_asset_paths)
+    # Appeared during this run: provisioning fetched it. Always a refusal, on a
+    # first boot and on a re-provision alike, and the check OD-BB's "no
+    # unattended model download" actually needs.
+    if [ "${#new_paths[@]}" -gt 0 ]; then
+        problems+=("provisioning installed speech-model dictation assets during this run: ${new_paths[*]}; provisioning must fetch no model weights")
+    fi
+    if [ "${#carried_paths[@]}" -gt 0 ]; then
+        if first_use_dictation_is_the_users; then
+            # A re-provision of a machine that has already completed firstboot.
+            # These are the user's, from the first-use flow, and the contract
+            # is that a re-run reconciles the machine rather than refusing it.
+            carried_is_the_users=1
+        else
+            # No completed provisioning behind this run, so the image is the
+            # only thing that can have shipped these.
+            for asset in "${carried_paths[@]}"; do
+                if [ "$asset" = "$library_root" ]; then
+                    problems+=("provisioning installed the Vosk dictation library at $library_root; the dictation leg must not run during provisioning")
+                else
+                    weight_paths+=("$asset")
+                fi
+            done
+            if [ "${#weight_paths[@]}" -gt 0 ]; then
+                problems+=("provisioning left speech-model weights on the image: ${weight_paths[*]}")
+            fi
+        fi
+    fi
+
+    # The stamp is the same in both policies, because provisioning takes the
+    # same leg in both: read-aloud installed, dictation assets skipped.
     # `skipped` is the installer's own word for "this run fetched neither the
     # Vosk wheel nor the model", so it is the signed record that no weights
-    # were downloaded here.
+    # were downloaded here. The one exception is a machine carrying the user's
+    # own accepted install: at KILIX_VOICE_REF a `--without-dictation` run
+    # accepts an existing full stamp instead of rewriting it
+    # (install-kilix-voice.sh:242, full_stamp_satisfies_runtime), so the stamp
+    # still names what the user installed. It may name that and nothing else —
+    # each entry has to be backed by an asset that was already here.
     if [ ! -f "$stamp" ] || [ -L "$stamp" ]; then
         problems+=("missing or unsafe install stamp $stamp")
     else
@@ -3994,35 +4131,30 @@ verify_kilix_voice_install() {
             grep -Eq '^kilix-voice=[0-9a-fA-F]{40}$' "$stamp" \
                 || problems+=("Kilix Voice install stamp has no immutable source ref")
         fi
-        grep -Fqx -- 'libvosk=skipped' "$stamp" \
-            || problems+=("provisioning did not record the skipped Vosk library")
-        grep -Fqx -- 'model-small-en-us=skipped' "$stamp" \
-            || problems+=("provisioning did not record the skipped Vosk model; the image must fetch no model weights")
-    fi
-
-    # OD-S, enforced rather than described: after provisioning there must be no
-    # speech-model weights on the image at all. `small-en-us` is the promoted
-    # name, and every immutable generation the installer would have published
-    # is `vosk-model-*`; both are checked, so a fetch that landed but was never
-    # promoted is still caught. `$library_root` is checked the same way for the
-    # Vosk shared object: it is code, not weights, but at the pinned
-    # KILIX_VOICE_REF the installer fetches it only on the same all-or-nothing
-    # dictation leg that fetches the model, so its presence here would mean the
-    # leg ran.
-    if [ -e "$model_root" ] || [ -L "$model_root" ]; then
-        weight_paths+=("$model_root")
-    fi
-    if [ -d "$models_root" ]; then
-        for generation in "$models_root"/vosk-model-*; do
-            [ -e "$generation" ] || [ -L "$generation" ] || continue
-            weight_paths+=("$generation")
-        done
-    fi
-    if [ "${#weight_paths[@]}" -gt 0 ]; then
-        problems+=("provisioning left speech-model weights on the image: ${weight_paths[*]}")
-    fi
-    if [ -e "$library_root" ] || [ -L "$library_root" ]; then
-        problems+=("provisioning installed the Vosk dictation library at $library_root; the dictation leg must not run during provisioning")
+        if [ "$carried_is_the_users" = 1 ]; then
+            stamp_value="$(sed -n 's/^model-small-en-us=//p' -- "$stamp" | head -1)"
+            if [ "$stamp_value" != skipped ]; then
+                [ -n "$stamp_value" ] \
+                    && voice_asset_predates_this_run \
+                        "$models_root/vosk-model-small-en-us-0.15-$stamp_value" \
+                    && { [ -e "$models_root/vosk-model-small-en-us-0.15-$stamp_value" ] \
+                        || [ -L "$models_root/vosk-model-small-en-us-0.15-$stamp_value" ]; } \
+                    || problems+=("the install stamp records a Vosk model no carried-over generation holds; provisioning must fetch no model weights")
+            fi
+            stamp_value="$(sed -n 's/^libvosk=//p' -- "$stamp" | head -1)"
+            if [ "$stamp_value" != skipped ]; then
+                [ -n "$stamp_value" ] \
+                    && voice_asset_predates_this_run "$library_root" \
+                    && [ "$(readlink -- "$library_root" 2>/dev/null)" \
+                        = "vosk-${stamp_value/+/-}" ] \
+                    || problems+=("the install stamp records a Vosk library no carried-over generation holds; the dictation leg must not run during provisioning")
+            fi
+        else
+            grep -Fqx -- 'libvosk=skipped' "$stamp" \
+                || problems+=("provisioning did not record the skipped Vosk library")
+            grep -Fqx -- 'model-small-en-us=skipped' "$stamp" \
+                || problems+=("provisioning did not record the skipped Vosk model; the image must fetch no model weights")
+        fi
     fi
 
     if [ "$INSTALL_VOICE_MODEL" = 1 ]; then
@@ -4050,8 +4182,14 @@ verify_kilix_voice_install() {
         warn "Kilix Voice is unavailable: ${problems[*]} (run 'kilix voice doctor' after login)"
         return 0
     fi
-    if [ "$INSTALL_VOICE_MODEL" = 1 ]; then
-        log "voice: read-aloud is ready and no model weights were installed; dictation is an advertised first-use pull ('kilix models install vosk-model-small-en-us-0.15') that shows the licence and records acceptance before downloading"
+    if [ "$carried_is_the_users" = 1 ]; then
+        log "voice: read-aloud is ready; this run installed no model weights and left the dictation assets already on this machine alone (${carried_paths[*]})"
+    elif [ "$INSTALL_VOICE_MODEL" = 1 ]; then
+        # Deliberately no command to run. At KILIX_REF the pinned Kilix
+        # closure carries no first-use flow, so naming one here would send the
+        # user at something this image cannot execute. See releases/0.2.2-notes.md,
+        # "Known limitation: the first-use route is not in the pinned closure".
+        log "voice: read-aloud is ready and no model weights were installed; this release advertises the dictation model as a first-use pull, which becomes reachable when the pinned Kilix closure carries kilix-content's first-use flow"
     else
         log "voice: all read-aloud tools execute; dictation assets were explicitly skipped"
     fi
@@ -4730,6 +4868,11 @@ install_env=(
         "KILIX_TRANSACTION_LOCK_FD=$KILIX_PROVISION_LOCK_FD"
         "KILIX_TRANSACTION_LOCK_PATH=$KILIX_PROVISION_LOCK_PATH"
     )
+# Before the one step that could install anything: what dictation assets were
+# already here. verify_kilix_voice_install compares against this, so a model
+# that appears during `pleb install` is caught as a fetch no matter what the
+# machine looked like beforehand.
+record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 if [ "$DRY_RUN" != 1 ]; then

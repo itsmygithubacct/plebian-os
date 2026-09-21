@@ -56,15 +56,27 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   installed before provisioning finished, with no licence shown and no
   acceptance asked for. The image now ships no model bytes and performs no
   unattended model download: read-aloud still works out of the box, and the
-  dictation model is acquired the first time it is wanted, through
+  dictation model is to be acquired the first time it is wanted, through
   kilix-content's first-use flow, which shows the model, its upstream source,
   its size, its licence and its licensor and records an acceptance receipt
-  **before** anything is fetched (`kilix models install
-  vosk-model-small-en-us-0.15`). `PLEBIAN_OS_INSTALL_VOICE_MODEL` keeps its
+  **before** anything is fetched. `PLEBIAN_OS_INSTALL_VOICE_MODEL` keeps its
   name and changes meaning, to "this release advertises a first-use pull"; its
   pins stay, as the identity that later download is verified against. The Vosk
   library is code, not weights, and stays pinned for the same reason. Owner
   decision OD-BB, under OD-S.
+  **That route is not reachable on a 0.2.2 image, and this is recorded rather
+  than worked around**: the Kilix
+  closure this release pins (`KILIX_REF=62cb5760`) pins
+  `third_party/kilix-content` at `c275334`, which carries neither
+  `first_use.py` nor a `vosk-model-small-en-us-0.15` record, so
+  `kilix models install vosk-model-small-en-us-0.15` cannot resolve the asset
+  and no licence screen exists to show. A 0.2.2 image therefore has read-aloud
+  and no dictation, and no way to acquire it through the documented route; a
+  machine that already had a model keeps it. The advertisement is ahead of the
+  closure. `tests/test_voice_release_contract.py::
+  test_the_pinned_closure_can_acquire_the_model_with_acceptance` fails until
+  `KILIX_REF` and `KILIX_VOICE_REF` advance to a closure that carries the flow
+  and the receipt gate. See `releases/0.2.2-notes.md`, *Known limitation*.
 - Keys in a `kilix run` pane no longer turn into Alt chords after leaving the
   pane with an Alt binding: modifiers are injected with the key that needs
   them and released with it, and the pane releases everything on focus-out.
