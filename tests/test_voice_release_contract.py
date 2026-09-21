@@ -399,16 +399,31 @@ _RECEIPT_GATE_OWED = (
 # asserted by test_the_gap_test_requires_both_halves_of_the_route, which also
 # runs each probe against a tree lacking precisely that probe's own half.
 #
-# That guard test binds its probes **out of this table**, by key, and never by
-# the module-level names below. OS-V-FIX2-IMPL.md §2 claimed an entry could not
-# become a no-op, and OS-V-FIX2-VERIFY VF1 showed that claim was false: its
-# mutants MU-12 and MU-13 replaced one entry with `lambda ref, **kw: None`,
-# left the key and the module-level function untouched, and survived the whole
-# suite with the failing set, the test count and the skip count all unchanged;
-# doing it to both entries greened the deliberate failure outright. The guard
-# test asserted the table's keys and then called the functions, so the table
-# and the code it was supposed to guard could drift apart. Binding from the
-# table is what makes the claim true.
+# What that guard test pins about this table, and what it does not:
+#
+#   * it binds its probes **out of this table**, by key, never by the
+#     module-level names below, so the entry is what gets exercised. That is
+#     the shape OS-V-FIX2-VERIFY's MU-12 and MU-13 drove a wedge through —
+#     replace one entry with `lambda ref, **kw: None`, leave the key and the
+#     module-level function untouched, and the whole suite was unchanged on
+#     every axis — and it is closed;
+#   * it asserts each entry **is** the function defined above it, by identity.
+#     Binding from the table was not by itself enough, and OS-V-FIX2-IMPL.md §2
+#     and OS-V-FIX3-IMPL.md §3 both claimed more than it bought. OS-V-FIX3-
+#     VERIFY's X-05 and X-27 left an entry that delegates when it is given
+#     explicit repositories — which is how every arm of every test in this file
+#     calls it — and answers None when it is given none, which is the only way
+#     the deliberate gap test calls it. The failing set, the test count, the
+#     error count and the skip count were all identical while one half of the
+#     route vanished from the failure message (2631 bytes down to 1661);
+#   * it also calls both probes at that bare call shape — one positional ref,
+#     no keyword repositories — so the drift is caught behaviourally as well as
+#     by identity;
+#   * it cannot see a special case *inside* a probe's own body. X-07 returned
+#     None for exactly the commit releases/0.2.2.env pins, and every fixture in
+#     this file builds a synthetic ref, so no arm can reach it. No unit test
+#     can assert that a function contains no special case; that shape is caught
+#     by reading the diff. This comment claims nothing the tests do not prove.
 FIRST_USE_REQUIREMENTS = (
     ("1. THE CONTENT CHAIN", "KILIX_REF", content_chain_gap,
      _CONTENT_CHAIN_OWED),
@@ -851,16 +866,30 @@ class VoiceReleaseContractTests(unittest.TestCase):
         OS-V-FIX2-VERIFY VF3's V5), `"referenced"` (the symbol bound to a name
         on the route but never called) or `"elsewhere"` (a real call, but in
         another file: the gate exists and the advertised route does not reach
-        it). `exit_code` is True, False, or `"doc"` (the constant only in a
+        it). `exit_code` is True, False, `"doc"` (the constant only in a
         design note — VF3's V6; written so that it *would* satisfy a parser,
-        which is why the probe also requires a `.py` module). `route` is
-        `"file"` or `"dir"`, the `kilix-stt` package directory the verifier's
-        V7 judged, correctly, to be the route.
+        which is why the probe also requires a `.py` module), or
+        `"wrong-value"` (OS-V-FIX3-VERIFY V3F3: the symbol bound in a parsing
+        `.py` module, on a real assignment, to the wrong value — and the right
+        value bound in the same module under another name, so that dropping
+        either the value check or the target-name check accepts it). `route` is
+        `"file"`, `"dir"` (the `kilix-stt` package directory the verifier's V7
+        judged, correctly, to be the route) or `"unparseable"` (V3F4: a route
+        that names the gate and is not Python at all, so the call cannot be
+        shown).
         """
         repo = self._git_init(base)
         (repo / "voicelib").mkdir()
+        if exit_code is True:
+            licensing = f"{LICENCE_REFUSED_DEFINITION}\n"
+        elif exit_code == "wrong-value":
+            licensing = (
+                f"{LICENCE_REFUSED_SYMBOL} = {LICENCE_REFUSED_VALUE + 1}\n"
+                f"OTHER_REFUSAL_EXIT = {LICENCE_REFUSED_VALUE}\n")
+        else:
+            licensing = ""
         (repo / "voicelib" / "licensing.py").write_text(
-            (f"{LICENCE_REFUSED_DEFINITION}\n" if exit_code is True else "")
+            licensing
             + f"def {RECEIPT_GATE_SYMBOL}(model):\n    return None\n"
         )
         if exit_code == "doc":
@@ -886,7 +915,15 @@ class VoiceReleaseContractTests(unittest.TestCase):
                     "install(model)\n")
         else:
             body = "install(model)\n"
-        source = "#!/usr/bin/env python3\n" + body
+        if route == "unparseable":
+            # Mentions the gate, so `_paths_mentioning` hands it to the parse,
+            # and is a shell script, so the parse cannot show a call. The
+            # documented fail-safe is that this is a gap.
+            source = ("#!/bin/sh\n"
+                      f"# the gate this route owes is {RECEIPT_GATE_SYMBOL}\n"
+                      'exec kilix-stt-real "$@"\n')
+        else:
+            source = "#!/usr/bin/env python3\n" + body
         if route == "dir":
             (repo / RECEIPT_GATE_ROUTE).mkdir()
             (repo / RECEIPT_GATE_ROUTE / "__init__.py").write_text(source)
@@ -910,10 +947,17 @@ class VoiceReleaseContractTests(unittest.TestCase):
 
         OS-V-FIX2-VERIFY VF1. Reading them out of FIRST_USE_REQUIREMENTS rather
         than closing over the module-level `content_chain_gap` and
-        `receipt_gate_gap` is the whole of that fix: MU-12 and MU-13 replaced a
-        table entry with a no-op and left the module-level function alone, and
-        every test that mattered went on exercising the function nobody was
-        going to run.
+        `receipt_gate_gap` is the first half of that fix: MU-12 and MU-13
+        replaced a table entry with a no-op and left the module-level function
+        alone, and every test that mattered went on exercising the function
+        nobody was going to run.
+
+        It is only the first half. OS-V-FIX3-VERIFY V3F1 showed that reading
+        the entry is not the same as pinning it: an entry that *delegates* to
+        the real probe at every call shape this file uses, and answers None at
+        the deliberate gap test's, passes every arm below. The caller pins the
+        entries by identity as well, and calls them at the gap test's own call
+        shape.
         """
         return {key: probe
                 for _heading, key, probe, _owed in FIRST_USE_REQUIREMENTS}
@@ -934,6 +978,15 @@ class VoiceReleaseContractTests(unittest.TestCase):
         so the table and the functions could drift: MU-12 and MU-13 swapped one
         entry for `lambda ref, **kw: None`, the deliberate test stopped
         checking that half, and nothing anywhere objected.
+
+        OS-V-FIX3-VERIFY V3F1 then showed that binding from the table is not
+        the same as pinning what the table holds. X-05 and X-27 left an entry
+        that delegates when it is handed explicit repositories — which is how
+        every arm below calls it — and returns None when it is handed none,
+        which is the only shape the deliberate gap test uses. The suite was
+        byte-identical and half the route stopped being checked. So the entries
+        are pinned by identity, and both probes are additionally called at that
+        bare shape at the end of this test.
         """
         table = self._requirement_probes()
         self.assertEqual(
@@ -948,6 +1001,22 @@ class VoiceReleaseContractTests(unittest.TestCase):
         )
         content_probe = table["KILIX_REF"]
         voice_probe = table["KILIX_VOICE_REF"]
+        # OS-V-FIX3-VERIFY V3F1: the entry must BE the probe, not a wrapper
+        # around it. A wrapper can behave correctly for every caller in this
+        # file and incorrectly for the only caller that matters, and X-05 and
+        # X-27 did exactly that without moving a single count in the suite.
+        self.assertIs(
+            content_probe, content_chain_gap,
+            "the KILIX_REF entry must be content_chain_gap itself: a wrapper "
+            "that delegates when handed explicit repositories and answers "
+            "None when handed none passes every other assertion here while "
+            "deleting half the deliberate failure's message (X-27)",
+        )
+        self.assertIs(
+            voice_probe, receipt_gate_gap,
+            "the KILIX_VOICE_REF entry must be receipt_gate_gap itself, for "
+            "the same reason (X-05)",
+        )
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             for label, first_use, record, wanted in (
@@ -1016,12 +1085,68 @@ class VoiceReleaseContractTests(unittest.TestCase):
             ):
                 with self.subTest(voice=label):
                     voice, voice_ref = self._kilix_voice(
-                        base / f"voice-{gate}-{exit_code}",
+                        base / f"voice-{gate}-{exit_code}-{route}",
                         gate=gate, exit_code=exit_code, route=route)
                     gap = voice_probe(voice_ref, voice_repos=[voice])
                     self.assertIsNotNone(
                         gap, "a tree missing the gate must be reported")
                     self.assertIn(wanted, gap)
+            # One control for the two arms below, which each vary exactly one
+            # thing about this fixture family: with nothing missing, the same
+            # family is a pass, so an arm that reports a gap is reporting the
+            # one thing its own tree changed.
+            control, control_ref = self._kilix_voice(base / "voice-control")
+            self.assertIsNone(
+                voice_probe(control_ref, voice_repos=[control]),
+                "control: the fixture family the two arms below vary passes "
+                "when neither half of the route is missing")
+            # OS-V-FIX3-VERIFY V3F3 / mutants X-15 and X-16.
+            # `_defines_the_refusal_exit` makes four checks — the path ends
+            # `.py`, the file parses, the binding's target is
+            # LICENCE_REFUSED_EXIT, and the bound value is 3 — and only the
+            # first two had an arm, so dropping either of the other two
+            # survived the whole suite with the signature identical. This tree
+            # binds the symbol, in a parsing `.py` module, on a real
+            # assignment, to 4 — and binds 3 in the same module under another
+            # name. Without the value check it is accepted; without the
+            # target-name check it is accepted; and either way the failure
+            # message would go on promising LICENCE_REFUSED_EXIT = 3 to a tree
+            # that refuses with some other code or none.
+            with self.subTest(voice="exit code bound to the wrong value"):
+                wrong, wrong_ref = self._kilix_voice(
+                    base / "voice-wrong-value", exit_code="wrong-value")
+                gap = voice_probe(wrong_ref, voice_repos=[wrong])
+                self.assertIsNotNone(
+                    gap,
+                    "a tree that binds LICENCE_REFUSED_EXIT to 4, and 3 to "
+                    "some other name, defines no refusal exit code and must "
+                    "be reported as a gap")
+                self.assertIn(LICENCE_REFUSED_DEFINITION, gap)
+                self.assertNotIn(
+                    RECEIPT_GATE_ROUTE, gap,
+                    "only the exit-code half is missing in this tree, so the "
+                    "arm cannot be passing because the gate broke too")
+            # OS-V-FIX3-VERIFY V3F4 / mutant X-17. `_route_calls_the_gate`'s
+            # docstring states the fail-safe — "A route whose files do not
+            # parse as Python is reported as a gap: the call cannot be shown,
+            # and an unprovable capability is worth exactly what an absent one
+            # is" — and no fixture built an unparseable route, so inverting it
+            # to `if module is None: return True` survived with the signature
+            # identical. This route names the gate and is a shell script.
+            with self.subTest(voice="route does not parse as Python"):
+                opaque, opaque_ref = self._kilix_voice(
+                    base / "voice-unparseable", route="unparseable")
+                gap = voice_probe(opaque_ref, voice_repos=[opaque])
+                self.assertIsNotNone(
+                    gap,
+                    "a route that does not parse cannot be shown to call the "
+                    "gate, and this suite's standing rule is that an "
+                    "unprovable capability is worth what an absent one is")
+                self.assertIn(RECEIPT_GATE_SYMBOL, gap)
+                self.assertNotIn(
+                    LICENCE_REFUSED_DEFINITION, gap,
+                    "only the gate half is missing in this tree, so the arm "
+                    "cannot be passing because the exit code went missing too")
             # An unresolvable ref is a gap, never a pass: otherwise the gap
             # test could be greened by removing a checkout.
             self.assertIsNotNone(content_probe(
@@ -1030,11 +1155,51 @@ class VoiceReleaseContractTests(unittest.TestCase):
             self.assertIsNotNone(content_probe(
                 "", kilix_repos=[], content_repos=[]))
             self.assertIsNotNone(voice_probe("", voice_repos=[]))
+            # OS-V-FIX3-VERIFY V3F1, the behavioural half. Every assertion
+            # above hands the probes explicit repositories by keyword. The
+            # deliberate gap test is the only caller in this repository that
+            # passes none — `probe(manifest.get(key, ""))` — and that is the
+            # shape X-05 and X-27 made a no-op while the suite stayed
+            # byte-identical. So the probes are called here exactly that way.
+            # Neither call depends on the environment: no checkout anywhere
+            # holds a commit of forty zeros, and the empty string is refused
+            # before any repository is consulted at all.
+            self.assertIsNotNone(
+                content_probe("0" * 40),
+                "called the way the deliberate gap test calls it — one "
+                "positional ref, no keyword repositories — an unresolvable "
+                "KILIX_REF must still be reported as a gap")
+            self.assertIsNotNone(
+                voice_probe("0" * 40),
+                "called the way the deliberate gap test calls it, an "
+                "unresolvable KILIX_VOICE_REF must still be reported as a gap")
+            self.assertIsNotNone(
+                content_probe(""),
+                "an unset KILIX_REF, at the gap test's call shape, is a gap")
+            self.assertIsNotNone(
+                voice_probe(""),
+                "an unset KILIX_VOICE_REF, at the gap test's call shape, is a "
+                "gap")
 
     PASS_PATH_ARMS = ("synthetic", "real-trees")
 
+    # Arm 1 is synthetic and can always run. Arm 2 needs read-only checkouts
+    # that are not part of this repository, so it alone has a legitimate
+    # "unavailable" path — and that claim is corroborated below rather than
+    # believed.
+    PASS_PATH_ARM_THAT_MAY_BE_UNAVAILABLE = "real-trees"
+
     @staticmethod
-    def _assert_every_pass_path_arm_accounted_for(ran):
+    def _real_pass_path_trees_are_present():
+        """Can the read-only checkouts arm 2 needs be found right now?"""
+        return (
+            repo_holding(kilix_content_repo_candidates(),
+                         CONTENT_REF_WITH_FIRST_USE) is not None
+            and repo_holding(kilix_voice_repo_candidates(),
+                             VOICE_REF_WITH_RECEIPT_GATE) is not None)
+
+    @classmethod
+    def _assert_every_pass_path_arm_accounted_for(cls, ran, available=None):
         """Every arm of the pass-path test must have run or declared itself.
 
         OS-V-FIX2-VERIFY VF4 / mutant MU-16: a `return` inserted before the
@@ -1045,13 +1210,55 @@ class VoiceReleaseContractTests(unittest.TestCase):
         executes neither fails nor skips.
 
         So the arms keep a ledger, and this is registered with `addCleanup`
-        before the first one starts. A cleanup runs even when the test body
-        returns early or skips, so deleting an arm — by a `return`, by an
-        excision, by any edit that stops it executing — now raises here.
+        before the first one starts, because a cleanup runs even when the test
+        body returns early or skips.
+
+        OS-V-FIX3-IMPL.md §6 then claimed that "deleting an arm — by a
+        `return`, by an excision, by any edit that stops it executing — now
+        raises here". OS-V-FIX3-VERIFY V3F5 showed that was too strong, and it
+        is corrected here rather than repeated. Two edits stopped an arm
+        executing and raised nothing: `X-18` wrote the arm's own
+        ':unavailable' token and returned, which satisfied this check and did
+        not skip either, so the skip count could not see it; `X-19` shrank
+        PASS_PATH_ARMS to the one arm that was left, and nothing in the suite
+        asserted what that tuple should contain.
+
+        What this check guarantees now:
+
+        * an arm that neither ran nor claimed unavailability raises — MU-16's
+          shape, which always held;
+        * a claim of unavailability is **corroborated**: `available` looks for
+          the read-only checkouts itself, and a claim made while they are
+          present raises. So `X-18` costs an error on every arm whose
+          environment has them, which is every arm this suite is baselined on;
+        * only `PASS_PATH_ARM_THAT_MAY_BE_UNAVAILABLE` may make that claim at
+          all;
+        * the arm names themselves are pinned by
+          `test_the_pass_path_arm_ledger_cannot_be_forged_or_shrunk`, so
+          shrinking the tuple costs a failure.
+
+        What it does **not** guarantee: that an arm which did run asserted
+        what it was meant to assert. A ledger records execution, not meaning.
+        Gutting an arm's assertions while leaving it executing is caught, where
+        it is caught at all, by the mutants aimed at the probes themselves.
         """
-        for arm in VoiceReleaseContractTests.PASS_PATH_ARMS:
-            if arm in ran or f"{arm}:unavailable" in ran:
+        if available is None:
+            available = cls._real_pass_path_trees_are_present
+        for arm in cls.PASS_PATH_ARMS:
+            if arm in ran:
                 continue
+            if (arm == cls.PASS_PATH_ARM_THAT_MAY_BE_UNAVAILABLE
+                    and f"{arm}:unavailable" in ran):
+                if not available():
+                    continue
+                raise AssertionError(
+                    f"the {arm!r} arm of the pass-path test reported itself "
+                    "unavailable, but the read-only checkouts it needs are "
+                    f"both present (ledger: {sorted(ran)}), so it had no "
+                    "reason to skip and it did not run. Writing the "
+                    "':unavailable' token and returning is how "
+                    "OS-V-FIX3-VERIFY's X-18 deleted this arm without costing "
+                    "a failure, an error or a skip.")
             raise AssertionError(
                 f"the {arm!r} arm of the pass-path test neither ran nor "
                 f"reported itself unavailable (ledger: {sorted(ran)}). An "
@@ -1074,7 +1281,9 @@ class VoiceReleaseContractTests(unittest.TestCase):
         Both arms record themselves in `ran`, and the cleanup registered
         before either of them starts requires both to be accounted for: see
         `_assert_every_pass_path_arm_accounted_for` for why "skipped=4 is
-        unchanged" was not evidence that arm 2 ran.
+        unchanged" was not evidence that arm 2 ran, and for what the ledger
+        does and does not guarantee now that a claim of unavailability is
+        corroborated rather than believed.
         """
         ran = set()
         self.addCleanup(self._assert_every_pass_path_arm_accounted_for, ran)
@@ -1129,6 +1338,72 @@ class VoiceReleaseContractTests(unittest.TestCase):
                 "gate, so it must pass")
             ran.add("real-trees")
         self._assert_every_pass_path_arm_accounted_for(ran)
+
+    def test_the_pass_path_arm_ledger_cannot_be_forged_or_shrunk(self):
+        """OS-V-FIX3-VERIFY V3F5 / mutants X-18 and X-19.
+
+        The ledger above was introduced to make a deleted pass-path arm cost
+        something, and OS-V-FIX3-IMPL.md §6 claimed it made *any* edit that
+        stops an arm executing raise. Two did not. `X-18` wrote the arm's own
+        ':unavailable' token and returned: the ledger was satisfied, nothing
+        skipped, and `Ran 696 / failures=2 / errors=0 / skipped=4` was
+        identical to the baseline. `X-19` shrank `PASS_PATH_ARMS` to the arm
+        that was left; `PASS_PATH_ARMS` was asserted nowhere in the suite.
+
+        This test is the arm the ledger itself never had. It pins the arm
+        names, and drives the check directly with an injected availability
+        oracle so that both the forged claim and the legitimate skip can be
+        exercised on one machine, whichever checkouts that machine happens to
+        have.
+        """
+        self.assertEqual(
+            self.PASS_PATH_ARMS, ("synthetic", "real-trees"),
+            "both arms of the pass-path test are named here; shrinking this "
+            "tuple is how X-19 deleted the real-trees arm in silence")
+        self.assertEqual(
+            self.PASS_PATH_ARM_THAT_MAY_BE_UNAVAILABLE, "real-trees",
+            "only the arm needing checkouts outside this repository may ever "
+            "report itself unavailable; the synthetic arm can always run")
+        check = self._assert_every_pass_path_arm_accounted_for
+        present = (lambda: True)
+        absent = (lambda: False)
+
+        # The two honest ledgers: both arms ran, and the legitimate skip.
+        check({"synthetic", "real-trees"}, available=present)
+        check({"synthetic", "real-trees:unavailable"}, available=absent)
+
+        # An arm that simply stopped executing — MU-16's shape, in every
+        # position.
+        for ledger in ({"synthetic"}, {"real-trees"}, set()):
+            with self.subTest(ledger=sorted(ledger)):
+                with self.assertRaises(AssertionError):
+                    check(set(ledger), available=absent)
+                with self.assertRaises(AssertionError):
+                    check(set(ledger), available=present)
+
+        # The forged claim: ':unavailable' while the checkouts are right
+        # there. This is X-18, and it must cost something.
+        with self.assertRaises(AssertionError) as forged:
+            check({"synthetic", "real-trees:unavailable"}, available=present)
+        self.assertIn("X-18", str(forged.exception))
+        self.assertIn("real-trees", str(forged.exception))
+
+        # The synthetic arm has no unavailable path, so claiming one for it is
+        # not satisfaction in either environment.
+        for oracle, name in ((present, "present"), (absent, "absent")):
+            with self.subTest(trees=name):
+                with self.assertRaises(AssertionError):
+                    check({"synthetic:unavailable", "real-trees"},
+                          available=oracle)
+
+        # …and the un-injected default really is the environment lookup, not a
+        # constant: with no oracle given, the forged ledger raises exactly
+        # when the checkouts can actually be found.
+        if self._real_pass_path_trees_are_present():
+            with self.assertRaises(AssertionError):
+                check({"synthetic", "real-trees:unavailable"})
+        else:
+            check({"synthetic", "real-trees:unavailable"})
 
     def test_repo_holding_returns_a_checkout_that_really_holds_the_commit(self):
         """OS-V-FIX2-VERIFY VF5 / mutant MU-11: the contract was untested.
