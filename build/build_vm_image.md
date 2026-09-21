@@ -240,7 +240,7 @@ read-aloud only; the guest acceptance check requires the built image to hold no
 speech-model weights and no Vosk dictation library, under either policy value.
 That check runs against a freshly built image, which is always a machine's
 first provisioning run, so it stays an unconditional absence check: the
-allowance for a model a user accepted later belongs to
+allowance for a model the machine already carried belongs to
 `plebian-os-provision.sh`'s re-provision path and never to a build.
 
 The advertised pull is **not reachable on a 0.2.2 image**, and the builder

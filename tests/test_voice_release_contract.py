@@ -1,30 +1,292 @@
+import json
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# OS-V-VERIFY F1, as data rather than prose. These are the two refs that were
-# shown, by command, not to carry what the documented acquisition route needs:
+# ── the first-use route, as a capability probe rather than as pin values ─────
 #
-#   $ grep -E '^KILIX_REF=' releases/0.2.2.env
-#   KILIX_REF=62cb5760f2d8f47bf62a7ccbb25c6bc2cebf98e9
-#   $ git -C <kilix> ls-tree 62cb5760 third_party/kilix-content
-#   160000 commit c275334f34427307747a2fef5608b2c993e22007  third_party/kilix-content
-#   $ git -C <kilix-content> cat-file -e c275334:src/kilix_content/first_use.py
-#   fatal: path ... exists on disk, but not in 'c275334'          (rc 128)
-#   $ git -C <kilix-content> cat-file -e 7543aa30:src/kilix_content/first_use.py
-#   (rc 0)                                                   # positive control
-#   $ git -C <kilix-content> show c275334:src/kilix_content/catalog/plebian.json
-#       | <select vosk ids>   -> []          (7543aa30 -> two vosk records)
-#   $ git -C <kilix-voice> grep -c require_covering_receipt ba15d849  -> 0 hits
-KILIX_REF_WITHOUT_FIRST_USE = "62cb5760f2d8f47bf62a7ccbb25c6bc2cebf98e9"
-KILIX_CONTENT_WITHOUT_FIRST_USE = "c275334f34427307747a2fef5608b2c993e22007"
-KILIX_VOICE_REF_WITHOUT_RECEIPT_GATE = "ba15d849486d19967f0e543f21bdfdfaf93df4fe"
+# OS-V-VERIFY F1/F2 are held open by the deliberately failing test below. Its
+# first version compared two pins against two known-bad values, and
+# OS-V-FIX-VERIFY V1 showed that was the wrong thing to assert: its mutant
+# MV-02 advanced both pins to two other *real* commits that carry neither the
+# first-use flow nor the receipt gate, and the test went green with the gap
+# entirely untouched; MV-04 deleted one of the two requirements outright and
+# nothing in the suite noticed. Pin equality is bookkeeping. What the documents
+# promise is a capability, so the capability is what is checked here:
+#
+#   * whatever KILIX_REF is, the Kilix commit it names must pin a
+#     `third_party/kilix-content` commit that carries the first-use flow AND an
+#     asset record for vosk-model-small-en-us-0.15 — that submodule is what the
+#     image serves kilix_content from;
+#   * whatever KILIX_VOICE_REF is, the kilix-voice tree it names must carry the
+#     covering-receipt gate on the install route the catalog row advertises,
+#     and the exit code its refusal uses.
+#
+# Neither probe compares a SHA with anything. A pin bump that lands the route
+# passes; a pin bump that does not, fails — with a message about what is
+# missing rather than about which SHA it is.
+CONTENT_GITLINK_PATH = "third_party/kilix-content"
+CONTENT_FIRST_USE_PATH = "src/kilix_content/first_use.py"
+CONTENT_CATALOG_PATH = "src/kilix_content/catalog/plebian.json"
+REQUIRED_MODEL_RECORD = "vosk-model-small-en-us-0.15"
+RECEIPT_GATE_SYMBOL = "require_covering_receipt"
+RECEIPT_GATE_ROUTE = "kilix-stt"
+LICENCE_REFUSED_DEFINITION = "LICENCE_REFUSED_EXIT = 3"
+
+# The two commits that do carry these things today, on branches that have not
+# been merged or released. They are fixtures for the probes' pass path — the
+# release pins neither, and nothing here compares a pinned ref against them.
+CONTENT_REF_WITH_FIRST_USE = "7543aa30bd0c7ff60b7d7953e3290b87da10583c"
+VOICE_REF_WITH_RECEIPT_GATE = "dacfcaa98e58faffef8876873e7cb5b306890eec"
 
 # The words every instructing document has to carry while that is true.
 GAP_STATEMENT = "not reachable on a 0.2.2 image"
+
+# OS-V-FIX-VERIFY V6. Every shipped surface a provisioning or build path can
+# run from — not the four files the item-6 test used to name. `--install` alone
+# is not the signal (plebian-os-nvidia-driver has its own `--install` mode, and
+# native_runtime.py runs `dpkg --install`); `--install` on a line that also
+# names the speech tool is.
+SHIPPED_SURFACE_DIRECTORIES = ("provision", "build", "preseed", "tools")
+SHIPPED_SURFACE_FILES = ("bootstrap.sh",)
+SPEECH_TOOL_PATTERN = re.compile(r"\bstt\b")
+
+
+def _git(repo, *args):
+    """Read-only git plumbing; stdout, or None when the command failed.
+
+    Only object-store reads are used, never a command that touches an index or
+    a working tree: kilix, kilix-content and kilix-voice are read-only to this
+    repository's tests.
+    """
+    try:
+        done = subprocess.run(
+            ("git", "-C", str(repo)) + tuple(args),
+            capture_output=True, text=True, timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return done.stdout
+
+
+def _sibling_roots():
+    """Directories that may hold checkouts of the read-only sibling repos.
+
+    The sibling repositories sit beside the *primary* clone, and this suite
+    runs from linked worktrees at least as often as from that clone, so
+    `ROOT.parent` alone is not enough. `--git-common-dir` resolves to the
+    primary `.git` from either.
+    """
+    roots = [ROOT.parent]
+    common = _git(ROOT, "rev-parse", "--git-common-dir")
+    if common and common.strip():
+        git_dir = Path(common.strip())
+        if not git_dir.is_absolute():
+            git_dir = ROOT / git_dir
+        roots.append(git_dir.resolve().parent.parent)
+    ordered = []
+    for root in roots:
+        if root not in ordered:
+            ordered.append(root)
+    return ordered
+
+
+def _repo_candidates(env_var, *relatives):
+    candidates = [
+        Path(raw.strip())
+        for raw in os.environ.get(env_var, "").split(os.pathsep)
+        if raw.strip()
+    ]
+    for root in _sibling_roots():
+        for relative in relatives:
+            candidates.append(root.joinpath(*relative))
+    ordered = []
+    for path in candidates:
+        if path not in ordered:
+            ordered.append(path)
+    return ordered
+
+
+def kilix_repo_candidates():
+    return _repo_candidates("PLEBIAN_OS_KILIX_REPO", ("kilix",))
+
+
+def kilix_content_repo_candidates():
+    return _repo_candidates(
+        "PLEBIAN_OS_KILIX_CONTENT_REPO",
+        ("kilix-modules", "kilix-content"),
+        ("kilix", "third_party", "kilix-content"),
+        ("kilix-content",),
+    )
+
+
+def kilix_voice_repo_candidates():
+    return _repo_candidates(
+        "PLEBIAN_OS_KILIX_VOICE_REPO",
+        ("kilix-apps", "kilix-voice"),
+        ("kilix-voice",),
+    )
+
+
+def repo_holding(candidates, commit):
+    """The first candidate checkout whose object store has `commit`."""
+    if not re.fullmatch(r"[0-9a-f]{40}", commit or ""):
+        return None
+    for repo in candidates:
+        if not (repo / ".git").exists():
+            continue
+        if _git(repo, "cat-file", "-e", commit + "^{commit}") is not None:
+            return repo
+    return None
+
+
+def _searched(candidates):
+    return ", ".join(str(path) for path in candidates)
+
+
+def _catalog_records_the_model(repo, commit):
+    blob = _git(repo, "show", f"{commit}:{CONTENT_CATALOG_PATH}")
+    if blob is None:
+        return False
+    try:
+        document = json.loads(blob)
+    except ValueError:
+        return False
+    records = document.get("assets") if isinstance(document, dict) else None
+    if not isinstance(records, list):
+        return False
+    return any(
+        isinstance(record, dict) and record.get("id") == REQUIRED_MODEL_RECORD
+        for record in records
+    )
+
+
+def content_chain_gap(kilix_ref, *, kilix_repos=None, content_repos=None):
+    """What the Kilix closure `kilix_ref` still lacks, or None if it lacks none.
+
+    Resolves the ref's own `third_party/kilix-content` gitlink and looks in
+    *that* commit for the first-use flow and the small-en-us asset record. A
+    ref that cannot be resolved counts as a gap, not as a pass: an unprovable
+    capability is worth exactly as much as an absent one, and treating it as a
+    pass would let this check be greened by deleting a checkout.
+    """
+    if kilix_repos is None:
+        kilix_repos = kilix_repo_candidates()
+    if content_repos is None:
+        content_repos = kilix_content_repo_candidates()
+    if not re.fullmatch(r"[0-9a-f]{40}", kilix_ref or ""):
+        return (f"KILIX_REF {kilix_ref!r} is not a 40-character commit id, so "
+                "the pinned closure cannot be resolved at all")
+    kilix = repo_holding(kilix_repos, kilix_ref)
+    if kilix is None:
+        return (f"no Kilix checkout holding {kilix_ref} was found, so the "
+                "pinned closure cannot be shown to carry the first-use flow "
+                f"(searched {_searched(kilix_repos)}; set PLEBIAN_OS_KILIX_REPO "
+                "to a checkout that has the commit)")
+    gitlink = _git(kilix, "rev-parse", f"{kilix_ref}:{CONTENT_GITLINK_PATH}")
+    content_ref = (gitlink or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", content_ref):
+        return (f"Kilix {kilix_ref[:8]} has no {CONTENT_GITLINK_PATH} gitlink, "
+                "so an image built from it serves no kilix_content at all")
+    content = repo_holding(content_repos, content_ref)
+    if content is None:
+        return (f"Kilix {kilix_ref[:8]} pins kilix-content {content_ref[:8]}, "
+                "but no kilix-content checkout holding it was found "
+                f"(searched {_searched(content_repos)}; set "
+                "PLEBIAN_OS_KILIX_CONTENT_REPO to a checkout that has it)")
+    missing = []
+    if _git(content, "cat-file", "-e",
+            f"{content_ref}:{CONTENT_FIRST_USE_PATH}") is None:
+        missing.append(CONTENT_FIRST_USE_PATH)
+    if not _catalog_records_the_model(content, content_ref):
+        missing.append(
+            f"{REQUIRED_MODEL_RECORD} record in {CONTENT_CATALOG_PATH}")
+    if missing:
+        return (f"Kilix {kilix_ref[:8]} pins kilix-content {content_ref[:8]}, "
+                "which carries no " + ", and no ".join(missing))
+    return None
+
+
+def receipt_gate_gap(voice_ref, *, voice_repos=None):
+    """What the pinned kilix-voice tree still lacks, or None if it lacks none.
+
+    The gate has to be on the route the catalog row advertises, so the
+    `require_covering_receipt` call is required in `kilix-stt` itself and not
+    merely somewhere in the tree, and the refusal's exit code has to be defined.
+    """
+    if voice_repos is None:
+        voice_repos = kilix_voice_repo_candidates()
+    if not re.fullmatch(r"[0-9a-f]{40}", voice_ref or ""):
+        return (f"KILIX_VOICE_REF {voice_ref!r} is not a 40-character commit "
+                "id, so the pinned tree cannot be resolved at all")
+    voice = repo_holding(voice_repos, voice_ref)
+    if voice is None:
+        return (f"no kilix-voice checkout holding {voice_ref} was found, so "
+                "the pinned tree cannot be shown to gate the advertised "
+                f"install action (searched {_searched(voice_repos)}; set "
+                "PLEBIAN_OS_KILIX_VOICE_REPO to a checkout that has it)")
+    missing = []
+    if _git(voice, "grep", "-q", "-F", "-e", RECEIPT_GATE_SYMBOL,
+            voice_ref, "--", RECEIPT_GATE_ROUTE) is None:
+        missing.append(
+            f"{RECEIPT_GATE_SYMBOL} call in {RECEIPT_GATE_ROUTE}, the route "
+            "the catalog row's own action runs")
+    if _git(voice, "grep", "-q", "-F", "-e", LICENCE_REFUSED_DEFINITION,
+            voice_ref) is None:
+        missing.append(
+            f"definition of the refusal exit code "
+            f"({LICENCE_REFUSED_DEFINITION})")
+    if missing:
+        return (f"kilix-voice {voice_ref[:8]} carries no "
+                + ", and no ".join(missing))
+    return None
+
+
+_CONTENT_CHAIN_OWED = (
+    "   The image serves kilix_content from exactly that submodule\n"
+    "   (build/build_vm_image.py, $KILIX_DIR/third_party/kilix-content/src),\n"
+    "   so on a 0.2.2 image\n"
+    "   `kilix models install vosk-model-small-en-us-0.15` cannot resolve the\n"
+    "   asset and no licence screen exists to show.\n"
+    "   WHAT MUST LAND: kilix-content's first-use flow and the vosk record are\n"
+    "   merged and released (they exist today on the unmerged\n"
+    "   work/0.2.2-c1-first-use, at 7543aa30); a Kilix commit advances\n"
+    "   third_party/kilix-content to a commit carrying both; and KILIX_REF here\n"
+    "   advances to that Kilix commit. Only the last of those three is an edit\n"
+    "   to this repository."
+)
+
+_RECEIPT_GATE_OWED = (
+    "   Without that gate the catalog row action this repository *requires*\n"
+    "   every row to carry, `kilix stt --install M --default M`, still reaches\n"
+    "   a 39.3 MiB download with no licence shown and no receipt written.\n"
+    "   OD-BB's 'the licence is shown and accepted before any fetch' is false\n"
+    "   on the surface users reach while that is the pin.\n"
+    "   WHAT MUST LAND: KILIX_VOICE_REF advances to a kilix-voice commit whose\n"
+    "   install routes call require_covering_receipt first and exit 3\n"
+    "   (LICENCE_REFUSED_EXIT) without one — the V-ACC work, at dacfcaa9 on\n"
+    "   work/0.2.2-v-acc. Only that pin advance is an edit to this repository."
+)
+
+# The two halves of the route, as a table the deliberate test iterates over.
+# Both must be here: OS-V-FIX-VERIFY's MV-04 deleted one of them and the suite
+# stayed silent because the other was still failing. The table's shape is
+# asserted by test_the_gap_test_requires_both_halves_of_the_route, and each
+# probe is required there to actually report a gap on a tree that lacks its
+# half, so an entry cannot become a no-op either.
+FIRST_USE_REQUIREMENTS = (
+    ("1. THE CONTENT CHAIN", "KILIX_REF", content_chain_gap,
+     _CONTENT_CHAIN_OWED),
+    ("2. THE RECEIPT GATE ON THE ADVERTISED ACTION", "KILIX_VOICE_REF",
+     receipt_gate_gap, _RECEIPT_GATE_OWED),
+)
 
 # OS-V-VERIFY F6. (document, a sentence that really was removed, the sentence
 # that replaced it). The first four were removed by the OS-V commit from the
@@ -346,6 +608,14 @@ class VoiceReleaseContractTests(unittest.TestCase):
         suite green**: weakening it would restore the false-delivery shape the
         carrier design calls D6, which is the thing OD-BB exists to prevent.
 
+        It asserts the capability, not the pins. Its first version asserted
+        that two pins still equalled two known-bad values, and OS-V-FIX-VERIFY
+        V1 greened it by advancing both to two other real commits that carry
+        neither half of the route: the tripwire was gone and the gap was not.
+        Each requirement now resolves what the pin actually points at and looks
+        for the thing itself, so advancing the pins without landing the flow
+        does not green this test — it fails with a different message.
+
         plebian-os cannot fix this from inside plebian-os. The acquisition flow
         lives in kilix-content and reaches the image only through Kilix's
         `third_party/kilix-content` submodule, and the receipt gate that stops
@@ -354,53 +624,286 @@ class VoiceReleaseContractTests(unittest.TestCase):
         """
         manifest = _manifest(ROOT / "releases" / "0.2.2.env")
         owed = []
-        if manifest.get("KILIX_REF") == KILIX_REF_WITHOUT_FIRST_USE:
-            owed.append(
-                "1. THE CONTENT CHAIN. releases/0.2.2.env pins\n"
-                f"   KILIX_REF={KILIX_REF_WITHOUT_FIRST_USE}, whose\n"
-                f"   third_party/kilix-content gitlink is\n"
-                f"   {KILIX_CONTENT_WITHOUT_FIRST_USE}. That commit has no\n"
-                "   src/kilix_content/first_use.py and no\n"
-                "   vosk-model-small-en-us-0.15 asset record, and the image\n"
-                "   serves kilix_content from exactly that submodule\n"
-                "   (build/build_vm_image.py, $KILIX_DIR/third_party/\n"
-                "   kilix-content/src). So on a 0.2.2 image\n"
-                "   `kilix models install vosk-model-small-en-us-0.15` cannot\n"
-                "   resolve the asset and no licence screen exists to show.\n"
-                "   WHAT MUST LAND: kilix-content's first-use flow and the\n"
-                "   vosk record are merged and released (they exist today on\n"
-                "   the unmerged work/0.2.2-c1-first-use, at 7543aa30); a\n"
-                "   Kilix commit advances third_party/kilix-content to a\n"
-                "   commit carrying both; and KILIX_REF here advances to that\n"
-                "   Kilix commit. Only the last of those three is an edit to\n"
-                "   this repository.")
-        if (manifest.get("KILIX_VOICE_REF")
-                == KILIX_VOICE_REF_WITHOUT_RECEIPT_GATE):
-            owed.append(
-                "2. THE RECEIPT GATE ON THE ADVERTISED ACTION.\n"
-                f"   KILIX_VOICE_REF={KILIX_VOICE_REF_WITHOUT_RECEIPT_GATE}\n"
-                "   has no covering-receipt check, so the catalog row action\n"
-                "   this repository *requires* every row to carry,\n"
-                "   `kilix stt --install M --default M`, still reaches a\n"
-                "   39.3 MiB download with no licence shown and no receipt\n"
-                "   written. OD-BB's 'the licence is shown and accepted\n"
-                "   before any fetch' is false on the surface users reach\n"
-                "   while that is the pin. WHAT MUST LAND: KILIX_VOICE_REF\n"
-                "   advances to a kilix-voice commit whose install routes\n"
-                "   call require_covering_receipt first and exit 3\n"
-                "   (LICENCE_REFUSED_EXIT) without one.")
+        for heading, key, probe, what_must_land in FIRST_USE_REQUIREMENTS:
+            gap = probe(manifest.get(key, ""))
+            if gap is not None:
+                owed.append(
+                    f"{heading}. releases/0.2.2.env pins\n"
+                    f"   {key}={manifest.get(key, '<unset>')}.\n"
+                    f"   WHAT IS MISSING: {gap}.\n"
+                    + what_must_land)
         if owed:
             self.fail(
                 "0.2.2 advertises a first-use acquisition route its own\n"
                 "pinned closure cannot run. This failure is deliberate and\n"
-                "recorded (OS-V-VERIFY F1/F2, OS-V-FIX-IMPL.md); it is the\n"
-                "only failure in this suite besides the sanctioned undated\n"
-                "0.2.2 CHANGELOG heading. What is owed:\n\n"
+                "recorded (OS-V-VERIFY F1/F2, OS-V-FIX-IMPL.md,\n"
+                "OS-V-FIX2-IMPL.md); it is the only failure in this suite\n"
+                "besides the sanctioned undated 0.2.2 CHANGELOG heading.\n"
+                "What is owed:\n\n"
                 + "\n\n".join(owed)
-                + "\n\nWhen both pins have advanced, this test passes with no\n"
-                "edit to it, and the cross-repo equality OS-V-VERIFY F7 defers\n"
-                "becomes writable at the same moment, because the release\n"
-                "then pins a kilix-content ref to test against.")
+                + "\n\nThis test is satisfied by the route existing, not by\n"
+                "either pin having a particular value: advancing the pins to\n"
+                "commits that still lack the flow or the gate fails it again\n"
+                "rather than greening it. When the route really lands, it\n"
+                "passes with no edit to it, and the cross-repo equality\n"
+                "OS-V-VERIFY F7 defers becomes writable at the same moment,\n"
+                "because the release then pins a kilix-content ref to test\n"
+                "against.")
+
+    # ── the pass path, and the bite of each half ─────────────────────────────
+    #
+    # The test above must fail today, so its pass path can never be exercised
+    # by the release's own pins. OS-V-FIX-VERIFY V1's point was that an
+    # assertion whose pass path is never run is not known to have one. These
+    # two tests run both directions of both probes against trees built for the
+    # purpose, so "fails while either half is missing, passes only when both
+    # are really there" is a demonstrated property rather than a claim.
+
+    @staticmethod
+    def _git_init(path):
+        path.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", str(path)],
+                       check=True, capture_output=True, text=True)
+        return path
+
+    @staticmethod
+    def _commit_worktree(repo, message="synthetic"):
+        identity = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+        subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "-C", str(repo)] + identity + ["commit", "-q", "-m",
+                                                   message],
+            check=True, capture_output=True, text=True)
+        return subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True).stdout.strip()
+
+    def _kilix_pinning(self, base, content_ref):
+        """A Kilix commit whose third_party/kilix-content gitlink is given.
+
+        A gitlink is a tree entry, not a reachable object, so this needs no
+        copy of kilix-content and touches no real repository.
+        """
+        repo = self._git_init(base)
+        subprocess.run(
+            ["git", "-C", str(repo), "update-index", "--add", "--cacheinfo",
+             f"160000,{content_ref},{CONTENT_GITLINK_PATH}"],
+            check=True, capture_output=True, text=True)
+        tree = subprocess.run(
+            ["git", "-C", str(repo), "write-tree"],
+            check=True, capture_output=True, text=True).stdout.strip()
+        commit = subprocess.run(
+            ["git", "-C", str(repo), "-c", "user.name=t",
+             "-c", "user.email=t@example.invalid", "commit-tree", tree,
+             "-m", "synthetic"],
+            check=True, capture_output=True, text=True, input="").stdout.strip()
+        return repo, commit
+
+    def _kilix_content(self, base, *, first_use=True, record=True):
+        repo = self._git_init(base)
+        package = repo / "src" / "kilix_content"
+        (package / "catalog").mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        if first_use:
+            (package / "first_use.py").write_text(
+                "def show_licence_and_accept():\n    raise NotImplementedError\n")
+        assets = [{"id": "piper-en-us-kristin-medium"}]
+        if record:
+            assets.append({"id": REQUIRED_MODEL_RECORD})
+        (package / "catalog" / "plebian.json").write_text(
+            json.dumps({"schema_version": 3, "assets": assets}))
+        return repo, self._commit_worktree(repo)
+
+    def _kilix_voice(self, base, *, gate=True, exit_code=True):
+        repo = self._git_init(base)
+        (repo / "voicelib").mkdir()
+        (repo / "voicelib" / "licensing.py").write_text(
+            (f"{LICENCE_REFUSED_DEFINITION}\n" if exit_code else "")
+            + f"def {RECEIPT_GATE_SYMBOL}(model):\n    return None\n"
+        )
+        (repo / RECEIPT_GATE_ROUTE).write_text(
+            "#!/usr/bin/env python3\n"
+            + (f"licensing.{RECEIPT_GATE_SYMBOL}(model)\n" if gate else
+               "install(model)\n")
+        )
+        return repo, self._commit_worktree(repo)
+
+    def test_the_gap_test_requires_both_halves_of_the_route(self):
+        """OS-V-FIX-VERIFY V1 / mutant MV-04: half of it could be deleted.
+
+        MV-04 removed the receipt-gate requirement from the gap test and
+        survived the whole suite, because the other requirement was still
+        failing and the failing set did not change. The two halves are now a
+        named table, and this test asserts both that the table names both pins
+        and that neither entry is a no-op: each probe is run against a tree
+        that lacks precisely its own half and is required to report it.
+        """
+        self.assertEqual(
+            {key for _heading, key, _probe, _owed in FIRST_USE_REQUIREMENTS},
+            {"KILIX_REF", "KILIX_VOICE_REF"},
+            "the route has two halves and both must be checked: deleting one "
+            "is what MV-04 did, and it went unnoticed",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            for label, first_use, record, wanted in (
+                ("no first_use.py", False, True, CONTENT_FIRST_USE_PATH),
+                ("no asset record", True, False, REQUIRED_MODEL_RECORD),
+                ("neither", False, False, CONTENT_FIRST_USE_PATH),
+            ):
+                with self.subTest(content=label):
+                    content, content_ref = self._kilix_content(
+                        base / f"content-{first_use}-{record}",
+                        first_use=first_use, record=record)
+                    kilix, kilix_ref = self._kilix_pinning(
+                        base / f"kilix-{first_use}-{record}", content_ref)
+                    gap = content_chain_gap(
+                        kilix_ref, kilix_repos=[kilix],
+                        content_repos=[content])
+                    self.assertIsNotNone(
+                        gap, "a closure missing the flow must be reported")
+                    self.assertIn(wanted, gap)
+            for label, gate, exit_code, wanted in (
+                ("no gate", False, True, RECEIPT_GATE_SYMBOL),
+                ("no exit code", True, False, LICENCE_REFUSED_DEFINITION),
+            ):
+                with self.subTest(voice=label):
+                    voice, voice_ref = self._kilix_voice(
+                        base / f"voice-{gate}-{exit_code}",
+                        gate=gate, exit_code=exit_code)
+                    gap = receipt_gate_gap(voice_ref, voice_repos=[voice])
+                    self.assertIsNotNone(
+                        gap, "a tree missing the gate must be reported")
+                    self.assertIn(wanted, gap)
+            # An unresolvable ref is a gap, never a pass: otherwise the gap
+            # test could be greened by removing a checkout.
+            self.assertIsNotNone(content_chain_gap(
+                "0" * 40, kilix_repos=[], content_repos=[]))
+            self.assertIsNotNone(receipt_gate_gap("0" * 40, voice_repos=[]))
+            self.assertIsNotNone(content_chain_gap(
+                "", kilix_repos=[], content_repos=[]))
+            self.assertIsNotNone(receipt_gate_gap("", voice_repos=[]))
+
+    def test_the_gap_test_passes_when_the_route_is_really_there(self):
+        """The pass path, exercised — the release's own pins never reach it.
+
+        Arm 1 is synthetic and always runs: a kilix-content tree carrying the
+        flow and the record, pinned by a Kilix commit's gitlink, and a
+        kilix-voice tree carrying the gate and the exit code. Arm 2 uses the
+        real trees that carry these things today — kilix-content 7543aa30 on
+        the unmerged work/0.2.2-c1-first-use, and kilix-voice dacfcaa9 on
+        work/0.2.2-v-acc — so the probe is also known to accept the actual
+        commits this release is waiting for. Arm 2 is skipped, and only arm 2,
+        where those read-only checkouts are not present.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            content, content_ref = self._kilix_content(base / "content")
+            kilix, kilix_ref = self._kilix_pinning(base / "kilix", content_ref)
+            self.assertIsNone(
+                content_chain_gap(kilix_ref, kilix_repos=[kilix],
+                                  content_repos=[content]),
+                "a closure that carries the flow and the record must pass")
+            voice, voice_ref = self._kilix_voice(base / "voice")
+            self.assertIsNone(
+                receipt_gate_gap(voice_ref, voice_repos=[voice]),
+                "a tree that carries the gate and the exit code must pass")
+
+            real_content = repo_holding(
+                kilix_content_repo_candidates(), CONTENT_REF_WITH_FIRST_USE)
+            real_voice = repo_holding(
+                kilix_voice_repo_candidates(), VOICE_REF_WITH_RECEIPT_GATE)
+            if real_content is None or real_voice is None:
+                self.skipTest(
+                    "no read-only checkout holding kilix-content "
+                    f"{CONTENT_REF_WITH_FIRST_USE[:8]} and kilix-voice "
+                    f"{VOICE_REF_WITH_RECEIPT_GATE[:8]} is present; the "
+                    "synthetic arm above still ran")
+            real_kilix, real_kilix_ref = self._kilix_pinning(
+                base / "kilix-real", CONTENT_REF_WITH_FIRST_USE)
+            self.assertIsNone(
+                content_chain_gap(real_kilix_ref, kilix_repos=[real_kilix],
+                                  content_repos=[real_content]),
+                f"kilix-content {CONTENT_REF_WITH_FIRST_USE[:8]} carries the "
+                "flow and the record, so a Kilix pinning it must pass")
+            self.assertIsNone(
+                receipt_gate_gap(VOICE_REF_WITH_RECEIPT_GATE,
+                                 voice_repos=[real_voice]),
+                f"kilix-voice {VOICE_REF_WITH_RECEIPT_GATE[:8]} carries the "
+                "gate, so it must pass")
+
+    def test_the_carried_over_allowance_claims_no_acceptance_it_cannot_see(
+            self):
+        """OS-V-FIX-VERIFY V4: the words were false on every upgraded machine.
+
+        The re-provision allowance used to describe a carried-over asset as
+        "the user's, acquired through the first-use licence flow". 0.2.1 set
+        PLEBIAN_OS_INSTALL_VOICE_MODEL=1 and its firstboot fetched small-en-us
+        with no acceptance step, and the completion marker predates this wave,
+        so a machine upgraded from 0.2.1 carries both and is accepted by that
+        allowance. The behaviour is right and owner-sanctioned; the attribution
+        was not, and a carrier attests from words.
+        """
+        provision = (
+            ROOT / "provision" / "plebian-os-provision.sh"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("acquired through the first-use licence flow",
+                         provision)
+        self.assertIn("came from\n#      the machine's own history", provision)
+        self.assertIn("releases/0.2.1.env", provision)
+        upgrading = " ".join(
+            (ROOT / "UPGRADING.md").read_text(encoding="utf-8").split())
+        self.assertNotIn(
+            "Re-provisioning a machine whose user accepted a model is "
+            "supported", upgrading)
+        self.assertIn(
+            "whether its user accepted that model at first use or 0.2.1's "
+            "firstboot fetched it before the upgrade", upgrading)
+
+    @staticmethod
+    def _shipped_surface_files():
+        """Every file on a provisioning or build surface, as relative paths.
+
+        Enumerated from the tree rather than listed, because OS-V-FIX-VERIFY's
+        MV-15 added a caller to a file the list did not name and survived.
+        """
+        found = []
+        for name in SHIPPED_SURFACE_FILES:
+            if (ROOT / name).is_file():
+                found.append(name)
+        for directory in SHIPPED_SURFACE_DIRECTORIES:
+            root = ROOT / directory
+            if not root.is_dir():
+                continue
+            for path in root.rglob("*"):
+                if not path.is_file() or path.is_symlink():
+                    continue
+                if any(part == ".git" or part == "__pycache__"
+                       for part in path.parts):
+                    continue
+                found.append(str(path.relative_to(ROOT)))
+        return sorted(found)
+
+    def test_the_shipped_surface_enumeration_sees_the_files_it_must(self):
+        """A scan that sees nothing proves nothing (see the item-6 test).
+
+        The enumeration above is what makes MV-15 catchable, so it is checked
+        against files known to be on each surface before it is trusted to say
+        an action is absent.
+        """
+        surface = set(self._shipped_surface_files())
+        for name in (
+            "bootstrap.sh",
+            "provision/plebian-os-provision.sh",
+            "provision/plebian-os-update.sh",
+            "provision/plebian-os-firstboot.service",
+            "build/build_vm_image.py",
+            "build/remaster-iso.sh",
+        ):
+            with self.subTest(path=name):
+                self.assertIn(name, surface)
+        self.assertGreater(len(surface), len(SHIPPED_SURFACE_FILES) + 6)
 
     def test_no_provisioning_path_runs_the_advertised_install_action(self):
         """The row is required; running it is not this image's business.
@@ -435,6 +938,40 @@ class VoiceReleaseContractTests(unittest.TestCase):
             text = (ROOT / name).read_text(encoding="utf-8")
             with self.subTest(script=name):
                 self.assertNotIn("--install", text)
+        # OS-V-FIX-VERIFY V6 / mutant MV-15: this used to name four files, and
+        # a caller added to a fifth — bootstrap.sh — survived the whole suite.
+        # The fact item 6 asserts is about the tree, so the check is now about
+        # the tree. Every shipped line that mentions `--install` anywhere under
+        # the provisioning and build surfaces is enumerated, and any of them
+        # that also names the speech tool must be one of the two contract
+        # comparisons above. (`--install` by itself is not the signal:
+        # plebian-os-nvidia-driver's own mode flag and native_runtime's
+        # `dpkg --install` are unrelated and must stay allowed.)
+        speech_install_lines = []
+        for path in self._shipped_surface_files():
+            text = (ROOT / path).read_text(encoding="utf-8", errors="replace")
+            for number, line in enumerate(text.splitlines(), start=1):
+                if "--install" in line and SPEECH_TOOL_PATTERN.search(line):
+                    speech_install_lines.append((path, number, line.strip()))
+        self.assertEqual(
+            sorted(entry[0] for entry in speech_install_lines),
+            ["build/build_vm_image.py", "provision/plebian-os-provision.sh"],
+            "the only speech-model install action on any shipped path must be "
+            f"the contract comparison: {speech_install_lines}")
+        for path, _number, line in speech_install_lines:
+            with self.subTest(occurrence=path):
+                self.assertIn(contract, line)
+        # `kilix models install` / `kilix voice install` carry no `--install`,
+        # so they are scanned separately: on a shipped path they may be
+        # discussed in a comment and never run.
+        for path in self._shipped_surface_files():
+            text = (ROOT / path).read_text(encoding="utf-8", errors="replace")
+            for number, line in enumerate(text.splitlines(), start=1):
+                if re.search(r"kilix (models|voice|stt) install", line):
+                    with self.subTest(mention=f"{path}:{number}"):
+                        self.assertTrue(
+                            line.lstrip().startswith("#"),
+                            f"{path}:{number} runs an install action: {line!r}")
         # …and every kilix-stt these paths actually run is a read-only report.
         for name in ("provision/plebian-os-provision.sh",
                      "build/build_vm_image.py"):
@@ -510,9 +1047,24 @@ class VoiceReleaseContractTests(unittest.TestCase):
         self.assertIn(
             "\nrecord_voice_dictation_census\n", provision,
             "the census function must be defined and also called")
+        # OS-V-FIX-VERIFY V5 / mutant MV-18. record_voice_dictation_census
+        # guards its enumeration with `[ -n "${KILIX_DATA_HOME:-}" ]`, so a
+        # call placed above the assignment takes an *empty* census under
+        # `set -u` and still sets PROVISION_VOICE_CENSUS_TAKEN=1. Every
+        # carried-over asset is then classified as installed-this-run, and a
+        # legitimate re-provision is refused with provisioning blamed for a
+        # fetch that never happened (the verifier's S10 and S11, rc 1 each).
+        # MV-18 moved the call above the assignment and survived, because the
+        # three orderings below did not include this one.
+        data_home = provision.index(
+            '\nKILIX_DATA_HOME="${KILIX_DATA_HOME:-')
         census = provision.index("\nrecord_voice_dictation_census\n")
         install = provision.index('"$PLEB_DIR/bin/pleb" install')
         verify = provision.index("\n    verify_kilix_voice_install\n")
+        self.assertLess(
+            data_home, census,
+            "KILIX_DATA_HOME must be resolved before the census is taken, or "
+            "the census is empty and every carried-over asset looks new")
         self.assertLess(census, install, "the census must precede pleb install")
         self.assertLess(install, verify)
         self.assertIn("PROVISION_COMPLETED_MARKER=/var/lib/plebian-os/"

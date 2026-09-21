@@ -113,8 +113,12 @@ release-controlled by the rules above:
   run `kilix models install vosk-model-small-en-us-0.15` on a 0.2.2 image; it
   cannot resolve the asset. `releases/0.2.2-notes.md` names what must land, and
   a deliberately failing test in `tests/test_voice_release_contract.py` holds
-  the gap open. Re-provisioning a machine whose user accepted a model is
-  supported and leaves the model alone. Rollback to 0.2.1
+  the gap open. Re-provisioning a machine that already carries a model is
+  supported and leaves the model alone, whether its user accepted that model
+  at first use or 0.2.1's firstboot fetched it before the upgrade — 0.2.2
+  cannot tell those apart and does not claim to: what it checks is that this
+  run installed nothing, not who consented to what an earlier release
+  installed. Rollback to 0.2.1
   restores the previous behaviour, and an accepted model installed under 0.2.2
   satisfies 0.2.1's firstboot check, so a downgrade does not re-download it.
   `PLEBIAN_OS_INSTALL_VOICE_MODEL` stays a release-controlled key and keeps its

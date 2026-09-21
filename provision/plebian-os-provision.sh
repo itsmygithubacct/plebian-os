@@ -292,7 +292,7 @@ INSTALL_VOICE_MODEL_EXPLICIT="${PLEBIAN_OS_INSTALL_VOICE_MODEL:+1}"
 # an acceptance receipt before any byte is fetched. Nothing may make this 1:
 # a value of 1 here is exactly the unattended firstboot download OD-BB removed.
 readonly PROVISION_VOICE_WEIGHTS=0
-# ── telling an image-shipped model from one the user accepted ────────────────
+# ── telling a model this run installed from one the machine already had ──────
 # OD-BB asks two different things of this machine, and presence alone cannot
 # answer both, because an image-shipped model and a model the user accepted at
 # first use land in exactly the same place under $KILIX_DATA_HOME/voice:
@@ -317,14 +317,25 @@ readonly PROVISION_VOICE_WEIGHTS=0
 #      from ExecStartPost, i.e. only after the provisioner has already succeeded
 #      once. Absent, this is the machine's first provisioning run and nothing
 #      but the image can have put a model there. Present, the machine has
-#      already booted and been used, so assets carried into this run are the
-#      user's, acquired through the first-use licence flow.
+#      already booted and been used, so assets carried into this run came from
+#      the machine's own history rather than from this image or this run.
+#
+#      That attribution is deliberately weaker than "the user accepted them at
+#      first use", because on an upgraded machine it would be false: 0.2.1 set
+#      PLEBIAN_OS_INSTALL_VOICE_MODEL=1 (releases/0.2.1.env) and its firstboot
+#      fetched small-en-us with no acceptance step, and the marker is older
+#      still, so a machine upgraded from 0.2.1 carries both. Keeping those
+#      weights is right and owner-sanctioned (UPGRADING.md: upgrade with a
+#      model, keep dictation), and OD-BB's "no unattended model download" holds
+#      because this run downloads nothing and the census proves it. What this
+#      run cannot honestly attest is an acceptance that happened before the
+#      first-use flow existed, so it does not claim one.
 #
 # Assets that appeared during the run are therefore always a refusal; assets
 # that predate it are a refusal on a first run (the image shipped them) and are
-# left alone on a re-provision (the user accepted them). A plain assignment,
-# not "${VAR:-}": the environment must not be able to relax this, while a test
-# that sources this file can still point it at an isolated tree.
+# left alone on a re-provision (the machine carried them in). A plain
+# assignment, not "${VAR:-}": the environment must not be able to relax this,
+# while a test that sources this file can still point it at an isolated tree.
 PROVISION_COMPLETED_MARKER=/var/lib/plebian-os/provisioned
 PROVISION_VOICE_ASSETS_BEFORE=()
 PROVISION_VOICE_CENSUS_TAKEN=0
@@ -3883,8 +3894,29 @@ voice_asset_predates_this_run() {
     return 1
 }
 
+# The marker is the hinge of the whole discriminator, and it used to be the one
+# piece of evidence here with no integrity check at all — `-f` and `! -L` and
+# nothing else, while the install stamp three screens below is checked with
+# stat(1). It is now checked the same way, and the same way
+# plebian-os-update.sh already checks /var/lib/plebian-os itself (its root
+# snapshot: owner 0, and no group or world write bit). A genuine marker is
+# written by plebian-os-firstboot.service's ExecStartPost as
+# `install -Dm644 /dev/null`, running as root: a regular file, owned by the
+# identity this provisioner runs as, writable by nobody else.
+#
+# Forging one still requires root today, because /var/lib/plebian-os is created
+# root-owned under the provisioner's umask, so this crosses no privilege
+# boundary and closes no live hole. It is defence in depth: what it removes is
+# the asymmetry of authenticating the stamp and trusting the marker.
+# (OS-V-FIX-VERIFY V3.)
 machine_already_provisioned() {
-    [ -f "$PROVISION_COMPLETED_MARKER" ] && [ ! -L "$PROVISION_COMPLETED_MARKER" ]
+    local marker="$PROVISION_COMPLETED_MARKER" metadata mode
+    [ -f "$marker" ] && [ ! -L "$marker" ] || return 1
+    metadata="$(stat -c '%u:%a' -- "$marker" 2>/dev/null)" || return 1
+    [ "${metadata%%:*}" = "$EUID" ] || return 1
+    mode="${metadata##*:}"
+    (( (8#$mode & 8#22) == 0 )) || return 1
+    return 0
 }
 
 first_use_dictation_is_the_users() {

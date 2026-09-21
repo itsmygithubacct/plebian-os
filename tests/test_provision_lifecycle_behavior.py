@@ -922,7 +922,8 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
 
     def _first_use_voice_fixture(self, base, *, already_provisioned=False,
                                  during_install="", model_sha=None,
-                                 accepted_model=False):
+                                 accepted_model=False, take_census=True,
+                                 marker_shape="file"):
         """A correctly provisioned 0.2.2 image: read-aloud, and no weights.
 
         The body reproduces the provisioner's own order: the dictation census
@@ -931,6 +932,13 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         points at a path that exists only when the caller asks for it, which is
         what tells a re-provision of a used machine from the first provisioning
         run of a fresh image.
+
+        ``take_census`` and ``marker_shape`` exist for OS-V-FIX-VERIFY V2 and
+        V3: the two guards that make the marker mean what the fix says it means
+        were untested, so each has to be reachable from a fixture. A genuine
+        marker is what plebian-os-firstboot.service writes — `install -Dm644
+        /dev/null`, a plain root-owned file — so ``"file"`` reproduces that
+        mode explicitly rather than inheriting the runner's umask.
         """
         home = base / "home"
         data = base / "data"
@@ -1015,7 +1023,19 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         (voice_source / "VERSION").write_text("0.1.3\n")
         marker = base / "provisioned"
         if already_provisioned:
-            marker.write_text("")
+            if marker_shape == "symlink":
+                target = base / "provisioned-target"
+                target.write_text("")
+                target.chmod(0o644)
+                marker.symlink_to(target.name)
+            elif marker_shape == "world-writable":
+                marker.write_text("")
+                marker.chmod(0o666)
+            elif marker_shape == "file":
+                marker.write_text("")
+                marker.chmod(0o644)
+            else:
+                raise AssertionError(f"unknown marker shape {marker_shape!r}")
         body = (
             f"TARGET_USER={pwd.getpwuid(os.getuid()).pw_name!r}\n"
             f"TARGET_UID={os.getuid()}\nTARGET_GID={os.getgid()}\n"
@@ -1043,7 +1063,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "KILIX_VOICE_MODEL_SHA256="
             f"{(self.MODEL_SHA if model_sha is None else model_sha)!r}\n"
             f"PROVISION_COMPLETED_MARKER={str(marker)!r}\n"
-            "record_voice_dictation_census\n"
+            + ("record_voice_dictation_census\n" if take_census else "")
             + during_install +
             "verify_kilix_voice_install\n"
         )
@@ -1245,6 +1265,88 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                     self.assertIn(
                         "provisioning installed speech-model dictation assets "
                         "during this run", refused.stderr)
+
+    def _carried_weights_are_refused(self, base, *, message, **fixture):
+        """A model-free control at this marker state, then the weights arm.
+
+        The control comes first so a refusal in the arm is attributable to the
+        weights and not to the marker shape or the missing census.
+        """
+        env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+        _control_data, control_body = self._first_use_voice_fixture(
+            base / "control", **fixture)
+        control = self._run_library(control_body, env)
+        self.assertEqual(
+            control.returncode, 0,
+            "the model-free control must pass in this shape before the "
+            "weights arm is judged: " + control.stderr,
+        )
+        _data, body = self._first_use_voice_fixture(
+            base / "weights", accepted_model=True, **fixture)
+        refused = self._run_library(body, env)
+        self.assertNotEqual(
+            refused.returncode, 0,
+            "carried weights must not be accepted here: " + refused.stdout)
+        self.assertIn(message, refused.stderr)
+
+    def test_a_marker_without_a_census_cannot_make_weights_the_users(self):
+        """OS-V-FIX-VERIFY V2, mutant MV-06 — the verifier's S8 arm.
+
+        `first_use_dictation_is_the_users` requires the census as well as the
+        marker, so that a caller which skipped the census gets the strict rule
+        instead of a free pass. That requirement was untested: MV-06 deleted
+        the census clause and survived the whole suite, while an image-shipped
+        model became acceptable on any machine that had completed a
+        provisioning run. This arm takes no census at all.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            self._carried_weights_are_refused(
+                Path(td),
+                message="provisioning left speech-model weights on the image",
+                already_provisioned=True, take_census=False)
+
+    def test_a_symlinked_completion_marker_is_not_a_completed_run(self):
+        """OS-V-FIX-VERIFY V2, mutant MV-09 — the verifier's S6 arm.
+
+        `machine_already_provisioned` requires a regular file, because a
+        symlink named `provisioned` is not the file
+        plebian-os-firstboot.service writes and says nothing about whether this
+        machine has ever been provisioned. MV-09 dropped the `! -L` guard and
+        survived, while a symlinked marker started laundering carried weights.
+        """
+        with tempfile.TemporaryDirectory() as td:
+            self._carried_weights_are_refused(
+                Path(td),
+                message="provisioning left speech-model weights on the image",
+                already_provisioned=True, marker_shape="symlink")
+
+    def test_a_group_or_world_writable_marker_is_not_a_completed_run(self):
+        """OS-V-FIX-VERIFY V3 — the verifier's S5 arm.
+
+        The marker is the hinge of the whole discriminator and used to be
+        checked only for existence and shape, while the install stamp in the
+        same function is checked with stat(1). It is now checked for owner and
+        mode too, the way plebian-os-update.sh already checks
+        /var/lib/plebian-os itself. Forging a marker still needs root, so this
+        is defence in depth rather than a live hole; what it removes is the
+        asymmetry. The two arms differ in exactly one thing: the marker's mode.
+        """
+        env = {**os.environ, "PLEBIAN_OS_PROVISION_LIB_ONLY": "1"}
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            _data, trusted_body = self._first_use_voice_fixture(
+                base / "trusted", already_provisioned=True,
+                accepted_model=True)
+            trusted = self._run_library(trusted_body, env)
+            self.assertEqual(
+                trusted.returncode, 0,
+                "a 0644 marker is what firstboot writes and must be trusted: "
+                + trusted.stderr,
+            )
+            self._carried_weights_are_refused(
+                base,
+                message="provisioning left speech-model weights on the image",
+                already_provisioned=True, marker_shape="world-writable")
 
     def test_release_voice_verification_requires_a_well_formed_advertisement(
             self):
