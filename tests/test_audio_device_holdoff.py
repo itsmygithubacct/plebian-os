@@ -673,6 +673,217 @@ WantedBy=default.target
         self.assertEqual(os.readlink(override), "/dev/null")
 
 
+    def the_login_targets(self, root):
+        """default.target and basic.target as systemd ships them."""
+        units = root / "usr/lib/systemd/user"
+        (units / "default.target").write_text(
+            "[Unit]\nDescription=Main User Target\nRequires=basic.target\n"
+            "After=basic.target\nAllowIsolate=yes\n")
+        (units / "basic.target").write_text(
+            "[Unit]\nDescription=Basic System\n"
+            "Wants=sockets.target timers.target paths.target\n")
+        for name in ("sockets.target", "timers.target", "paths.target"):
+            (units / name).write_text(f"[Unit]\nDescription={name}\n")
+
+    def test_what_the_login_target_pulls_in_is_caught_however_it_does(self):
+        """A link is not the only thing that starts a unit at login.
+
+        Each shape below was checked against `systemd-analyze --user verify
+        default.target` on systemd 257, which puts a start job on the daemon
+        for every one of them — and each gave "no login audio daemon" before
+        the walk from the login target existed. The helper is the realistic
+        one: a package that splits an innocent helper from its daemon.
+        """
+        unit = "midi-render-daemon.service"
+        wants = f"[Unit]\nWants={unit}\n"
+
+        def dropin_on(directory):
+            def plant(root):
+                path = root / "etc/systemd/user" / directory / "50-midi.conf"
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(wants)
+            return plant
+
+        def override_default(root):
+            (root / "etc/systemd/user/default.target").write_text(
+                "[Unit]\nDescription=Main User Target\nRequires=basic.target\n"
+                f"Wants={unit}\n")
+
+        def alias_default(root):
+            etc = root / "etc/systemd/user"
+            (etc / "mylogin.target").write_text(
+                "[Unit]\nDescription=My login target\nRequires=basic.target\n")
+            (etc / "default.target").symlink_to("mylogin.target")
+            dropin_on("mylogin.target.d")(root)
+
+        def helper(root):
+            install_unit(root, "midi-helper.service", f"""[Unit]
+Description=An innocent helper that wants the daemon
+Wants={unit}
+[Service]
+ExecStart=/bin/true
+[Install]
+WantedBy=default.target
+""")
+
+        shapes = {
+            "drop-in on default.target": dropin_on("default.target.d"),
+            "drop-in on basic.target": dropin_on("basic.target.d"),
+            "type-level target.d drop-in": dropin_on("target.d"),
+            "full default.target override in /etc": override_default,
+            "default.target aliased to a target with a drop-in": alias_default,
+            "enabled helper that Wants= the daemon": helper,
+        }
+        for shape, plant in shapes.items():
+            with self.subTest(shape=shape):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                self.the_login_targets(root)
+                install_unit(root, unit,
+                             a_holding_unit(f"Started by: {shape}"),
+                             enable=False)
+                self.assertEqual(held_units(root), [],
+                                 "the fixture holds the card before the shape "
+                                 "is planted, so it proves nothing")
+                plant(root)
+                self.assertEqual(held_units(root), [unit])
+                result = apply_holdoff(root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(held_units(root), [])
+                # Neither a link nor ours to edit: the daemon itself is
+                # masked, and whatever pulled it in is left as it was.
+                self.assertTrue(unit_is_masked(root, unit))
+                if shape.startswith("enabled helper"):
+                    self.assertTrue(
+                        (root / "etc/systemd/user/default.target.wants"
+                         / "midi-helper.service").is_symlink(),
+                        "the innocent helper was disabled instead of the "
+                        "daemon it pulls in")
+
+    def test_a_link_is_read_by_its_name_as_systemd_reads_it(self):
+        """systemd uses a `.wants/` link's NAME, not the file it points at.
+
+        A link written with a build-root prefix dangles inside the image, and
+        one aimed at the wrong file still starts the unit its name resolves
+        to — systemd 257 says so itself ("has different name") and loads the
+        named unit from the search path.
+        """
+        unit = "midi-render-daemon.service"
+        for shape, target in (("dangling", "/usr/lib/systemd/user/no-such.service"),
+                              ("misnamed", "/usr/lib/systemd/user/notes-sync.service")):
+            with self.subTest(shape=shape):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                install_unit(root, unit, a_holding_unit(f"Reached by a {shape} link"),
+                             enable=False)
+                install_unit(root, "notes-sync.service",
+                             "[Unit]\nDescription=Innocent\n[Service]\n"
+                             "ExecStart=/bin/true\n", enable=False)
+                link = root / "etc/systemd/user/default.target.wants" / unit
+                link.symlink_to(target)
+                self.assertEqual(held_units(root), [unit])
+                self.assertEqual(apply_holdoff(root).returncode, 0)
+                self.assertEqual(held_units(root), [])
+                self.assertFalse(link.is_symlink())
+
+    def test_signal_one_reads_what_systemd_reads(self):
+        """Upholds= is a wanting verb; blanks around `=` are still the key."""
+        for shape, line in (("Upholds=", "Upholds=pipewire.service"),
+                            ("blanks around =", "Wants = pipewire.service")):
+            with self.subTest(shape=shape):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                install_unit(root, "midi-render-daemon.service", f"""[Unit]
+Description=Declares the sound stack as {shape}
+{line}
+[Service]
+ExecStart=/bin/true
+[Install]
+WantedBy=default.target
+""")
+                self.assertEqual(held_units(root), ["midi-render-daemon.service"])
+
+    def test_an_execstart_set_by_a_dropin_is_what_is_checked(self):
+        """A placeholder fragment and a drop-in that sets the real program."""
+        donor = an_audio_client_program()
+        if donor is None:
+            self.skipTest("no program on this machine links an audio client "
+                          "library, so the linkage signal cannot be exercised "
+                          "here")
+        program = self.root / "usr/lib/systemd/quiet-audio-client"
+        program.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(donor, program)
+        program.chmod(0o755)
+        install_unit(self.root, "quiet-audio-client.service", """[Unit]
+Description=Placeholder fragment; the drop-in says what really runs
+[Service]
+ExecStart=/bin/true
+[Install]
+WantedBy=default.target
+""")
+        self.assertEqual(held_units(self.root), [])
+        dropin = self.root / "etc/systemd/user/quiet-audio-client.service.d/override.conf"
+        dropin.parent.mkdir(parents=True)
+        dropin.write_text("[Service]\nExecStart=\n"
+                          "ExecStart = /usr/lib/systemd/quiet-audio-client\n")
+        self.assertEqual(held_units(self.root), ["quiet-audio-client.service"])
+        self.assertEqual(apply_holdoff(self.root).returncode, 0)
+        self.assertEqual(held_units(self.root), [])
+
+    def test_a_mask_is_never_written_over_what_is_already_there(self):
+        """An administrator's own unit file is not ours to replace.
+
+        A drop-in pulls in `midi.service`, and the only `midi.service` is one
+        someone wrote by hand in /etc. `ln -sf /dev/null` there destroyed it
+        with no backup. The hold-off must refuse, say so, record it, and fail
+        — the card is still held, and pretending otherwise would be worse —
+        leaving what was there byte for byte as it was. A link in the same
+        place (an alias, or `systemctl link`) is somebody's too.
+        """
+        admin_unit = (b"[Unit]\nDescription=My own synth\n"
+                      b"Wants=pipewire.service\n[Service]\n"
+                      b"ExecStart=/usr/bin/fluidsynth -is /srv/my.sf2\n"
+                      b"# hand-written, not packaged\n")
+
+        def regular_file(etc):
+            (etc / "midi.service").write_bytes(admin_unit)
+            return "midi.service"
+
+        def systemctl_link(etc):
+            (etc / "midi-alias.service").symlink_to(
+                "/usr/lib/systemd/user/midi-render-daemon.service")
+            return "midi-alias.service"
+
+        def snapshot(path):
+            return os.readlink(path) if path.is_symlink() else path.read_bytes()
+
+        for case, plant in (("a regular file", regular_file),
+                            ("a systemctl link", systemctl_link)):
+            with self.subTest(already_there=case):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                etc = root / "etc/systemd/user"
+                install_unit(root, "midi-render-daemon.service",
+                             a_holding_unit("The unit a systemctl link names"),
+                             enable=False)
+                unit = plant(etc)
+                before = snapshot(etc / unit)
+                dropin = etc / "default.target.d/50-midi.conf"
+                dropin.parent.mkdir(parents=True)
+                dropin.write_text(f"[Unit]\nWants={unit}\n")
+                self.assertEqual(held_units(root), [unit])
+
+                result = apply_holdoff(root)
+                self.assertNotEqual(result.returncode, 0,
+                                    "the card is still held; the hold-off "
+                                    "must not report success")
+                self.assertIn("will NOT mask", result.stderr)
+                self.assertEqual(snapshot(etc / unit), before,
+                                 f"{case} at /etc/systemd/user/{unit} was "
+                                 "changed by the hold-off")
+                self.assertIn("\trefused", (root / "var/lib/plebian-os/"
+                                            "audio-holdoff.log").read_text())
+
 class DeliberateEnablementTests(unittest.TestCase):
     """Someone enabled it on purpose. That is not the same as a package did."""
 
@@ -741,6 +952,24 @@ class DeliberateEnablementTests(unittest.TestCase):
                         "a per-account enablement was removed by provisioning")
 
 
+    def test_a_link_no_package_writes_is_masked_but_never_silently(self):
+        """/run and /usr/local are not where dpkg puts links."""
+        for directory, announced in (("usr/local/lib/systemd/user", True),
+                                     ("run/systemd/user", True),
+                                     ("usr/lib/systemd/user", False)):
+            with self.subTest(link_directory=directory):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                install_unit(root, "midi-render-daemon.service",
+                             a_holding_unit(f"Enabled under /{directory}"),
+                             link_dir=directory)
+                result = apply_holdoff(root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(held_units(root), [])
+                self.assertEqual("not where a" in result.stderr, announced,
+                                 result.stderr)
+
+
 class InstallPathAudioHoldoffTests(unittest.TestCase):
     """The install path, modelled from this machine's real package contents."""
 
@@ -796,14 +1025,23 @@ class InstallPathAudioHoldoffTests(unittest.TestCase):
         # blinding the rule cannot also blind the precondition.
         never_asked = units_the_install_path_never_asked_for(resolved, named)
         before = held_units(root)
-        if never_asked:
-            self.assertTrue(
-                before,
+        with self.subTest(check="the rule sees what the oracle names"):
+            if not never_asked:
+                # Visible, not vacuous: on a runner with no unnamed audio
+                # holder installed this half of the arm has nothing to bite
+                # on, and the counts must say so rather than report a pass.
+                self.skipTest(
+                    "this machine's modelled image enables no unit from an "
+                    "unnamed package that links an audio client library, so "
+                    "a rule blinded to such a unit cannot be caught here; the "
+                    "rest of the arm still runs")
+            self.assertLessEqual(
+                set(never_asked), set(before),
                 f"the modelled image enables {never_asked} — units from "
                 "packages this install path never names, whose programs link "
                 "an audio client library — and the image's own rule reports "
-                "nothing holding the card. That is a blind rule, not a clean "
-                "image.")
+                f"only {before} holding the card. That is a blind rule, not a "
+                "clean image.")
 
         # The capability: after the image's own hold-off runs, nothing that
         # starts at login holds the card. Packages named by the install path
@@ -1063,6 +1301,7 @@ class UpdateReinstallTests(unittest.TestCase):
             PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(link))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing or unsafe", result.stderr)
+
 
 
 if __name__ == "__main__":
