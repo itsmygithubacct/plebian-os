@@ -22,11 +22,24 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   that names no package — any enabled user unit whose program links an audio
   client library, or that declares a dependency on the sound stack, is
   disabled unless it is the machine's own sound server — and the VM acceptance
-  run asks the installed system the same question. Both fresh-install package
-  lists now name `libfluidsynth3`, the runtime library Amp actually loads,
-  rather than the player: Amp links libfluidsynth in-process and renders MIDI
-  through the General MIDI SoundFont, which is kept. Scoped to Debian, the
-  release distribution; other distributions package the player differently.
+  run asks the installed system the same question. `plebian-os-update` now asks
+  it too, after everything an update installs, so a package first installed
+  during an update cannot quietly take the card back. All three enablement
+  shapes systemd honours are covered (`WantedBy=`, `RequiredBy=` and
+  `UpheldBy=`, i.e. `.wants/`, `.requires/` and `.upholds/`), across every
+  root-owned directory of the user-unit search path, plus a drop-in on the
+  login target. Ordering alone no longer condemns a unit: `After=` says when a
+  unit may start, never that it opens anything, so a helper that merely runs
+  after audio is up is left alone. An enablement nobody's package created —
+  someone's deliberate machine-wide choice — is still removed, because the
+  image's own acceptance fails while the card is held, but it is announced and
+  recorded in `/var/lib/plebian-os/audio-holdoff.log` rather than undone in
+  silence; a per-account `systemctl --user enable` is never touched at all.
+  Both fresh-install package lists now name `libfluidsynth3`, the runtime
+  library Amp actually loads, rather than the player: Amp links libfluidsynth
+  in-process and renders MIDI through the General MIDI SoundFont, which is
+  kept. Scoped to Debian, the release distribution; other distributions
+  package the player differently.
 - The image ships `feh` as the still-image viewer, on both the Debian-installer
   path and `install-deps.sh`. Evince remains the PDF handler and mpv the video
   player; without `feh` a PNG or JPEG from a file manager had no dedicated

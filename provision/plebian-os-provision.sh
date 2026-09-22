@@ -2102,21 +2102,109 @@ EOF
 # reaches the image no matter what the package lists say, and dropping the
 # -dev package is not available. What can be removed is the *enablement*.
 #
-# Removing the enablement symlink is the form that survives. deb-systemd-helper
-# reports `was-enabled` false as soon as any link it recorded is missing, so
-# the package's own postinst takes its update-state branch on every later
-# upgrade instead of re-enabling. Masking does not survive: that same postinst
-# runs `deb-systemd-helper --user unmask` before it looks. A vendor-enabled
-# link under /usr/lib is package-owned and would be restored by dpkg, so that
-# one case is handled with a mask and is the weaker of the two.
+# WHY REMOVAL RATHER THAN A MASK — corrected, and on the evidence that holds.
+# Removing the enablement link is durable because deb-systemd-helper's
+# `was_enabled` returns false as soon as any link it recorded is missing
+# (measured against a fixture root: `was-enabled` rc 0 with the link present,
+# rc 1 once it is gone). The package's own postinst asks exactly that question
+# and takes its `update-state` branch instead of `enable` on every later
+# install or upgrade. That is the whole reason, and it is measurable.
 #
-# The rule is a capability, not a package name. A unit counts as holding the
-# card if the program it starts links an audio client library, or if the unit
-# itself declares a dependency on the sound stack. Any future MIDI or music
-# daemon is caught by the same rule without being named. The image's own sound
-# server is supposed to own the card, and is the one thing named here.
+# An earlier revision of this comment justified the choice the other way round
+# — "a mask does not survive an upgrade, because the postinst runs
+# `deb-systemd-helper --user unmask` first". That is wrong on the real
+# semantics, in both directions, and is corrected here so the next reader
+# inherits the true reason. `unmask_service` refuses to remove a mask whose
+# own state file under /var/lib/systemd/deb-systemd-user-helper-masked does
+# not exist, and the mask written below by hand (`ln -sf /dev/null`) has no
+# such state file — so it SURVIVES the postinst's unmask. The mask branch is
+# therefore the stronger half, not the weaker one. It is used only where the
+# enablement link is not ours to remove, because dpkg would put such a link
+# straight back.
+#
+# THE RULE IS A CAPABILITY, NOT A PACKAGE NAME. A unit counts as holding the
+# card when either signal fires:
+#   1. the unit declares it *wants* the sound stack — Wants=, Requires=,
+#      Requisite=, BindsTo=, PartOf= or Upholds= naming sound.target, pipewire,
+#      pulseaudio or jackd;
+#   2. the program its ExecStart names is dynamically linked against
+#      libasound, libpulse, libpipewire or libjack.
+# `After=` is deliberately NOT in signal 1's verb list. After= is a pure
+# ordering relation in systemd: it says when a unit may start, never that it
+# wants to start or that it opens anything. A well-behaved desktop helper that
+# merely wants to run once audio is up declares exactly that and nothing else,
+# and condemning it would be a false positive. A unit that is ordered after
+# the sound stack *and* actually opens the card is still caught, by signal 2.
+#
+# THE ENABLEMENT SHAPES SYSTEMD HONOURS, AND WHICH OF THEM THIS COVERS.
+#
+# An enablement is a symlink in a `<unit>.wants/`, `<unit>.requires/` or
+# `<unit>.upholds/` directory beside a unit systemd already reaches —
+# systemd.unit(5) lists exactly those three for [Install] WantedBy=,
+# RequiredBy= and UpheldBy=. deb-systemd-helper writes two of them
+# (`$wants_dir .= '.wants' if $1 eq 'WantedBy'; $wants_dir .= '.requires' if
+# $1 eq 'RequiredBy';`), `systemctl --global enable` writes all three, and
+# [Install] Also= produces more links of the same three kinds. All three are
+# covered, in every root-owned directory of the user-unit search path, and a
+# drop-in on the login target is covered as well.
+#
+# Covered:
+#   * .wants/, .requires/ and .upholds/ links under each of
+#     AUDIO_HOLDOFF_UNIT_DIRS below — the on-disk, root-owned members of the
+#     user-unit search path that `systemd-analyze --user unit-paths` reports.
+#   * a drop-in under `default.target.d/` in any of those directories that
+#     pulls a unit in with Wants=, Requires=, Requisite=, BindsTo= or
+#     Upholds=. The login target is reached by definition, so a drop-in on it
+#     really does start what it names.
+#   * a mask (`-> /dev/null`) is honoured as the negative: a masked unit
+#     cannot start however many links point at it.
+#
+# NOT covered, deliberately, and why:
+#   * ~/.config/systemd/user{,.control} and ~/.local/share/systemd/user —
+#     where `systemctl --user enable` writes. Provisioning does not own a
+#     person's own configuration, and their own account's choice is not the
+#     defect this exists to fix. This boundary is what makes the "deliberate"
+#     branch below narrow: it can only ever see a MACHINE-WIDE choice.
+#   * /run/user/<uid>/systemd/{user.control,transient,generator*} — per-boot,
+#     per-user, created by a running user systemd. An image cannot carry them.
+#   * generators, which synthesise units at every boot from state that cannot
+#     be read from here.
+#   * a top-level symlink such as /etc/systemd/user/foo.service pointing at a
+#     unit file: that is an Alias= or `systemctl link`, a second NAME for a
+#     unit. It starts nothing by itself, and the .wants-style link that would
+#     start it is covered. (The link's own target is followed when the unit
+#     file is read, so an aliased unit is read correctly.)
+#   * drop-ins on anything other than the login target. A `<unit>.d/*.conf`
+#     that adds Wants= pulls its units in only if <unit> is itself reached at
+#     login, and deciding that needs systemd's whole dependency graph, which
+#     this check does not build. Over-approximating there would condemn units
+#     that never start — the same false positive After= would cause.
+#
+# The image's own sound server is supposed to own the card, and is the one
+# thing named here: disabling it would take audio away rather than free it.
 SOUND_SERVER_USER_UNITS="pulseaudio.service pulseaudio.socket pipewire.service \
 pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service"
+
+# The root-owned, on-disk members of the user-unit search path, highest
+# priority first, as `systemd-analyze --user unit-paths` orders them. On a
+# merged-usr Debian /lib/systemd/user IS /usr/lib/systemd/user, which is why
+# only the canonical spelling appears.
+AUDIO_HOLDOFF_UNIT_DIRS=(
+    /etc/systemd/user
+    /run/systemd/user
+    /usr/local/share/systemd/user
+    /usr/share/systemd/user
+    /usr/local/lib/systemd/user
+    /usr/lib/systemd/user
+)
+
+# The three directory suffixes systemd treats as enablement.
+AUDIO_HOLDOFF_ENABLEMENT_SUFFIXES=(.wants .requires .upholds)
+
+# Where a removal is recorded so it is never silent. Outside the provisioning
+# root transaction on purpose: it is a log of what was done, and a rollback
+# that erased the record would hide the very thing this exists to show.
+AUDIO_HOLDOFF_RECORD=/var/lib/plebian-os/audio-holdoff.log
 
 audio_holdoff_root() { printf '%s' "${PLEBIAN_OS_AUDIO_HOLDOFF_ROOT:-}"; }
 
@@ -2127,12 +2215,61 @@ unit_is_the_sound_server() {
     esac
 }
 
+# A masked unit cannot start, however many links point at it.
+unit_is_masked() {
+    [ "$(readlink "$1/etc/systemd/user/$2" 2>/dev/null)" = /dev/null ]
+}
+
+# Resolve a unit NAME to its unit file the way systemd would: first match in
+# search-path order wins. A mask is not a unit file, so -f rejects it.
+audio_holdoff_unit_file() {
+    local root="$1" unit="$2" dir
+    for dir in "${AUDIO_HOLDOFF_UNIT_DIRS[@]}"; do
+        if [ -f "$root$dir/$unit" ]; then
+            printf '%s' "$root$dir/$unit"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Who asked for this enablement. deb-systemd-helper records every user-instance
+# link it creates under /var/lib/systemd/deb-systemd-user-helper-enabled,
+# mirroring the path below /etc/systemd/user — so a link under /etc with no
+# matching record was not written by any package. Someone enabled it on
+# purpose, machine-wide, and that deserves to be said out loud rather than
+# undone in silence.
+audio_holdoff_link_origin() {
+    local root="$1" link="$2" rest
+    case "$link" in
+        "$root"/etc/systemd/user/*)
+            rest=${link#"$root"/etc/systemd/user/}
+            if [ -e "$root/var/lib/systemd/deb-systemd-user-helper-enabled/$rest" ]; then
+                printf 'package'
+            else
+                printf 'deliberate'
+            fi
+            ;;
+        *) printf 'vendor' ;;
+    esac
+}
+
+# The unit names a drop-in pulls in. One awk, no pipeline: nothing here can
+# die of SIGPIPE and be read as "nothing found".
+audio_holdoff_dropin_units() {
+    awk '/^[ \t]*(Wants|Requires|Requisite|BindsTo|Upholds)[ \t]*=/ {
+            sub(/^[ \t]*[A-Za-z]+[ \t]*=[ \t]*/, "")
+            for (i = 1; i <= NF; i++) print $i
+         }' "$1" 2>/dev/null
+}
+
 unit_holds_default_sound_card() {
     local unit_file="$1" root="$2" program linkage
     [ -r "$unit_file" ] || return 1
-    # Signal 1 — the unit's own declaration that it wants the sound stack at
-    # login. grep reads a file here; there is no pipeline to mask its status.
-    if grep -qE '^(After|Wants|Requires|Requisite|BindsTo|PartOf)=.*(sound\.target|pipewire|pulseaudio|jackd)' \
+    # Signal 1 — the unit's own declaration that it WANTS the sound stack at
+    # login. Ordering (After=) is not use and is not in this list; see the
+    # header. grep reads a file here; there is no pipeline to mask its status.
+    if grep -qE '^(Wants|Requires|Requisite|BindsTo|PartOf|Upholds)=.*(sound\.target|pipewire|pulseaudio|jackd)' \
             "$unit_file"; then
         return 0
     fi
@@ -2144,9 +2281,12 @@ unit_holds_default_sound_card() {
     case "$program" in /*) ;; *) return 1 ;; esac
     [ -x "$root$program" ] || return 1
     # `ldd ... | grep -q` is the shape that silently fails: grep exits at the
-    # first match, ldd dies of SIGPIPE, and under `set -o pipefail` the
-    # pipeline reports 141 — so a unit that DOES link the sound stack reads
-    # as clean. Measured on this checker before it was fixed. Materialise
+    # first match, ldd dies of SIGPIPE once the 64 KiB pipe buffer fills, and
+    # under `set -o pipefail` the pipeline reports 141 — so a unit that DOES
+    # link the sound stack reads as clean. Measured on this checker before it
+    # was fixed: a linkage report of 522 KB gave 141 ten times out of ten, and
+    # a short one gave 0 twenty times out of twenty, which is why the test
+    # that guards this feeds it a report larger than the buffer. Materialise
     # ldd's output, then match it without a pipe.
     linkage=$(ldd "$root$program" 2>/dev/null) || linkage=
     [ -n "$linkage" ] || return 1
@@ -2156,44 +2296,69 @@ unit_holds_default_sound_card() {
     return 1
 }
 
-# Prints "unit-name<TAB>enablement-link" for every enabled user unit that would
-# hold the default sound card. Silence means the capability is intact.
+# Prints "unit<TAB>enablement-site<TAB>origin" for every enabled user unit
+# that would hold the default sound card. Silence means the capability is
+# intact. Origin is one of: package (a link deb-systemd-helper recorded),
+# deliberate (a machine-wide link no package created), vendor (a link under a
+# /usr directory that dpkg owns and would restore), dropin (a fragment on the
+# login target).
 enabled_audio_holding_user_units() {
-    local root unit_file target link unit
+    local root unit_file target link unit dir suffix conf wanted
     root=$(audio_holdoff_root)
-    for link in "$root"/etc/systemd/user/*.wants/* \
-                "$root"/usr/lib/systemd/user/*.wants/*; do
-        [ -L "$link" ] || continue
-        unit=${link##*/}
-        if unit_is_the_sound_server "$unit"; then
-            continue
-        fi
-        # A masked unit cannot start, however many .wants links point at it.
-        # Without this the enumeration would keep reporting a unit the mask
-        # branch below has already neutralised, and the re-measured verdict
-        # would never clear.
-        if [ "$(readlink "$root/etc/systemd/user/$unit" 2>/dev/null)" \
-                = /dev/null ]; then
-            continue
-        fi
-        target=$(readlink "$link" 2>/dev/null) || continue
-        [ -n "$target" ] || continue
-        # Resolve the unit file INSIDE the root: Debian writes these links
-        # absolute, so an unprefixed readlink -f would leave the tree under
-        # test and read the build host's own unit instead.
-        case "$target" in
-            /*) unit_file="$root$target" ;;
-            *)  unit_file="${link%/*}/$target" ;;
-        esac
-        [ -r "$unit_file" ] || continue
-        if unit_holds_default_sound_card "$unit_file" "$root"; then
-            printf '%s\t%s\n' "$unit" "$link"
-        fi
+    for dir in "${AUDIO_HOLDOFF_UNIT_DIRS[@]}"; do
+        for suffix in "${AUDIO_HOLDOFF_ENABLEMENT_SUFFIXES[@]}"; do
+            for link in "$root$dir"/*"$suffix"/*; do
+                [ -L "$link" ] || continue
+                unit=${link##*/}
+                if unit_is_the_sound_server "$unit"; then
+                    continue
+                fi
+                # Without this the enumeration would keep reporting a unit the
+                # mask branch below has already neutralised, and the
+                # re-measured verdict would never clear.
+                if unit_is_masked "$root" "$unit"; then
+                    continue
+                fi
+                target=$(readlink "$link" 2>/dev/null) || continue
+                [ -n "$target" ] || continue
+                # Resolve the unit file INSIDE the root: Debian writes these
+                # links absolute, so an unprefixed readlink -f would leave the
+                # tree under test and read the build host's own unit instead.
+                case "$target" in
+                    /*) unit_file="$root$target" ;;
+                    *)  unit_file="${link%/*}/$target" ;;
+                esac
+                [ -r "$unit_file" ] || continue
+                if unit_holds_default_sound_card "$unit_file" "$root"; then
+                    printf '%s\t%s\t%s\n' "$unit" "$link" \
+                        "$(audio_holdoff_link_origin "$root" "$link")"
+                fi
+            done
+        done
+        # A drop-in on the login target starts what it names just as surely as
+        # a link does, and no glob over *.wants/ would ever see it.
+        for conf in "$root$dir"/default.target.d/*.conf; do
+            [ -f "$conf" ] || continue
+            while IFS= read -r wanted; do
+                [ -n "$wanted" ] || continue
+                if unit_is_the_sound_server "$wanted"; then
+                    continue
+                fi
+                if unit_is_masked "$root" "$wanted"; then
+                    continue
+                fi
+                unit_file=$(audio_holdoff_unit_file "$root" "$wanted") \
+                    || continue
+                if unit_holds_default_sound_card "$unit_file" "$root"; then
+                    printf '%s\t%s\t%s\n' "$wanted" "$conf" dropin
+                fi
+            done < <(audio_holdoff_dropin_units "$conf")
+        done
     done
 }
 
 disable_audio_holding_user_units() {
-    local root found remaining link unit
+    local root found remaining link unit origin record stamp
     root=$(audio_holdoff_root)
     log "checking for login-time daemons that would hold the default sound card"
     found=$(enabled_audio_holding_user_units)
@@ -2201,21 +2366,44 @@ disable_audio_holding_user_units() {
         log "no enabled user unit holds the default sound card"
         return 0
     fi
-    while IFS=$'\t' read -r unit link; do
+    record="$root$AUDIO_HOLDOFF_RECORD"
+    stamp=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) || stamp=unknown
+    while IFS=$'\t' read -r unit link origin; do
         [ -n "$unit" ] || continue
+        if [ "$origin" = deliberate ]; then
+            # Someone enabled this machine-wide on purpose: no package
+            # recorded the link. It is still removed, because the image
+            # promises that voice capture works out of the box and the
+            # acceptance check fails the image while the card is held — but
+            # it is never removed quietly. A person who wants this daemon can
+            # have it for their own account, in a directory this provisioner
+            # does not touch at all.
+            warn "$unit was enabled machine-wide on purpose — no package created"
+            warn "  $link — and it holds the default sound card that dictation"
+            warn "  records from. Plebian-OS is disabling it and recording that in"
+            warn "  $AUDIO_HOLDOFF_RECORD."
+            warn "  To keep it for one account instead, where provisioning never"
+            warn "  looks:  systemctl --user enable $unit"
+        fi
         if [ "$DRY_RUN" = 1 ]; then
-            echo "    + disable user unit $unit (holds the default sound card)"
+            echo "    + disable user unit $unit ($origin: holds the default sound card)"
             continue
         fi
-        case "$link" in
-            "$root"/etc/systemd/user/*)
+        mkdir -p "${record%/*}" 2>/dev/null || true
+        printf '%s\t%s\t%s\t%s\n' "$stamp" "$unit" "$origin" "$link" \
+            >> "$record" 2>/dev/null || true
+        case "$origin" in
+            package|deliberate)
                 log "disabling user unit $unit -> $link"
                 rm -f "$link"
                 ;;
             *)
-                # Package-owned enablement: dpkg would restore the link, so
-                # override the unit itself instead.
-                log "masking vendor-enabled user unit $unit"
+                # The enablement is not ours to remove: dpkg would restore a
+                # link it owns, and a drop-in is a fragment rather than a
+                # link. Override the unit itself instead. This mask outlives
+                # the package's own postinst unmask (see the header), which is
+                # what makes it the right tool here.
+                log "masking user unit $unit (enabled by $link, which this image does not own)"
                 mkdir -p "$root/etc/systemd/user"
                 ln -sf /dev/null "$root/etc/systemd/user/$unit"
                 ;;

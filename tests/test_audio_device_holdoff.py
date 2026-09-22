@@ -8,9 +8,20 @@ such an image ships degraded — or absent — voice capture out of the box.
 These tests assert that capability, not a package name. The rule under test is
 the one the image itself carries (``enabled_audio_holding_user_units`` and
 ``disable_audio_holding_user_units`` in ``plebian-os-provision.sh``); nothing
-here restates it, so the guard and the shipped behaviour cannot drift. Every
-fixture unit below is named for what it does, never after any package: a rule
-that only caught one spelling would pass these and still ship the defect.
+here restates its verdict, so the guard and the shipped behaviour cannot
+drift. Every fixture unit below is named for what it does, never after any
+package: a rule that only caught one spelling would pass these and still ship
+the defect.
+
+Two exceptions, both deliberate and both narrow. ``model_the_image`` restates
+what *dpkg* does when it installs a unit, because the test has to build the
+image before it can ask about it. And ``units_the_install_path_never_asked_for``
+is an independent, deliberately coarse oracle over the same modelled image; it
+decides only whether this machine can exercise the arm's teeth, never whether
+the image is acceptable. It exists because a zero from a query is evidence
+about the query: without it, "the rule reported nothing" cannot be told apart
+from "the rule was blinded", and a mutation that widens the rule's exemption
+until it swallows the real daemon passes unnoticed.
 
 Reach, stated rather than assumed. Two arms model the real image from the
 build machine's own dpkg database, and a package that is not installed here
@@ -30,12 +41,33 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
+UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 INSTALL_DEPS = ROOT / "provision" / "install-deps.sh"
 PRESEED = ROOT / "preseed" / "preseed.cfg"
 BUILD_VM = ROOT / "build" / "build_vm_image.py"
 
 DPKG_INFO = Path("/var/lib/dpkg/info")
 USER_UNIT_DIRS = ("/usr/lib/systemd/user/", "/lib/systemd/user/")
+
+# The root-owned, on-disk members of the user-unit search path, as
+# `systemd-analyze --user unit-paths` reports them and as the provisioner
+# enumerates them. The per-user and per-boot directories systemd also searches
+# are outside the image and outside what provisioning may touch; the arm below
+# that proves `systemctl --user enable` survives is the other half of that.
+UNIT_DIRS_UNDER_ROOT = (
+    "etc/systemd/user",
+    "run/systemd/user",
+    "usr/local/share/systemd/user",
+    "usr/share/systemd/user",
+    "usr/local/lib/systemd/user",
+    "usr/lib/systemd/user",
+)
+
+# The three directory suffixes systemd honours as enablement, from
+# [Install] WantedBy=, RequiredBy= and UpheldBy= respectively.
+ENABLEMENT_SUFFIXES = (".wants", ".requires", ".upholds")
+INSTALL_KEYS = {"wants": "WantedBy", "requires": "RequiredBy",
+                "upholds": "UpheldBy"}
 
 # The runtime pieces Kilix Amp actually uses. Amp links libfluidsynth into its
 # own process and renders MIDI through a General MIDI SoundFont; it never runs
@@ -45,11 +77,18 @@ USER_UNIT_DIRS = ("/usr/lib/systemd/user/", "/lib/systemd/user/")
 AMP_RUNTIME_SONAME = re.compile(r"/libfluidsynth\.so\.\d")
 AMP_SOUNDFONT_PATHS = re.compile(r"^/usr/share/(sounds/sf2|soundfonts)/.*\.sf[23]$")
 
+AUDIO_CLIENT_LIBRARY = re.compile(r"lib(asound|pulse|pipewire|jack)")
+INSTALL_SECTION_ENABLES = re.compile(r"^(WantedBy|RequiredBy|UpheldBy)=(\S+)",
+                                     flags=re.MULTILINE)
+EXEC_START_PROGRAM = re.compile(r"^ExecStart=[-@+!:]*(\S+)", flags=re.MULTILINE)
 
-def clean_env():
+
+def clean_env(**extra):
     """A minimal environment: no inherited session, no Kilix state."""
-    return {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
-            "HOME": "/nonexistent", "LC_ALL": "C"}
+    env = {"PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+           "HOME": "/nonexistent", "LC_ALL": "C"}
+    env.update(extra)
+    return env
 
 
 def provision_call(body, root, env=None):
@@ -64,9 +103,9 @@ def provision_call(body, root, env=None):
                           text=True, capture_output=True, check=False)
 
 
-def held_units(root):
+def held_units(root, env=None):
     """The unit names the image's own rule says hold the default sound card."""
-    result = provision_call("enabled_audio_holding_user_units", root)
+    result = provision_call("enabled_audio_holding_user_units", root, env=env)
     if result.returncode != 0:
         raise AssertionError(
             f"enumeration failed ({result.returncode}): {result.stderr}")
@@ -74,8 +113,9 @@ def held_units(root):
                   for line in result.stdout.splitlines() if line.strip())
 
 
-def apply_holdoff(root):
-    return provision_call("DRY_RUN=0\ndisable_audio_holding_user_units", root)
+def apply_holdoff(root, env=None):
+    return provision_call("DRY_RUN=0\ndisable_audio_holding_user_units", root,
+                          env=env)
 
 
 def make_root(tmp):
@@ -87,15 +127,65 @@ def make_root(tmp):
     return root
 
 
-def install_unit(root, name, text, enable=True, wants="default.target"):
-    """Install a user unit the way a Debian package and its postinst would."""
-    (root / "usr/lib/systemd/user" / name).write_text(text)
+def install_unit(root, name, text, enable=True, wants="default.target",
+                 kind="wants", unit_dir="usr/lib/systemd/user",
+                 link_dir="etc/systemd/user"):
+    """Install a user unit the way a Debian package and its postinst would.
+
+    `kind` selects the enablement shape: "wants", "requires" or "upholds" —
+    what systemd creates for [Install] WantedBy=, RequiredBy= and UpheldBy=.
+    `unit_dir` and `link_dir` select where in the user-unit search path the
+    unit file and its enablement link land.
+    """
+    unit_path = root / unit_dir / name
+    unit_path.parent.mkdir(parents=True, exist_ok=True)
+    unit_path.write_text(text)
     if enable:
-        link = root / "etc/systemd/user" / f"{wants}.wants" / name
+        link = root / link_dir / f"{wants}{kind if kind.startswith('.') else '.' + kind}" / name
         link.parent.mkdir(parents=True, exist_ok=True)
         # Debian writes these absolute; the rule must resolve them inside the
         # root rather than following them out onto the build host.
-        link.symlink_to(f"/usr/lib/systemd/user/{name}")
+        link.symlink_to(f"/{unit_dir}/{name}")
+    return unit_path
+
+
+def a_holding_unit(description, execstart="/usr/bin/midi-render-daemon -is",
+                   install="WantedBy=default.target"):
+    """A unit that says, in systemd's own words, that it wants the sound stack.
+
+    Wants= is a real dependency: it says this unit should be pulled up with the
+    sound stack. It is not the same as After=, which only orders.
+    """
+    return f"""[Unit]
+Description={description}
+Wants=pipewire.service pulseaudio.service
+[Service]
+ExecStart={execstart}
+[Install]
+{install}
+"""
+
+
+def enablement_links(root, unit):
+    """Every enablement link naming `unit`, anywhere on the search path."""
+    found = []
+    for directory in UNIT_DIRS_UNDER_ROOT:
+        base = root / directory
+        if not base.is_dir():
+            continue
+        for suffix in ENABLEMENT_SUFFIXES:
+            found.extend(str(p) for p in base.glob(f"*{suffix}/{unit}"))
+    return sorted(found)
+
+
+def unit_is_masked(root, unit):
+    override = root / "etc/systemd/user" / unit
+    return override.is_symlink() and os.readlink(override) == "/dev/null"
+
+
+def unit_cannot_start_at_login(root, unit):
+    """Measured on the filesystem, not taken from the rule's own report."""
+    return unit_is_masked(root, unit) or not enablement_links(root, unit)
 
 
 def an_audio_client_program():
@@ -107,9 +197,33 @@ def an_audio_client_program():
                                capture_output=True, check=False)
         if probe.returncode != 0:
             continue
-        if re.search(r"lib(asound|pulse|pipewire|jack)", probe.stdout):
+        if AUDIO_CLIENT_LIBRARY.search(probe.stdout):
             return candidate
     return None
+
+
+def a_linkage_report_larger_than_a_pipe_buffer(directory):
+    """A stub `ldd` whose report is far larger than a pipe buffer.
+
+    The regression this exists to guard is a pipeline — `ldd prog | grep -q
+    lib…`. grep exits at the first match, ldd is killed by SIGPIPE once the
+    64 KiB pipe buffer fills, and under `set -o pipefail` the pipeline reports
+    141, so a program that DOES link the sound stack reads as clean. A real
+    binary's report is a few hundred bytes and never fills the buffer, which
+    is why a fixture built from one cannot exercise this at all: the mutation
+    that restores the bad shape passes against it. This one makes it fire, and
+    the arm that uses it proves so before it proves anything else.
+    """
+    stub = directory / "ldd"
+    stub.write_text(
+        "#!/bin/sh\n"
+        "printf '\\tlibasound.so.2 => /lib/x86_64-linux-gnu/libasound.so.2"
+        " (0x00007f0000000000)\\n'\n"
+        "awk 'BEGIN{for(i=0;i<8000;i++)"
+        " printf \"\\tlibpadding%05d.so.0 => /usr/lib/libpadding%05d.so.0"
+        " (0x0000000000000000)\\n\", i, i}'\n")
+    stub.chmod(0o755)
+    return stub
 
 
 # --- the install path, read the way the manifest tests read it ---------------
@@ -213,27 +327,82 @@ def resolve_install_path(packages):
     return resolve(install_closure(packages))
 
 
-def model_the_image(root, resolved):
-    """Recreate, under `root`, the user units the install path would enable.
-
-    A package's unit is enabled on installation exactly when it carries an
-    [Install] WantedBy — that is what dh_installsystemduser's postinst acts on.
-    """
-    enabled = []
-    for files in resolved.values():
+def shipped_user_units(resolved):
+    """(package, path, text) for every user unit those packages ship."""
+    for package, files in sorted(resolved.items()):
         for path in files:
             if not any(path.startswith(d) for d in USER_UNIT_DIRS):
                 continue
             source = Path(path)
             if not source.is_file():
                 continue
-            text = source.read_text(errors="replace")
-            wants = re.search(r"^WantedBy=(\S+)", text, flags=re.MULTILINE)
-            install_unit(root, source.name, text, enable=bool(wants),
-                         wants=wants.group(1) if wants else "default.target")
-            if wants:
-                enabled.append(source.name)
+            yield package, source, source.read_text(errors="replace")
+
+
+def enablement_of(text):
+    """(target, kind) a package's postinst would enable this unit as, or None.
+
+    A unit is enabled on installation exactly when it carries an [Install]
+    WantedBy=, RequiredBy= or UpheldBy= — the three keys systemd turns into a
+    `.wants/`, `.requires/` or `.upholds/` link, and the first two are what
+    deb-systemd-helper acts on for dh_installsystemduser. A model that read
+    only one of them would build an image with the defect left out, and the
+    install-path arm would then prove the rule clean against a picture that
+    could not contain the thing it exists to catch.
+    """
+    install = INSTALL_SECTION_ENABLES.search(text)
+    if not install:
+        return None
+    return install.group(2), {"WantedBy": "wants", "RequiredBy": "requires",
+                              "UpheldBy": "upholds"}[install.group(1)]
+
+
+def model_the_image(root, resolved):
+    """Recreate, under `root`, the user units the install path would enable."""
+    enabled = []
+    for _package, source, text in shipped_user_units(resolved):
+        install = enablement_of(text)
+        install_unit(root, source.name, text, enable=bool(install),
+                     wants=install[0] if install else "default.target",
+                     kind=install[1] if install else "wants")
+        if install:
+            enabled.append(source.name)
     return sorted(enabled)
+
+
+def units_the_install_path_never_asked_for(resolved, named):
+    """Enabled user units from packages the install path does not name, whose
+    ExecStart program links an audio client library.
+
+    An independent, deliberately narrow oracle. It is used for one thing only:
+    to decide whether this machine's modelled image can exercise the teeth of
+    the install-path arm. It never decides whether the image is acceptable.
+
+    It asks the one question the rule cannot reasonably disagree with — does
+    this program link an audio client library? — over the one set this whole
+    wave is about: packages that arrive through the dependency closure without
+    being named. Because it consults neither the rule's exemption list nor its
+    declaration signal, a change that blinds the rule to such a unit cannot
+    also blind this, which is what lets the arm tell "the hold-off cleared it"
+    from "the rule never saw it".
+    """
+    holders = []
+    for package, source, text in shipped_user_units(resolved):
+        if package in named:
+            continue
+        if not INSTALL_SECTION_ENABLES.search(text):
+            continue
+        program = EXEC_START_PROGRAM.search(text)
+        if not program:
+            continue
+        binary = program.group(1)
+        if not binary.startswith("/") or not os.access(binary, os.X_OK):
+            continue
+        probe = subprocess.run(["ldd", binary], text=True,
+                               capture_output=True, check=False)
+        if probe.returncode == 0 and AUDIO_CLIENT_LIBRARY.search(probe.stdout):
+            holders.append(source.name)
+    return sorted(set(holders))
 
 
 class AudioHoldoffRuleTests(unittest.TestCase):
@@ -244,15 +413,8 @@ class AudioHoldoffRuleTests(unittest.TestCase):
             tempfile.TemporaryDirectory()))
 
     def test_a_login_daemon_that_asks_for_the_sound_stack_is_disabled(self):
-        install_unit(self.root, "midi-render-daemon.service", """[Unit]
-Description=A synthesiser nobody asked to run
-After=sound.target
-Wants=pipewire.service pulseaudio.service
-[Service]
-ExecStart=/usr/bin/midi-render-daemon -is
-[Install]
-WantedBy=default.target
-""")
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("A synthesiser nobody asked to run"))
         install_unit(self.root, "notes-sync.service", """[Unit]
 Description=Something that never touches audio
 [Service]
@@ -274,6 +436,133 @@ WantedBy=default.target
             (self.root / "etc/systemd/user/default.target.wants"
              / "notes-sync.service").is_symlink())
 
+    def test_every_enablement_shape_systemd_honours_is_caught(self):
+        """WantedBy=, RequiredBy= and UpheldBy= are three ways to say "enabled".
+
+        systemd.unit(5) turns them into `.wants/`, `.requires/` and
+        `.upholds/` links respectively, and deb-systemd-helper writes the
+        first two from a package's own [Install] section. A rule that
+        enumerated only one of them would report a clean image while the card
+        was held — and so would the acceptance check that runs it.
+        """
+        for kind, key in sorted(INSTALL_KEYS.items()):
+            with self.subTest(enablement=kind):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                install_unit(root, "midi-render-daemon.service",
+                             a_holding_unit(f"Enabled through {key}",
+                                            install=f"{key}=default.target"),
+                             kind=kind)
+                link = (root / "etc/systemd/user"
+                        / f"default.target.{kind}"
+                        / "midi-render-daemon.service")
+                self.assertTrue(link.is_symlink(), link)
+                self.assertEqual(held_units(root),
+                                 ["midi-render-daemon.service"])
+                self.assertEqual(apply_holdoff(root).returncode, 0)
+                self.assertEqual(held_units(root), [])
+                self.assertFalse(link.exists())
+
+    def test_an_enablement_anywhere_on_the_search_path_is_caught(self):
+        """systemd reads six root-owned unit directories, not two.
+
+        `/usr/local/lib/systemd/user/*.wants/` is where a local admin or a
+        third-party installer puts one, and nothing about it is exotic: it is
+        on the path `systemd-analyze --user unit-paths` prints. Enumerating
+        only /etc and /usr/lib leaves four directories in which a daemon can
+        hold the card while the check says the image is clean.
+        """
+        for directory in UNIT_DIRS_UNDER_ROOT:
+            with self.subTest(unit_directory=directory):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                install_unit(root, "midi-render-daemon.service",
+                             a_holding_unit(f"Enabled under /{directory}"),
+                             unit_dir=directory, link_dir=directory)
+                self.assertEqual(held_units(root),
+                                 ["midi-render-daemon.service"])
+                self.assertEqual(apply_holdoff(root).returncode, 0)
+                self.assertEqual(held_units(root), [])
+                self.assertTrue(
+                    unit_cannot_start_at_login(
+                        root, "midi-render-daemon.service"))
+
+    def test_a_dropin_on_the_login_target_is_caught(self):
+        """The third shape: no link anywhere, and the daemon still starts.
+
+        A `default.target.d/*.conf` fragment that says `Wants=` pulls its unit
+        up at login exactly as a `.wants/` link does, and no glob over
+        `*.wants/` will ever see it. The login target is reached by
+        definition, so this needs no dependency-graph reasoning.
+        """
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("Pulled in by a drop-in, not a link"),
+                     enable=False)
+        dropin = self.root / "etc/systemd/user/default.target.d/50-extra.conf"
+        dropin.parent.mkdir(parents=True)
+        dropin.write_text("[Unit]\nWants=midi-render-daemon.service\n")
+        self.assertEqual(held_units(self.root), ["midi-render-daemon.service"])
+        self.assertEqual(apply_holdoff(self.root).returncode, 0)
+        self.assertEqual(held_units(self.root), [])
+        # A fragment is not a link: it is neutralised with the override that
+        # outlives a package upgrade, and the admin's own file is left intact
+        # so the change is inspectable rather than mysterious.
+        self.assertTrue(unit_is_masked(self.root, "midi-render-daemon.service"))
+        self.assertTrue(dropin.is_file())
+
+    def test_ordering_alone_does_not_condemn_a_unit_that_never_opens_the_card(self):
+        """After= is ordering. Ordering is not use.
+
+        `After=pipewire.service` says only *when* a unit may start. A
+        well-behaved desktop helper that wants to run once audio is up says
+        exactly that and opens nothing, and disabling it would be a plain
+        false positive. Both directions are proved here, because dropping a
+        signal is only safe if what the signal was for is still caught.
+        """
+        install_unit(self.root, "notes-sync.service", """[Unit]
+Description=Notes sync, ordered after the sound stack only
+After=pipewire.service pulseaudio.service
+After=sound.target
+[Service]
+ExecStart=/bin/true
+[Install]
+WantedBy=default.target
+""")
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("Wants the sound stack, not merely after it",
+                                    execstart="/bin/true"))
+        self.assertEqual(held_units(self.root), ["midi-render-daemon.service"],
+                         "ordering alone must not condemn, and a declared "
+                         "dependency must still condemn")
+        self.assertEqual(apply_holdoff(self.root).returncode, 0)
+        self.assertTrue(
+            (self.root / "etc/systemd/user/default.target.wants"
+             / "notes-sync.service").is_symlink(),
+            "a unit that only asked to start after audio was killed for it")
+
+    def test_a_unit_ordered_after_the_sound_stack_that_opens_the_card_still_dies(self):
+        """The other direction: ordering is not a licence, either."""
+        donor = an_audio_client_program()
+        if donor is None:
+            self.skipTest("no program on this machine links an audio client "
+                          "library, so the linkage signal cannot be exercised "
+                          "here")
+        program = self.root / "usr/lib/systemd/ordered-audio-client"
+        program.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(donor, program)
+        program.chmod(0o755)
+        install_unit(self.root, "ordered-audio-client.service", """[Unit]
+Description=Declares only an ordering relation, and opens the card anyway
+After=pipewire.service
+[Service]
+ExecStart=/usr/lib/systemd/ordered-audio-client
+[Install]
+WantedBy=default.target
+""")
+        self.assertEqual(held_units(self.root), ["ordered-audio-client.service"])
+        self.assertEqual(apply_holdoff(self.root).returncode, 0)
+        self.assertEqual(held_units(self.root), [])
+
     def test_a_login_daemon_that_declares_nothing_is_still_caught(self):
         """The second signal: what the program links, not what it declares."""
         donor = an_audio_client_program()
@@ -282,6 +571,7 @@ WantedBy=default.target
                           "library, so the linkage signal cannot be exercised "
                           "here; the declaration signal above still runs")
         program = self.root / "usr/lib/systemd/quiet-audio-client"
+        program.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(donor, program)
         program.chmod(0o755)
         install_unit(self.root, "quiet-audio-client.service", f"""[Unit]
@@ -295,18 +585,64 @@ WantedBy=default.target
         self.assertEqual(apply_holdoff(self.root).returncode, 0)
         self.assertEqual(held_units(self.root), [])
 
+    def test_a_linkage_report_larger_than_a_pipe_buffer_is_not_read_as_clean(self):
+        """The SIGPIPE shape, exercised on a fixture that can actually fail it.
+
+        `ldd prog | grep -q lib…` reports 141 under `set -o pipefail` once the
+        report outgrows the pipe buffer, so the unit reads as clean. Every
+        real binary on this machine produces a few hundred bytes, which is far
+        too little: against such a fixture the bad shape passes, and a mutant
+        that restores it survives. The arm proves its own fixture first.
+        """
+        stub_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        a_linkage_report_larger_than_a_pipe_buffer(stub_dir)
+        env = clean_env(PATH=f"{stub_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}")
+
+        program = self.root / "usr/lib/systemd/large-linkage-client"
+        program.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2("/bin/true", program)
+        program.chmod(0o755)
+        install_unit(self.root, "large-linkage-client.service", """[Unit]
+Description=Declares nothing; its linkage report is enormous
+[Service]
+ExecStart=/usr/lib/systemd/large-linkage-client
+[Install]
+WantedBy=default.target
+""")
+
+        # Control on the control. Before asserting that the shipped checker
+        # gets this right, prove the fixture is capable of making the wrong
+        # shape fail — otherwise this arm guards nothing.
+        report = subprocess.run(["ldd", str(program)], env=env, text=True,
+                                capture_output=True, check=False)
+        self.assertGreater(
+            len(report.stdout), 65536,
+            "the fixture's linkage report fits in a pipe buffer, so the shape "
+            "this arm exists to catch cannot fail against it")
+        bad_shape = subprocess.run(
+            ["bash", "-c",
+             'set -uo pipefail; ldd "$1" | grep -qE '
+             '"lib(asound|pulse|pipewire|jack)"',
+             "bad-shape", str(program)],
+            env=env, text=True, capture_output=True, check=False)
+        self.assertNotEqual(
+            bad_shape.returncode, 0,
+            "the piped form succeeded on this fixture, so the fixture cannot "
+            "distinguish the shipped checker from the broken one")
+
+        # And now the thing that matters: the shipped checker sees it.
+        self.assertEqual(held_units(self.root, env=env),
+                         ["large-linkage-client.service"])
+        self.assertEqual(apply_holdoff(self.root, env=env).returncode, 0)
+        self.assertEqual(held_units(self.root, env=env), [])
+
     def test_the_machines_own_sound_server_is_never_disabled(self):
         """Disabling the sound server would take the card away, not free it."""
         for unit in ("pulseaudio.service", "pipewire.service",
                      "wireplumber.service"):
-            install_unit(self.root, unit, f"""[Unit]
-Description={unit} — this machine's sound server
-After=sound.target
-[Service]
-ExecStart=/usr/bin/{unit.split('.')[0]}
-[Install]
-WantedBy=default.target
-""")
+            install_unit(self.root, unit,
+                         a_holding_unit(f"{unit} — this machine's sound server",
+                                        execstart=f"/usr/bin/{unit.split('.')[0]}"))
         self.assertEqual(held_units(self.root), [])
         self.assertEqual(apply_holdoff(self.root).returncode, 0)
         for unit in ("pulseaudio.service", "pipewire.service",
@@ -317,23 +653,15 @@ WantedBy=default.target
 
     def test_a_unit_that_is_installed_but_not_enabled_is_left_alone(self):
         """Only an *enabled* unit runs at login, and only that is the defect."""
-        install_unit(self.root, "midi-render-daemon.service", """[Unit]
-Description=Present but not wanted by any target
-After=sound.target
-[Service]
-ExecStart=/usr/bin/midi-render-daemon
-""", enable=False)
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("Present but not wanted by any target"),
+                     enable=False)
         self.assertEqual(held_units(self.root), [])
 
     def test_a_vendor_enabled_unit_is_overridden_where_dpkg_cannot_undo_it(self):
-        install_unit(self.root, "midi-render-daemon.service", """[Unit]
-Description=Enabled by a link the package owns
-After=sound.target
-[Service]
-ExecStart=/usr/bin/midi-render-daemon
-[Install]
-WantedBy=default.target
-""", enable=False)
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("Enabled by a link the package owns"),
+                     enable=False)
         vendor = self.root / "usr/lib/systemd/user/default.target.wants"
         vendor.mkdir(parents=True)
         (vendor / "midi-render-daemon.service").symlink_to(
@@ -345,6 +673,74 @@ WantedBy=default.target
         self.assertEqual(os.readlink(override), "/dev/null")
 
 
+class DeliberateEnablementTests(unittest.TestCase):
+    """Someone enabled it on purpose. That is not the same as a package did."""
+
+    def setUp(self):
+        self.root = make_root(self.enterContext(
+            tempfile.TemporaryDirectory()))
+        self.record = self.root / "var/lib/plebian-os/audio-holdoff.log"
+
+    def enable_as_a_package_would(self, unit, target="default.target",
+                                  kind="wants"):
+        """The state file deb-systemd-helper writes beside every link it makes."""
+        state = (self.root / "var/lib/systemd/deb-systemd-user-helper-enabled"
+                 / f"{target}.{kind}" / unit)
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(f"/usr/lib/systemd/user/{unit}\n")
+
+    def test_a_machine_wide_choice_nobody_packaged_is_removed_but_never_silently(self):
+        """Decided, and made visible: removed, warned about, and recorded.
+
+        The image promises voice capture works out of the box, and its own
+        acceptance check fails the image while the card is held, so leaving a
+        deliberate enablement in place is not available. What is available is
+        refusing to do it quietly: say whose choice it was, say where the
+        record is, and say where the same choice can be kept instead.
+        """
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("Enabled by hand, machine-wide"))
+        result = apply_holdoff(self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("on purpose", result.stderr)
+        self.assertIn("systemctl --user enable midi-render-daemon.service",
+                      result.stderr)
+        self.assertEqual(held_units(self.root), [])
+        record = self.record.read_text()
+        self.assertIn("deliberate", record)
+        self.assertIn("midi-render-daemon.service", record)
+
+    def test_a_package_created_enablement_is_removed_without_the_warning(self):
+        """A vendor default is not a choice, and must not read like one."""
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("Enabled by the package's own postinst"))
+        self.enable_as_a_package_would("midi-render-daemon.service")
+        result = apply_holdoff(self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("on purpose", result.stderr)
+        self.assertEqual(held_units(self.root), [])
+        self.assertIn("package", self.record.read_text())
+
+    def test_a_per_account_choice_is_not_touched_at_all(self):
+        """`systemctl --user enable` writes where provisioning never looks.
+
+        This is the boundary that makes the branch above narrow enough to be
+        defensible: a person's own account keeps whatever they enabled, and
+        the only choice the provisioner ever overrides is a machine-wide one.
+        """
+        home = self.root / "home/someone/.config/systemd/user"
+        install_unit(self.root, "midi-render-daemon.service",
+                     a_holding_unit("Enabled for one account only"),
+                     enable=False)
+        link = home / "default.target.wants/midi-render-daemon.service"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("/usr/lib/systemd/user/midi-render-daemon.service")
+        self.assertEqual(held_units(self.root), [])
+        self.assertEqual(apply_holdoff(self.root).returncode, 0)
+        self.assertTrue(link.is_symlink(),
+                        "a per-account enablement was removed by provisioning")
+
+
 class InstallPathAudioHoldoffTests(unittest.TestCase):
     """The install path, modelled from this machine's real package contents."""
 
@@ -352,8 +748,26 @@ class InstallPathAudioHoldoffTests(unittest.TestCase):
         self.tmp = self.enterContext(
             tempfile.TemporaryDirectory())
 
+    def test_the_model_reads_every_install_spelling_a_postinst_acts_on(self):
+        """The test's own model of dpkg must not be narrower than dpkg is.
+
+        This is the one place the suite restates someone else's behaviour, so
+        it is asserted directly rather than trusted: the arm below builds its
+        whole image through it, and a model blind to a spelling would hand
+        that arm an image with the defect quietly left out.
+        """
+        for kind, key in sorted(INSTALL_KEYS.items()):
+            with self.subTest(install_key=key):
+                self.assertEqual(
+                    enablement_of(a_holding_unit("x", install=f"{key}=some.target")),
+                    ("some.target", kind))
+        self.assertIsNone(
+            enablement_of("[Unit]\n[Service]\nExecStart=/bin/true\n"),
+            "a unit with no [Install] section is not enabled by installing it")
+
     def test_the_install_path_leaves_nothing_holding_the_default_sound_card(self):
-        resolved = resolve_install_path(install_path_packages())
+        named = install_path_packages()
+        resolved = resolve_install_path(named)
         # Absent is not the same as invisible: a scan that resolved nothing
         # would "find no defect" without having looked at anything.
         self.assertGreater(
@@ -368,18 +782,28 @@ class InstallPathAudioHoldoffTests(unittest.TestCase):
         control = make_root(
             self.enterContext(tempfile.TemporaryDirectory()))
         model_the_image(control, resolved)
-        install_unit(control, "midi-render-daemon.service", """[Unit]
-Description=Control — a login daemon that holds the default sound card
-After=sound.target
-Wants=pulseaudio.service
-[Service]
-ExecStart=/usr/bin/midi-render-daemon
-[Install]
-WantedBy=default.target
-""")
+        install_unit(control, "midi-render-daemon.service",
+                     a_holding_unit("Control — a login daemon that holds the "
+                                    "default sound card"))
         self.assertIn("midi-render-daemon.service", held_units(control),
                       "the rule failed to see a planted login audio daemon, "
                       "so its verdict on the real image means nothing")
+
+        # The pre-state, measured and asserted rather than printed. Without
+        # this the arm cannot tell "the hold-off cleared the daemon" from "the
+        # rule never saw the daemon", and a rule widened until it is blind to
+        # the real defect passes. The oracle is independent of the rule, so
+        # blinding the rule cannot also blind the precondition.
+        never_asked = units_the_install_path_never_asked_for(resolved, named)
+        before = held_units(root)
+        if never_asked:
+            self.assertTrue(
+                before,
+                f"the modelled image enables {never_asked} — units from "
+                "packages this install path never names, whose programs link "
+                "an audio client library — and the image's own rule reports "
+                "nothing holding the card. That is a blind rule, not a clean "
+                "image.")
 
         # The capability: after the image's own hold-off runs, nothing that
         # starts at login holds the card. Packages named by the install path
@@ -388,7 +812,15 @@ WantedBy=default.target
         self.assertEqual(
             held_units(root), [],
             f"modelled from {len(resolved)} resolvable packages "
-            f"({len(enabled)} enabled user units)")
+            f"({len(enabled)} enabled user units, {len(before)} holding the "
+            "card before the hold-off)")
+        # Re-measured on the filesystem, not taken from the rule's own report:
+        # a rule that stopped seeing these units would report success here too.
+        for unit in never_asked:
+            self.assertTrue(
+                unit_cannot_start_at_login(root, unit),
+                f"{unit} still starts at login on the modelled image: "
+                f"{enablement_links(root, unit)}")
 
     def test_the_install_path_provides_what_kilix_amp_loads_at_runtime(self):
         """Amp needs the library and a SoundFont — proven by test, not read.
@@ -431,7 +863,7 @@ WantedBy=default.target
 
 
 class AudioHoldoffWiringTests(unittest.TestCase):
-    """That the rule is reached — on a real install and on a real image."""
+    """That the rule is reached — on a real install, an update and an image."""
 
     def test_provisioning_runs_the_holdoff_after_everything_installs(self):
         """It must run last, not merely after this repository's own apt call.
@@ -460,6 +892,34 @@ class AudioHoldoffWiringTests(unittest.TestCase):
                         "PLEB_REF, and again through the pinned Kilix's "
                         "scripts/install-build-deps.sh")
 
+    def test_an_update_re_checks_the_card_after_everything_it_installs(self):
+        """A remedy an update reverses is not a remedy.
+
+        `plebian-os-update` installs packages at four sites — the OS dependency
+        closure, the selected native runtime `.deb`, `pleb install` and the
+        whole component update — and any of them can bring a package whose
+        user unit Debian enables for every login. Provisioning-time-only would
+        mean the first such update quietly undoes the fix and nothing notices
+        until someone tries to dictate.
+        """
+        text = UPDATE.read_text()
+        calls = [m.start() for m in
+                 re.finditer(r"^[ \t]*reapply_audio_holdoff$", text,
+                             flags=re.MULTILINE)]
+        self.assertTrue(
+            calls, "plebian-os-update installs packages and never re-checks "
+                   "whether one of them took the default sound card")
+        for site in ('\nrefresh_os_dependencies\n',
+                     '\napply_selected_native_runtime "$_STACK_TXN_DIR"',
+                     '"$PLEB_DIR/bin/pleb" install\n',
+                     '"$PLEB_DIR/bin/pleb" update --no-restart\n'):
+            with self.subTest(install_site=site.strip()):
+                position = text.rindex(site)
+                self.assertTrue(
+                    any(call > position for call in calls),
+                    "the update's hold-off must run after every step that can "
+                    f"install a package; it does not run after {site.strip()}")
+
     def test_the_image_is_accepted_on_the_capability_not_on_a_package_list(self):
         text = BUILD_VM.read_text()
         self.assertIn('("no login audio daemon", audio_holdoff)', text)
@@ -481,24 +941,128 @@ class AudioHoldoffWiringTests(unittest.TestCase):
             tempfile.TemporaryDirectory()))
         clean = make_root(tmp / "clean")
         dirty = make_root(tmp / "dirty")
-        install_unit(dirty, "midi-render-daemon.service", """[Unit]
-After=sound.target
-[Service]
-ExecStart=/usr/bin/midi-render-daemon
-[Install]
-WantedBy=default.target
-""")
+        install_unit(dirty, "midi-render-daemon.service",
+                     a_holding_unit("A login daemon holding the card"))
+        # The shape that used to go green on a held card: same daemon, same
+        # body, enabled the other way systemd and dpkg both honour.
+        requires = make_root(tmp / "requires")
+        install_unit(requires, "midi-render-daemon.service",
+                     a_holding_unit("Enabled by RequiredBy=",
+                                    install="RequiredBy=default.target"),
+                     kind="requires")
 
         def run(script, root):
-            env = clean_env()
-            env["PLEBIAN_OS_AUDIO_HOLDOFF_ROOT"] = str(root)
+            env = clean_env(PLEBIAN_OS_AUDIO_HOLDOFF_ROOT=str(root))
             return subprocess.run(["bash", "-c", guest, "guest", str(script)],
                                   env=env, text=True, capture_output=True,
                                   check=False).returncode
 
         self.assertEqual(run(PROVISION, clean), 0)
         self.assertEqual(run(PROVISION, dirty), 1)
+        self.assertEqual(
+            run(PROVISION, requires), 1,
+            "the acceptance check accepted an image whose card is held, "
+            "because the daemon was enabled through RequiredBy= instead of "
+            "WantedBy=")
         self.assertEqual(run(tmp / "absent.sh", clean), 2)
+
+
+class UpdateReinstallTests(unittest.TestCase):
+    """An update that reinstalls the player must still leave the card free."""
+
+    def run_the_updates_holdoff_step(self, **env):
+        """Run the updater's own step, out of the shipped updater itself.
+
+        Sourced in the updater's existing library-only mode, so this is the
+        real function with the real log/warn/die around it — not a fragment
+        copied into the test, which could drift from what ships. `sudo` is
+        replaced after the source because the step elevates when it is not
+        already root, and a test must never reach for real privilege.
+        """
+        script = ('set -uo pipefail\n'
+                  'export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n'
+                  f'. "{UPDATE}"\n'
+                  'sudo() { "$@"; }\n'
+                  'reapply_audio_holdoff\n')
+        return subprocess.run(["bash", "-c", script], cwd=ROOT,
+                              env=clean_env(**env), text=True,
+                              capture_output=True, check=False)
+
+    def test_a_package_reinstalled_by_an_update_does_not_keep_the_card(self):
+        """End to end, with the real deb-systemd-helper doing the enabling.
+
+        This is the exposure F9 names: a package installed during an OS-layer
+        update brings a user unit its postinst enables, and the hold-off ran
+        only at provisioning time. The arm reproduces it with the machinery
+        Debian actually uses — `deb-systemd-helper --user enable` against a
+        DPKG_ROOT — and then runs the updater's own step over the result.
+        """
+        helper = shutil.which("deb-systemd-helper")
+        if helper is None:
+            self.skipTest("deb-systemd-helper is not installed here, so the "
+                          "real enablement machinery cannot be exercised")
+        root = make_root(self.enterContext(tempfile.TemporaryDirectory()))
+        # The installed image carries the provisioner; self_update_os_layer has
+        # already replaced it with the target release's copy by the time the
+        # updater reaches this step, which is why the updater sources it
+        # rather than carrying a second copy of the rule.
+        installed = root / "usr/local/sbin/plebian-os-provision"
+        installed.parent.mkdir(parents=True)
+        shutil.copy2(PROVISION, installed)
+
+        unit = "midi-render-daemon.service"
+        install_unit(root, unit,
+                     a_holding_unit("Reinstalled during an OS-layer update",
+                                    install="RequiredBy=default.target"),
+                     enable=False)
+        enable = subprocess.run(
+            [helper, "--user", "enable", unit],
+            env=clean_env(DPKG_MAINTSCRIPT_PACKAGE="midi-render-daemon",
+                          DPKG_ROOT=str(root)),
+            text=True, capture_output=True, check=False)
+        self.assertEqual(enable.returncode, 0, enable.stderr)
+        self.assertEqual(held_units(root), [unit],
+                         "the fixture did not reproduce the defect, so what "
+                         "follows would prove nothing")
+
+        result = self.run_the_updates_holdoff_step(
+            PLEBIAN_OS_AUDIO_HOLDOFF_ROOT=str(root),
+            PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(installed))
+        self.assertEqual(result.returncode, 0,
+                         f"{result.stdout}\n{result.stderr}")
+        self.assertEqual(held_units(root), [])
+        self.assertTrue(unit_cannot_start_at_login(root, unit))
+
+        # And it stays fixed: `was-enabled` is what the package's own postinst
+        # asks on every later install, and it is now false.
+        was_enabled = subprocess.run(
+            [helper, "--quiet", "--user", "was-enabled", unit],
+            env=clean_env(DPKG_MAINTSCRIPT_PACKAGE="midi-render-daemon",
+                          DPKG_ROOT=str(root)),
+            text=True, capture_output=True, check=False)
+        self.assertEqual(was_enabled.returncode, 1,
+                         "deb-systemd-helper still reports the unit as "
+                         "enabled, so the next upgrade would re-enable it")
+
+    def test_the_updates_step_fails_loudly_when_it_cannot_run(self):
+        """A step that cannot run must never be mistaken for a clean card."""
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        result = self.run_the_updates_holdoff_step(
+            PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(tmp / "absent"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing or unsafe", result.stderr)
+
+        # A symlink where the provisioner should be is refused for the same
+        # reason the dependency helper refuses one: it is a redirection nobody
+        # asked for, and this step runs as root.
+        planted = tmp / "planted"
+        planted.write_text("#!/bin/bash\n")
+        link = tmp / "linked-provisioner"
+        link.symlink_to(planted)
+        result = self.run_the_updates_holdoff_step(
+            PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(link))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing or unsafe", result.stderr)
 
 
 if __name__ == "__main__":

@@ -2969,6 +2969,48 @@ refresh_os_dependencies() {
         || die "selected OS dependency closure could not be installed"
 }
 
+# An update installs packages at four sites — the OS dependency closure above,
+# the selected native runtime .deb, `pleb install`, and the component update
+# that runs the pinned Kilix's own build-dependency installer. Any of them can
+# bring a package whose systemd *user* unit Debian enables for every login, and
+# one that opens the default sound card holds the same card dictation records
+# from. A hold-off that ran only at provisioning time would be undone by the
+# first update that installs such a package, which is not a remedy at all: it
+# is a remedy with an expiry date nobody is told about.
+#
+# Run the installed provisioner's own rule rather than a second copy that could
+# drift — the same rule the image's acceptance check asks. The OS-layer
+# self-update step above has already deployed the TARGET release's provisioner,
+# so this runs the rule the release being installed ships, not the one it
+# replaces.
+#
+# A *fluidsynth upgrade* was never the exposure: once the enablement link is
+# gone, deb-systemd-helper's `was-enabled` is false and the postinst takes its
+# update-state branch. The exposure is a package installed here for the first
+# time. That is narrow, and it is exactly the kind of narrow thing that is
+# invisible until someone cannot dictate.
+#
+# The provisioner path is overridable only through the same PLEBIAN_OS_UPDATE_TEST_*
+# convention test_fail_after_boundary already uses, so the end-to-end arm can
+# drive this step against a fixture root; normal execution never sets it, and
+# the path is still required to be a regular file and not a symlink.
+reapply_audio_holdoff() {
+    local provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-/usr/local/sbin/plebian-os-provision}"
+    local -a elevate=()
+    if [ ! -f "$provisioner" ] || [ -L "$provisioner" ]; then
+        die "installed provisioner is missing or unsafe: $provisioner"
+    fi
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    log "re-checking for login-time daemons that would hold the default sound card"
+    "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 bash -c '
+        set -uo pipefail
+        . "$1" || exit 1
+        DRY_RUN=0
+        disable_audio_holding_user_units
+    ' reapply-audio-holdoff "$provisioner" \
+        || die "a login-time daemon still holds the default sound card after this update"
+}
+
 stack_env=(
     "PLEBIAN_OS_NATIVE_DEB_URL=$PLEBIAN_OS_NATIVE_DEB_URL"
     "PLEBIAN_OS_NATIVE_DEB_SHA256=$PLEBIAN_OS_NATIVE_DEB_SHA256"
@@ -3537,6 +3579,10 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     log "updating kilix, submodules, fork engine, and optional desktop provider"
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart
     test_fail_after_boundary component-update
+    # Last, after every step above that can install a package. See the
+    # function's own header for why an update needs this at all.
+    reapply_audio_holdoff
+    test_fail_after_boundary audio-holdoff
     # Only now — after the dependency install and the whole component update
     # have succeeded — may the persisted session select the new window manager.
     # `pleb install` is the step that adds the openbox package and installs the
