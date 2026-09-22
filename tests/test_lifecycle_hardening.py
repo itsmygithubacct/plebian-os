@@ -17,6 +17,26 @@ FIRSTBOOT = (ROOT / "provision" / "plebian-os-firstboot.service").read_text()
 ATTEMPT = ROOT / "provision" / "plebian-os-firstboot-attempt"
 
 
+def update_call_site(name, text=None):
+    """Offset of the one line of the updater that CALLS `name` — not its text.
+
+    `UPDATE.index("self_update_os_layer\n")` finds the first place the
+    identifier ends a line, and a comment that happens to end in it ("...
+    before self_update_os_layer") satisfies that first. The ordering assertion
+    then measures the comment, so it fails for a correct updater or passes for
+    a reordered one. A call is a line that is only the identifier, maybe
+    indented; a comment, a definition or a string cannot match that.
+    """
+    text = UPDATE if text is None else text
+    calls = [m.start() for m in re.finditer(
+        rf"^[ \t]*{re.escape(name)}[ \t]*$", text, flags=re.MULTILINE)]
+    if len(calls) != 1:
+        raise AssertionError(
+            f"expected exactly one call of {name} in the updater, found "
+            f"{len(calls)}; the ordering it guards would be ambiguous")
+    return calls[0]
+
+
 class UpdateLifecycleTests(unittest.TestCase):
     def test_update_is_serialized(self):
         self.assertIn("acquire_update_lock", UPDATE)
@@ -30,8 +50,8 @@ class UpdateLifecycleTests(unittest.TestCase):
         self.assertIn("KILIX_TRANSACTION_LOCK_PATH", UPDATE)
         self.assertIn("release_kilix_transaction_lock", UPDATE)
         self.assertNotIn("PLEBIAN_OS_UPDATE_LOCK", UPDATE)
-        self.assertLess(UPDATE.index("acquire_update_lock\n"),
-                        UPDATE.index("self_update_os_layer\n"))
+        self.assertLess(update_call_site("acquire_update_lock"),
+                        update_call_site("self_update_os_layer"))
 
     def test_root_session_config_is_ownership_and_path_validated(self):
         self.assertIn("root_config_safe_to_source", UPDATE)
@@ -50,8 +70,8 @@ class UpdateLifecycleTests(unittest.TestCase):
         self.assertIn("--restart) restart_arg=--restart", UPDATE)
         self.assertIn('pleb" update --no-restart', UPDATE)
         self.assertIn("restart_session_after_commit", UPDATE)
-        self.assertLess(UPDATE.index("commit_stack_transaction\n"),
-                        UPDATE.index("restart_session_after_commit\n"))
+        self.assertLess(update_call_site("commit_stack_transaction"),
+                        update_call_site("restart_session_after_commit"))
         help_result = subprocess.run(
             ["bash", str(UPDATE_PATH), "--help"],
             text=True,
@@ -184,12 +204,12 @@ class UpdateLifecycleTests(unittest.TestCase):
     def test_selected_dependencies_and_final_provenance_are_transactional(self):
         production = UPDATE[UPDATE.rindex(
             "# Capture the complete old runtime boundary") :]
-        self.assertLess(production.index("begin_stack_transaction\n"),
-                        production.index("refresh_os_dependencies\n"))
-        self.assertLess(production.index("refresh_os_dependencies\n"),
+        self.assertLess(update_call_site("begin_stack_transaction", production),
+                        update_call_site("refresh_os_dependencies", production))
+        self.assertLess(update_call_site("refresh_os_dependencies", production),
                         production.index('log "updating pleb'))
-        self.assertLess(production.index("write_final_provenance\n"),
-                        production.index("commit_stack_transaction\n"))
+        self.assertLess(update_call_site("write_final_provenance", production),
+                        update_call_site("commit_stack_transaction", production))
         for path in (
             "/usr/local/bin/uv",
             "/usr/local/bin/uvx",
@@ -259,9 +279,9 @@ class UpdateLifecycleTests(unittest.TestCase):
             "PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md",
             UPDATE,
         )
-        self.assertLess(UPDATE.index("begin_stack_transaction\n"),
-                        UPDATE.index("self_update_os_layer\n"))
-        self.assertLess(UPDATE.index("commit_stack_transaction\n"),
+        self.assertLess(update_call_site("begin_stack_transaction"),
+                        update_call_site("self_update_os_layer"))
+        self.assertLess(update_call_site("commit_stack_transaction"),
                         UPDATE.index('log "Plebian-OS stack updated."'))
 
     def test_closed_output_pipe_runs_outer_rollback_to_completion(self):
