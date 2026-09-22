@@ -2086,6 +2086,151 @@ EOF
     modprobe -r snd_pcsp pcspkr 2>/dev/null || true
 }
 
+# --- login-time audio hold-off -----------------------------------------------
+#
+# A Debian package may ship a systemd *user* unit, and dh_installsystemduser's
+# postinst enables it for every account on the machine. A unit that opens the
+# default sound card at login holds the same card dictation records from, so
+# the image would ship degraded — or absent — voice capture out of the box for
+# a daemon nobody asked to run.
+#
+# The live case is the FluidSynth player. Kilix Amp links libfluidsynth
+# in-process and renders MIDI through a General MIDI SoundFont; it never runs
+# the player and does not need its daemon. But `libfluidsynth-dev` — which Amp
+# builds against, and which is this image's only route to libpipewire-0.3-dev
+# — carries a versioned hard `Depends: fluidsynth`. The player therefore
+# reaches the image no matter what the package lists say, and dropping the
+# -dev package is not available. What can be removed is the *enablement*.
+#
+# Removing the enablement symlink is the form that survives. deb-systemd-helper
+# reports `was-enabled` false as soon as any link it recorded is missing, so
+# the package's own postinst takes its update-state branch on every later
+# upgrade instead of re-enabling. Masking does not survive: that same postinst
+# runs `deb-systemd-helper --user unmask` before it looks. A vendor-enabled
+# link under /usr/lib is package-owned and would be restored by dpkg, so that
+# one case is handled with a mask and is the weaker of the two.
+#
+# The rule is a capability, not a package name. A unit counts as holding the
+# card if the program it starts links an audio client library, or if the unit
+# itself declares a dependency on the sound stack. Any future MIDI or music
+# daemon is caught by the same rule without being named. The image's own sound
+# server is supposed to own the card, and is the one thing named here.
+SOUND_SERVER_USER_UNITS="pulseaudio.service pulseaudio.socket pipewire.service \
+pipewire.socket pipewire-pulse.service pipewire-pulse.socket wireplumber.service"
+
+audio_holdoff_root() { printf '%s' "${PLEBIAN_OS_AUDIO_HOLDOFF_ROOT:-}"; }
+
+unit_is_the_sound_server() {
+    case " $SOUND_SERVER_USER_UNITS " in
+        *" $1 "*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+unit_holds_default_sound_card() {
+    local unit_file="$1" root="$2" program linkage
+    [ -r "$unit_file" ] || return 1
+    # Signal 1 — the unit's own declaration that it wants the sound stack at
+    # login. grep reads a file here; there is no pipeline to mask its status.
+    if grep -qE '^(After|Wants|Requires|Requisite|BindsTo|PartOf)=.*(sound\.target|pipewire|pulseaudio|jackd)' \
+            "$unit_file"; then
+        return 0
+    fi
+    # Signal 2 — the program it starts is linked against an audio client
+    # library, whatever the unit chose to declare.
+    program=$(sed -n 's/^ExecStart=[-@+!:]*\([^ ]*\).*/\1/p' "$unit_file" \
+        | head -n 1)
+    [ -n "$program" ] || return 1
+    case "$program" in /*) ;; *) return 1 ;; esac
+    [ -x "$root$program" ] || return 1
+    # `ldd ... | grep -q` is the shape that silently fails: grep exits at the
+    # first match, ldd dies of SIGPIPE, and under `set -o pipefail` the
+    # pipeline reports 141 — so a unit that DOES link the sound stack reads
+    # as clean. Measured on this checker before it was fixed. Materialise
+    # ldd's output, then match it without a pipe.
+    linkage=$(ldd "$root$program" 2>/dev/null) || linkage=
+    [ -n "$linkage" ] || return 1
+    case "$linkage" in
+        *libasound*|*libpulse*|*libpipewire*|*libjack*) return 0 ;;
+    esac
+    return 1
+}
+
+# Prints "unit-name<TAB>enablement-link" for every enabled user unit that would
+# hold the default sound card. Silence means the capability is intact.
+enabled_audio_holding_user_units() {
+    local root unit_file target link unit
+    root=$(audio_holdoff_root)
+    for link in "$root"/etc/systemd/user/*.wants/* \
+                "$root"/usr/lib/systemd/user/*.wants/*; do
+        [ -L "$link" ] || continue
+        unit=${link##*/}
+        if unit_is_the_sound_server "$unit"; then
+            continue
+        fi
+        # A masked unit cannot start, however many .wants links point at it.
+        # Without this the enumeration would keep reporting a unit the mask
+        # branch below has already neutralised, and the re-measured verdict
+        # would never clear.
+        if [ "$(readlink "$root/etc/systemd/user/$unit" 2>/dev/null)" \
+                = /dev/null ]; then
+            continue
+        fi
+        target=$(readlink "$link" 2>/dev/null) || continue
+        [ -n "$target" ] || continue
+        # Resolve the unit file INSIDE the root: Debian writes these links
+        # absolute, so an unprefixed readlink -f would leave the tree under
+        # test and read the build host's own unit instead.
+        case "$target" in
+            /*) unit_file="$root$target" ;;
+            *)  unit_file="${link%/*}/$target" ;;
+        esac
+        [ -r "$unit_file" ] || continue
+        if unit_holds_default_sound_card "$unit_file" "$root"; then
+            printf '%s\t%s\n' "$unit" "$link"
+        fi
+    done
+}
+
+disable_audio_holding_user_units() {
+    local root found remaining link unit
+    root=$(audio_holdoff_root)
+    log "checking for login-time daemons that would hold the default sound card"
+    found=$(enabled_audio_holding_user_units)
+    if [ -z "$found" ]; then
+        log "no enabled user unit holds the default sound card"
+        return 0
+    fi
+    while IFS=$'\t' read -r unit link; do
+        [ -n "$unit" ] || continue
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + disable user unit $unit (holds the default sound card)"
+            continue
+        fi
+        case "$link" in
+            "$root"/etc/systemd/user/*)
+                log "disabling user unit $unit -> $link"
+                rm -f "$link"
+                ;;
+            *)
+                # Package-owned enablement: dpkg would restore the link, so
+                # override the unit itself instead.
+                log "masking vendor-enabled user unit $unit"
+                mkdir -p "$root/etc/systemd/user"
+                ln -sf /dev/null "$root/etc/systemd/user/$unit"
+                ;;
+        esac
+    done <<< "$found"
+    if [ "$DRY_RUN" = 1 ]; then
+        return 0
+    fi
+    # The verdict is re-measured, never assumed from the removals above.
+    remaining=$(enabled_audio_holding_user_units)
+    [ -z "$remaining" ] || die "user units still hold the default sound card: $(
+        printf '%s\n' "$remaining" | cut -f1 | tr '\n' ' ')"
+    return 0
+}
+
 validate_desktop_wallpaper() {
     local path="$1" actual
     [ -f "$path" ] && [ ! -L "$path" ] \
@@ -4546,6 +4691,9 @@ else
 fi
 begin_provision_root_transaction
 install_no_beep_defaults
+# Runs after the dependency install above, because that is what brings the
+# packages whose user units this has to look at.
+disable_audio_holding_user_units
 install_quiet_console_defaults
 install_desktop_wallpaper
 install_version_marker
@@ -4907,6 +5055,13 @@ install_env=(
 record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
+# `pleb install` is the last step that installs packages, and it installs some
+# this repository does not name: its own runtime set, and whatever the pinned
+# Kilix's scripts/install-build-deps.sh pulls in. Either can re-enable a user
+# unit the earlier pass disabled, so the hold-off is re-run here — after
+# everything that can add one. This late call is the one that decides the
+# image; the earlier one only keeps a partial provision honest.
+disable_audio_holding_user_units
 if [ "$DRY_RUN" != 1 ]; then
     if [ ! -f "$GPU_TERMINAL_SETTINGS_FILE" ] \
             || [ -L "$GPU_TERMINAL_SETTINGS_FILE" ] \

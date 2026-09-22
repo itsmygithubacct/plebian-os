@@ -12,6 +12,21 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- A fresh install no longer comes up with a MIDI synthesiser daemon holding the
+  default sound card, which is the same card dictation records from. On Debian
+  the `fluidsynth` package ships a systemd *user* unit that is enabled for
+  every login, and that unit cannot be kept off the image by editing a package
+  list: `libfluidsynth-dev`, which Kilix Amp builds against and which is this
+  image's only route to `libpipewire-0.3-dev`, carries a versioned hard
+  `Depends: fluidsynth`. Provisioning therefore disables the *unit*, by a rule
+  that names no package — any enabled user unit whose program links an audio
+  client library, or that declares a dependency on the sound stack, is
+  disabled unless it is the machine's own sound server — and the VM acceptance
+  run asks the installed system the same question. Both fresh-install package
+  lists now name `libfluidsynth3`, the runtime library Amp actually loads,
+  rather than the player: Amp links libfluidsynth in-process and renders MIDI
+  through the General MIDI SoundFont, which is kept. Scoped to Debian, the
+  release distribution; other distributions package the player differently.
 - The image ships `feh` as the still-image viewer, on both the Debian-installer
   path and `install-deps.sh`. Evince remains the PDF handler and mpv the video
   player; without `feh` a PNG or JPEG from a file manager had no dedicated
