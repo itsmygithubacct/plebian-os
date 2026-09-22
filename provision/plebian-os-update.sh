@@ -2999,6 +2999,29 @@ refresh_os_dependencies() {
 #     every shipped machine that runs with self-update disabled, for a check
 #     the operator's own setting means this updater cannot make.
 #
+# That inspection is TEXTUAL. It is a compatibility check, not a sandbox and
+# not a proof that sourcing runs nothing. It is two greps, each for one line
+# anywhere in the file: one beginning `disable_audio_holding_user_units() {`,
+# and the library-only `if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then`.
+# It is right for every provisioner ever released: v0.1.0 has no library-only
+# guard, and v0.1.1 through v0.2.1 have no hold-off function, so on a shipped
+# machine nothing is sourced at all. But a file that carries both lines is
+# sourced as root and runs whatever its top level runs. Six shapes pass the
+# inspection and still run code as root through this step:
+#   1. a command placed before the guard;
+#   2. an EXIT trap;
+#   3. a DEBUG trap;
+#   4. a RETURN trap (with functrace);
+#   5. the guard's text placed after the work it should have stopped;
+#   6. the guard's text inside a heredoc.
+# The ownership bar below is what keeps this from being an escalation: only
+# root can put a file there, and root has nothing to escalate to. The greps
+# are POSIX basic regular expressions, read by the `grep` on PATH. GNU grep
+# matches both lines in the shipped provisioner. A grep that reads them
+# differently misses a line, and the step then refuses to source the file:
+# it takes the rc 98 branch below. ugrep 7.8.4 in its `-G` basic-regex mode
+# is one such grep, and misses the second line.
+#
 # Only on the success path. An update that fails after refresh_os_dependencies
 # and before this step rolls back the OS layer and the checkouts but keeps the
 # packages it installed ("Apt package additions are permitted rollback
@@ -3065,7 +3088,8 @@ reapply_audio_holdoff() {
     audio_holdoff_provisioner_is_safe "$provisioner" "$test_mode" \
         || die "installed provisioner is missing or unsafe: $provisioner"
     # Inspected before it is sourced: a provisioner without a library-only
-    # return would run a full provisioning pass here, as root.
+    # return would run a full provisioning pass here, as root. A textual
+    # check only; see the header for the six shapes it does not stop.
     if ! grep -q '^disable_audio_holding_user_units() {' "$provisioner" \
         || ! grep -q '^if \[ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 \]; then' \
             "$provisioner"; then
