@@ -34,6 +34,7 @@ the acceptance check that runs this same rule inside a real installed image.
 import os
 import re
 import shutil
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -883,6 +884,87 @@ WantedBy=default.target
                                  "changed by the hold-off")
                 self.assertIn("\trefused", (root / "var/lib/plebian-os/"
                                             "audio-holdoff.log").read_text())
+
+    def test_a_directory_fifo_or_socket_in_the_units_place_does_not_hide_it(self):
+        """systemd passes over an entry of the unit's name that is not a file.
+
+        Ground truth, systemd 257 (`systemd-analyze --user verify
+        default.target` with a planted ordering cycle, in a chroot whose
+        `/etc/systemd/user/<unit>` is the shape below and whose
+        `default.target.d/` drop-in says `Wants=<unit>`): for a directory, a
+        FIFO and a socket systemd skips that entry, loads the vendor unit from
+        /usr/lib and starts it. The rule stopped at the first entry of any type
+        and reported nothing, so the image's own acceptance check passed while
+        the daemon still started. The mask cannot be written either — the
+        entry is somebody's — so the hold-off must refuse, say so and fail,
+        leaving it as it was. And the entry is only passed over, never taken
+        as a mask: a mask further down the path (`/run`) still wins, which
+        systemd 257 also confirmed.
+        """
+        unit = "midi-render-daemon.service"
+
+        def directory(etc):
+            (etc / unit).mkdir()
+            (etc / unit / "admin-note").write_text("keep\n")
+
+        def fifo(etc):
+            os.mkfifo(etc / unit)
+
+        def unix_socket(etc):
+            listener = socket.socket(socket.AF_UNIX)
+            self.addCleanup(listener.close)
+            listener.bind(str(etc / unit))
+
+        def describe(path):
+            if path.is_fifo():
+                return ("fifo",)
+            if path.is_socket():
+                return ("socket",)
+            return ("dir", sorted(p.name for p in path.iterdir()),
+                    (path / "admin-note").read_text())
+
+        for shape, plant in (("a directory", directory), ("a FIFO", fifo),
+                             ("a socket", unix_socket)):
+            with self.subTest(at_etc=shape):
+                root = make_root(self.enterContext(
+                    tempfile.TemporaryDirectory()))
+                etc = root / "etc/systemd/user"
+                if shape == "a socket" and len(str(etc / unit)) > 100:
+                    self.skipTest("the temporary directory is too deep for "
+                                  "a unix socket path")
+                install_unit(root, unit,
+                             a_holding_unit(f"Hidden behind {shape}"),
+                             enable=False)
+                dropin = etc / "default.target.d/50-midi.conf"
+                dropin.parent.mkdir(parents=True)
+                dropin.write_text(f"[Unit]\nWants={unit}\n")
+                self.assertEqual(held_units(root), [unit],
+                                 "control: the drop-in alone must be caught")
+                plant(etc)
+                before = describe(etc / unit)
+                self.assertEqual(held_units(root), [unit],
+                                 f"{shape} at /etc/systemd/user/{unit} hid a "
+                                 "unit systemd 257 still starts")
+
+                result = apply_holdoff(root)
+                self.assertNotEqual(result.returncode, 0,
+                                    "the card is still held; the hold-off "
+                                    "must not report success")
+                self.assertIn("will NOT mask", result.stderr)
+                self.assertEqual(describe(etc / unit), before,
+                                 f"{shape} at /etc/systemd/user/{unit} was "
+                                 "changed by the hold-off")
+                self.assertIn("\trefused", (root / "var/lib/plebian-os/"
+                                            "audio-holdoff.log").read_text())
+
+                with self.subTest(at_etc=shape, masked_in="/run"):
+                    run = root / "run/systemd/user"
+                    run.mkdir(parents=True)
+                    (run / unit).symlink_to("/dev/null")
+                    self.assertEqual(held_units(root), [],
+                                     "the entry was passed over past a mask "
+                                     "systemd honours")
+
 
 class DeliberateEnablementTests(unittest.TestCase):
     """Someone enabled it on purpose. That is not the same as a package did."""

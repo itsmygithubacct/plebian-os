@@ -2269,10 +2269,15 @@ audio_holdoff_resolve() {
 }
 
 # The first entry for a unit NAME in search-path order — the one systemd uses.
+# Only a symlink (followed or not, dangling or not) or a regular file counts:
+# systemd passes over a directory, a FIFO or a socket of that name and loads
+# the unit from further down the path. Stopping at one would blind every check
+# below to a unit systemd 257 still starts (checked with a directory, a FIFO
+# and a socket at /etc/systemd/user/<unit> plus a drop-in Wants=).
 audio_holdoff_unit_entry() {
     local root="$1" unit="$2" dir
     for dir in "${AUDIO_HOLDOFF_UNIT_DIRS[@]}"; do
-        if [ -e "$root$dir/$unit" ] || [ -L "$root$dir/$unit" ]; then
+        if [ -L "$root$dir/$unit" ] || [ -f "$root$dir/$unit" ]; then
             printf '%s' "$root$dir/$unit"
             return 0
         fi
@@ -2541,7 +2546,10 @@ audio_holdoff_enumerate() {
 # Something already at /etc/systemd/user/<unit> that is not our mask: a regular
 # file is a unit an administrator wrote by hand, and a link is an alias or a
 # `systemctl link`. `ln -sf /dev/null` over it would destroy either, with no
-# backup. The mask is refused instead — never written over the top.
+# backup. The mask is refused instead — never written over the top. A
+# directory, FIFO or socket there blocks the mask too, although systemd passes
+# over it when it looks the unit up: it is still somebody's, and `ln -s` would
+# put the mask inside a directory rather than in its place.
 audio_holdoff_mask_is_blocked() {
     local override="$1/etc/systemd/user/$2"
     if [ -L "$override" ] && [ "$(readlink "$override")" = /dev/null ]; then
@@ -2580,7 +2588,8 @@ disable_audio_holding_user_units() {
         elif [ "$origin" != package ] && audio_holdoff_mask_is_blocked "$root" "$unit"; then
             warn "$unit is started at login by $link and holds the default sound"
             warn "  card that dictation records from, but /etc/systemd/user/$unit"
-            warn "  already exists — a unit file or link someone put there by hand."
+            warn "  already exists — a unit file, a link or something else someone put"
+            warn "  there by hand."
             warn "  Plebian-OS will NOT mask it over the top of that: it is left exactly"
             warn "  as it is, and the refusal is recorded in $AUDIO_HOLDOFF_RECORD."
             warn "  To free the card, remove what pulls it in ($link),"
