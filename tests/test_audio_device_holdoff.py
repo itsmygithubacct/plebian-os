@@ -1426,6 +1426,24 @@ class UpdateReinstallTests(unittest.TestCase):
         script, marker = self.a_provisioner_from_before_the_holdoff(
             tmp / "no-lib-only", library_only=False)
         cases["no library-only mode either (v0.1.0)"] = (script, marker)
+        # The rule itself, defined for real, in a file with no library-only
+        # return. No release has this shape; it is what makes the second half
+        # of the inspection necessary. The v0.1.0 shape above lacks the
+        # function too, so the function grep alone keeps it unsourced and
+        # deleting the library-only grep would pass unnoticed without this.
+        script, marker = self.a_provisioner_from_before_the_holdoff(
+            tmp / "rule-no-lib-only", library_only=False)
+        script.write_text(script.read_text().replace(
+            "log() {", "disable_audio_holding_user_units() {\n"
+            f"    : > '{tmp / 'rule-no-lib-only/rule-ran'}'\n}}\nlog() {{", 1))
+        # Asked of the same `grep` the step finds on its PATH, not of a
+        # rewrite of the pattern: the step's own tool is what decides.
+        self.assertEqual(subprocess.run(
+            ["grep", "-c", "^disable_audio_holding_user_units() {",
+             str(script)], env=clean_env(), capture_output=True,
+            text=True).stdout, "1\n",
+            "the fixture must carry the text the step's first grep looks for")
+        cases["the rule, but no library-only mode"] = (script, marker)
         # Text that looks like the rule but never defines it: only
         # `declare -F`, after sourcing, can tell.
         script, marker = self.a_provisioner_from_before_the_holdoff(tmp / "text-only")
@@ -1455,7 +1473,7 @@ class UpdateReinstallTests(unittest.TestCase):
                 self.assertIn("did NOT check", result.stderr)
                 self.assertNotIn("still holds", result.stderr + result.stdout)
                 self.assertNotIn("command not found", result.stderr)
-                if case.startswith("no library-only"):
+                if "no library-only" in case:
                     self.assertFalse(marker.exists(),
                                      "a provisioner with no library-only mode "
                                      "was sourced, which runs it for real")
@@ -1471,6 +1489,10 @@ class UpdateReinstallTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("does not carry the audio hold-off", result.stderr)
                 self.assertNotIn("still holds", result.stderr + result.stdout)
+                if "no library-only" in case:
+                    self.assertFalse(marker.exists(),
+                                     "a provisioner with no library-only mode "
+                                     "was sourced, which runs it for real")
         if released.returncode != 0:
             with self.subTest(installed="the released v0.2.1 provisioner"):
                 self.skipTest("no v0.2.1 tag in this checkout, so the released "
@@ -1557,6 +1579,178 @@ class UpdateReinstallTests(unittest.TestCase):
             PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(installed))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("missing or unsafe", result.stderr)
+
+    # -- the production ownership bar, driven for real ---------------------------
+
+    # Runs inside `unshare -rmn`: the caller's uid is namespace root there, so a
+    # tmpfs it mounts is owned by uid 0 and a chroot into it is a machine whose
+    # /usr, /usr/local and /usr/local/sbin really are root-owned and not group-
+    # or other-writable. The real /usr/{bin,lib,...} are bound in read-only
+    # beneath them; a file or directory bound in from the host keeps its host
+    # owner, which shows as the overflow uid because host root is not mapped.
+    # That is what lets the step run in PRODUCTION mode — no override, the
+    # constant path — and still meet every arm of its ownership bar.
+    PRODUCTION_BAR_CHROOT = r'''
+set -eu
+umask 022
+R=$1 W=$2 PROV=$3 CASE=$4 FOREIGN_FILE=$5 FOREIGN_DIR=$6 CHROOT=$7
+case $R in /?*/?*) ;; *) echo "refusing mount point $R" >&2; exit 91 ;; esac
+mount -t tmpfs fixture "$R"
+chmod 755 "$R"
+mkdir "$R/usr"
+for d in /usr/*; do
+    n=${d##*/}
+    [ "$n" != local ] && [ -d "$d" ] && [ ! -L "$d" ] || continue
+    mkdir "$R/usr/$n"
+    mount --rbind "$d" "$R/usr/$n"
+    mount -o remount,bind,ro "$R/usr/$n" 2>/dev/null || :
+done
+for l in bin sbin lib lib32 lib64 libx32; do
+    if [ -L "/$l" ]; then
+        ln -s "$(readlink "/$l")" "$R/$l"
+    elif [ -d "/$l" ]; then
+        mkdir "$R/$l"; mount --rbind "/$l" "$R/$l"
+    fi
+done
+# No unit directories from the host: the rule must have nothing to act on.
+[ ! -d "$R/usr/lib/systemd/user" ] || mount -t tmpfs units "$R/usr/lib/systemd/user"
+mkdir -p "$R/etc" "$R/tmp" "$R/dev" "$R/proc" "$R/w" "$R/usr/local/sbin"
+chmod 1777 "$R/tmp"
+[ ! -e /etc/ld.so.cache ] || cp /etc/ld.so.cache "$R/etc/"
+mount --rbind /dev "$R/dev"
+mount --rbind /proc "$R/proc"
+mount --bind "$W" "$R/w"
+mount -o remount,bind,ro "$R/w" 2>/dev/null || :
+install -m 755 "$PROV" "$R/usr/local/sbin/plebian-os-provision"
+case "$CASE" in
+    pass) ;;
+    sbin-writable) chmod 775 "$R/usr/local/sbin" ;;
+    local-writable) chmod 757 "$R/usr/local" ;;
+    usr-writable) chmod 770 "$R/usr" ;;
+    sbin-symlink)
+        mkdir "$R/opt"
+        mv "$R/usr/local/sbin" "$R/opt/sbin"
+        ln -s /opt/sbin "$R/usr/local/sbin" ;;
+    file-foreign)
+        mount --bind "$FOREIGN_FILE" "$R/usr/local/sbin/plebian-os-provision" ;;
+    dir-foreign)
+        rm -rf "$R/usr/local"; mkdir "$R/usr/local"
+        mount --rbind "$FOREIGN_DIR" "$R/usr/local"
+        mount -t tmpfs sbin "$R/usr/local/sbin"
+        chmod 755 "$R/usr/local/sbin"
+        install -m 755 "$PROV" "$R/usr/local/sbin/plebian-os-provision" ;;
+    *) echo "unknown case $CASE" >&2; exit 90 ;;
+esac
+for p in /usr/local/sbin/plebian-os-provision /usr/local/sbin /usr/local /usr; do
+    printf 'OWNER %s %s %s\n' "$p" "$(stat -c %u "$R$p")" "$(stat -c %a "$R$p")"
+done
+"$CHROOT" "$R" /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME=/ LC_ALL=C PLEBIAN_OS_SELF_UPDATE=1 /bin/bash -c '
+    export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
+    . /w/provision/plebian-os-update.sh
+    unset PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT
+    set +e
+    ( reapply_audio_holdoff )
+    echo "STEP rc=$?"' 2>&1
+'''
+
+    def test_the_production_bar_decides_what_root_sources(self):
+        """Outside a test, only a root-owned file in root-owned directories is sourced.
+
+        The step sources /usr/local/sbin/plebian-os-provision as root. Every
+        other arm of this class drives it in test mode, where the ownership
+        bar is deliberately relaxed to "root or the suite's own user", so none
+        of them reaches the production branch: its directory walk, or its
+        demand that the owner be root, could be deleted and they would all
+        still pass. Here the step runs with the test flag unset, on the
+        constant path, in a chroot where that path's owners are real.
+
+        The foreign-owner arms need an owner that is neither the caller nor
+        namespace root; a host file owned by root is that, unless the suite
+        itself runs as root, in which case those two arms record a skip.
+        """
+        unshare = shutil.which("unshare")
+        chroot = shutil.which("chroot", path="/usr/sbin:/sbin:/usr/bin:/bin")
+        if unshare is None or chroot is None:
+            self.skipTest("unshare or chroot is not installed here")
+        probe = subprocess.run([unshare, "-rmn", "--propagation", "private",
+                                "true"], capture_output=True, check=False)
+        if probe.returncode != 0:
+            self.skipTest("unprivileged user namespaces are unavailable here "
+                          f"({probe.stderr.decode(errors='replace').strip()}), "
+                          "so the production ownership bar cannot be built")
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        inner = tmp / "inner.sh"
+        inner.write_text(self.PRODUCTION_BAR_CHROOT)
+        mount_point = tmp / "root"
+        mount_point.mkdir()
+        foreign_file = Path(os.path.realpath(shutil.which("bash")))
+        foreign_dir = Path("/usr/local")
+
+        def run(case):
+            return subprocess.run(
+                [unshare, "-rmn", "--propagation", "private", "bash",
+                 str(inner), str(mount_point), str(ROOT), str(PROVISION), case,
+                 str(foreign_file), str(foreign_dir), chroot],
+                env=clean_env(), text=True, capture_output=True, check=False)
+
+        def owners(result):
+            return {line.split()[1]: line.split()[2:]
+                    for line in result.stdout.splitlines()
+                    if line.startswith("OWNER ")}
+
+        with self.subTest(case="pass"):
+            result = run("pass")
+            output = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, output)
+            self.assertEqual(
+                {p: o[0] for p, o in owners(result).items()},
+                {"/usr/local/sbin/plebian-os-provision": "0",
+                 "/usr/local/sbin": "0", "/usr/local": "0", "/usr": "0"},
+                "the fixture is not root-owned, so it proves nothing")
+            self.assertIn("STEP rc=0", output)
+            self.assertIn("no enabled user unit holds the default sound card",
+                          output, "the rule never ran, so the refusals below "
+                          "could be refusing everything")
+
+        refused = {
+            "sbin-writable": "/usr/local/sbin writable by its group",
+            "local-writable": "/usr/local writable by others",
+            "usr-writable": "/usr writable by its group",
+            "sbin-symlink": "/usr/local/sbin a symlink",
+            "file-foreign": "the provisioner owned by someone else",
+            "dir-foreign": "/usr/local owned by someone else",
+        }
+        foreign = {"file-foreign": foreign_file,
+                   "dir-foreign": foreign_dir / "sbin"}
+        for case, why in refused.items():
+            with self.subTest(case=case):
+                if case in foreign and (
+                        not foreign[case].exists()
+                        or foreign[case].stat().st_uid == os.geteuid()):
+                    self.skipTest(f"{foreign[case]} is missing or owned by the "
+                                  "caller, so a foreign owner cannot be shown")
+                result = run(case)
+                output = result.stdout + result.stderr
+                self.assertEqual(result.returncode, 0, output)
+                if case == "dir-foreign":
+                    self.assertNotEqual(owners(result)["/usr/local"][0], "0",
+                                        "the foreign directory shows as root")
+                    self.assertEqual(
+                        owners(result)["/usr/local/sbin/plebian-os-provision"][0],
+                        "0", "the file itself must pass, or the arm tests "
+                        "the file and not the directory")
+                if case == "file-foreign":
+                    self.assertNotEqual(
+                        owners(result)["/usr/local/sbin/plebian-os-provision"][0],
+                        "0", "the foreign file shows as root")
+                self.assertRegex(output, r"STEP rc=[1-9]",
+                                 f"{why}, and the step did not fail")
+                self.assertIn("installed provisioner is missing or unsafe: "
+                              "/usr/local/sbin/plebian-os-provision", output,
+                              f"{why}, and the step did not refuse it")
+                self.assertNotIn("re-checking for login-time daemons", output,
+                                 f"{why}, and the step went on to source it")
 
     def test_no_update_writes_a_provisioning_banner(self):
         """Sourcing the provisioner is not provisioning, and the log must not say it is.
