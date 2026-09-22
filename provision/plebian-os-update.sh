@@ -2979,10 +2979,34 @@ refresh_os_dependencies() {
 # is a remedy with an expiry date nobody is told about.
 #
 # Run the installed provisioner's own rule rather than a second copy that could
-# drift — the same rule the image's acceptance check asks. The OS-layer
-# self-update step above has already deployed the TARGET release's provisioner,
-# so this runs the rule the release being installed ships, not the one it
-# replaces.
+# drift — the same rule the image's acceptance check asks. WHICH provisioner
+# that is depends on PLEBIAN_OS_SELF_UPDATE, and the step has to be honest
+# about both cases:
+#   * self-update on (the default): self_update_os_layer above has just
+#     deployed the TARGET release's provisioner, so this runs the rule the
+#     release being installed ships. If that file does not carry the rule, the
+#     OS layer that was just deployed is not the one this updater belongs to,
+#     and the update fails saying so.
+#   * self-update off (PLEBIAN_OS_SELF_UPDATE=0, documented in this file's
+#     header): the installed provisioner is whatever the machine already had.
+#     Every provisioner released before this hold-off — every v0.1.x, v0.2.0
+#     and v0.2.1 tag — lacks the function, and v0.1.0's has no library-only
+#     mode either, so SOURCING it would run a whole provisioning pass as root.
+#     So the file is inspected before it is sourced, the function is checked
+#     with `declare -F` before it is called, and when either is missing the
+#     step warns — truthfully: the card was NOT re-checked, and why — and the
+#     update carries on. Failing the update there would fail every update on
+#     every shipped machine that runs with self-update disabled, for a check
+#     the operator's own setting means this updater cannot make.
+#
+# Only on the success path. An update that fails after refresh_os_dependencies
+# and before this step rolls back the OS layer and the checkouts but keeps the
+# packages it installed ("Apt package additions are permitted rollback
+# residue"), and with them any enablement link a postinst wrote; nothing on the
+# rollback path re-checks the card. The next update that completes, or a
+# reprovision, runs this step and clears it. Running the rule from the rollback
+# path itself was not done: it would source a provisioner the rollback has just
+# restored, as root, at the moment the update is already failing.
 #
 # A *fluidsynth upgrade* was never the exposure: once the enablement link is
 # gone, deb-systemd-helper's `was-enabled` is false and the postinst takes its
@@ -2990,25 +3014,89 @@ refresh_os_dependencies() {
 # time. That is narrow, and it is exactly the kind of narrow thing that is
 # invisible until someone cannot dictate.
 #
-# The provisioner path is overridable only through the same PLEBIAN_OS_UPDATE_TEST_*
-# convention test_fail_after_boundary already uses, so the end-to-end arm can
-# drive this step against a fixture root; normal execution never sets it, and
-# the path is still required to be a regular file and not a symlink.
-reapply_audio_holdoff() {
-    local provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-/usr/local/sbin/plebian-os-provision}"
-    local -a elevate=()
-    if [ ! -f "$provisioner" ] || [ -L "$provisioner" ]; then
-        die "installed provisioner is missing or unsafe: $provisioner"
+# The step runs as root, so the file it sources is held to the same bar the
+# root-sourced session config is: a regular file, not a symlink, owned by
+# root, writable by nobody else, in root-owned directories nobody else can
+# write. The one override, PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT, exists so
+# the end-to-end arm can drive this step against a fixture root, and it is
+# honoured ONLY under PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1 — the mode in which
+# this file refuses to run an update at all. Outside it the variable is
+# ignored, and the default path is the one deploy_staged_os_layer writes.
+#
+# PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 is passed because the provisioner opens its
+# own log at source time: without it, every update would append a false
+# "plebian-os-provision starting" banner to /var/log/plebian-os-provision.log
+# and tee this step into it. Current provisioners also skip that in library-only
+# mode; the variable is what stops an OLD installed one from doing it.
+AUDIO_HOLDOFF_PROVISIONER=/usr/local/sbin/plebian-os-provision
+
+audio_holdoff_provisioner_is_safe() {
+    local path="$1" test_mode="$2" owner mode dir
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    owner="$(stat -c '%u' "$path" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' "$path" 2>/dev/null)" || return 1
+    (( (8#$mode & 8#22) == 0 )) || return 1
+    if [ "$test_mode" = 1 ]; then
+        # A fixture is owned by whoever runs the suite; nothing else is.
+        [ "$owner" = 0 ] || [ "$owner" = "$(id -u)" ] || return 1
+        return 0
     fi
-    [ "$(id -u)" = 0 ] || elevate=(sudo)
-    log "re-checking for login-time daemons that would hold the default sound card"
-    "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 bash -c '
-        set -uo pipefail
-        . "$1" || exit 1
-        DRY_RUN=0
-        disable_audio_holding_user_units
-    ' reapply-audio-holdoff "$provisioner" \
-        || die "a login-time daemon still holds the default sound card after this update"
+    [ "$owner" = 0 ] || return 1
+    dir="$(dirname "$path")"
+    while [ "$dir" != / ]; do
+        owner="$(stat -c '%u' "$dir" 2>/dev/null)" || return 1
+        mode="$(stat -c '%a' "$dir" 2>/dev/null)" || return 1
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || return 1
+        dir="$(dirname "$dir")"
+    done
+}
+
+reapply_audio_holdoff() {
+    local provisioner="$AUDIO_HOLDOFF_PROVISIONER" test_mode=0 rc=0 self_update
+    local -a elevate=()
+    if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        test_mode=1
+        provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-$provisioner}"
+    fi
+    case "${PLEBIAN_OS_SELF_UPDATE:-1}" in
+        1|yes|true|on) self_update=1 ;;
+        *) self_update=0 ;;
+    esac
+    audio_holdoff_provisioner_is_safe "$provisioner" "$test_mode" \
+        || die "installed provisioner is missing or unsafe: $provisioner"
+    # Inspected before it is sourced: a provisioner without a library-only
+    # return would run a full provisioning pass here, as root.
+    if ! grep -q '^disable_audio_holding_user_units() {' "$provisioner" \
+        || ! grep -q '^if \[ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 \]; then' \
+            "$provisioner"; then
+        rc=98
+    else
+        [ "$(id -u)" = 0 ] || elevate=(sudo)
+        log "re-checking for login-time daemons that would hold the default sound card"
+        "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 \
+            PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 bash -c '
+            set -uo pipefail
+            . "$1" || exit 97
+            declare -F disable_audio_holding_user_units >/dev/null || exit 98
+            DRY_RUN=0
+            disable_audio_holding_user_units
+        ' reapply-audio-holdoff "$provisioner" || rc=$?
+    fi
+    case "$rc:$self_update" in
+        0:*) return 0 ;;
+        98:0)
+            warn "the installed provisioner ($provisioner) predates the login-time"
+            warn "  audio hold-off, and OS-layer self-update is disabled"
+            warn "  (PLEBIAN_OS_SELF_UPDATE=${PLEBIAN_OS_SELF_UPDATE:-}), so this update"
+            warn "  did NOT check whether a package it installed now holds the default"
+            warn "  sound card that dictation records from. Update with OS-layer"
+            warn "  self-update enabled to install the hold-off."
+            return 0
+            ;;
+        98:*) die "the provisioner this update just deployed ($provisioner) does not carry the audio hold-off; the OS layer on this machine is not the one this updater belongs to" ;;
+        97:*) die "the installed provisioner could not be loaded to re-check the default sound card: $provisioner" ;;
+        *) die "the audio hold-off did not complete (exit $rc): see its message above" ;;
+    esac
 }
 
 stack_env=(

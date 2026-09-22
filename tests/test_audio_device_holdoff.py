@@ -1303,6 +1303,222 @@ class UpdateReinstallTests(unittest.TestCase):
         self.assertIn("missing or unsafe", result.stderr)
 
 
+    # -- the provisioner a shipped machine actually has -------------------------
+
+    def a_provisioner_from_before_the_holdoff(self, directory, library_only=True):
+        """The shape of every provisioner released before this hold-off.
+
+        Every v0.1.x, v0.2.0 and v0.2.1 provisioner lacks
+        disable_audio_holding_user_units, and v0.1.0's has no library-only
+        return either — sourcing that one would run a full provisioning pass.
+        The marker proves whether the step sourced it at all.
+        """
+        directory.mkdir(parents=True, exist_ok=True)
+        marker = directory / "sourced"
+        body = ["#!/usr/bin/env bash", "set -euo pipefail",
+                f": > '{marker}'",
+                'log() { printf "%s\\n" "$*"; }']
+        if library_only:
+            body += ['if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then',
+                     "    return 0 2>/dev/null || exit 0", "fi"]
+        body += [f": > '{directory / 'provisioned'}'"]
+        script = directory / "plebian-os-provision"
+        script.write_text("\n".join(body) + "\n")
+        script.chmod(0o755)
+        return script, marker
+
+    def test_an_update_without_self_update_on_a_shipped_machine_is_not_failed(self):
+        """PLEBIAN_OS_SELF_UPDATE=0 is documented, and shipped machines lack the rule.
+
+        With self-update disabled the installed provisioner is whatever the
+        machine already had. Calling a function it does not define used to
+        fail every such update at its last step — and report a held card that
+        nobody had measured. The step must say, truthfully, that it did not
+        re-check, and let the update finish.
+        """
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        cases = {}
+        script, marker = self.a_provisioner_from_before_the_holdoff(
+            tmp / "no-function")
+        cases["no hold-off function"] = (script, marker)
+        script, marker = self.a_provisioner_from_before_the_holdoff(
+            tmp / "no-lib-only", library_only=False)
+        cases["no library-only mode either (v0.1.0)"] = (script, marker)
+        # Text that looks like the rule but never defines it: only
+        # `declare -F`, after sourcing, can tell.
+        script, marker = self.a_provisioner_from_before_the_holdoff(tmp / "text-only")
+        script.write_text(script.read_text().replace(
+            "fi\n", "fi\nif false; then\ndisable_audio_holding_user_units() {\n"
+            "    :\n}\nfi\n", 1))
+        cases["the rule's text, never defined"] = (script, marker)
+        released = subprocess.run(
+            ["git", "-C", str(ROOT), "show",
+             "v0.2.1:provision/plebian-os-provision.sh"],
+            capture_output=True, check=False)
+        if released.returncode == 0:
+            (tmp / "v0.2.1").mkdir()
+            script = tmp / "v0.2.1/plebian-os-provision"
+            script.write_bytes(released.stdout)
+            script.chmod(0o755)
+            cases["the released v0.2.1 provisioner"] = (script, None)
+
+        for case, (script, marker) in cases.items():
+            with self.subTest(installed=case, self_update="0"):
+                result = self.run_the_updates_holdoff_step(
+                    PLEBIAN_OS_SELF_UPDATE="0",
+                    PLEBIAN_OS_AUDIO_HOLDOFF_ROOT=str(tmp / "no-root"),
+                    PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(script))
+                self.assertEqual(result.returncode, 0,
+                                 f"{result.stdout}\n{result.stderr}")
+                self.assertIn("did NOT check", result.stderr)
+                self.assertNotIn("still holds", result.stderr + result.stdout)
+                self.assertNotIn("command not found", result.stderr)
+                if case.startswith("no library-only"):
+                    self.assertFalse(marker.exists(),
+                                     "a provisioner with no library-only mode "
+                                     "was sourced, which runs it for real")
+                if case.startswith("the rule's text"):
+                    self.assertTrue(marker.exists(), "never sourced, so "
+                                    "`declare -F` was never what decided")
+            with self.subTest(installed=case, self_update="1"):
+                # With self-update on, the file was just deployed by this very
+                # release; lacking the rule means the OS layer is not ours.
+                result = self.run_the_updates_holdoff_step(
+                    PLEBIAN_OS_SELF_UPDATE="1",
+                    PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(script))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("does not carry the audio hold-off", result.stderr)
+                self.assertNotIn("still holds", result.stderr + result.stdout)
+        if released.returncode != 0:
+            with self.subTest(installed="the released v0.2.1 provisioner"):
+                self.skipTest("no v0.2.1 tag in this checkout, so the released "
+                              "provisioner itself was not exercised; the "
+                              "constructed shapes above were")
+
+    def test_the_updates_step_fails_when_the_rule_it_runs_fails(self):
+        """A step whose rule fails must fail the update, not be swallowed.
+
+        Driven through the real rule: a drop-in pulls in a unit someone wrote
+        by hand in /etc, which the hold-off refuses to mask over, so the card
+        is still held and the provisioner's own re-measure dies.
+        """
+        root = make_root(self.enterContext(tempfile.TemporaryDirectory()))
+        installed = root / "usr/local/sbin/plebian-os-provision"
+        installed.parent.mkdir(parents=True)
+        shutil.copy2(PROVISION, installed)
+        etc = root / "etc/systemd/user"
+        (etc / "midi.service").write_text(
+            "[Unit]\nWants=pipewire.service\n[Service]\nExecStart=/bin/true\n")
+        (etc / "default.target.d").mkdir()
+        (etc / "default.target.d/50-midi.conf").write_text(
+            "[Unit]\nWants=midi.service\n")
+        result = self.run_the_updates_holdoff_step(
+            PLEBIAN_OS_AUDIO_HOLDOFF_ROOT=str(root),
+            PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(installed))
+        self.assertNotEqual(result.returncode, 0,
+                            f"{result.stdout}\n{result.stderr}")
+        self.assertIn("did not complete", result.stderr)
+        self.assertIn("will NOT mask", result.stderr)
+        self.assertEqual((etc / "midi.service").read_text(),
+                         "[Unit]\nWants=pipewire.service\n[Service]\n"
+                         "ExecStart=/bin/true\n")
+
+    def test_the_test_seam_is_ignored_outside_a_test(self):
+        """The provisioner override exists for the suite, and only for it.
+
+        The step sources that file as root. Outside the updater's library-only
+        test mode the variable must not select anything: the default path is
+        the one self_update_os_layer deploys. `sudo` here only records what it
+        was asked to run; it never runs it.
+        """
+        if os.geteuid() == 0:
+            self.skipTest("running as root, where the step would not go "
+                          "through the recording sudo")
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        payload = tmp / "payload.sh"
+        ran = tmp / "payload-ran"
+        payload.write_text(f"#!/bin/bash\n: > '{ran}'\n"
+                           "disable_audio_holding_user_units() { :; }\n"
+                           'if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then\n'
+                           "    return 0\nfi\n")
+        payload.chmod(0o755)
+        argv = tmp / "sudo-argv"
+        script = ('set -uo pipefail\n'
+                  'export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n'
+                  f'. "{UPDATE}"\n'
+                  'unset PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY\n'
+                  f'sudo() {{ printf "%s\\n" "$@" >> "{argv}"; return 0; }}\n'
+                  'reapply_audio_holdoff\n')
+        result = subprocess.run(
+            ["bash", "-c", script], cwd=ROOT,
+            env=clean_env(PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(payload),
+                          PLEBIAN_OS_SELF_UPDATE="0",
+                          PLEBIAN_OS_AUDIO_HOLDOFF_ROOT=str(tmp / "no-root")),
+            text=True, capture_output=True, check=False)
+        asked = argv.read_text() if argv.exists() else ""
+        self.assertFalse(ran.exists(), "the override was sourced outside a test")
+        self.assertNotIn(str(payload), asked + result.stderr + result.stdout)
+        # Whatever this machine has installed, the step used — or refused, or
+        # reported on — the default path, and nothing else.
+        self.assertIn("/usr/local/sbin/plebian-os-provision",
+                      asked + result.stderr + result.stdout,
+                      f"{result.stdout}\n{result.stderr}")
+
+    def test_a_provisioner_others_can_write_is_refused(self):
+        """Sourced as root, so group- or world-writable is not safe."""
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        installed = tmp / "plebian-os-provision"
+        shutil.copy2(PROVISION, installed)
+        installed.chmod(0o775)
+        result = self.run_the_updates_holdoff_step(
+            PLEBIAN_OS_AUDIO_HOLDOFF_ROOT=str(tmp),
+            PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(installed))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("missing or unsafe", result.stderr)
+
+    def test_no_update_writes_a_provisioning_banner(self):
+        """Sourcing the provisioner is not provisioning, and the log must not say it is.
+
+        Two guards, each with its own arm: the current provisioner skips its
+        log in library-only mode, and the step marks the log already active so
+        that an OLDER installed provisioner, which lacks that skip, does not
+        write a false "plebian-os-provision starting" banner either.
+        """
+        root = make_root(self.enterContext(tempfile.TemporaryDirectory()))
+        log_path = root / "provision.log"
+        current = root / "current-provision"
+        shutil.copy2(PROVISION, current)
+        older = root / "older-provision"
+        text = PROVISION.read_text()
+        skip = '    && [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] \\\n'
+        self.assertIn(skip, text)
+        older.write_text(text.replace(skip, "", 1))
+        older.chmod(0o755)
+        with self.subTest(guard="library-only mode skips the log"):
+            result = provision_call(":", root,
+                                    env=clean_env(PLEBIAN_OS_PROVISION_LOG=str(log_path)))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(log_path.exists() and "starting" in log_path.read_text(),
+                             "sourcing the library wrote a provisioning banner")
+        with self.subTest(guard="the step marks the log active"):
+            result = self.run_the_updates_holdoff_step(
+                PLEBIAN_OS_AUDIO_HOLDOFF_ROOT=str(root),
+                PLEBIAN_OS_PROVISION_LOG=str(log_path),
+                PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT=str(older))
+            self.assertEqual(result.returncode, 0,
+                             f"{result.stdout}\n{result.stderr}")
+            self.assertFalse(log_path.exists() and "starting" in log_path.read_text(),
+                             "an update wrote a false provisioning banner")
+        # Control: the older shape really does write one when nothing stops it.
+        control = subprocess.run(
+            ["bash", "-c", f'export PLEBIAN_OS_PROVISION_LIB_ONLY=1; . "{older}" >/dev/null 2>&1'],
+            env=clean_env(PLEBIAN_OS_PROVISION_LOG=str(log_path)),
+            text=True, capture_output=True, check=False)
+        self.assertEqual(control.returncode, 0, control.stderr)
+        self.assertIn("plebian-os-provision starting", log_path.read_text(),
+                      "the older-provisioner fixture writes no banner, so the "
+                      "arm above proves nothing")
+
 
 if __name__ == "__main__":
     unittest.main()

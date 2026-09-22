@@ -24,11 +24,25 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   disabled unless it is the machine's own sound server — and the VM acceptance
   run asks the installed system the same question. `plebian-os-update` now asks
   it too, after everything an update installs, so a package first installed
-  during an update cannot quietly take the card back. All three enablement
-  shapes systemd honours are covered (`WantedBy=`, `RequiredBy=` and
-  `UpheldBy=`, i.e. `.wants/`, `.requires/` and `.upholds/`), across every
-  root-owned directory of the user-unit search path, plus a drop-in on the
-  login target. Ordering alone no longer condemns a unit: `After=` says when a
+  during an update cannot quietly take the card back. With OS-layer self-update
+  disabled (`PLEBIAN_OS_SELF_UPDATE=0`) the update can only use the provisioner
+  the machine already has, and one from before this release has no hold-off:
+  the update then warns that it did not re-check the card, and carries on. The
+  check reads the `.wants/`, `.requires/` and `.upholds/` links that
+  `WantedBy=`, `RequiredBy=` and `UpheldBy=` create, in every root-owned
+  directory of the user-unit search path, by the link's name as systemd does;
+  and it follows what the login target and every enabled unit pull in through
+  their unit files and drop-ins — so a drop-in on `default.target` or
+  `basic.target`, a type-level `target.d/` drop-in, an override or alias of
+  `default.target`, and an enabled helper unit that `Wants=` the daemon are
+  caught. It is not complete, and does not claim to be: it does not see a
+  daemon started through a wrapper such as `sh -c`, per-account or
+  `/etc/skel` units, generators (XDG autostart among them), or what the
+  desktop session rather than the login target starts; the provisioner's own
+  header lists every known gap. Where the remedy is a mask, it is never
+  written over a file already in its place — an administrator's own unit in
+  `/etc/systemd/user` is left byte for byte, and provisioning stops and says
+  so instead. Ordering alone no longer condemns a unit: `After=` says when a
   unit may start, never that it opens anything, so a helper that merely runs
   after audio is up is left alone. An enablement nobody's package created —
   someone's deliberate machine-wide choice — is still removed, because the
