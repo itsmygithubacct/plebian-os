@@ -18,8 +18,9 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   prompt. A reply benchmark measures provider startup and warm responses.
   The shared model-sizer adds measured speech profiles. The 0.6B Qwen CPU tier
   installs a locked runtime only after a live memory-fit check and keeps model
-  weights behind first-use acceptance. The GPU tier uses an explicitly supplied
-  CUDA/FlashAttention environment. None of these changes qualify the release
+  weights behind first-use acceptance. On eligible NVIDIA hardware, the GPU
+  tier also lazily installs a separate locked CUDA/FlashAttention runtime after
+  a fit check. None of these changes qualify the release
   image or make Qwen the default.
 - A fresh install no longer comes up with a MIDI synthesiser daemon holding the
   default sound card, which is the same card dictation records from. On Debian
@@ -102,7 +103,8 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   conformance-bound against; the 0.2.1 pin was seven commits behind it and
   lacked the bridge module the SDK imports.
 - `KILIX_VOICE_REF` advances through `06d1f672` (a selected-model test fix) to
-  `542a56c4`, adding interactive TTS tiers and first-use Piper/Qwen selection.
+  `25ec0917`, adding interactive TTS tiers, first-use Piper/Qwen selection and
+  GPU fit visibility before lazy runtime installation.
 - The speech-recognition model is no longer downloaded by the image. Through
   0.2.1 firstboot fetched the Vosk `small-en-us` acoustic model and required it
   installed before provisioning finished, with no licence shown and no
