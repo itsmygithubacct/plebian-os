@@ -370,6 +370,56 @@ root_config_safe_to_source() {
     done
 }
 
+# The shell which starts an update can belong to a previously selected
+# release. Remove exactly the installed selector's release-controlled keys
+# before loading the root-owned session file; operator-controlled environment
+# choices remain intact. This also makes the documented selector-then-updater
+# sequence work from an already-open terminal.
+# The optional selector argument supports isolated fixture callers.
+# shellcheck disable=SC2120
+selected_release_environment_keys() {
+    local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
+    local output keys
+    [ -x "$selector" ] || {
+        warn "target closure selector is not executable: $selector"
+        return 1
+    }
+    output="$("$selector" --show)" || {
+        warn "could not read the target selector's release-controlled keys"
+        return 1
+    }
+    keys="$(printf '%s\n' "$output" | sed -n \
+        -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' \
+        -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
+    [ -n "$keys" ] || {
+        warn "target selector reported no release-controlled keys"
+        return 1
+    }
+    printf '%s\n' "$keys"
+}
+
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+    release_keys="$(selected_release_environment_keys)" \
+        || die "could not prepare a clean selected-release environment"
+    clean_release_env=(env)
+    clean_release_env_needed=0
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        if [[ -v $key ]]; then
+            clean_release_env+=(-u "$key")
+            clean_release_env_needed=1
+        fi
+    done <<<"$release_keys"
+    if [ "$clean_release_env_needed" = 1 ]; then
+        # Replacing the process is the environment-cleaning boundary. The
+        # second invocation observes no selected-release keys, so no sentinel
+        # controlled by the caller is needed to prevent another relaunch.
+        # shellcheck disable=SC2093
+        exec "${clean_release_env[@]}" "$0" "$@"
+        die "could not relaunch the updater with its selected release environment"
+    fi
+fi
+
 if [ -r /etc/pleb/session.env ]; then
     root_config_safe_to_source /etc/pleb/session.env \
         || die "refusing to source unsafe /etc/pleb/session.env as root"
@@ -549,6 +599,10 @@ PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
 
 restart_arg=--no-restart
 select_latest_release=1
+# Set only after the complete local-candidate gate succeeds. These are reset
+# unconditionally so caller-provided environment cannot opt into the bypass.
+_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
+_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --version|-V) echo "plebian-os-update $PLEBIAN_OS_VERSION"; exit 0 ;;
@@ -2017,12 +2071,33 @@ require_clean_pinned_checkout() {
 checkout_pinned_ref() {
     local dir="$1" ref="$2" label="$3" resolved actual
     require_clean_pinned_checkout "$dir" "$label"
-    # FETCH_HEAD binds resolution to the object returned by this origin fetch;
-    # do not trust an existing local tag with the same spelling.
-    git -C "$dir" fetch --force origin "$ref" \
-        || die "$label fetch of pinned ref $ref failed"
-    resolved="$(git -C "$dir" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
-        || die "pinned $label ref $ref did not resolve to a commit"
+    if [ "$label" = plebian-os ] \
+        && [ "$dir" = "$PLEBIAN_OS_DIR" ] \
+        && { [ "$ref" = "v$PLEBIAN_OS_VERSION" ] \
+            || [ "$ref" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ]; } \
+        && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT:-}" ] \
+        && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT:-}" ]; then
+        # The stable tag deliberately does not exist on origin during release
+        # qualification. The earlier candidate gate bound its annotated tag,
+        # manifest and deployed handoff bytes. Recheck both immutable object
+        # identities here so a changed local tag cannot cross that boundary.
+        [ "$(git -C "$dir" rev-parse --verify "refs/tags/v$PLEBIAN_OS_VERSION" 2>/dev/null)" \
+            = "$_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT" ] \
+            || die "validated local Plebian-OS candidate tag v$PLEBIAN_OS_VERSION changed before checkout"
+        resolved="$(git -C "$dir" rev-parse --verify "v$PLEBIAN_OS_VERSION^{commit}" 2>/dev/null)" \
+            || die "validated local Plebian-OS candidate v$PLEBIAN_OS_VERSION no longer resolves to a commit"
+        [ "$resolved" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ] \
+            || die "validated local Plebian-OS candidate commit changed before checkout"
+        log "using already-validated unpublished Plebian-OS candidate $ref at $resolved"
+    else
+        # FETCH_HEAD binds resolution to the object returned by this origin
+        # fetch. Component refs and ordinary OS refs never inherit the local
+        # prepublication exception.
+        git -C "$dir" fetch --force origin "$ref" \
+            || die "$label fetch of pinned ref $ref failed"
+        resolved="$(git -C "$dir" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
+            || die "pinned $label ref $ref did not resolve to a commit"
+    fi
     git -C "$dir" checkout --detach "$resolved" \
         || die "could not check out pinned $label ref $ref ($resolved)"
     actual="$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null)" \
@@ -2128,35 +2203,69 @@ release_is_newer() {
     [ "$highest" = "$candidate" ]
 }
 
-# The shell which starts an update can belong to the previous release.  Pleb's
-# configuration contract deliberately gives explicit environment values
-# precedence over /etc/pleb/session.env, so exec alone would let an old pane's
-# exported refs override the closure which was just selected.  Ask the
-# installed target selector for its own release-key classification and remove
-# exactly those variables at the relaunch boundary.  The target updater then
-# reloads their newly selected values from the root-owned session file while
-# operator-controlled environment choices remain intact.
-# The optional selector argument supports isolated fixture callers.
-# shellcheck disable=SC2120
-selected_release_environment_keys() {
-    local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
-    local output keys
-    [ -x "$selector" ] || {
-        warn "target closure selector is not executable: $selector"
+# Permit the current, locally tagged release candidate to continue updating
+# while publication is pending. The tag must describe the exact installed
+# closure and the deployed handoff tools must still be its bytes.
+local_candidate_matches_selected_closure() {
+    local version="$1" tag="v$1" manifest key line value
+    local selector="${PLEBIAN_OS_INSTALLED_SELECTOR:-/usr/local/bin/plebian-os-select-closure}"
+    local updater="${PLEBIAN_OS_INSTALLED_UPDATER:-/usr/local/bin/plebian-os-update}"
+    local temp tag_object tag_commit
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
+    _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
+        && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [ "${PLEBIAN_OS_RELEASE:-}" = "$version" ] || return 1
+    [ "$(git -C "$PLEBIAN_OS_DIR" cat-file -t "refs/tags/$tag" 2>/dev/null)" = tag ] || return 1
+    tag_object="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "refs/tags/$tag" 2>/dev/null)" \
+        || return 1
+    tag_commit="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "$tag^{commit}" 2>/dev/null)" \
+        || return 1
+    [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] \
+        && [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    case "${PLEBIAN_OS_REF:-}" in
+        "$tag"|"$tag_commit") ;;
+        *) return 1 ;;
+    esac
+    [ "$(git -C "$PLEBIAN_OS_DIR" show "$tag:VERSION" 2>/dev/null)" = "$version" ] || return 1
+    manifest="$(git -C "$PLEBIAN_OS_DIR" show "$tag:releases/$version.env" 2>/dev/null)" || return 1
+    temp="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-candidate.XXXXXX")" || return 1
+    if ! git -C "$PLEBIAN_OS_DIR" show "$tag:provision/plebian-os-select-closure.sh" >"$temp/selector" \
+        || ! git -C "$PLEBIAN_OS_DIR" show "$tag:provision/plebian-os-update.sh" >"$temp/updater" \
+        || ! cmp -s "$temp/selector" "$selector" \
+        || ! cmp -s "$temp/updater" "$updater"; then
+        rm -rf -- "$temp"
         return 1
-    }
-    output="$("$selector" --show)" || {
-        warn "could not read the target selector's release-controlled keys"
-        return 1
-    }
-    keys="$(printf '%s\n' "$output" | sed -n \
-        -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' \
-        -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
-    [ -n "$keys" ] || {
-        warn "target selector reported no release-controlled keys"
-        return 1
-    }
-    printf '%s\n' "$keys"
+    fi
+    # --show is the installed selector's authoritative list of closure keys.
+    local keys
+    keys="$("$selector" --show 2>/dev/null)" || { rm -rf -- "$temp"; return 1; }
+    while IFS= read -r line; do
+        key="$(printf '%s\n' "$line" | sed -n -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
+        [ -n "$key" ] || continue
+        # PLEBIAN_OS_RELEASE is the selector's runtime identity for the chosen
+        # manifest, not a manifest pin. Its exact equality to version was
+        # already required above.
+        [ "$key" != PLEBIAN_OS_RELEASE ] || continue
+        value="${!key-}"
+        # Closure selection resolves pins before writing the root-owned
+        # session file. For the OS candidate, the selected value is therefore
+        # the peeled commit while the signed-off manifest retains its annotated
+        # tag spelling. Their equality was bound above; compare the manifest
+        # with that spelling here.
+        if [ "$key" = PLEBIAN_OS_REF ] && [ "$value" = "$tag_commit" ]; then
+            value="$tag"
+        fi
+        if ! printf '%s\n' "$manifest" | awk -v k="$key" -v v="$value" '
+            index($0, "#") == 1 || $0 == "" { next }
+            index($0, "=") { name=substr($0,1,index($0,"=")-1); val=substr($0,index($0,"=")+1); gsub(/^\"|\"$/, "", val); if (name==k && val==v) found=1 }
+            END { exit !found }
+        '; then rm -rf -- "$temp"; return 1; fi
+    done <<<"$keys"
+    rm -rf -- "$temp"
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT="$tag_object"
+    _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT="$tag_commit"
+    return 0
 }
 
 ensure_os_source_checkout_for_selection() {
@@ -2210,6 +2319,11 @@ select_latest_release_if_needed() {
         return 0
     fi
     if ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
+        if [ "$restart_arg" = --restart ] \
+            && local_candidate_matches_selected_closure "$PLEBIAN_OS_VERSION"; then
+            log "unpublished candidate v$PLEBIAN_OS_VERSION matches the selected release closure; continuing update"
+            return 0
+        fi
         die "published release $latest is not newer than selected release $PLEBIAN_OS_VERSION; refusing an implicit downgrade"
     fi
 

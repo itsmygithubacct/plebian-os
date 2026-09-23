@@ -447,6 +447,7 @@ class VmBuilderEnvTests(unittest.TestCase):
 
         self.assertEqual(installed, ["game", "app"])
         self.assertTrue(roots)
+        self.assertTrue(all(root.parent.parent == Path.home() for root in roots))
         self.assertTrue(all(not root.exists() for root in roots))
 
     def test_yes_mode_generates_harness_only_password(self):

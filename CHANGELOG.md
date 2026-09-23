@@ -75,11 +75,13 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Kilix Start and status widgets open anchored drop-downs above the panes.
   Panes keep their size and live contents; popups fit the window, restore
   focus and consume outside clicks used to dismiss them. The release selects
-  integrated rc1 host `30922e5e` plus the lazy-TTS follow-ups through `a53b80f`,
-  with engine `8f423846` and desktop `fd88a328`.
+  rc1 host `363d0222` (over `3a257725`) merged with the lazy-TTS follow-ups
+  through `29fbaa5` (merge `252aad6`, head `ea1f710`), with engine `8f423846`
+  and desktop `1e7921b9`.
   The host pins the rc1 content catalog and includes floating chrome, model
-  setup, native build support and supplied-model installation. The other
-  release and feature qualification gates remain open.
+  setup, native build support, supplied-model installation, private catalog
+  build caches and hardened fetched-source permissions. The other release and
+  feature qualification gates remain open.
 - The closure selector can explicitly select one full development source commit
   with `--development-commit` for an untagged diagnostic transaction. Origin,
   complete manifest, component ancestry, exact target-tool and atomic rollback
