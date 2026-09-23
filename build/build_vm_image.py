@@ -1807,6 +1807,18 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         f'{shlex.quote("uv " + expected_uv_version + " (")}*\\)) true ;; '
         '*) false ;; esac)'
     )
+    # A package can ship a systemd *user* unit that Debian enables for every
+    # login, and one that opens the default sound card holds the same card
+    # dictation records from. Ask the installed system itself, using the rule
+    # the provisioner already carries, rather than restating the rule here
+    # where the two copies could drift. Exit 2 -- the script is missing, or
+    # the enumeration failed -- is a failed check, never a quiet pass.
+    audio_holdoff = (
+        "bash -c 'export PLEBIAN_OS_PROVISION_LIB_ONLY=1; "
+        ". /usr/local/sbin/plebian-os-provision >/dev/null 2>&1 || exit 2; "
+        "held=$(enabled_audio_holding_user_units) || exit 2; "
+        'test -z "$held" || { echo "$held" >&2; exit 1; }\''
+    )
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
         ("exact build provenance", exact_build_provenance),
@@ -1856,6 +1868,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
             "--dry-run | grep -Fqx '  Unix listener patch sha256: "
             "ad1ba7475946a22e371156c06cbb8dba58d8fd23f916a3bcffa8d937bf35ccde'",
         ),
+        ("no login audio daemon", audio_holdoff),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]

@@ -2969,6 +2969,160 @@ refresh_os_dependencies() {
         || die "selected OS dependency closure could not be installed"
 }
 
+# An update installs packages at four sites — the OS dependency closure above,
+# the selected native runtime .deb, `pleb install`, and the component update
+# that runs the pinned Kilix's own build-dependency installer. Any of them can
+# bring a package whose systemd *user* unit Debian enables for every login, and
+# one that opens the default sound card holds the same card dictation records
+# from. A hold-off that ran only at provisioning time would be undone by the
+# first update that installs such a package, which is not a remedy at all: it
+# is a remedy with an expiry date nobody is told about.
+#
+# Run the installed provisioner's own rule rather than a second copy that could
+# drift — the same rule the image's acceptance check asks. WHICH provisioner
+# that is depends on PLEBIAN_OS_SELF_UPDATE, and the step has to be honest
+# about both cases:
+#   * self-update on (the default): self_update_os_layer above has just
+#     deployed the TARGET release's provisioner, so this runs the rule the
+#     release being installed ships. If that file does not carry the rule, the
+#     OS layer that was just deployed is not the one this updater belongs to,
+#     and the update fails saying so.
+#   * self-update off (PLEBIAN_OS_SELF_UPDATE=0, documented in this file's
+#     header): the installed provisioner is whatever the machine already had.
+#     Every provisioner released before this hold-off — every v0.1.x, v0.2.0
+#     and v0.2.1 tag — lacks the function, and v0.1.0's has no library-only
+#     mode either, so SOURCING it would run a whole provisioning pass as root.
+#     So the file is inspected before it is sourced, the function is checked
+#     with `declare -F` before it is called, and when either is missing the
+#     step warns — truthfully: the card was NOT re-checked, and why — and the
+#     update carries on. Failing the update there would fail every update on
+#     every shipped machine that runs with self-update disabled, for a check
+#     the operator's own setting means this updater cannot make.
+#
+# That inspection is TEXTUAL. It is a compatibility check, not a sandbox and
+# not a proof that sourcing runs nothing. It is two greps, each for one line
+# anywhere in the file: one beginning `disable_audio_holding_user_units() {`,
+# and the library-only `if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then`.
+# It is right for every provisioner ever released: v0.1.0 has no library-only
+# guard, and v0.1.1 through v0.2.1 have no hold-off function, so on a shipped
+# machine nothing is sourced at all. But a file that carries both lines is
+# sourced as root and runs whatever its top level runs. Six shapes pass the
+# inspection and still run code as root through this step:
+#   1. a command placed before the guard;
+#   2. an EXIT trap;
+#   3. a DEBUG trap;
+#   4. a RETURN trap (with functrace);
+#   5. the guard's text placed after the work it should have stopped;
+#   6. the guard's text inside a heredoc.
+# The ownership bar below is what keeps this from being an escalation: only
+# root can put a file there, and root has nothing to escalate to. The greps
+# are POSIX basic regular expressions, read by the `grep` on PATH. GNU grep
+# matches both lines in the shipped provisioner. A grep that reads them
+# differently misses a line, and the step then refuses to source the file:
+# it takes the rc 98 branch below. ugrep 7.8.4 in its `-G` basic-regex mode
+# is one such grep, and misses the second line.
+#
+# Only on the success path. An update that fails after refresh_os_dependencies
+# and before this step rolls back the OS layer and the checkouts but keeps the
+# packages it installed ("Apt package additions are permitted rollback
+# residue"), and with them any enablement link a postinst wrote; nothing on the
+# rollback path re-checks the card. The next update that completes, or a
+# reprovision, runs this step and clears it. Running the rule from the rollback
+# path itself was not done: it would source a provisioner the rollback has just
+# restored, as root, at the moment the update is already failing.
+#
+# A *fluidsynth upgrade* was never the exposure: once the enablement link is
+# gone, deb-systemd-helper's `was-enabled` is false and the postinst takes its
+# update-state branch. The exposure is a package installed here for the first
+# time. That is narrow, and it is exactly the kind of narrow thing that is
+# invisible until someone cannot dictate.
+#
+# The step runs as root, so the file it sources is held to the same bar the
+# root-sourced session config is: a regular file, not a symlink, owned by
+# root, writable by nobody else, in root-owned directories nobody else can
+# write. The one override, PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT, exists so
+# the end-to-end arm can drive this step against a fixture root, and it is
+# honoured ONLY under PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1 — the mode in which
+# this file refuses to run an update at all. Outside it the variable is
+# ignored, and the default path is the one deploy_staged_os_layer writes.
+#
+# PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 is passed because the provisioner opens its
+# own log at source time: without it, every update would append a false
+# "plebian-os-provision starting" banner to /var/log/plebian-os-provision.log
+# and tee this step into it. Current provisioners also skip that in library-only
+# mode; the variable is what stops an OLD installed one from doing it.
+AUDIO_HOLDOFF_PROVISIONER=/usr/local/sbin/plebian-os-provision
+
+audio_holdoff_provisioner_is_safe() {
+    local path="$1" test_mode="$2" owner mode dir
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    owner="$(stat -c '%u' "$path" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' "$path" 2>/dev/null)" || return 1
+    (( (8#$mode & 8#22) == 0 )) || return 1
+    if [ "$test_mode" = 1 ]; then
+        # A fixture is owned by whoever runs the suite; nothing else is.
+        [ "$owner" = 0 ] || [ "$owner" = "$(id -u)" ] || return 1
+        return 0
+    fi
+    [ "$owner" = 0 ] || return 1
+    dir="$(dirname "$path")"
+    while [ "$dir" != / ]; do
+        owner="$(stat -c '%u' "$dir" 2>/dev/null)" || return 1
+        mode="$(stat -c '%a' "$dir" 2>/dev/null)" || return 1
+        [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || return 1
+        dir="$(dirname "$dir")"
+    done
+}
+
+reapply_audio_holdoff() {
+    local provisioner="$AUDIO_HOLDOFF_PROVISIONER" test_mode=0 rc=0 self_update
+    local -a elevate=()
+    if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        test_mode=1
+        provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-$provisioner}"
+    fi
+    case "${PLEBIAN_OS_SELF_UPDATE:-1}" in
+        1|yes|true|on) self_update=1 ;;
+        *) self_update=0 ;;
+    esac
+    audio_holdoff_provisioner_is_safe "$provisioner" "$test_mode" \
+        || die "installed provisioner is missing or unsafe: $provisioner"
+    # Inspected before it is sourced: a provisioner without a library-only
+    # return would run a full provisioning pass here, as root. A textual
+    # check only; see the header for the six shapes it does not stop.
+    if ! grep -q '^disable_audio_holding_user_units() {' "$provisioner" \
+        || ! grep -q '^if \[ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 \]; then' \
+            "$provisioner"; then
+        rc=98
+    else
+        [ "$(id -u)" = 0 ] || elevate=(sudo)
+        log "re-checking for login-time daemons that would hold the default sound card"
+        "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 \
+            PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 bash -c '
+            set -uo pipefail
+            . "$1" || exit 97
+            declare -F disable_audio_holding_user_units >/dev/null || exit 98
+            DRY_RUN=0
+            disable_audio_holding_user_units
+        ' reapply-audio-holdoff "$provisioner" || rc=$?
+    fi
+    case "$rc:$self_update" in
+        0:*) return 0 ;;
+        98:0)
+            warn "the installed provisioner ($provisioner) predates the login-time"
+            warn "  audio hold-off, and OS-layer self-update is disabled"
+            warn "  (PLEBIAN_OS_SELF_UPDATE=${PLEBIAN_OS_SELF_UPDATE:-}), so this update"
+            warn "  did NOT check whether a package it installed now holds the default"
+            warn "  sound card that dictation records from. Update with OS-layer"
+            warn "  self-update enabled to install the hold-off."
+            return 0
+            ;;
+        98:*) die "the provisioner this update just deployed ($provisioner) does not carry the audio hold-off; the OS layer on this machine is not the one this updater belongs to" ;;
+        97:*) die "the installed provisioner could not be loaded to re-check the default sound card: $provisioner" ;;
+        *) die "the audio hold-off did not complete (exit $rc): see its message above" ;;
+    esac
+}
+
 stack_env=(
     "PLEBIAN_OS_NATIVE_DEB_URL=$PLEBIAN_OS_NATIVE_DEB_URL"
     "PLEBIAN_OS_NATIVE_DEB_SHA256=$PLEBIAN_OS_NATIVE_DEB_SHA256"
@@ -3537,6 +3691,10 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     log "updating kilix, submodules, fork engine, and optional desktop provider"
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart
     test_fail_after_boundary component-update
+    # Last, after every step above that can install a package. See the
+    # function's own header for why an update needs this at all.
+    reapply_audio_holdoff
+    test_fail_after_boundary audio-holdoff
     # Only now — after the dependency install and the whole component update
     # have succeeded — may the persisted session select the new window manager.
     # `pleb install` is the step that adds the openbox package and installs the

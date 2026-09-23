@@ -154,7 +154,15 @@ DEP_GROUPS=(
     "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
     # Playalong links SDL2 for output and libsndfile for stem decode. Keep the
     # runtime libraries explicit rather than relying on the -dev toolchain.
-    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils fluidsynth fluid-soundfont-gm libsdl2-2.0-0 libsndfile1"
+    # Kilix Amp links libfluidsynth in-process and reads a General MIDI
+    # SoundFont; it never runs the fluidsynth *player*, and the player's
+    # package ships a systemd user unit Debian enables for every login, which
+    # opens and holds the default sound card -- the card dictation records
+    # from. So the runtime library package is what belongs here, next to the
+    # SoundFont the renderer loads. (The player still reaches the image as a
+    # hard dependency of libfluidsynth-dev below; disable_audio_holding_user_units
+    # in plebian-os-provision.sh is what keeps its unit from running.)
+    "audio|pulseaudio pulseaudio-utils pulsemixer alsa-utils libfluidsynth3 fluid-soundfont-gm libsdl2-2.0-0 libsndfile1"
     # Read-aloud's synthesizer, plus the mbrola runtime its optional quality
     # tier drives. The mbrola *voice databases* (mbrola-us1) are non-free. The
     # image now enables the non-free component, so they are installable — but

@@ -12,6 +12,48 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- A fresh install no longer comes up with a MIDI synthesiser daemon holding the
+  default sound card, which is the same card dictation records from. On Debian
+  the `fluidsynth` package ships a systemd *user* unit that is enabled for
+  every login, and that unit cannot be kept off the image by editing a package
+  list: `libfluidsynth-dev`, which Kilix Amp builds against and which is this
+  image's only route to `libpipewire-0.3-dev`, carries a versioned hard
+  `Depends: fluidsynth`. Provisioning therefore disables the *unit*, by a rule
+  that names no package — any enabled user unit whose program links an audio
+  client library, or that declares a dependency on the sound stack, is
+  disabled unless it is the machine's own sound server — and the VM acceptance
+  run asks the installed system the same question. `plebian-os-update` now asks
+  it too, after everything an update installs, so a package first installed
+  during an update cannot quietly take the card back. With OS-layer self-update
+  disabled (`PLEBIAN_OS_SELF_UPDATE=0`) the update can only use the provisioner
+  the machine already has, and one from before this release has no hold-off:
+  the update then warns that it did not re-check the card, and carries on. The
+  check reads the `.wants/`, `.requires/` and `.upholds/` links that
+  `WantedBy=`, `RequiredBy=` and `UpheldBy=` create, in every root-owned
+  directory of the user-unit search path, by the link's name as systemd does;
+  and it follows what the login target and every enabled unit pull in through
+  their unit files and drop-ins — so a drop-in on `default.target` or
+  `basic.target`, a type-level `target.d/` drop-in, an override or alias of
+  `default.target`, and an enabled helper unit that `Wants=` the daemon are
+  caught. It is not complete, and does not claim to be: it does not see a
+  daemon started through a wrapper such as `sh -c`, per-account or
+  `/etc/skel` units, generators (XDG autostart among them), or what the
+  desktop session rather than the login target starts; the provisioner's own
+  header lists every known gap. Where the remedy is a mask, it is never
+  written over a file already in its place — an administrator's own unit in
+  `/etc/systemd/user` is left byte for byte, and provisioning stops and says
+  so instead. Ordering alone no longer condemns a unit: `After=` says when a
+  unit may start, never that it opens anything, so a helper that merely runs
+  after audio is up is left alone. An enablement nobody's package created —
+  someone's deliberate machine-wide choice — is still removed, because the
+  image's own acceptance fails while the card is held, but it is announced and
+  recorded in `/var/lib/plebian-os/audio-holdoff.log` rather than undone in
+  silence; a per-account `systemctl --user enable` is never touched at all.
+  Both fresh-install package lists now name `libfluidsynth3`, the runtime
+  library Amp actually loads, rather than the player: Amp links libfluidsynth
+  in-process and renders MIDI through the General MIDI SoundFont, which is
+  kept. Scoped to Debian, the release distribution; other distributions
+  package the player differently.
 - The image ships `feh` as the still-image viewer, on both the Debian-installer
   path and `install-deps.sh`. Evince remains the PDF handler and mpv the video
   player; without `feh` a PNG or JPEG from a file manager had no dedicated
