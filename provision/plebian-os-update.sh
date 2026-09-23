@@ -2128,6 +2128,46 @@ release_is_newer() {
     [ "$highest" = "$candidate" ]
 }
 
+# Permit the current, locally tagged release candidate to continue updating
+# while publication is pending. The tag must describe the exact installed
+# closure and the deployed handoff tools must still be its bytes.
+local_candidate_matches_selected_closure() {
+    local version="$1" tag="v$1" manifest key line value
+    local selector="${PLEBIAN_OS_INSTALLED_SELECTOR:-/usr/local/bin/plebian-os-select-closure}"
+    local updater="${PLEBIAN_OS_INSTALLED_UPDATER:-/usr/local/bin/plebian-os-update}"
+    local temp
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
+        && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [ "${PLEBIAN_OS_REF:-}" = "$tag" ] \
+        && [ "${PLEBIAN_OS_RELEASE:-}" = "$version" ] || return 1
+    [ "$(git -C "$PLEBIAN_OS_DIR" cat-file -t "refs/tags/$tag" 2>/dev/null)" = tag ] || return 1
+    [ "$(git -C "$PLEBIAN_OS_DIR" show "$tag:VERSION" 2>/dev/null)" = "$version" ] || return 1
+    manifest="$(git -C "$PLEBIAN_OS_DIR" show "$tag:releases/$version.env" 2>/dev/null)" || return 1
+    temp="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-candidate.XXXXXX")" || return 1
+    if ! git -C "$PLEBIAN_OS_DIR" show "$tag:provision/plebian-os-select-closure.sh" >"$temp/selector" \
+        || ! git -C "$PLEBIAN_OS_DIR" show "$tag:provision/plebian-os-update.sh" >"$temp/updater" \
+        || ! cmp -s "$temp/selector" "$selector" \
+        || ! cmp -s "$temp/updater" "$updater"; then
+        rm -rf -- "$temp"
+        return 1
+    fi
+    # --show is the installed selector's authoritative list of closure keys.
+    local keys
+    keys="$("$selector" --show 2>/dev/null)" || { rm -rf -- "$temp"; return 1; }
+    while IFS= read -r line; do
+        key="$(printf '%s\n' "$line" | sed -n -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
+        [ -n "$key" ] || continue
+        value="${!key-}"
+        if ! printf '%s\n' "$manifest" | awk -v k="$key" -v v="$value" '
+            index($0, "#") == 1 || $0 == "" { next }
+            index($0, "=") { name=substr($0,1,index($0,"=")-1); val=substr($0,index($0,"=")+1); gsub(/^\"|\"$/, "", val); if (name==k && val==v) found=1 }
+            END { exit !found }
+        '; then rm -rf -- "$temp"; return 1; fi
+    done <<<"$keys"
+    rm -rf -- "$temp"
+    return 0
+}
+
 # The shell which starts an update can belong to the previous release.  Pleb's
 # configuration contract deliberately gives explicit environment values
 # precedence over /etc/pleb/session.env, so exec alone would let an old pane's
@@ -2210,6 +2250,11 @@ select_latest_release_if_needed() {
         return 0
     fi
     if ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
+        if [ "$restart_arg" = --restart ] \
+            && local_candidate_matches_selected_closure "$PLEBIAN_OS_VERSION"; then
+            log "unpublished candidate v$PLEBIAN_OS_VERSION matches the selected release closure; continuing update"
+            return 0
+        fi
         die "published release $latest is not newer than selected release $PLEBIAN_OS_VERSION; refusing an implicit downgrade"
     fi
 

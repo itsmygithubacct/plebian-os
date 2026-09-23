@@ -529,3 +529,15 @@ select the target release's complete coordinated closure, then run
 supported source versions, preservation guarantees, rollback behavior, and
 release gate are defined in [UPGRADING.md](UPGRADING.md); anything older than
 0.1.7 requires a fresh install.
+
+
+### Updating an unpublished tagged candidate
+
+A candidate image may run `plebian-os-update --restart` before its stable tag is
+published. The updater permits this only when release mode is enabled, the selected
+version is exact `X.Y.Z`, `PLEBIAN_OS_REF=vX.Y.Z`, the local tag is annotated, its
+`VERSION` and manifest match the selected release-controlled values, and the
+installed selector and updater are byte-for-byte those in that tag. This check
+does not require checkout HEAD to equal the candidate: selecting a closure reads
+the tag object and leaves the source checkout untouched. Development selections
+and any mismatch remain refused.

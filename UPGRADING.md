@@ -177,8 +177,13 @@ and documented.
 Release images keep exact refs in `/etc/pleb/session.env`. Beginning with 0.2.2,
 plain `plebian-os-update` queries the published stable `vX.Y.Z` tags, selects the
 highest version through that target release's own immutable closure selector,
-and then runs the newly installed updater. The normal upgrade is therefore one
-command:
+and then runs the newly installed updater. While publication is pending,
+`plebian-os-update --restart` may also proceed from a local unpublished candidate
+when its annotated stable tag, release manifest, selected closure, and installed
+selector/updater bytes all match exactly. The checkout HEAD is not part of this
+check because closure selection reads the tag object without moving the checkout.
+Development selections and mismatched candidates remain refused. The normal upgrade
+is therefore one command:
 
 ```sh
 plebian-os-update --restart

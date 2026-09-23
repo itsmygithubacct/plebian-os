@@ -88,6 +88,118 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("could not query published", result.stderr)
 
+    def _candidate_fixture(self, base: Path, annotated=True):
+        repo = base / "candidate"
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "test"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.invalid"], check=True)
+        (repo / "VERSION").write_text("0.2.2\n")
+        (repo / "releases").mkdir()
+        (repo / "provision").mkdir()
+        manifest = "PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_RELEASE_MODE=1\nPLEBIAN_OS_REF=v0.2.2\n"
+        (repo / "releases/0.2.2.env").write_text(manifest)
+        selector = (repo / "provision/plebian-os-select-closure.sh")
+        selector.write_text("#!/bin/bash\necho '  PLEBIAN_OS_VERSION=0.2.2'\necho '  PLEBIAN_OS_RELEASE=0.2.2'\necho '  PLEBIAN_OS_RELEASE_MODE=1'\necho '  PLEBIAN_OS_REF=v0.2.2'\n")
+        updater = (repo / "provision/plebian-os-update.sh")
+        updater.write_text("candidate updater bytes\n")
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "candidate"], check=True)
+        command = ["git", "-C", str(repo), "tag"]
+        command += ["-a", "v0.2.2", "-m", "candidate"] if annotated else ["v0.2.2"]
+        subprocess.run(command, check=True)
+        (repo / "later-change").write_text("head may advance\n")
+        subprocess.run(["git", "-C", str(repo), "add", "later-change"], check=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "later change"], check=True)
+        installed_selector = base / "installed-selector"
+        installed_updater = base / "installed-updater"
+        installed_selector.write_bytes(selector.read_bytes())
+        installed_selector.chmod(0o700)
+        installed_updater.write_bytes(updater.read_bytes())
+        return repo, installed_selector, installed_updater
+
+    def _candidate_result(self, repo: Path, selector: Path, updater: Path, overrides=()):
+        env = os.environ.copy()
+        env.update({"PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1", "PLEBIAN_OS_DIR": str(repo),
+                    "PLEBIAN_OS_RELEASE_MODE": "1", "PLEBIAN_OS_RELEASE": "0.2.2",
+                    "PLEBIAN_OS_VERSION": "0.2.2", "PLEBIAN_OS_REF": "v0.2.2",
+                    "PLEBIAN_OS_INSTALLED_SELECTOR": str(selector),
+                    "PLEBIAN_OS_INSTALLED_UPDATER": str(updater)})
+        env.update(dict(overrides))
+        return subprocess.run(["bash", "-c", 'update_path=$1; set --; source "$update_path"; local_candidate_matches_selected_closure 0.2.2',
+                               "bash", str(UPDATE)], env=env, text=True, capture_output=True)
+
+    def test_unpublished_annotated_candidate_is_accepted_without_head_check(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo, selector, updater = self._candidate_fixture(Path(td))
+            # _candidate_fixture leaves HEAD one commit beyond the tag. The
+            # selector contract reads the tag object without moving checkout.
+            self.assertNotEqual(
+                subprocess.run(
+                    ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                    text=True, capture_output=True, check=True,
+                ).stdout,
+                subprocess.run(
+                    ["git", "-C", str(repo), "rev-parse", "v0.2.2^{commit}"],
+                    text=True, capture_output=True, check=True,
+                ).stdout,
+            )
+            result = self._candidate_result(repo, selector, updater)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_plain_restart_uses_exact_unpublished_candidate_when_remote_is_older(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            repo, selector, updater = self._candidate_fixture(base)
+            published = self._repo_with_tags(base / "published")
+            env = os.environ.copy()
+            env.update({
+                "PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1",
+                "PLEBIAN_OS_DIR": str(repo),
+                "PLEBIAN_OS_REPO": str(published),
+                "PLEBIAN_OS_RELEASE_MODE": "1",
+                "PLEBIAN_OS_RELEASE": "0.2.2",
+                "PLEBIAN_OS_VERSION": "0.2.2",
+                "PLEBIAN_OS_REF": "v0.2.2",
+                "PLEBIAN_OS_INSTALLED_SELECTOR": str(selector),
+                "PLEBIAN_OS_INSTALLED_UPDATER": str(updater),
+            })
+            command = (
+                'update_path=$1; set --; source "$update_path"; '
+                'restart_arg=--restart; select_latest_release_if_needed'
+            )
+            result = subprocess.run(
+                ["bash", "-c", command, "bash", str(UPDATE)], env=env,
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("unpublished candidate v0.2.2 matches", result.stdout)
+
+            refused = subprocess.run(
+                ["bash", "-c", command.replace(
+                    "restart_arg=--restart", "restart_arg=--no-restart"
+                ), "bash", str(UPDATE)], env=env,
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("refusing an implicit downgrade", refused.stderr)
+
+    def test_candidate_gate_refuses_lightweight_tag_and_mismatched_installed_bytes(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo, selector, updater = self._candidate_fixture(Path(td), annotated=False)
+            self.assertNotEqual(self._candidate_result(repo, selector, updater).returncode, 0)
+        with tempfile.TemporaryDirectory() as td:
+            repo, selector, updater = self._candidate_fixture(Path(td))
+            updater.write_text("changed updater\n")
+            self.assertNotEqual(self._candidate_result(repo, selector, updater).returncode, 0)
+
+    def test_candidate_gate_refuses_wrong_ref_or_development_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo, selector, updater = self._candidate_fixture(Path(td))
+            self.assertNotEqual(self._candidate_result(repo, selector, updater,
+                (("PLEBIAN_OS_REF", "deadbeef"),)).returncode, 0)
+            self.assertNotEqual(self._candidate_result(repo, selector, updater,
+                (("PLEBIAN_OS_RELEASE_MODE", "0"),)).returncode, 0)
+
     def test_relaunch_drops_every_target_release_key_from_an_old_pane(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
