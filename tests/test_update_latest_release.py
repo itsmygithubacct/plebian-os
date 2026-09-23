@@ -96,7 +96,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
         (repo / "VERSION").write_text("0.2.2\n")
         (repo / "releases").mkdir()
         (repo / "provision").mkdir()
-        manifest = "PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_RELEASE_MODE=1\nPLEBIAN_OS_REF=v0.2.2\n"
+        manifest = "PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_RELEASE_MODE=1\nPLEBIAN_OS_REF=v0.2.2\n"
         (repo / "releases/0.2.2.env").write_text(manifest)
         selector = (repo / "provision/plebian-os-select-closure.sh")
         selector.write_text(

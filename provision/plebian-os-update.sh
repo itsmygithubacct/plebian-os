@@ -2193,6 +2193,10 @@ local_candidate_matches_selected_closure() {
     while IFS= read -r line; do
         key="$(printf '%s\n' "$line" | sed -n -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
         [ -n "$key" ] || continue
+        # PLEBIAN_OS_RELEASE is the selector's runtime identity for the chosen
+        # manifest, not a manifest pin. Its exact equality to version was
+        # already required above.
+        [ "$key" != PLEBIAN_OS_RELEASE ] || continue
         value="${!key-}"
         # Closure selection resolves pins before writing the root-owned
         # session file. For the OS candidate, the selected value is therefore
