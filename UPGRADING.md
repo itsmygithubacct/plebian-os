@@ -103,17 +103,15 @@ release-controlled by the rules above:
   leg. A model you already have is **application state and is preserved**: it
   lives under `~/.local/gpu_terminal`, the update does not remove it, and
   dictation keeps working across the upgrade. A machine that did not have one
-  will not acquire one silently — and on 0.2.2 it cannot acquire one at all:
-  the first-use acceptance flow that was to replace the silent download is
-  **not reachable on a 0.2.2 image**, because the Kilix closure this release
-  pins (`KILIX_REF=62cb5760`) pins `third_party/kilix-content` at `c275334`,
-  which carries neither the flow nor a `vosk-model-small-en-us-0.15` record.
-  So: upgrade with a model, keep dictation; upgrade without one, and 0.2.2
-  gives you read-aloud only, with no documented way to add dictation. Do not
-  run `kilix models install vosk-model-small-en-us-0.15` on a 0.2.2 image; it
-  cannot resolve the asset. `releases/0.2.2-notes.md` names what must land, and
-  a deliberately failing test in `tests/test_voice_release_contract.py` holds
-  the gap open. Re-provisioning a machine that already carries a model is
+  will not acquire one silently. The integrated rc1 closure carries the
+  first-use acceptance flow, so a user without a model can install it through
+  `kilix models install vosk-model-small-en-us-0.15` after accepting its
+  licence. A previous 0.2.1 acceptance is not imported; accept again through
+  the licence screen. Amp's unavailable-model refusal is silent. A supplied
+  `--from DIR` install records acceptance, not the source or provenance of the
+  files. The flow has not yet been exercised in a built guest; no VM or ISO
+  has been built from rc1. Re-provisioning a machine that already carries a
+  model leaves it in place, without claiming who accepted it or when. Re-provisioning a machine that already carries a model is
   supported and leaves the model alone, whether its user accepted that model
   at first use or 0.2.1's firstboot fetched it before the upgrade — 0.2.2
   cannot tell those apart and does not claim to: what it checks is that this

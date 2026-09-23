@@ -12,14 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 # ── the first-use route, as a capability probe rather than as pin values ─────
 #
-# OS-V-VERIFY F1/F2 are held open by the deliberately failing test below. Its
-# first version compared two pins against two known-bad values, and
-# OS-V-FIX-VERIFY V1 showed that was the wrong thing to assert: its mutant
-# MV-02 advanced both pins to two other *real* commits that carry neither the
-# first-use flow nor the receipt gate, and the test went green with the gap
-# entirely untouched; MV-04 deleted one of the two requirements outright and
-# nothing in the suite noticed. Pin equality is bookkeeping. What the documents
-# promise is a capability, so the capability is what is checked here:
+# The release closure must carry both capabilities promised in its documents.
+# Earlier versions compared pins with known-bad SHAs or allowed the
+# deliberately failing test to remain a tripwire after the route had landed.
+# Pin equality is bookkeeping. What the documents promise is a capability, so
+# the pinned trees are inspected for those capabilities:
 #
 #   * whatever KILIX_REF is, the Kilix commit it names must pin a
 #     `third_party/kilix-content` commit that carries the first-use flow AND an
@@ -43,14 +40,11 @@ LICENCE_REFUSED_VALUE = 3
 LICENCE_REFUSED_DEFINITION = (
     f"{LICENCE_REFUSED_SYMBOL} = {LICENCE_REFUSED_VALUE}")
 
-# The two commits that do carry these things today, on branches that have not
-# been merged or released. They are fixtures for the probes' pass path — the
-# release pins neither, and nothing here compares a pinned ref against them.
+# Earlier reviewed capability commits retained as fixtures for the probes'
+# positive and negative pass-path tests. The release contract below resolves
+# and checks the actual refs in releases/0.2.2.env.
 CONTENT_REF_WITH_FIRST_USE = "7543aa30bd0c7ff60b7d7953e3290b87da10583c"
 VOICE_REF_WITH_RECEIPT_GATE = "dacfcaa98e58faffef8876873e7cb5b306890eec"
-
-# The words every instructing document has to carry while that is true.
-GAP_STATEMENT = "not reachable on a 0.2.2 image"
 
 # OS-V-FIX-VERIFY V6. Every shipped surface a provisioning or build path can
 # run from — not the four files the item-6 test used to name. `--install` alone
@@ -431,9 +425,8 @@ FIRST_USE_REQUIREMENTS = (
      receipt_gate_gap, _RECEIPT_GATE_OWED),
 )
 
-# OS-V-VERIFY F6. (document, a sentence that really was removed, the sentence
-# that replaced it). The first four were removed by the OS-V commit from the
-# base at 139de5be; the last four by this one, from OS-V's own text.
+# (document, a sentence that must stay removed, and the truthful replacement)
+# for stale claims that the pinned first-use path was unreachable.
 REWRITTEN_CLAIMS = (
     (
         "RELEASING.md",
@@ -460,28 +453,25 @@ REWRITTEN_CLAIMS = (
     ),
     (
         "RELEASING.md",
-        "Then acquire the model the way a user does: run `kilix models "
-        "install vosk-model-small-en-us-0.15`",
         "The first-use acceptance leg is deferred and must not be attempted "
         "on a 0.2.2 image",
+        "Exercise the pinned first-use path",
     ),
     (
         "releases/0.2.2-notes.md",
-        "The first time you ask for dictation, Kilix shows the model's "
-        "identity",
         "on a 0.2.2 image dictation is neither installed nor acquirable "
         "through the documented route",
+        "The rc1 closure now carries the first-use flow",
     ),
     (
         "UPGRADING.md",
-        "The first time dictation is wanted, Kilix shows the model, its "
-        "upstream source",
         "it cannot acquire one at all",
+        "The integrated rc1 closure carries the",
     ),
     (
         "CHANGELOG.md",
-        "dictation model is acquired the first time it is wanted",
-        "dictation model is to be acquired the first time it is wanted",
+        "That route is not reachable on a 0.2.2 image",
+        "The rc1 closure now carries the first-use flow",
     ),
 )
 
@@ -681,21 +671,19 @@ class VoiceReleaseContractTests(unittest.TestCase):
             with self.subTest(document=name, requirement="first-use route"):
                 self.assertIn("first-use", text)
                 self.assertIn("advertis", text)
-        # OS-V-VERIFY F1. The route these documents name is not in the closure
-        # this release pins, so a document may name the command only as part of
-        # saying that it cannot be run here. Any document that mentions it must
-        # carry the gap statement, in those words, in the same file.
+        # Keep the old unavailable-route claim out of every current release
+        # instruction. The pinned closure is checked below against the source
+        # trees themselves, so this does not rely on prose as capability proof.
+        stale_route_claims = (
+            "not reachable on a 0.2.2 image",
+            "it cannot acquire one at all",
+            "dictation is neither installed nor acquirable",
+        )
         for name, text in documents.items():
             collapsed = " ".join(text.split())
-            with self.subTest(document=name, requirement="the honest gap"):
-                self.assertIn(GAP_STATEMENT, collapsed)
-                if "kilix models install vosk-model-small-en-us-0.15" in (
-                        collapsed):
-                    self.assertIn(
-                        "0.2.2 image", collapsed,
-                        "a document naming the command must say where it does "
-                        "not run",
-                    )
+            with self.subTest(document=name, requirement="current route"):
+                for stale in stale_route_claims:
+                    self.assertNotIn(stale, collapsed)
         for name in ("CHANGELOG.md", "releases/0.2.2-notes.md"):
             with self.subTest(document=name, requirement="acceptance first"):
                 collapsed = " ".join(documents[name].split())
@@ -741,66 +729,29 @@ class VoiceReleaseContractTests(unittest.TestCase):
 
 
     def test_the_pinned_closure_can_acquire_the_model_with_acceptance(self):
-        """DELIBERATELY FAILING — OS-V-VERIFY F1 (Critical), and F2 (High).
+        """Inspect both capabilities at the exact refs selected for rc1.
 
-        This test does not describe a defect in this repository's code. It
-        holds open a gap between what 0.2.2's documents describe and what the
-        closure 0.2.2 pins can do, so that the gap cannot be closed by
-        forgetting about it. It fails today, on purpose, and the message says
-        exactly what has to land for it to pass. **Do not weaken it to make the
-        suite green**: weakening it would restore the false-delivery shape the
-        carrier design calls D6, which is the thing OD-BB exists to prevent.
-
-        It asserts the capability, not the pins. Its first version asserted
-        that two pins still equalled two known-bad values, and OS-V-FIX-VERIFY
-        V1 greened it by advancing both to two other real commits that carry
-        neither half of the route: the tripwire was gone and the gap was not.
-        Each requirement now resolves what the pin actually points at and looks
-        for the thing itself, so advancing the pins without landing the flow
-        does not green this test — it fails with a different message.
-
-        plebian-os cannot fix this from inside plebian-os. The acquisition flow
-        lives in kilix-content and reaches the image only through Kilix's
-        `third_party/kilix-content` submodule, and the receipt gate that stops
-        the catalog row's own action from fetching unconsented lives in
-        kilix-voice. Both arrive here as ref advances in `releases/0.2.2.env`.
+        The content probe follows KILIX_REF through the Kilix gitlink to the
+        vendored content tree. The voice probe checks the advertised
+        kilix-stt action for the covering-receipt gate and refusal exit. These
+        remain capability checks: changing either pin to a commit without its
+        required behavior makes this test fail.
         """
         manifest = _manifest(ROOT / "releases" / "0.2.2.env")
-        owed = []
-        for heading, key, probe, what_must_land in FIRST_USE_REQUIREMENTS:
-            gap = probe(manifest.get(key, ""))
-            if gap is not None:
-                owed.append(
-                    f"{heading}. releases/0.2.2.env pins\n"
-                    f"   {key}={manifest.get(key, '<unset>')}.\n"
-                    f"   WHAT IS MISSING: {gap}.\n"
-                    + what_must_land)
-        if owed:
-            self.fail(
-                "0.2.2 advertises a first-use acquisition route its own\n"
-                "pinned closure cannot run. This failure is deliberate and\n"
-                "recorded (OS-V-VERIFY F1/F2, OS-V-FIX-IMPL.md,\n"
-                "OS-V-FIX2-IMPL.md); it is the only failure in this suite\n"
-                "besides the sanctioned undated 0.2.2 CHANGELOG heading.\n"
-                "What is owed:\n\n"
-                + "\n\n".join(owed)
-                + "\n\nThis test is satisfied by the route existing, not by\n"
-                "either pin having a particular value: advancing the pins to\n"
-                "commits that still lack the flow or the gate fails it again\n"
-                "rather than greening it. When the route really lands, it\n"
-                "passes with no edit to it, and the cross-repo equality\n"
-                "OS-V-VERIFY F7 defers becomes writable at the same moment,\n"
-                "because the release then pins a kilix-content ref to test\n"
-                "against.")
+        for heading, key, probe, _missing_description in FIRST_USE_REQUIREMENTS:
+            with self.subTest(requirement=heading, ref=manifest.get(key)):
+                gap = probe(manifest.get(key, ""))
+                self.assertIsNone(
+                    gap,
+                    f"releases/0.2.2.env {key}={manifest.get(key, '<unset>')} "
+                    f"does not provide the required capability: {gap}",
+                )
 
     # ── the pass path, and the bite of each half ─────────────────────────────
     #
-    # The test above must fail today, so its pass path can never be exercised
-    # by the release's own pins. OS-V-FIX-VERIFY V1's point was that an
-    # assertion whose pass path is never run is not known to have one. These
-    # two tests run both directions of both probes against trees built for the
-    # purpose, so "fails while either half is missing, passes only when both
-    # are really there" is a demonstrated property rather than a claim.
+    # Keep synthetic probes for both missing halves as well as the actual
+    # pinned-tree test above. This verifies that a future pin can only pass
+    # when both capabilities are present.
 
     @staticmethod
     def _git_init(path):
@@ -1522,20 +1473,14 @@ class VoiceReleaseContractTests(unittest.TestCase):
         self.assertIn(
             "whether its user accepted that model at first use or 0.2.1's "
             "firstboot fetched it before the upgrade", upgrading)
-        # OS-V-FIX2-VERIFY VF6: two lines further down the same paragraph, the
-        # rollback sentence still asserted flatly that a model could be "an
-        # accepted model installed under 0.2.2" — eight lines after the same
-        # paragraph says 0.2.2 cannot acquire one at all. It is the same
-        # overclaim the sentence above was rewritten to remove, so it is
-        # removed the same way: by naming what the check can see (a model the
-        # machine carries) instead of who consented to it.
+        # The update installs no model; user acquisition is a later, explicit
+        # first-use action. Keep the distinction clear when describing rollback.
         self.assertNotIn("an accepted model installed under 0.2.2", upgrading)
         self.assertIn(
-            "a model the machine already carries — whichever release put it "
-            "there — satisfies 0.2.1's firstboot check", upgrading)
+            "Re-provisioning a machine that already carries a model leaves it "
+            "in place", upgrading)
         self.assertIn(
-            "It cannot be a model 0.2.2 installed: 0.2.2 installs none",
-            upgrading)
+            "a model the machine already carries", upgrading)
 
     @staticmethod
     def _shipped_surface_files():

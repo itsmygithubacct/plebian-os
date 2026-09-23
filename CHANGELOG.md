@@ -4,7 +4,7 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.2.2] — in development
+## [0.2.2] — 2026-09-23
 
 0.2.2 is a source integration candidate. Required F101/F104 qualification,
 artifact acceptance and final human review remain open; no release is tagged
@@ -61,9 +61,10 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Kilix Start and status widgets open anchored drop-downs above the panes.
   Panes keep their size and live contents; popups fit the window, restore
   focus and consume outside clicks used to dismiss them. The release selects
-  host `62cb5760` with engine `8f423846` and desktop `598c0ef8`, whose CI tests
-  that exact host. Existing host and desktop content-root integration is
-  retained; the other release and feature qualification gates remain open.
+  integrated rc1 host `30922e5e` with engine `8f423846` and desktop `598c0ef8`.
+  The host pins the rc1 content catalog and includes floating chrome, model
+  setup, native build support and supplied-model installation. The other
+  release and feature qualification gates remain open.
 - The closure selector can explicitly select one full development source commit
   with `--development-commit` for an untagged diagnostic transaction. Origin,
   complete manifest, component ancestry, exact target-tool and atomic rollback
@@ -90,7 +91,7 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - `KILIX_ICEWM_REF` advances to `ea45b9ab`, the revision the desktop SDK is
   conformance-bound against; the 0.2.1 pin was seven commits behind it and
   lacked the bridge module the SDK imports.
-- `KILIX_VOICE_REF` advances to `ba15d849`: one test read the operator's own
+- `KILIX_VOICE_REF` advances to `06d1f672`: one test read the operator's own
   selected model through the shared settings file and failed on any machine
   whose choice was not the default.
 - The speech-recognition model is no longer downloaded by the image. Through
@@ -106,19 +107,14 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   pins stay, as the identity that later download is verified against. The Vosk
   library is code, not weights, and stays pinned for the same reason. Owner
   decision OD-BB, under OD-S.
-  **That route is not reachable on a 0.2.2 image, and this is recorded rather
-  than worked around**: the Kilix
-  closure this release pins (`KILIX_REF=62cb5760`) pins
-  `third_party/kilix-content` at `c275334`, which carries neither
-  `first_use.py` nor a `vosk-model-small-en-us-0.15` record, so
-  `kilix models install vosk-model-small-en-us-0.15` cannot resolve the asset
-  and no licence screen exists to show. A 0.2.2 image therefore has read-aloud
-  and no dictation, and no way to acquire it through the documented route; a
-  machine that already had a model keeps it. The advertisement is ahead of the
-  closure. `tests/test_voice_release_contract.py::
-  test_the_pinned_closure_can_acquire_the_model_with_acceptance` fails until
-  `KILIX_REF` and `KILIX_VOICE_REF` advance to a closure that carries the flow
-  and the receipt gate. See `releases/0.2.2-notes.md`, *Known limitation*.
+  The rc1 closure now carries the first-use flow and covering-receipt gate.
+  Users must accept again through the licence screen because 0.2.1 receipts
+  are not read. Amp's unavailable-model refusal is silent. A supplied
+  `--from DIR` installation records acceptance, not the source or provenance
+  of the files. The flow has not yet been exercised in a built guest: no VM or
+  ISO has been built from rc1. See `releases/0.2.2-notes.md`, *Known
+  limitations*.
+
 - Keys in a `kilix run` pane no longer turn into Alt chords after leaving the
   pane with an Alt binding: modifiers are injected with the key that needs
   them and released with it, and the pane releases everything on focus-out.
