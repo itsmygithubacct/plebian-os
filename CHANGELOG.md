@@ -12,6 +12,12 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- Kilix 0.2.2 offers hardware-aware text-to-speech auditions. Piper Kristin
+  medium is the laptop-sized neural tier: its provider runtime installs only
+  when selected, and its model remains behind the pinned first-use licence
+  prompt. A reply benchmark measures provider startup and warm responses.
+  The shared model-sizer adds measured speech profiles. These source changes
+  do not qualify the release image or make larger Qwen models defaults.
 - A fresh install no longer comes up with a MIDI synthesiser daemon holding the
   default sound card, which is the same card dictation records from. On Debian
   the `fluidsynth` package ships a systemd *user* unit that is enabled for
@@ -61,7 +67,8 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Kilix Start and status widgets open anchored drop-downs above the panes.
   Panes keep their size and live contents; popups fit the window, restore
   focus and consume outside clicks used to dismiss them. The release selects
-  integrated rc1 host `30922e5e` with engine `8f423846` and desktop `fd88a328`.
+  integrated rc1 host `30922e5e` plus the lazy-TTS follow-up `fff53613`,
+  with engine `8f423846` and desktop `fd88a328`.
   The host pins the rc1 content catalog and includes floating chrome, model
   setup, native build support and supplied-model installation. The other
   release and feature qualification gates remain open.
@@ -91,9 +98,8 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - `KILIX_ICEWM_REF` advances to `ea45b9ab`, the revision the desktop SDK is
   conformance-bound against; the 0.2.1 pin was seven commits behind it and
   lacked the bridge module the SDK imports.
-- `KILIX_VOICE_REF` advances to `06d1f672`: one test read the operator's own
-  selected model through the shared settings file and failed on any machine
-  whose choice was not the default.
+- `KILIX_VOICE_REF` advances through `06d1f672` (a selected-model test fix) to
+  `53819f5e`, adding interactive TTS tiers and first-use Piper selection.
 - The speech-recognition model is no longer downloaded by the image. Through
   0.2.1 firstboot fetched the Vosk `small-en-us` acoustic model and required it
   installed before provisioning finished, with no licence shown and no
