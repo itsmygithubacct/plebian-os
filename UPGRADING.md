@@ -182,6 +182,9 @@ and then runs the newly installed updater. While publication is pending,
 when its annotated stable tag, release manifest, selected closure, and installed
 selector/updater bytes all match exactly. The checkout HEAD is not part of this
 check because closure selection reads the tag object without moving the checkout.
+The updater binds that validated local tag object and commit for its own OS-layer
+checkout, since the stable tag is deliberately absent from the remote during this
+gate; component refs and ordinary OS updates still resolve through their remotes.
 Development selections and mismatched candidates remain refused. The normal upgrade
 is therefore one command:
 

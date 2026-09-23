@@ -183,6 +183,130 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             self.assertNotEqual(refused.returncode, 0)
             self.assertIn("refusing an implicit downgrade", refused.stderr)
 
+    def test_validated_unpublished_candidate_completes_os_checkout_without_remote_tag(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            repo, selector, updater = self._candidate_fixture(base)
+            published = self._repo_with_tags(base / "published")
+            subprocess.run(
+                ["git", "-C", str(repo), "remote", "add", "origin", str(published)],
+                check=True,
+            )
+            candidate = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "v0.2.2^{commit}"],
+                text=True, capture_output=True, check=True,
+            ).stdout.strip()
+            self.assertNotEqual(
+                subprocess.run(
+                    ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                    text=True, capture_output=True, check=True,
+                ).stdout.strip(),
+                candidate,
+            )
+            env = os.environ.copy()
+            env.update({
+                "PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1",
+                "PLEBIAN_OS_DIR": str(repo),
+                "PLEBIAN_OS_REPO": str(published),
+                "PLEBIAN_OS_RELEASE_MODE": "1",
+                "PLEBIAN_OS_RELEASE": "0.2.2",
+                "PLEBIAN_OS_VERSION": "0.2.2",
+                "PLEBIAN_OS_REF": "v0.2.2",
+                "PLEBIAN_OS_INSTALLED_SELECTOR": str(selector),
+                "PLEBIAN_OS_INSTALLED_UPDATER": str(updater),
+            })
+            command = (
+                'update_path=$1; set --; source "$update_path"; '
+                'local_candidate_matches_selected_closure 0.2.2; '
+                'update_os_checkout'
+            )
+            result = subprocess.run(
+                ["bash", "-c", command, "bash", str(UPDATE)], env=env,
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("using already-validated unpublished", result.stdout)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(repo), "rev-parse", "HEAD"],
+                    text=True, capture_output=True, check=True,
+                ).stdout.strip(),
+                candidate,
+            )
+            # The configured origin has no v0.2.2 tag. Success therefore came
+            # from the validated local annotated tag, not a hidden fetch.
+            missing = subprocess.run(
+                ["git", "-C", str(published), "rev-parse", "--verify", "v0.2.2"],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(missing.returncode, 0)
+
+    def test_candidate_checkout_exception_does_not_apply_to_component_refs(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            os_repo, selector, updater = self._candidate_fixture(base)
+            published = self._repo_with_tags(base / "published")
+            subprocess.run(
+                ["git", "-C", str(os_repo), "remote", "add", "origin", str(published)],
+                check=True,
+            )
+            component = base / "component"
+            subprocess.run(["git", "init", "-q", str(component)], check=True)
+            subprocess.run(
+                ["git", "-C", str(component), "config", "user.name", "test"], check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(component), "config", "user.email", "test@example.invalid"], check=True,
+            )
+            (component / "local").write_text("local\n")
+            subprocess.run(["git", "-C", str(component), "add", "local"], check=True)
+            subprocess.run(["git", "-C", str(component), "commit", "-qm", "local"], check=True)
+            subprocess.run(
+                ["git", "-C", str(component), "remote", "add", "origin", str(published)],
+                check=True,
+            )
+            remote_commit = subprocess.run(
+                ["git", "-C", str(published), "rev-parse", "HEAD"],
+                text=True, capture_output=True, check=True,
+            ).stdout.strip()
+            env = os.environ.copy()
+            env.update({
+                "PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1",
+                "PLEBIAN_OS_DIR": str(os_repo),
+                "PLEBIAN_OS_REPO": str(published),
+                "PLEBIAN_OS_RELEASE_MODE": "1",
+                "PLEBIAN_OS_RELEASE": "0.2.2",
+                "PLEBIAN_OS_VERSION": "0.2.2",
+                "PLEBIAN_OS_REF": "v0.2.2",
+                "PLEBIAN_OS_INSTALLED_SELECTOR": str(selector),
+                "PLEBIAN_OS_INSTALLED_UPDATER": str(updater),
+            })
+            command = (
+                'update_path=$1; component=$2; ref=$3; set --; source "$update_path"; '
+                'local_candidate_matches_selected_closure 0.2.2; '
+                'checkout_pinned_ref "$component" "$ref" pleb'
+            )
+            result = subprocess.run(
+                ["bash", "-c", command, "bash", str(UPDATE), str(component), remote_commit],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("already-validated unpublished", result.stdout)
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(component), "rev-parse", "FETCH_HEAD"],
+                    text=True, capture_output=True, check=True,
+                ).stdout.strip(),
+                remote_commit,
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "-C", str(component), "rev-parse", "HEAD"],
+                    text=True, capture_output=True, check=True,
+                ).stdout.strip(),
+                remote_commit,
+            )
+
     def test_candidate_gate_refuses_lightweight_tag_and_mismatched_installed_bytes(self):
         with tempfile.TemporaryDirectory() as td:
             repo, selector, updater = self._candidate_fixture(Path(td), annotated=False)

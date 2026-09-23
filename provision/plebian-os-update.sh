@@ -549,6 +549,10 @@ PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
 
 restart_arg=--no-restart
 select_latest_release=1
+# Set only after the complete local-candidate gate succeeds. These are reset
+# unconditionally so caller-provided environment cannot opt into the bypass.
+_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
+_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --version|-V) echo "plebian-os-update $PLEBIAN_OS_VERSION"; exit 0 ;;
@@ -2017,12 +2021,32 @@ require_clean_pinned_checkout() {
 checkout_pinned_ref() {
     local dir="$1" ref="$2" label="$3" resolved actual
     require_clean_pinned_checkout "$dir" "$label"
-    # FETCH_HEAD binds resolution to the object returned by this origin fetch;
-    # do not trust an existing local tag with the same spelling.
-    git -C "$dir" fetch --force origin "$ref" \
-        || die "$label fetch of pinned ref $ref failed"
-    resolved="$(git -C "$dir" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
-        || die "pinned $label ref $ref did not resolve to a commit"
+    if [ "$label" = plebian-os ] \
+        && [ "$dir" = "$PLEBIAN_OS_DIR" ] \
+        && [ "$ref" = "v$PLEBIAN_OS_VERSION" ] \
+        && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT:-}" ] \
+        && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT:-}" ]; then
+        # The stable tag deliberately does not exist on origin during release
+        # qualification. The earlier candidate gate bound its annotated tag,
+        # manifest and deployed handoff bytes. Recheck both immutable object
+        # identities here so a changed local tag cannot cross that boundary.
+        [ "$(git -C "$dir" rev-parse --verify "refs/tags/$ref" 2>/dev/null)" \
+            = "$_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT" ] \
+            || die "validated local Plebian-OS candidate tag $ref changed before checkout"
+        resolved="$(git -C "$dir" rev-parse --verify "$ref^{commit}" 2>/dev/null)" \
+            || die "validated local Plebian-OS candidate $ref no longer resolves to a commit"
+        [ "$resolved" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ] \
+            || die "validated local Plebian-OS candidate commit changed before checkout"
+        log "using already-validated unpublished Plebian-OS candidate $ref at $resolved"
+    else
+        # FETCH_HEAD binds resolution to the object returned by this origin
+        # fetch. Component refs and ordinary OS refs never inherit the local
+        # prepublication exception.
+        git -C "$dir" fetch --force origin "$ref" \
+            || die "$label fetch of pinned ref $ref failed"
+        resolved="$(git -C "$dir" rev-parse --verify 'FETCH_HEAD^{commit}' 2>/dev/null)" \
+            || die "pinned $label ref $ref did not resolve to a commit"
+    fi
     git -C "$dir" checkout --detach "$resolved" \
         || die "could not check out pinned $label ref $ref ($resolved)"
     actual="$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null)" \
@@ -2135,12 +2159,20 @@ local_candidate_matches_selected_closure() {
     local version="$1" tag="v$1" manifest key line value
     local selector="${PLEBIAN_OS_INSTALLED_SELECTOR:-/usr/local/bin/plebian-os-select-closure}"
     local updater="${PLEBIAN_OS_INSTALLED_UPDATER:-/usr/local/bin/plebian-os-update}"
-    local temp
+    local temp tag_object tag_commit
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
+    _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
         && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
         && [ "${PLEBIAN_OS_REF:-}" = "$tag" ] \
         && [ "${PLEBIAN_OS_RELEASE:-}" = "$version" ] || return 1
     [ "$(git -C "$PLEBIAN_OS_DIR" cat-file -t "refs/tags/$tag" 2>/dev/null)" = tag ] || return 1
+    tag_object="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "refs/tags/$tag" 2>/dev/null)" \
+        || return 1
+    tag_commit="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "$tag^{commit}" 2>/dev/null)" \
+        || return 1
+    [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] \
+        && [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
     [ "$(git -C "$PLEBIAN_OS_DIR" show "$tag:VERSION" 2>/dev/null)" = "$version" ] || return 1
     manifest="$(git -C "$PLEBIAN_OS_DIR" show "$tag:releases/$version.env" 2>/dev/null)" || return 1
     temp="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-candidate.XXXXXX")" || return 1
@@ -2165,6 +2197,8 @@ local_candidate_matches_selected_closure() {
         '; then rm -rf -- "$temp"; return 1; fi
     done <<<"$keys"
     rm -rf -- "$temp"
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT="$tag_object"
+    _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT="$tag_commit"
     return 0
 }
 
