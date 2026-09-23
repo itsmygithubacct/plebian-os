@@ -20,7 +20,10 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   installs a locked runtime only after a live memory-fit check and keeps model
   weights behind first-use acceptance. On eligible NVIDIA hardware, the GPU
   tier also lazily installs a separate locked CUDA/FlashAttention runtime after
-  a fit check. None of these changes qualify the release
+  a fit check. The 0.6B Base GPU audition uses its own measured profile and a
+  fixed synthetic reference, with separate first-use weights. Pocket TTS is
+  not a selectable Voice tier: its native runtime remains research-only after
+  malformed near-silent output. None of these changes qualify the release
   image or make Qwen the default.
 - A fresh install no longer comes up with a MIDI synthesiser daemon holding the
   default sound card, which is the same card dictation records from. On Debian
@@ -103,8 +106,8 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   conformance-bound against; the 0.2.1 pin was seven commits behind it and
   lacked the bridge module the SDK imports.
 - `KILIX_VOICE_REF` advances through `06d1f672` (a selected-model test fix) to
-  `25ec0917`, adding interactive TTS tiers, first-use Piper/Qwen selection and
-  GPU fit visibility before lazy runtime installation.
+  `ae18f4d0`, adding interactive TTS tiers, first-use Piper/Qwen selection,
+  GPU fit visibility and the guarded 0.6B Base audition.
 - The speech-recognition model is no longer downloaded by the image. Through
   0.2.1 firstboot fetched the Vosk `small-en-us` acoustic model and required it
   installed before provisioning finished, with no licence shown and no
