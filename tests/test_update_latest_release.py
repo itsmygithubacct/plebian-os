@@ -372,6 +372,16 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             source,
         )
 
+    def test_initial_entry_cleans_release_keys_before_loading_session(self):
+        source = UPDATE.read_text()
+        clean_exec = 'exec "${clean_release_env[@]}" "$0" "$@"'
+        session_source = '. /etc/pleb/session.env'
+        self.assertIn(clean_exec, source)
+        self.assertLess(source.index(clean_exec), source.index(session_source))
+        self.assertIn('clean_release_env+=(-u "$key")', source)
+        self.assertIn('if [[ -v $key ]]; then', source)
+        self.assertNotIn('PLEBIAN_OS_RELEASE_ENV_CLEANED', source)
+
 
 if __name__ == "__main__":
     unittest.main()

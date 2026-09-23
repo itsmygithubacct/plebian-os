@@ -370,6 +370,56 @@ root_config_safe_to_source() {
     done
 }
 
+# The shell which starts an update can belong to a previously selected
+# release. Remove exactly the installed selector's release-controlled keys
+# before loading the root-owned session file; operator-controlled environment
+# choices remain intact. This also makes the documented selector-then-updater
+# sequence work from an already-open terminal.
+# The optional selector argument supports isolated fixture callers.
+# shellcheck disable=SC2120
+selected_release_environment_keys() {
+    local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
+    local output keys
+    [ -x "$selector" ] || {
+        warn "target closure selector is not executable: $selector"
+        return 1
+    }
+    output="$("$selector" --show)" || {
+        warn "could not read the target selector's release-controlled keys"
+        return 1
+    }
+    keys="$(printf '%s\n' "$output" | sed -n \
+        -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' \
+        -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
+    [ -n "$keys" ] || {
+        warn "target selector reported no release-controlled keys"
+        return 1
+    }
+    printf '%s\n' "$keys"
+}
+
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+    release_keys="$(selected_release_environment_keys)" \
+        || die "could not prepare a clean selected-release environment"
+    clean_release_env=(env)
+    clean_release_env_needed=0
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        if [[ -v $key ]]; then
+            clean_release_env+=(-u "$key")
+            clean_release_env_needed=1
+        fi
+    done <<<"$release_keys"
+    if [ "$clean_release_env_needed" = 1 ]; then
+        # Replacing the process is the environment-cleaning boundary. The
+        # second invocation observes no selected-release keys, so no sentinel
+        # controlled by the caller is needed to prevent another relaunch.
+        # shellcheck disable=SC2093
+        exec "${clean_release_env[@]}" "$0" "$@"
+        die "could not relaunch the updater with its selected release environment"
+    fi
+fi
+
 if [ -r /etc/pleb/session.env ]; then
     root_config_safe_to_source /etc/pleb/session.env \
         || die "refusing to source unsafe /etc/pleb/session.env as root"
@@ -2216,37 +2266,6 @@ local_candidate_matches_selected_closure() {
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT="$tag_object"
     _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT="$tag_commit"
     return 0
-}
-
-# The shell which starts an update can belong to the previous release.  Pleb's
-# configuration contract deliberately gives explicit environment values
-# precedence over /etc/pleb/session.env, so exec alone would let an old pane's
-# exported refs override the closure which was just selected.  Ask the
-# installed target selector for its own release-key classification and remove
-# exactly those variables at the relaunch boundary.  The target updater then
-# reloads their newly selected values from the root-owned session file while
-# operator-controlled environment choices remain intact.
-# The optional selector argument supports isolated fixture callers.
-# shellcheck disable=SC2120
-selected_release_environment_keys() {
-    local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
-    local output keys
-    [ -x "$selector" ] || {
-        warn "target closure selector is not executable: $selector"
-        return 1
-    }
-    output="$("$selector" --show)" || {
-        warn "could not read the target selector's release-controlled keys"
-        return 1
-    }
-    keys="$(printf '%s\n' "$output" | sed -n \
-        -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' \
-        -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
-    [ -n "$keys" ] || {
-        warn "target selector reported no release-controlled keys"
-        return 1
-    }
-    printf '%s\n' "$keys"
 }
 
 ensure_os_source_checkout_for_selection() {
