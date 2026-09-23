@@ -61,7 +61,7 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Kilix Start and status widgets open anchored drop-downs above the panes.
   Panes keep their size and live contents; popups fit the window, restore
   focus and consume outside clicks used to dismiss them. The release selects
-  integrated rc1 host `30922e5e` with engine `8f423846` and desktop `598c0ef8`.
+  integrated rc1 host `30922e5e` with engine `8f423846` and desktop `fd88a328`.
   The host pins the rc1 content catalog and includes floating chrome, model
   setup, native build support and supplied-model installation. The other
   release and feature qualification gates remain open.
