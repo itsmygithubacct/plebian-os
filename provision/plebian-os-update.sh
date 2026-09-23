@@ -2023,18 +2023,19 @@ checkout_pinned_ref() {
     require_clean_pinned_checkout "$dir" "$label"
     if [ "$label" = plebian-os ] \
         && [ "$dir" = "$PLEBIAN_OS_DIR" ] \
-        && [ "$ref" = "v$PLEBIAN_OS_VERSION" ] \
+        && { [ "$ref" = "v$PLEBIAN_OS_VERSION" ] \
+            || [ "$ref" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ]; } \
         && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT:-}" ] \
         && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT:-}" ]; then
         # The stable tag deliberately does not exist on origin during release
         # qualification. The earlier candidate gate bound its annotated tag,
         # manifest and deployed handoff bytes. Recheck both immutable object
         # identities here so a changed local tag cannot cross that boundary.
-        [ "$(git -C "$dir" rev-parse --verify "refs/tags/$ref" 2>/dev/null)" \
+        [ "$(git -C "$dir" rev-parse --verify "refs/tags/v$PLEBIAN_OS_VERSION" 2>/dev/null)" \
             = "$_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT" ] \
-            || die "validated local Plebian-OS candidate tag $ref changed before checkout"
-        resolved="$(git -C "$dir" rev-parse --verify "$ref^{commit}" 2>/dev/null)" \
-            || die "validated local Plebian-OS candidate $ref no longer resolves to a commit"
+            || die "validated local Plebian-OS candidate tag v$PLEBIAN_OS_VERSION changed before checkout"
+        resolved="$(git -C "$dir" rev-parse --verify "v$PLEBIAN_OS_VERSION^{commit}" 2>/dev/null)" \
+            || die "validated local Plebian-OS candidate v$PLEBIAN_OS_VERSION no longer resolves to a commit"
         [ "$resolved" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ] \
             || die "validated local Plebian-OS candidate commit changed before checkout"
         log "using already-validated unpublished Plebian-OS candidate $ref at $resolved"
@@ -2164,7 +2165,6 @@ local_candidate_matches_selected_closure() {
     _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
         && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-        && [ "${PLEBIAN_OS_REF:-}" = "$tag" ] \
         && [ "${PLEBIAN_OS_RELEASE:-}" = "$version" ] || return 1
     [ "$(git -C "$PLEBIAN_OS_DIR" cat-file -t "refs/tags/$tag" 2>/dev/null)" = tag ] || return 1
     tag_object="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "refs/tags/$tag" 2>/dev/null)" \
@@ -2173,6 +2173,10 @@ local_candidate_matches_selected_closure() {
         || return 1
     [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] \
         && [[ "$tag_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+    case "${PLEBIAN_OS_REF:-}" in
+        "$tag"|"$tag_commit") ;;
+        *) return 1 ;;
+    esac
     [ "$(git -C "$PLEBIAN_OS_DIR" show "$tag:VERSION" 2>/dev/null)" = "$version" ] || return 1
     manifest="$(git -C "$PLEBIAN_OS_DIR" show "$tag:releases/$version.env" 2>/dev/null)" || return 1
     temp="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-candidate.XXXXXX")" || return 1
@@ -2190,6 +2194,14 @@ local_candidate_matches_selected_closure() {
         key="$(printf '%s\n' "$line" | sed -n -e 's/^  \([A-Z][A-Z0-9_]*\)=.*/\1/p' -e 's/^  \([A-Z][A-Z0-9_]*\) (not set)$/\1/p')"
         [ -n "$key" ] || continue
         value="${!key-}"
+        # Closure selection resolves pins before writing the root-owned
+        # session file. For the OS candidate, the selected value is therefore
+        # the peeled commit while the signed-off manifest retains its annotated
+        # tag spelling. Their equality was bound above; compare the manifest
+        # with that spelling here.
+        if [ "$key" = PLEBIAN_OS_REF ] && [ "$value" = "$tag_commit" ]; then
+            value="$tag"
+        fi
         if ! printf '%s\n' "$manifest" | awk -v k="$key" -v v="$value" '
             index($0, "#") == 1 || $0 == "" { next }
             index($0, "=") { name=substr($0,1,index($0,"=")-1); val=substr($0,index($0,"=")+1); gsub(/^\"|\"$/, "", val); if (name==k && val==v) found=1 }

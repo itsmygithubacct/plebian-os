@@ -185,6 +185,9 @@ check because closure selection reads the tag object without moving the checkout
 The updater binds that validated local tag object and commit for its own OS-layer
 checkout, since the stable tag is deliberately absent from the remote during this
 gate; component refs and ordinary OS updates still resolve through their remotes.
+The selector records the OS pin as the tag's peeled commit in the installed
+session, so the gate accepts that exact commit as equivalent to the annotated tag
+while rejecting every other commit.
 Development selections and mismatched candidates remain refused. The normal upgrade
 is therefore one command:
 

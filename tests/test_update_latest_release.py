@@ -99,7 +99,13 @@ class LatestReleaseUpdateTests(unittest.TestCase):
         manifest = "PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_RELEASE_MODE=1\nPLEBIAN_OS_REF=v0.2.2\n"
         (repo / "releases/0.2.2.env").write_text(manifest)
         selector = (repo / "provision/plebian-os-select-closure.sh")
-        selector.write_text("#!/bin/bash\necho '  PLEBIAN_OS_VERSION=0.2.2'\necho '  PLEBIAN_OS_RELEASE=0.2.2'\necho '  PLEBIAN_OS_RELEASE_MODE=1'\necho '  PLEBIAN_OS_REF=v0.2.2'\n")
+        selector.write_text(
+            "#!/bin/bash\n"
+            "echo '  PLEBIAN_OS_VERSION=0.2.2'\n"
+            "echo '  PLEBIAN_OS_RELEASE=0.2.2'\n"
+            "echo '  PLEBIAN_OS_RELEASE_MODE=1'\n"
+            "printf '  PLEBIAN_OS_REF=%s\\n' \"${PLEBIAN_OS_REF:-v0.2.2}\"\n"
+        )
         updater = (repo / "provision/plebian-os-update.sh")
         updater.write_text("candidate updater bytes\n")
         subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
@@ -144,6 +150,15 @@ class LatestReleaseUpdateTests(unittest.TestCase):
                 ).stdout,
             )
             result = self._candidate_result(repo, selector, updater)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            resolved = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "v0.2.2^{commit}"],
+                text=True, capture_output=True, check=True,
+            ).stdout.strip()
+            result = self._candidate_result(
+                repo, selector, updater, (("PLEBIAN_OS_REF", resolved),)
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_plain_restart_uses_exact_unpublished_candidate_when_remote_is_older(self):
@@ -211,7 +226,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
                 "PLEBIAN_OS_RELEASE_MODE": "1",
                 "PLEBIAN_OS_RELEASE": "0.2.2",
                 "PLEBIAN_OS_VERSION": "0.2.2",
-                "PLEBIAN_OS_REF": "v0.2.2",
+                "PLEBIAN_OS_REF": candidate,
                 "PLEBIAN_OS_INSTALLED_SELECTOR": str(selector),
                 "PLEBIAN_OS_INSTALLED_UPDATER": str(updater),
             })
@@ -321,6 +336,8 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             repo, selector, updater = self._candidate_fixture(Path(td))
             self.assertNotEqual(self._candidate_result(repo, selector, updater,
                 (("PLEBIAN_OS_REF", "deadbeef"),)).returncode, 0)
+            self.assertNotEqual(self._candidate_result(repo, selector, updater,
+                (("PLEBIAN_OS_REF", "0" * 40),)).returncode, 0)
             self.assertNotEqual(self._candidate_result(repo, selector, updater,
                 (("PLEBIAN_OS_RELEASE_MODE", "0"),)).returncode, 0)
 
