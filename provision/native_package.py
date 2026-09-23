@@ -164,7 +164,7 @@ def expand_source(data):
     return raw
 
 
-def tar_members(raw, *, dotted, maximum_members):
+def tar_members(raw, *, dotted, maximum_members, canonical_source=False):
     """Only canonical directories, regular files and the sole linker symlink."""
     require(len(raw) % 512 == 0, 'unaligned tar archive')
     members = {}
@@ -173,8 +173,10 @@ def tar_members(raw, *, dotted, maximum_members):
         with tarfile.open(fileobj=io.BytesIO(raw), mode='r:') as archive:
             for entry in archive:
                 require(len(members) < maximum_members, 'too many tar members')
-                require(entry.offset == end and raw[entry.offset + 156:entry.offset + 157] == entry.type,
-                        'extended tar headers are not supported')
+                require(entry.offset == end, 'noncontiguous tar member')
+                if not canonical_source:
+                    require(raw[entry.offset + 156:entry.offset + 157] == entry.type,
+                            'extended tar headers are not supported')
                 name = entry.name
                 if dotted:
                     require(name == '.' or name.startswith('./'), 'noncanonical package path')
@@ -184,7 +186,9 @@ def tar_members(raw, *, dotted, maximum_members):
                         and not name.startswith('/') and str(path) == name
                         and '..' not in path.parts and '.' not in path.parts), 'unsafe tar path')
                 require(name not in members, 'duplicate tar member')
-                require(entry.uid == entry.gid == entry.mtime == 0 and not entry.pax_headers,
+                require(entry.uid == entry.gid == entry.mtime == 0
+                        and (not entry.pax_headers or (canonical_source
+                             and entry.pax_headers == {'path': entry.name})),
                         'unexpected ownership, time or extended metadata')
                 require(entry.type in (tarfile.REGTYPE, tarfile.DIRTYPE, tarfile.SYMTYPE),
                         'unsupported tar member type')
@@ -209,6 +213,18 @@ def tar_members(raw, *, dotted, maximum_members):
     except tarfile.TarError as error:
         raise InvalidPackage('invalid tar container') from error
     require(len(raw) - end >= 1024 and not any(raw[end:]), 'missing tar end or trailing payload')
+    if canonical_source:
+        # Python's PAX writer is deterministic for the builder's zeroed
+        # metadata. Exact reconstruction rejects extra or reordered extended
+        # records, alternate encodings and hidden archive members.
+        rebuilt = io.BytesIO()
+        with tarfile.open(fileobj=rebuilt, mode='w', format=tarfile.PAX_FORMAT) as archive:
+            for name, (entry, payload) in members.items():
+                clone = tarfile.TarInfo(name)
+                clone.size, clone.mode, clone.mtime = len(payload), entry.mode, 0
+                clone.uid = clone.gid = 0
+                archive.addfile(clone, io.BytesIO(payload))
+        require(rebuilt.getvalue() == raw, 'noncanonical source tar archive')
     return members
 
 
@@ -280,7 +296,8 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
             require(type(expected) is dict and type(expected.get('bytes')) is int
                     and type(expected.get('mode')) is int and entry.isfile() and entry.mode == mode and expected == {
                 'bytes': len(payload), 'mode': mode, 'sha256': digest(payload)}, 'file record differs')
-    source = tar_members(expand_source(installed[DOC + 'source.tar.gz'][1]), dotted=False, maximum_members=256)
+    source = tar_members(expand_source(installed[DOC + 'source.tar.gz'][1]), dotted=False,
+                         maximum_members=256, canonical_source=True)
     require(all(PurePosixPath(name).suffix.lower() not in ('.onnx', '.pt', '.th', '.safetensors', '.deb')
                 for name in source), 'model or binary package in source offer')
     require(source_tree(source) == record.get('source_tree'), 'source tree differs from archive')

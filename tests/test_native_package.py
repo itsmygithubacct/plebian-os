@@ -245,6 +245,27 @@ class ArtifactTests(unittest.TestCase):
         with self.assertRaises(native.InvalidPackage):
             native.tar_members(stream.getvalue(), dotted=False, maximum_members=8)
 
+    def test_long_source_path_accepts_only_canonical_pax(self):
+        name = 'receipts/' + 'a' * 130 + '.json'
+        data = b'{"accepted":true}\n'
+        def archive(extra=None):
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode='w', format=tarfile.PAX_FORMAT) as tar:
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                info.mode = 0o644
+                info.pax_headers = extra or {}
+                tar.addfile(info, io.BytesIO(data))
+            return stream.getvalue()
+        valid = archive()
+        self.assertEqual(native.tar_members(valid, dotted=False, maximum_members=8,
+                                            canonical_source=True)[name][1], data)
+        with self.assertRaises(native.InvalidPackage):
+            native.tar_members(valid, dotted=False, maximum_members=8)
+        with self.assertRaises(native.InvalidPackage):
+            native.tar_members(archive({'comment': 'untrusted'}), dotted=False,
+                               maximum_members=8, canonical_source=True)
+
     def test_source_offer_may_not_contain_models(self):
         for name in ('model.onnx', 'model.TH', 'payload.deb', 'nested/weights.safetensors'):
             with self.subTest(name=name), self.assertRaises(native.InvalidPackage):
