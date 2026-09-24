@@ -281,7 +281,11 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
     require(set(installed) == actual_files | parents, 'unexpected installed directory')
     require(installed[RECORD][0].isfile() and installed[RECORD][0].mode == 0o644, 'invalid package record')
     record = json_object(installed[RECORD][1])
-    require(record.get('schema') == 'kilix.encodec.native-package/v1'
+    # v1 pinned its three direct dependencies exactly and every loaded library
+    # byte for byte, which a Debian security update to libc6 or OpenSSL breaks.
+    # v2 states minimums and names each library's owning package instead.
+    schema = record.get('schema')
+    require(schema in ('kilix.encodec.native-package/v1', 'kilix.encodec.native-package/v2')
             and record.get('source_commit') == source_commit
             and record.get('content_commit') == content_commit, 'package source identity differs')
     file_records = record.get('files')
@@ -332,21 +336,57 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
             require(row.get('source') == 'verified-private-deb' and set(row) == {'version', 'source', 'sha256'}
                     and type(row.get('sha256')) is str and DIGEST.fullmatch(row['sha256'])
                     and row['sha256'] == selected.get('sha256'), 'private dependency archive record differs')
-    runtime_files = record.get('runtime_files')
+    exact = schema == 'kilix.encodec.native-package/v1'
+    runtime_key = 'runtime_files' if exact else 'runtime_libraries'
+    require(set(record) & {'runtime_files', 'runtime_libraries'} == {runtime_key},
+            'runtime dependency record does not match its schema')
+    runtime_files = record.get(runtime_key)
     require(type(runtime_files) is dict and 1 <= len(runtime_files) <= 128,
             'invalid runtime dependency population')
     require({'ld-linux-x86-64.so.2', 'libc.so.6', 'libcrypto.so.3', 'libonnxruntime.so.1.21.0'} <= set(runtime_files),
             'required runtime dependency identity missing')
+
+    def fingerprint(row):
+        return (type(row) is dict and set(row) == {'bytes', 'sha256'}
+                and type(row.get('bytes')) is int and 0 < row['bytes'] <= 96 * 1024**2
+                and type(row.get('sha256')) is str and DIGEST.fullmatch(row['sha256']) is not None)
+
     for name, row in runtime_files.items():
         require(type(name) is str and re.fullmatch(r'[A-Za-z0-9_+.-]{1,160}', name)
-                and name not in ('.', '..') and type(row) is dict and set(row) == {'bytes', 'sha256'}
-                and type(row.get('bytes')) is int and 0 < row['bytes'] <= 96 * 1024**2
-                and type(row.get('sha256')) is str and DIGEST.fullmatch(row['sha256']),
-                'invalid runtime dependency file identity')
+                and name not in ('.', '..'), 'invalid runtime dependency file identity')
+        if exact:
+            require(fingerprint(row), 'invalid runtime dependency file identity')
+        else:
+            require(type(row) is dict and set(row) == {'package', 'version', 'built'}
+                    and type(row.get('package')) is str
+                    and re.fullmatch(r'[a-z0-9][a-z0-9+.-]{1,127}', row['package'])
+                    and type(row.get('version')) is str
+                    and re.fullmatch(r'[A-Za-z0-9.+:~_-]{1,100}', row['version'])
+                    and fingerprint(row.get('built')), 'invalid runtime library owner')
+    if not exact:
+        # The libraries a direct dependency ships are named by that dependency,
+        # at the version it is declared at; the rest of the closure is free to
+        # come from whichever Debian package ships it.
+        for library, owner in (('libc.so.6', 'libc6'), ('ld-linux-x86-64.so.2', 'libc6'),
+                               ('libcrypto.so.3', 'libssl3t64'),
+                               ('libonnxruntime.so.1.21.0', 'libonnxruntime1.21')):
+            row = runtime_files[library]
+            require(row['package'] == owner and row['version'] == dependencies[owner],
+                    'direct dependency library has the wrong owner: ' + library)
     version_base = source['VERSION'][1].decode('ascii').strip()
     require(re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version_base), 'invalid source version')
     version = version_base + '+git' + source_commit[:12] + '.' + content_commit[:12]
-    depends = ', '.join(name + ' (= ' + dependencies[name] + ')' for name in package_names)
+    if exact:
+        depends = ', '.join(name + ' (= ' + dependencies[name] + ')' for name in package_names)
+    else:
+        # Every owner of a loaded library, at the one version it was built
+        # against: the three direct dependencies first, the rest by name.
+        floors = dict(dependencies)
+        for row in runtime_files.values():
+            require(floors.setdefault(row['package'], row['version']) == row['version'],
+                    'one package is recorded at two versions: ' + row['package'])
+        order = list(package_names) + sorted(set(floors) - set(package_names))
+        depends = ', '.join(name + ' (>= ' + floors[name] + ')' for name in order)
     expected_control = (f'Package: libkilix-encodec\nVersion: {version}\nArchitecture: amd64\n'
         'Maintainer: itsmygithubacct <itsmygithubacct@users.noreply.github.com>\n'
         f'Depends: {depends}\nSection: libs\nPriority: optional\n'
@@ -366,7 +406,11 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
             'source_tree': record['source_tree'], 'source_files': len(source),
             'record_sha256': digest(installed[RECORD][1]), 'files': file_records | {
                 RECORD: {'bytes': len(installed[RECORD][1]), 'mode': 0o644, 'sha256': digest(installed[RECORD][1])}},
-            'dependencies': dependencies, 'runtime_files': runtime_files,
+            # A v1 result must stay exactly what rc1 recorded in current.json:
+            # the cached package is re-inspected and compared to it. The policy
+            # is carried by which runtime key is present, never by a new field.
+            'dependencies': dependencies,
+            'runtime_files' if exact else 'runtime_libraries': runtime_files,
             'content_bundle_sha256': receipt['bundle_sha256']}
 
 

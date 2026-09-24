@@ -118,7 +118,72 @@ class Dpkg:
                 'info': {name: self.tree.fingerprint('var/lib/dpkg/info/' + PACKAGE + '.' + name)
                          for name in INFO}}
 
+    def version_at_least(self, installed, floor):
+        code, out, err = self.run(['/usr/bin/dpkg', '--compare-versions', installed, 'ge', floor],
+                                  accepted=(0, 1))
+        need(not out and not err, 'unexpected dpkg version comparison output')
+        return code == 0
+
+    def current_at_least(self, name, floor):
+        # Qualified, so an i386 co-installation of the same library (Wine,
+        # Steam) cannot turn one status record into two.
+        status = self.status(name + ':amd64')
+        need(status is not None and status['status'] == 'install ok installed'
+             and status['architecture'] == 'amd64'
+             and self.version_at_least(status['version'], floor),
+             'native dependency is not installed at or above the version built against: ' + name)
+
+    def owned_library(self, name, row):
+        """A loaded library must be exactly what its owning package installed.
+
+        The owner is the recorded package, installed at or above the version the
+        package was built against; the file is regular, root-owned and not
+        group/other writable, and its bytes match the owner's own dpkg md5sums
+        entry, which a Debian security update rewrites together with the file.
+        """
+        self.current_at_least(row['package'], row['version'])
+        relative = 'usr/lib/x86_64-linux-gnu/' + name
+        owners = set()
+        for path in ('/' + relative, '/lib/x86_64-linux-gnu/' + name):
+            code, out, err = self.run(['/usr/bin/dpkg-query', '--admindir=/var/lib/dpkg', '--search', path],
+                                      accepted=(0, 1))
+            for line in out.decode('utf-8').splitlines():
+                owner, separator, found = line.rpartition(': ')
+                if separator and found == path and not line.startswith('diversion '):
+                    owners.update(item.strip() for item in owner.split(','))
+        # The amd64 instance (or an architecture-independent package) and no
+        # other: an i386 co-installation owning a file here is not the owner.
+        need(len(owners) == 1 and owners <= {row['package'] + ':amd64', row['package']},
+             'native runtime library is not owned by its recorded package: ' + name)
+        actual = self.tree.fingerprint(relative, maximum=96 * 1024**2)
+        need(actual is not None and 'link' not in actual
+             and actual.get('uid') == actual.get('gid') == self.tree.uid
+             and not actual.get('mode', 0o777) & 0o022, 'native runtime library is not a root-owned file: ' + name)
+        data = self.tree.read(relative, maximum=96 * 1024**2)
+        need(hashlib.sha256(data).hexdigest() == actual['sha256'], 'native runtime library changed during inspection')
+        digest = hashlib.md5(data).hexdigest()
+        sums = None
+        for info in (row['package'] + ':amd64.md5sums', row['package'] + '.md5sums'):
+            sums = self.tree.read('var/lib/dpkg/info/' + info, maximum=4 * 1024**2, missing=True)
+            if sums is not None:
+                break
+        need(sums is not None, 'owning package has no dpkg checksums: ' + row['package'])
+        recorded = {line.split(None, 1)[1].strip(): line.split(None, 1)[0]
+                    for line in sums.decode('utf-8', 'replace').splitlines() if len(line.split(None, 1)) == 2}
+        need(digest in (recorded.get(relative), recorded.get('lib/x86_64-linux-gnu/' + name)),
+             'native runtime library differs from its package: ' + name)
+
     def dependencies(self, metadata):
+        if 'runtime_libraries' in metadata:
+            for name, version in metadata['dependencies'].items():
+                self.current_at_least(name, version)
+            for name, row in metadata['runtime_libraries'].items():
+                self.runner.check()
+                self.guard()
+                self.owned_library(name, row)
+                self.runner.check()
+                self.guard()
+            return
         for name, version in metadata['dependencies'].items():
             need(self.status(name) == {'status': 'install ok installed', 'version': version,
                                       'architecture': 'amd64'},
@@ -147,7 +212,8 @@ class Dpkg:
             need(resolved.parent == Path('/usr/lib/x86_64-linux-gnu') and resolved.name not in actual,
                  'native loader selected an unexpected dependency origin')
             actual.add(resolved.name)
-        need(actual == set(metadata['runtime_files']), 'native loader closure differs from reviewed package')
+        closure = metadata['runtime_libraries' if 'runtime_libraries' in metadata else 'runtime_files']
+        need(actual == set(closure), 'native loader closure differs from reviewed package')
         probe = ('import ctypes,json; p=ctypes.CDLL("/usr/lib/libkilix-encodec.so.0"); '
                  'p.kenc_installed_content_commit.restype=ctypes.c_char_p; '
                  'p.kenc_installed_bundle_sha256.restype=ctypes.c_char_p; '

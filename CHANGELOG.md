@@ -208,6 +208,13 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Fixed
 
+- Install and keep the native EnCodec package on a machine that takes Debian
+  security updates. rc1's package pinned libc6, libssl3t64 and onnxruntime
+  exactly and byte-pinned every loaded system library, so dpkg refused it once
+  libc6 or OpenSSL was patched, and it would have held those security updates
+  back. The rc2 package states minimums, and the updater verifies each loaded
+  library against its owning package's own dpkg checksums at or above the
+  version built against. A package from rc1 is still verified exactly.
 - Deliver Debian security updates to installed release machines. The
   `snapshot.debian.org` timestamp still resolves the Debian Installer and
   first-boot closure, but once that run commits apt tracks live `trixie`,

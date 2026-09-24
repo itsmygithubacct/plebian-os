@@ -61,8 +61,12 @@ def ar_bytes(members, *, slash=False):
     return bytes(result)
 
 
+OWNERS = {'ld-linux-x86-64.so.2': 'libc6', 'libc.so.6': 'libc6', 'libcrypto.so.3': 'libssl3t64',
+          'libonnxruntime.so.1.21.0': 'libonnxruntime1.21'}
+
+
 def fixture(*, mutate_control=None, mutate_data=None, mutate_source=None, mutate_record=None,
-            source_commit=SOURCE, version_base='0.0.1'):
+            source_commit=SOURCE, version_base='0.0.1', schema=1, relation=None, extra=None):
     """Tiny inert, explicitly synthetic selection; never production authority."""
     lock = {'schema': 'kilix.encodec.debian-dependencies/v1', 'architecture': 'amd64',
             'packages': {name: {'version': '1.0'} for name in ('libonnxruntime1.21', 'libssl3t64', 'libc6')}}
@@ -83,14 +87,20 @@ def fixture(*, mutate_control=None, mutate_data=None, mutate_source=None, mutate
     files[native.DOC + 'source.tar.gz'] = regular('source', gzip.compress(tar_bytes(source, dotted=False), mtime=0))
     receipt = {'schema': 'kilix.encodec.content-build/v2', 'content_commit': CONTENT, 'bundle_sha256': 'c' * 64}
     files[native.DOC + 'content_bundle.receipt.json'] = regular('receipt', canonical(receipt))
-    record = {'schema': 'kilix.encodec.native-package/v1', 'source_commit': source_commit,
+    record = {'schema': f'kilix.encodec.native-package/v{schema}', 'source_commit': source_commit,
               'source_tree': native.source_tree(source), 'content_commit': CONTENT,
               'content_bundle_sha256': 'c' * 64, 'files': {},
               'packages': {name: {'version': row['version'], 'source': 'installed-dpkg'}
                            for name, row in lock['packages'].items()},
-              'runtime_files': {name: {'bytes': 6, 'sha256': hashlib.sha256(b'inert\n').hexdigest()}
-                                for name in ('ld-linux-x86-64.so.2', 'libc.so.6', 'libcrypto.so.3',
-                                             'libonnxruntime.so.1.21.0')}}
+              }
+    built = {'bytes': 6, 'sha256': hashlib.sha256(b'inert\n').hexdigest()}
+    if schema == 1:
+        record['runtime_files'] = {name: dict(built) for name in OWNERS}
+    else:
+        record['runtime_libraries'] = {name: {'package': owner, 'version': '1.0', 'built': dict(built)}
+                                       for name, owner in OWNERS.items()}
+        for name, (owner, version) in (extra or {}).items():
+            record['runtime_libraries'][name] = {'package': owner, 'version': version, 'built': dict(built)}
     for name, (entry, data) in files.items():
         record['files'][name] = {'link': entry.linkname} if entry.issym() else {
             'bytes': len(data), 'mode': entry.mode, 'sha256': hashlib.sha256(data).hexdigest()}
@@ -102,7 +112,9 @@ def fixture(*, mutate_control=None, mutate_data=None, mutate_source=None, mutate
     version = version_base + '+git' + source_commit[:12] + '.' + CONTENT[:12]
     control_text = (f'Package: libkilix-encodec\nVersion: {version}\nArchitecture: amd64\n'
         'Maintainer: itsmygithubacct <itsmygithubacct@users.noreply.github.com>\n'
-        'Depends: libonnxruntime1.21 (= 1.0), libssl3t64 (= 1.0), libc6 (= 1.0)\n'
+        'Depends: libonnxruntime1.21 ({0} 1.0), libssl3t64 ({0} 1.0), libc6 ({0} 1.0){1}\n'.format(
+            relation or ('=' if schema == 1 else '>='),
+            ''.join(f', {owner} (>= {version})' for owner, version in sorted(set((extra or {}).values())))) +
         'Section: libs\nPriority: optional\n'
         'Description: Shared Kilix codec and installed-content admission\n'
         ' No model payload or model authorization is included.\n').encode()
@@ -223,6 +235,73 @@ class ArtifactTests(unittest.TestCase):
         for change in changes:
             with self.subTest(change=change), self.assertRaises(native.InvalidPackage):
                 inspect(fixture(mutate_record=change))
+
+    def test_minimum_schema_is_accepted_and_reports_its_owners(self):
+        result = inspect(fixture(schema=2))
+        self.assertEqual(result['runtime_libraries']['libc.so.6']['package'], 'libc6')
+        self.assertNotIn('runtime_files', result)
+
+    def test_exact_schema_result_is_what_the_released_inspector_recorded(self):
+        # An installed machine re-inspects its cached package and compares the
+        # result to the metadata the previous release stored; a v1 result may
+        # not gain, lose or change a single key.
+        import importlib.util, subprocess, tempfile
+        released = subprocess.run(['git', 'show', 'db8392a7a60cada5a0dfd670b7a3cf09a6e60526:provision/native_package.py'],
+                                  cwd=Path(__file__).resolve().parents[1], capture_output=True)
+        if released.returncode:
+            self.skipTest('released inspector is not in this checkout')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'native_package.py'
+            path.write_bytes(released.stdout)
+            spec = importlib.util.spec_from_file_location('released_native_package', path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            args = {'sha256': hashlib.sha256(self.example).hexdigest(), 'byte_count': len(self.example),
+                    'source_commit': SOURCE, 'content_commit': CONTENT}
+            self.assertEqual(inspect(self.example), module.inspect_package(self.example, **args))
+
+    def test_each_schema_requires_its_own_dependency_relation(self):
+        for schema, relation in ((1, '>='), (2, '=')):
+            with self.subTest(schema=schema), self.assertRaises(native.InvalidPackage):
+                inspect(fixture(schema=schema, relation=relation))
+
+    def test_minimum_schema_depends_names_every_owner(self):
+        extra = {'libz.so.1': ('zlib1g', '1:1.3'), 'libabsl_base.so': ('libabsl20240722', '2.0')}
+        result = inspect(fixture(schema=2, extra=extra))
+        self.assertEqual(result['runtime_libraries']['libz.so.1']['package'], 'zlib1g')
+        # The record names an owner the control file does not.
+        def drop_zlib(control):
+            entry, data = control['control']
+            control['control'] = entry, data.replace(b', zlib1g (>= 1:1.3)', b'')
+        with self.assertRaises(native.InvalidPackage):
+            inspect(fixture(schema=2, extra=extra, mutate_control=drop_zlib))
+        # One owner recorded at two versions, with a control file that lists
+        # it once, so only the consistency rule can refuse it.
+        def once(control):
+            entry, data = control['control']
+            control['control'] = entry, data.replace(b'zlib1g (>= 1:1.2), zlib1g (>= 1:1.3)', b'zlib1g (>= 1:1.3)')
+        with self.assertRaisesRegex(native.InvalidPackage, 'two versions'):
+            inspect(fixture(schema=2, extra={'libz.so.1': ('zlib1g', '1:1.3'), 'libz2.so': ('zlib1g', '1:1.2')},
+                            mutate_control=once))
+
+    def test_minimum_schema_runtime_owners_are_bounded_and_consistent(self):
+        changes = (
+            lambda row: row.update(runtime_files=row['runtime_libraries']),
+            lambda row: row.update(runtime_files=row.pop('runtime_libraries')),
+            lambda row: row['runtime_libraries'].pop('libcrypto.so.3'),
+            lambda row: row['runtime_libraries']['libc.so.6'].update(package='impostor'),
+            lambda row: row['runtime_libraries']['libcrypto.so.3'].update(package='libc6'),
+            lambda row: row['runtime_libraries']['libc.so.6'].update(version='0.9'),
+            lambda row: row['runtime_libraries']['libc.so.6'].update(package='Bad Name'),
+            lambda row: row['runtime_libraries']['libc.so.6'].pop('built'),
+            lambda row: row['runtime_libraries']['libc.so.6']['built'].update(sha256='bad'),
+            lambda row: row['runtime_libraries']['libc.so.6'].update(extra=1),
+            lambda row: row['runtime_libraries'].update({'../x': {'package': 'libc6', 'version': '1.0',
+                                                                 'built': {'bytes': 1, 'sha256': 'c' * 64}}}),
+        )
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(native.InvalidPackage):
+                inspect(fixture(schema=2, mutate_record=change))
 
     def test_duplicate_json_key_and_non_object_refuse(self):
         for raw in (b'{"a":1,"a":2}', b'[]', b'{', b'x' * (256 * 1024 + 1)):
