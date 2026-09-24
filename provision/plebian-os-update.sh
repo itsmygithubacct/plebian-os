@@ -736,6 +736,51 @@ require_standard_install_destinations() {
     fi
 }
 
+# A per-user Pleb session.env (loaded after /etc/pleb/session.env by both the
+# login session and the pleb CLI) can point the desktop at another source tree,
+# such as a developer layout below ~/gpu_terminal. This updater hands pleb its
+# own paths explicitly, so it would update, build and link the tree below
+# $GPU_TERMINAL_SOURCE_HOME while the session keeps running the other one, and
+# the other tree's links make the install fail part-way. Refuse before anything
+# changes. Paths that resolve to the same directory (a symlinked tree) agree.
+PLEBIAN_OS_SOURCE_LAYOUT_KEYS=(GPU_TERMINAL_SOURCE_HOME PLEB_DIR PLEBIAN_OS_DIR
+    KILIX_DIR KILIX95_DIR KILIX_CAP_DIR KILIX_TUI_UTILS_DIR KILIX_LAND_DESKTOP_DIR)
+
+per_user_source_layout_conflicts() {
+    local file="$1"
+    [ -r "$file" ] || return 0
+    (
+        set +eu
+        local key
+        # Start from this updater's paths, exactly as the login session starts
+        # from the system file, and report only what the per-user file moves.
+        for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
+            declare "_plebian_os_updater_$key=${!key}"
+        done
+        # shellcheck source=/dev/null
+        . "$file" </dev/null >/dev/null 2>&1
+        for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
+            local ours="_plebian_os_updater_$key"
+            [ "$(realpath -m -- "${!key}")" = "$(realpath -m -- "${!ours}")" ] \
+                || printf '%s\t%s\t%s\n' "$key" "${!key}" "${!ours}"
+        done
+    )
+}
+
+refuse_per_user_source_layout() {
+    local file="${PLEB_ENV_USER:-$PLEB_CONFIG_HOME/session.env}" conflicts key theirs ours
+    conflicts="$(per_user_source_layout_conflicts "$file")"
+    [ -n "$conflicts" ] || return 0
+    warn "$file points the desktop session at a different source tree than this update installs:"
+    while IFS=$'\t' read -r key theirs ours; do
+        warn "  $key: the session uses $theirs; this update would update $ours"
+    done <<<"$conflicts"
+    warn "updating would leave the session running the old tree, and the install would stop part-way on its links"
+    warn "to use the standard layout, move $file aside (keep its other settings in a new copy without these keys), then rerun"
+    warn "to keep the custom layout, update those checkouts yourself with 'pleb update' instead of plebian-os-update"
+    die "refusing to update: per-user session.env overrides the source layout"
+}
+
 require_clean_transaction_checkout() {
     local dir="$1" label="$2" dirty
     dirty="$(git -C "$dir" status --porcelain --untracked-files=normal \
@@ -3838,6 +3883,8 @@ fi
 # atomic configuration/tool transaction, then exec above starts the target
 # updater from a fresh environment.  If no newer release exists, this returns
 # and the already-selected closure is revalidated normally.
+# Before the release hop below: that already changes the selected closure.
+refuse_per_user_source_layout
 select_latest_release_if_needed
 validate_native_release_closure "${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" \
     "$PLEBIAN_OS_RELEASE_MODE" || die "invalid native runtime closure"
