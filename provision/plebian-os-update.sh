@@ -737,32 +737,49 @@ require_standard_install_destinations() {
 }
 
 # A per-user Pleb session.env (loaded after /etc/pleb/session.env by both the
-# login session and the pleb CLI) can point the desktop at another source tree,
-# such as a developer layout below ~/gpu_terminal. This updater hands pleb its
-# own paths explicitly, so it would update, build and link the tree below
-# $GPU_TERMINAL_SOURCE_HOME while the session keeps running the other one, and
-# the other tree's links make the install fail part-way. Refuse before anything
-# changes. Paths that resolve to the same directory (a symlinked tree) agree.
+# login session and the pleb CLI) can point the desktop at another source tree
+# or engine, such as a developer layout below ~/gpu_terminal. This updater
+# hands pleb its own paths explicitly, so it would update, build and link the
+# tree below $GPU_TERMINAL_SOURCE_HOME while the session keeps running the
+# other one, and the other tree's links make the install fail part-way. Refuse
+# before the release hop and the stack transaction. Paths that resolve to the
+# same file or directory (a symlinked tree) agree.
 PLEBIAN_OS_SOURCE_LAYOUT_KEYS=(GPU_TERMINAL_SOURCE_HOME PLEB_DIR PLEBIAN_OS_DIR
-    KILIX_DIR KILIX95_DIR KILIX_CAP_DIR KILIX_TUI_UTILS_DIR KILIX_LAND_DESKTOP_DIR)
+    KILIX_DIR KILIX KILIX95_DIR KILIX_CAP_DIR KILIX_TUI_UTILS_DIR
+    KILIX_LAND_DESKTOP_DIR)
 
 per_user_source_layout_conflicts() {
     local file="$1"
     [ -r "$file" ] || return 0
     (
         set +eu
-        local key
-        # Start from this updater's paths, exactly as the login session starts
-        # from the system file, and report only what the per-user file moves.
+        local key ours
+        # This updater's view. KILIX names the engine the session launches;
+        # pleb defaults it from KILIX_DIR (lib/common.sh KILIX_DEFAULT).
         for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
             declare "_plebian_os_updater_$key=${!key}"
         done
+        _plebian_os_updater_KILIX="${KILIX:-$KILIX_DIR/kilix}"
+        # Start from those paths, exactly as the login session starts from the
+        # system file, and report only what the per-user file moves.
         # shellcheck source=/dev/null
         . "$file" </dev/null >/dev/null 2>&1
+        # Pleb derives any path left unset or empty after loading its files
+        # (lib/common.sh); an unset key is therefore not a move. Pleb's own
+        # PLEB_DIR default is the checkout it runs from, which is this one.
+        GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}"
+        PLEB_DIR="${PLEB_DIR:-$_plebian_os_updater_PLEB_DIR}"
+        PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-$GPU_TERMINAL_SOURCE_HOME/plebian-os}"
+        KILIX_DIR="${KILIX_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix}"
+        KILIX="${KILIX:-$KILIX_DIR/kilix}"
+        KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95}"
+        KILIX_CAP_DIR="${KILIX_CAP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-cap}"
+        KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils}"
+        KILIX_LAND_DESKTOP_DIR="${KILIX_LAND_DESKTOP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-land-desktop}"
         for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
-            local ours="_plebian_os_updater_$key"
+            ours="_plebian_os_updater_$key"
             [ "$(realpath -m -- "${!key}")" = "$(realpath -m -- "${!ours}")" ] \
-                || printf '%s\t%s\t%s\n' "$key" "${!key}" "${!ours}"
+                || printf '%s\037%s\037%s\n' "$key" "${!key}" "${!ours}"
         done
     )
 }
@@ -772,7 +789,7 @@ refuse_per_user_source_layout() {
     conflicts="$(per_user_source_layout_conflicts "$file")"
     [ -n "$conflicts" ] || return 0
     warn "$file points the desktop session at a different source tree than this update installs:"
-    while IFS=$'\t' read -r key theirs ours; do
+    while IFS=$'\037' read -r key theirs ours; do
         warn "  $key: the session uses $theirs; this update would update $ours"
     done <<<"$conflicts"
     warn "updating would leave the session running the old tree, and the install would stop part-way on its links"
@@ -3522,9 +3539,10 @@ require_lifetime_release_apt_provenance() {
 }
 
 # The lifetime gate above runs again when the final provenance is written, at
-# the very end of the update. Check the configured sources before anything
-# changes too, so a third-party repository is refused up front rather than
-# after the whole stack has been rebuilt and has to be rolled back.
+# the very end of the update. Check the configured sources before the release
+# hop and the stack transaction too, so a third-party repository is refused up
+# front rather than after the whole stack has been rebuilt and rolled back.
+# (Only the update lock and private storage directories exist by then.)
 preflight_release_apt_provenance() {
     local listing rc=0
     [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0

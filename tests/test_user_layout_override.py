@@ -18,7 +18,7 @@ UPDATE_PATH = ROOT / "provision" / "plebian-os-update.sh"
 LAYOUT_KEYS = (
     "GPU_TERMINAL_SOURCE_HOME", "PLEB_DIR", "PLEBIAN_OS_DIR", "KILIX_DIR",
     "KILIX95_DIR", "KILIX_CAP_DIR", "KILIX_TUI_UTILS_DIR",
-    "KILIX_LAND_DESKTOP_DIR", "PLEB_ENV_USER",
+    "KILIX_LAND_DESKTOP_DIR", "PLEB_ENV_USER", "KILIX",
 )
 
 
@@ -39,6 +39,7 @@ class PerUserLayoutOverrideTests(unittest.TestCase):
             "PLEB_DIR": str(sources / "pleb"),
             "PLEBIAN_OS_DIR": str(sources / "plebian-os"),
             "KILIX_DIR": str(sources / "kilix"),
+            "KILIX": str(sources / "kilix" / "kilix"),
             "KILIX95_DIR": str(sources / "kilix-desktops/kilix-95"),
             "KILIX_CAP_DIR": str(sources / "kilix-desktops/kilix-cap"),
             "KILIX_TUI_UTILS_DIR": str(sources / "kilix-desktops/kilix-tui-utils"),
@@ -110,6 +111,27 @@ class PerUserLayoutOverrideTests(unittest.TestCase):
                 'KILIX_DIR="$KILIX_DIR/"\n',
             )
             self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_engine_override_alone_is_refused(self):
+        # The session launches $KILIX, which pleb defaults from KILIX_DIR.
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            result = self._refuse(home, 'KILIX="$HOME/dev/kilix/kilix"\n')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                f"KILIX: the session uses {home}/dev/kilix/kilix; this update "
+                f"would update {home}/.local/gpu_terminal/sources/kilix/kilix",
+                result.stderr)
+
+    def test_unset_or_empty_paths_are_rederived_not_moved(self):
+        # Pleb derives unset paths after loading, so the session agrees.
+        for session_env in ("unset KILIX_DIR\n", 'KILIX_DIR=""\n',
+                            "unset GPU_TERMINAL_SOURCE_HOME KILIX PLEB_DIR\n"):
+            with self.subTest(session_env=session_env), \
+                    tempfile.TemporaryDirectory() as td:
+                result = self._refuse(Path(td), session_env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stderr, "")
 
     def test_sourcing_the_user_file_changes_nothing_in_the_updater(self):
         with tempfile.TemporaryDirectory() as td:
