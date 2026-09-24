@@ -79,7 +79,7 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   through `29fbaa5` (merge `252aad6`) and Kilix main, head `7c37f93`, with
   engine `054ec5b` (rc1's `8f423846` plus the echo, Wayland scale and pane
   memory fix) and desktop `c642ef3`. rc2 then merges kilix-needle (host
-  `7629d4e`, desktop `6ab773b`): drive Kilix panes and tabs from plain
+  `2ba9baa`, desktop `43870de`): drive Kilix panes and tabs from plain
   requests with Cactus Compute's Needle 2, installed from the catalog, whose
   engine, runtime and base checkpoint download only after the first-use
   licence is accepted.
