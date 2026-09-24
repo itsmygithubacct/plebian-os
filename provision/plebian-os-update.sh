@@ -754,21 +754,37 @@ PLEBIAN_OS_SOURCE_LAYOUT_KEYS=(GPU_TERMINAL_SOURCE_HOME PLEB_DIR PLEBIAN_OS_DIR
     KILIX_LAND_DESKTOP_DIR)
 
 per_user_source_layout_conflicts() {
-    local file="$1"
+    local file="$1" key
+    local -a values=()
     [ -r "$file" ] || return 0
+    # Only the raw values leave the subshell that sources the user file, so
+    # nothing it defines (functions included) takes part in the comparison.
+    # Start from this updater's paths, exactly as the login session starts
+    # from the system file, and see what the per-user file moves.
+    mapfile -d '' -t values < <(
+        set +eu
+        # shellcheck source=/dev/null
+        . "$file" </dev/null >/dev/null 2>&1
+        for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
+            builtin printf '%s\0' "${!key-}"
+        done
+    )
+    [ "${#values[@]}" = "${#PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}" ] || {
+        printf -- '-\037\037\n'
+        return 0
+    }
     (
         set +eu
-        local key ours
+        local index ours
         # This updater's view. KILIX names the engine the session launches;
         # pleb defaults it from KILIX_DIR (lib/common.sh KILIX_DEFAULT).
         for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
             declare "_plebian_os_updater_$key=${!key}"
         done
         _plebian_os_updater_KILIX="${KILIX:-$KILIX_DIR/kilix}"
-        # Start from those paths, exactly as the login session starts from the
-        # system file, and report only what the per-user file moves.
-        # shellcheck source=/dev/null
-        . "$file" </dev/null >/dev/null 2>&1
+        for index in "${!PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
+            printf -v "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[$index]}" '%s' "${values[$index]}"
+        done
         # Pleb derives any path left unset or empty after loading its files
         # (lib/common.sh); an unset key is therefore not a move. Pleb's own
         # PLEB_DIR default is the checkout it runs from, which is this one.
@@ -802,7 +818,11 @@ refuse_per_user_source_layout() {
     [ -n "$conflicts" ] || return 0
     warn "$file points the desktop session at a different source tree than this update installs:"
     while IFS=$'\037' read -r key theirs ours; do
-        warn "  $key: the session uses $theirs; this update would update $ours"
+        if [ "$key" = - ]; then
+            warn "  it could not be evaluated (it exits or replaces the updater's key list)"
+        else
+            warn "  $key: the session uses $theirs; this update would update $ours"
+        fi
     done <<<"$conflicts"
     warn "updating would leave the session running the old tree, and the install would stop part-way on its links"
     warn "to use the standard layout, move $file aside (keep its other settings in a new copy without these keys), then rerun"

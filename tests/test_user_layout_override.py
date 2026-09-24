@@ -156,6 +156,31 @@ class PerUserLayoutOverrideTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("KILIX95_DIR: the session uses", result.stderr)
 
+    def test_functions_the_user_file_defines_take_no_part(self):
+        legacy = 'KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-95"\n'
+        with tempfile.TemporaryDirectory() as td:
+            result = self._refuse(
+                Path(td), "unset -f rehome_legacy_desktop_paths\n" + legacy)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            result = self._refuse(
+                home,
+                'KILIX_DIR="$HOME/dev/kilix"\n'
+                "rehome_legacy_desktop_paths() {\n"
+                '    KILIX_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix"\n'
+                "}\n"
+                "realpath() { echo same; }\n")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"KILIX_DIR: the session uses {home}/dev/kilix;",
+                          result.stderr)
+
+    def test_a_file_that_cannot_be_evaluated_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            result = self._refuse(Path(td), "exit 3\n")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("could not be evaluated", result.stderr)
+
     def test_sourcing_the_user_file_changes_nothing_in_the_updater(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)
