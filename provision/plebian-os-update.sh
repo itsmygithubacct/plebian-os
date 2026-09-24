@@ -1138,7 +1138,7 @@ ROOT_CLEAN
 
 restore_stack_checkout() {
     local dir="$1" key="$2" label="$3" cleanliness="${4:-strict}"
-    local existed head ref branch dirty
+    local existed head ref branch dirty log_file
     case "$cleanliness" in
         strict) ;;
         transaction-controlled)
@@ -1169,14 +1169,27 @@ restore_stack_checkout() {
     fi
     head="$(cat "$_STACK_TXN_DIR/$key.head")"
     ref="$(cat "$_STACK_TXN_DIR/$key.ref")"
+    # Never recurse: pleb sets submodule.recurse=true on Kilix, and a
+    # recursive checkout that dies inside a submodule (an embedded gitdir with
+    # linked worktrees cannot be relocated) stops after rewriting part of the
+    # parent tree while HEAD stays on the target. Submodules are restored
+    # afterwards, one by one, by restore_recorded_kilix_submodules.
+    log_file="$_STACK_TXN_DIR/$key.restore.log"
     if [ -n "$ref" ]; then
         branch="${ref#refs/heads/}"
-        git -C "$dir" checkout "$branch" >/dev/null 2>&1 \
-            && git -C "$dir" reset --hard "$head" >/dev/null 2>&1
+        git -C "$dir" -c submodule.recurse=false checkout "$branch" \
+            >"$log_file" 2>&1 \
+            && git -C "$dir" -c submodule.recurse=false reset --hard "$head" \
+                >>"$log_file" 2>&1
     else
-        git -C "$dir" checkout --detach "$head" >/dev/null 2>&1 \
-            && git -C "$dir" reset --hard "$head" >/dev/null 2>&1
-    fi
+        git -C "$dir" -c submodule.recurse=false checkout --detach "$head" \
+            >"$log_file" 2>&1 \
+            && git -C "$dir" -c submodule.recurse=false reset --hard "$head" \
+                >>"$log_file" 2>&1
+    fi || {
+        warn "could not return $label to $head; git said: $(tail -n 3 -- "$log_file" | tr '\n' ' ')"
+        return 1
+    }
 }
 
 kilix_submodule_was_recorded() {

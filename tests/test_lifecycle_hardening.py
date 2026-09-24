@@ -413,11 +413,23 @@ init_repo "$work/multiplexer-source"
 init_repo "$work/state-source"
 init_repo "$work/telemetry-source"
 init_repo "$work/nested-source"
+# Like a developer's engine checkout, this submodule keeps its own embedded
+# .git directory rather than an absorbed one below .git/modules.
+git -c protocol.file.allow=always clone -q "$work/multiplexer-source" \
+    "$KILIX_DIR/third_party/kilix-multiplexer"
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/multiplexer-source" third_party/kilix-multiplexer >/dev/null
 git -c protocol.file.allow=always -C "$KILIX_DIR" submodule add \
     "$work/state-source" third_party/kilix-state >/dev/null
 git -C "$KILIX_DIR" commit -q -m old-submodules
+# pleb's reconcile_kilix_submodules sets this on every real Kilix checkout,
+# and an embedded submodule may carry linked worktrees. Together they
+# make a recursive checkout die part-way ("relocate_gitdir ... with more than
+# one worktree not supported"), which once left HEAD on the target with
+# half the tree rolled back.
+git -C "$KILIX_DIR" config --local submodule.recurse true
+git -C "$KILIX_DIR/third_party/kilix-multiplexer" worktree add -q --detach \
+    "$work/multiplexer-worktree"
 mkdir -p "$KILIX_PREBUILT_HOME/bin"
 printf '%s\n' old-engine >"$KILIX_PREBUILT_HOME/bin/kitty"
 mkdir -p "$KILIX_STATE_DIRECTORY" \
