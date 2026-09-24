@@ -80,7 +80,8 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   engine `054ec5b` (rc1's `8f423846` plus the echo, Wayland scale and pane
   memory fix) and desktop `c642ef3`. rc2 then merges kilix-needle (host
   `2ba9baa`, desktop `43870de`; then `2bb9609` / `7eac552`, which keep a live
-  pane's transcript when the broker's `list` misses it): drive Kilix panes and tabs from plain
+  pane's transcript when the broker's `list` misses it, and `dc6171a` /
+  `5fe9e45`): drive Kilix panes and tabs from plain
   requests with Cactus Compute's Needle 2, installed from the catalog, whose
   engine, runtime and base checkpoint download only after the first-use
   licence is accepted.
@@ -152,6 +153,18 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Updating a host whose Go is below 1.26, Debian 13's 1.24 included, no longer
   fails with "Go toolchain is still below 1.26 after install": the updater's
   `umask 077` had left `/usr/local/go` readable only by root.
+- A failed update now rolls Kilix back completely. Pleb sets
+  `submodule.recurse` on Kilix, and a recursive checkout could die part-way
+  (an engine submodule with linked worktrees), leaving the checkout on the new
+  commit with half its files reverted and no reason given.
+- The updater refuses, before it changes anything that matters, when the
+  per-user Pleb `session.env` points the desktop at another source tree or
+  engine, and when an apt source outside the Debian archive would fail the
+  release provenance check at the end of the update. Both refusals name the
+  file to change and how.
+- A developer layout's command links no longer stop an update: links that
+  already reach the right file are rewritten in place, and tmux-tui and `tb`
+  links into another source home's managed checkout are taken over.
 - The desktop declares its portal backends in
   `/etc/xdg-desktop-portal/pleb-portals.conf` instead of leaving every
   interface to a last-resort fallback. ScreenCast and Screenshot are stated as
