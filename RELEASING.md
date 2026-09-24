@@ -196,7 +196,9 @@ actually cutting.
   remain facts of the selected Git trees rather than duplicate env pins;
 - a stable Debian archive URL, SHA-256, and positive byte ceiling for the
   source netinst;
-- a `snapshot.debian.org` timestamp covering installer and firstboot packages;
+- a `snapshot.debian.org` timestamp covering installer and firstboot packages
+  (the install closure; installed machines track live Debian security and
+  point-release suites afterwards);
 - the fallback kitty bundle version and SHA-256;
 - the exact Go version and SHA-256 for every supported build architecture;
 - pinned installer versions/checksums and a positive download byte bound for
@@ -354,10 +356,14 @@ cannot change the process which is performing that hop.
    it first and opt in explicitly (or select new name/output/report overrides).
 
    The automated gate checks exact embedded build provenance, firstboot,
-   component/session/storage contracts, the installed closure selector, voice,
-   a real induced OS-layer update failure with byte-exact rollback, a successful
-   whole-stack update/restart, and clean builds of every installable catalog
-   pin. Guest exit status—not output text—decides each check. The wrapper
+   component/session/storage contracts, live Debian security sources
+   (`plebian-os-debian.sources`) with no global `Acquire::Check-Valid-Until`
+   or `Acquire::Check-Date` override and the security-upgrade policy file, the
+   installed closure
+   selector, voice, a real induced OS-layer update failure with byte-exact
+   rollback, a successful whole-stack update/restart, and clean builds of every
+   installable catalog pin. Guest exit status—not output text—decides each
+   check. The wrapper
    inherits the builder's 120-minute combined Debian-install and firstboot
    ceiling; pass a larger `--timeout` on a slower host or mirror. Retain the
    generated JSON and `.sha256`; only `status: "passed"` satisfies this lane.

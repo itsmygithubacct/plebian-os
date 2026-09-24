@@ -46,6 +46,8 @@ if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     require_unprivileged_updater "$EUID"
 fi
 
+# The deployed provisioner, which reconciles apt sources after a committed update.
+PROVISION_HELPER_DST=/usr/local/sbin/plebian-os-provision
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 # shellcheck disable=SC2034
@@ -1955,6 +1957,25 @@ test_fail_after_boundary() {
         || die "injected stack update failure after $1"
 }
 
+# Once the stack commits, the just-deployed provisioner moves a release machine
+# from the Debian install snapshot to live Debian security sources. The stack
+# stays committed either way; a failure is reported and the next update retries.
+reconcile_release_apt_sources_after_commit() {
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    local helper="$PROVISION_HELPER_DST"
+    local -a elevate=()
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    if [ ! -x "$helper" ] || [ -L "$helper" ]; then
+        warn "stack updated, but $helper is missing or unsafe; Debian security sources were not reconciled"
+        return 1
+    fi
+    log "reconciling Debian apt sources for security updates (needs root)"
+    if ! "${elevate[@]}" "$helper" --reconcile-apt-sources; then
+        warn "stack updated, but apt could not be moved to live Debian security sources; fix the reported apt problem and run plebian-os-update again"
+        return 1
+    fi
+}
+
 restart_session_after_commit() {
     [ "$restart_arg" = --restart ] || return 0
     local -a elevate=()
@@ -3064,6 +3085,8 @@ reconcile_legacy_remote_login() {
 # refresh deploys the matching dependency helper before it is invoked here. Apt package
 # additions are permitted rollback residue; the two system uv binaries are
 # included in the root snapshot because they are directly selected on PATH.
+# Debian package upgrades pulled in by live sources are residue as well; apt
+# source changes happen only after commit.
 refresh_os_dependencies() {
     local helper=/usr/local/sbin/plebian-os-install-deps
     local -a elevate=()
@@ -3237,6 +3260,23 @@ reapply_audio_holdoff() {
     esac
 }
 
+# Mirrors refuse_amd64_only_inputs in plebian-os-provision.sh for the pins this
+# update hands to `pleb install`. On any other architecture the x86_64 Vosk
+# wheel and the fallback amd64 kitty bundle checksum fail late, inside the
+# component update; refuse them before the stack transaction begins.
+refuse_amd64_only_stack_inputs() {
+    local machine
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64) return 0 ;;
+    esac
+    if [ "$PLEBIAN_OS_INSTALL_VOICE_MODEL" = 1 ] && [[ "$KILIX_VOICE_LIB_URL" == *_x86_64.whl ]]; then
+        die "KILIX_VOICE_LIB_URL is the x86_64 Vosk wheel, but this machine is $machine; set KILIX_VOICE_LIB_URL and KILIX_VOICE_LIB_SHA256 to the wheel for $machine"
+    fi
+    [ "$KILIX_PREBUILT_SHA256" != bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693 ] \
+        || die "KILIX_PREBUILT_SHA256 is the amd64 kitty $KILIX_PREBUILT_VERSION bundle checksum, but this machine is $machine; set KILIX_PREBUILT_VERSION and KILIX_PREBUILT_SHA256 for the $machine bundle"
+}
+
 stack_env=(
     "PLEBIAN_OS_NATIVE_DEB_URL=$PLEBIAN_OS_NATIVE_DEB_URL"
     "PLEBIAN_OS_NATIVE_DEB_SHA256=$PLEBIAN_OS_NATIVE_DEB_SHA256"
@@ -3357,6 +3397,52 @@ stack_env=(
     "KILIX_WAYDROID_BRANCH=$KILIX_WAYDROID_BRANCH"
     "KILIX_WAYDROID_REF=$KILIX_WAYDROID_REF"
 )
+
+# Release apt index provenance has two phases, and the provisioner and updater
+# must agree on both (a test holds their copies byte-identical). The run that
+# records a release install resolves every index from the exact install
+# snapshot; afterwards the machine tracks live Debian, and every index must still
+# come from the official Debian archive for its codename. Returns 2 for an empty
+# index list and 1, naming the index, for any other violation.
+validate_release_apt_provenance() {
+    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release
+    [ -s "$file" ] || return 2
+    while IFS= read -r line || [ -n "$line" ]; do
+        read -r site release _ <<<"$line"
+        [ -n "$site" ] || continue
+        case "$phase" in
+            install)
+                if [ -z "$snapshot" ] \
+                    || { [ "$site" != "https://snapshot.debian.org/archive/debian/$snapshot" ] \
+                        && [ "$site" != "https://snapshot.debian.org/archive/debian-security/$snapshot" ]; }; then
+                    printf 'apt index outside the install snapshot: %s\n' "$line" >&2
+                    return 1
+                fi
+                ;;
+            lifetime)
+                if ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
+                    || { [ "$release" != "$codename" ] && [ "$release" != "$codename-updates" ] \
+                        && [ "$release" != "$codename-security" ]; }; then
+                    printf 'apt index outside the Debian archive for %s: %s\n' "$codename" "$line" >&2
+                    return 1
+                fi
+                ;;
+            *) return 1 ;;
+        esac
+    done <"$file"
+    return 0
+}
+
+# A machine being updated already has a recorded install closure, so its apt
+# indexes are held to the lifetime phase: the official Debian archive only.
+require_lifetime_release_apt_provenance() {
+    local rc=0
+    validate_release_apt_provenance "$1" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+        "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
+        || rc=$?
+    [ "$rc" != 2 ] || die "release apt index provenance is empty"
+    [ "$rc" = 0 ] || die "release apt provenance contains an index outside the Debian archive"
+}
 
 # Build the same final source/tool manifest as the provisioner, but only after
 # every checkout, build, dependency, install, and session migration has
@@ -3510,11 +3596,7 @@ stage_final_provenance() {
         || die "could not record final apt source indexes"
 
     if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
-        [ -s "$stage/apt-sources.list" ] \
-            || die "release apt index provenance is empty"
-        if grep -v 'snapshot\.debian\.org' "$stage/apt-sources.list" | grep -q .; then
-            die "release apt provenance contains a non-snapshot index"
-        fi
+        require_lifetime_release_apt_provenance "$stage/apt-sources.list"
         [ "$plebian_os_commit" = "${PLEBIAN_OS_REF,,}" ] \
             || die "resolved plebian-os commit $plebian_os_commit does not match PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
         [ "$pleb_commit" = "${PLEB_REF,,}" ] \
@@ -3778,6 +3860,7 @@ fi
 # Capture the complete old runtime boundary before the first checkout or
 # deployed file is changed. The inherited fd keeps Pleb's nested component
 # transaction under the same serialization lock.
+refuse_amd64_only_stack_inputs
 begin_stack_transaction
 
 # Refresh the OS layer itself (provisioner/deps/update helper) first, then pleb.
@@ -3826,6 +3909,8 @@ else
 fi
 
 commit_stack_transaction
+apt_reconcile_rc=0
+reconcile_release_apt_sources_after_commit || apt_reconcile_rc=1
 if ! seed_desktop_wallpaper_after_commit; then
     warn "stack committed, but wallpaper state seeding failed; existing state was not changed"
 fi
@@ -3834,3 +3919,4 @@ restart_session_after_commit
 if [ "$restart_arg" = --no-restart ]; then
     log "restart the session to load the changes when ready:  sudo systemctl restart lightdm"
 fi
+exit "$apt_reconcile_rc"

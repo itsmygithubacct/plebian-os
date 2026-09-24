@@ -1828,6 +1828,19 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
         ("source provenance",    exact_source_provenance),
         ("apt provenance",       "test -s /var/lib/plebian-os/apt-sources.list"),
+        ("live Debian security source",
+         "grep -qx 'URIs: https://security.debian.org/debian-security' "
+         "/etc/apt/sources.list.d/plebian-os-debian.sources"),
+        # Check-Date false skips the Valid-Until check too. apt-config reads
+        # each value as apt does (unset prints nothing), so every spelling apt
+        # takes as false fails, and so does an apt-config that cannot answer.
+        ("apt validity checks enabled",
+         "ok=1; for k in Acquire::Check-Valid-Until Acquire::Check-Date; do "
+         "v=\"$(apt-config shell V \"$k/b\")\" || ok=0; "
+         "if [ \"$v\" = \"V='false'\" ]; then ok=0; fi; "
+         "done; test \"$ok\" = 1"),
+        ("security upgrades enabled",
+         "test -f /etc/apt/apt.conf.d/52plebian-os-security-upgrades"),
         ("uv closure",           uv_contract),
         ("coordinated checkouts", coordinated_checkouts),
         ("private storage roots", private_storage),

@@ -1,5 +1,7 @@
 import hashlib
 import os
+import shlex
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +14,11 @@ SETUP = ROOT / "provision" / "plebian-os-waydroid-setup"
 PIN = ROOT / "provision" / "waydroid-closure.sha256"
 REQUIREMENTS_020 = ROOT / "releases" / "0.2.0.requirements"
 REQUIREMENTS_021 = ROOT / "releases" / "0.2.1.requirements"
+
+
+def _shell_function(source: str, name: str) -> str:
+    start = source.index(f"\n{name}() {{\n") + 1
+    return source[start:source.index("\n}\n", start) + 3]
 
 
 def values(path: Path) -> dict[str, str]:
@@ -76,9 +83,68 @@ class WaydroidReleaseTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Waydroid 1.6.2 closure", result.stdout)
-        self.assertIn("apt-install exact Weston", result.stdout)
+        self.assertIn("apt-install Weston >=", result.stdout)
         self.assertIn("initialize Waydroid from the preinstalled", result.stdout)
         self.assertNotIn("checksum was not supplied", result.stderr)
+
+    def test_weston_is_a_floor_not_an_exact_pin(self):
+        setup = SETUP.read_text(encoding="utf-8")
+        self.assertIn("dpkg --compare-versions", setup)
+        self.assertNotIn('"weston=${VALUES[WAYDROID_WESTON_VERSION]}"', setup)
+
+    def test_verify_package_accepts_newer_weston_and_keeps_local_packages_exact(self):
+        dpkg = shutil.which("dpkg")
+        if dpkg is None:
+            self.skipTest("dpkg --compare-versions is required")
+        setup = SETUP.read_text(encoding="utf-8")
+        closure = values(CLOSURE)
+        declared = " ".join(
+            f"[{key}]={shlex.quote(closure[key])}"
+            for key in ("WAYDROID_WESTON_VERSION", "WAYDROID_PACKAGE_VERSION",
+                        "WAYDROID_LIBGLIBUTIL_VERSION", "WAYDROID_LIBGBINDER_VERSION",
+                        "WAYDROID_PYTHON_GBINDER_VERSION")
+        )
+        script = (
+            "set -euo pipefail\n"
+            f"declare -A VALUES=({declared})\n"
+            "warn() { printf '%s\\n' \"$*\" >&2; }\n"
+            + _shell_function(setup, "package_version")
+            + _shell_function(setup, "verify_package")
+            + 'verify_package "$1"\n'
+        )
+        weston = closure["WAYDROID_WESTON_VERSION"]
+        waydroid = closure["WAYDROID_PACKAGE_VERSION"]
+        cases = (
+            ("weston", "install ok installed", weston + "+deb13u1", 0),
+            ("weston", "install ok installed", weston, 0),
+            ("weston", "install ok installed", "14.0.1-1", 1),
+            ("weston", "deinstall ok config-files", weston, 1),
+            ("weston", None, None, 1),
+            ("waydroid", "install ok installed", waydroid, 0),
+            ("waydroid", "install ok installed", waydroid + "+1", 1),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            bindir = Path(td)
+            (bindir / "dpkg-query").write_text(
+                '#!/bin/sh\n[ -n "${FAKE_STATUS:-}" ] || exit 1\n'
+                'printf \'%s\\t%s\' "$FAKE_STATUS" "$FAKE_VERSION"\n'
+            )
+            (bindir / "dpkg").write_text(
+                f'#!/bin/sh\n[ "${{1:-}}" = --compare-versions ] || exit 2\nexec {dpkg} "$@"\n'
+            )
+            for stub in ("dpkg-query", "dpkg"):
+                (bindir / stub).chmod(0o755)
+            for package, status, version, expected in cases:
+                with self.subTest(package=package, status=status, version=version):
+                    env = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}"}
+                    env.pop("FAKE_STATUS", None)
+                    if status is not None:
+                        env.update(FAKE_STATUS=status, FAKE_VERSION=version)
+                    result = subprocess.run(
+                        ["bash", "-c", script, "verify", package],
+                        env=env, text=True, capture_output=True, check=False,
+                    )
+                    self.assertEqual(result.returncode, expected, result.stderr)
 
     def test_setup_rejects_substitution_and_unknown_closure_keys(self):
         result = subprocess.run(
@@ -154,7 +220,9 @@ class WaydroidReleaseTests(unittest.TestCase):
         self.assertIn('binder_device_present "$device"', setup)
         self.assertLess(
             setup.index("install_binder_support\n"),
-            setup.index("apt-get install -y --no-install-recommends"),
+            setup.index(
+                "apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends"
+            ),
         )
 
     def test_large_images_use_bounded_verified_range_downloads(self):

@@ -50,6 +50,8 @@ system-monitor, desktop-SDK, IceWM, media-SDK and Waydroid components joined
 the closure in 0.2.1), the Debian snapshot and installer input, the Kilix
 engine and Go pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
 one reviewed target closure; mixing old and new release pins is unsupported.
+The Debian snapshot is the install-time resolution pin; it does not freeze an
+installed machine's Debian packages.
 
 ### The 0.2.0 shared-credential transition
 
@@ -76,9 +78,12 @@ transaction restores both the prior drop-in state and the running SSH policy.
 
 ### The 0.2.1 to 0.2.2 transition
 
-Nothing migrates. Four things change under an upgrader, all preserved or
+Nothing migrates. These things change under an upgrader, all preserved or
 release-controlled by the rules above:
 
+- The package sources move from the release's Debian snapshot to live Debian
+  with daily security updates, after the first successful update to 0.2.2
+  commits; see **Debian security updates** below.
 - `feh` is newly installed as the still-image viewer. An upgrader who already
   has another image viewer keeps it; this only adds the package.
 - `/etc/xdg-desktop-portal/pleb-portals.conf` is a new **release-managed** file,
@@ -127,6 +132,38 @@ release-controlled by the rules above:
   is the migration owner decision OD-BB requires the notes to name, and
   `releases/0.2.2-notes.md` names the old and new representation in full.
 
+## Debian security updates
+
+Beginning with 0.2.2, a release machine installs its package closure from the
+release's `snapshot.debian.org` timestamp and then tracks live Debian. A fresh
+0.2.2 install switches at the end of first boot. An installed 0.2.1 machine
+switches after its first successful `plebian-os-update` to 0.2.2 commits: the
+updater runs `plebian-os-provision --reconcile-apt-sources`, which retires the
+installer's snapshot `sources.list`, restores sources Plebian-OS had disabled,
+removes the global `Acquire::Check-Valid-Until "false"` that the installer and
+earlier provisioners wrote, and writes `plebian-os-debian.sources` unless
+operator sources already provide live `trixie`, `trixie-updates`, and
+`trixie-security`. It refuses to activate live sources while any other global
+validity or date-check override remains (find it with
+`grep -rE 'Check-Valid-Until|Check-Date' /etc/apt`), or while an operator
+source for those Debian suites turns off signature or replay checks with
+`trusted`, `check-valid-until`, `check-date`, or an `allow-*` option. If that
+step fails, the stack update still stands and the updater exits non-zero; fix
+the reported apt problem and run `plebian-os-update` again. Machines on
+0.1.7-0.2.0 stay on the snapshot until they reach 0.2.2 one release at a time.
+Machines upgraded from 0.2.1 keep the previous Waydroid first-use helper, which
+installs the closure's exact `weston` version, until they are reprovisioned.
+
+`unattended-upgrades` applies `trixie-security` updates daily and never
+reboots; install point releases with `sudo apt update && sudo apt upgrade`. To
+opt out, set `APT::Periodic::Unattended-Upgrade "0";` in a later file such as
+`/etc/apt/apt.conf.d/99local`.
+
+After a machine has left the snapshot, `plebian-os-select-closure --rollback` to
+a release older than 0.2.2 is refused: that release's updater accepts only
+snapshot indexes and exact package versions which security updates have
+superseded.
+
 ## Failure and rollback contract
 
 Before its first mutation, the updater must snapshot the selected source
@@ -136,7 +173,8 @@ validation, build, install, migration, health check, or restart step fails, the
 machine must select the exact previous coherent stack and configuration again.
 
 Downloaded git objects, packages, and toolchains may remain after rollback when
-they are additive and inactive. User data must never be removed as rollback
+they are additive and inactive; Debian security and point-release upgrades are
+never rolled back. User data must never be removed as rollback
 cleanup. The updater must report recovery material it could not restore and
 must not report success until the outer transaction commits.
 
@@ -144,9 +182,9 @@ must not report success until the outer transaction commits.
 
 The target release is not publishable until its immediately previous published
 release has been installed from the published image in a fresh VM and upgraded
-using the documented installed-system path. That path must use the updater
-shipped by the starting release with the target's immutable release closure; it
-must not depend on an unpublished developer checkout. The acceptance run must:
+using the documented installed-system path. That path must use the target
+release's selector and the updater it installs, with the target's immutable
+release closure; it must not depend on an unpublished developer checkout. The acceptance run must:
 
 1. verify the starting VM against the previous release's published hashes and
    exact coordinated commits;

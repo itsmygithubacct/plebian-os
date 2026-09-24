@@ -19,8 +19,9 @@
 #   4. (optional) enables Pleb autologin — a hard kiosk that boots straight in
 #   5. (optional) grants the target user passwordless sudo (--nopasswd-sudo)
 #
-# It is idempotent: re-running updates the checkouts, reconciles snapshot/live
-# apt and kiosk/sudo state, re-asserts the session, and rewrites final provenance.
+# It is idempotent: re-running updates the checkouts, reconciles apt (a release
+# installs from its Debian snapshot, then tracks live Debian security sources)
+# and kiosk/sudo state, re-asserts the session, and rewrites final provenance.
 # Run as root (the firstboot service does) or via sudo. --dry-run prints the
 # plan without touching anything.
 set -euo pipefail
@@ -416,6 +417,13 @@ UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
 # The apt root is overridable only to exercise snapshot transactions in an
 # isolated test tree. Production and firstboot leave it at /etc.
 APT_ETC_ROOT="${PLEBIAN_OS_APT_ETC_ROOT:-/etc}"
+# A recorded install closure ends a release machine's install phase: from then
+# on its apt sources track live Debian rather than the install snapshot.
+APT_INSTALL_RECORD=/var/lib/plebian-os/versions.env
+# Seconds to wait for another apt source transaction; tests shorten it.
+APT_SOURCES_LOCK_TIMEOUT=300
+APT_PROVENANCE_PHASE=lifetime
+RECONCILE_APT_ONLY=0
 PLEB_DIR="${PLEB_DIR:-}"                       # defaults after target user is known
 KILIX_DIR="${KILIX_DIR:-}"                     # default after target user is known
 KILIX95_DIR="${KILIX95_DIR:-}"                 # default after target user is known
@@ -491,6 +499,7 @@ Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--desktop|--no-desktop] [--
   --no-desktop   load a shell in the first screen-filling Kilix page
   --branch REF   pleb branch/tag to clone (default: repo default)
   --dry-run      print what would happen; change nothing
+  --reconcile-apt-sources internal: called by plebian-os-update after a committed update
   --version      print the Plebian-OS version and exit
 EOF
 }
@@ -933,6 +942,26 @@ validate_release_inputs() {
             ;;
         *) die "invalid PLEBIAN_OS_INSTALL_WAYDROID=$INSTALL_WAYDROID (expected 0/1)" ;;
     esac
+}
+
+# Release closures pin amd64 artifacts: the Waydroid runtime and images, the
+# x86_64 Vosk wheel, and this script's fallback kitty bundle checksum. On any
+# other architecture they fail late, as a checksum or ELF mismatch deep inside
+# `pleb install`. Refuse them before anything is downloaded, and name the
+# per-architecture override instead.
+refuse_amd64_only_inputs() {
+    local machine
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64) return 0 ;;
+    esac
+    [ "$INSTALL_WAYDROID" != 1 ] \
+        || die "PLEBIAN_OS_INSTALL_WAYDROID=1 selects the amd64-only Waydroid closure, but this machine is $machine; set PLEBIAN_OS_INSTALL_WAYDROID=0 and an empty PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"
+    if [ "$INSTALL_VOICE_MODEL" = 1 ] && [[ "$KILIX_VOICE_LIB_URL" == *_x86_64.whl ]]; then
+        die "KILIX_VOICE_LIB_URL is the x86_64 Vosk wheel, but this machine is $machine; set KILIX_VOICE_LIB_URL and KILIX_VOICE_LIB_SHA256 to the wheel for $machine"
+    fi
+    [ "$KILIX_PREBUILT_SHA256" != bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693 ] \
+        || die "KILIX_PREBUILT_SHA256 is the amd64 kitty $KILIX_PREBUILT_VERSION bundle checksum, but this machine is $machine; set KILIX_PREBUILT_VERSION and KILIX_PREBUILT_SHA256 for the $machine bundle"
 }
 
 as_user() {
@@ -3526,7 +3555,9 @@ _discover_legacy_apt_snapshot_inventory() {
 }
 
 _active_apt_source_paths() {
-    local managed="$1" out_name="$2" path
+    local out_name="$1" path
+    local snapshot="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
+    local managed_live="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
     # shellcheck disable=SC2178  # nameref intentionally targets an array
     local -n out="$out_name"
     local -a candidates
@@ -3539,7 +3570,10 @@ _active_apt_source_paths() {
     )
     shopt -u nullglob
     for path in "${candidates[@]}"; do
-        [ "$path" = "$managed" ] && continue
+        # Both managed Debian source files belong to this provisioner and are
+        # never inventoried as operator sources.
+        [ "$path" = "$snapshot" ] && continue
+        [ "$path" = "$managed_live" ] && continue
         [ -f "$path" ] || [ -L "$path" ] || continue
         case "$path" in *$'\n'*|*$'\r'*) die "invalid newline in apt source path" ;; esac
         out+=("$path")
@@ -3554,18 +3588,274 @@ _restore_managed_apt_file() {
     fi
 }
 
+# A failure while an apt transaction is still being staged, before anything in
+# apt has moved: remove the staged files and the transaction directory, then die.
+_abort_apt_staging() {
+    local txn="$1" message="$2"
+    shift 2
+    rm -f -- "$@" 2>/dev/null || true
+    rm -rf -- "$txn"
+    die "$message"
+}
+
+# The Debian codename of the apt root being configured (trixie when unknown).
+_apt_codename() {
+    local codename
+    # shellcheck source=/dev/null
+    codename="$(. "$APT_ETC_ROOT/os-release" 2>/dev/null; printf '%s' "${VERSION_CODENAME:-}")"
+    printf '%s\n' "${codename:-trixie}"
+}
+
+# First boot, a manual re-run, and the updater's post-commit reconcile may each
+# change apt sources; serialize their transactions on one root-owned lock.
+_with_apt_sources_lock() {
+    local lock_fd
+    if [ "$DRY_RUN" = 1 ]; then
+        "$@"
+        return
+    fi
+    case "$APT_ETC_ROOT" in /*) ;; *) die "PLEBIAN_OS_APT_ETC_ROOT must be absolute" ;; esac
+    mkdir -p "$APT_ETC_ROOT/plebian-os"
+    exec {lock_fd}>"$APT_ETC_ROOT/plebian-os/.apt-sources.lock"
+    flock -w "$APT_SOURCES_LOCK_TIMEOUT" "$lock_fd" \
+        || die "another Plebian-OS apt source change is in progress"
+    "$@"
+    exec {lock_fd}>&-
+}
+
+# Remove the global overrides Plebian-OS's own snapshot setup left: exact
+# `Acquire::Check-Valid-Until "false";` lines in apt.conf, which the Debian
+# Installer generator appends, and the 99plebian-os-snapshot file that earlier
+# provisioners wrote. Any other global override stays for
+# _assert_no_global_validity_override to refuse. Snapshot stanzas disable the
+# check per source instead, so live sources keep apt's replay protection.
+# Callers back up both files and restore them on rollback; no other apt.conf.d
+# file is touched.
+_remove_global_validity_overrides() {
+    local conf="$APT_ETC_ROOT/apt/apt.conf" tmp rc=0
+    local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
+    local pattern='^[[:space:]]*Acquire::Check-Valid-Until[[:space:]]+"false";[[:space:]]*$'
+    rm -f "$cfg" || return 1
+    [ -f "$conf" ] || return 0
+    grep -Eq "$pattern" "$conf" || return 0
+    tmp="$(mktemp "$APT_ETC_ROOT/apt/.plebian-os-apt.conf.XXXXXX")" || return 1
+    grep -Ev "$pattern" "$conf" > "$tmp" || rc=$?
+    if [ "$rc" -gt 1 ]; then
+        rm -f "$tmp"
+        return 1
+    fi
+    if grep -q '[^[:space:]]' "$tmp"; then
+        if ! chmod --reference="$conf" "$tmp" || ! mv -fT "$tmp" "$conf"; then
+            rm -f "$tmp"
+            return 1
+        fi
+    else
+        rm -f "$tmp" "$conf" || return 1
+    fi
+}
+
+# apt's boolean spellings for source options (StringToBool). False is every
+# spelling apt reads as false: the words, and a zero that strtol parses whole,
+# with optional leading space, sign, octal or hex. True is only the plain words
+# and 1, so each caller asks in the direction where a miss refuses.
+_apt_value_is_false() {
+    case "${1,,}" in
+        false|no|off|without|disable) return 0 ;;
+    esac
+    [[ "$1" =~ ^[[:space:]]*[+-]?(0+|0[xX]0+)$ ]]
+}
+
+_apt_value_is_true() {
+    case "${1,,}" in
+        true|yes|on|with|enable) return 0 ;;
+    esac
+    [[ "$1" =~ ^(0*1|0[xX]0*1)$ ]]
+}
+
+# Live Debian sources must never be activated while any global setting turns
+# apt's replay protection off: Check-Valid-Until, or Check-Date, which skips the
+# Valid-Until check as well. apt-config reads the real configuration and gives
+# apt's own boolean reading of each key (nothing when it is unset), so every
+# spelling of the override apt accepts is caught; a value apt cannot read as a
+# boolean also reads as false and is refused.
+_assert_no_global_validity_override() {
+    local key value
+    if ! command -v apt-config >/dev/null 2>&1; then
+        warn "apt-config is unavailable; cannot prove that apt replay protection is enabled"
+        return 1
+    fi
+    for key in Acquire::Check-Valid-Until Acquire::Check-Date; do
+        if ! value="$(apt-config shell V "$key/b" 2>/dev/null)"; then
+            warn "apt-config could not read $key; cannot prove that apt replay protection is enabled"
+            return 1
+        fi
+        [ "$value" = "V='false'" ] || continue
+        warn "a global $key disables replay protection for live Debian sources; remove it (see: grep -r ${key#Acquire::} $APT_ETC_ROOT/apt) and re-run"
+        return 1
+    done
+}
+
+# Prints the options of one apt source entry as lowercase key=value lines. The
+# entry is apt's own SOURCESENTRY: file:line for the one-line format, and
+# file:stanza for deb822 files, whose comment-only paragraphs apt skips.
+_apt_source_entry_options() {
+    local file="${1%:*}" index="${1##*:}" line rest options word key
+    local -a words=()
+    [[ "$index" =~ ^[1-9][0-9]*$ ]] && [ -r "$file" ] || return 1
+    if [[ "$file" == *.sources ]]; then
+        awk -v want="$index" '
+            /^[ \t]*$/ { open = 0; next }
+            /^#/ { next }
+            { if (!open) { stanza++; open = 1 } }
+            stanza == want && /^[^ \t]/ {
+                key = $0; sub(/:.*/, "", key)
+                value = $0; sub(/^[^:]*:[ \t]*/, "", value); sub(/[ \t]+$/, "", value)
+                print tolower(key) "=" value
+            }' "$file"
+        return
+    fi
+    line="$(sed -n "${index}p" "$file")" || return 1
+    read -r _ rest <<<"$line"
+    [ "${rest:0:1}" = "[" ] || return 0
+    options="${rest#\[}"
+    options="${options%%]*}"
+    read -ra words <<<"$options"
+    for word in "${words[@]}"; do
+        [[ "$word" == *=* ]] || continue
+        key="${word%%=*}"
+        printf '%s=%s\n' "${key,,}" "${word#*=}"
+    done
+}
+
+# True when an apt source entry turns off signature checking or replay
+# protection for itself. Each option counts as disabling unless apt reads it as
+# leaving the check on, so an unreadable entry or an unusual spelling refuses.
+_apt_source_entry_disables_trust() {
+    local options option key value
+    options="$(_apt_source_entry_options "$1")" || return 0
+    while IFS= read -r option; do
+        [ -n "$option" ] || continue
+        key="${option%%=*}"
+        key="${key%[+-]}"
+        value="${option#*=}"
+        case "$key" in
+            trusted|allow-insecure|allow-weak|allow-downgrade-to-insecure)
+                _apt_value_is_false "$value" || return 0 ;;
+            check-valid-until|check-date)
+                _apt_value_is_true "$value" || return 0 ;;
+        esac
+    done <<<"$options"
+    return 1
+}
+
+# The Debian Installer's snapshot sources.list is inventoried like any source,
+# but it is not the operator's: its apt-setup generator marks it, and it names
+# the install timestamp. Leaving the snapshot retires it outside every path apt
+# or this provisioner scans instead of restoring it. Returns 0 to retire it by
+# rename, 2 when an identical retired copy already exists, and 1 for any other
+# source. A conflicting retired copy dies before anything moves.
+_retire_installer_snapshot_source() {
+    local live="$1" backup="$1.plebian-os-disabled"
+    local retired="$APT_ETC_ROOT/apt/sources.list.plebian-os-installer-snapshot"
+    [ "$live" = "$APT_ETC_ROOT/apt/sources.list" ] || return 1
+    [ -f "$backup" ] && [ ! -L "$backup" ] || return 1
+    grep -qxF '# Plebian-OS snapshot validity policy' "$backup" || return 1
+    if [ -e "$retired" ] || [ -L "$retired" ]; then
+        if [ -f "$retired" ] && [ ! -L "$retired" ] && cmp -s "$backup" "$retired"; then
+            return 2
+        fi
+        die "cannot retire the installer snapshot source: both $backup and $retired exist"
+    fi
+    return 0
+}
+
+# Returns 0 when active operator sources already give apt live Debian main for
+# this codename, its point-release updates, and its security suite. apt parses
+# the sources itself, so both source formats and disabled stanzas count exactly
+# as apt counts them. Any failure reads as not covered (1). Returns 2 when an
+# operator entry for those suites turns off signature checking or replay
+# protection: it can never be the coverage, and a managed source beside it
+# would either conflict with it in apt or leave it in use.
+_live_debian_coverage_complete() {
+    local codename="$1" state_dir="$APT_ETC_ROOT/plebian-os" parts path list=/dev/null
+    local targets site release component entry origin base=0 updates=0 security=0 unsafe=0
+    local -a active=()
+    local -A inspected=()
+    _active_apt_source_paths active
+    parts="$(mktemp -d "$state_dir/.apt-coverage.XXXXXX")" || return 1
+    for path in "${active[@]}"; do
+        if [ "$path" = "$APT_ETC_ROOT/apt/sources.list" ]; then
+            list="$path"
+        elif ! ln -s "$path" "$parts/${path##*/}"; then
+            rm -rf "$parts"
+            return 1
+        fi
+    done
+    # apt-get expands these index-target fields; the shell must not.
+    # shellcheck disable=SC2016
+    if ! targets="$(apt-get indextargets --no-release-info \
+            -o "Dir::Etc::SourceParts=$parts" -o "Dir::Etc::SourceList=$list" \
+            --format '$(SITE) $(RELEASE) $(COMPONENT) $(SOURCESENTRY)' 2>/dev/null)"; then
+        rm -rf "$parts"
+        warn "apt could not list the active sources' indexes; writing the managed live Debian source"
+        return 1
+    fi
+    # Entries name the links under $parts, so read them before it is removed.
+    while read -r site release component entry; do
+        case "$release" in
+            "$codename"|"$codename-updates")
+                [[ "$site" =~ ^https?://deb\.debian\.org/debian/?$ ]] || continue ;;
+            "$codename-security")
+                [[ "$site" =~ ^https?://(security|deb)\.debian\.org/debian-security/?$ ]] || continue ;;
+            *) continue ;;
+        esac
+        if [ -z "${inspected[$entry]+x}" ]; then
+            inspected[$entry]=1
+            if _apt_source_entry_disables_trust "$entry"; then
+                origin="${entry%:*}"
+                [ "$origin" = "$list" ] \
+                    || origin="$APT_ETC_ROOT/apt/sources.list.d/${origin##*/}"
+                warn "apt source $origin (entry ${entry##*:}) disables signature or replay checks for live Debian $release; remove trusted, check-valid-until, check-date, and allow-* options from it and re-run"
+                unsafe=1
+            fi
+        fi
+        [ "$component" = main ] || continue
+        case "$release" in
+            "$codename") base=1 ;;
+            "$codename-updates") updates=1 ;;
+            "$codename-security") security=1 ;;
+        esac
+    done <<<"$targets"
+    rm -rf "$parts"
+    [ "$unsafe" = 0 ] || return 2
+    [ "$base$updates$security" = 111 ]
+}
+
+# Leave the Debian snapshot for live sources. Every source Plebian-OS disabled is
+# restored except the Debian Installer's snapshot sources.list, which is
+# retired; global validity overrides are removed; and the managed live Debian
+# source is written only when operator sources do not already provide it. The
+# move is one transaction and never finishes while replay protection is off.
 restore_live_apt_sources() {
     local apt_dir="$APT_ETC_ROOT/apt" state_dir="$APT_ETC_ROOT/plebian-os"
     local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
+    local live_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local aptconf="$APT_ETC_ROOT/apt/apt.conf"
+    local retired="$APT_ETC_ROOT/apt/sources.list.plebian-os-installer-snapshot"
     local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
-    local live backup txn codename live_tmp failed=0 rollback_ok=1 signal_rc=0
-    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0
-    local -a managed=() restored=() active=()
-    log "apt snapshot disabled; restoring the exact sources disabled by Plebian-OS"
+    local live backup target txn codename live_tmp failed=0 rollback_ok=1 signal_rc=0
+    local retire_mode=1 changed=0 staged=1 coverage
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 aptconf_old=0
+    local -a managed=() moved_from=() moved_to=()
+    log "leaving the apt snapshot; restoring disabled sources and ensuring live Debian sources"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + preflight $inventory and every managed backup before changing apt"
         echo "    + restore exactly the inventoried *.plebian-os-disabled sources, then remove only Plebian-OS snapshot files"
+        echo "    + retire the Debian Installer snapshot sources.list -> $retired"
+        echo "    + ensure live Debian and security sources ($live_src unless operator sources already provide them)"
+        echo "    + remove Plebian-OS's global Check-Valid-Until overrides; refuse live sources while a global Check-Valid-Until or Check-Date override remains, or an operator source disables apt checks"
+        echo "    + apt-get update (a failure warns; apt retries on its daily timer)"
         return 0
     fi
     case "$APT_ETC_ROOT" in /*) ;; *) die "PLEBIAN_OS_APT_ETC_ROOT must be absolute" ;; esac
@@ -3583,63 +3873,26 @@ restore_live_apt_sources() {
         backup="$live.plebian-os-disabled"
         { [ -e "$backup" ] || [ -L "$backup" ]; } \
             || die "apt snapshot inventory names a missing backup: $backup"
+        if [ "$live" = "$apt_dir/sources.list" ]; then
+            retire_mode=0
+            _retire_installer_snapshot_source "$live" || retire_mode=$?
+            # A retired installer source is never restored, so a sources.list
+            # recreated since then is not a conflict.
+            [ "$retire_mode" = 1 ] || continue
+        fi
         if [ -e "$live" ] || [ -L "$live" ]; then
             die "cannot restore apt sources safely: both $live and $backup exist"
         fi
     done
 
+    codename="$(_apt_codename)"
     txn="$(mktemp -d "$state_dir/.apt-restore.XXXXXX")" \
         || die "could not create apt restore transaction directory"
-    if [ -e "$src" ] || [ -L "$src" ]; then cp -a "$src" "$txn/src"; src_old=1; fi
-    if [ -e "$cfg" ] || [ -L "$cfg" ]; then cp -a "$cfg" "$txn/cfg"; cfg_old=1; fi
-    if [ -e "$marker" ] || [ -L "$marker" ]; then cp -a "$marker" "$txn/marker"; marker_old=1; fi
-    if [ -e "$inventory" ] || [ -L "$inventory" ]; then cp -a "$inventory" "$txn/inventory"; inventory_old=1; fi
-
-    # Defer termination only across the mutation window so every signal takes
-    # the same rollback path as an ordinary command failure.
-    trap 'signal_rc=143' INT TERM HUP
-    for live in "${managed[@]}"; do
-        if [ "$failed" != 0 ] || [ "$signal_rc" != 0 ]; then failed=1; break; fi
-        backup="$live.plebian-os-disabled"
-        if mv -T "$backup" "$live"; then
-            restored+=("$live")
-        else
-            failed=1
-            break
-        fi
-    done
-    if [ "$failed" = 0 ]; then
-        rm -f "$src" "$cfg" "$marker" "$inventory" || failed=1
-    fi
-    [ "$signal_rc" = 0 ] || failed=1
-    if [ "$failed" != 0 ]; then
-        for ((i=${#restored[@]}-1; i>=0; i--)); do
-            live="${restored[$i]}"
-            mv -T "$live" "$live.plebian-os-disabled" 2>/dev/null || rollback_ok=0
-        done
-        _restore_managed_apt_file "$src" "$txn/src" "$src_old" || rollback_ok=0
-        _restore_managed_apt_file "$cfg" "$txn/cfg" "$cfg_old" || rollback_ok=0
-        _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
-        _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
-        if [ "$rollback_ok" = 1 ]; then
-            rm -rf "$txn"
-            restore_provision_signal_traps
-            [ "$signal_rc" = 0 ] || exit "$signal_rc"
-            die "apt source restoration failed; the previous snapshot configuration was restored"
-        fi
-        restore_provision_signal_traps
-        die "apt source restoration and rollback were incomplete; recovery files remain at $txn"
-    fi
-    rm -rf "$txn"
-    restore_provision_signal_traps
-    [ "$signal_rc" = 0 ] || exit "$signal_rc"
-
-    _active_apt_source_paths "$src" active
-    if [ "${#active[@]}" -eq 0 ]; then
-        codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
-        live_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-live.XXXXXX")"
-        cat > "$live_tmp" <<EOF
-# Managed by plebian-os-provision after leaving snapshot mode with no saved source.
+    live_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-live.XXXXXX")" \
+        || _abort_apt_staging "$txn" "could not stage the live Debian source; apt was not changed"
+    cat > "$live_tmp" <<EOF || staged=0
+# Managed by plebian-os-provision. Live Debian, including security updates, with
+# apt's replay protection. Removed when operator sources already provide it.
 Types: deb
 URIs: https://deb.debian.org/debian
 Suites: $codename ${codename}-updates
@@ -3652,15 +3905,109 @@ Suites: ${codename}-security
 Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
-        chmod 0644 "$live_tmp"
-        mv -fT "$live_tmp" "$apt_dir/sources.list.d/debian.sources"
+    chmod 0644 "$live_tmp" || staged=0
+    if [ -e "$src" ] || [ -L "$src" ]; then src_old=1; cp -a "$src" "$txn/src" || staged=0; fi
+    if [ -e "$cfg" ] || [ -L "$cfg" ]; then cfg_old=1; cp -a "$cfg" "$txn/cfg" || staged=0; fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then marker_old=1; cp -a "$marker" "$txn/marker" || staged=0; fi
+    if [ -e "$inventory" ] || [ -L "$inventory" ]; then inventory_old=1; cp -a "$inventory" "$txn/inventory" || staged=0; fi
+    if [ -e "$live_src" ] || [ -L "$live_src" ]; then live_src_old=1; cp -a "$live_src" "$txn/live_src" || staged=0; fi
+    if [ -e "$aptconf" ] || [ -L "$aptconf" ]; then aptconf_old=1; cp -a "$aptconf" "$txn/aptconf" || staged=0; fi
+    [ "$staged" = 1 ] \
+        || _abort_apt_staging "$txn" "could not stage the move to live Debian sources; apt was not changed" "$live_tmp"
+
+    # Defer termination only across the mutation window so every signal takes
+    # the same rollback path as an ordinary command failure.
+    trap 'signal_rc=143' INT TERM HUP
+    for live in "${managed[@]}"; do
+        if [ "$failed" != 0 ] || [ "$signal_rc" != 0 ]; then failed=1; break; fi
+        backup="$live.plebian-os-disabled"
+        target="$live"
+        if [ "$live" = "$apt_dir/sources.list" ]; then
+            case "$retire_mode" in
+                0) target="$retired" ;;
+                2) target="$txn/installer-snapshot-duplicate" ;;
+            esac
+        fi
+        if mv -T "$backup" "$target"; then
+            moved_from+=("$backup")
+            moved_to+=("$target")
+        else
+            failed=1
+            break
+        fi
+    done
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
+        rm -f "$src" "$marker" "$inventory" || failed=1
+    fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
+        _remove_global_validity_overrides || failed=1
+    fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
+        coverage=0
+        _live_debian_coverage_complete "$codename" || coverage=$?
+        case "$coverage" in
+            0) rm -f "$live_src" || failed=1 ;;
+            1) mv -fT "$live_tmp" "$live_src" || failed=1 ;;
+            *) failed=1 ;;
+        esac
+    fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
+        _assert_no_global_validity_override || failed=1
+    fi
+    [ "$signal_rc" = 0 ] || failed=1
+    rm -f "$live_tmp"
+    if [ "$failed" != 0 ]; then
+        for ((i=${#moved_to[@]}-1; i>=0; i--)); do
+            mv -T "${moved_to[$i]}" "${moved_from[$i]}" 2>/dev/null || rollback_ok=0
+        done
+        _restore_managed_apt_file "$src" "$txn/src" "$src_old" || rollback_ok=0
+        _restore_managed_apt_file "$cfg" "$txn/cfg" "$cfg_old" || rollback_ok=0
+        _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
+        _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
+        _restore_managed_apt_file "$live_src" "$txn/live_src" "$live_src_old" || rollback_ok=0
+        _restore_managed_apt_file "$aptconf" "$txn/aptconf" "$aptconf_old" || rollback_ok=0
+        if [ "$rollback_ok" = 1 ]; then
+            rm -rf "$txn"
+            restore_provision_signal_traps
+            [ "$signal_rc" = 0 ] || exit "$signal_rc"
+            die "apt source restoration failed; the previous snapshot configuration was restored"
+        fi
+        restore_provision_signal_traps
+        die "apt source restoration and rollback were incomplete; recovery files remain at $txn"
+    fi
+    if [ "${#moved_to[@]}" -gt 0 ] \
+        || [ "$src_old$cfg_old$marker_old$inventory_old" != 0000 ]; then
+        changed=1
+    fi
+    if [ "$live_src_old" = 1 ]; then
+        { [ -e "$live_src" ] && cmp -s "$txn/live_src" "$live_src"; } || changed=1
+    elif [ -e "$live_src" ]; then
+        changed=1
+    fi
+    if [ "$aptconf_old" = 1 ]; then
+        { [ -e "$aptconf" ] && cmp -s "$txn/aptconf" "$aptconf"; } || changed=1
+    fi
+    rm -rf "$txn"
+    restore_provision_signal_traps
+    [ "$signal_rc" = 0 ] || exit "$signal_rc"
+    # A network failure must not roll back: that would freeze the machine on the
+    # snapshot again. apt's daily timer retries against the live sources.
+    if [ "$changed" = 1 ] && ! apt-get update -y; then
+        warn "apt-get update against live Debian failed; apt will retry on its daily timer"
     fi
 }
 
-# Pin apt to a snapshot.debian.org timestamp so the first-boot package closure is
-# reproducible. Turning the knob back off actively restores the stock/live
-# sources instead of leaving a machine permanently stranded on the snapshot.
+# Release machines resolve their first-boot package closure from a
+# snapshot.debian.org timestamp so it is reproducible, then track live Debian
+# once that closure is recorded (see finish_release_apt_install): the timestamp
+# is install provenance, not a lifetime pin. A non-release timestamp stays a pin,
+# and turning the knob back off restores live sources instead of leaving a
+# machine stranded on the snapshot.
 configure_apt_snapshot() {
+    _with_apt_sources_lock _configure_apt_snapshot
+}
+
+_configure_apt_snapshot() {
     if [ -z "$PLEBIAN_OS_APT_SNAPSHOT" ]; then
         [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] \
             && die "release mode requires PLEBIAN_OS_APT_SNAPSHOT; refusing live package drift"
@@ -3671,13 +4018,26 @@ configure_apt_snapshot() {
     local apt_dir="$APT_ETC_ROOT/apt" state_dir="$APT_ETC_ROOT/plebian-os"
     local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
+    local live_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local aptconf="$APT_ETC_ROOT/apt/apt.conf"
     local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
     [[ "$ts" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] \
         || die "invalid PLEBIAN_OS_APT_SNAPSHOT=$ts (expected YYYYMMDD or YYYYMMDDTHHMMSSZ)"
+    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] && [ -e "$APT_INSTALL_RECORD" ]; then
+        APT_PROVENANCE_PHASE=lifetime
+        log "release install closure already recorded; keeping Debian sources live (install snapshot $ts is provenance, not a pin)"
+        # The security-only policy must already be in place when live sources
+        # (and the unattended-upgrades defaults install-deps may bring) appear.
+        install_security_upgrade_policy
+        restore_live_apt_sources
+        return 0
+    fi
+    [ "$PLEBIAN_OS_RELEASE_MODE" != 1 ] || APT_PROVENANCE_PHASE=install
     log "pinning apt to snapshot.debian.org/$ts (reproducible package closure)"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + disable stock apt sources (sources.list, sources.list.d/debian.sources)"
-        echo "    + write $src (deb822 snapshot sources for $ts) + $cfg (Check-Valid-Until false)"
+        echo "    + disable every active apt source (inventoried in $inventory)"
+        echo "    + write $src (deb822 snapshot sources for $ts, per-source Check-Valid-Until: no)"
+        echo "    + remove global Check-Valid-Until overrides and $live_src"
         echo "    + apt-get update"
         return 0
     fi
@@ -3685,8 +4045,8 @@ configure_apt_snapshot() {
     mkdir -p "$apt_dir/sources.list.d" "$apt_dir/apt.conf.d" "$state_dir"
     # Inventory every source this provisioner disables. Existing inventories are
     # extended when an operator adds a source while snapshot mode is active.
-    local d backup txn src_tmp cfg_tmp marker_tmp inventory_tmp failed=0 rollback_ok=1 signal_rc=0
-    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0
+    local d backup txn src_tmp marker_tmp inventory_tmp failed=0 rollback_ok=1 signal_rc=0 staged=1
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 aptconf_old=0
     local -a managed=() active=() moved=() combined=()
     _load_apt_snapshot_inventory "$inventory" managed
     if [ "${#managed[@]}" -eq 0 ] && [ ! -f "$inventory" ]; then
@@ -3701,7 +4061,7 @@ configure_apt_snapshot() {
         fi
         combined+=("$d")
     done
-    _active_apt_source_paths "$src" active
+    _active_apt_source_paths active
     for d in "${active[@]}"; do
         backup="$d.plebian-os-disabled"
         if [ -e "$backup" ] || [ -L "$backup" ]; then
@@ -3712,37 +4072,47 @@ configure_apt_snapshot() {
 
     txn="$(mktemp -d "$state_dir/.apt-enable.XXXXXX")" \
         || die "could not create apt snapshot transaction directory"
-    src_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-snapshot.XXXXXX")"
-    cat > "$src_tmp" <<EOF
+    src_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-snapshot.XXXXXX")" \
+        || _abort_apt_staging "$txn" "could not stage the apt snapshot source; apt was not changed"
+    # Snapshot Release files carry a Valid-Until long past, which apt would
+    # otherwise reject. Only these stanzas skip that check; nothing global does.
+    cat > "$src_tmp" <<EOF || staged=0
 # Managed by plebian-os-provision. Reproducible apt via snapshot.debian.org.
 Types: deb
 URIs: https://snapshot.debian.org/archive/debian/$ts
 Suites: trixie trixie-updates
 Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
 
 Types: deb
 URIs: https://snapshot.debian.org/archive/debian-security/$ts
 Suites: trixie-security
 Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+Check-Valid-Until: no
 EOF
-    # snapshot archives carry an old Valid-Until, which apt would otherwise reject.
-    cfg_tmp="$(mktemp "$apt_dir/apt.conf.d/.plebian-os-snapshot.XXXXXX")"
-    marker_tmp="$(mktemp "$state_dir/.apt-snapshot.XXXXXX")"
-    inventory_tmp="$(mktemp "$state_dir/.apt-snapshot-sources.XXXXXX")"
-    printf '%s\n' 'Acquire::Check-Valid-Until "false";' > "$cfg_tmp"
-    printf '%s\n' "$ts" > "$marker_tmp"
-    : > "$inventory_tmp"
+    marker_tmp="$(mktemp "$state_dir/.apt-snapshot.XXXXXX")" \
+        || _abort_apt_staging "$txn" "could not stage the apt snapshot marker; apt was not changed" "$src_tmp"
+    inventory_tmp="$(mktemp "$state_dir/.apt-snapshot-sources.XXXXXX")" \
+        || _abort_apt_staging "$txn" "could not stage the apt snapshot inventory; apt was not changed" \
+            "$src_tmp" "$marker_tmp"
+    printf '%s\n' "$ts" > "$marker_tmp" || staged=0
+    : > "$inventory_tmp" || staged=0
     if [ "${#combined[@]}" -gt 0 ]; then
-        printf '%s\n' "${combined[@]}" > "$inventory_tmp"
+        printf '%s\n' "${combined[@]}" > "$inventory_tmp" || staged=0
     fi
-    chmod 0644 "$src_tmp" "$cfg_tmp" "$marker_tmp"
-    chmod 0600 "$inventory_tmp"
-    if [ -e "$src" ] || [ -L "$src" ]; then cp -a "$src" "$txn/src"; src_old=1; fi
-    if [ -e "$cfg" ] || [ -L "$cfg" ]; then cp -a "$cfg" "$txn/cfg"; cfg_old=1; fi
-    if [ -e "$marker" ] || [ -L "$marker" ]; then cp -a "$marker" "$txn/marker"; marker_old=1; fi
-    if [ -e "$inventory" ] || [ -L "$inventory" ]; then cp -a "$inventory" "$txn/inventory"; inventory_old=1; fi
+    chmod 0644 "$src_tmp" "$marker_tmp" || staged=0
+    chmod 0600 "$inventory_tmp" || staged=0
+    if [ -e "$src" ] || [ -L "$src" ]; then src_old=1; cp -a "$src" "$txn/src" || staged=0; fi
+    if [ -e "$cfg" ] || [ -L "$cfg" ]; then cfg_old=1; cp -a "$cfg" "$txn/cfg" || staged=0; fi
+    if [ -e "$marker" ] || [ -L "$marker" ]; then marker_old=1; cp -a "$marker" "$txn/marker" || staged=0; fi
+    if [ -e "$inventory" ] || [ -L "$inventory" ]; then inventory_old=1; cp -a "$inventory" "$txn/inventory" || staged=0; fi
+    if [ -e "$live_src" ] || [ -L "$live_src" ]; then live_src_old=1; cp -a "$live_src" "$txn/live_src" || staged=0; fi
+    if [ -e "$aptconf" ] || [ -L "$aptconf" ]; then aptconf_old=1; cp -a "$aptconf" "$txn/aptconf" || staged=0; fi
+    [ "$staged" = 1 ] \
+        || _abort_apt_staging "$txn" "could not stage the apt snapshot configuration; apt was not changed" \
+            "$src_tmp" "$marker_tmp" "$inventory_tmp"
 
     # Once source renames begin, defer signals into the explicit rollback path.
     trap 'signal_rc=143' INT TERM HUP
@@ -3756,7 +4126,8 @@ EOF
         fi
     done
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$src_tmp" "$src" || failed=1; fi
-    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$cfg_tmp" "$cfg" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then rm -f "$live_src" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then _remove_global_validity_overrides || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$marker_tmp" "$marker" || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$inventory_tmp" "$inventory" || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ] && ! apt-get update -y; then failed=1; fi
@@ -3766,11 +4137,13 @@ EOF
         _restore_managed_apt_file "$cfg" "$txn/cfg" "$cfg_old" || rollback_ok=0
         _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
         _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
+        _restore_managed_apt_file "$live_src" "$txn/live_src" "$live_src_old" || rollback_ok=0
+        _restore_managed_apt_file "$aptconf" "$txn/aptconf" "$aptconf_old" || rollback_ok=0
         for ((i=${#moved[@]}-1; i>=0; i--)); do
             d="${moved[$i]}"
             mv -T "$d.plebian-os-disabled" "$d" 2>/dev/null || rollback_ok=0
         done
-        rm -f "$src_tmp" "$cfg_tmp" "$marker_tmp" "$inventory_tmp"
+        rm -f "$src_tmp" "$marker_tmp" "$inventory_tmp"
         if [ "$rollback_ok" = 1 ]; then
             rm -rf "$txn"
             restore_provision_signal_traps
@@ -3783,6 +4156,49 @@ EOF
     rm -rf "$txn"
     restore_provision_signal_traps
     [ "$signal_rc" = 0 ] || exit "$signal_rc"
+}
+
+# Called once a release run has committed: the install closure it resolved from
+# the snapshot is recorded, so apt moves to live Debian and security updates
+# start arriving. A failure is fatal at first boot, whose retry converges in the
+# lifetime phase, and the updater reports it after its own commit.
+finish_release_apt_install() {
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    log "install closure committed; moving apt to live Debian sources so security updates arrive"
+    install_security_upgrade_policy
+    _with_apt_sources_lock restore_live_apt_sources
+}
+
+# unattended-upgrades applies the Debian security suite only and never reboots:
+# point releases stay a deliberate `apt upgrade`, and kiosk or desktop sessions
+# are never interrupted. ${distro_codename} is expanded by unattended-upgrades.
+# Release runs write this before any live source is activated. It is inert until
+# the package is installed, and then it overrides the package's own defaults.
+install_security_upgrade_policy() {
+    local conf="$APT_ETC_ROOT/apt/apt.conf.d/52plebian-os-security-upgrades" tmp
+    log "enabling daily Debian security updates without automatic reboots -> $conf"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $conf (unattended-upgrades: Debian-Security origin only, Automatic-Reboot false)"
+        return 0
+    fi
+    mkdir -p "$APT_ETC_ROOT/apt/apt.conf.d"
+    tmp="$(mktemp "$APT_ETC_ROOT/apt/apt.conf.d/.plebian-os-security-upgrades.XXXXXX")" \
+        || die "could not stage $conf; apt sources were not changed"
+    cat > "$tmp" <<'EOF' || { rm -f "$tmp"; die "could not write $conf; apt sources were not changed"; }
+// Managed by plebian-os-provision. Apply Debian security updates daily without rebooting.
+// To opt out, set APT::Periodic::Unattended-Upgrade "0"; in a later file such as 99local.
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+    "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+    if ! chmod 0644 "$tmp" || ! mv -fT "$tmp" "$conf"; then
+        rm -f "$tmp"
+        die "could not write $conf; apt sources were not changed"
+    fi
 }
 
 # Record the exact final installed package set for provenance. This is called
@@ -3815,6 +4231,71 @@ validate_component_versions() {
         || die "kilix reports '$kilix_version', expected exactly '$PLEBIAN_OS_VERSION'"
     [ "$kilix95_version" = "kilix-95 $PLEBIAN_OS_VERSION" ] \
         || die "kilix 95 reports '$kilix95_version', expected exactly 'kilix-95 $PLEBIAN_OS_VERSION'"
+}
+
+# Release apt index provenance has two phases, and the provisioner and updater
+# must agree on both (a test holds their copies byte-identical). The run that
+# records a release install resolves every index from the exact install
+# snapshot; afterwards the machine tracks live Debian, and every index must still
+# come from the official Debian archive for its codename. Returns 2 for an empty
+# index list and 1, naming the index, for any other violation.
+validate_release_apt_provenance() {
+    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release
+    [ -s "$file" ] || return 2
+    while IFS= read -r line || [ -n "$line" ]; do
+        read -r site release _ <<<"$line"
+        [ -n "$site" ] || continue
+        case "$phase" in
+            install)
+                if [ -z "$snapshot" ] \
+                    || { [ "$site" != "https://snapshot.debian.org/archive/debian/$snapshot" ] \
+                        && [ "$site" != "https://snapshot.debian.org/archive/debian-security/$snapshot" ]; }; then
+                    printf 'apt index outside the install snapshot: %s\n' "$line" >&2
+                    return 1
+                fi
+                ;;
+            lifetime)
+                if ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
+                    || { [ "$release" != "$codename" ] && [ "$release" != "$codename-updates" ] \
+                        && [ "$release" != "$codename-security" ]; }; then
+                    printf 'apt index outside the Debian archive for %s: %s\n' "$codename" "$line" >&2
+                    return 1
+                fi
+                ;;
+            *) return 1 ;;
+        esac
+    done <"$file"
+    return 0
+}
+
+# Prints why the recorded apt indexes in $1 break this run's provenance phase
+# (install at first boot, lifetime afterwards), or nothing when they satisfy it.
+release_apt_provenance_violation() {
+    local rc=0
+    validate_release_apt_provenance "$1" "$APT_PROVENANCE_PHASE" \
+        "$PLEBIAN_OS_APT_SNAPSHOT" "$(_apt_codename)" || rc=$?
+    case "$rc" in
+        0) ;;
+        2) printf '%s\n' "release apt index provenance is empty" ;;
+        *)
+            if [ "$APT_PROVENANCE_PHASE" = install ]; then
+                printf '%s\n' "release install closure resolved from an index other than snapshot $PLEBIAN_OS_APT_SNAPSHOT"
+            else
+                printf '%s\n' "release apt provenance contains an index outside the Debian archive"
+            fi
+            ;;
+    esac
+}
+
+# Dies, after removing both staged manifest files, when the recorded apt indexes
+# in $1 break this run's provenance phase; $2 is the staged versions file.
+require_release_apt_provenance() {
+    local sources_tmp="$1" versions_tmp="$2" provenance_violation
+    provenance_violation="$(release_apt_provenance_violation "$sources_tmp")"
+    if [ -n "$provenance_violation" ]; then
+        rm -f "$versions_tmp" "$sources_tmp"
+        die "$provenance_violation"
+    fi
 }
 
 write_source_tool_manifest() {
@@ -3959,11 +4440,7 @@ write_source_tool_manifest() {
         | sed '/^[[:space:]]*$/d' | sort -u > "$sources_tmp" \
         || { rm -f "$versions_tmp" "$sources_tmp"; die "could not record final apt source indexes"; }
     if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
-        [ -s "$sources_tmp" ] || die "release apt index provenance is empty"
-        if grep -v 'snapshot\.debian\.org' "$sources_tmp" | grep -q .; then
-            rm -f "$versions_tmp" "$sources_tmp"
-            die "release apt provenance contains a non-snapshot index"
-        fi
+        require_release_apt_provenance "$sources_tmp" "$versions_tmp"
         [ "$plebian_os_commit" = "${PLEBIAN_OS_REF,,}" ] \
             || die "resolved plebian-os commit $plebian_os_commit does not match PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
         [ "$pleb_commit" = "${PLEB_REF,,}" ] \
@@ -4890,6 +5367,22 @@ build_kilix_fork() {
     verify_kilix_fork_build
 }
 
+# --reconcile-apt-sources: plebian-os-update calls this after its stack
+# transaction commits. It changes only apt and always exits, so it never falls
+# through into provisioning. Release mode and the install record are this
+# machine's, never the caller's: sudo resets the environment, and the closure
+# was restored from session.env before this runs.
+reconcile_apt_sources_and_exit() {
+    if [ "$PLEBIAN_OS_RELEASE_MODE" != 1 ]; then
+        log "not a release closure; apt sources are left as configured"
+        exit 0
+    fi
+    [ -e "$APT_INSTALL_RECORD" ] \
+        || die "refusing to leave the install snapshot before an install closure is recorded"
+    finish_release_apt_install
+    exit 0
+}
+
 # Tests source the path-agnostic transaction/version helpers without running the
 # root provisioning workflow. Normal execution never sets this internal flag.
 if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then
@@ -4911,6 +5404,7 @@ while [ $# -gt 0 ]; do
             PLEB_BRANCH="${2:?}"; shift 2
             PLEB_BRANCH_EXPLICIT=1; PERSISTED_KEY_EXPLICIT[PLEB_BRANCH]=1 ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --reconcile-apt-sources) RECONCILE_APT_ONLY=1; shift ;;
         --version) echo "plebian-os-provision $PLEBIAN_OS_VERSION"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option: $1 (see --help)" ;;
@@ -4935,8 +5429,13 @@ if [ -n "$WAYDROID_CLOSURE_SHA256" ] \
     die "invalid PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"
 fi
 validate_release_inputs
+refuse_amd64_only_inputs
 
 [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "must run as root (try: sudo $0)"
+
+if [ "$RECONCILE_APT_ONLY" = 1 ]; then
+    reconcile_apt_sources_and_exit
+fi
 
 # ── resolve the target user ──────────────────────────────────────────────────
 read_recorded_user() {
@@ -5797,6 +6296,7 @@ write_package_manifest
 write_source_tool_manifest
 
 commit_provision_root_transaction
+finish_release_apt_install
 cleanup
 trap - EXIT INT TERM HUP
 

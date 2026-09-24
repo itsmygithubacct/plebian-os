@@ -76,8 +76,9 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   Panes keep their size and live contents; popups fit the window, restore
   focus and consume outside clicks used to dismiss them. The release selects
   rc1 host `363d0222` (over `3a257725`) merged with the lazy-TTS follow-ups
-  through `29fbaa5` (merge `252aad6`, head `ea1f710`), with engine `8f423846`
-  and desktop `1e7921b9`.
+  through `29fbaa5` (merge `252aad6`) and Kilix main, head `7c37f93`, with
+  engine `054ec5b` (rc1's `8f423846` plus the echo, Wayland scale and pane
+  memory fix) and desktop `c642ef3`.
   The host pins the rc1 content catalog and includes floating chrome, model
   setup, native build support, supplied-model installation, private catalog
   build caches and hardened fetched-source permissions. The other release and
@@ -192,6 +193,42 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Both optional installers are carried through fresh ISO, standalone
   provisioning, transactional update and rollback, and VM acceptance without
   being invoked by any of them.
+- Enable `unattended-upgrades` for Debian security updates only, with no
+  automatic reboot, and hold daily apt jobs until first boot finishes.
+- Check release apt provenance in two phases shared by the provisioner and the
+  updater: the install closure must come from the exact snapshot, and later
+  indexes only from the official Debian archive for the installed codename.
+- Refuse `--rollback` to a release older than 0.2.2 once a machine has left the
+  Debian install snapshot.
+
+### Fixed
+
+- Deliver Debian security updates to installed release machines. The
+  `snapshot.debian.org` timestamp still resolves the Debian Installer and
+  first-boot closure, but once that run commits apt tracks live `trixie`,
+  `trixie-updates`, and `trixie-security`; previously every suite, security
+  included, stayed frozen at the install timestamp for the life of the machine.
+- Stop disabling apt replay protection globally. Snapshot sources carry
+  `Check-Valid-Until: no` per source; the installer's and provisioner's global
+  `Acquire::Check-Valid-Until "false"` is removed, and live sources are never
+  activated while a global `Acquire::Check-Valid-Until` or
+  `Acquire::Check-Date` override remains, or while an operator source for the
+  live Debian suites turns off signature or replay checks.
+- Move installed 0.2.1 machines to live Debian after their first committed
+  0.2.2 update, keep hand-restored live sources instead of re-pinning them, and
+  retire the installer's snapshot `sources.list` rather than restoring it.
+- Accept newer Debian builds of the release's `bubblewrap` and `libseccomp2`
+  versions as floors in `install-deps`, which also waits for the dpkg lock
+  instead of failing when a background upgrade holds it. The Waydroid first-use
+  helper does the same for `weston` on fresh 0.2.2 installs and reprovisioned
+  machines; machines upgraded from 0.2.1 keep the previous helper until they
+  are reprovisioned.
+- Refuse amd64-only release inputs on other architectures before anything is
+  downloaded: an enabled Waydroid closure, the x86_64 Vosk wheel when
+  dictation is on, and the provisioner's fallback amd64 kitty bundle checksum.
+  The provisioner and the updater name the per-architecture override instead
+  of failing later inside `pleb install` with a checksum or ELF mismatch.
+
 
 ## [0.2.1] — 2026-09-01
 

@@ -1,6 +1,8 @@
+import fcntl
 import json
 import os
 import pwd
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -15,6 +17,20 @@ os.umask(0o022)
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 DEPS = ROOT / "provision" / "install-deps.sh"
+# What `apt-get indextargets` reports for a deb822 source whose first stanza is
+# trixie + trixie-updates and whose second is trixie-security. The apt-get stub
+# replaces @SOURCE@ with the path it was handed, as apt's SOURCESENTRY does.
+LIVE_DEBIAN_TARGETS = (
+    "https://deb.debian.org/debian trixie main @SOURCE@:1\n"
+    "https://deb.debian.org/debian trixie-updates main @SOURCE@:1\n"
+    "https://security.debian.org/debian-security trixie-security main @SOURCE@:2\n"
+)
+# What Debian Installer leaves on a snapshot image: the apt-setup generator's
+# marker plus the snapshot mirror it configured.
+INSTALLER_SOURCES_LIST = (
+    "# Plebian-OS snapshot validity policy\n"
+    "deb https://snapshot.debian.org/archive/debian/20260727T000000Z/ trixie main\n"
+)
 
 
 class ProvisionLifecycleBehaviorTests(unittest.TestCase):
@@ -26,8 +42,67 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         bindir = base / "bin"
         bindir.mkdir()
         apt = bindir / "apt-get"
-        apt.write_text(f"#!/bin/sh\nexit {apt_rc}\n")
+        fixtures = base / "indextargets"
+        fixtures.mkdir()
+        log = str(base / "apt.log")
+        # Record every call. indextargets reports only the source files apt is
+        # actually handed through Dir::Etc::SourceParts and SourceList: each
+        # one with a fixture (see _index_targets) yields its targets. apt-get
+        # update also records whether the security policy was already written.
+        apt.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"$*\" >> {log!r}\n"
+            "if [ \"${1:-}\" = indextargets ]; then\n"
+            "  parts=; list=\n"
+            "  for arg; do\n"
+            "    case \"$arg\" in\n"
+            "      Dir::Etc::SourceParts=*) parts=\"${arg#*=}\" ;;\n"
+            "      Dir::Etc::SourceList=*) list=\"${arg#*=}\" ;;\n"
+            "    esac\n"
+            "  done\n"
+            "  for source in \"$parts\"/* \"$list\"; do\n"
+            f"    fixture={str(fixtures)!r}/\"${{source##*/}}\"\n"
+            "    [ -e \"$source\" ] && [ -f \"$fixture\" ] || continue\n"
+            "    sed \"s|@SOURCE@|$source|g\" \"$fixture\"\n"
+            "  done\n"
+            "  exit 0\n"
+            "fi\n"
+            "if [ \"${1:-}\" = update ]; then\n"
+            "  policy=\"$PLEBIAN_OS_APT_ETC_ROOT/apt/apt.conf.d/52plebian-os-security-upgrades\"\n"
+            "  if [ -f \"$policy\" ]; then state=yes; else state=no; fi\n"
+            f"  printf 'policy-at-update=%s\\n' \"$state\" >> {log!r}\n"
+            "fi\n"
+            f"exit {apt_rc}\n"
+        )
         apt.chmod(0o755)
+        # The real tools would read this host's own apt and dpkg state. The
+        # real apt-config instead answers from an isolated configuration that
+        # holds only the FAKE_* keys, so apt itself reads each spelling;
+        # FAKE_APT_CONFIG_FAIL_KEY makes apt-config fail for that one key.
+        real_config = shutil.which("apt-config") or "/usr/bin/apt-config"
+        isolated = base / "apt-config.conf"
+        parts = base / "apt-config.d"
+        parts.mkdir()
+        config = bindir / "apt-config"
+        config.write_text(
+            "#!/bin/sh\n"
+            "for arg; do\n"
+            "  [ \"$arg\" != \"${FAKE_APT_CONFIG_FAIL_KEY:-}/b\" ] || exit 100\n"
+            "done\n"
+            "{\n"
+            f"  printf 'Dir::Etc::main \"%s\";\\nDir::Etc::parts \"%s\";\\n' "
+            f"{str(isolated) + '.none'!r} {str(parts)!r}\n"
+            "  [ -z \"${FAKE_CHECK_VALID_UNTIL:-}\" ] "
+            "|| printf 'Acquire::Check-Valid-Until \"%s\";\\n' \"$FAKE_CHECK_VALID_UNTIL\"\n"
+            "  [ -z \"${FAKE_CHECK_DATE:-}\" ] "
+            "|| printf 'Acquire::Check-Date \"%s\";\\n' \"$FAKE_CHECK_DATE\"\n"
+            f"}} > {str(isolated)!r}\n"
+            f"APT_CONFIG={str(isolated)!r} exec {real_config!r} \"$@\"\n"
+        )
+        config.chmod(0o755)
+        query = bindir / "dpkg-query"
+        query.write_text("#!/bin/sh\nprintf '%s' \"${FAKE_DPKG_STATUS:-}\"\n")
+        query.chmod(0o755)
         env = {
             **os.environ,
             "PATH": f"{bindir}:{os.environ['PATH']}",
@@ -35,6 +110,70 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "PLEBIAN_OS_PROVISION_LIB_ONLY": "1",
         }
         return etc, sources, env
+
+    @staticmethod
+    def _index_targets(base: Path, source_name: str, targets: str) -> None:
+        """What the apt-get stub reports when it is handed this source file."""
+        (base / "indextargets" / source_name).write_text(targets)
+
+    @staticmethod
+    def _release_body(base: Path, recorded: bool = True) -> str:
+        record = base / "versions.env"
+        if recorded:
+            record.write_text("PLEBIAN_OS_VERSION=0.2.2\n")
+        return (
+            "PLEBIAN_OS_RELEASE_MODE=1\n"
+            f"APT_INSTALL_RECORD={str(record)!r}\n"
+            "PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z\n"
+        )
+
+    @staticmethod
+    def _installer_snapshot_state(etc: Path) -> dict[Path, bytes]:
+        """First boot's snapshot pin over a Debian Installer sources.list, with
+        the global overrides the installer generator and 0.2.1 wrote."""
+        apt = etc / "apt"
+        state = etc / "plebian-os"
+        state.mkdir(exist_ok=True)
+        files = {
+            apt / "apt.conf": 'Acquire::Check-Valid-Until "false";\n',
+            apt / "apt.conf.d" / "99plebian-os-snapshot": 'Acquire::Check-Valid-Until "false";\n',
+            apt / "sources.list.plebian-os-disabled": INSTALLER_SOURCES_LIST,
+            state / "apt-snapshot-sources": f"{apt / 'sources.list'}\n",
+            state / "apt-snapshot": "20260727T000000Z\n",
+            apt / "sources.list.d" / "plebian-os-snapshot.sources": (
+                "Types: deb\n"
+                "URIs: https://snapshot.debian.org/archive/debian/20260727T000000Z\n"
+            ),
+        }
+        for file, text in files.items():
+            file.write_text(text)
+        return {file: file.read_bytes() for file in files}
+
+    def _assert_snapshot_state_restored(self, etc: Path, before: dict[Path, bytes]):
+        for file, content in before.items():
+            self.assertEqual(file.read_bytes(), content, file)
+        apt = etc / "apt"
+        self.assertFalse((apt / "sources.list").exists())
+        self.assertFalse((apt / "sources.list.d" / "plebian-os-debian.sources").exists())
+        self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
+        self.assertEqual(list((etc / "plebian-os").glob(".apt-restore.*")), [])
+        self.assertEqual(list((etc / "plebian-os").glob(".apt-coverage.*")), [])
+        self.assertEqual(list((apt / "sources.list.d").glob(".plebian-os-live.*")), [])
+
+    @staticmethod
+    def _tree(root: Path) -> dict[str, bytes | None]:
+        return {
+            str(item.relative_to(root)): item.read_bytes() if item.is_file() else None
+            for item in sorted(root.rglob("*"))
+        }
+
+    @staticmethod
+    def _apt_updates(base: Path) -> int:
+        log = base / "apt.log"
+        if not log.exists():
+            return 0
+        return sum(1 for line in log.read_text().splitlines()
+                   if line.split()[:1] == ["update"])
 
     def _run_library(self, body: str, env: dict[str, str]):
         return subprocess.run(
@@ -91,6 +230,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             result = self._run_library(
                 "PLEBIAN_OS_APT_SNAPSHOT=20260712T000000Z\n"
                 "configure_apt_snapshot\n"
+                '[ ! -e "$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot" ] || exit 97\n'
                 "PLEBIAN_OS_APT_SNAPSHOT=\n"
                 "configure_apt_snapshot\n",
                 env,
@@ -100,6 +240,9 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertFalse(Path(str(operator) + ".plebian-os-disabled").exists())
             self.assertFalse((etc / "plebian-os" / "apt-snapshot-sources").exists())
             self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
+            self.assertFalse((etc / "apt" / "apt.conf.d" / "99plebian-os-snapshot").exists())
+            # The operator source provides no live Debian, so the managed one does.
+            self.assertTrue((sources / "plebian-os-debian.sources").exists())
 
     def test_snapshot_conflict_preflight_does_not_move_earlier_sources(self):
         with tempfile.TemporaryDirectory() as td:
@@ -127,6 +270,11 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             live = sources / "debian.sources"
             content = "Types: deb\nURIs: https://deb.debian.org/debian\n"
             live.write_text(content)
+            override = 'Acquire::Check-Valid-Until "false";\n'
+            apt_conf = etc / "apt" / "apt.conf"
+            apt_conf.write_text(override)
+            legacy_cfg = etc / "apt" / "apt.conf.d" / "99plebian-os-snapshot"
+            legacy_cfg.write_text(override)
             result = self._run_library(
                 "PLEBIAN_OS_APT_SNAPSHOT=20260712T000000Z\nconfigure_apt_snapshot\n",
                 env,
@@ -137,6 +285,8 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertFalse((etc / "plebian-os" / "apt-snapshot-sources").exists())
             self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
             self.assertIn("restored the previous apt configuration", result.stderr)
+            self.assertEqual(apt_conf.read_text(), override)
+            self.assertEqual(legacy_cfg.read_text(), override)
 
     def test_snapshot_signal_rolls_back_before_exiting(self):
         with tempfile.TemporaryDirectory() as td:
@@ -145,6 +295,8 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             apt = base / "bin" / "apt-get"
             apt.write_text('#!/bin/sh\nkill -TERM "$PPID"\nexit 1\n')
             apt.chmod(0o755)
+            apt_conf = etc / "apt" / "apt.conf"
+            apt_conf.write_text('Acquire::Check-Valid-Until "false";\n')
             live = sources / "debian.sources"
             content = "Types: deb\nURIs: https://deb.debian.org/debian\n"
             live.write_text(content)
@@ -154,9 +306,863 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 143, result.stderr)
             self.assertEqual(live.read_text(), content)
+            self.assertEqual(apt_conf.read_text(), 'Acquire::Check-Valid-Until "false";\n')
             self.assertFalse(Path(str(live) + ".plebian-os-disabled").exists())
             self.assertFalse((etc / "plebian-os" / "apt-snapshot-sources").exists())
             self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
+
+    def test_snapshot_stanzas_disable_validity_only_per_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            apt_conf = etc / "apt" / "apt.conf"
+            apt_conf.write_text('Acquire::Check-Valid-Until "false";\n')
+            result = self._run_library(
+                self._release_body(base, recorded=False)
+                + "configure_apt_snapshot\n"
+                'printf "phase=%s\\n" "$APT_PROVENANCE_PHASE"\n',
+                env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            snapshot = (sources / "plebian-os-snapshot.sources").read_text()
+            self.assertEqual(snapshot.count("\nCheck-Valid-Until: no\n"), 2)
+            self.assertFalse((etc / "apt" / "apt.conf.d" / "99plebian-os-snapshot").exists())
+            self.assertFalse(apt_conf.exists())
+            self.assertIn("phase=install", result.stdout)
+
+    def test_operator_apt_conf_lines_survive_validity_override_removal(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            apt_conf = etc / "apt" / "apt.conf"
+            apt_conf.write_text('APT::Foo "1";\nAcquire::Check-Valid-Until "false";\n')
+            apt_conf.chmod(0o640)
+            result = self._run_library(
+                "PLEBIAN_OS_APT_SNAPSHOT=20260712T000000Z\nconfigure_apt_snapshot\n",
+                env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(apt_conf.read_text(), 'APT::Foo "1";\n')
+            self.assertEqual(stat.S_IMODE(apt_conf.stat().st_mode), 0o640)
+
+    def test_release_reprovision_never_repins_after_install(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            live = sources / "debian.sources"
+            content = (
+                "Types: deb\nURIs: https://deb.debian.org/debian\n"
+                "Suites: trixie trixie-updates\nComponents: main\n\n"
+                "Types: deb\nURIs: https://security.debian.org/debian-security\n"
+                "Suites: trixie-security\nComponents: main\n"
+            )
+            live.write_text(content)
+            self._index_targets(base, live.name, LIVE_DEBIAN_TARGETS)
+            result = self._run_library(
+                self._release_body(base)
+                + "APT_PROVENANCE_PHASE=unset\n"
+                "configure_apt_snapshot\n"
+                'printf "phase=%s\\n" "$APT_PROVENANCE_PHASE"\n',
+                env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
+            self.assertEqual(list(etc.rglob("*.plebian-os-disabled")), [])
+            self.assertEqual(live.read_text(), content)
+            self.assertFalse((sources / "plebian-os-debian.sources").exists())
+            self.assertIn("phase=lifetime", result.stdout)
+            self.assertEqual(self._apt_updates(base), 0)
+
+    def test_installer_snapshot_sources_list_is_retired_not_restored(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            apt = etc / "apt"
+            self.assertFalse((apt / "sources.list").exists())
+            self.assertFalse((apt / "sources.list.plebian-os-disabled").exists())
+            self.assertEqual(
+                (apt / "sources.list.plebian-os-installer-snapshot").read_bytes(),
+                before[apt / "sources.list.plebian-os-disabled"],
+            )
+            for gone in (etc / "plebian-os" / "apt-snapshot-sources",
+                         etc / "plebian-os" / "apt-snapshot",
+                         sources / "plebian-os-snapshot.sources"):
+                self.assertFalse(gone.exists(), gone)
+            managed = (sources / "plebian-os-debian.sources").read_text()
+            for expected in (
+                "URIs: https://deb.debian.org/debian\n",
+                "Suites: trixie trixie-updates\n",
+                "URIs: https://security.debian.org/debian-security\n",
+                "Suites: trixie-security\n",
+            ):
+                self.assertIn(expected, managed)
+            self.assertNotIn("Check-Valid-Until", managed)
+            self.assertEqual(self._apt_updates(base), 1)
+
+    def test_operator_sources_disabled_by_the_snapshot_are_restored(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            chrome = sources / "google-chrome.sources"
+            chrome_content = (
+                "Types: deb\nURIs: https://dl.google.com/linux/chrome/deb/\n"
+                "Suites: stable\nComponents: main\n"
+            )
+            Path(str(chrome) + ".plebian-os-disabled").write_text(chrome_content)
+            (etc / "plebian-os" / "apt-snapshot-sources").write_text(
+                f"{chrome}\n{etc / 'apt' / 'sources.list'}\n"
+            )
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(chrome.read_text(), chrome_content)
+            self.assertFalse(Path(str(chrome) + ".plebian-os-disabled").exists())
+            self.assertFalse((etc / "apt" / "sources.list").exists())
+            self.assertEqual(
+                (etc / "apt" / "sources.list.plebian-os-installer-snapshot").read_text(),
+                INSTALLER_SOURCES_LIST,
+            )
+            self.assertTrue((sources / "plebian-os-debian.sources").exists())
+
+    def test_hand_unpinned_release_machine_converges_idempotently(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            # The administrator restored live Debian by hand and moved the
+            # snapshot source out of apt's directories; no apt.conf remains.
+            (sources / "plebian-os-snapshot.sources").unlink()
+            (etc / "apt" / "apt.conf").unlink()
+            live = sources / "debian.sources"
+            content = (
+                "Types: deb\nURIs: https://deb.debian.org/debian\n"
+                "Suites: trixie trixie-updates\nComponents: main\n\n"
+                "Types: deb\nURIs: https://security.debian.org/debian-security\n"
+                "Suites: trixie-security\nComponents: main\n"
+            )
+            live.write_text(content)
+            self._index_targets(base, live.name, LIVE_DEBIAN_TARGETS)
+            body = self._release_body(base) + "configure_apt_snapshot\n"
+
+            first = self._run_library(body, env)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            apt = etc / "apt"
+            self.assertEqual(live.read_text(), content)
+            self.assertFalse((sources / "plebian-os-debian.sources").exists())
+            self.assertEqual(
+                (apt / "sources.list.plebian-os-installer-snapshot").read_bytes(),
+                before[apt / "sources.list.plebian-os-disabled"],
+            )
+            self.assertFalse((apt / "sources.list.plebian-os-disabled").exists())
+            self.assertFalse((etc / "plebian-os" / "apt-snapshot-sources").exists())
+            self.assertEqual(self._apt_updates(base), 1)
+            converged = self._tree(etc)
+
+            second = self._run_library(body, env)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(self._tree(etc), converged)
+            self.assertEqual(self._apt_updates(base), 1)
+
+    def test_live_switch_refuses_a_remaining_global_validity_override(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            env["FAKE_CHECK_VALID_UNTIL"] = "false"
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Check-Valid-Until", result.stderr)
+            self.assertIn("the previous snapshot configuration was restored", result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+            self.assertEqual(self._apt_updates(base), 0)
+
+    def test_live_switch_refuses_apts_other_false_spellings(self):
+        for spelling in ("Disable", "0", "without"):
+            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                etc, _sources, env = self._apt_tree(base)
+                before = self._installer_snapshot_state(etc)
+                env["FAKE_CHECK_VALID_UNTIL"] = spelling
+                result = self._run_library(
+                    self._release_body(base) + "configure_apt_snapshot\n", env
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self._assert_snapshot_state_restored(etc, before)
+
+    def test_live_switch_signal_rolls_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            # The guard runs in a command substitution, whose parent is a
+            # subshell; signal the provisioner itself.
+            config = base / "bin" / "apt-config"
+            config.write_text('#!/bin/sh\nkill -TERM "$PLEBIAN_OS_TEST_SIGNAL_PID"\n')
+            result = self._run_library(
+                "export PLEBIAN_OS_TEST_SIGNAL_PID=$$\n"
+                + self._release_body(base)
+                + "configure_apt_snapshot\n",
+                env,
+            )
+            self.assertEqual(result.returncode, 143, result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+
+    def test_live_switch_retirement_conflict_preflights(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            retired = etc / "apt" / "sources.list.plebian-os-installer-snapshot"
+            retired.write_text("# a different retired source\n")
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("both", result.stderr)
+            for file, content in before.items():
+                self.assertEqual(file.read_bytes(), content, file)
+            self.assertEqual(retired.read_text(), "# a different retired source\n")
+            self.assertFalse((sources / "plebian-os-debian.sources").exists())
+
+    def test_live_switch_update_failure_keeps_live_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base, apt_rc=1)
+            self._installer_snapshot_state(etc)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("apt-get update against live Debian failed", result.stderr)
+            self.assertTrue((sources / "plebian-os-debian.sources").exists())
+            self.assertTrue(
+                (etc / "apt" / "sources.list.plebian-os-installer-snapshot").exists()
+            )
+            self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
+            self.assertEqual(self._apt_updates(base), 1)
+
+    def test_dev_snapshot_off_on_iso_machine_no_longer_restores_snapshot_base(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            override = 'Acquire::Check-Valid-Until "false";\n'
+            apt_conf = etc / "apt" / "apt.conf"
+            apt_conf.write_text(override)
+            legacy_cfg = etc / "apt" / "apt.conf.d" / "99plebian-os-snapshot"
+            legacy_cfg.write_text(override)
+            result = self._run_library(
+                "PLEBIAN_OS_RELEASE_MODE=0\nPLEBIAN_OS_APT_SNAPSHOT=\nconfigure_apt_snapshot\n",
+                env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((etc / "apt" / "sources.list").exists())
+            self.assertEqual(
+                (etc / "apt" / "sources.list.plebian-os-installer-snapshot").read_text(),
+                INSTALLER_SOURCES_LIST,
+            )
+            self.assertTrue((sources / "plebian-os-debian.sources").exists())
+            self.assertFalse(apt_conf.exists())
+            self.assertFalse(legacy_cfg.exists())
+
+    def test_security_upgrade_policy_is_security_only_without_reboot(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            policy = etc / "apt" / "apt.conf.d" / "52plebian-os-security-upgrades"
+            # Written whether or not unattended-upgrades is installed yet: it is
+            # inert without the package and pre-empts the package's defaults.
+            result = self._run_library("DRY_RUN=0\ninstall_security_upgrade_policy\n", env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = policy.read_text()
+            for expected in (
+                "#clear Unattended-Upgrade::Origins-Pattern;",
+                '"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";',
+                'Unattended-Upgrade::Automatic-Reboot "false";',
+                'APT::Periodic::Update-Package-Lists "1";',
+                'APT::Periodic::Unattended-Upgrade "1";',
+            ):
+                self.assertIn(expected, text)
+            self.assertNotIn('label=Debian"', text)
+            self.assertEqual(stat.S_IMODE(policy.stat().st_mode), 0o644)
+
+            again = self._run_library("DRY_RUN=0\ninstall_security_upgrade_policy\n", env)
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertEqual(policy.read_text(), text)
+            self.assertEqual([path.name for path in policy.parent.iterdir()], [policy.name])
+
+    def test_release_apt_moves_live_only_after_the_provision_commit(self):
+        source = PROVISION.read_text()
+        committed = source.rindex("\ncommit_provision_root_transaction\n")
+        finished = source.rindex("\nfinish_release_apt_install\n")
+        released = source.rindex("\ncleanup\ntrap - EXIT INT TERM HUP\n")
+        self.assertLess(committed, finished)
+        self.assertLess(finished, released)
+        self.assertIn("--reconcile-apt-sources) RECONCILE_APT_ONLY=1; shift ;;", source)
+        handler = source.index('if [ "$RECONCILE_APT_ONLY" = 1 ]; then')
+        self.assertLess(source.index('die "must run as root'), handler)
+        self.assertLess(handler, source.rindex("\nallocate_coordinated_private_storage\n"))
+        self.assertIn(
+            'if [ "$RECONCILE_APT_ONLY" = 1 ]; then\n'
+            "    reconcile_apt_sources_and_exit\nfi\n",
+            source,
+        )
+        self.assertLess(handler, source.index("# ── resolve the target user"))
+
+    def test_lifetime_phase_writes_the_security_policy_before_live_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((sources / "plebian-os-debian.sources").exists())
+            policy = etc / "apt" / "apt.conf.d" / "52plebian-os-security-upgrades"
+            self.assertIn("label=Debian-Security", policy.read_text())
+            # apt-get update runs only after the live sources are in place.
+            self.assertIn("policy-at-update=yes", (base / "apt.log").read_text())
+            self.assertNotIn("policy-at-update=no", (base / "apt.log").read_text())
+
+    def test_security_policy_remains_when_the_switch_fails_after_activation(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            # The replay-protection guard runs once the live source is in place.
+            env["FAKE_CHECK_VALID_UNTIL"] = "false"
+            result = self._run_library(
+                self._release_body(base) + "finish_release_apt_install\n", env
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("the previous snapshot configuration was restored", result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+            self.assertTrue(
+                (etc / "apt" / "apt.conf.d" / "52plebian-os-security-upgrades").is_file()
+            )
+
+    def test_finish_release_apt_install_moves_a_committed_release_to_live_debian(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            result = self._run_library(
+                self._release_body(base) + "finish_release_apt_install\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            apt = etc / "apt"
+            self.assertFalse((apt / "sources.list").exists())
+            self.assertFalse((apt / "sources.list.plebian-os-disabled").exists())
+            self.assertEqual(
+                (apt / "sources.list.plebian-os-installer-snapshot").read_bytes(),
+                before[apt / "sources.list.plebian-os-disabled"],
+            )
+            self.assertIn(
+                "URIs: https://security.debian.org/debian-security\n",
+                (sources / "plebian-os-debian.sources").read_text(),
+            )
+            for gone in (sources / "plebian-os-snapshot.sources",
+                         apt / "apt.conf",
+                         apt / "apt.conf.d" / "99plebian-os-snapshot",
+                         etc / "plebian-os" / "apt-snapshot",
+                         etc / "plebian-os" / "apt-snapshot-sources"):
+                self.assertFalse(gone.exists(), gone)
+            self.assertTrue((apt / "apt.conf.d" / "52plebian-os-security-upgrades").is_file())
+            self.assertEqual(self._apt_updates(base), 1)
+
+    def test_finish_release_apt_install_is_a_no_op_outside_release_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            tree = self._tree(etc)
+            result = self._run_library(
+                self._release_body(base)
+                + "PLEBIAN_OS_RELEASE_MODE=0\nfinish_release_apt_install\n",
+                env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self._tree(etc), tree)
+            self.assertFalse((base / "apt.log").exists())
+
+    def test_reconcile_apt_sources_handler_changes_only_apt_and_exits(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            tree = self._tree(etc)
+            handler = "reconcile_apt_sources_and_exit\necho FELL_THROUGH\n"
+
+            unrecorded = self._run_library(
+                self._release_body(base, recorded=False) + handler, env
+            )
+            self.assertNotEqual(unrecorded.returncode, 0)
+            self.assertIn(
+                "refusing to leave the install snapshot before an install closure is recorded",
+                unrecorded.stderr,
+            )
+            self.assertNotIn("FELL_THROUGH", unrecorded.stdout)
+            self.assertEqual(self._tree(etc), tree)
+
+            development = self._run_library(
+                self._release_body(base) + "PLEBIAN_OS_RELEASE_MODE=0\n" + handler, env
+            )
+            self.assertEqual(development.returncode, 0, development.stderr)
+            self.assertIn("apt sources are left as configured", development.stdout)
+            self.assertNotIn("FELL_THROUGH", development.stdout)
+            self.assertEqual(self._tree(etc), tree)
+
+            recorded = self._run_library(self._release_body(base) + handler, env)
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+            self.assertNotIn("FELL_THROUGH", recorded.stdout)
+            self.assertTrue((sources / "plebian-os-debian.sources").exists())
+            self.assertTrue(
+                (etc / "apt" / "sources.list.plebian-os-installer-snapshot").exists()
+            )
+
+    def test_manifest_gate_uses_the_phase_configure_apt_snapshot_chose(self):
+        source = PROVISION.read_text()
+        manifest = source[source.index("\nwrite_source_tool_manifest() {\n"):]
+        self.assertIn(
+            'require_release_apt_provenance "$sources_tmp" "$versions_tmp"',
+            manifest[:manifest.index("\n}\n")],
+        )
+        for recorded, violation in (
+            (False, "release install closure resolved from an index other than "
+                    "snapshot 20260727T000000Z"),
+            (True, ""),
+        ):
+            with self.subTest(recorded=recorded), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                _etc, _sources, env = self._apt_tree(base)
+                index = base / "apt-sources.list"
+                index.write_text("https://deb.debian.org/debian trixie main amd64\n")
+                result = self._run_library(
+                    self._release_body(base, recorded=recorded)
+                    + "configure_apt_snapshot\n"
+                    'printf "violation=[%s]\\n" '
+                    f'"$(release_apt_provenance_violation {str(index)!r})"\n',
+                    env,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f"violation=[{violation}]", result.stdout)
+
+    def test_live_switch_refuses_a_global_check_date_override(self):
+        # apt reads a signed or space-padded zero as false as well.
+        for spelling in ("false", "No", "0x0", "+0", "-0", " 0"):
+            with self.subTest(spelling=spelling), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                etc, _sources, env = self._apt_tree(base)
+                before = self._installer_snapshot_state(etc)
+                env["FAKE_CHECK_DATE"] = spelling
+                result = self._run_library(
+                    self._release_body(base) + "configure_apt_snapshot\n", env
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("a global Acquire::Check-Date disables replay protection",
+                              result.stderr)
+                self._assert_snapshot_state_restored(etc, before)
+                self.assertEqual(self._apt_updates(base), 0)
+
+    def test_live_switch_refuses_a_restored_deb822_source_that_disables_trust(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            operator = sources / "debian.sources"
+            backup = Path(str(operator) + ".plebian-os-disabled")
+            backup.write_text(
+                "# Debian, maintained by hand\n\n"
+                "Types: deb\nURIs: https://deb.debian.org/debian\n"
+                "Suites: trixie trixie-updates\nComponents: main\n\n"
+                "# security\n"
+                "Types: deb\nURIs: https://security.debian.org/debian-security\n"
+                "Suites: trixie-security\nComponents: main\nTrusted: yes\n"
+            )
+            inventory = etc / "plebian-os" / "apt-snapshot-sources"
+            inventory.write_text(f"{operator}\n{etc / 'apt' / 'sources.list'}\n")
+            before = {path: path.read_bytes() for path in (*before, backup)}
+            self._index_targets(base, operator.name, LIVE_DEBIAN_TARGETS)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"{operator} (entry 2) disables signature or replay checks",
+                          result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+            self.assertFalse(operator.exists())
+            self.assertEqual(self._apt_updates(base), 0)
+
+    def test_live_switch_refuses_a_one_line_source_that_disables_replay_checks(self):
+        # Each option turns a check off for its own entry; apt reads +1 as yes.
+        for entry, options in ((2, "arch=amd64 check-valid-until=no"),
+                               (3, "check-date=no"),
+                               (1, "trusted=+1"),
+                               (1, "allow-insecure=yes")):
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                etc, sources, env = self._apt_tree(base)
+                before = self._installer_snapshot_state(etc)
+                operator = sources / "debian.list"
+                lines = [
+                    "deb http://deb.debian.org/debian trixie main",
+                    "deb http://deb.debian.org/debian trixie-updates main",
+                    "deb http://security.debian.org/debian-security trixie-security main",
+                ]
+                lines[entry - 1] = lines[entry - 1].replace("deb ", f"deb [ {options} ] ", 1)
+                content = "".join(f"{line}\n" for line in lines)
+                operator.write_text(content)
+                self._index_targets(
+                    base, operator.name,
+                    "http://deb.debian.org/debian trixie main @SOURCE@:1\n"
+                    "http://deb.debian.org/debian trixie-updates main @SOURCE@:2\n"
+                    "http://security.debian.org/debian-security trixie-security main @SOURCE@:3\n",
+                )
+                result = self._run_library(
+                    self._release_body(base) + "configure_apt_snapshot\n", env
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"{operator} (entry {entry}) disables signature or replay checks",
+                              result.stderr)
+                self._assert_snapshot_state_restored(etc, before)
+                self.assertEqual(operator.read_text(), content)
+                self.assertEqual(self._apt_updates(base), 0)
+
+    def test_sources_that_keep_apt_checks_on_still_count_as_live_coverage(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            operator = sources / "debian.list"
+            # apt reads a signed zero as false, so allow-weak=+0 keeps checks on.
+            operator.write_text(
+                "deb [check-valid-until=yes trusted=no] http://deb.debian.org/debian trixie main\n"
+                "deb [ allow-weak=+0 ] http://deb.debian.org/debian trixie-updates main\n"
+                "deb http://security.debian.org/debian-security trixie-security main\n"
+            )
+            self._index_targets(
+                base, operator.name,
+                "http://deb.debian.org/debian trixie main @SOURCE@:1\n"
+                "http://deb.debian.org/debian trixie-updates main @SOURCE@:2\n"
+                "http://security.debian.org/debian-security trixie-security main @SOURCE@:3\n",
+            )
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((sources / "plebian-os-debian.sources").exists())
+
+    def test_operator_sources_without_point_release_updates_get_the_managed_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            operator = sources / "debian.list"
+            content = (
+                "deb http://deb.debian.org/debian trixie main\n"
+                "deb http://security.debian.org/debian-security trixie-security main\n"
+            )
+            operator.write_text(content)
+            self._index_targets(
+                base, operator.name,
+                "http://deb.debian.org/debian trixie main @SOURCE@:1\n"
+                "http://security.debian.org/debian-security trixie-security main @SOURCE@:2\n",
+            )
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(operator.read_text(), content)
+            self.assertIn("Suites: trixie trixie-updates\n",
+                          (sources / "plebian-os-debian.sources").read_text())
+
+    def test_live_switch_refuses_when_apt_config_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            result = self._run_library(
+                'command() { [ "$*" != "-v apt-config" ] || return 1; builtin command "$@"; }\n'
+                + self._release_body(base)
+                + "configure_apt_snapshot\n",
+                env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("apt-config is unavailable", result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+
+    def test_managed_live_source_alone_is_never_operator_coverage(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            managed = sources / "plebian-os-debian.sources"
+            body = self._release_body(base) + "configure_apt_snapshot\n"
+            first = self._run_library(body, env)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            content = managed.read_bytes()
+            self.assertEqual([path.name for path in sources.iterdir()], [managed.name])
+            # Handed to apt, the managed file would read as complete coverage.
+            self._index_targets(base, managed.name, LIVE_DEBIAN_TARGETS)
+            (base / "apt.log").unlink()
+
+            second = self._run_library(body, env)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertEqual(managed.read_bytes(), content)
+            self.assertEqual(self._apt_updates(base), 0)
+            coverage = self._run_library(
+                '_live_debian_coverage_complete trixie || exit "$?"\n', env
+            )
+            self.assertEqual(coverage.returncode, 1, coverage.stderr)
+
+    def test_unmarked_inventoried_sources_list_is_restored_not_retired(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            apt = etc / "apt"
+            operator = "deb https://deb.debian.org/debian trixie main\n"
+            (apt / "sources.list.plebian-os-disabled").write_text(operator)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((apt / "sources.list").read_text(), operator)
+            self.assertFalse((apt / "sources.list.plebian-os-disabled").exists())
+            self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_live_switch_staging_failure_dies_without_leaking_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            sources.chmod(0o555)
+            try:
+                result = self._run_library(
+                    self._release_body(base) + "finish_release_apt_install\n", env
+                )
+            finally:
+                sources.chmod(0o755)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("could not stage the live Debian source; apt was not changed",
+                          result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+            self.assertEqual(self._apt_updates(base), 0)
+
+    @unittest.skipIf(os.geteuid() == 0, "root ignores directory permissions")
+    def test_snapshot_staging_failure_dies_without_leaking_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            live = sources / "debian.sources"
+            content = "Types: deb\nURIs: https://deb.debian.org/debian\n"
+            live.write_text(content)
+            sources.chmod(0o555)
+            try:
+                result = self._run_library(
+                    "PLEBIAN_OS_APT_SNAPSHOT=20260712T000000Z\nconfigure_apt_snapshot\n", env
+                )
+            finally:
+                sources.chmod(0o755)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("could not stage the apt snapshot source; apt was not changed",
+                          result.stderr)
+            self.assertEqual(live.read_text(), content)
+            self.assertEqual(sorted(path.name for path in sources.iterdir()), [live.name])
+            self.assertEqual(
+                [path.name for path in (etc / "plebian-os").iterdir()],
+                [".apt-sources.lock"],
+            )
+
+    def test_manifest_gate_dies_on_a_violation_and_removes_both_staged_files(self):
+        for recorded, violation in (
+            (False, "release install closure resolved from an index other than "
+                    "snapshot 20260727T000000Z"),
+            (True, None),
+        ):
+            with self.subTest(recorded=recorded), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                _etc, _sources, env = self._apt_tree(base)
+                index = base / ".apt-sources.list.staged"
+                index.write_text("https://deb.debian.org/debian trixie main amd64\n")
+                versions = base / ".versions.env.staged"
+                versions.write_text("# staged provenance\n")
+                result = self._run_library(
+                    self._release_body(base, recorded=recorded)
+                    + "configure_apt_snapshot\n"
+                    f"require_release_apt_provenance {str(index)!r} {str(versions)!r}\n"
+                    "echo GATE_PASSED\n",
+                    env,
+                )
+                if violation is None:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("GATE_PASSED", result.stdout)
+                    self.assertTrue(index.exists())
+                    self.assertTrue(versions.exists())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(violation, result.stderr)
+                    self.assertNotIn("GATE_PASSED", result.stdout)
+                    self.assertFalse(index.exists())
+                    self.assertFalse(versions.exists())
+
+    def test_live_switch_refuses_when_apt_config_fails_for_one_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            env["FAKE_APT_CONFIG_FAIL_KEY"] = "Acquire::Check-Date"
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("apt-config could not read Acquire::Check-Date", result.stderr)
+            self.assertIn("the previous snapshot configuration was restored", result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+            self.assertEqual(self._apt_updates(base), 0)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads files regardless of mode")
+    def test_live_switch_refuses_an_operator_source_it_cannot_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            operator = sources / "debian.list"
+            content = (
+                "deb http://deb.debian.org/debian trixie main\n"
+                "deb http://deb.debian.org/debian trixie-updates main\n"
+                "deb http://security.debian.org/debian-security trixie-security main\n"
+            )
+            operator.write_text(content)
+            self._index_targets(
+                base, operator.name,
+                "http://deb.debian.org/debian trixie main @SOURCE@:1\n"
+                "http://deb.debian.org/debian trixie-updates main @SOURCE@:2\n"
+                "http://security.debian.org/debian-security trixie-security main @SOURCE@:3\n",
+            )
+            # apt can list it, but its options cannot be checked: fail closed.
+            operator.chmod(0)
+            try:
+                result = self._run_library(
+                    self._release_body(base) + "configure_apt_snapshot\n", env
+                )
+            finally:
+                operator.chmod(0o644)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"{operator} (entry 1) disables signature or replay checks",
+                          result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+            self.assertEqual(operator.read_text(), content)
+            self.assertEqual(self._apt_updates(base), 0)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads files regardless of mode")
+    def test_live_switch_backup_failure_dies_without_leaking_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            tree = self._tree(etc)
+            cfg = etc / "apt" / "apt.conf.d" / "99plebian-os-snapshot"
+            cfg.chmod(0)
+            try:
+                result = self._run_library(
+                    self._release_body(base) + "finish_release_apt_install\n", env
+                )
+            finally:
+                cfg.chmod(0o644)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "could not stage the move to live Debian sources; apt was not changed",
+                result.stderr,
+            )
+            self._assert_snapshot_state_restored(etc, before)
+            # Only the inert security policy and the lock file, both written
+            # before staging, are new.
+            after = self._tree(etc)
+            after.pop("apt/apt.conf.d/52plebian-os-security-upgrades")
+            after.pop("plebian-os/.apt-sources.lock")
+            self.assertEqual(after, tree)
+            self.assertEqual(self._apt_updates(base), 0)
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads files regardless of mode")
+    def test_snapshot_backup_failure_dies_without_leaking_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            (sources / "debian.sources").write_text(
+                "Types: deb\nURIs: https://deb.debian.org/debian\n")
+            aptconf = etc / "apt" / "apt.conf"
+            aptconf.write_text('APT::Keep "1";\n')
+            tree = self._tree(etc)
+            aptconf.chmod(0)
+            try:
+                result = self._run_library(
+                    "PLEBIAN_OS_APT_SNAPSHOT=20260712T000000Z\nconfigure_apt_snapshot\n", env
+                )
+            finally:
+                aptconf.chmod(0o644)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "could not stage the apt snapshot configuration; apt was not changed",
+                result.stderr,
+            )
+            after = self._tree(etc)
+            self.assertEqual(after.pop("plebian-os"), None)
+            self.assertEqual(after.pop("plebian-os/.apt-sources.lock"), b"")
+            self.assertEqual(after, tree)
+            self.assertEqual(self._apt_updates(base), 0)
+
+    def test_security_policy_write_failure_stops_before_live_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            # A directory in the policy's place makes the final rename fail.
+            policy = etc / "apt" / "apt.conf.d" / "52plebian-os-security-upgrades"
+            policy.mkdir()
+            result = self._run_library(
+                self._release_body(base) + "finish_release_apt_install\n", env
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"could not write {policy}; apt sources were not changed",
+                          result.stderr)
+            self.assertEqual(list(policy.iterdir()), [])
+            self.assertEqual(
+                list(policy.parent.glob(".plebian-os-security-upgrades.*")), [])
+            self._assert_snapshot_state_restored(etc, before)
+            self.assertFalse((base / "apt.log").exists())
+
+    def test_finish_release_apt_install_waits_for_the_apt_sources_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            lock = etc / "plebian-os" / ".apt-sources.lock"
+            # Another apt source change holds the lock for the whole run.
+            with lock.open("w") as held:
+                fcntl.flock(held, fcntl.LOCK_EX)
+                tree = self._tree(etc)
+                result = self._run_library(
+                    self._release_body(base)
+                    + "APT_SOURCES_LOCK_TIMEOUT=1\nfinish_release_apt_install\n",
+                    env,
+                )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("another Plebian-OS apt source change is in progress", result.stderr)
+            self._assert_snapshot_state_restored(etc, before)
+            # The inert security policy is written before the lock is taken.
+            after = self._tree(etc)
+            after.pop("apt/apt.conf.d/52plebian-os-security-upgrades")
+            self.assertEqual(after, tree)
+            self.assertFalse((base / "apt.log").exists())
 
     def test_provision_lock_contends_with_direct_pleb_lock(self):
         user = pwd.getpwuid(os.getuid())
