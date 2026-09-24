@@ -3494,12 +3494,51 @@ validate_release_apt_provenance() {
 # A machine being updated already has a recorded install closure, so its apt
 # indexes are held to the lifetime phase: the official Debian archive only.
 require_lifetime_release_apt_provenance() {
-    local rc=0
-    validate_release_apt_provenance "$1" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+    local rc=0 refused line site host file
+    refused="$(validate_release_apt_provenance "$1" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
         "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
-        || rc=$?
+        2>&1 >/dev/null)" || rc=$?
     [ "$rc" != 2 ] || die "release apt index provenance is empty"
-    [ "$rc" = 0 ] || die "release apt provenance contains an index outside the Debian archive"
+    if [ "$rc" != 0 ]; then
+        [ -z "$refused" ] || printf '%s\n' "$refused" >&2
+        # There is deliberately no override: a release records Debian-only
+        # package provenance. Say which file to set aside, and for how long.
+        while IFS= read -r line; do
+            site="${line#*: }"
+            site="${site%% *}"
+            host="${site#*://}"
+            host="${host%/}"
+            [ -n "$host" ] || continue
+            while IFS= read -r file; do
+                warn "apt source $site is configured in $file"
+            done < <(grep -rlF -- "$host" "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}/sources.list" \
+                "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}/sources.list.d" 2>/dev/null | LC_ALL=C sort -u)
+        done <<<"$refused"
+        warn "release updates install only from the Debian archive; disable each source above for this run"
+        warn "(rename the file so it no longer ends in .list/.sources, or add 'Enabled: no' to a .sources file),"
+        warn "rerun plebian-os-update, then re-enable the source afterwards"
+        die "release apt provenance contains an index outside the Debian archive"
+    fi
+}
+
+# The lifetime gate above runs again when the final provenance is written, at
+# the very end of the update. Check the configured sources before anything
+# changes too, so a third-party repository is refused up front rather than
+# after the whole stack has been rebuilt and has to be rolled back.
+preflight_release_apt_provenance() {
+    local listing rc=0
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    listing="$(mktemp)" || die "could not list the configured apt indexes"
+    apt-get indextargets \
+        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
+        | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u >"$listing" || rc=$?
+    if [ "$rc" != 0 ]; then
+        rm -f -- "$listing"
+        die "could not list the configured apt indexes"
+    fi
+    ( require_lifetime_release_apt_provenance "$listing" ) || rc=$?
+    rm -f -- "$listing"
+    [ "$rc" = 0 ] || exit "$rc"
 }
 
 # Build the same final source/tool manifest as the provisioner, but only after
@@ -3885,6 +3924,7 @@ fi
 # and the already-selected closure is revalidated normally.
 # Before the release hop below: that already changes the selected closure.
 refuse_per_user_source_layout
+preflight_release_apt_provenance
 select_latest_release_if_needed
 validate_native_release_closure "${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" \
     "$PLEBIAN_OS_RELEASE_MODE" || die "invalid native runtime closure"
