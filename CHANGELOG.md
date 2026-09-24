@@ -149,6 +149,9 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Copied text survives closing the app that copied it. X keeps no clipboard
   store and the desktop shipped no clipboard manager; the session now holds
   CLIPBOARD and PRIMARY through `autocutsel` (`PLEB_CLIPBOARD` opts out).
+- Updating a host whose Go is below 1.26, Debian 13's 1.24 included, no longer
+  fails with "Go toolchain is still below 1.26 after install": the updater's
+  `umask 077` had left `/usr/local/go` readable only by root.
 - The desktop declares its portal backends in
   `/etc/xdg-desktop-portal/pleb-portals.conf` instead of leaving every
   interface to a last-resort fallback. ScreenCast and Screenshot are stated as
