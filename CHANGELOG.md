@@ -78,7 +78,11 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   rc1 host `363d0222` (over `3a257725`) merged with the lazy-TTS follow-ups
   through `29fbaa5` (merge `252aad6`) and Kilix main, head `7c37f93`, with
   engine `054ec5b` (rc1's `8f423846` plus the echo, Wayland scale and pane
-  memory fix) and desktop `c642ef3`.
+  memory fix) and desktop `c642ef3`. rc2 then merges kilix-needle (host
+  `a9e8d3b`, desktop `4fe60f9`): drive Kilix panes and tabs from plain
+  requests with Cactus Compute's Needle 2, installed from the catalog, whose
+  engine, runtime and base checkpoint download only after the first-use
+  licence is accepted.
   The host pins the rc1 content catalog and includes floating chrome, model
   setup, native build support, supplied-model installation, private catalog
   build caches and hardened fetched-source permissions. The other release and
