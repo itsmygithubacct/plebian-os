@@ -503,23 +503,28 @@ KILIX_LAND_DESKTOP_CONFIG_HOME="${KILIX_LAND_DESKTOP_CONFIG_HOME:-}"
 KILIX_LAND_DESKTOP_EXTERNAL_APPS="${KILIX_LAND_DESKTOP_EXTERNAL_APPS:-}"
 KILIX_LAND_DESKTOP_AUDIO="${KILIX_LAND_DESKTOP_AUDIO:-}"
 KILIX95_DIR="${KILIX95_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95}"
-if [ "$KILIX_CAP_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-cap" ] \
-   && [ ! -e "$KILIX_CAP_DIR" ] && [ ! -L "$KILIX_CAP_DIR" ]; then
-    KILIX_CAP_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-cap"
-fi
-if [ "$KILIX_TUI_UTILS_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-tui-utils" ] \
-   && [ ! -e "$KILIX_TUI_UTILS_DIR" ] && [ ! -L "$KILIX_TUI_UTILS_DIR" ]; then
-    KILIX_TUI_UTILS_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils"
-fi
-if [ "$KILIX_LAND_DESKTOP_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-land-desktop" ] \
-   && [ ! -e "$KILIX_LAND_DESKTOP_DIR" ] \
-   && [ ! -L "$KILIX_LAND_DESKTOP_DIR" ]; then
-    KILIX_LAND_DESKTOP_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-land-desktop"
-fi
-if [ "$KILIX95_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-95" ] \
-   && [ ! -e "$KILIX95_DIR" ] && [ ! -L "$KILIX95_DIR" ]; then
-    KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95"
-fi
+# Desktop checkouts moved below kilix-desktops/. A configured legacy path
+# that does not exist follows them, as in pleb (lib/common.sh).
+rehome_legacy_desktop_paths() {
+    if [ "$KILIX_CAP_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-cap" ] \
+       && [ ! -e "$KILIX_CAP_DIR" ] && [ ! -L "$KILIX_CAP_DIR" ]; then
+        KILIX_CAP_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-cap"
+    fi
+    if [ "$KILIX_TUI_UTILS_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-tui-utils" ] \
+       && [ ! -e "$KILIX_TUI_UTILS_DIR" ] && [ ! -L "$KILIX_TUI_UTILS_DIR" ]; then
+        KILIX_TUI_UTILS_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils"
+    fi
+    if [ "$KILIX_LAND_DESKTOP_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-land-desktop" ] \
+       && [ ! -e "$KILIX_LAND_DESKTOP_DIR" ] \
+       && [ ! -L "$KILIX_LAND_DESKTOP_DIR" ]; then
+        KILIX_LAND_DESKTOP_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-land-desktop"
+    fi
+    if [ "$KILIX95_DIR" = "$GPU_TERMINAL_SOURCE_HOME/kilix-95" ] \
+       && [ ! -e "$KILIX95_DIR" ] && [ ! -L "$KILIX95_DIR" ]; then
+        KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-95"
+    fi
+}
+rehome_legacy_desktop_paths
 KILIX95_STORAGE_HOME="${KILIX95_STORAGE_HOME:-$GPU_TERMINAL_HOME/kilix-95}"
 KILIX95_CONFIG_HOME="${KILIX95_CONFIG_HOME:-$KILIX95_STORAGE_HOME/config}"
 KILIX95_STATE_HOME="${KILIX95_STATE_HOME:-$KILIX95_STORAGE_HOME/state}"
@@ -776,10 +781,17 @@ per_user_source_layout_conflicts() {
         KILIX_CAP_DIR="${KILIX_CAP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-cap}"
         KILIX_TUI_UTILS_DIR="${KILIX_TUI_UTILS_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-tui-utils}"
         KILIX_LAND_DESKTOP_DIR="${KILIX_LAND_DESKTOP_DIR:-$GPU_TERMINAL_SOURCE_HOME/kilix-desktops/kilix-land-desktop}"
+        rehome_legacy_desktop_paths
         for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
             ours="_plebian_os_updater_$key"
             [ "$(realpath -m -- "${!key}")" = "$(realpath -m -- "${!ours}")" ] \
-                || printf '%s\037%s\037%s\n' "$key" "${!key}" "${!ours}"
+                && continue
+            # The engine this update builds is $KILIX_DIR/kilix whatever the
+            # system file names, so a session that ends there agrees too.
+            [ "$key" = KILIX ] \
+                && [ "$(realpath -m -- "$KILIX")" = "$(realpath -m -- "$_plebian_os_updater_KILIX_DIR/kilix")" ] \
+                && continue
+            printf '%s\037%s\037%s\n' "$key" "${!key}" "${!ours}"
         done
     )
 }

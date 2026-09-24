@@ -23,7 +23,8 @@ LAYOUT_KEYS = (
 
 
 class PerUserLayoutOverrideTests(unittest.TestCase):
-    def _run(self, home: Path, session_env: str | None, body: str):
+    def _run(self, home: Path, session_env: str | None, body: str,
+             **overrides: str):
         config = home / ".local/gpu_terminal/pleb/config"
         config.mkdir(parents=True)
         if session_env is not None:
@@ -46,6 +47,7 @@ class PerUserLayoutOverrideTests(unittest.TestCase):
             "KILIX_LAND_DESKTOP_DIR":
                 str(sources / "kilix-desktops/kilix-land-desktop"),
         })
+        env.update(overrides)
         script = (
             "set -euo pipefail\n"
             "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
@@ -56,9 +58,10 @@ class PerUserLayoutOverrideTests(unittest.TestCase):
         return subprocess.run(["bash", "-c", script], env=env, text=True,
                               capture_output=True, check=False)
 
-    def _refuse(self, home: Path, session_env: str | None):
+    def _refuse(self, home: Path, session_env: str | None, **overrides: str):
         return self._run(home, session_env,
-                         "refuse_per_user_source_layout\necho passed\n")
+                         "refuse_per_user_source_layout\necho passed\n",
+                         **overrides)
 
     def test_developer_layout_override_is_refused_by_name(self):
         # The exact override this machine carried from 2026-08-15.
@@ -132,6 +135,26 @@ class PerUserLayoutOverrideTests(unittest.TestCase):
                 result = self._refuse(Path(td), session_env)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stderr, "")
+
+    def test_clearing_a_system_engine_back_to_the_built_one_passes(self):
+        # The system file names a custom engine; the user file clears it, so
+        # the session derives $KILIX_DIR/kilix, which is what this update builds.
+        with tempfile.TemporaryDirectory() as td:
+            result = self._refuse(Path(td), "unset KILIX\n",
+                                  KILIX="/opt/custom/kilix")
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_an_absent_legacy_desktop_path_follows_its_new_home(self):
+        legacy = 'KILIX95_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix-95"\n'
+        with tempfile.TemporaryDirectory() as td:
+            result = self._refuse(Path(td), legacy)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            (home / ".local/gpu_terminal/sources/kilix-95").mkdir(parents=True)
+            result = self._refuse(home, legacy)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("KILIX95_DIR: the session uses", result.stderr)
 
     def test_sourcing_the_user_file_changes_nothing_in_the_updater(self):
         with tempfile.TemporaryDirectory() as td:
