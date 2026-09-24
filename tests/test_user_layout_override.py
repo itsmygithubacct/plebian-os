@@ -175,6 +175,24 @@ class PerUserLayoutOverrideTests(unittest.TestCase):
             self.assertIn(f"KILIX_DIR: the session uses {home}/dev/kilix;",
                           result.stderr)
 
+    def test_the_key_list_cannot_be_replaced_from_the_user_file(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            result = self._refuse(
+                home,
+                'KILIX_DIR="$HOME/dev/kilix"\n'
+                "for k in GPU_TERMINAL_SOURCE_HOME PLEB_DIR PLEBIAN_OS_DIR"
+                " KILIX_DIR KILIX KILIX95_DIR KILIX_CAP_DIR KILIX_TUI_UTILS_DIR"
+                " KILIX_LAND_DESKTOP_DIR; do declare \"saved_$k=${!k}\"; done\n"
+                'saved_KILIX_DIR="$GPU_TERMINAL_SOURCE_HOME/kilix"\n'
+                "PLEBIAN_OS_SOURCE_LAYOUT_KEYS=(saved_GPU_TERMINAL_SOURCE_HOME"
+                " saved_PLEB_DIR saved_PLEBIAN_OS_DIR saved_KILIX_DIR saved_KILIX"
+                " saved_KILIX95_DIR saved_KILIX_CAP_DIR saved_KILIX_TUI_UTILS_DIR"
+                " saved_KILIX_LAND_DESKTOP_DIR)\n")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(f"KILIX_DIR: the session uses {home}/dev/kilix;",
+                          result.stderr)
+
     def test_a_file_that_cannot_be_evaluated_is_refused(self):
         with tempfile.TemporaryDirectory() as td:
             result = self._refuse(Path(td), "exit 3\n")

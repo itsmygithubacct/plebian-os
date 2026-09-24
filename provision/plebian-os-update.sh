@@ -763,9 +763,11 @@ per_user_source_layout_conflicts() {
     # from the system file, and see what the per-user file moves.
     mapfile -d '' -t values < <(
         set +eu
+        # Readonly, so the file can neither replace nor reorder the list.
+        readonly -a _plebian_os_layout_keys=("${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}")
         # shellcheck source=/dev/null
         . "$file" </dev/null >/dev/null 2>&1
-        for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
+        for key in "${_plebian_os_layout_keys[@]}"; do
             builtin printf '%s\0' "${!key-}"
         done
     )
