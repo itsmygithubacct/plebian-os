@@ -400,6 +400,16 @@ selected_release_environment_keys() {
     printf '%s\n' "$keys"
 }
 
+# Help needs no installed selector and no configuration, so answer it before
+# either is read; a machine that has never been provisioned can still ask.
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+    for _help_arg in "$@"; do
+        case "$_help_arg" in
+            -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
+        esac
+    done
+fi
+
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     release_keys="$(selected_release_environment_keys)" \
         || die "could not prepare a clean selected-release environment"

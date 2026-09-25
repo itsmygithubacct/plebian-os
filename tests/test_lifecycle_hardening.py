@@ -72,6 +72,10 @@ class UpdateLifecycleTests(unittest.TestCase):
         self.assertIn("restart_session_after_commit", UPDATE)
         self.assertLess(update_call_site("commit_stack_transaction"),
                         update_call_site("restart_session_after_commit"))
+        # --help is answered before the installed selector is required, so it
+        # works on a machine (or CI runner) without /usr/local/bin's selector.
+        self.assertLess(UPDATE.index("-h|--help) sed -n"),
+                        UPDATE.index('release_keys="$(selected_release_environment_keys)"'))
         help_result = subprocess.run(
             ["bash", str(UPDATE_PATH), "--help"],
             text=True,
