@@ -12,6 +12,7 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
+- The rc2 host pin is kilix `e2431d760a966f8d586d0875b71c20b8c0f4b411`. Terminal sizes that do not fit a signed cell index are refused, the matrix screensaver keeps its previous grid when a resize does not fit, and agent installers run a downloaded bootstrap only after its sha256 matches the pin. Kilix 95 stays at `dda40f6`, paired with `4802125`.
 - Kilix 0.2.2 offers hardware-aware text-to-speech auditions. Piper Kristin
   medium is the laptop-sized neural tier: its provider runtime installs only
   when selected, and its model remains behind the pinned first-use licence
