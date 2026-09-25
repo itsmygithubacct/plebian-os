@@ -266,7 +266,7 @@ validate_voice_compliance_carrier() {
     is_hex_len "${PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256:-}" 64 \
         || { carrier_refuse "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256 is not a sha256"; return 1; }
     local name
-    for name in CARRIER.json CARRIER.env ACCEPTANCE.json SHA256SUMS; do
+    for name in CARRIER.json BINDINGS.sha256 CARRIER.env ACCEPTANCE.json SHA256SUMS; do
         { [ -f "$dir/$name" ] && [ ! -L "$dir/$name" ] && [ -s "$dir/$name" ]; } \
             || { carrier_refuse "$name is missing or not a regular file"; return 1; }
     done
@@ -274,23 +274,50 @@ validate_voice_compliance_carrier() {
         || { carrier_refuse "CARRIER.json is too large"; return 1; }
     [ "$(sha256sum -- "$dir/CARRIER.json" | cut -d' ' -f1)" = "$PLEBIAN_OS_VOICE_CARRIER_SHA256" ] \
         || { carrier_refuse "CARRIER.json does not match PLEBIAN_OS_VOICE_CARRIER_SHA256"; return 1; }
-    # Every file is listed, every listed file verifies, and nothing else exists.
-    local line listed
+    [ "$(sha256sum -- "$dir/ACCEPTANCE.json" | cut -d' ' -f1)" = "$PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256" ] \
+        || { carrier_refuse "ACCEPTANCE.json does not match PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256"; return 1; }
+    grep -Fq -- "\"carrier_sha256\":\"$PLEBIAN_OS_VOICE_CARRIER_SHA256\"" "$dir/ACCEPTANCE.json" \
+        || { carrier_refuse "ACCEPTANCE.json is not the receipt for this carrier"; return 1; }
+    # Trust reaches every other file only from the two pins: the pinned
+    # CARRIER.json names the digest of BINDINGS.sha256, which lists every
+    # generated file; the pinned ACCEPTANCE.json lists every seat record.
+    local bindings
+    bindings="$(grep -o '"bindings_sha256":"[0-9a-f]\{64\}"' "$dir/CARRIER.json")"
+    [ "$(printf '%s\n' "$bindings" | grep -c .)" = 1 ] \
+        || { carrier_refuse "CARRIER.json does not name exactly one bindings digest"; return 1; }
+    bindings="${bindings#\"bindings_sha256\":\"}"; bindings="${bindings%\"}"
+    [ "$(sha256sum -- "$dir/BINDINGS.sha256" | cut -d' ' -f1)" = "$bindings" ] \
+        || { carrier_refuse "BINDINGS.sha256 is not the one CARRIER.json binds"; return 1; }
+    local line listed file
     listed="$(mktemp)" || return 1
+    printf '%s\n' CARRIER.json BINDINGS.sha256 ACCEPTANCE.json SHA256SUMS >"$listed"
     while IFS= read -r line || [ -n "$line" ]; do
         [[ "$line" =~ ^[0-9a-f]{64}\ \ ([A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*)$ ]] \
             && [[ "/${BASH_REMATCH[1]}/" != */../* ]] && [[ "/${BASH_REMATCH[1]}/" != */./* ]] \
-            || { rm -f -- "$listed"; carrier_refuse "SHA256SUMS has an invalid line"; return 1; }
+            && [[ "${BASH_REMATCH[1]}" != seats/* ]] \
+            || { rm -f -- "$listed"; carrier_refuse "BINDINGS.sha256 has an invalid line"; return 1; }
         printf '%s\n' "${BASH_REMATCH[1]}" >>"$listed"
-    done <"$dir/SHA256SUMS"
-    (cd -- "$dir" && sha256sum --quiet --strict -c SHA256SUMS >/dev/null 2>&1) \
-        || { rm -f -- "$listed"; carrier_refuse "SHA256SUMS does not verify"; return 1; }
+    done <"$dir/BINDINGS.sha256"
+    (cd -- "$dir" && sha256sum --quiet --strict -c BINDINGS.sha256 >/dev/null 2>&1) \
+        || { rm -f -- "$listed"; carrier_refuse "a bound file does not match BINDINGS.sha256"; return 1; }
+    if [ -d "$dir/seats" ] && [ ! -L "$dir/seats" ]; then
+        for file in "$dir"/seats/*; do
+            [ -f "$file" ] && [ ! -L "$file" ] || continue
+            name="${file##*/}"
+            [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] \
+                && grep -Fq -- "\"path\":\"seats/$name\",\"sha256\":\"$(sha256sum -- "$file" | cut -d' ' -f1)\"" "$dir/ACCEPTANCE.json" \
+                || { rm -f -- "$listed"; carrier_refuse "seats/$name is not the record ACCEPTANCE.json names"; return 1; }
+            printf 'seats/%s\n' "$name" >>"$listed"
+        done
+    fi
     if [ -n "$(cd -- "$dir" && find . -mindepth 1 ! -type f ! -type d -print -quit)" ] \
-            || [ -n "$(cd -- "$dir" && find . -type f ! -name SHA256SUMS -printf '%P\n' \
-                | LC_ALL=C sort | LC_ALL=C comm -23 - <(LC_ALL=C sort -- "$listed"))" ]; then
-        rm -f -- "$listed"; carrier_refuse "a file below the carrier is not listed in SHA256SUMS"; return 1
+            || [ -n "$(cd -- "$dir" && find . -type f -printf '%P\n' \
+                | LC_ALL=C sort | LC_ALL=C comm -23 - <(LC_ALL=C sort -u -- "$listed"))" ]; then
+        rm -f -- "$listed"; carrier_refuse "a file below the carrier is bound by neither pin"; return 1
     fi
     rm -f -- "$listed"
+    (cd -- "$dir" && sha256sum --quiet --strict -c SHA256SUMS >/dev/null 2>&1) \
+        || { carrier_refuse "SHA256SUMS does not verify"; return 1; }
     # CARRIER.env: strict KEY=VALUE, allow-listed keys, no duplicates, no placeholders.
     local -A cv=()
     local key value models model prefix field digest host
@@ -365,11 +392,6 @@ validate_voice_compliance_carrier() {
         && [ "${cv[interface_content_ref]}" = "${PLEBIAN_OS_NATIVE_CONTENT_REF:-}" ] \
         && [ "${cv[interface_licence_ref]}" = "${KILIX_LICENSE_REF:-}" ] \
         || { carrier_refuse "the carrier's producing interfaces are not the release's pins"; return 1; }
-    # The receipt: pinned, and bound to this carrier.
-    [ "$(sha256sum -- "$dir/ACCEPTANCE.json" | cut -d' ' -f1)" = "$PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256" ] \
-        || { carrier_refuse "ACCEPTANCE.json does not match PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256"; return 1; }
-    grep -Fq -- "\"carrier_sha256\":\"$PLEBIAN_OS_VOICE_CARRIER_SHA256\"" "$dir/ACCEPTANCE.json" \
-        || { carrier_refuse "ACCEPTANCE.json is not the receipt for this carrier"; return 1; }
     return 0
 }
 

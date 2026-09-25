@@ -93,6 +93,104 @@ def regenerate(content: Path, license_: Path, out: Path,
     return subprocess.run(args, text=True, capture_output=True)
 
 
+def advertised_models(provision: str) -> list[tuple[str, bool]]:
+    block = provision[provision.index("validate_voice_model_catalog() {"):]
+    block = block[:block.index("\n}\n")]
+    return [(name, flag == "True") for name, flag in re.findall(
+        r'\(\s*"([a-z0-9.-]+)", "[a-z]+", (True|False),', block)]
+
+
+def coverage_gaps(provision: str, root: Path = CARRIER) -> list[str]:
+    """AC-5: the carrier covers exactly the advertised models, in order."""
+    advertised = advertised_models(provision)
+    carrier = json.loads((root / "CARRIER.json").read_bytes())
+    gaps = []
+    if not advertised:
+        gaps.append("the provisioner advertises no models")
+    if carrier_env(root)["models"].split() != [name for name, _ in advertised]:
+        gaps.append("carried models differ from the advertised catalog")
+    for name, runnable in advertised:
+        entry = carrier["models"].get(name)
+        if entry is None or entry["runnable"] != runnable:
+            gaps.append(f"{name} is not carried as advertised")
+    return gaps
+
+
+def artifact_gaps(catalog: dict, pins: dict, root: Path = CARRIER) -> list[str]:
+    """AC-4: each ARTIFACT.json is the pinned content's asset record."""
+    by_id = {asset["id"]: asset for asset in catalog["assets"]}
+    carrier = json.loads((root / "CARRIER.json").read_bytes())
+    env = carrier_env(root)
+    gaps = []
+    for model, entry in carrier["models"].items():
+        artifact = json.loads((root / model / "ARTIFACT.json").read_bytes())
+        if artifact != by_id.get(entry["artifact_id"]):
+            gaps.append(f"{model}: ARTIFACT.json is not the pinned asset record")
+        prefix = "m_" + re.sub(r"[^a-z0-9]", "_", model) + "_"
+        archive = artifact["source"].get("archive_sha256")
+        if archive and env.get(prefix + "archive_sha256") != archive:
+            gaps.append(f"{model}: CARRIER.env archive digest is not the asset's")
+    dictation = carrier_env(root)["dictation_model"]
+    if carrier["models"][dictation].get("archive_sha256") != pins["KILIX_VOICE_MODEL_SHA256"]:
+        gaps.append("the dictation model is not the pinned KILIX_VOICE_MODEL_SHA256")
+    return gaps
+
+
+def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
+    """AC-8: the DELIVERY statements are true of this image."""
+    gaps = []
+    if "readonly PROVISION_VOICE_WEIGHTS=0" not in provision:
+        gaps.append("provisioning may install model weights")
+    carrier = json.loads((root / "CARRIER.json").read_bytes())
+    voice_ref = carrier["voice_ref"]
+    for model, entry in carrier["models"].items():
+        delivery = (root / model / "DELIVERY").read_text()
+        for claim in ("No model weights are present in this image, and "
+                      "provisioning downloads none.",
+                      f"require_covering_receipt, kilix-voice {voice_ref}",
+                      "mode: first-use-upstream-download"):
+            if claim not in delivery:
+                gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+        if ("not runnable" in delivery) == entry["runnable"]:
+            gaps.append(f"{model}: DELIVERY misstates runnability")
+    return gaps
+
+
+def rebind(root: Path) -> dict[str, str]:
+    """Re-derive every digest after an edit, as a forger with write access to the
+    release env would: BINDINGS, CARRIER.json, the receipt and both pins."""
+    unbound = {"CARRIER.json", "BINDINGS.sha256", "ACCEPTANCE.json", "SHA256SUMS"}
+    names = sorted(str(p.relative_to(root)) for p in root.rglob("*")
+                   if p.is_file() and str(p.relative_to(root)) not in unbound
+                   and not str(p.relative_to(root)).startswith("seats/"))
+    (root / "BINDINGS.sha256").write_text("".join(
+        f"{sha256((root / n).read_bytes())}  {n}\n" for n in names))
+    carrier = json.loads((root / "CARRIER.json").read_bytes())
+    carrier["bindings_sha256"] = sha256((root / "BINDINGS.sha256").read_bytes())
+    (root / "CARRIER.json").write_bytes(json.dumps(
+        carrier, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+    receipt = json.loads((root / "ACCEPTANCE.json").read_bytes())
+    receipt["carrier_sha256"] = sha256((root / "CARRIER.json").read_bytes())
+    (root / "ACCEPTANCE.json").write_bytes(json.dumps(
+        receipt, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+    resum(root)
+    return {"PLEBIAN_OS_VOICE_CARRIER_SHA256": sha256((root / "CARRIER.json").read_bytes()),
+            "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256": sha256((root / "ACCEPTANCE.json").read_bytes())}
+
+
+def resum(root: Path) -> None:
+    names = sorted(str(p.relative_to(root)) for p in root.rglob("*")
+                   if p.is_file() and p.name != "SHA256SUMS")
+    (root / "SHA256SUMS").write_text("".join(
+        f"{sha256((root / n).read_bytes())}  {n}\n" for n in names))
+
+
+def edit_env(root: Path, key: str, value: str) -> None:
+    lines = (root / "CARRIER.env").read_text().splitlines()
+    lines = [f"{key}={value}" if line.startswith(f"{key}=") else line for line in lines]
+    (root / "CARRIER.env").write_text("\n".join(lines) + "\n")
+
+
 class ModelComplianceCarrierTests(unittest.TestCase):
     def pinned_checkouts(self) -> tuple[Path, Path]:
         pins = manifest(f"{VERSION}.env")
@@ -173,33 +271,46 @@ class ModelComplianceCarrierTests(unittest.TestCase):
     # AC-4
     def test_carrier_artifact_records_match_kilix_content(self):
         content, _ = self.pinned_checkouts()
-        ref = manifest(f"{VERSION}.env")["PLEBIAN_OS_NATIVE_CONTENT_REF"]
+        pins = manifest(f"{VERSION}.env")
         catalog = json.loads(subprocess.run(
             ["git", "-C", str(content), "--no-replace-objects", "show",
-             f"{ref}:src/kilix_content/catalog/plebian.json"],
+             f"{pins['PLEBIAN_OS_NATIVE_CONTENT_REF']}:src/kilix_content/catalog/plebian.json"],
             capture_output=True, check=True).stdout)
-        by_id = {asset["id"]: asset for asset in catalog["assets"]}
-        carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
-        for model, entry in carrier["models"].items():
-            artifact = json.loads((CARRIER / model / "ARTIFACT.json").read_bytes())
-            self.assertEqual(artifact, by_id[entry["artifact_id"]], model)
-            self.assertIn(entry["licence_record_digest"],
-                          [item["record_digest"] for item in artifact["licenses"]])
-        dictation = carrier["models"][carrier["dictation_model"]]
-        self.assertEqual(dictation["archive_sha256"],
-                         manifest(f"{VERSION}.env")["KILIX_VOICE_MODEL_SHA256"])
+        self.assertEqual(artifact_gaps(catalog, pins), [])
+        # D5b: a digest flipped consistently in the carrier and the release pin,
+        # with every carrier digest re-derived, passes the shell guard by
+        # construction; the asset record at the content interface still refutes it.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "carrier"
+            shutil.copytree(CARRIER, root)
+            key = "m_" + re.sub(r"[^a-z0-9]", "_", carrier_env()["dictation_model"]) + "_archive_sha256"
+            flipped = ("0" if carrier_env()[key][0] != "0" else "1") + carrier_env()[key][1:]
+            edit_env(root, key, flipped)
+            carrier = json.loads((root / "CARRIER.json").read_bytes())
+            carrier["models"][carrier["dictation_model"]]["archive_sha256"] = flipped
+            (root / "CARRIER.json").write_bytes(json.dumps(
+                carrier, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode() + b"\n")
+            overrides = rebind(root)
+            forged = dict(pins, KILIX_VOICE_MODEL_SHA256=flipped)
+            self.assertEqual(run_guard(release_env(root, KILIX_VOICE_MODEL_SHA256=flipped,
+                                                   **overrides)).returncode, 0)
+            self.assertTrue(artifact_gaps(catalog, forged, root))
 
     # AC-5
     def test_carrier_covers_every_advertised_model(self):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
-        block = provision[provision.index("validate_voice_model_catalog() {"):]
-        block = block[:block.index("\n}\n")]
-        advertised = re.findall(r'\(\s*"([a-z0-9.-]+)", "[a-z]+", (True|False),', block)
-        self.assertEqual(len(advertised), 3)
-        self.assertEqual(carrier_env()["models"].split(), [name for name, _ in advertised])
-        carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
-        for name, flag in advertised:
-            self.assertEqual(carrier["models"][name]["runnable"], flag == "True", name)
+        self.assertEqual(len(advertised_models(provision)), 3)
+        self.assertEqual(coverage_gaps(provision), [])
+        # D9: an advertised model the carrier does not carry.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "carrier"
+            shutil.copytree(CARRIER, root)
+            dropped = carrier_env()["models"].split()[-1]
+            edit_env(root, "models", " ".join(carrier_env()["models"].split()[:-1]))
+            carrier = json.loads((root / "CARRIER.json").read_bytes())
+            del carrier["models"][dropped]
+            (root / "CARRIER.json").write_bytes(json.dumps(carrier, sort_keys=True).encode())
+            self.assertTrue(coverage_gaps(provision, root))
 
     # AC-6
     def test_acceptance_receipt_names_the_real_determinations(self):
@@ -231,20 +342,14 @@ class ModelComplianceCarrierTests(unittest.TestCase):
     # AC-8
     def test_delivery_statement_is_true_of_this_image(self):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
-        self.assertIn("readonly PROVISION_VOICE_WEIGHTS=0", provision)
-        carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
-        # The download is digest-verified: the first-use flow is in the content
-        # the release pins, and kilix-voice gates the weights on a receipt.
         pins = manifest(f"{VERSION}.env")
+        self.assertEqual(delivery_gaps(provision), [])
+        # The download is digest-verified and receipt-gated at the pinned refs.
         self.assertIsNone(voice_contract.content_chain_gap(pins["KILIX_REF"]))
         self.assertIsNone(voice_contract.receipt_gate_gap(pins["KILIX_VOICE_REF"]))
-        for model, entry in carrier["models"].items():
-            delivery = (CARRIER / model / "DELIVERY").read_text()
-            self.assertIn("No model weights are present in this image, and "
-                          "provisioning downloads none.", delivery)
-            self.assertIn(f"require_covering_receipt, kilix-voice {pins['KILIX_VOICE_REF']}",
-                          delivery)
-            self.assertEqual("not runnable" in delivery, not entry["runnable"], model)
+        # D6: the same DELIVERY statement is false of an image that provisions weights.
+        self.assertTrue(delivery_gaps(provision.replace(
+            "readonly PROVISION_VOICE_WEIGHTS=0", "readonly PROVISION_VOICE_WEIGHTS=1")))
 
     # AC-9
     def test_guard_refuses_without_a_carrier(self):
@@ -263,78 +368,115 @@ class ModelComplianceCarrierTests(unittest.TestCase):
 
     # AC-11
     def test_guard_refuses_every_planted_carrier_defect(self):
-        def resum(root: Path) -> None:
-            names = sorted(str(p.relative_to(root)) for p in root.rglob("*")
-                           if p.is_file() and p.name != "SHA256SUMS")
-            (root / "SHA256SUMS").write_text("".join(
-                f"{sha256((root / n).read_bytes())}  {n}\n" for n in names))
+        env0 = carrier_env()
+        dictation = "m_" + re.sub(r"[^a-z0-9]", "_", env0["dictation_model"])
+        text = env0[f"{dictation}_licence_text_sha256s"].split()[0]
 
-        def edit_env(root: Path, key: str, value: str) -> None:
-            lines = (root / "CARRIER.env").read_text().splitlines()
-            lines = [f"{key}={value}" if line.startswith(f"{key}=") else line
-                     for line in lines]
-            (root / "CARRIER.env").write_text("\n".join(lines) + "\n")
+        def flip(value):
+            return ("0" if value[0] != "0" else "1") + value[1:]
 
-        dictation = "m_" + re.sub(r"[^a-z0-9]", "_", carrier_env()["dictation_model"])
-        text = carrier_env()[f"{dictation}_licence_text_sha256s"].split()[0]
-
-        def empty(root): shutil.rmtree(root); root.mkdir()
-        def forged_receipt(root):
-            (root / "ACCEPTANCE.json").write_text('{"seats":["fictitious"]}\n'); resum(root)
-        def wrong_release(root): edit_env(root, "release_id", "0.2.1"); resum(root)
-        def wrong_archive(root):
-            value = carrier_env(root)[f"{dictation}_archive_sha256"]
-            edit_env(root, f"{dictation}_archive_sha256", ("0" if value[0] != "0" else "1") + value[1:])
-            resum(root)
-        def borrowed_text(root):
-            path = root / "licence-texts" / f"{text}.txt"
-            path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n")); resum(root)
-        def unlisted(root): (root / "EXTRA").write_text("x\n")
-        def placeholder(root): edit_env(root, f"{dictation}_licensors", "REPLACE_ME"); resum(root)
-        def unknown_key(root):
-            with open(root / "CARRIER.env", "a") as fh: fh.write("sneaky=1\n")
-            resum(root)
-        def missing_notice(root): (root / carrier_env()["dictation_model"] / "NOTICE").unlink(); resum(root)
-        def other_content(root): edit_env(root, "interface_content_ref", "f" * 40); resum(root)
-        def undelivered(root): edit_env(root, f"{dictation}_delivery", "provisioned"); resum(root)
-
-        cases = [
-            ("D2 empty carrier", empty, {}, "CARRIER.json is missing"),
-            ("D3 forged receipt", forged_receipt, {}, "does not match PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256"),
-            ("D3b consistently forged receipt", forged_receipt,
-             {"PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256": None}, "is not the receipt for this carrier"),
-            ("D4 wrong release", wrong_release, {}, "carrier is for release 0.2.1"),
-            ("D5 bound digest differs", wrong_archive, {}, "is not KILIX_VOICE_MODEL_URL/SHA256"),
-            ("D7 borrowed licence text", borrowed_text, {}, "is missing or altered"),
-            ("D8 unlisted extra file", unlisted, {}, "not listed in SHA256SUMS"),
-            ("D11 placeholder value", placeholder, {}, "is empty or a placeholder"),
-            ("unknown key", unknown_key, {}, "unknown key sneaky"),
-            ("missing notice", missing_notice, {}, "NOTICE is missing"),
-            ("other content interface", other_content, {}, "producing interfaces"),
-            ("false delivery mode", undelivered, {}, "delivery is not first-use-upstream-download"),
-            ("tampered listing", lambda root: (root / "CARRIER.env").write_text(
-                (root / "CARRIER.env").read_text() + "\n"), {}, "SHA256SUMS does not verify"),
+        # Unpinned tampering: bytes change, only SHA256SUMS is recomputed.
+        # Each must stop at the bindings, whatever the edit claims.
+        unpinned = [
+            ("seat scenario: false licensor",
+             lambda r: edit_env(r, "m_lgraph_en_us_licensors", "Fictitious Licensor")),
+            ("D5 bound digest differs",
+             lambda r: edit_env(r, f"{dictation}_archive_sha256",
+                                flip(env0[f"{dictation}_archive_sha256"]))),
+            ("D7 borrowed licence text",
+             lambda r: (r / "licence-texts" / f"{text}.txt").write_bytes(
+                 (r / "licence-texts" / f"{text}.txt").read_bytes().replace(b"\n", b"\r\n"))),
+            ("false NOTICE", lambda r: (r / env0["dictation_model"] / "NOTICE").write_text("forged\n")),
         ]
-        for label, plant, overrides, reason in cases:
+        for label, plant in unpinned:
             with self.subTest(defect=label), tempfile.TemporaryDirectory() as td:
                 root = Path(td) / "carrier"
                 shutil.copytree(CARRIER, root)
                 plant(root)
-                env = release_env(root)
-                for key, value in overrides.items():
-                    env[key] = sha256((root / "ACCEPTANCE.json").read_bytes()) if value is None else value
-                result = run_guard(env)
+                resum(root)
+                result = run_guard(release_env(root))
+                self.assertEqual(result.returncode, 1, label)
+                self.assertIn("a bound file does not match BINDINGS.sha256", result.stderr, label)
+                self.assertTrue(result.stderr.endswith(REFUSAL), label)
+
+        # Fully re-pinned forgeries: every digest and both pins re-derived.
+        # The validator's own checks must still refuse each for its reason.
+        def remove_notice(r): (r / env0["dictation_model"] / "NOTICE").unlink()
+        def add_key(r):
+            with open(r / "CARRIER.env", "a") as fh:
+                fh.write("sneaky=1\n")
+        repinned = [
+            ("D4 wrong release", lambda r: edit_env(r, "release_id", "0.2.1"), {}, "carrier is for release 0.2.1"),
+            ("D5 archive differs from the release pin",
+             lambda r: edit_env(r, f"{dictation}_archive_sha256", flip(env0[f"{dictation}_archive_sha256"])),
+             {}, "is not KILIX_VOICE_MODEL_URL/SHA256"),
+            ("D11 placeholder value", lambda r: edit_env(r, f"{dictation}_licensors", "REPLACE_ME"), {},
+             "is empty or a placeholder"),
+            ("unknown key", add_key, {}, "unknown key sneaky"),
+            ("missing notice", remove_notice, {}, "NOTICE is missing"),
+            ("other content interface", lambda r: edit_env(r, "interface_content_ref", "f" * 40), {},
+             "producing interfaces"),
+            ("false delivery mode", lambda r: edit_env(r, f"{dictation}_delivery", "provisioned"), {},
+             "delivery is not first-use-upstream-download"),
+            ("undecided licence", lambda r: edit_env(r, f"{dictation}_decision", "pending"), {},
+             "decision is not affirmative"),
+            ("foreign upstream host", lambda r: edit_env(r, f"{dictation}_upstream_host", "example.invalid"), {},
+             "upstream host does not match its source"),
+            ("D4b wrong release inputs", lambda r: None,
+             {"KILIX_VOICE_MODEL_SHA256": flip(env0[f"{dictation}_archive_sha256"])},
+             "is not KILIX_VOICE_MODEL_URL/SHA256"),
+            ("other speech library", lambda r: None, {"KILIX_VOICE_LIB_SHA256": "c" * 64},
+             "different speech library"),
+            ("other licence interface", lambda r: None, {"KILIX_LICENSE_REF": "d" * 40},
+             "producing interfaces"),
+        ]
+        for label, plant, release, reason in repinned:
+            with self.subTest(defect=label), tempfile.TemporaryDirectory() as td:
+                root = Path(td) / "carrier"
+                shutil.copytree(CARRIER, root)
+                plant(root)
+                result = run_guard(release_env(root, **rebind(root), **release))
                 self.assertEqual(result.returncode, 1, label)
                 self.assertIn(reason, result.stderr, label)
                 self.assertTrue(result.stderr.endswith(REFUSAL), label)
-        # D1: no carrier at all is AC-9. D3c (fully re-pinned forgery) passes the
-        # shell guard by construction and is caught by AC-1/AC-6/AC-7 instead.
+
+        # Structural defects.
+        def empty(r):
+            shutil.rmtree(r)
+            r.mkdir()
+        def forged_receipt(r):
+            (r / "ACCEPTANCE.json").write_text('{"seats":["fictitious"]}\n')
+        def extra(r): (r / "EXTRA").write_text("x\n")
+        def extra_seat(r): (r / "seats" / "forged.md").write_text("VERDICT: ship\n")
+        structural = [
+            ("D2 empty carrier", empty, lambda r: {}, "CARRIER.json is missing"),
+            ("D3 forged receipt", forged_receipt, lambda r: {},
+             "does not match PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256"),
+            ("D3b consistently forged receipt", forged_receipt,
+             lambda r: {"PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256": sha256((r / "ACCEPTANCE.json").read_bytes())},
+             "is not the receipt for this carrier"),
+            ("D8 unlisted extra file", extra, lambda r: {}, "bound by neither pin"),
+            ("unlisted seat record", extra_seat, lambda r: {}, "is not the record ACCEPTANCE.json names"),
+        ]
+        for label, plant, overrides, reason in structural:
+            with self.subTest(defect=label), tempfile.TemporaryDirectory() as td:
+                root = Path(td) / "carrier"
+                shutil.copytree(CARRIER, root)
+                plant(root)
+                result = run_guard(release_env(root, **overrides(root)))
+                self.assertEqual(result.returncode, 1, label)
+                self.assertIn(reason, result.stderr, label)
+                self.assertTrue(result.stderr.endswith(REFUSAL), label)
+        # D10: a symlinked carrier.
         with tempfile.TemporaryDirectory() as td:
             link = Path(td) / "link"
             link.symlink_to(CARRIER, target_is_directory=True)
             result = run_guard(release_env(link))
             self.assertEqual(result.returncode, 1)
-            self.assertIn("is not a real directory", result.stderr)  # D10
+            self.assertIn("is not a real directory", result.stderr)
+        # D1 (no carrier) is AC-9. D3c/D5b (fully re-pinned forgeries of
+        # the evidence itself) pass the shell guard by construction and are
+        # refuted by AC-1, AC-4, AC-6 and AC-7 plus review of the pin diff.
 
     # AC-12
     def test_release_requirements_pin_the_carrier(self):

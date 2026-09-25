@@ -31,5 +31,5 @@ PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20
 # The model compliance carrier and the licence interface it binds. A carrier
 # change moves these pins in both files (tests/test_model_compliance_carrier.py AC-12).
 PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.2-model-compliance
-PLEBIAN_OS_VOICE_CARRIER_SHA256=1e355f7a0029e1a2919823f26a510ff268a986378d50ec984a583fc7e3d10c4b
+PLEBIAN_OS_VOICE_CARRIER_SHA256=59f332ffdee94c3860bdd61f8278417ff12a4b6727810309b7d7eaf2b20b083e
 KILIX_LICENSE_REF=78417e4038db381bd51b7d081c8c723c7cfafc88

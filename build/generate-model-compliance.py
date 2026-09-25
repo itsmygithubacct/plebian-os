@@ -273,9 +273,16 @@ def build(args) -> dict[str, bytes]:
             "schema": CARRIER_SCHEMA,
             "voice_ref": pins["KILIX_VOICE_REF"],
         }
+    # Every generated file is bound to the pinned CARRIER.json through
+    # BINDINGS.sha256, so nothing the shell validator reads can change without
+    # moving PLEBIAN_OS_VOICE_CARRIER_SHA256. Seat records join later and are
+    # bound by the separately pinned ACCEPTANCE.json.
+    files["CARRIER.env"] = project_env(carrier).encode()
+    files["BINDINGS.sha256"] = "".join(
+        f"{sha256(files[name])}  {name}\n" for name in sorted(files)).encode()
+    carrier["bindings_sha256"] = sha256(files["BINDINGS.sha256"])
     carrier_bytes = canonical(carrier) + b"\n"
     files["CARRIER.json"] = carrier_bytes
-    files["CARRIER.env"] = project_env(carrier).encode()
 
     seats = []
     for path in args.seat:
