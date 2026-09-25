@@ -112,7 +112,10 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   which `build/acceptance-release-iso.sh` fails its first manifest check — true
   of every release ISO since 0.2.0.
 - `KILIX_DESKTOP_SDK_REF` advances to `401b8ef9`, one commit past the graded
-  `3da47dec`, which both independent seats state their reviews cover.
+  `3da47dec`, which both independent seats state their reviews cover, and in
+  rc2 to `b4dc784d`, whose layout check passes on the SDK's own tree.
+- `KILIX_MEDIA_SDK_REF` advances to `7b9170ec`: the vendored ggwave digest is
+  now recomputed by the build instead of declared and never checked.
 - VM acceptance waits for the sum of a check's own guest time limits. The
   voice check chains a 180-second recognition smoke after several 15-second
   probes and was cut off at 15 seconds on a busy host (0.1.9 fixed it with a
