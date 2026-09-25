@@ -1463,18 +1463,20 @@ def _guest_timeout_budget(command: str) -> int:
     total = 0
     # A while/until loop runs an unknown number of times: acceptable only when
     # nothing inside it carries a guest time limit.
-    unbounded = re.compile(r"\b(?:while|until) [^;]*; do (.*?)\bdone\b", re.S)
+    # The whole loop, condition included, is checked: the condition also
+    # runs once per iteration. `do` may follow `;` or a newline.
+    unbounded = re.compile(r"\b(?:while|until)\b(.*?)[;\n]\s*do\b(.*?)\bdone\b", re.S)
     for match in unbounded.finditer(command):
-        if bounds(match.group(1)):
+        if bounds(match.group(1)) or bounds(match.group(2)):
             raise ValueError("guest timeout budget cannot bound a while loop")
     command = unbounded.sub(" ", command)
-    loop = re.compile(r"\bfor \w+ in ([^;]*); do (.*?)\bdone\b", re.S)
+    loop = re.compile(r"\bfor \w+ in ([^;\n]*)[;\n]\s*do\b(.*?)\bdone\b", re.S)
     for match in loop.finditer(command):
-        if re.search(r"\bfor \w+ in [^;]*; do\b", match.group(2)):
+        if re.search(r"\bfor \w+ in [^;\n]*[;\n]\s*do\b", match.group(2)):
             raise ValueError("guest timeout budget cannot count a nested loop")
         total += len(match.group(1).split()) * bounds(match.group(2))
     rest = loop.sub(" ", command)
-    if re.search(r";\s*done\b|\bfor \w+ in [^;]*; do\b", rest):
+    if re.search(r"[;\n]\s*done\b|\b(?:for|while|until)\b[^;\n]*[;\n]\s*do\b", rest):
         raise ValueError("guest timeout budget cannot count this loop shape")
     return total + bounds(rest) + 15
 

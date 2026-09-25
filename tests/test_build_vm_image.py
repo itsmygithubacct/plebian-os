@@ -416,10 +416,16 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(vm._guest_timeout_budget("true"), 15)
         self.assertEqual(vm._guest_timeout_budget(
             'while [ -n "$x" ]; do x="${x#*/}"; done; timeout 9 a'), 9 + 15)
+        self.assertEqual(vm._guest_timeout_budget(
+            "for t in a b c\ndo\n timeout 10 x\ndone"), 3 * 10 + 15)
         for unsupported in (
                 "for x in a b; do for y in c d e; do timeout 10 n; done; done",
                 'for x in a b c; do printf "%s" "done"; timeout 10 one; done',
-                'while true; do timeout 10 poll; done'):
+                'while true; do timeout 10 poll; done',
+                'while timeout 10 check; do printf x; done',
+                'until timeout 11 check; do printf x; done',
+                'while true\ndo\n timeout 10 poll\ndone',
+                'for t in a b\ndo\n timeout 10 x\ndone\nfor u in c\ndo\n for v in d e\n do timeout 1 y; done\ndone'):
             with self.subTest(command=unsupported):
                 with self.assertRaises(ValueError):
                     vm._guest_timeout_budget(unsupported)
