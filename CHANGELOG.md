@@ -81,8 +81,9 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   memory fix) and desktop `c642ef3`. rc2 then merges kilix-needle (host
   `2ba9baa`, desktop `43870de`; then `2bb9609` / `7eac552`, which keep a live
   pane's transcript when the broker's `list` misses it, then `dc6171a` /
-  `5fe9e45`, `806ea6c` / `d69096c`, and `338e593` / `f170c44`, whose
-  kilix-needle binds a program to the clause that asks for it): drive Kilix panes and tabs from plain
+  `5fe9e45`, `806ea6c` / `d69096c`, `338e593` / `f170c44`, whose
+  kilix-needle binds a program to the clause that asks for it, and
+  `4802125` / `dda40f6`, which add `kilix install yolox`): drive Kilix panes and tabs from plain
   requests with Cactus Compute's Needle 2, installed from the catalog, whose
   engine, runtime and base checkpoint download only after the first-use
   licence is accepted.
