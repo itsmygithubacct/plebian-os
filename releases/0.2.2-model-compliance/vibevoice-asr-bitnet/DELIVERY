@@ -1,0 +1,7 @@
+mode: first-use-upstream-download
+No model weights are present in this image, and provisioning downloads none.
+vibevoice-asr-bitnet reaches a machine only when a user installs it; it is downloaded from
+huggingface.co and verified against the pinned digests before installation.
+kilix-voice refuses to use the weights without a covering licence receipt
+(require_covering_receipt, kilix-voice af9398e3e644886f1ef3f269637e70272a0a9944).
+vibevoice-asr-bitnet is installable in this release but not runnable: the speech runtime does not yet support it.

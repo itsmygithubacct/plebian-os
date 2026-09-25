@@ -158,6 +158,14 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Copied text survives closing the app that copied it. X keeps no clipboard
   store and the desktop shipped no clipboard manager; the session now holds
   CLIPBOARD and PRIMARY through `autocutsel` (`PLEB_CLIPBOARD` opts out).
+- F107-A merged: split release closures (release-controlled keys may live in
+  `/etc/pleb/closure.env`), the release-hop acceptance harness, and the
+  fail-closed F100 voice-carrier guard. The guard now opens only for the
+  release's verified model compliance carrier,
+  `releases/0.2.2-model-compliance/`, which binds each advertised speech model
+  to its pinned asset record, licence record and texts, and owner determination,
+  under a receipt graded by two independent seats (`KILIX_LICENSE_REF` is newly
+  pinned for it).
 - Updating a host whose Go is below 1.26, Debian 13's 1.24 included, no longer
   fails with "Go toolchain is still below 1.26 after install": the updater's
   `umask 077` had left `/usr/local/go` readable only by root.
