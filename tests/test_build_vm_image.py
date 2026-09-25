@@ -414,6 +414,15 @@ class VmBuilderEnvTests(unittest.TestCase):
                    "done && timeout 7 b")
         self.assertEqual(vm._guest_timeout_budget(command), 5 + 3 * 10 + 7 + 15)
         self.assertEqual(vm._guest_timeout_budget("true"), 15)
+        self.assertEqual(vm._guest_timeout_budget(
+            'while [ -n "$x" ]; do x="${x#*/}"; done; timeout 9 a'), 9 + 15)
+        for unsupported in (
+                "for x in a b; do for y in c d e; do timeout 10 n; done; done",
+                'for x in a b c; do printf "%s" "done"; timeout 10 one; done',
+                'while true; do timeout 10 poll; done'):
+            with self.subTest(command=unsupported):
+                with self.assertRaises(ValueError):
+                    vm._guest_timeout_budget(unsupported)
 
     def test_voice_acceptance_host_timeout_outlives_guest_steps(self):
         # 0.1.9 fixed this with a flat 195 s; the check has since grown

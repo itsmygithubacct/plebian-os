@@ -1458,11 +1458,25 @@ def _guest_timeout_budget(command: str) -> int:
         return sum(int(n) for n in re.findall(r"\btimeout (\d+) ", text))
 
     # A `for x in a b c; do BODY done` loop runs BODY's bounds once per item.
+    # This is not a shell parser: refuse loop shapes it would miscount (a
+    # nested loop, or a `done` word inside the body) rather than undercount.
     total = 0
+    # A while/until loop runs an unknown number of times: acceptable only when
+    # nothing inside it carries a guest time limit.
+    unbounded = re.compile(r"\b(?:while|until) [^;]*; do (.*?)\bdone\b", re.S)
+    for match in unbounded.finditer(command):
+        if bounds(match.group(1)):
+            raise ValueError("guest timeout budget cannot bound a while loop")
+    command = unbounded.sub(" ", command)
     loop = re.compile(r"\bfor \w+ in ([^;]*); do (.*?)\bdone\b", re.S)
     for match in loop.finditer(command):
+        if re.search(r"\bfor \w+ in [^;]*; do\b", match.group(2)):
+            raise ValueError("guest timeout budget cannot count a nested loop")
         total += len(match.group(1).split()) * bounds(match.group(2))
-    return total + bounds(loop.sub(" ", command)) + 15
+    rest = loop.sub(" ", command)
+    if re.search(r";\s*done\b|\bfor \w+ in [^;]*; do\b", rest):
+        raise ValueError("guest timeout budget cannot count this loop shape")
+    return total + bounds(rest) + 15
 
 
 def _voice_acceptance_command(expected_policy: str) -> str:
