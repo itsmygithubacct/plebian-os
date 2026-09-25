@@ -80,8 +80,8 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   engine `054ec5b` (rc1's `8f423846` plus the echo, Wayland scale and pane
   memory fix) and desktop `c642ef3`. rc2 then merges kilix-needle (host
   `2ba9baa`, desktop `43870de`; then `2bb9609` / `7eac552`, which keep a live
-  pane's transcript when the broker's `list` misses it, and `dc6171a` /
-  `5fe9e45`): drive Kilix panes and tabs from plain
+  pane's transcript when the broker's `list` misses it, then `dc6171a` /
+  `5fe9e45` and `806ea6c` / `d69096c`): drive Kilix panes and tabs from plain
   requests with Cactus Compute's Needle 2, installed from the catalog, whose
   engine, runtime and base checkpoint download only after the first-use
   licence is accepted.
