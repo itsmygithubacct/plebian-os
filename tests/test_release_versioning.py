@@ -327,7 +327,11 @@ class ReleaseVersioningTests(unittest.TestCase):
             self.assertIn(path, acceptance)
         self.assertIn('"Kilix-95 GUI routing tests"', acceptance)
         self.assertIn('shell_xpane', acceptance)
-        self.assertIn('timeout=check_timeouts.get(name, 15)', acceptance)
+        # The routing tests keep their own 60 s floor; every check also waits
+        # for the sum of its guest time limits.
+        self.assertIn('check_timeouts = {"Kilix-95 GUI routing tests": 60}', acceptance)
+        self.assertIn('timeout=max(check_timeouts.get(name, 15),', acceptance)
+        self.assertIn('_guest_timeout_budget(cmd)', acceptance)
 
     def test_release_mode_warns_on_unpinned_apt(self):
         r = _read("build", "remaster-iso.sh")

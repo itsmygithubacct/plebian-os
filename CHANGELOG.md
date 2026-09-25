@@ -113,6 +113,10 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   of every release ISO since 0.2.0.
 - `KILIX_DESKTOP_SDK_REF` advances to `401b8ef9`, one commit past the graded
   `3da47dec`, which both independent seats state their reviews cover.
+- VM acceptance waits for the sum of a check's own guest time limits. The
+  voice check chains a 180-second recognition smoke after several 15-second
+  probes and was cut off at 15 seconds on a busy host (0.1.9 fixed it with a
+  flat 195 seconds, which never reached this line and no longer suffices).
 - `KILIX_ICEWM_REF` advances to `ea45b9ab`, the revision the desktop SDK is
   conformance-bound against; the 0.2.1 pin was seven commits behind it and
   lacked the bridge module the SDK imports.

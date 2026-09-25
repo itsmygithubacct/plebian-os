@@ -1445,6 +1445,18 @@ if default not in {item[0] for item in expected} or selected != [default]:
 """
 
 
+def _guest_timeout_budget(command: str) -> int:
+    """Host SSH timeout that outlives every guest `timeout N` in `command`.
+
+    A check's guest steps are bounded by `timeout N` and run in sequence, so
+    the host must wait for their sum. Voice acceptance alone chains a
+    180-second recognition smoke after several 15-second probes; a fixed
+    host timeout reported a false failure on a busy acceptance host while the
+    guest was still inside its own bounds (the fix 0.1.9 carried as 195 s).
+    """
+    return sum(int(n) for n in re.findall(r"\btimeout (\d+) ", command)) + 15
+
+
 def _voice_acceptance_command(expected_policy: str) -> str:
     """Return a guest check for the declared read-aloud/dictation closure."""
     if expected_policy not in ("0", "1"):
@@ -1933,7 +1945,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     check_timeouts = {"Kilix-95 GUI routing tests": 60}
     for name, cmd in checks:
         r = ssh(cfg, cmd, askpass,
-                timeout=check_timeouts.get(name, 15))
+                timeout=max(check_timeouts.get(name, 15),
+                            _guest_timeout_budget(cmd)))
         ok = r is not None and r.returncode == 0
         detail = ""
         if not ok:
