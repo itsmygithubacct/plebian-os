@@ -1454,7 +1454,15 @@ def _guest_timeout_budget(command: str) -> int:
     host timeout reported a false failure on a busy acceptance host while the
     guest was still inside its own bounds (the fix 0.1.9 carried as 195 s).
     """
-    return sum(int(n) for n in re.findall(r"\btimeout (\d+) ", command)) + 15
+    def bounds(text: str) -> int:
+        return sum(int(n) for n in re.findall(r"\btimeout (\d+) ", text))
+
+    # A `for x in a b c; do BODY done` loop runs BODY's bounds once per item.
+    total = 0
+    loop = re.compile(r"\bfor \w+ in ([^;]*); do (.*?)\bdone\b", re.S)
+    for match in loop.finditer(command):
+        total += len(match.group(1).split()) * bounds(match.group(2))
+    return total + bounds(loop.sub(" ", command)) + 15
 
 
 def _voice_acceptance_command(expected_policy: str) -> str:

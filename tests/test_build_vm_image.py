@@ -409,6 +409,12 @@ class VmBuilderEnvTests(unittest.TestCase):
             vm.verify_provisioning(cfg(), "askpass")
         self.assertGreater(remote.call_count, 1)
 
+    def test_guest_timeout_budget_counts_each_loop_iteration(self):
+        command = ("timeout 5 a && for t in x y z; do timeout 10 \"$t\" || exit 1; "
+                   "done && timeout 7 b")
+        self.assertEqual(vm._guest_timeout_budget(command), 5 + 3 * 10 + 7 + 15)
+        self.assertEqual(vm._guest_timeout_budget("true"), 15)
+
     def test_voice_acceptance_host_timeout_outlives_guest_steps(self):
         # 0.1.9 fixed this with a flat 195 s; the check has since grown
         # further sequential guest steps, so the bound is derived from them.
@@ -427,8 +433,11 @@ class VmBuilderEnvTests(unittest.TestCase):
             self.assertEqual(len(voice_calls), 1)
             command = voice_calls[0].args[1]
             self.assertIn("timeout 180 python3", command)
-            guest = sum(int(n) for n in re.findall(r"\btimeout (\d+) ", command))
-            self.assertGreater(guest, 180)
+            # Counted by hand: the 180 s smoke; 3 tools x 15 s --version;
+            # tts --print, stt --print, stt --models and the catalog check at
+            # 15 s each; policy 1 adds a second 3-tool --version loop.
+            guest = {"0": 180 + 3 * 15 + 4 * 15,
+                     "1": 180 + 3 * 15 + 4 * 15 + 3 * 15}[policy]
             self.assertGreater(voice_calls[0].kwargs["timeout"], guest)
 
     def test_update_rollback_gate_uses_real_installed_updater(self):
