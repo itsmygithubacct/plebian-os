@@ -787,13 +787,14 @@ per_user_source_layout_conflicts() {
     }
     (
         set +eu
-        local index ours
+        local index ours built_engine
         # This updater's view. KILIX names the engine the session launches;
         # pleb defaults it from KILIX_DIR (lib/common.sh KILIX_DEFAULT).
         for key in "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
             declare "_plebian_os_updater_$key=${!key}"
         done
         _plebian_os_updater_KILIX="${KILIX:-$KILIX_DIR/kilix}"
+        built_engine="$KILIX_DIR/kilix"
         for index in "${!PLEBIAN_OS_SOURCE_LAYOUT_KEYS[@]}"; do
             printf -v "${PLEBIAN_OS_SOURCE_LAYOUT_KEYS[$index]}" '%s' "${values[$index]}"
         done
@@ -817,7 +818,7 @@ per_user_source_layout_conflicts() {
             # The engine this update builds is $KILIX_DIR/kilix whatever the
             # system file names, so a session that ends there agrees too.
             [ "$key" = KILIX ] \
-                && [ "$(realpath -m -- "$KILIX")" = "$(realpath -m -- "$_plebian_os_updater_KILIX_DIR/kilix")" ] \
+                && [ "$(realpath -m -- "$KILIX")" = "$(realpath -m -- "$built_engine")" ] \
                 && continue
             printf '%s\037%s\037%s\n' "$key" "${!key}" "${!ours}"
         done
