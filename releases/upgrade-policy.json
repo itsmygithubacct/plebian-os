@@ -5,6 +5,15 @@
   "default_supported_hop": "immediately_previous_published_release",
   "published_release_skip": "explicit_path_and_acceptance_required",
   "upgrade_entrypoint": "installed_updater_with_target_release_closure",
+  "image_release_hop_entrypoint": "pleb update --to <x.y.z>",
+  "standalone_release_hop_entrypoint": "pleb update --to <x.y.z>",
+  "latest_release_hop_entrypoint": "pleb update --latest",
+  "release_hop_dry_run": "pleb update --to <x.y.z> --dry-run",
+  "closure_layout": {
+    "operator_choices": "session.env",
+    "release_controlled_image": "/etc/pleb/closure.env",
+    "release_controlled_standalone": "$PLEB_CONFIG_HOME/closure.env"
+  },
   "release_controlled_keys_move_as": "one_coordinated_closure",
   "preserve": [
     "user_files",
