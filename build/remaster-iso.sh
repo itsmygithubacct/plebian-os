@@ -300,16 +300,22 @@ validate_voice_compliance_carrier() {
     done <"$dir/BINDINGS.sha256"
     (cd -- "$dir" && sha256sum --quiet --strict -c BINDINGS.sha256 >/dev/null 2>&1) \
         || { rm -f -- "$listed"; carrier_refuse "a bound file does not match BINDINGS.sha256"; return 1; }
-    if [ -d "$dir/seats" ] && [ ! -L "$dir/seats" ]; then
-        for file in "$dir"/seats/*; do
-            [ -f "$file" ] && [ ! -L "$file" ] || continue
-            name="${file##*/}"
-            [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] \
-                && grep -Fq -- "\"path\":\"seats/$name\",\"sha256\":\"$(sha256sum -- "$file" | cut -d' ' -f1)\"" "$dir/ACCEPTANCE.json" \
-                || { rm -f -- "$listed"; carrier_refuse "seats/$name is not the record ACCEPTANCE.json names"; return 1; }
-            printf 'seats/%s\n' "$name" >>"$listed"
-        done
-    fi
+    # The seats are exactly the records the pinned receipt names: each must
+    # exist with its digest, there must be at least two, and any other file
+    # under seats/ is refused below as bound by neither pin.
+    local seat seats=0
+    while IFS= read -r seat; do
+        [[ "$seat" =~ ^\"path\":\"seats/([A-Za-z0-9._-]+)\",\"sha256\":\"([0-9a-f]{64})\"$ ]] \
+            || { rm -f -- "$listed"; carrier_refuse "ACCEPTANCE.json names an invalid seat"; return 1; }
+        file="$dir/seats/${BASH_REMATCH[1]}"
+        { [ -f "$file" ] && [ ! -L "$file" ] \
+            && [ "$(sha256sum -- "$file" | cut -d' ' -f1)" = "${BASH_REMATCH[2]}" ]; } \
+            || { rm -f -- "$listed"; carrier_refuse "seats/${BASH_REMATCH[1]} is missing or is not the record ACCEPTANCE.json names"; return 1; }
+        printf 'seats/%s\n' "${BASH_REMATCH[1]}" >>"$listed"
+        seats=$((seats + 1))
+    done < <(grep -o '"path":"seats/[^"]*","sha256":"[^"]*"' "$dir/ACCEPTANCE.json")
+    [ "$seats" -ge 2 ] \
+        || { rm -f -- "$listed"; carrier_refuse "ACCEPTANCE.json names fewer than two seats"; return 1; }
     if [ -n "$(cd -- "$dir" && find . -mindepth 1 ! -type f ! -type d -print -quit)" ] \
             || [ -n "$(cd -- "$dir" && find . -type f -printf '%P\n' \
                 | LC_ALL=C sort | LC_ALL=C comm -23 - <(LC_ALL=C sort -u -- "$listed"))" ]; then

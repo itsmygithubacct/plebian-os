@@ -131,8 +131,10 @@ def delivery_text(model: str, host: str, runnable: bool, voice_ref: str) -> str:
         "No model weights are present in this image, and provisioning downloads none.",
         f"{model} reaches a machine only when a user installs it; it is downloaded from",
         f"{host} and verified against the pinned digests before installation.",
-        "kilix-voice refuses to use the weights without a covering licence receipt",
-        f"(require_covering_receipt, kilix-voice {voice_ref}).",
+        "No install route downloads it until a kilix-license receipt covers it:",
+        "`kilix models install` shows the licence and records the receipt, and",
+        "`kilix stt --install`, `kilix voice install` and `kilix bonsai pull` first ask",
+        f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).",
     ]
     if not runnable:
         lines.append(f"{model} is installable in this release but not runnable: the "

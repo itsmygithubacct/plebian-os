@@ -53,7 +53,7 @@ one reviewed target closure; mixing old and new release pins is unsupported.
 The Debian snapshot is the install-time resolution pin; it does not freeze an
 installed machine's Debian packages.
 
-Beginning with 0.2.1, release-controlled pins live in `closure.env` rather than
+Beginning with 0.2.2, release-controlled pins live in `closure.env` rather than
 beside operator choices. Image installs use root-owned mode-0644
 `/etc/pleb/closure.env`; standalone Pleb installs use user-owned mode-0600
 `$PLEB_CONFIG_HOME/closure.env`. The adjacent `session.env` retains operator
@@ -266,8 +266,8 @@ For both an installed Plebian-OS image and a standalone `pleb install` machine,
 the supported operator entrypoint is:
 
 ```sh
-pleb update --to 0.2.1 --dry-run
-pleb update --to 0.2.1
+pleb update --to 0.2.2 --dry-run
+pleb update --to 0.2.2
 ```
 
 Substitute the published adjacent target release. `pleb update --latest` is
@@ -338,7 +338,7 @@ commit, half-pins an optional closure such as Kilix Voice, or declares a version
 which disagrees with the release identifier or with the release commit's
 `VERSION`, is refused and the refusal names what was wrong. It then reports every
 release-controlled key it will move. It proves advertised-ref reachability for
-all nine 0.2.1 component roots, fetches each exact target without moving a
+every component root of the target closure, fetches each exact target without moving a
 checkout, compares available installed identities, and announces `DOWNGRADE`
 or `DIVERGED` per component;
 a rising release number cannot hide a falling pin. It then proves the rendered

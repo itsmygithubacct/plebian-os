@@ -158,6 +158,10 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 - Copied text survives closing the app that copied it. X keeps no clipboard
   store and the desktop shipped no clipboard manager; the session now holds
   CLIPBOARD and PRIMARY through `autocutsel` (`PLEB_CLIPBOARD` opts out).
+- Classify `PLEBIAN_OS_DESKTOP` and `PLEBIAN_OS_KIOSK` as fresh-image
+  defaults and installed operator policy. Release selection now validates and
+  reports their manifest values without moving them into `closure.env` or
+  overriding `/etc/default/plebian-os`.
 - F107-A merged: split release closures (release-controlled keys may live in
   `/etc/pleb/closure.env`), the release-hop acceptance harness, and the
   fail-closed F100 voice-carrier guard. The guard now opens only for the
@@ -276,9 +280,9 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ## [0.2.1] — 2026-09-01
 
-The 0.2.1 candidate working set is integrated but not owner-frozen, qualified,
-tagged, or published as a release. This section records source work on the
-candidate line and must not be used to revise 0.2.0 artifacts.
+0.2.1 is not integrated, qualified, tagged, or published. This section records
+source work present on the development line; it does not create a release
+closure and must not be used to revise 0.2.0 artifacts.
 
 ### Added
 
@@ -321,10 +325,6 @@ candidate line and must not be used to revise 0.2.0 artifacts.
 
 ### Fixed
 
-- Classify `PLEBIAN_OS_DESKTOP` and `PLEBIAN_OS_KIOSK` as fresh-image
-  defaults and installed operator policy. Release selection now validates and
-  reports their manifest values without moving them into `closure.env` or
-  overriding `/etc/default/plebian-os`.
 - Contain the 0.2.0 starter credential during upgrade without changing local
   identity or password state. If the historical hash remains, password-based
   SSH is disabled for that account only through a validated transactional

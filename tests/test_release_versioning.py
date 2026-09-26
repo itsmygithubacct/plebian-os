@@ -431,9 +431,6 @@ class ReleaseVersioningTests(unittest.TestCase):
         ]
         self.assertNotRegex(current_section, r"(?i)\bunreleased\b")
 
-
-
-
     def test_0_2_1_env_key_names_match_the_no_later_additions_freeze(self):
         names = []
         for line in _read("releases", "0.2.1.env").splitlines():

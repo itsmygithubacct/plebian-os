@@ -147,12 +147,33 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         delivery = (root / model / "DELIVERY").read_text()
         for claim in ("No model weights are present in this image, and "
                       "provisioning downloads none.",
-                      f"require_covering_receipt, kilix-voice {voice_ref}",
+                      "No install route downloads it until a kilix-license receipt covers it:",
+                      f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).",
                       "mode: first-use-upstream-download"):
             if claim not in delivery:
                 gaps.append(f"{model}: DELIVERY lacks {claim!r}")
         if ("not runnable" in delivery) == entry["runnable"]:
             gaps.append(f"{model}: DELIVERY misstates runnability")
+    return gaps
+
+
+def kilix_show(kilix: Path, ref: str, path: str) -> str:
+    return subprocess.run(["git", "-C", str(kilix), "--no-replace-objects", "show",
+                           f"{ref}:{path}"], capture_output=True, text=True,
+                          check=True).stdout
+
+
+def kilix_gate_gaps(launcher: str, voice_installer: str) -> list[str]:
+    """Every Kilix route that downloads speech weights asks the receipt gate first."""
+    gaps = []
+    if '"$_bonsai_stt" --check-licence "$_bonsai_model"' not in launcher:
+        gaps.append("`kilix bonsai pull` does not ask the receipt gate")
+    gate = voice_installer.find('require_dictation_receipt "')
+    fetch = voice_installer.find('fetch_verified "$KILIX_VOICE_LIB_URL"')
+    if gate < 0 or fetch < 0 or gate > fetch:
+        gaps.append("`kilix voice install` can fetch before asking the receipt gate")
+    if 'check-licence "$model_id"' not in voice_installer:
+        gaps.append("`kilix voice install` does not ask about the selected model")
     return gaps
 
 
@@ -230,7 +251,10 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             self.assertEqual(env[key], carrier[key], key)
         self.assertEqual(env["models"].split(), carrier["model_order"])
         self.assertEqual(set(carrier["model_order"]), set(carrier["models"]))
-        expected = 10
+        fixed = {"schema", "release_id", "models", "dictation_model",
+                 "library_wheel_url", "library_wheel_sha256", "interface_content_ref",
+                 "interface_content_schema_sha256", "interface_licence_ref", "voice_ref"}
+        expected = len(fixed)
         for model, entry in carrier["models"].items():
             prefix = "m_" + re.sub(r"[^a-z0-9]", "_", model) + "_"
             projected = {
@@ -296,10 +320,38 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                                                    **overrides)).returncode, 0)
             self.assertTrue(artifact_gaps(catalog, forged, root))
 
+    def test_carried_records_are_the_ones_the_image_serves(self):
+        # The carrier reads asset records at PLEBIAN_OS_NATIVE_CONTENT_REF; the
+        # image's first-use flow serves KILIX_REF's kilix-content gitlink. A
+        # KILIX_REF bump that changed a speech record must fail here.
+        pins = manifest(f"{VERSION}.env")
+        kilix = repo_holding("PLEBIAN_OS_KILIX_REPO", "kilix", pins["KILIX_REF"])
+        self.assertIsNotNone(kilix, "no Kilix checkout holds KILIX_REF")
+        gitlink = subprocess.run(
+            ["git", "-C", str(kilix), "--no-replace-objects", "rev-parse",
+             f"{pins['KILIX_REF']}:third_party/kilix-content"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        content = repo_holding("PLEBIAN_OS_KILIX_CONTENT_REPO", "kilix-content", gitlink)
+        self.assertIsNotNone(content, f"no kilix-content checkout holds {gitlink}")
+        catalog = json.loads(subprocess.run(
+            ["git", "-C", str(content), "--no-replace-objects", "show",
+             f"{gitlink}:src/kilix_content/catalog/plebian.json"],
+            capture_output=True, check=True).stdout)
+        served = {asset["id"]: asset for asset in catalog["assets"]}
+        carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
+        for model, entry in carrier["models"].items():
+            artifact = json.loads((CARRIER / model / "ARTIFACT.json").read_bytes())
+            self.assertEqual(served.get(entry["artifact_id"]), artifact, model)
+
     # AC-5
     def test_carrier_covers_every_advertised_model(self):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
-        self.assertEqual(len(advertised_models(provision)), 3)
+        advertised = advertised_models(provision)
+        self.assertTrue(advertised)
+        # The provisioner's catalog check enforces a fixed record count; the
+        # advertised set must be exactly that many models.
+        block = provision[provision.index("validate_voice_model_catalog() {"):]
+        self.assertIn("len(records) != len(expected)", block)
         self.assertEqual(coverage_gaps(provision), [])
         # D9: an advertised model the carrier does not carry.
         with tempfile.TemporaryDirectory() as td:
@@ -347,6 +399,16 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         # The download is digest-verified and receipt-gated at the pinned refs.
         self.assertIsNone(voice_contract.content_chain_gap(pins["KILIX_REF"]))
         self.assertIsNone(voice_contract.receipt_gate_gap(pins["KILIX_VOICE_REF"]))
+        # Every Kilix route, at the pinned KILIX_REF, asks that gate first.
+        kilix = repo_holding("PLEBIAN_OS_KILIX_REPO", "kilix", pins["KILIX_REF"])
+        self.assertIsNotNone(kilix, "no Kilix checkout holds KILIX_REF; set PLEBIAN_OS_KILIX_REPO")
+        launcher = kilix_show(kilix, pins["KILIX_REF"], "kilix")
+        installer = kilix_show(kilix, pins["KILIX_REF"], "scripts/install-kilix-voice.sh")
+        self.assertEqual(kilix_gate_gaps(launcher, installer), [])
+        self.assertTrue(kilix_gate_gaps(
+            launcher.replace('"$_bonsai_stt" --check-licence "$_bonsai_model"', "true"), installer))
+        self.assertTrue(kilix_gate_gaps(
+            launcher, installer.replace('require_dictation_receipt "', 'true "')))
         # D6: the same DELIVERY statement is false of an image that provisions weights.
         self.assertTrue(delivery_gaps(provision.replace(
             "readonly PROVISION_VOICE_WEIGHTS=0", "readonly PROVISION_VOICE_WEIGHTS=1")))
@@ -448,6 +510,12 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             (r / "ACCEPTANCE.json").write_text('{"seats":["fictitious"]}\n')
         def extra(r): (r / "EXTRA").write_text("x\n")
         def extra_seat(r): (r / "seats" / "forged.md").write_text("VERDICT: ship\n")
+        def missing_seat(r):
+            sorted((r / "seats").iterdir())[0].unlink()
+            resum(r)
+        def no_seats(r):
+            shutil.rmtree(r / "seats")
+            resum(r)
         structural = [
             ("D2 empty carrier", empty, lambda r: {}, "CARRIER.json is missing"),
             ("D3 forged receipt", forged_receipt, lambda r: {},
@@ -456,7 +524,9 @@ class ModelComplianceCarrierTests(unittest.TestCase):
              lambda r: {"PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256": sha256((r / "ACCEPTANCE.json").read_bytes())},
              "is not the receipt for this carrier"),
             ("D8 unlisted extra file", extra, lambda r: {}, "bound by neither pin"),
-            ("unlisted seat record", extra_seat, lambda r: {}, "is not the record ACCEPTANCE.json names"),
+            ("unlisted seat record", extra_seat, lambda r: {}, "bound by neither pin"),
+            ("seat record deleted", missing_seat, lambda r: {}, "is missing or is not the record"),
+            ("all seat records deleted", no_seats, lambda r: {}, "is missing or is not the record"),
         ]
         for label, plant, overrides, reason in structural:
             with self.subTest(defect=label), tempfile.TemporaryDirectory() as td:
