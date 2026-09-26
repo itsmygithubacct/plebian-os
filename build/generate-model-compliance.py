@@ -132,8 +132,8 @@ def delivery_text(model: str, host: str, runnable: bool, voice_ref: str) -> str:
         f"{model} reaches a machine only when a user installs it; it is downloaded from",
         f"{host} and verified against the pinned digests before installation.",
         "No install route downloads it until a kilix-license receipt covers it:",
-        "`kilix models install` shows the licence and records the receipt, and",
-        "`kilix stt --install`, `kilix voice install` and `kilix bonsai pull` first ask",
+        "The model catalog shows the licence and records the receipt, and",
+        "The speech install command, voice installer and Bonsai pull command first ask",
         f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).",
     ]
     if not runnable:
