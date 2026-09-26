@@ -17,8 +17,8 @@ jobs:
       - name: Fetch the pinned trees the release contracts inspect
         # test_voice_release_contract and test_model_compliance_carrier read the
         # exact KILIX_REF, its kilix-content gitlink, KILIX_VOICE_REF, the native
-        # content ref and KILIX_LICENSE_REF from sibling checkouts (object store
-        # only). Fetch just those commits beside this checkout.
+        # content ref, KILIX_LICENSE_REF and KILIX_REF's kilix-bonsai from sibling
+        # checkouts (object store only). Fetch just those commits beside this checkout.
         run: |
           manifest="releases/$(cat VERSION).env"
           pin() { sed -n "s/^$1=\([0-9a-f]\{40\}\)\$/\1/p" "$manifest"; }
@@ -40,6 +40,10 @@ jobs:
           git -C ../kilix-content fetch -q --depth 1 \
             https://github.com/itsmygithubacct/kilix-content.git "$(pin PLEBIAN_OS_NATIVE_CONTENT_REF)"
           fetch ../kilix-license https://github.com/itsmygithubacct/kilix-license.git "$(pin KILIX_LICENSE_REF)"
+          # AC-8 reads the speech licence gate in the kilix-bonsai KILIX_REF installs.
+          bonsai_ref="$(git -C ../kilix show "$kilix_ref:scripts/install-kilix-bonsai.sh" \
+            | sed -n 's/^KILIX_BONSAI_REF="\${KILIX_BONSAI_REF:-\([0-9a-f]\{40\}\)}"$/\1/p')"
+          fetch ../kilix-bonsai https://github.com/itsmygithubacct/kilix-bonsai.git "$bonsai_ref"
       - name: Python tests
         run: python3 -m unittest discover -s tests -v
       - name: F120 authority profile tests

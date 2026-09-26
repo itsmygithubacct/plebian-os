@@ -163,18 +163,41 @@ def kilix_show(kilix: Path, ref: str, path: str) -> str:
                           check=True).stdout
 
 
-def kilix_gate_gaps(launcher: str, voice_installer: str) -> list[str]:
-    """Every Kilix route that downloads speech weights asks the receipt gate first."""
+def kilix_gate_gaps(voice_installer: str) -> list[str]:
+    """`kilix voice install` asks the receipt gate before it fetches a model."""
     gaps = []
-    if '"$_bonsai_stt" --check-licence "$_bonsai_model"' not in launcher:
-        gaps.append("`kilix bonsai pull` does not ask the receipt gate")
     gate = voice_installer.find('require_dictation_receipt "')
-    fetch = voice_installer.find('fetch_verified "$KILIX_VOICE_LIB_URL"')
+    fetch = voice_installer.find('fetch_verified "$KILIX_VOICE_MODEL_URL"')
     if gate < 0 or fetch < 0 or gate > fetch:
-        gaps.append("`kilix voice install` can fetch before asking the receipt gate")
+        gaps.append("`kilix voice install` can fetch a model before asking the receipt gate")
     if 'check-licence "$model_id"' not in voice_installer:
         gaps.append("`kilix voice install` does not ask about the selected model")
     return gaps
+
+
+def bonsai_gate_gaps(model_json: str, main_py: str, pull_sh: str, model: str) -> list[str]:
+    """kilix-bonsai's pull.sh, which every bonsai download route runs (CLI, TUI,
+    `kilix bonsai pull`, `kilix stt --install`), asks the receipt gate for a model
+    whose MODEL.json names it, before it downloads anything."""
+    gaps = []
+    if json.loads(model_json).get("licence_gate") != model:
+        gaps.append(f"{model}: MODEL.json names no licence_gate")
+    if 'print(f"LICENCE_GATE\\t{model.licence_gate}"' not in main_py:
+        gaps.append("the bonsai plan does not report the licence gate")
+    if 'licence_gate="$(field LICENCE_GATE)"' not in pull_sh:
+        gaps.append("pull.sh does not read the licence gate")
+    gate = pull_sh.find('"$gate_tool" --check-licence "$licence_gate"')
+    fetch = pull_sh.find('case "$downloader" in')
+    link = pull_sh.find('ln -f -- "$FROM/$path"')
+    if gate < 0 or fetch < 0 or link < 0 or gate > min(fetch, link):
+        gaps.append("pull.sh can fetch a gated model before asking the receipt gate")
+    return gaps
+
+
+def bonsai_ref(bonsai_installer: str) -> str:
+    match = re.search(r'^KILIX_BONSAI_REF="\$\{KILIX_BONSAI_REF:-([0-9a-f]{40})\}"$',
+                      bonsai_installer, re.M)
+    return match.group(1) if match else ""
 
 
 def rebind(root: Path) -> dict[str, str]:
@@ -402,13 +425,24 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         # Every Kilix route, at the pinned KILIX_REF, asks that gate first.
         kilix = repo_holding("PLEBIAN_OS_KILIX_REPO", "kilix", pins["KILIX_REF"])
         self.assertIsNotNone(kilix, "no Kilix checkout holds KILIX_REF; set PLEBIAN_OS_KILIX_REPO")
-        launcher = kilix_show(kilix, pins["KILIX_REF"], "kilix")
         installer = kilix_show(kilix, pins["KILIX_REF"], "scripts/install-kilix-voice.sh")
-        self.assertEqual(kilix_gate_gaps(launcher, installer), [])
-        self.assertTrue(kilix_gate_gaps(
-            launcher.replace('"$_bonsai_stt" --check-licence "$_bonsai_model"', "true"), installer))
-        self.assertTrue(kilix_gate_gaps(
-            launcher, installer.replace('require_dictation_receipt "', 'true "')))
+        self.assertEqual(kilix_gate_gaps(installer), [])
+        self.assertTrue(kilix_gate_gaps(installer.replace('require_dictation_receipt "', 'true "')))
+        # ...and so does the kilix-bonsai that KILIX_REF installs.
+        ref = bonsai_ref(kilix_show(kilix, pins["KILIX_REF"], "scripts/install-kilix-bonsai.sh"))
+        self.assertRegex(ref, r"^[0-9a-f]{40}$", "KILIX_REF pins no kilix-bonsai commit")
+        bonsai = repo_holding("PLEBIAN_OS_KILIX_BONSAI_REPO", "kilix-bonsai", ref)
+        self.assertIsNotNone(bonsai, f"no kilix-bonsai checkout holds {ref}; "
+                             "set PLEBIAN_OS_KILIX_BONSAI_REPO")
+        model_json, main_py, pull_sh = (kilix_show(bonsai, ref, path) for path in (
+            "models/vibevoice-asr-bitnet/MODEL.json", "tools/kilix-bonsai/main.py",
+            "models/_shared/pull.sh"))
+        model = "vibevoice-asr-bitnet"
+        self.assertEqual(bonsai_gate_gaps(model_json, main_py, pull_sh, model), [])
+        self.assertTrue(bonsai_gate_gaps(
+            model_json.replace('"licence_gate"', '"no_gate"'), main_py, pull_sh, model))
+        self.assertTrue(bonsai_gate_gaps(model_json, main_py, pull_sh.replace(
+            '"$gate_tool" --check-licence "$licence_gate"', "true"), model))
         # D6: the same DELIVERY statement is false of an image that provisions weights.
         self.assertTrue(delivery_gaps(provision.replace(
             "readonly PROVISION_VOICE_WEIGHTS=0", "readonly PROVISION_VOICE_WEIGHTS=1")))
