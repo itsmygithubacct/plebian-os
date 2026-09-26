@@ -12,7 +12,7 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Changed
 
-- The rc2 host pin is kilix `d7bebdf22901243584beca1ad526ec5ef490fe3a`: `e2431d7` with kilix-needle `bfacf6e7`, which keeps one selected model per job (panes behaves as before). From `e2431d7`: Terminal sizes that do not fit a signed cell index are refused, the matrix screensaver keeps its previous grid when a resize does not fit, and agent installers run a downloaded bootstrap only after its sha256 matches the pin. Kilix 95 is `93bd0cc`, paired with `d7bebdf`.
+- The rc2 host pin is kilix `9101c7181e65fa08494bd1c20be1b84f09aaeac4`: `d7bebdf` with the camera stack re-pinned (kilix-rtsp `dc83447`: the view keeps a rolling history behind the live picture with replay keys and a detector button; kilix-object-detect `096dd5a`; kilix-nvr `25497a6`). `d7bebdf` is `e2431d7` with kilix-needle `bfacf6e7`, which keeps one selected model per job (panes behaves as before). From `e2431d7`: Terminal sizes that do not fit a signed cell index are refused, the matrix screensaver keeps its previous grid when a resize does not fit, and agent installers run a downloaded bootstrap only after its sha256 matches the pin. Kilix 95 is `731480a`, paired with `9101c71`.
 - Kilix 0.2.2 offers hardware-aware text-to-speech auditions. Piper Kristin
   medium is the laptop-sized neural tier: its provider runtime installs only
   when selected, and its model remains behind the pinned first-use licence
@@ -85,7 +85,8 @@ or published. This section must not be used to revise 0.2.1 artifacts.
   `5fe9e45`, `806ea6c` / `d69096c`, `338e593` / `f170c44`, whose
   kilix-needle binds a program to the clause that asks for it, and
   `4802125` / `dda40f6`, which add `kilix install yolox`, and `d7bebdf` /
-  `93bd0cc`, whose kilix-needle keeps a selected model per job): drive Kilix panes and tabs from plain
+  `93bd0cc`, whose kilix-needle keeps a selected model per job, and `9101c71` /
+  `731480a`, which re-pin the camera stack): drive Kilix panes and tabs from plain
   requests with Cactus Compute's Needle 2, installed from the catalog, whose
   engine, runtime and base checkpoint download only after the first-use
   licence is accepted.
