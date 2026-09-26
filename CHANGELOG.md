@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Agent guidance recommends Needle's local panes job for routine pane management,
+  with direct-command fallbacks and verified targets. Pair Kilix 95 checks with
+  the final host.
+
 - Pleb logs host native-window opens and focus changes, with available process
   arguments and parent chains, to private rotating JSON lines for routing fixes.
   Pleb `69e30a6`, Kilix `f52a319`.
