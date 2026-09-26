@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Pleb logs host native-window opens and focus changes, with available process
+  arguments and parent chains, to private rotating JSON lines for routing fixes.
+  Pleb `69e30a6`, Kilix `f52a319`.
+
 - Pane chrome opens the complete retained pane log in a searchable new tab.
   Charging batteries remain visible below full charge, and clock widgets refresh
   the local timezone. Kilix `5acc512`, engine `8b3711ec6`, Kilix 95 `82f81f5`.
