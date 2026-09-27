@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Move Layout selection and enable/disable controls into the three-dash Start menu, with a return-to-Start entry. Remove the standalone Layout badge from the bar.
+
 - Re-provisioning and post-update apt reconciliation restore pins from the selected split closure. This enables the live Debian security-source transition after an upgrade; invalid selected configuration stops the operation.
 
 - The whole-stack updater reads the selected `closure.env` before deriving defaults, including the first hop from a 0.2.1 installation. An unreadable selected closure is refused.
