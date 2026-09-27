@@ -11,6 +11,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - The whole-stack updater reads the selected `closure.env` before deriving defaults, including the first hop from a 0.2.1 installation. An unreadable selected closure is refused.
 
 - Integrate reviewed chrome charging indication, per-tab Layout controls and pane IDs; coding-session agents and rollout readers; help documentation; catalog and provider fixes. Main and RC2 select the same source stack.
+- kilix-needle's agents job (kilix-needle `40a189a8`, kilix-content `03e2f02`,
+  Kilix `5b39b61`, Kilix 95 `2683d2a`, kilix-tui-utils `03ffa1f`):
+  `kilix-needle agents "…"` and the MCP tools `kilix_agents_plan` /
+  `kilix_agents_act` launch Claude Code, Codex, Grok or qwen-omp in a
+  directory (with a task, a resume, a model or a side), wait for a session to
+  finish or to ask, and message a session; the request is the consent. Folder
+  trust and permissions follow Kilix's agent-control and its coding-yolo
+  setting (reviews R13 and R14). The catalog now gives it `session-write`.
 
 - Agent guidance recommends Needle's local panes job for routine pane management,
   with direct-command fallbacks and verified targets. Pair Kilix 95 checks with
