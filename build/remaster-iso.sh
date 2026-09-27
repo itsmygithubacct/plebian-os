@@ -223,6 +223,7 @@ PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-$(cat "$HERE/VERSION" 2>/dev/null || e
 # The release manifest names its model compliance carrier relative to this
 # checkout; the validator (inside the tested slice) only accepts an absolute path.
 PLEBIAN_OS_VOICE_CARRIER_DIR="${PLEBIAN_OS_VOICE_CARRIER_DIR:-}"
+VOICE_CARRIER_MANIFEST_DIR="$PLEBIAN_OS_VOICE_CARRIER_DIR"
 case "$PLEBIAN_OS_VOICE_CARRIER_DIR" in
     ''|/*) ;;
     *) PLEBIAN_OS_VOICE_CARRIER_DIR="$HERE/$PLEBIAN_OS_VOICE_CARRIER_DIR" ;;
@@ -1138,6 +1139,13 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_VOICE_MODEL "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
+        # Record the portable manifest path, not the validator's host-local path.
+        manifest_kv PLEBIAN_OS_VOICE_CARRIER_DIR "${VOICE_CARRIER_MANIFEST_DIR:-}"
+        manifest_kv PLEBIAN_OS_VOICE_CARRIER_SHA256 "${PLEBIAN_OS_VOICE_CARRIER_SHA256:-}"
+        manifest_kv PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256 "${PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256:-}"
+        manifest_kv KILIX_LICENSE_REPO "${KILIX_LICENSE_REPO:-}"
+        manifest_kv KILIX_LICENSE_BRANCH "${KILIX_LICENSE_BRANCH:-}"
+        manifest_kv KILIX_LICENSE_REF "${KILIX_LICENSE_REF:-}"
         manifest_kv PLEBIAN_OS_INSTALL_WAYDROID "${PLEBIAN_OS_INSTALL_WAYDROID:-0}"
         manifest_kv PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 "${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}"
         manifest_kv PLEBIAN_OS_SSH_ENABLED "${PLEBIAN_OS_SSH_ENABLED:-0}"

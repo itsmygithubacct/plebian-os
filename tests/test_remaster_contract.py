@@ -1,5 +1,6 @@
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -172,6 +173,42 @@ class RemasterContractTests(unittest.TestCase):
                          f"runtime keys missing from build-info: {runtime - manifest}")
         for key in ("PLEBIAN_OS_AUTOBOOT", "PLEBIAN_OS_UNATTENDED_DISK"):
             self.assertIn(key, manifest)
+
+    def test_build_info_preserves_every_current_release_manifest_value(self):
+        version = (ROOT / "VERSION").read_text().strip()
+        values = dict(line.split("=", 1) for line in
+                      (ROOT / "releases" / f"{version}.env").read_text().splitlines()
+                      if line and not line.startswith("#") and "=" in line)
+        writer = self.source_section("write_build_info() {", "\nwrite_firstboot_env() {")
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "build-info.env"
+            inputs = dict(values, HERE=str(ROOT), SRC_ISO=str(ROOT / "VERSION"),
+                          PRESEED=str(ROOT / "preseed/preseed.cfg"),
+                          INSTALLER_ASSETS=str(ROOT / "assets/installer"),
+                          DESKTOP_WALLPAPER=str(ROOT / "assets/desktop/plebian-os.png"),
+                          LIGHTDM_GREETER_CONFIG=str(ROOT / "provision/lightdm-gtk-greeter.conf"),
+                          INSTALLER_ATTRIBUTION=str(ROOT / "assets/installer/ATTRIBUTION.md"),
+                          GPL2_LICENSE=str(ROOT / "assets/COPYING.GPL-2"))
+            setup = "\n".join(f"{key}={shlex.quote(value)}" for key, value in inputs.items())
+            # The actual path-resolution slice runs before the metadata writer.
+            resolution = self.source_section(
+                'PLEBIAN_OS_VOICE_CARRIER_DIR="${PLEBIAN_OS_VOICE_CARRIER_DIR:-}"',
+                'if [ "${PLEBIAN_OS_UNATTENDED_DISK:-0}" = 1 ]; then')
+            script = ("set -eo pipefail\n" + setup + "\n" + resolution +
+                      "\nmanifest_kv() { printf '%s=%q\\n' \"$1\" \"$2\"; }\n" +
+                      writer + '\nwrite_build_info "$1"\n')
+            result = subprocess.run(["bash", "-c", script, "build-info-test", str(output)],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            recorded = {}
+            for line in output.read_text().splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                key, raw = line.split("=", 1)
+                parts = shlex.split(raw)
+                recorded[key] = parts[0] if parts else ""
+            for key, value in values.items():
+                self.assertEqual(recorded.get(key), value, key)
 
     def test_normal_image_has_no_identity_or_credential_answer(self):
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()

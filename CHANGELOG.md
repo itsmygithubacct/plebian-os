@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Record the accepted voice-compliance carrier, receipt and licensing source pins in ISO build metadata. Preserve the portable carrier path and verify every release-manifest value against generated metadata.
+
 - Pair Kilix 95 CI with the final RC2 clock/chrome host before test-image construction; all 72 provider test files pass.
 
 - Default the clock to 12-hour time with AM/PM. Right-click opens clock-only settings for time format, date, seconds and calendar visibility; changes save and reload live.
