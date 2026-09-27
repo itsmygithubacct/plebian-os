@@ -229,6 +229,12 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Added
 
+- Joustix's neural rider (kilix-games `573162b`, kilix-content `f8e90ae`, Kilix
+  `628a215`, Kilix 95 `2979ead`): a trained rider clears 89.3% of held-out
+  waves against the autopilot's 1.0%; you can watch it or press N to take
+  over, and the menus leave through QUIT (review J1). Kilix now also carries
+  the pane and tab verbs (`kilix pane`, `kilix tab`, over `kilix_sdk.panes`)
+  and requires known pane dimensions, rolling back incomplete quads.
 - kilix-needle's apps job (kilix-content `b2743b4`, Kilix `394b6eb`, Kilix 95
   `440ecc0`): `kilix-needle apps "…"` and the MCP tools `kilix_apps_plan` /
   `kilix_apps_act` open Kilix apps and games in a new tab and show or hide
