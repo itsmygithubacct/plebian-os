@@ -229,6 +229,14 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Added
 
+- kilix-needle's apps job (kilix-content `b2743b4`, Kilix `394b6eb`, Kilix 95
+  `440ecc0`): `kilix-needle apps "…"` and the MCP tools `kilix_apps_plan` /
+  `kilix_apps_act` open Kilix apps and games in a new tab and show or hide
+  top-bar indicators, pane buttons and pane CPU/memory readouts, make games
+  available or not, or open a settings section. Every launch and setting
+  change asks first; a yes given in advance covers only a plainly worded
+  request, and a launch that may install always waits for a person (review
+  R12, eleven rounds). Panes behaves as before.
 - The kilix-games catalog entries move to `3f81a74` (kilix-content `b8e4eee`,
   Kilix `14da49e`, Kilix 95 `b993e97`): trained neural players for Kilix Lander
   (98.4% of held-out levels landed against the autopilot's 55.0%), Kilix
