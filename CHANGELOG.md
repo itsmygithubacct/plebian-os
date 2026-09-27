@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Pair Kilix 95 CI with the final RC2 clock/chrome host before test-image construction; all 72 provider test files pass.
+
 - Default the clock to 12-hour time with AM/PM. Right-click opens clock-only settings for time format, date, seconds and calendar visibility; changes save and reload live.
 
 - Move Layout selection and enable/disable controls into the three-dash Start menu, with a return-to-Start entry. Remove the standalone Layout badge from the bar.
