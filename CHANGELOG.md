@@ -229,6 +229,13 @@ or published. This section must not be used to revise 0.2.1 artifacts.
 
 ### Added
 
+- The kilix-games catalog entries move to `3f81a74` (kilix-content `b8e4eee`,
+  Kilix `14da49e`, Kilix 95 `b993e97`): trained neural players for Kilix Lander
+  (98.4% of held-out levels landed against the autopilot's 55.0%), Kilix
+  Brokeout (14.9% of held-out levels cleared in three minutes against 0.4%),
+  Solitaire TUI (hint and auto-play) and a new Tic-Tac-Toe with an opponent
+  proven to play perfectly; Kilix Pong's match options; every changed game
+  leaves through its menus and restores the terminal on any fatal signal.
 - `build/remaster-iso.sh` refuses media whose closure submodule gitlinks do not
   resolve on their remotes, not merely whose refs do.
 - Opt-in Vulkan runtime closures for Mesa and Nouveau that leave the base image
