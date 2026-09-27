@@ -40,7 +40,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             subprocess.run(["git", "-C", str(repo), "tag", tag], check=True)
         return repo
 
-    def _source_and_run(self, command: str, repo: Path) -> subprocess.CompletedProcess:
+    def _source_and_run(self, command: str, repo: Path, update=UPDATE) -> subprocess.CompletedProcess:
         env = os.environ.copy()
         env.update(
             {
@@ -54,7 +54,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
                 "-c",
                 'update_path=$1; command=$2; set --; source "$update_path"; eval "$command"',
                 "bash",
-                str(UPDATE),
+                str(update),
                 command,
             ],
             env=env,
@@ -381,6 +381,38 @@ class LatestReleaseUpdateTests(unittest.TestCase):
         self.assertIn('clean_release_env+=(-u "$key")', source)
         self.assertIn('if [[ -v $key ]]; then', source)
         self.assertNotIn('PLEBIAN_OS_RELEASE_ENV_CLEANED', source)
+
+    def test_initial_entry_loads_selected_split_closure_before_defaults(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session = base / "session.env"
+            closure = base / "closure.env"
+            update = base / "update.sh"
+            update.write_text(UPDATE.read_text().replace(
+                "/etc/pleb/session.env", str(session)).replace(
+                "/etc/pleb/closure.env", str(closure)))
+            old, new = "1" * 40, "2" * 40
+            session.write_text(
+                f"PLEBIAN_OS_VERSION=0.2.1\nPLEBIAN_OS_REF={old}\n"
+                "PLEBIAN_OS_RELEASE_MODE=1\nPLEB_WM=openbox\n")
+            command = 'printf "%s %s %s %s\\n" "$PLEBIAN_OS_VERSION" "$PLEBIAN_OS_REF" "$PLEBIAN_OS_RELEASE_MODE" "$PLEB_WM"'
+            legacy = self._source_and_run(command, base, update)
+            self.assertEqual(legacy.returncode, 0, legacy.stderr)
+            self.assertEqual(legacy.stdout, f"0.2.1 {old} 1 openbox\n")
+            # A selector has removed the old pins from the operator file.
+            session.write_text("PLEB_WM=openbox\n")
+            closure.write_text(
+                f"PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_REF={new}\n"
+                "PLEBIAN_OS_RELEASE_MODE=1\n")
+            selected = self._source_and_run(command, base, update)
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            self.assertEqual(selected.stdout, f"0.2.2 {new} 1 openbox\n")
+            # A broken selected closure must not fall back to an unpinned pull.
+            closure.unlink()
+            closure.symlink_to(base / "missing")
+            broken = self._source_and_run(command, base, update)
+            self.assertNotEqual(broken.returncode, 0)
+            self.assertNotIn("openbox", broken.stdout)
 
 
 if __name__ == "__main__":

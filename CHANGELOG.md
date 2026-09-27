@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- The whole-stack updater reads the selected `closure.env` before deriving defaults, including the first hop from a 0.2.1 installation. An unreadable selected closure is refused.
+
 - Integrate reviewed chrome charging indication, per-tab Layout controls and pane IDs; coding-session agents and rollout readers; help documentation; catalog and provider fixes. Main and RC2 select the same source stack.
 
 - Agent guidance recommends Needle's local panes job for routine pane management,

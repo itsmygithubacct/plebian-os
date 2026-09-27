@@ -438,6 +438,17 @@ if [ -r /etc/pleb/session.env ]; then
     # shellcheck source=/dev/null
     . /etc/pleb/session.env
 fi
+# The target selector splits release pins out of session.env before the
+# first update from 0.2.1. Read those pins before deriving any defaults, even
+# while the installed Pleb still predates the split configuration format.
+if [ -e /etc/pleb/closure.env ] || [ -L /etc/pleb/closure.env ]; then
+    root_config_safe_to_source /etc/pleb/closure.env \
+        || die "refusing to source unsafe /etc/pleb/closure.env as root"
+    [ -r /etc/pleb/closure.env ] \
+        || die "selected closure /etc/pleb/closure.env is not readable"
+    # shellcheck source=/dev/null
+    . /etc/pleb/closure.env
+fi
 
 GPU_TERMINAL_SOURCE_HOME="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}"
 PLEB_DIR="${PLEB_DIR:-$GPU_TERMINAL_SOURCE_HOME/pleb}"
