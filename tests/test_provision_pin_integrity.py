@@ -297,6 +297,37 @@ class ReprovisionPinIntegrityTests(unittest.TestCase):
                         continue
                     self.assertEqual(reported.get(key), INSTALLED_CLOSURE[key])
 
+    def test_split_closure_restores_pins_and_preserves_explicit_overrides(self):
+        with tempfile.TemporaryDirectory() as td:
+            session = Path(td) / "session.env"
+            session.write_text(session_env_text(INSTALLED_SELECTION))
+            closure = session.with_name("closure.env")
+            closure.write_text(session_env_text(INSTALLED_CLOSURE))
+            keys = ["PLEBIAN_OS_RELEASE_MODE", "PLEBIAN_OS_REF", "KILIX_REF"]
+            result = self._run(session, "restore_installed_closure\n" + self._report(keys))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for key in keys:
+                self.assertIn(f"{key}={INSTALLED_CLOSURE[key]}\n", result.stdout)
+            explicit = self._run(session, "restore_installed_closure\n" + self._report(keys),
+                                 extra="export KILIX_REF=explicit\n")
+            self.assertEqual(explicit.returncode, 0, explicit.stderr)
+            self.assertIn("KILIX_REF=explicit\n", explicit.stdout)
+
+    def test_broken_split_closure_does_not_silently_use_defaults(self):
+        with tempfile.TemporaryDirectory() as td:
+            session = Path(td) / "session.env"
+            session.write_text("# operator choices\n")
+            closure = session.with_name("closure.env")
+            closure.symlink_to(Path(td) / "missing")
+            broken = self._run(session, "restore_installed_closure\necho FALLBACK\n")
+            self.assertNotEqual(broken.returncode, 0)
+            self.assertNotIn("FALLBACK", broken.stdout)
+            closure.unlink()
+            closure.write_text("invalid shell (\n")
+            malformed = self._run(session, "restore_installed_closure\necho FALLBACK\n")
+            self.assertNotEqual(malformed.returncode, 0)
+            self.assertNotIn("FALLBACK", malformed.stdout)
+
     def test_the_desktop_selection_survives_a_reprovision(self):
         keys = bash_array(PROVISION, "SESSION_SELECTION_KEYS")
         self.assertIn("KILIX_DESKTOP_PROVIDER", keys)

@@ -695,6 +695,28 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertEqual(self._tree(etc), tree)
             self.assertFalse((base / "apt.log").exists())
 
+    def test_split_closure_enables_post_update_live_security_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            session = base / "session.env"
+            session.write_text("# operator choices\n")
+            session.with_name("closure.env").write_text(
+                "PLEBIAN_OS_RELEASE_MODE=1\n"
+                "PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z\n")
+            env["PLEBIAN_OS_SESSION_ENV"] = str(session)
+            env.pop("PLEBIAN_OS_RELEASE_MODE", None)
+            record = base / "versions.env"
+            record.write_text("PLEBIAN_OS_VERSION=0.2.2\n")
+            result = self._run_library(
+                f"APT_INSTALL_RECORD={str(record)!r}\n"
+                "restore_installed_closure\nfinish_release_apt_install\n", env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("https://security.debian.org/debian-security",
+                          (sources / "plebian-os-debian.sources").read_text())
+            self.assertEqual(self._apt_updates(base), 1)
+
     def test_reconcile_apt_sources_handler_changes_only_apt_and_exits(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

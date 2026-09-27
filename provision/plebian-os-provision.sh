@@ -572,10 +572,9 @@ uv_version_matches_pin() {
 run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
 
 # ── the installed closure ────────────────────────────────────────────────────
-# The refs this machine is provisioned from live in /etc/pleb/session.env — the
-# same file pleb-session, `pleb`, plebian-os-update and plebian-os-select-closure
-# read, and the one this script rewrites at the end of every successful run, so
-# it tracks the installed closure rather than the image the disk shipped with.
+# The installed refs live in /etc/pleb/closure.env after 0.2.2 selection, or
+# in the legacy /etc/pleb/session.env. Read both in login order so a re-run
+# uses the installed closure rather than the image the disk shipped with.
 #
 # Nothing fed those refs back into a *re-run* of this provisioner. It received
 # them only from its environment, and the only thing that ever set that
@@ -587,6 +586,7 @@ run()  { if [ "$DRY_RUN" = 1 ]; then echo "    + $*"; else "$@"; fi; }
 # `git pull --ff-only`, which cannot work on the detached HEAD every pinned
 # install has. Read the pins back so a re-run reproduces the installed closure.
 PLEBIAN_OS_SESSION_ENV="${PLEBIAN_OS_SESSION_ENV:-/etc/pleb/session.env}"
+PLEBIAN_OS_CLOSURE_ENV="${PLEBIAN_OS_CLOSURE_ENV:-$(dirname -- "$PLEBIAN_OS_SESSION_ENV")/closure.env}"
 
 # Refuse to source root configuration that a non-root account could have
 # written. Mirrors plebian-os-update.sh; both run as root.
@@ -607,11 +607,19 @@ root_config_safe_to_source() {
 }
 
 restore_installed_closure() {
-    local key var value state skip="${1:-}"
-    local -a candidates=() restored=() missing=()
-    [ -r "$PLEBIAN_OS_SESSION_ENV" ] || return 0
-    root_config_safe_to_source "$PLEBIAN_OS_SESSION_ENV" \
-        || die "refusing to source unsafe $PLEBIAN_OS_SESSION_ENV as root"
+    local key var value state cfg values skip="${1:-}"
+    local -a candidates=() restored=() missing=() configs=()
+    # Legacy installs keep pins in session.env; the 0.2.2 selector moves them
+    # into the adjacent closure.env. Match the login reader's file order.
+    for cfg in "$PLEBIAN_OS_SESSION_ENV" "$PLEBIAN_OS_CLOSURE_ENV"; do
+        if [ -e "$cfg" ] || [ -L "$cfg" ]; then
+            root_config_safe_to_source "$cfg" \
+                || die "refusing to source unsafe $cfg as root"
+            [ -r "$cfg" ] || die "installed configuration $cfg is not readable"
+            configs+=("$cfg")
+        fi
+    done
+    [ "${#configs[@]}" -gt 0 ] || return 0
     # An explicit value from the environment or the command line always wins —
     # that is how a pin is deliberately changed — so only the keys this run was
     # not told about are candidates.
@@ -627,6 +635,16 @@ restore_installed_closure() {
     # source the file in a subshell, so it can fill them without any of its other
     # assignments reaching this run: the storage paths, the install policy and
     # the window-manager choice stay exactly as resolved here.
+    values="$(
+        for key in "${candidates[@]}"; do unset "$key"; done
+        for cfg in "${configs[@]}"; do
+            # shellcheck source=/dev/null
+            . "$cfg" >/dev/null 2>&1 || exit 1
+        done
+        for key in "${candidates[@]}"; do
+            printf '%s\t%s\t%s\n' "$key" "${!key+set}" "${!key-}"
+        done
+    )" || die "could not read the installed closure from ${configs[*]}"
     while IFS=$'\t' read -r key state value; do
         case " ${candidates[*]} " in *" $key "*) ;; *) continue ;; esac
         if [ "$state" != set ]; then
@@ -641,21 +659,14 @@ restore_installed_closure() {
         [ "${!var-}" != "$value" ] || continue
         declare -g "$var=$value"
         restored+=("$key=$value")
-    done < <(
-        for key in "${candidates[@]}"; do unset "$key"; done
-        # shellcheck source=/dev/null
-        . "$PLEBIAN_OS_SESSION_ENV" >/dev/null 2>&1 || exit 0
-        for key in "${candidates[@]}"; do
-            printf '%s\t%s\t%s\n' "$key" "${!key+set}" "${!key-}"
-        done
-    )
+    done <<<"$values"
     if [ "${#restored[@]}" -gt 0 ]; then
-        log "restored the installed closure from $PLEBIAN_OS_SESSION_ENV: ${restored[*]}"
+        log "restored the installed closure from ${configs[*]}: ${restored[*]}"
     fi
     # A key the machine has no answer for is not a key to quietly default: the
     # built-in fallback would be written back over the pin as if it were one.
     if [ "${#missing[@]}" -gt 0 ]; then
-        warn "$PLEBIAN_OS_SESSION_ENV records no value for ${#missing[@]} key(s) this run must otherwise default: ${missing[*]}"
+        warn "${configs[*]} records no value for ${#missing[@]} key(s) this run must otherwise default: ${missing[*]}"
         warn "this run will use its built-in defaults for them; select the release closure again to restore the pins"
     fi
 }
