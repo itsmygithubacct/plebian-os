@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Restore 12-hour AM/PM time in the desktop taskbar, calendar popup, and Date/Time panel; align the built-in Settings clock default.
+
 - Integrate the reviewed Needle app-request grammar and baseline log reader, and add `kilix help-search` for local documentation lookup. Keep existing model selections.
 - kilix-needle `083b9ee` (kilix-content `5e1ed4e`, Kilix `abfc80f`, Kilix 95 `34d3dd0`): the apps job gates on a fresh blind held-out set of 146 requests, and its tuned model apps-qat-3 passed it at 93/146 against the base model's 75/146, with no unsafe action.
 
