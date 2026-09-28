@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Run GUI apps and browser links inside panes with a supervised private Openbox. Wait for Openbox startup before launching the app; keep dialogs at their own size and restore focus after closing them. Terminal desktop entries open shell panes. Escape cancels an X11 drag, and dropping immediately releases its preview and pointer grab.
+
 - Record the accepted voice-compliance carrier, receipt and licensing source pins in ISO build metadata. Preserve the portable carrier path and verify every release-manifest value against generated metadata.
 
 - Pair Kilix 95 CI with the final RC2 clock/chrome host before test-image construction; all 72 provider test files pass.
