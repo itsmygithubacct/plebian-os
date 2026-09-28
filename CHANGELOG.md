@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Bashed Earth gains a Neural opponent (kilix-games `53ccef8`, kilix-content `ea18a98`, Kilix `c1ce074`, Kilix 95 `67b2402`): a trained network picks weapon, angle and power without searching trajectories and won 1,873 of 2,000 held-out duels against the five classic personalities. Player 1 can be set to Neural to watch it play, and the game's tests no longer write the player's options file.
+
 - Record the accepted voice-compliance carrier, receipt and licensing source pins in ISO build metadata. Preserve the portable carrier path and verify every release-manifest value against generated metadata.
 
 - Pair Kilix 95 CI with the final RC2 clock/chrome host before test-image construction; all 72 provider test files pass.
