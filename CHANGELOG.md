@@ -7,6 +7,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 ## [0.2.2] — 2026-09-23
 
 - Integrate the reviewed Needle app-request grammar and baseline log reader, and add `kilix help-search` for local documentation lookup. Keep existing model selections.
+- kilix-needle `083b9ee` (kilix-content `5e1ed4e`, Kilix `abfc80f`, Kilix 95 `34d3dd0`): the apps job gates on a fresh blind held-out set of 146 requests, and its tuned model apps-qat-3 passed it at 93/146 against the base model's 75/146, with no unsafe action.
 
 - Run GUI apps and browser links inside panes with a supervised private Openbox. Wait for Openbox startup before launching the app; keep dialogs at their own size and restore focus after closing them. Terminal desktop entries open shell panes. Escape cancels an X11 drag, and dropping immediately releases its preview and pointer grab.
 - Bashed Earth gains a Neural opponent (kilix-games `53ccef8`, kilix-content `ea18a98`, Kilix `c1ce074`, Kilix 95 `67b2402`): a trained network picks weapon, angle and power without searching trajectories and won 1,873 of 2,000 held-out duels against the five classic personalities. Player 1 can be set to Neural to watch it play, and the game's tests no longer write the player's options file.
