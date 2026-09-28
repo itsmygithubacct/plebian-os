@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Complete lazy speech setup for Piper Kristin, Pocket Alba and all three catalogued Qwen TTS models, including interactive VoiceDesign.
+
 - Restore 12-hour AM/PM time in the desktop taskbar, calendar popup, and Date/Time panel; align the built-in Settings clock default.
 
 - Integrate the reviewed Needle app-request grammar and baseline log reader, and add `kilix help-search` for local documentation lookup. Keep existing model selections.
