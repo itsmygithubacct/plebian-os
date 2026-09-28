@@ -12,6 +12,15 @@ UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 
 
 class LatestReleaseUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.config_temp = tempfile.TemporaryDirectory(prefix="latest-release-config-")
+        self.addCleanup(self.config_temp.cleanup)
+        base = Path(self.config_temp.name)
+        self.update = base / "update.sh"
+        self.update.write_text(UPDATE.read_text().replace(
+            "/etc/pleb/session.env", str(base / "session.env")).replace(
+            "/etc/pleb/closure.env", str(base / "closure.env")))
+
     def _repo_with_tags(self, base: Path) -> Path:
         repo = base / "releases"
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
@@ -41,6 +50,8 @@ class LatestReleaseUpdateTests(unittest.TestCase):
         return repo
 
     def _source_and_run(self, command: str, repo: Path, update=UPDATE) -> subprocess.CompletedProcess:
+        if update == UPDATE:
+            update = self.update
         env = os.environ.copy()
         env.update(
             {
@@ -132,7 +143,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
                     "PLEBIAN_OS_INSTALLED_UPDATER": str(updater)})
         env.update(dict(overrides))
         return subprocess.run(["bash", "-c", 'update_path=$1; set --; source "$update_path"; local_candidate_matches_selected_closure 0.2.2',
-                               "bash", str(UPDATE)], env=env, text=True, capture_output=True)
+                               "bash", str(self.update)], env=env, text=True, capture_output=True)
 
     def test_unpublished_annotated_candidate_is_accepted_without_head_check(self):
         with tempfile.TemporaryDirectory() as td:
@@ -183,7 +194,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
                 'restart_arg=--restart; select_latest_release_if_needed'
             )
             result = subprocess.run(
-                ["bash", "-c", command, "bash", str(UPDATE)], env=env,
+                ["bash", "-c", command, "bash", str(self.update)], env=env,
                 text=True, capture_output=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -192,7 +203,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             refused = subprocess.run(
                 ["bash", "-c", command.replace(
                     "restart_arg=--restart", "restart_arg=--no-restart"
-                ), "bash", str(UPDATE)], env=env,
+                ), "bash", str(self.update)], env=env,
                 text=True, capture_output=True, check=False,
             )
             self.assertNotEqual(refused.returncode, 0)
@@ -236,7 +247,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
                 'update_os_checkout'
             )
             result = subprocess.run(
-                ["bash", "-c", command, "bash", str(UPDATE)], env=env,
+                ["bash", "-c", command, "bash", str(self.update)], env=env,
                 text=True, capture_output=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -302,7 +313,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
                 'checkout_pinned_ref "$component" "$ref" pleb'
             )
             result = subprocess.run(
-                ["bash", "-c", command, "bash", str(UPDATE), str(component), remote_commit],
+                ["bash", "-c", command, "bash", str(self.update), str(component), remote_commit],
                 env=env, text=True, capture_output=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)

@@ -45,7 +45,14 @@ class NativeOuterTests(unittest.TestCase):
                'PLEBIAN_OS_RELEASE_MODE': '1', 'OUTER': str(self.outer),
                'EVENTS': str(self.events), 'ARCHIVE_INPUT': str(self.archive),
                'NATIVE_FAIL': fail, **(VALUES if values is None else values)}
-        prelude = 'set -euo pipefail\nsource ' + shlex.quote(str(ROOT / source)) + '\n'
+        source_path = ROOT / source
+        if source.endswith('plebian-os-update.sh'):
+            isolated = self.base / 'update.sh'
+            isolated.write_text(source_path.read_text().replace(
+                '/etc/pleb/session.env', str(self.base / 'session.env')).replace(
+                '/etc/pleb/closure.env', str(self.base / 'closure.env')))
+            source_path = isolated
+        prelude = 'set -euo pipefail\nsource ' + shlex.quote(str(source_path)) + '\n'
         prelude += r'''
 native_download_archive() { cp -- "$ARCHIVE_INPUT" "$1"; }
 native_runtime_command() {
