@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Bashed Earth leaves through menus only (a pause menu and a match-over menu; Q no longer quits) and keeps a watched game playing between matches; Joustix starts the next game by itself when a computer rider loses (kilix-games `668faac`, kilix-content `14f9f61`, Kilix `f806654`, Kilix 95 `f34492d`; five rounds of independent review, the last SHIP).
+
 - Complete lazy speech setup for Piper Kristin, Pocket Alba and all three catalogued Qwen TTS models, including interactive VoiceDesign.
 
 - Restore 12-hour AM/PM time in the desktop taskbar, calendar popup, and Date/Time panel; align the built-in Settings clock default.
