@@ -106,6 +106,10 @@ class VoiceAcceptanceTests(unittest.TestCase):
                     "vibevoice-asr-bitnet", "vibevoice", True,
                     1705771590, "1.6 GiB",
                 ),
+                (
+                    "whisper-small-en", "whisper", True,
+                    486100128, "463.6 MiB",
+                ),
             ):
                 records.append({
                     "id": model,

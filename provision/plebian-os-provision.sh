@@ -4928,18 +4928,20 @@ run_voice_tool() {
 # `voice/lib/current` is the Vosk shared object — code, not weights, but at the
 # pinned KILIX_VOICE_REF it is fetched only on the same all-or-nothing leg that
 # fetches the model, so its arrival means that leg ran. `lgraph-en-us` and
-# `vibevoice-asr-bitnet` are the other carrier models' directories, and
-# `desktop-apps/assets/<id>` is where `kilix models install` puts each of the
-# three carrier models, so weights arriving by any install route are counted.
+# `vibevoice-asr-bitnet` and `whisper-small-en` are the other carrier models'
+# directories, and `desktop-apps/assets/<id>` is where `kilix models install`
+# puts each carrier model, so weights arriving by any install route are counted.
 voice_dictation_asset_paths() {
     local models_root="$KILIX_DATA_HOME/voice/models" entry
     local library_root="$KILIX_DATA_HOME/voice/lib/current"
     local assets_root="$KILIX_DATA_HOME/desktop-apps/assets"
     {
         for entry in "$models_root/lgraph-en-us" "$models_root/vibevoice-asr-bitnet" \
+                "$models_root/whisper-small-en" \
                 "$assets_root/vosk-model-small-en-us-0.15" \
                 "$assets_root/vosk-model-en-us-0.22-lgraph" \
-                "$assets_root/vibevoice-asr-bitnet"; do
+                "$assets_root/vibevoice-asr-bitnet" \
+                "$assets_root/faster-whisper-small-en"; do
             [ -e "$entry" ] || [ -L "$entry" ] || continue
             printf '%s\n' "$entry"
         done
@@ -5062,6 +5064,10 @@ expected = [
             "vibeasr-lm-i2_s-embed-q6_k.gguf",
             "vibeasr-vae-encoder-i8_s.gguf",
         ),
+    ),
+    (
+        "whisper-small-en", "whisper", True, 486100128, "463.6 MiB",
+        ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"),
     ),
 ]
 if type(document) is not dict:

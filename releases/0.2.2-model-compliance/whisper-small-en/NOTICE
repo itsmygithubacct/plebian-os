@@ -1,0 +1,13 @@
+Plebian-OS 0.2.2 conveyance notice for whisper-small-en.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS does not distribute these model bytes.
+
+Artifact: faster-whisper-small-en (provider kilix-whisper-stt, version d1d751a5f8271d482d14ca55d9e2deeebbae577f)
+Source: https://huggingface.co/Systran/faster-whisper-small.en/resolve/d1d751a5f8271d482d14ca55d9e2deeebbae577f/README.md
+Upstream host: huggingface.co
+Download size: 486100128 bytes
+Installed member manifest digest: f2b132c87876730b807411fd2f3d46bf18a8b0a31b27bf7353ca8ef5ebc90059
+Licence(s): mit
+Licensor(s): OpenAI; SYSTRAN
+Licence, advisory and attribution texts: licence-texts/b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d.txt, licence-texts/0e9d0d19fa02b8f246d9902d93a2b0b0fac7cb07a518257ffa7d102d1c37c638.txt, licence-texts/94536c807e7ad8257102a5db0496db0bf1753fc8b32cba9188e337d9796db7d0.txt
+Owner determination: determinations/whisper-small-en/OWNER-DETERMINATION-whisper-small-en.md

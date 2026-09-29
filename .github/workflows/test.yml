@@ -38,7 +38,7 @@ jobs:
           # The model compliance carrier's producing interfaces
           # (tests/test_model_compliance_carrier.py AC-1, AC-3, AC-4).
           git -C ../kilix-content fetch -q --depth 1 \
-            https://github.com/itsmygithubacct/kilix-content.git "$(pin PLEBIAN_OS_NATIVE_CONTENT_REF)"
+            https://github.com/itsmygithubacct/kilix-content.git "$(pin PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF)"
           fetch ../kilix-license https://github.com/itsmygithubacct/kilix-license.git "$(pin KILIX_LICENSE_REF)"
           # AC-8 reads the speech licence gate in the kilix-bonsai KILIX_REF installs.
           bonsai_ref="$(git -C ../kilix show "$kilix_ref:scripts/install-kilix-bonsai.sh" \

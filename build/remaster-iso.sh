@@ -137,6 +137,7 @@ load_release_manifest() {
     PLEBIAN_OS_NATIVE_DEB_BYTES=
     PLEBIAN_OS_NATIVE_SOURCE_REF=
     PLEBIAN_OS_NATIVE_CONTENT_REF=
+    PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=
     declare -A seen=()
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in ''|\#*) continue ;; esac
@@ -396,7 +397,7 @@ validate_voice_compliance_carrier() {
         || { carrier_refuse "the carrier binds a different speech library or kilix-voice ref"; return 1; }
     # The interfaces that produced the records are the release's own pins.
     is_hex_len "${cv[interface_content_ref]:-}" 40 && is_hex_len "${cv[interface_licence_ref]:-}" 40 \
-        && [ "${cv[interface_content_ref]}" = "${PLEBIAN_OS_NATIVE_CONTENT_REF:-}" ] \
+        && [ "${cv[interface_content_ref]}" = "${PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF:-}" ] \
         && [ "${cv[interface_licence_ref]}" = "${KILIX_LICENSE_REF:-}" ] \
         || { carrier_refuse "the carrier's producing interfaces are not the release's pins"; return 1; }
     return 0
@@ -1154,6 +1155,7 @@ write_build_info() {
         manifest_kv KILIX_LICENSE_REPO "${KILIX_LICENSE_REPO:-}"
         manifest_kv KILIX_LICENSE_BRANCH "${KILIX_LICENSE_BRANCH:-}"
         manifest_kv KILIX_LICENSE_REF "${KILIX_LICENSE_REF:-}"
+        manifest_kv PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF "${PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF:-}"
         manifest_kv PLEBIAN_OS_INSTALL_WAYDROID "${PLEBIAN_OS_INSTALL_WAYDROID:-0}"
         manifest_kv PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 "${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}"
         manifest_kv PLEBIAN_OS_SSH_ENABLED "${PLEBIAN_OS_SSH_ENABLED:-0}"

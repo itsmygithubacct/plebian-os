@@ -6,7 +6,7 @@ refusal for every input without it (OD-BA). Each acceptance line below is one
 test; AC-11 plants each defect of F100-CARRIER-DESIGN.md §6 and requires the
 validator to refuse it for its own reason.
 
-AC-1, AC-3 and AC-4 read kilix-content at PLEBIAN_OS_NATIVE_CONTENT_REF and
+AC-1, AC-3 and AC-4 read kilix-content at PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF and
 kilix-license at KILIX_LICENSE_REF from sibling checkouts (CI fetches exactly
 those commits), or from PLEBIAN_OS_KILIX_CONTENT_REPO / PLEBIAN_OS_KILIX_LICENSE_REPO.
 A missing checkout is a failure, never a skip: an unprovable binding is worth
@@ -28,6 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_voice_release_contract as voice_contract  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
+# The one speech model whose licence record names its upstream artifact rather
+# than the catalog id; spelled here, not imported from the generator it checks.
+LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
 VERSION = (ROOT / "VERSION").read_text().strip()
 CARRIER = ROOT / "releases" / f"{VERSION}-model-compliance"
 GENERATOR = ROOT / "build" / "generate-model-compliance.py"
@@ -66,7 +69,7 @@ def release_env(carrier: Path = CARRIER, **overrides: str) -> dict[str, str]:
                 "PLEBIAN_OS_INSTALL_VOICE_MODEL", "KILIX_VOICE_REF",
                 "KILIX_VOICE_LIB_VERSION", "KILIX_VOICE_LIB_URL",
                 "KILIX_VOICE_LIB_SHA256", "KILIX_VOICE_MODEL_URL",
-                "KILIX_VOICE_MODEL_SHA256", "PLEBIAN_OS_NATIVE_CONTENT_REF",
+                "KILIX_VOICE_MODEL_SHA256", "PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF",
                 "KILIX_LICENSE_REF", "PLEBIAN_OS_VOICE_CARRIER_SHA256",
                 "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256"):
         env[key] = pins[key]
@@ -239,11 +242,11 @@ class ModelComplianceCarrierTests(unittest.TestCase):
     def pinned_checkouts(self) -> tuple[Path, Path]:
         pins = manifest(f"{VERSION}.env")
         content = repo_holding("PLEBIAN_OS_KILIX_CONTENT_REPO", "kilix-content",
-                               pins["PLEBIAN_OS_NATIVE_CONTENT_REF"])
+                               pins["PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF"])
         license_ = repo_holding("PLEBIAN_OS_KILIX_LICENSE_REPO", "kilix-license",
                                 pins["KILIX_LICENSE_REF"])
         self.assertIsNotNone(content, "no kilix-content checkout holds "
-                             "PLEBIAN_OS_NATIVE_CONTENT_REF; set PLEBIAN_OS_KILIX_CONTENT_REPO")
+                             "PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF; set PLEBIAN_OS_KILIX_CONTENT_REPO")
         self.assertIsNotNone(license_, "no kilix-license checkout holds "
                              "KILIX_LICENSE_REF; set PLEBIAN_OS_KILIX_LICENSE_REPO")
         return content, license_
@@ -309,7 +312,7 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         for model, entry in carrier["models"].items():
             upstream = subprocess.run(
                 ["git", "-C", str(license_), "--no-replace-objects", "show",
-                 f"{ref}:src/kilix_license/data/records/{model}.json"],
+                 f"{ref}:src/kilix_license/data/records/{LICENCE_RECORD_IDS.get(model, model)}.json"],
                 capture_output=True, check=True).stdout
             self.assertEqual((CARRIER / model / "LICENCE-RECORD.json").read_bytes(),
                              upstream, model)
@@ -321,7 +324,7 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         pins = manifest(f"{VERSION}.env")
         catalog = json.loads(subprocess.run(
             ["git", "-C", str(content), "--no-replace-objects", "show",
-             f"{pins['PLEBIAN_OS_NATIVE_CONTENT_REF']}:src/kilix_content/catalog/plebian.json"],
+             f"{pins['PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF']}:src/kilix_content/catalog/plebian.json"],
             capture_output=True, check=True).stdout)
         self.assertEqual(artifact_gaps(catalog, pins), [])
         # D5b: a digest flipped consistently in the carrier and the release pin,
@@ -344,7 +347,7 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             self.assertTrue(artifact_gaps(catalog, forged, root))
 
     def test_carried_records_are_the_ones_the_image_serves(self):
-        # The carrier reads asset records at PLEBIAN_OS_NATIVE_CONTENT_REF; the
+        # The carrier reads asset records at PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF; the
         # image's first-use flow serves KILIX_REF's kilix-content gitlink. A
         # KILIX_REF bump that changed a speech record must fail here.
         pins = manifest(f"{VERSION}.env")

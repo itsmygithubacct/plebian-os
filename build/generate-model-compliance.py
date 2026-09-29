@@ -9,7 +9,7 @@ F100-CARRIER-DESIGN.md §5 in the owner's research records.
 Nothing here is typed by hand. Every value is read from:
   * this repository: `releases/<version>.env` (pins) and the speech-model
     catalog `provision/plebian-os-provision.sh` enforces (the advertised set);
-  * kilix-content at `PLEBIAN_OS_NATIVE_CONTENT_REF`: the `kilix.content.asset/v3`
+  * kilix-content at `PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF`: the `kilix.content.asset/v3`
     records, digested by kilix-content's own `AssetSpec`;
   * kilix-license at `KILIX_LICENSE_REF`: the `kilix.license.record/v1`
     records (digested by kilix-license's own `LicenseRecord`) and the licence
@@ -84,6 +84,16 @@ def read_manifest(version: str) -> dict[str, str]:
             key, value = line.split("=", 1)
             values[key] = value
     return values
+
+
+# Licence records are keyed by the speech catalog id, except where the record
+# names the upstream artifact: whisper-small-en runs the faster-whisper
+# conversion, whose record is faster-whisper-small-en.
+LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
+
+
+def licence_record_id(model: str) -> str:
+    return LICENCE_RECORD_IDS.get(model, model)
 
 
 def advertised_models() -> list[tuple[str, bool]]:
@@ -168,7 +178,7 @@ def notice_text(model: str, entry: dict, determination: str) -> str:
 def build(args) -> dict[str, bytes]:
     version = (ROOT / "VERSION").read_text().strip()
     pins = read_manifest(version)
-    content_ref = pins["PLEBIAN_OS_NATIVE_CONTENT_REF"]
+    content_ref = pins["PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF"]
     license_ref = pins["KILIX_LICENSE_REF"]
     models = advertised_models()
     determinations = {}
@@ -192,7 +202,7 @@ def build(args) -> dict[str, bytes]:
 
         entries = {}
         for model, runnable in models:
-            record = records.by_id(model)
+            record = records.by_id(licence_record_id(model))
             matches = [a for a in assets
                        if any(item.record_digest == record.digest for item in a.licenses)]
             if len(matches) != 1:
@@ -201,7 +211,7 @@ def build(args) -> dict[str, bytes]:
             asset = matches[0]
             mapping = asset.to_mapping()
             source = mapping["source"]
-            record_file = license_catalog.record_path(model, scratch / "license")
+            record_file = license_catalog.record_path(licence_record_id(model), scratch / "license")
             digests = [record.text_sha256] + [
                 component.exception_text_sha256 for component in record.components
                 if getattr(component, "exception_text_sha256", None)]
