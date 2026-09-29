@@ -2107,6 +2107,31 @@ reconcile_release_apt_sources_after_commit() {
     fi
 }
 
+# The running desktop consumes this per-user event once. A later desktop starts
+# with it as its baseline, so old updates are not announced after restarting.
+notify_system_voice_update_complete() {
+    [ "$(id -u)" != 0 ] || return 0
+    python3 - "$KILIX_STATE_DIRECTORY" <<'VOICE_UPDATE_NOTICE'
+import os
+from pathlib import Path
+import tempfile
+import uuid
+import sys
+root = Path(sys.argv[1])
+root.mkdir(parents=True, exist_ok=True, mode=0o700)
+fd, temporary = tempfile.mkstemp(prefix='.system-voice-update-', dir=root)
+try:
+    with os.fdopen(fd, 'w') as stream:
+        stream.write(uuid.uuid4().hex+'\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, root/'system-voice-update-complete')
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+VOICE_UPDATE_NOTICE
+}
+
 restart_session_after_commit() {
     [ "$restart_arg" = --restart ] || return 0
     local -a elevate=()
@@ -4091,6 +4116,9 @@ fi
 log "Plebian-OS stack updated."
 restart_session_after_commit
 if [ "$restart_arg" = --no-restart ]; then
+    if [ "$apt_reconcile_rc" = 0 ]; then
+        notify_system_voice_update_complete || warn "stack updated, but the system voice notice could not be recorded"
+    fi
     log "restart the session to load the changes when ready:  sudo systemctl restart lightdm"
 fi
 exit "$apt_reconcile_rc"

@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- System voice announces stable power-source changes, low local disk space, and successful whole-stack updates that leave the session awaiting restart. Failed updates and automatic restarts do not emit a restart-required notice.
+
 - Enabled system voice says Goodbye before normal machine shutdown, using cached Piper audio and a logind delay inhibitor. Desktop shutdown waits briefly for acknowledgement; desktop restarts and disabling voice stay silent.
 
 - Enabled system voice speaks cached warnings for overheating above 101°C, low/critical battery, physical network link loss, and sustained heavy swapping. Warnings are incident-based with recovery and cooldowns; temperature display preferences are independent.
