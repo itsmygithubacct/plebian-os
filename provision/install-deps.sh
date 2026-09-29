@@ -172,7 +172,7 @@ DEP_GROUPS=(
     # Dictation's library and model are pinned downloads owned by Kilix's
     # installer; unzip is listed in the fetch group above to extract both
     # verified archives.
-    "voice (tts/stt)|espeak-ng mbrola"
+    "voice (tts/stt)|espeak-ng mbrola poppler-utils"
     # mpv is the image's general media player: ffmpeg above is the codec and
     # capture toolchain rather than something a user opens, and kilix-amp
     # covers music only. Video, and anything else a file manager or desktop

@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Kilix 95 Document Reader opens TXT, Markdown and PDF files with passage progress and playback controls. Explicit Kristin opt-in installs the voice before changing the shared read-aloud default. Include poppler-utils for PDF extraction.
+
 - kilix-needle `e66ec13` (kilix-content `e4acba8`, Kilix `e7edfce`, Kilix 95 `8d4bddc`): each request it answers is added to a private local history for improving its grammar and models. It is bounded, never delays or changes a request, keeps no pane names, runtime errors or command lines, and `KILIX_NEEDLE_HISTORY=0` turns it off.
 
 - System voice announces stable power-source changes, low local disk space, and successful whole-stack updates that leave the session awaiting restart. Failed updates and automatic restarts do not emit a restart-required notice.
