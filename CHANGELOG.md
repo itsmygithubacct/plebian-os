@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Install `xdotool` by default on both install paths (preseed and `install-deps.sh`) for scripted X input and window control.
+
 - The instrumented acceptance image keeps the release apt lifecycle. It clears release mode only to allow SSH and unattended install; `PLEBIAN_OS_LIVE_SECURITY_UPDATES=1` still moves the guest to live Debian security sources and enables security upgrades after firstboot, so the live-security-source and security-upgrade checks it always required can pass. Non-release images are unchanged unless they set it.
 
 - Kilix 95 Document Reader opens TXT, Markdown and PDF files with passage progress and playback controls. Explicit Kristin opt-in installs the voice before changing the shared read-aloud default. Include poppler-utils for PDF extraction.

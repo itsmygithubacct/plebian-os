@@ -371,6 +371,12 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(CLIPBOARD_PACKAGES, install_deps_packages())
         self.assertLessEqual(CLIPBOARD_PACKAGES, preseed_packages())
 
+    def test_x_automation_tool_is_on_both_paths(self):
+        # xdotool is a default from 0.2.2 RC2 onward; scripts may rely on it
+        # whichever install route produced the machine.
+        self.assertIn("xdotool", install_deps_packages())
+        self.assertIn("xdotool", preseed_packages())
+
     def test_f115_excluded_engines_are_not_explicit_base_packages(self):
         self.assertTrue(
             F115_EXCLUDED_BASE_PACKAGES.isdisjoint(install_deps_packages())

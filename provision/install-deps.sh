@@ -138,6 +138,9 @@ DEP_GROUPS=(
     # entirely independent here. xclip is not required for that, but it is
     # how anyone diagnoses the next clipboard report.
     "clipboard ownership + inspection|autocutsel xclip"
+    # Scripted X input and window control: agents and pane tooling send keys,
+    # move the pointer and find windows through it on every release image.
+    "X input + window automation|xdotool"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
