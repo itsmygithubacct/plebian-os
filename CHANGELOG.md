@@ -8,6 +8,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 - Offer optional system voice on the first Kilix 95 launch. Enabling it installs Piper Kristin, preloads it on subsequent desktop starts, and speaks a configurable startup greeting (default: hello). Settings can change the message, preload silently, or turn it off.
 
+- Bashed Earth leaves through menus only (a pause menu and a match-over menu; Q no longer quits) and keeps a watched game playing between matches; Joustix starts the next game by itself when a computer rider loses (kilix-games `668faac`, kilix-content `14f9f61`, Kilix `f806654`, Kilix 95 `f34492d`; five rounds of independent review, the last SHIP).
+
 - Complete lazy speech setup for Piper Kristin, Pocket Alba and all three catalogued Qwen TTS models, including interactive VoiceDesign.
 
 - Restore 12-hour AM/PM time in the desktop taskbar, calendar popup, and Date/Time panel; align the built-in Settings clock default.
