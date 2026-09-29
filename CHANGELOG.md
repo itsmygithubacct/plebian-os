@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Offer optional system voice on the first Kilix 95 launch. Enabling it installs Piper Kristin, preloads it on subsequent desktop starts, and speaks a configurable startup greeting (default: hello). Settings can change the message, preload silently, or turn it off.
+
 - Complete lazy speech setup for Piper Kristin, Pocket Alba and all three catalogued Qwen TTS models, including interactive VoiceDesign.
 
 - Restore 12-hour AM/PM time in the desktop taskbar, calendar popup, and Date/Time panel; align the built-in Settings clock default.
