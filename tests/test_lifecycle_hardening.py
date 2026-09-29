@@ -1038,6 +1038,12 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
                 'printf "rc=%s\\n" "$rc"\n'
             )
             elevated = [] if os.geteuid() == 0 else [f"sudo {helper} --reconcile-apt-sources"]
+            live = root / "live.env"
+            live.write_text('PLEBIAN_OS_LIVE_SECURITY_UPDATES="1"\n')
+            pinned = root / "pinned.env"
+            pinned.write_text('PLEBIAN_OS_LIVE_SECURITY_UPDATES="1"\n'
+                              'PLEBIAN_OS_LIVE_SECURITY_UPDATES="0"\n')
+            absent = str(root / "absent.env")
             cases = (
                 ({"MODE": "1", "HELPER": str(helper)}, "rc=0",
                  elevated + ["helper --reconcile-apt-sources"], None),
@@ -1047,10 +1053,18 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
                 ({"MODE": "1", "HELPER": str(root / "missing")}, "rc=1", [],
                  "is missing or unsafe"),
                 ({"MODE": "0", "HELPER": str(helper)}, "rc=0", [], None),
+                # A non-release image installed with the release apt lifecycle.
+                ({"MODE": "0", "HELPER": str(helper),
+                  "PLEBIAN_OS_FIRSTBOOT_ENV": str(live)}, "rc=0",
+                 elevated + ["helper --reconcile-apt-sources"], None),
+                # Last line wins, as in the provisioner's reader.
+                ({"MODE": "0", "HELPER": str(helper),
+                  "PLEBIAN_OS_FIRSTBOOT_ENV": str(pinned)}, "rc=0", [], None),
             )
             for extra, status, expected_calls, warning in cases:
                 with self.subTest(**extra):
                     calls.unlink(missing_ok=True)
+                    extra = {"PLEBIAN_OS_FIRSTBOOT_ENV": absent, **extra}
                     result = self._run_updater_library(root, body, bindir, extra)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn(status, result.stdout)

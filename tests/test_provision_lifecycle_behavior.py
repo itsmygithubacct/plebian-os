@@ -695,6 +695,48 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertEqual(self._tree(etc), tree)
             self.assertFalse((base / "apt.log").exists())
 
+    def test_live_security_updates_selects_the_release_lifecycle_outside_release_mode(self):
+        # The instrumented acceptance image clears release mode for SSH and
+        # unattended install, yet must still install the release apt policy
+        # its provisioning checks require.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            result = self._run_library(
+                self._release_body(base)
+                + "PLEBIAN_OS_RELEASE_MODE=0\nLIVE_SECURITY_UPDATES=1\n"
+                "finish_release_apt_install\n",
+                env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "URIs: https://security.debian.org/debian-security\n",
+                (sources / "plebian-os-debian.sources").read_text(),
+            )
+            self.assertTrue(
+                (etc / "apt" / "apt.conf.d" / "52plebian-os-security-upgrades").is_file()
+            )
+            self.assertEqual(self._apt_updates(base), 1)
+
+    def test_live_security_updates_keeps_a_rerun_on_live_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            result = self._run_library(
+                self._release_body(base)
+                + "PLEBIAN_OS_RELEASE_MODE=0\nLIVE_SECURITY_UPDATES=1\n"
+                "configure_apt_snapshot\n",
+                env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((sources / "plebian-os-debian.sources").exists())
+            self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
+            self.assertTrue(
+                (etc / "apt" / "apt.conf.d" / "52plebian-os-security-upgrades").is_file()
+            )
+
     def test_split_closure_enables_post_update_live_security_sources(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -2543,12 +2585,13 @@ class PersistedPinTests(unittest.TestCase):
                 'PLEBIAN_OS_INSTALL_VOICE_MODEL="1"\n'
                 'PLEBIAN_OS_APT_SNAPSHOT="20260727T000000Z"\n'
                 'PLEBIAN_OS_USER="pleb"\n'
+                'PLEBIAN_OS_LIVE_SECURITY_UPDATES="1"\n'
             )
             report = (
                 'printf "KIOSK=%s NOPASSWD_SUDO=%s DESKTOP=%s INSTALL_UV=%s '
-                'VOICE=%s APT=%s USER=%s\\n" "$KIOSK" "$NOPASSWD_SUDO" '
+                'VOICE=%s APT=%s USER=%s LIVE=%s\\n" "$KIOSK" "$NOPASSWD_SUDO" '
                 '"$DESKTOP" "$INSTALL_UV" "$INSTALL_VOICE_MODEL" '
-                '"$PLEBIAN_OS_APT_SNAPSHOT" "$TARGET_USER"\n'
+                '"$PLEBIAN_OS_APT_SNAPSHOT" "$TARGET_USER" "$LIVE_SECURITY_UPDATES"\n'
             )
             result = self._run(
                 Path(td) / "missing.env", "restore_persisted_policy\n" + report,
@@ -2556,7 +2599,7 @@ class PersistedPinTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(
                 "KIOSK=1 NOPASSWD_SUDO=1 DESKTOP=0 INSTALL_UV=1 VOICE=1 "
-                "APT=20260727T000000Z USER=pleb", result.stdout)
+                "APT=20260727T000000Z USER=pleb LIVE=1", result.stdout)
 
             # An explicit choice still wins — that is how policy is changed.
             explicit = self._run(

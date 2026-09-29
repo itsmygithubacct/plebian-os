@@ -366,7 +366,11 @@ together.
    local candidate tag all identify the same clean commit. Only after proving
    that identity does it create a clearly non-publishable SSH/autoboot
    derivative while retaining the exact release-manifest media, snapshot,
-   toolchain, component, voice, and provider pins. VM, ISO, and report names
+   toolchain, component, voice, and provider pins. Clearing release mode for
+   that derivative does not clear the release apt policy:
+   `PLEBIAN_OS_LIVE_SECURITY_UPDATES=1` makes the guest move from the install
+   snapshot to live Debian security sources exactly as a release install does,
+   so the checks below test the policy users receive. VM, ISO, and report names
    include the release and candidate commit; an older candidate or unrelated
    `plebian-acceptance` VM is never deleted implicitly. Do not use `--replace`
    for an ordinary run. If a same-candidate rerun must replace evidence, inspect

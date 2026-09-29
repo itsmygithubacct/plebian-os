@@ -279,7 +279,8 @@ class ReleaseVersioningTests(unittest.TestCase):
         r = _read("build", "remaster-iso.sh")
         for key in ("PLEBIAN_OS_VERSION", "PLEBIAN_OS_KIOSK", "PLEBIAN_OS_USER",
                     "PLEBIAN_OS_NOPASSWD_SUDO", "PLEBIAN_OS_INSTALL_UV",
-                    "PLEBIAN_OS_APT_SNAPSHOT", "PLEBIAN_OS_REPO", "PLEBIAN_OS_REF"):
+                    "PLEBIAN_OS_APT_SNAPSHOT", "PLEBIAN_OS_REPO", "PLEBIAN_OS_REF",
+                    "PLEBIAN_OS_LIVE_SECURITY_UPDATES"):
             self.assertIn(key, r)
 
     def test_release_installs_and_reasserts_public_version_marker(self):
@@ -564,6 +565,9 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn('status --porcelain --untracked-files=normal', source)
         self.assertIn('PLEBIAN_OS_REF="$candidate_commit"', source)
         self.assertIn('PLEBIAN_OS_RELEASE_MODE=0', source)
+        # Clearing release mode keeps the release apt policy it verifies.
+        self.assertIn('PLEBIAN_OS_LIVE_SECURITY_UPDATES=1', source)
+        self.assertIn('export PLEBIAN_OS_LIVE_SECURITY_UPDATES', source)
         self.assertIn('PLEBIAN_OS_RELEASE=', source)
         self.assertIn('unset IMAGE_PASSWORD RANDOM_PASSWORD', source)
         self.assertIn('--generate-one-time-password', source)

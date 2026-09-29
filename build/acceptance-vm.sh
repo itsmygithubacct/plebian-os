@@ -119,6 +119,10 @@ export PLEBIAN_OS_ACCEPTANCE_MANIFEST_SHA256="$manifest_sha256"
 PLEBIAN_OS_REF="$candidate_commit"
 PLEBIAN_OS_RELEASE=
 PLEBIAN_OS_RELEASE_MODE=0
+# Clearing release mode must not also clear the release apt policy: the guest
+# still moves from the install snapshot to live Debian security sources and
+# enables security upgrades, and the provisioning checks require both.
+PLEBIAN_OS_LIVE_SECURITY_UPDATES=1
 # This derivative enables SSH for its waiter. Its identity is explicit and its
 # one-time password exists only inside the harness; the harness expires it once
 # acceptance completes. The publishable ISO remains interactive and has neither.
@@ -126,6 +130,7 @@ unset IMAGE_PASSWORD RANDOM_PASSWORD
 ACCEPTANCE_USER="${PLEBIAN_OS_ACCEPTANCE_USER:-releaseci}"
 ACCEPTANCE_HOSTNAME="${PLEBIAN_OS_ACCEPTANCE_HOSTNAME:-plebian-ci}"
 export PLEBIAN_OS_REF PLEBIAN_OS_RELEASE PLEBIAN_OS_RELEASE_MODE
+export PLEBIAN_OS_LIVE_SECURITY_UPDATES
 echo "acceptance-vm: candidate $PLEBIAN_OS_ACCEPTANCE_RELEASE @ $candidate_commit"
 echo "acceptance-vm: manifest sha256 $manifest_sha256"
 

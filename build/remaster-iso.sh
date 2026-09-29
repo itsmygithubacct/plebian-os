@@ -880,6 +880,13 @@ done
     echo "release artifacts refuse PLEBIAN_OS_PRESEED (automated identity profile)" >&2
     exit 1
 }
+# Release installs always move to live Debian security sources once their
+# snapshot closure is recorded. This asks a non-release image, such as the
+# instrumented acceptance derivative, to install that same apt policy.
+case "${PLEBIAN_OS_LIVE_SECURITY_UPDATES:-0}" in 0|1) ;; *)
+    echo "invalid PLEBIAN_OS_LIVE_SECURITY_UPDATES=${PLEBIAN_OS_LIVE_SECURITY_UPDATES} (expected 0/1)" >&2
+    exit 1 ;;
+esac
 
 # Resolve the future guest's source/data layout independently from this build
 # host's cache and scratch paths. Normal media has no identity yet, so it emits
@@ -1137,6 +1144,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_IDENTITY_PROFILE "$PLEBIAN_OS_IDENTITY_PROFILE"
         manifest_kv PLEBIAN_OS_USER "${PLEBIAN_OS_USER:-}"
         manifest_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
+        manifest_kv PLEBIAN_OS_LIVE_SECURITY_UPDATES "${PLEBIAN_OS_LIVE_SECURITY_UPDATES:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
         manifest_kv PLEBIAN_OS_INSTALL_VOICE_MODEL "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
         # Record the portable manifest path, not the validator's host-local path.
@@ -1266,6 +1274,7 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_IDENTITY_PROFILE "$PLEBIAN_OS_IDENTITY_PROFILE"
         env_kv PLEBIAN_OS_USER "${PLEBIAN_OS_USER:-}"
         env_kv PLEBIAN_OS_NOPASSWD_SUDO "${PLEBIAN_OS_NOPASSWD_SUDO:-0}"
+        env_kv PLEBIAN_OS_LIVE_SECURITY_UPDATES "${PLEBIAN_OS_LIVE_SECURITY_UPDATES:-0}"
         env_kv PLEBIAN_OS_INSTALL_UV "${PLEBIAN_OS_INSTALL_UV:-0}"
         env_kv PLEBIAN_OS_INSTALL_VOICE_MODEL "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}"
         env_kv PLEBIAN_OS_INSTALL_WAYDROID "${PLEBIAN_OS_INSTALL_WAYDROID:-0}"

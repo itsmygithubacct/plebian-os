@@ -1687,6 +1687,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         "PLEBIAN_OS_COMMIT": expected_os_commit,
         "PLEBIAN_OS_DIRTY": "0",
         "PLEBIAN_OS_RELEASE_MODE": os.environ.get("PLEBIAN_OS_RELEASE_MODE", "0"),
+        "PLEBIAN_OS_LIVE_SECURITY_UPDATES": os.environ.get(
+            "PLEBIAN_OS_LIVE_SECURITY_UPDATES", "0"),
         "PLEBIAN_OS_NETINST_SHA256": os.environ.get("PLEBIAN_OS_NETINST_SHA256", ""),
         "PLEBIAN_OS_APT_SNAPSHOT": os.environ.get("PLEBIAN_OS_APT_SNAPSHOT", ""),
         "PLEBIAN_OS_REF": os.environ.get("PLEBIAN_OS_REF", ""),
@@ -2033,6 +2035,7 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "PLEBIAN_OS_VERSION",
         "PLEBIAN_OS_RELEASE",
         "PLEBIAN_OS_RELEASE_MODE",
+        "PLEBIAN_OS_LIVE_SECURITY_UPDATES",
         "PLEBIAN_OS_REF",
         "PLEB_REF",
         "KILIX_REF",

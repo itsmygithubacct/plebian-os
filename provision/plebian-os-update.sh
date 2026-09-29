@@ -2091,8 +2091,21 @@ test_fail_after_boundary() {
 # Once the stack commits, the just-deployed provisioner moves a release machine
 # from the Debian install snapshot to live Debian security sources. The stack
 # stays committed either way; a failure is reported and the next update retries.
+# A non-release image can ask for the release apt lifecycle at install time;
+# that choice is install policy in /etc/default/plebian-os, never session.env.
+# Parsed as the provisioner's read_firstboot_env_value does: last line wins.
+release_apt_lifecycle_selected() {
+    local value
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] && return 0
+    value="$(sed -n 's/^[[:space:]]*PLEBIAN_OS_LIVE_SECURITY_UPDATES=//p' \
+        "${PLEBIAN_OS_FIRSTBOOT_ENV:-/etc/default/plebian-os}" 2>/dev/null | tail -1)" || value=""
+    value="${value%\"}"; value="${value#\"}"
+    value="${value%\'}"; value="${value#\'}"
+    [ "$value" = 1 ]
+}
+
 reconcile_release_apt_sources_after_commit() {
-    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    release_apt_lifecycle_selected || return 0
     local helper="$PROVISION_HELPER_DST"
     local -a elevate=()
     [ "$(id -u)" = 0 ] || elevate=(sudo)

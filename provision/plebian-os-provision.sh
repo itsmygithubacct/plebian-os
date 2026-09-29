@@ -420,6 +420,13 @@ INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
 # Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
 # shellcheck disable=SC2034
 INSTALL_UV_EXPLICIT="${PLEBIAN_OS_INSTALL_UV:+1}"
+# Release mode always implies this apt lifecycle. A non-release image, such as
+# the instrumented acceptance derivative, opts into the same one here so the
+# installed security policy it verifies is the one a release installs.
+LIVE_SECURITY_UPDATES="${PLEBIAN_OS_LIVE_SECURITY_UPDATES:-0}"
+# Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
+# shellcheck disable=SC2034
+LIVE_SECURITY_UPDATES_EXPLICIT="${PLEBIAN_OS_LIVE_SECURITY_UPDATES:+1}"
 UV_VERSION_PIN="${PLEBIAN_OS_UV_VERSION:-}"
 UV_INSTALLER_SHA256="${PLEBIAN_OS_UV_INSTALLER_SHA256:-}"
 UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
@@ -705,6 +712,7 @@ PERSISTED_POLICY=(
     "PLEBIAN_OS_INSTALL_VOICE_MODEL" "INSTALL_VOICE_MODEL"   '^[01]$'
     "PLEBIAN_OS_INSTALL_WAYDROID"   "INSTALL_WAYDROID"      '^[01]$'
     "PLEBIAN_OS_APT_SNAPSHOT"       "PLEBIAN_OS_APT_SNAPSHOT" '^[0-9]{8}(T[0-9]{6}Z)?$'
+    "PLEBIAN_OS_LIVE_SECURITY_UPDATES" "LIVE_SECURITY_UPDATES" '^[01]$'
 )
 
 read_firstboot_env_value() {
@@ -4021,9 +4029,10 @@ EOF
 # Release machines resolve their first-boot package closure from a
 # snapshot.debian.org timestamp so it is reproducible, then track live Debian
 # once that closure is recorded (see finish_release_apt_install): the timestamp
-# is install provenance, not a lifetime pin. A non-release timestamp stays a pin,
-# and turning the knob back off restores live sources instead of leaving a
-# machine stranded on the snapshot.
+# is install provenance, not a lifetime pin. A non-release timestamp stays a pin
+# unless PLEBIAN_OS_LIVE_SECURITY_UPDATES=1 asks for the release lifecycle, and
+# turning the knob back off restores live sources instead of leaving a machine
+# stranded on the snapshot.
 configure_apt_snapshot() {
     _with_apt_sources_lock _configure_apt_snapshot
 }
@@ -4044,7 +4053,7 @@ _configure_apt_snapshot() {
     local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
     [[ "$ts" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] \
         || die "invalid PLEBIAN_OS_APT_SNAPSHOT=$ts (expected YYYYMMDD or YYYYMMDDTHHMMSSZ)"
-    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] && [ -e "$APT_INSTALL_RECORD" ]; then
+    if release_apt_lifecycle && [ -e "$APT_INSTALL_RECORD" ]; then
         APT_PROVENANCE_PHASE=lifetime
         log "release install closure already recorded; keeping Debian sources live (install snapshot $ts is provenance, not a pin)"
         # The security-only policy must already be in place when live sources
@@ -4179,12 +4188,17 @@ EOF
     [ "$signal_rc" = 0 ] || exit "$signal_rc"
 }
 
+# Release mode, or a non-release image that asked for the release apt lifecycle.
+release_apt_lifecycle() {
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || [ "$LIVE_SECURITY_UPDATES" = 1 ]
+}
+
 # Called once a release run has committed: the install closure it resolved from
 # the snapshot is recorded, so apt moves to live Debian and security updates
 # start arriving. A failure is fatal at first boot, whose retry converges in the
 # lifetime phase, and the updater reports it after its own commit.
 finish_release_apt_install() {
-    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    release_apt_lifecycle || return 0
     log "install closure committed; moving apt to live Debian sources so security updates arrive"
     install_security_upgrade_policy
     _with_apt_sources_lock restore_live_apt_sources
@@ -5394,7 +5408,7 @@ build_kilix_fork() {
 # machine's, never the caller's: sudo resets the environment, and the closure
 # was restored from session.env before this runs.
 reconcile_apt_sources_and_exit() {
-    if [ "$PLEBIAN_OS_RELEASE_MODE" != 1 ]; then
+    if ! release_apt_lifecycle; then
         log "not a release closure; apt sources are left as configured"
         exit 0
     fi
@@ -5444,6 +5458,10 @@ restore_persisted_policy
 case "$INSTALL_WAYDROID" in
     0|1) ;;
     *) die "invalid PLEBIAN_OS_INSTALL_WAYDROID=$INSTALL_WAYDROID (expected 0/1)" ;;
+esac
+case "$LIVE_SECURITY_UPDATES" in
+    0|1) ;;
+    *) die "invalid PLEBIAN_OS_LIVE_SECURITY_UPDATES=$LIVE_SECURITY_UPDATES (expected 0/1)" ;;
 esac
 if [ -n "$WAYDROID_CLOSURE_SHA256" ] \
         && ! [[ "$WAYDROID_CLOSURE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]]; then
