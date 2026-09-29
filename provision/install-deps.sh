@@ -217,7 +217,7 @@ DEP_GROUPS=(
     # one machine, and the libraries cannot be dropped while the portal needs
     # them. libpipewire-0.3-dev arrives through libfluidsynth-dev in the build
     # toolchain, for the same reason.
-    "desktop notifications + portal|dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
+    "desktop notifications + portal|python3-dbus python3-gi dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     # F100's sandbox must not depend on portal/systemd dependency accidents.
     # These are the minimum F118-S0 identities; newer Debian security builds are accepted.
     "F100 sandbox runtime|bubblewrap=0.11.0-2+deb13u1 libseccomp2=2.6.0-2"

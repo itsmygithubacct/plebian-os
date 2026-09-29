@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Enabled system voice says Goodbye before normal machine shutdown, using cached Piper audio and a logind delay inhibitor. Desktop shutdown waits briefly for acknowledgement; desktop restarts and disabling voice stay silent.
+
 - Enabled system voice speaks cached warnings for overheating above 101°C, low/critical battery, physical network link loss, and sustained heavy swapping. Warnings are incident-based with recovery and cooldowns; temperature display preferences are independent.
 
 - kilix-needle `56813ce` (kilix-content `e1c16cd`, Kilix `316d49c`, Kilix 95 `e1de5b5`): the apps job loads no model. The request's own reading proposes every call it supports, and the same checks admit them, in the order the request asks. It scores 111/146 on held-out v4, against 93/146 for the tuned model, with no unsafe action, and answers in tens of milliseconds.
