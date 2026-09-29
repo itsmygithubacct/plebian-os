@@ -6,6 +6,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Harden Avatar-owned speech (kilix-voice `4260f77`, Avatar `9021e60`, Kilix `4717e15`): admission stays atomic without holding the voice daemon lock through engine preparation; turns report `superseded` and `expired`, carry the daemon instance, and show the daemon's reason in Avatar; `kilix-stt --recommend` and the settings **n** key return.
 - Add the pinned Avatar conversation launcher, private Codex sign-in/key setup, persistent model defaults, and owned speech/dictation runtime.
 - kilix-needle `67d17e2` (kilix-content `091982f`, Kilix `4f11836`, Kilix 95 `a8b2853`) adds read-only files and system jobs and exact apps controls for audio, music, voice and text size. It refuses pane requests that give a time or a condition, and adds maximize, rename-pane, swap and move-tab actions to the panes model's schema.
 
