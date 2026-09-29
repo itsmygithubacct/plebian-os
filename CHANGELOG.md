@@ -6,6 +6,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- kilix-needle `79b9387` (kilix-content `b67efa8`, Kilix `94f58da`, Kilix 95 `a84d989`): a tab rename needs a rename in the clause that holds the name, typed commands reach plain `sh` panes, pane ids name panes, exact pane commands are read without a model and still checked, agent launches take an explicit directory, refusals carry a hint, the MCP server's descriptions and results are smaller, and its Codex entry forwards the whole Kilix environment.
 - VibeVoice dictation runs: kilix-voice `00a6cff` runs vibevoice-asr-bitnet through VibeASR.cpp, which Kilix `848ceea` builds from a pinned commit (`kilix voice vibeasr`); engine `467c8aa` enables the dictation button once it is built. Ctrl+Shift+D toggles dictation (engine `5b5bb03`, Kilix `401e7aa`). VibeVoice consent binds the exact GGUF bytes the runtime loads (kilix-voice `1590757`), Bonsai drops `--no-verify` and pins every VibeVoice member (`7464828`), and the no-weights census and guest check now cover every carrier model and install route. The owner amended condition C2 of the VibeVoice ruling (installable and runnable in 0.2.2); the compliance carrier is regenerated and regraded.
 - Install `shellcheck` by default on both install paths (preseed and `install-deps.sh`), so shell scripts can be linted locally the same way CI lints them.
 
