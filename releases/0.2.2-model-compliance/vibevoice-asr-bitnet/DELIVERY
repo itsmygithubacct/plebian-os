@@ -5,5 +5,5 @@ huggingface.co and verified against the pinned digests before installation.
 No install route downloads it until a kilix-license receipt covers it:
 The model catalog shows the licence and records the receipt, and
 The speech install command, voice installer and Bonsai pull command first ask
-`kilix-stt --check-licence` (kilix-voice af9398e3e644886f1ef3f269637e70272a0a9944).
+`kilix-stt --check-licence` (kilix-voice 59b3c3467506d087b2f0df036b48efc48f7722db).
 vibevoice-asr-bitnet is installable in this release but not runnable: the speech runtime does not yet support it.
