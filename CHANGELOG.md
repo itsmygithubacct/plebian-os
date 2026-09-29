@@ -6,6 +6,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- kilix-needle `2a5b856` and kilix-tui-utils `d910110` (kilix-content `6b29514`, Kilix `f3fdbac`, Kilix 95 `8691f54`): exact pane commands in agents' wordings skip the model, an agents launch sent to the panes CLI runs as the agents job, a tool call may run to 768 tokens, the MCP logs provider and plan/act guidance are stated up front, and a bare `kilix panes` lists panes without a terminal.
 - Pleb `7d4f2ca` sets the microphone input to 45% on a user's first session (once, so a level the user picks later is kept; `PLEB_MIC_DEFAULT=off` leaves it alone). The reference laptop's internal microphone opened at 25%, too quiet for dictation, and clipped at 60%.
 - kilix-needle `9688501` (kilix-content `cd317fb`, Kilix `0375060`, Kilix 95 `08f8e02`): an agents request its grammar reads completely launches without the model, so a long directory is never rewritten, and the files job reads name searches in agents' words and answers help with the accepted forms.
 - Ctrl+Shift+D dictation no longer ends empty: the microphone's start-up pop read as a finished utterance, so every turn closed in about three seconds. kilix-voice `ce56c4a` (Kilix `5288014`, Kilix 95 `21abf9e`) keeps a Vosk turn listening until a word is recognised.
