@@ -6,6 +6,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- kilix-needle `e66ec13` (kilix-content `e4acba8`, Kilix `e7edfce`, Kilix 95 `8d4bddc`): each request it answers is added to a private local history for improving its grammar and models. It is bounded, never delays or changes a request, keeps no pane names, runtime errors or command lines, and `KILIX_NEEDLE_HISTORY=0` turns it off.
 - Enabled system voice says Goodbye before normal machine shutdown, using cached Piper audio and a logind delay inhibitor. Desktop shutdown waits briefly for acknowledgement; desktop restarts and disabling voice stay silent.
 
 - Enabled system voice speaks cached warnings for overheating above 101°C, low/critical battery, physical network link loss, and sustained heavy swapping. Warnings are incident-based with recovery and cooldowns; temperature display preferences are independent.
