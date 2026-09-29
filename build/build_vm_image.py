@@ -1481,6 +1481,38 @@ def _guest_timeout_budget(command: str) -> int:
     return total + bounds(rest) + 15
 
 
+# Where each carrier speech model can arrive, relative to KILIX_DATA_HOME:
+# the other promoted catalog directories, and the content store that
+# `kilix models install` writes.
+SPEECH_WEIGHT_PATHS = (
+    "voice/models/lgraph-en-us",
+    "voice/models/vibevoice-asr-bitnet",
+    "desktop-apps/assets/vosk-model-small-en-us-0.15",
+    "desktop-apps/assets/vosk-model-en-us-0.22-lgraph",
+    "desktop-apps/assets/vibevoice-asr-bitnet",
+)
+
+
+def _no_speech_weights_check() -> str:
+    """OD-S, as a guest check: a provisioned image carries no speech-model
+    weights -- under the promoted small-en-us name ($m), any immutable Vosk
+    generation, any other carrier model's directory or its content-store
+    asset -- and no dictation library ($l), because at the pinned Kilix Voice
+    ref the installer fetches that library only on the same leg that fetches
+    the model. $d is KILIX_DATA_HOME and $r the voice install record."""
+    others = "".join(f'test ! -e "$d/{path}" && test ! -L "$d/{path}" && '
+                     for path in SPEECH_WEIGHT_PATHS)
+    return (
+        'test ! -e "$m" && test ! -L "$m" && '
+        'test -z "$(find "$d/voice/models" -maxdepth 1 -name \'vosk-model-*\' '
+        '-print -quit 2>/dev/null)" && '
+        + others +
+        'test ! -e "$l" && test ! -L "$l" && '
+        "grep -Fqx 'libvosk=skipped' \"$r\" && "
+        "grep -Fqx 'model-small-en-us=skipped' \"$r\""
+    )
+
+
 def _voice_acceptance_command(expected_policy: str) -> str:
     """Return a guest check for the declared read-aloud/dictation closure."""
     if expected_policy not in ("0", "1"):
@@ -1490,18 +1522,7 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         'PYTHONPATH="$d/voice/runtime/current/lib/kilix-voice" '
         f'timeout 180 python3 -c {shlex.quote(_voice_read_aloud_smoke_script())}'
     )
-    # OD-S, as a guest check: a provisioned image carries no speech-model
-    # weights, under the promoted name or any immutable generation, and no
-    # dictation library, because at the pinned Kilix Voice ref the installer
-    # fetches that library only on the same leg that fetches the model.
-    no_weights = (
-        'test ! -e "$m" && test ! -L "$m" && '
-        'test -z "$(find "$d/voice/models" -maxdepth 1 -name \'vosk-model-*\' '
-        '-print -quit 2>/dev/null)" && '
-        'test ! -e "$l" && test ! -L "$l" && '
-        "grep -Fqx 'libvosk=skipped' \"$r\" && "
-        "grep -Fqx 'model-small-en-us=skipped' \"$r\""
-    )
+    no_weights = _no_speech_weights_check()
     catalog_validation = shlex.quote(
         _voice_model_catalog_validation_script())
     command = (

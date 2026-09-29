@@ -4927,11 +4927,22 @@ run_voice_tool() {
 # immutable generation the installer publishes is `vosk-model-*`, and
 # `voice/lib/current` is the Vosk shared object — code, not weights, but at the
 # pinned KILIX_VOICE_REF it is fetched only on the same all-or-nothing leg that
-# fetches the model, so its arrival means that leg ran.
+# fetches the model, so its arrival means that leg ran. `lgraph-en-us` and
+# `vibevoice-asr-bitnet` are the other carrier models' directories, and
+# `desktop-apps/assets/<id>` is where `kilix models install` puts each of the
+# three carrier models, so weights arriving by any install route are counted.
 voice_dictation_asset_paths() {
     local models_root="$KILIX_DATA_HOME/voice/models" entry
     local library_root="$KILIX_DATA_HOME/voice/lib/current"
+    local assets_root="$KILIX_DATA_HOME/desktop-apps/assets"
     {
+        for entry in "$models_root/lgraph-en-us" "$models_root/vibevoice-asr-bitnet" \
+                "$assets_root/vosk-model-small-en-us-0.15" \
+                "$assets_root/vosk-model-en-us-0.22-lgraph" \
+                "$assets_root/vibevoice-asr-bitnet"; do
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            printf '%s\n' "$entry"
+        done
         if [ -e "$models_root/small-en-us" ] || [ -L "$models_root/small-en-us" ]; then
             printf '%s\n' "$models_root/small-en-us"
         fi
