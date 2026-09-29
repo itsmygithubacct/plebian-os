@@ -6,6 +6,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- kilix-needle `e962930` (kilix-content `9a4a84d`, Kilix `a9d6fee`, Kilix 95 `2721b07`) runs nothing for a pane request that is taken back ("never mind", "scratch that") or that reports a written or third party's instruction, reads "whichever tab …" as a description rather than a name, and starts `btop` for "with btop inside".
 - Image Analyzer builds from a clean checkout again: kilix-object-detect `05623f3` (kilix-content `cf59880`, Kilix `2b11ac7`, Kilix 95 `b098b48`) stages its pinned kilix-motion-detect when no `F120_PREFIX` is given. `096dd5a` stopped every catalog and first-use build at "F120_PREFIX is required", which the RC2 VM acceptance catalog gate found.
 
 - Harden Avatar-owned speech (kilix-voice `4260f77`, Avatar `9021e60`, Kilix `4717e15`): admission stays atomic without holding the voice daemon lock through engine preparation; turns report `superseded` and `expired`, carry the daemon instance, and show the daemon's reason in Avatar; `kilix-stt --recommend` and the settings **n** key return.
