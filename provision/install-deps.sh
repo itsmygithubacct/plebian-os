@@ -141,6 +141,10 @@ DEP_GROUPS=(
     # Scripted X input and window control: agents and pane tooling send keys,
     # move the pointer and find windows through it on every release image.
     "X input + window automation|xdotool"
+    # ShellCheck lints shell scripts. Agents and people editing the stack's own
+    # scripts run it before commit, and CI runs it on every push; a machine
+    # without it cannot run the same check locally.
+    "shell script linting|shellcheck"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"

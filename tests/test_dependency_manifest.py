@@ -371,6 +371,11 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(CLIPBOARD_PACKAGES, install_deps_packages())
         self.assertLessEqual(CLIPBOARD_PACKAGES, preseed_packages())
 
+    def test_shell_linter_is_on_both_paths(self):
+        # shellcheck is a default from 0.2.2 RC3 onward, so local checks match CI.
+        self.assertIn("shellcheck", install_deps_packages())
+        self.assertIn("shellcheck", preseed_packages())
+
     def test_x_automation_tool_is_on_both_paths(self):
         # xdotool is a default from 0.2.2 RC2 onward; scripts may rely on it
         # whichever install route produced the machine.
