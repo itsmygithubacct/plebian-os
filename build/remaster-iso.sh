@@ -400,6 +400,24 @@ validate_voice_compliance_carrier() {
         && [ "${cv[interface_content_ref]}" = "${PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF:-}" ] \
         && [ "${cv[interface_licence_ref]}" = "${KILIX_LICENSE_REF:-}" ] \
         || { carrier_refuse "the carrier's producing interfaces are not the release's pins"; return 1; }
+    # The records the carrier binds must be the ones the image serves: its
+    # content interface is exactly KILIX_REF's kilix-content gitlink. Read from
+    # the pinned Kilix tree itself, so no release pin can vouch for it, and
+    # refused when that tree cannot be read (KILIX_REPO may be a local clone).
+    local probe gitlink
+    probe="$(mktemp -d)" || { carrier_refuse "no scratch directory to read KILIX_REF"; return 1; }
+    if ! { is_hex_len "${KILIX_REF:-}" 40 && [ -n "${KILIX_REPO:-}" ] \
+            && git init -q "$probe" \
+            && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/true timeout 300 \
+                git -C "$probe" fetch -q --depth 1 "$KILIX_REPO" "$KILIX_REF"; } >/dev/null 2>&1; then
+        rm -rf -- "$probe"
+        carrier_refuse "KILIX_REF cannot be read to find the content it serves"
+        return 1
+    fi
+    gitlink="$(git -C "$probe" rev-parse 'FETCH_HEAD:third_party/kilix-content' 2>/dev/null || true)"
+    rm -rf -- "$probe"
+    [ "$gitlink" = "${cv[interface_content_ref]}" ] \
+        || { carrier_refuse "the carrier's content is not KILIX_REF's kilix-content gitlink"; return 1; }
     return 0
 }
 

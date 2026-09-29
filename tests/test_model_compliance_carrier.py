@@ -73,6 +73,11 @@ def release_env(carrier: Path = CARRIER, **overrides: str) -> dict[str, str]:
                 "KILIX_LICENSE_REF", "PLEBIAN_OS_VOICE_CARRIER_SHA256",
                 "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256"):
         env[key] = pins[key]
+    # The guard reads KILIX_REF's content gitlink from the pinned Kilix tree;
+    # a local clone that holds KILIX_REF stands in for the remote.
+    kilix = repo_holding("PLEBIAN_OS_KILIX_REPO", "kilix", pins["KILIX_REF"])
+    env["KILIX_REF"] = pins["KILIX_REF"]
+    env["KILIX_REPO"] = str(kilix) if kilix else pins["KILIX_REPO"]
     env["PLEBIAN_OS_VOICE_CARRIER_DIR"] = str(carrier)
     env.update(overrides)
     return env
@@ -148,10 +153,17 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
     voice_ref = carrier["voice_ref"]
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
+        # Whisper's install hands off to the model catalog (the licence screen)
+        # rather than asking the receipt check itself; say so, and nothing more.
+        route = (f"hands the download to that model catalog\nand fetches no weights "
+                 f"itself (kilix-voice {voice_ref})." if model == "whisper-small-en"
+                 else f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).")
+        if model == "whisper-small-en" and "--check-licence" in delivery:
+            gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
         for claim in ("No model weights are present in this image, and "
                       "provisioning downloads none.",
                       "No install route downloads it until a kilix-license receipt covers it:",
-                      f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).",
+                      route,
                       "mode: first-use-upstream-download"):
             if claim not in delivery:
                 gaps.append(f"{model}: DELIVERY lacks {claim!r}")
@@ -528,6 +540,19 @@ class ModelComplianceCarrierTests(unittest.TestCase):
              "different speech library"),
             ("other licence interface", lambda r: None, {"KILIX_LICENSE_REF": "d" * 40},
              "producing interfaces"),
+            # The seat's attack: only KILIX_REF moves, to the parent Kilix
+            # whose content gitlink predates the carried records.
+            ("host serves other content", lambda r: None,
+             {"KILIX_REF": "f3fdbac734a81e1ffaedc841fd8e8848af87c331"},
+             "is not KILIX_REF's kilix-content gitlink"),
+            # Carrier interface and release pin moved together to that older
+            # content: consistent with each other, not with what Kilix serves.
+            ("carrier and pin agree on unserved content",
+             lambda r: edit_env(r, "interface_content_ref", "6b29514655ce5653153dd6a8852636e46907ac8c"),
+             {"PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF": "6b29514655ce5653153dd6a8852636e46907ac8c"},
+             "is not KILIX_REF's kilix-content gitlink"),
+            ("unreadable host tree", lambda r: None, {"KILIX_REPO": "/nonexistent/kilix"},
+             "KILIX_REF cannot be read"),
         ]
         for label, plant, release, reason in repinned:
             with self.subTest(defect=label), tempfile.TemporaryDirectory() as td:

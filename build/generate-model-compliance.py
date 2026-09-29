@@ -90,6 +90,10 @@ def read_manifest(version: str) -> dict[str, str]:
 # names the upstream artifact: whisper-small-en runs the faster-whisper
 # conversion, whose record is faster-whisper-small-en.
 LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
+# Models whose only download route is the model catalog itself: `kilix stt
+# --install` runs `kilix models install`, the licence screen, and fetches
+# nothing on its own, so there is no separate receipt check to cite.
+CATALOG_INSTALLED_MODELS = frozenset({"whisper-small-en"})
 
 
 def licence_record_id(model: str) -> str:
@@ -143,9 +147,17 @@ def delivery_text(model: str, host: str, runnable: bool, voice_ref: str) -> str:
         f"{host} and verified against the pinned digests before installation.",
         "No install route downloads it until a kilix-license receipt covers it:",
         "The model catalog shows the licence and records the receipt, and",
-        "The speech install command, voice installer and Bonsai pull command first ask",
-        f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).",
     ]
+    if model in CATALOG_INSTALLED_MODELS:
+        lines += [
+            "The speech install command hands the download to that model catalog",
+            f"and fetches no weights itself (kilix-voice {voice_ref}).",
+        ]
+    else:
+        lines += [
+            "The speech install command, voice installer and Bonsai pull command first ask",
+            f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).",
+        ]
     if not runnable:
         lines.append(f"{model} is installable in this release but not runnable: the "
                      "speech runtime does not yet support it.")

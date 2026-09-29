@@ -4,5 +4,5 @@ whisper-small-en reaches a machine only when a user installs it; it is downloade
 huggingface.co and verified against the pinned digests before installation.
 No install route downloads it until a kilix-license receipt covers it:
 The model catalog shows the licence and records the receipt, and
-The speech install command, voice installer and Bonsai pull command first ask
-`kilix-stt --check-licence` (kilix-voice e3f1d6b4c3e7d980de0acc33bad62d35b92f0255).
+The speech install command hands the download to that model catalog
+and fetches no weights itself (kilix-voice a12be47e289ca03fccd46840276add1833df5760).
