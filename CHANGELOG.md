@@ -6,6 +6,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- kilix-needle `56813ce` (kilix-content `e1c16cd`, Kilix `316d49c`, Kilix 95 `e1de5b5`): the apps job loads no model. The request's own reading proposes every call it supports, and the same checks admit them, in the order the request asks. It scores 111/146 on held-out v4, against 93/146 for the tuned model, with no unsafe action, and answers in tens of milliseconds.
 - Offer optional system voice on the first Kilix 95 launch. Enabling it installs Piper Kristin, preloads it on subsequent desktop starts, and speaks a configurable startup greeting (default: hello). Settings can change the message, preload silently, or turn it off.
 
 - Bashed Earth leaves through menus only (a pause menu and a match-over menu; Q no longer quits) and keeps a watched game playing between matches; Joustix starts the next game by itself when a computer rider loses (kilix-games `668faac`, kilix-content `14f9f61`, Kilix `f806654`, Kilix 95 `f34492d`; five rounds of independent review, the last SHIP).
