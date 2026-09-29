@@ -1386,7 +1386,7 @@ expected = [
         ("conf/model.conf", "am/final.mdl"),
     ),
     (
-        "vibevoice-asr-bitnet", "vibevoice", False, 1705771590, "1.6 GiB",
+        "vibevoice-asr-bitnet", "vibevoice", True, 1705771590, "1.6 GiB",
         (
             "vibeasr-lm-i2_s-embed-q6_k.gguf",
             "vibeasr-vae-encoder-i8_s.gguf",

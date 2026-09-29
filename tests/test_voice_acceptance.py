@@ -103,7 +103,7 @@ class VoiceAcceptanceTests(unittest.TestCase):
                 ("small-en-us", "vosk", True, 41205931, "39.3 MiB"),
                 ("lgraph-en-us", "vosk", True, 130557655, "124.5 MiB"),
                 (
-                    "vibevoice-asr-bitnet", "vibevoice", False,
+                    "vibevoice-asr-bitnet", "vibevoice", True,
                     1705771590, "1.6 GiB",
                 ),
             ):
