@@ -8,6 +8,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 - Harden Avatar-owned speech (kilix-voice `4260f77`, Avatar `9021e60`, Kilix `4717e15`): admission stays atomic without holding the voice daemon lock through engine preparation; turns report `superseded` and `expired`, carry the daemon instance, and show the daemon's reason in Avatar; `kilix-stt --recommend` and the settings **n** key return.
 - Add the pinned Avatar conversation launcher, private Codex sign-in/key setup, persistent model defaults, and owned speech/dictation runtime.
+- kilix-needle `be7928f` (kilix-content `c3bde22`, Kilix `2ad029a`, Kilix 95 `f9cfca9`) refuses pane requests that report someone else's instruction, keeps all its state in one directory under `~/.local/gpu_terminal/kilix-apps/kilix-needle` (moving the system normalizer profile and logs index from `~/.local/share/kilix-needle` on first use), searches `*.md` for "markdown files", and gates the system and files jobs on blind held-out sets.
 - kilix-needle `67d17e2` (kilix-content `091982f`, Kilix `4f11836`, Kilix 95 `a8b2853`) adds read-only files and system jobs and exact apps controls for audio, music, voice and text size. It refuses pane requests that give a time or a condition, and adds maximize, rename-pane, swap and move-tab actions to the panes model's schema.
 
 - Install `xdotool` by default on both install paths (preseed and `install-deps.sh`) for scripted X input and window control.
