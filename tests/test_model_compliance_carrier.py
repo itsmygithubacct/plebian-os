@@ -286,6 +286,40 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                              "KILIX_LICENSE_REF; set PLEBIAN_OS_KILIX_LICENSE_REPO")
         return content, license_
 
+    def test_guard_rejects_parent_content_when_host_is_one_commit_ahead(self):
+        content_ref = carrier_env()["interface_content_ref"]
+        other_ref = ("0" if content_ref[0] != "0" else "1") + content_ref[1:]
+        with tempfile.TemporaryDirectory() as td:
+            kilix = Path(td) / "kilix"
+            parent, current = gitlink_repo(kilix, [content_ref, other_ref])
+            control = run_guard(release_env(KILIX_REF=parent, KILIX_REPO=str(kilix)))
+            self.assertEqual(control.returncode, 0, control.stderr)
+
+            # A carrier for the parent's content is stale as soon as the host
+            # serves a different gitlink, even with the carrier pins unchanged.
+            result = run_guard(release_env(KILIX_REF=current, KILIX_REPO=str(kilix)))
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("is not KILIX_REF's kilix-content gitlink", result.stderr)
+            self.assertTrue(result.stderr.endswith(REFUSAL), result.stderr)
+
+    def test_guard_compares_content_gitlink_beyond_a_short_prefix(self):
+        content_ref = carrier_env()["interface_content_ref"]
+        # Gitlinks can name absent objects, so no hash-collision search or
+        # network fixture is needed to exercise a shared seven-hex prefix.
+        other_ref = content_ref[:-1] + ("0" if content_ref[-1] != "0" else "1")
+        self.assertEqual(other_ref[:7], content_ref[:7])
+        self.assertNotEqual(other_ref, content_ref)
+        with tempfile.TemporaryDirectory() as td:
+            kilix = Path(td) / "kilix"
+            served, other = gitlink_repo(kilix, [content_ref, other_ref])
+            control = run_guard(release_env(KILIX_REF=served, KILIX_REPO=str(kilix)))
+            self.assertEqual(control.returncode, 0, control.stderr)
+
+            result = run_guard(release_env(KILIX_REF=other, KILIX_REPO=str(kilix)))
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("is not KILIX_REF's kilix-content gitlink", result.stderr)
+            self.assertTrue(result.stderr.endswith(REFUSAL), result.stderr)
+
     # AC-1
     def test_carrier_regenerates_byte_identically(self):
         content, license_ = self.pinned_checkouts()
