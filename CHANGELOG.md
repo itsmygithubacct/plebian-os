@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Final RC4 selects Needle `083f1fb` (content `191abbc`, Kilix `296a8f8`,
+  desktop `cea38b7`). Adds compact read-only agent startup context, the Kilix
+  Workflows guide and a bounded request-local parser cache that preserves
+  grammar, input limits and refusal rules.
+
 - RC4 selects Needle `deb1225` (content `2f5f3d7`, Kilix `e97e52a`, desktop `fdc50f8`): deterministic request handling, explicit-socket tmux, structured actions and receipts, and measured action guidance. The host includes the embedded-app keyboard fix that keeps press/release identity stable when Shift is released first and prevents duplicate modifier ownership. Engine `84e9f1d` remains unchanged, with supported-Debian build evidence and explicit non-green hosted CI limitations.
 
 - kilix-needle `747ae37` and kilix-rtsp `74a8eb6` (kilix-content `716a672`, Kilix `7aaf724`, Kilix 95 `d0732cf`): journal round 4 lifts held-out journal first requests from 58% to 80.6% (12/12 end to end), and a camera view left detached for 30 s exits, so re-attached copies cannot pile up (one camera desk had 29 copies of a single stream). The voice compliance carrier is regenerated against the new content gitlink and regraded.
