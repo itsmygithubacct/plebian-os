@@ -1511,6 +1511,9 @@ ROOT_APPLY
 apply_split_closure() {
     local session_pre closure_pre session_post closure_post rc=0 record
     local selector_pre=absent updater_pre=absent selector_post=absent updater_post=absent
+    local config_uid config_gid
+    config_uid="$(id -u)"
+    config_gid="$(id -g)"
     session_pre="$(installed_tool_fingerprint "$SESSION_ENV")"
     closure_pre="$(installed_tool_fingerprint "$CLOSURE_ENV")"
     if [ -n "$SELECTOR_DST" ]; then
@@ -1522,11 +1525,13 @@ apply_split_closure() {
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$CLOSURE_ENV" "$SELECTOR_DST" "$UPDATER_DST" \
         "$STAGE" "$RECOVERY_BASE" "$SELECTOR_MODE" \
-        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" <<'ROOT_SPLIT_APPLY' || rc=$?
+        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" "$config_uid" "$config_gid" \
+        >"$STAGE/record" <<'ROOT_SPLIT_APPLY' || rc=$?
 set -euo pipefail
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
 stage="$5"; base="$6"; mode="$7"; fail_after="$8"
+config_uid="$9"; config_gid="${10}"
 [ "$session_path" != "$closure_path" ] || exit 2
 case "$session_path:$closure_path:$base" in *$'\n'*|*$'\r'*) exit 2 ;; esac
 case "$mode" in
@@ -1540,11 +1545,17 @@ case "$mode" in
     standalone)
         [ -z "$selector_path" ] && [ -z "$updater_path" ] || exit 2
         [ "$(dirname -- "$session_path")" = "$(dirname -- "$closure_path")" ] || exit 2
+        [[ "$config_uid" =~ ^[0-9]+$ && "$config_gid" =~ ^[0-9]+$ ]] || exit 2
+        [ "$config_uid" = "${SUDO_UID:-$(id -u)}" ] || exit 2
+        [ "$config_gid" = "${SUDO_GID:-$(id -g)}" ] || exit 2
         file_mode=0600
         ;;
     *) exit 2 ;;
 esac
 [ -d "$stage" ] && [ ! -L "$stage" ] || exit 2
+if [ "$mode" = standalone ]; then
+    [ "$(stat -c '%u' -- "$stage")" = "$config_uid" ] || exit 2
+fi
 for path in "$session_path" "$closure_path"; do
     parent="$(dirname -- "$path")"
     mkdir -p -- "$parent"
@@ -1629,7 +1640,15 @@ sync -f "$base"
 for i in "${!paths[@]}"; do
     path="${paths[$i]}"
     tmps[$i]="$(mktemp "$(dirname -- "$path")/.${names[$i]}.XXXXXX")"
-    install -m "${modes[$i]}" -- "$stage/${stage_names[$i]}" "${tmps[$i]}"
+    if [ "$mode" = standalone ]; then
+        # These are USER configuration files even when the bounded transaction
+        # runs through sudo. Root-owned 0600 replacements cannot be read by Pleb.
+        install -o "$config_uid" -g "$config_gid" -m "${modes[$i]}" \
+            -- "$stage/${stage_names[$i]}" "${tmps[$i]}"
+        [ "$(stat -c '%u:%g:%a' -- "${tmps[$i]}")" = "$config_uid:$config_gid:600" ] || exit 3
+    else
+        install -m "${modes[$i]}" -- "$stage/${stage_names[$i]}" "${tmps[$i]}"
+    fi
     [ "$(sha256sum "${tmps[$i]}" | awk '{print $1}')" = "${expected[$i]}" ] || exit 3
     sync -f "${tmps[$i]}"
 done
