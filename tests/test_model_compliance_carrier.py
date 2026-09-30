@@ -215,6 +215,29 @@ def bonsai_ref(bonsai_installer: str) -> str:
     return match.group(1) if match else ""
 
 
+def gitlink_repo(root: Path, gitlinks: list[str]) -> list[str]:
+    """A local Kilix stand-in: one commit per content gitlink, oldest first.
+
+    The guard fetches KILIX_REF from KILIX_REPO; a clone CI makes holds only
+    the pinned commit, so a planted older Kilix must come from here, not the
+    network. Returns the commit ids."""
+    run = lambda *args: subprocess.run(["git", "-C", str(root), *args], check=True,
+                                       capture_output=True, text=True).stdout.strip()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    commits = []
+    for gitlink in gitlinks:
+        run("update-index", "--add", "--cacheinfo", f"160000,{gitlink},third_party/kilix-content")
+        tree = run("write-tree")
+        parent = ["-p", commits[-1]] if commits else []
+        commits.append(subprocess.run(
+            ["git", "-C", str(root), "commit-tree", tree, *parent, "-m", "kilix stand-in"],
+            check=True, capture_output=True, text=True,
+            env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                 "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}).stdout.strip())
+    run("update-ref", "refs/heads/main", commits[-1])
+    return commits
+
+
 def rebind(root: Path) -> dict[str, str]:
     """Re-derive every digest after an edit, as a forger with write access to the
     release env would: BINDINGS, CARRIER.json, the receipt and both pins."""
@@ -540,11 +563,6 @@ class ModelComplianceCarrierTests(unittest.TestCase):
              "different speech library"),
             ("other licence interface", lambda r: None, {"KILIX_LICENSE_REF": "d" * 40},
              "producing interfaces"),
-            # The seat's attack: only KILIX_REF moves, to the parent Kilix
-            # whose content gitlink predates the carried records.
-            ("host serves other content", lambda r: None,
-             {"KILIX_REF": "f3fdbac734a81e1ffaedc841fd8e8848af87c331"},
-             "is not KILIX_REF's kilix-content gitlink"),
             # Carrier interface and release pin moved together to that older
             # content: consistent with each other, not with what Kilix serves.
             ("carrier and pin agree on unserved content",
@@ -554,6 +572,19 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             ("unreadable host tree", lambda r: None, {"KILIX_REPO": "/nonexistent/kilix"},
              "KILIX_REF cannot be read"),
         ]
+        # The seat's attack, hermetic: a Kilix whose content gitlink is not the
+        # carrier's, as its parent commit (the older Kilix) in a local repo.
+        with tempfile.TemporaryDirectory() as td:
+            older, served = gitlink_repo(Path(td) / "kilix", [
+                "6b29514655ce5653153dd6a8852636e46907ac8c", env0["interface_content_ref"]])
+            kilix = {"KILIX_REPO": str(Path(td) / "kilix")}
+            with self.subTest(defect="control: the stand-in serving the carrier's content"):
+                self.assertEqual(run_guard(release_env(KILIX_REF=served, **kilix)).returncode, 0)
+            with self.subTest(defect="host serves other content"):
+                result = run_guard(release_env(KILIX_REF=older, **kilix))
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("is not KILIX_REF's kilix-content gitlink", result.stderr)
+                self.assertTrue(result.stderr.endswith(REFUSAL))
         for label, plant, release, reason in repinned:
             with self.subTest(defect=label), tempfile.TemporaryDirectory() as td:
                 root = Path(td) / "carrier"
