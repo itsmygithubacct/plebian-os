@@ -6,12 +6,17 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- RC4 selects workflow model readiness and licensed setup, optional desktop
+  enablement, verified YOLOX runtime selection and native-package v2 remote
+  build compatibility (Needle `12f5f7b`, content `2eb9121`, Kilix `1c8b5f8`,
+  desktop `90d1a0f`). Model mappings and bytes are unchanged.
+
 - Standalone closure selection keeps the private session and closure files
   owned by the selecting user when its bounded transaction runs through sudo.
   Rollback preserves the original file ownership and permissions; image
   configuration and installed tools retain their existing modes.
 
-- Final RC4 selects Needle `083f1fb` (content `191abbc`, Kilix `296a8f8`,
+- Earlier RC4 selects Needle `083f1fb` (content `191abbc`, Kilix `296a8f8`,
   desktop `cea38b7`). Adds compact read-only agent startup context, the Kilix
   Workflows guide and a bounded request-local parser cache that preserves
   grammar, input limits and refusal rules.
