@@ -148,6 +148,9 @@ DEP_GROUPS=(
     # htop shows processes, CPU and memory interactively; the first thing a
     # person reaches for when the machine is slow, and not in Debian's base.
     "interactive process viewer|htop"
+    # strace shows the system calls a process makes: why a program hangs, which
+    # file it cannot open, which socket it waits on. Not in Debian's base.
+    "system call tracer|strace"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
