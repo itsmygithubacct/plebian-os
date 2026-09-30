@@ -145,6 +145,9 @@ DEP_GROUPS=(
     # scripts run it before commit, and CI runs it on every push; a machine
     # without it cannot run the same check locally.
     "shell script linting|shellcheck"
+    # htop shows processes, CPU and memory interactively; the first thing a
+    # person reaches for when the machine is slow, and not in Debian's base.
+    "interactive process viewer|htop"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"

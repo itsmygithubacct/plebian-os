@@ -376,6 +376,11 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertIn("shellcheck", install_deps_packages())
         self.assertIn("shellcheck", preseed_packages())
 
+    def test_process_viewer_is_on_both_paths(self):
+        # htop is a default from 0.2.2 RC3 onward (owner, 2026-09-29).
+        self.assertIn("htop", install_deps_packages())
+        self.assertIn("htop", preseed_packages())
+
     def test_x_automation_tool_is_on_both_paths(self):
         # xdotool is a default from 0.2.2 RC2 onward; scripts may rely on it
         # whichever install route produced the machine.
