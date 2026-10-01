@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- The lifecycle successor binds Pleb's session children and Kilix's transcript
+  and native-window observers to their actual parent processes. Kilix selects
+  telemetry `ca58e4a`; automatic samplers exit after their last registered
+  process consumer, while explicitly persistent service behavior remains.
+
 - RC4 selects workflow model readiness and licensed setup, optional desktop
   enablement, verified YOLOX runtime selection and native-package v2 remote
   build compatibility (Needle `12f5f7b`, content `2eb9121`, Kilix `1c8b5f8`,
