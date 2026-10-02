@@ -29,6 +29,7 @@ def args(**overrides):
         firmware=None,
         disk=None, session=None, kiosk=None, nopasswd_sudo=True, port=None,
         gui=False, no_wait=False, iso=None, no_verify=False,
+        target="virtualbox",
         interactive_installer=False,
     )
     values.update(overrides)
@@ -160,6 +161,35 @@ class SelectedClosureGateTests(unittest.TestCase):
 
 
 class VmBuilderEnvTests(unittest.TestCase):
+    def test_qemu_creates_private_sparse_disk_and_boots_installer_once(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(vm, "storage_dir", return_value=Path(td)), \
+                mock.patch.object(vm, "run") as invoke:
+            selected = cfg(name="rc5-qemu", disk_gb=20, ssh_port=32222)
+            vm_dir = vm.qemu_create(selected)
+            self.assertEqual(vm_dir.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(invoke.call_args.args[0][:4],
+                             ["qemu-img", "create", "-f", "qcow2"])
+            vm.qemu_start(selected, Path("/tmp/installer.iso"), vm_dir)
+            argv = invoke.call_args.args[0]
+            self.assertIn("q35,accel=kvm", argv)
+            self.assertIn("once=d,order=c", argv)
+            self.assertIn("user,id=net0,hostfwd=tcp:127.0.0.1:32222-:22", argv)
+            self.assertIn("none", argv)
+            self.assertIn("-daemonize", argv)
+            with self.assertRaises(SystemExit):
+                vm.qemu_create(selected)
+
+    def test_qemu_report_records_hypervisor_and_target(self):
+        git_results = [SimpleNamespace(stdout="a" * 40 + "\n"),
+                       SimpleNamespace(stdout="")]
+        with mock.patch.object(vm, "run", return_value=SimpleNamespace(
+                stdout="QEMU emulator version 9.0.0\n")), \
+                mock.patch.object(vm.subprocess, "run", side_effect=git_results):
+            report = vm.acceptance_report_initial(cfg(), args(target="qemu"))
+        self.assertEqual(report["vm"]["target"], "qemu")
+        self.assertEqual(report["host"]["qemu_version"], "QEMU emulator version 9.0.0")
+
     def test_default_wait_budget_covers_install_and_firstboot(self):
         self.assertEqual(vm.DEFAULT_PROVISION_TIMEOUT_MINUTES, 120)
         result = subprocess.run(

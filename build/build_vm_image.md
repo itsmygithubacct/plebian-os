@@ -14,7 +14,7 @@
 `build/build_vm_image.py` builds a complete, ready-to-run **Plebian-OS virtual
 machine** end to end. It asks a few questions (username, password, RAM, disk,
 …), builds a customized installer ISO with the repo's own tooling, creates a
-VirtualBox VM, runs the install **completely unattended**, and waits for
+VirtualBox or QEMU/KVM VM, runs the install **completely unattended**, and waits for
 first-boot provisioning (pleb + kilix + the selected desktop provider + the
 Kilix fork build) to finish. When it returns, you have a VM that boots into the
 Pleb session.
@@ -26,13 +26,14 @@ answers ─▶ custom preseed ─▶ ISO (remaster-iso.sh) ─▶ VBox VM ─▶
    ready-to-run VM ◀── first-boot provisioning (pleb + kilix fork + desktop) ◀──┘
 ```
 
-> Only **VirtualBox** is implemented today. `qemu` and `docker` targets are
-> planned; the ISO-building half is deliberately target-agnostic so they can
-> reuse it.
+**VirtualBox** and **QEMU/KVM** are supported. The QEMU path currently uses
+BIOS, a headless QMP socket or GTK window, and a sparse qcow2 disk. It refuses
+replacement of an existing QEMU VM; choose a fresh name for each run.
 
 ## Requirements
 
-- **VirtualBox** (`VBoxManage` on `PATH`)
+- **VirtualBox** (`VBoxManage` on `PATH`) or **QEMU/KVM** (`qemu-img`,
+  `qemu-system-x86_64`, and `/dev/kvm`)
 - **xorriso**, GNU **cpio**, and **gzip** — build and brand the ISO. The first
   download also needs `curl`, `sha256sum`, `gpgv`, and
   `debian-archive-keyring` to verify Debian's signed checksums; the verified ISO
@@ -53,6 +54,8 @@ build/build_vm_image.py            # interactive — answer the prompts
 build/build_vm_image.py --yes --username releaseci --hostname plebian-ci \
   --generate-one-time-password --sudo-nopasswd
 build/build_vm_image.py --dry-run  # print the plan; build nothing and write no preseed
+build/build_vm_image.py --target qemu --yes --username releaseci \
+  --hostname plebian-ci --generate-one-time-password --sudo-nopasswd
 ```
 
 A full run commonly takes roughly **45–100 minutes** (unattended Debian
@@ -107,7 +110,7 @@ rejected. A generated credential also requires waiting and
 --session desktop|shell --kiosk / --no-kiosk
 --sudo-nopasswd / --no-sudo-nopasswd
 
---target virtualbox    only virtualbox today (qemu/docker planned)
+--target virtualbox|qemu    choose VirtualBox or QEMU/KVM
 --iso PATH             use a prebuilt ISO, skip building (see note below)
 --interactive-installer
                        let a prebuilt ISO collect guest identity; requires
@@ -274,9 +277,9 @@ guest source root without redirecting host-side build storage.
    kernel command line so the language/keyboard prompts are answered before the
    preseed is even read. To change the language, edit the preseed's
    `debian-installer/locale` and `keyboard-configuration/xkb-keymap`.
-3. **VM creation.** Standard `VBoxManage` calls: create + register, set
-   memory/CPUs/VRAM, enable audio input/output, configure NAT + port-forward, a
-   sparse VDI on a SATA controller, and the disk-first boot order.
+3. **VM creation.** VirtualBox creates a sparse VDI on SATA with NAT/SSH
+   forwarding and audio input/output. QEMU creates a private sparse qcow2 disk
+   with KVM and NAT/SSH forwarding; its installer media boots only once.
 4. **Install + wait.** It starts the VM and polls over SSH until
    `/var/lib/plebian-os/provisioned` appears (or the unit reports failure, in
    which case it dumps the journal). With no SSH yet, it's still installing; once
@@ -297,11 +300,12 @@ guest source root without redirecting host-side build storage.
 ## Rebuilding / cleanup
 
 Re-running with the same `--name`, generated `--out`, or `--report` path refuses
-to touch existing state unless `--replace` is present. Interactive VM
-replacement requires typing the exact VM name; automation requires the explicit
-pair `--replace --yes`. The release wrappers use version-and-commit-specific
-names by default so separate candidates do not erase one another. To remove one
-by hand:
+to touch existing state. VirtualBox replacement requires `--replace` and,
+interactively, typing the exact VM name; automation requires `--replace --yes`.
+QEMU refuses replacement and keeps its files under the session home in
+`qemu-vms/<name>`. The release wrappers use version-and-commit-specific names
+by default so separate candidates do not erase one another. To remove a
+VirtualBox VM by hand:
 
 ```sh
 VBoxManage controlvm <name> poweroff

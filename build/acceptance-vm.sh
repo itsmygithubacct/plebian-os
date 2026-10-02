@@ -2,7 +2,7 @@
 # acceptance-vm.sh — run a real end-to-end Plebian-OS VM acceptance install.
 #
 # This is intentionally an operator-run script, not a unit test: it creates a
-# VirtualBox VM, builds a fresh ISO, boots the unattended installer, waits for
+# VM, builds a fresh ISO, boots the unattended installer, waits for
 # firstboot provisioning, then verifies exact provenance, the provisioned
 # system, failed/successful update paths, and clean catalog builds. It writes a
 # checksummed JSON result and exits nonzero if any gate fails. Pass --no-verify
@@ -133,11 +133,6 @@ export PLEBIAN_OS_REF PLEBIAN_OS_RELEASE PLEBIAN_OS_RELEASE_MODE
 export PLEBIAN_OS_LIVE_SECURITY_UPDATES
 echo "acceptance-vm: candidate $PLEBIAN_OS_ACCEPTANCE_RELEASE @ $candidate_commit"
 echo "acceptance-vm: manifest sha256 $manifest_sha256"
-
-command -v VBoxManage >/dev/null 2>&1 || {
-    echo "acceptance-vm: VBoxManage not found; install VirtualBox first" >&2
-    exit 1
-}
 
 exec "$HERE/build_vm_image.py" \
     --yes \

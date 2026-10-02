@@ -3,15 +3,14 @@
 
 Interactively asks a few questions (username, password, RAM, disk, …), builds a
 customized Plebian-OS installer ISO with the repo's own tooling, then creates a
-VirtualBox VM, runs the unattended install, and waits for first-boot
+VirtualBox or QEMU VM, runs the unattended install, and waits for first-boot
 provisioning (pleb + kilix) to finish. The result is a ready-to-run VM.
 
     build/build_vm_image.py                 # interactive
     build/build_vm_image.py --yes           # accept all defaults, no prompts
     build/build_vm_image.py --dry-run       # show the plan; build nothing
 
-Targets: only `virtualbox` is implemented today. `qemu` and `docker` are
-planned — the ISO build below is target-agnostic and meant to be reused by them.
+Targets: `virtualbox` and `qemu` are implemented. `docker` is planned.
 """
 from __future__ import annotations
 
@@ -666,7 +665,8 @@ def resolve_automated_credential(args, prompter: Prompter) -> tuple[str, str, bo
 
 def gather_config(args) -> Config:
     p = Prompter(args.yes)
-    print(c("1", "\nPlebian-OS → VirtualBox image builder\n"))
+    target = getattr(args, "target", "virtualbox")
+    print(c("1", f"\nPlebian-OS → {target} image builder\n"))
     if not args.yes:
         print("Answer the prompts (Enter accepts the [default]).\n")
 
@@ -691,7 +691,7 @@ def gather_config(args) -> Config:
     cpus     = args.cpus     or p.ask("vCPUs", default_cpus(),
                                       cast=int, validate=lambda v: v >= 1)
     vram_mb  = args.vram if args.vram is not None else 128
-    if vram_mb > 256:
+    if target in ("virtualbox", "vbox") and vram_mb > 256:
         warn(f"VirtualBox rejects VRAM above 256 MB on this host; requested {vram_mb}, using 256")
         vram_mb = 256
     firmware = args.firmware or os.environ.get("PLEBIAN_OS_VM_FIRMWARE", "bios")
@@ -986,6 +986,42 @@ def vbox_detach_iso(cfg: Config) -> None:
         detail = (result.stderr or result.stdout or "unknown VirtualBox error").strip()
         die(f"could not detach the installer ISO: {detail}")
 
+
+# ── QEMU/KVM ─────────────────────────────────────────────────────────────────
+def qemu_vm_dir(name: str) -> Path:
+    return storage_dir("session") / "qemu-vms" / name
+
+
+def qemu_create(cfg: Config) -> Path:
+    """Create a new, private sparse VM disk; never replace an existing VM."""
+    vm_dir = qemu_vm_dir(cfg.name)
+    if vm_dir.exists() or vm_dir.is_symlink():
+        die(f"QEMU VM output already exists: {vm_dir}; choose a new VM name")
+    vm_dir.parent.mkdir(parents=True, exist_ok=True)
+    vm_dir.mkdir(mode=0o700)
+    run(["qemu-img", "create", "-f", "qcow2", str(vm_dir / "disk.qcow2"),
+         f"{cfg.disk_gb}G"])
+    return vm_dir
+
+
+def qemu_start(cfg: Config, iso: Path, vm_dir: Path) -> None:
+    # Boot the installer only once. On its reboot the guest boots the disk,
+    # even if the unattended installer did not eject the virtual CD drive.
+    argv = [
+        "qemu-system-x86_64", "-name", cfg.name,
+        "-machine", "q35,accel=kvm", "-cpu", "host",
+        "-m", str(cfg.ram_mb), "-smp", str(cfg.cpus),
+        "-drive", f"file={vm_dir / 'disk.qcow2'},format=qcow2,if=virtio",
+        "-drive", f"file={iso},media=cdrom,readonly=on",
+        "-boot", "once=d,order=c", "-vga", "std",
+        "-netdev", f"user,id=net0,hostfwd=tcp:127.0.0.1:{cfg.ssh_port}-:22",
+        "-device", "virtio-net-pci,netdev=net0",
+        "-qmp", f"unix:{vm_dir / 'qmp.sock'},server=on,wait=off",
+        "-pidfile", str(vm_dir / "qemu.pid"),
+        "-display", "gtk" if cfg.gui else "none", "-daemonize",
+    ]
+    run(argv)
+
 # ── SSH into the guest (password auth via SSH_ASKPASS; no sshpass needed) ─────
 @contextlib.contextmanager
 def _askpass_for(pw: str):
@@ -1072,7 +1108,7 @@ def wait_for_provisioning(cfg: Config, timeout_s: int,
         time.sleep(20)
     print()
     die(f"timed out after {timeout_s//60} min waiting for provisioning "
-        f"(the VM is still running; check it with `VBoxManage startvm {cfg.name} --type gui`).")
+        f"(the VM is still running; inspect VM {cfg.name!r}).")
 
 
 def expire_generated_credential(cfg: Config, askpass: tuple[str, str]) -> None:
@@ -2027,8 +2063,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     info(c("1;32", "acceptance verification passed."))
 
 # ── summary ──────────────────────────────────────────────────────────────────
-def final_summary(cfg: Config, iso: Path) -> None:
-    print(c("1;32", "\n✓ Plebian-OS VirtualBox image is ready.\n"))
+def final_summary(cfg: Config, iso: Path, target: str = "virtualbox") -> None:
+    print(c("1;32", f"\n✓ Plebian-OS {target} image is ready.\n"))
     print(f"  VM        : {cfg.name}")
     if cfg.interactive_installer:
         print("  login     : chosen interactively in Debian Installer")
@@ -2042,7 +2078,11 @@ def final_summary(cfg: Config, iso: Path) -> None:
         print(f"  session   : {'desktop provider in Kilix page 1' if cfg.desktop else 'Kilix shell in page 1'}"
               f"{' (autologin)' if cfg.kiosk else ' (greeter)'}")
     print(f"  firmware  : {cfg.firmware.upper()}")
-    print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
+    if target == "virtualbox":
+        print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
+    else:
+        print(f"  QEMU files: {qemu_vm_dir(cfg.name)}")
+        print("  display   : " + ("GTK window" if cfg.gui else "headless; QMP socket available"))
     if cfg.wait:
         print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")
     print(f"  ISO       : {iso}")
@@ -2085,7 +2125,10 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "KILIX_VOICE_LIB_SHA256",
         "KILIX_VOICE_MODEL_SHA256",
     )
-    vbox_version = run(["VBoxManage", "--version"], capture=True).stdout.strip()
+    requested_target = getattr(args, "target", "virtualbox")
+    target = "virtualbox" if requested_target in ("virtualbox", "vbox") else requested_target
+    hypervisor = "VBoxManage" if target == "virtualbox" else "qemu-system-x86_64"
+    hypervisor_version = run([hypervisor, "--version"], capture=True).stdout.splitlines()[0]
     try:
         repo_commit = subprocess.run(
             ["git", "-C", str(REPO), "rev-parse", "HEAD"],
@@ -2105,10 +2148,11 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
             key: os.environ.get(key, "") for key in pin_keys
         },
         "host": {
-            "virtualbox_version": vbox_version,
+            f"{target}_version": hypervisor_version,
             "python_version": sys.version.split()[0],
         },
         "vm": {
+            "target": target,
             "name": cfg.name,
             "identity_profile": (
                 "interactive-installer" if cfg.interactive_installer else "automated"),
@@ -2143,7 +2187,7 @@ def main() -> None:
     global _RECORDER
     ap = argparse.ArgumentParser(description="Build a Plebian-OS VM image from scratch.")
     ap.add_argument("--target", choices=["virtualbox", "vbox", "qemu", "docker"],
-                    default="virtualbox", help="image type (only virtualbox today)")
+                    default="virtualbox", help="hypervisor (virtualbox or qemu)")
     ap.add_argument("--name"); ap.add_argument("--username"); ap.add_argument("--fullname")
     ap.add_argument("--hostname")
     ap.add_argument("--password", help=argparse.SUPPRESS)
@@ -2200,12 +2244,20 @@ def main() -> None:
     args = ap.parse_args()
 
     target = "virtualbox" if args.target in ("virtualbox", "vbox") else args.target
-    if target != "virtualbox":
-        die(f"target {target!r} is not implemented yet — only 'virtualbox' for now.")
+    if target not in ("virtualbox", "qemu"):
+        die(f"target {target!r} is not implemented yet")
+    if target == "qemu" and args.replace:
+        die("QEMU VMs cannot be replaced by this builder; choose a new --name")
+    if target == "qemu" and args.firmware == "efi":
+        die("QEMU EFI is not configured; use --firmware bios")
+    if target == "qemu" and args.accelerate_3d:
+        die("QEMU 3D acceleration is not configured")
 
     # preflight
     if not args.dry_run:
-        tools = ["VBoxManage"]
+        tools = ["VBoxManage"] if target == "virtualbox" else ["qemu-img", "qemu-system-x86_64"]
+        if target == "qemu" and not Path("/dev/kvm").exists():
+            die("QEMU/KVM requires /dev/kvm on this host")
         if not args.iso:
             tools.extend(("xorriso", "openssl"))
         if not args.no_wait:
@@ -2244,6 +2296,8 @@ def main() -> None:
             warn("using a prebuilt automated ISO: builder identity options are NOT "
                  "applied; protected credentials entered here must match that ISO")
     cfg = gather_config(args)
+    if target == "qemu" and cfg.firmware != "bios":
+        die("QEMU EFI is not configured; use --firmware bios")
     if args.iso and cfg.credential_generated:
         die("--generate-one-time-password cannot match a prebuilt ISO; use its protected password file")
     confirm_summary(cfg, args.yes)
@@ -2269,8 +2323,10 @@ def main() -> None:
 
     # Refuse before spending an hour rebuilding an ISO. Replacement is one
     # explicit operation covering the VM and generated evidence for this run.
-    if vbox_exists(cfg.name) and not args.replace:
+    if target == "virtualbox" and vbox_exists(cfg.name) and not args.replace:
         die(f"a VM named {cfg.name!r} already exists; pass --replace explicitly")
+    if target == "qemu" and (qemu_vm_dir(cfg.name).exists() or qemu_vm_dir(cfg.name).is_symlink()):
+        die(f"QEMU VM output already exists: {qemu_vm_dir(cfg.name)}; choose a new VM name")
     if out is not None and not args.replace:
         preflight_unattended_output(out)
     report_path = args.report.resolve() if args.report else None
@@ -2298,18 +2354,24 @@ def main() -> None:
     if _RECORDER is not None:
         _RECORDER.set_iso(iso)
 
-    vbox_create(cfg, iso, replace=args.replace, assume_yes=args.yes)
+    if target == "virtualbox":
+        vbox_create(cfg, iso, replace=args.replace, assume_yes=args.yes)
+        if _RECORDER is not None:
+            _RECORDER.stage("VirtualBox VM created")
+        vbox_start(cfg)
+    else:
+        vm_dir = qemu_create(cfg)
+        if _RECORDER is not None:
+            _RECORDER.stage("QEMU VM created")
+        qemu_start(cfg, iso, vm_dir)
     if _RECORDER is not None:
-        _RECORDER.stage("VirtualBox VM created")
-    vbox_start(cfg)
-    if _RECORDER is not None:
-        _RECORDER.stage("VirtualBox VM started")
+        _RECORDER.stage(f"{target} VM started")
 
     if not cfg.wait:
         info(f"VM {cfg.name!r} started; not waiting (--no-wait).")
         if _RECORDER is not None:
             _RECORDER.complete("vm-started-no-verification")
-        final_summary(cfg, iso)
+        final_summary(cfg, iso, target)
         return
 
     with _askpass_for(cfg.password) as askpass:
@@ -2319,9 +2381,10 @@ def main() -> None:
             provisioning_ready = True
             if _RECORDER is not None:
                 _RECORDER.stage("installer and firstboot completed")
-            vbox_detach_iso(cfg)
-            if _RECORDER is not None:
-                _RECORDER.stage("installer ISO detached")
+            if target == "virtualbox":
+                vbox_detach_iso(cfg)
+                if _RECORDER is not None:
+                    _RECORDER.stage("installer ISO detached")
             if not args.no_verify:
                 verify_provisioning(cfg, askpass)
                 if _RECORDER is not None:
@@ -2337,7 +2400,7 @@ def main() -> None:
         _RECORDER.complete(
             "passed" if not args.no_verify else "completed-without-verification"
         )
-    final_summary(cfg, iso)
+    final_summary(cfg, iso, target)
 
 
 if __name__ == "__main__":
