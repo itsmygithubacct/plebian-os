@@ -479,12 +479,15 @@ do_rollback() {
     return 0
   fi
 
-  say "  Every installed nvidia* package will be purged and nouveau restored."
+  say "  Proprietary NVIDIA driver packages will be purged and nouveau firmware retained."
   confirm "Proceed with rollback? This ends with a required REBOOT."
 
   export DEBIAN_FRONTEND=noninteractive
 
-  apt-get purge -y '~nnvidia' || apt-get purge -y 'nvidia-*' 'libnvidia-*'
+  # Explicit namespaces exclude firmware-nvidia-graphics (needed by Nouveau).
+  # Installing it explicitly also marks it manual before autoremove runs.
+  apt-get install -y firmware-nvidia-graphics
+  apt-get purge -y '~n^nvidia-' '~n^libnvidia-' '~n^libcuda1$' '~n^libnvcuvid1$' '~n^libnvoptix1$' '~n^xserver-xorg-video-nvidia'
   apt-get autoremove -y --purge
   ok "nvidia packages purged"
 

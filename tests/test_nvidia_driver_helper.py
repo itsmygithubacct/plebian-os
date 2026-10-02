@@ -8,6 +8,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+
+import re
 import unittest
 from pathlib import Path
 
@@ -113,6 +115,44 @@ class HelperUsage(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout)
+
+
+class RollbackFirmwareTests(unittest.TestCase):
+    def test_rollback_installs_firmware_before_purge_and_autoremove(self):
+        source = HELPER.read_text()
+        start = source.index("do_rollback() {")
+        function = source[start:source.index("\n}\n", start) + 3]
+        # Run only the package phase; no real APT, devices or modprobe paths.
+        function = function[:function.index("  # Purging the driver")] + "}\n"
+        with tempfile.TemporaryDirectory() as td:
+            script = """
+set -euo pipefail
+need_root() { :; }; head_() { :; }; say() { :; }; confirm() { :; }; ok() { :; }
+dpkg() { printf 'ii  nvidia-driver 1 amd64\n'; }
+apt-get() { printf '%s\n' "$*" >> "$LOG"; }
+""" + function + "\ndo_rollback\n"
+            log = Path(td) / "apt.log"
+            result = subprocess.run(["bash", "-c", script],
+                                    env={**os.environ, "LOG": str(log)},
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text().splitlines()
+            # A missing firmware candidate must stop before any removal.
+            log.unlink()
+            failed = subprocess.run(
+                ["bash", "-c", script.replace('>> "$LOG";', '>> "$LOG"; return 1;')],
+                env={**os.environ, "LOG": str(log)}, capture_output=True, text=True)
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertEqual(log.read_text().splitlines(),
+                             ["install -y firmware-nvidia-graphics"])
+            self.assertEqual(calls[0], "install -y firmware-nvidia-graphics")
+            self.assertEqual(calls[2], "autoremove -y --purge")
+            patterns = calls[1].split()[2:]
+            for package in ("firmware-nvidia-graphics", "firmware-misc-nonfree"):
+                self.assertFalse(any(re.search(p[2:], package) for p in patterns))
+            for package in ("nvidia-driver", "libnvidia-glcore", "libcuda1",
+                            "xserver-xorg-video-nvidia"):
+                self.assertTrue(any(re.search(p[2:], package) for p in patterns))
 
 
 def _resolve(detect_output, candidates):
