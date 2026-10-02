@@ -1862,6 +1862,41 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         # temporary libkilix-state exactly as a direct test launch requires;
         # the raw test module only inherits that library inside `kilix desktop`.
         'python3 "$KILIX95_DIR/tests/run.py" shell_xpane')
+    wizard_inventory_script = '''import json, sys
+data = json.load(sys.stdin)
+assert data['schema'] == 'kilix.model-wizard/v1'
+pages = {page['id']: page for page in data['pages']}
+required = {'speech', 'dictation', 'workflows', 'vision', 'audio',
+            'image', 'system-local-llm'}
+assert required <= pages.keys()
+assert len(pages['vision']['models']) >= 2
+assert len(pages['audio']['models']) >= 2
+assert len(pages['image']['models']) >= 2
+assert len(pages['system-local-llm']['models']) >= 2
+for page in pages.values():
+    models = {model['id']: model for model in page['models']}
+    assert len(models) == len(page['models']) and models
+    assert page['recommendation']
+    assert page['default'] is None or page['default'] in models
+    for model in models.values():
+        assert model['download_bytes'] >= 0
+        assert model['disk_required_bytes'] >= model['installed_bytes']
+        assert model['fit'] in ('unknown', 'estimated-fit', 'does-not-fit', 'unsupported')
+default = pages['system-local-llm']['default']
+if default is not None:
+    chosen = next(model for model in pages['system-local-llm']['models']
+                  if model['id'] == default)
+    assert chosen['fit'] == 'estimated-fit'
+    assert isinstance(chosen['ram_bytes'], int) and chosen['ram_bytes'] > 0
+'''
+    wizard_inventory_contract = (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        'inventory="$(timeout 60 "$KILIX_DIR/kilix" wizard --all --json)" || exit; '
+        'printf \'%s\\n\' "$inventory" | python3 -c '
+        + shlex.quote(wizard_inventory_script))
+    kilix95_wizard_contract = (
+        gui_routing_environment +
+        'python3 "$KILIX95_DIR/tests/run.py" model_wizard license_terminal')
     visible_kilix_chrome = (
         "grep -Fq 'KILIX_ARGV=(--start-as=maximized -o hide_window_decorations=yes)' "
         "/usr/local/bin/pleb-session && "
@@ -1956,6 +1991,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         ("Kilix shell GUI routing tests", kilix_bashrc_routing_contract),
         ("Kilix desktop GUI routing tests", kilix_desktop_routing_contract),
         ("Kilix-95 GUI routing tests", kilix95_routing_contract),
+        ("wizard CLI inventory", wizard_inventory_contract),
+        ("Kilix-95 wizard and licence terminal tests", kilix95_wizard_contract),
         ("voice closure policy", _voice_acceptance_command(expected_voice_policy)),
         ("transcript disk budget", _transcript_acceptance_command()),
         ("visible kilix chrome", visible_kilix_chrome),
@@ -2031,7 +2068,9 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
     else:
         checks.append(("kilix engine", kdir + ' test -x "$d/kilix"'))
     failed = []
-    check_timeouts = {"Kilix-95 GUI routing tests": 60}
+    check_timeouts = {"Kilix-95 GUI routing tests": 60,
+                      "wizard CLI inventory": 90,
+                      "Kilix-95 wizard and licence terminal tests": 90}
     for name, cmd in checks:
         r = ssh(cfg, cmd, askpass,
                 timeout=max(check_timeouts.get(name, 15),
