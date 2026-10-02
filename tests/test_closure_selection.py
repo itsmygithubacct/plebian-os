@@ -9,6 +9,7 @@ touching a single operator-controlled choice.
 import fcntl
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import tempfile
@@ -949,6 +950,122 @@ class ClosureSelectionTests(unittest.TestCase):
                     os.close(competitor)
             finally:
                 os.close(fd)
+
+    def _selected_split_fixture(self, base):
+        session = self._machine(base)
+        self._source(
+            base, self._f120_manifest_text(), version="0.2.1",
+            release="0.2.1", tag="v0.2.1",
+            requirements_text=(ROOT / "releases/0.2.1.requirements").read_text())
+        selected = self._run(base, "0.2.1", "--offline")
+        self.assertEqual(selected.returncode, 0, selected.stderr)
+        return session
+
+    def test_split_rollback_sync_failure_is_retryable(self):
+        for fail_target in ("marker", "record"):
+            with self.subTest(target=fail_target), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                session = self._selected_split_fixture(base)
+                paths = (session, session.with_name("closure.env"),
+                         base / "root/usr/local/bin/plebian-os-select-closure",
+                         base / "root/usr/local/bin/plebian-os-update")
+                before = tuple(p.read_bytes() for p in paths)
+                record = self._recovery_records(base)[0]
+                bindir = base / "mock-bin"
+                bindir.mkdir()
+                target = record / "restored" if fail_target == "marker" else record
+                (bindir / "sync").write_text(
+                    '#!/bin/sh\n[ "$2" != ' + shlex.quote(str(target)) + ' ]\n')
+                (bindir / "sync").chmod(0o755)
+                failed = self._run(base, "--rollback", env_extra={
+                    "PATH": str(bindir) + ":" + os.environ["PATH"]})
+                self.assertNotEqual(failed.returncode, 0)
+                self.assertEqual(tuple(p.read_bytes() for p in paths), before)
+                self.assertFalse((record / "restored").exists())
+                retried = self._run(base, "--rollback")
+                self.assertEqual(retried.returncode, 0, retried.stderr)
+
+    def test_incomplete_compensation_keeps_current_operator_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session = self._selected_split_fixture(base)
+            with session.open("a") as stream:
+                stream.write("OPERATOR_NOTE=keep-me\n")
+            before = session.read_bytes()
+            bindir = base / "mock-bin"
+            bindir.mkdir()
+            real_cp = shutil.which("cp")
+            (bindir / "cp").write_text(
+                '#!/bin/sh\ncase "$3" in */.closure-rollback-current.*/*) exit 1;; esac\n'
+                + "exec " + shlex.quote(real_cp) + ' "$@"\n')
+            (bindir / "cp").chmod(0o755)
+            failed = self._run(base, "--rollback", fail_after="rollback-session",
+                              env_extra={"PATH": str(bindir) + ":" + os.environ["PATH"]})
+            self.assertNotEqual(failed.returncode, 0)
+            snapshots = list((base / "root/var/lib/plebian-os").glob(
+                ".closure-rollback-current.*"))
+            self.assertEqual(len(snapshots), 1, failed.stderr)
+            self.assertEqual((snapshots[0] / "session.env").read_bytes(), before)
+            self.assertIn(str(snapshots[0]), failed.stderr)
+            self.assertFalse((self._recovery_records(base)[0] / "restored").exists())
+
+    def test_exported_release_metadata_is_canonical_and_old_records_still_restore(self):
+        for old_record in (False, True):
+            with self.subTest(old_record=old_record), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                session = self._machine(base, release=self._release_values("0.2.2"))
+                text = session.read_text()
+                for key, value in (("PLEBIAN_OS_VERSION", "0.2.2"),
+                                   ("PLEBIAN_OS_RELEASE_MODE", "1")):
+                    text = text.replace(guarded(key, value), f'export {key}="{value}"')
+                session.write_text(text)
+                self._source(
+                    base, (ROOT / "releases/0.2.2.env").read_text(),
+                    version="0.2.2", release="0.2.2", tag="v0.2.2",
+                    requirements_text=(ROOT / "releases/0.2.2.requirements").read_text())
+                selected = self._run(base, "0.2.2", "--offline")
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                metadata = self._recovery_records(base)[0] / "release-metadata.env"
+                self.assertEqual(metadata.read_text(),
+                                 "PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_RELEASE_MODE=1\n")
+                if old_record:
+                    metadata.unlink()
+                self._leave_install_snapshot(base)
+                restored = self._run(base, "--rollback")
+                self.assertEqual(restored.returncode, 0, restored.stderr)
+                self.assertEqual(session.read_text(), text)
+
+    def test_recovery_metadata_parser_accepts_literals_and_refuses_ambiguity(self):
+        source = SELECT.read_text()
+        start = source.index("record_release_value() {")
+        function = source[start:source.index("\n}\n", start) + 3]
+        # All privileged transactions receive the same standalone data parser.
+        self.assertEqual(source.count("declare -f record_release_value"), 4)
+        cases = [
+            ('export PLEBIAN_OS_VERSION="0.2.2"', "0.2.2"),
+            ("PLEBIAN_OS_VERSION='0.2.2'", "0.2.2"),
+            (r"PLEBIAN_OS_VERSION=0\.2\.2", "0.2.2"),
+            ('PLEBIAN_OS_VERSION=0."2".2', "0.2.2"),
+            (guarded("PLEBIAN_OS_VERSION", "0.2.2"), "0.2.2"),
+            ('if true; then PLEBIAN_OS_VERSION=0.2.2; fi', None),
+            ('OTHER=note; PLEBIAN_OS_VERSION=0.2.2', None),
+            ('PLEBIAN_OS_VERSION="unknown"', None),
+            (r'PLEBIAN_OS_VERSION="0\.2\.2"', None),
+            ('# no release metadata', None),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line), tempfile.TemporaryDirectory() as td:
+                record = Path(td)
+                (record / "session.env").write_text(line + "\n")
+                result = subprocess.run(
+                    ["bash", "-c", function + '\nrecord="$1"\n'
+                     'record_release_value PLEBIAN_OS_VERSION', "bash", td],
+                    capture_output=True, text=True)
+                if expected is None:
+                    self.assertNotEqual(result.returncode, 0)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), expected)
 
     def test_standalone_split_selects_and_rolls_back_without_os_tooling(self):
         with tempfile.TemporaryDirectory() as td:

@@ -1403,6 +1403,73 @@ installed_tool_fingerprint() {
     fi
 }
 
+# Read only literal numeric release metadata; never execute saved configuration.
+# Guarded defaults keep the first value; plain/export assignments replace it.
+record_release_value() {
+    local key="$1" file line rhs value="" decoded char quote escaped guarded found=0
+    local managed='^if \[ -z "\$\{([A-Za-z_][A-Za-z0-9_]*)\+x\}" \]; then ([A-Za-z_][A-Za-z0-9_]*)=(.*); fi$'
+    local simple='^(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$'
+    local -a files=(session.env)
+    if [ -e "$record/release-metadata.env" ]; then
+        files=(release-metadata.env)
+    elif [ -f "$record/closure.existed" ] && [ "$(cat "$record/closure.existed")" = 1 ]; then
+        files+=(closure.env)
+    fi
+    for file in "${files[@]}"; do
+        if [ "$file" = session.env ] && [ -f "$record/session.existed" ] \
+                && [ "$(cat "$record/session.existed")" = 0 ]; then continue; fi
+        [ -f "$record/$file" ] && [ ! -L "$record/$file" ] || return 2
+        while IFS= read -r line || [ -n "$line" ]; do
+            guarded=0
+            [[ ! $line =~ ^[[:space:]]*(#|$) ]] || continue
+            if [[ $line =~ $managed ]] && [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ]; then
+                if [ "${BASH_REMATCH[1]}" != "$key" ]; then
+                    [[ ! $line =~ (^|[^A-Za-z0-9_])"$key"[=+] ]] || return 2
+                    continue
+                fi
+                rhs="${BASH_REMATCH[3]}"; guarded=1
+            elif [[ $line =~ $simple ]]; then
+                if [ "${BASH_REMATCH[2]}" != "$key" ]; then
+                    [[ ! $line =~ (^|[^A-Za-z0-9_])"$key"[=+] ]] || return 2
+                    continue
+                fi
+                rhs="${BASH_REMATCH[3]}"
+            else
+                [[ ! $line =~ (^|[^A-Za-z0-9_])"$key"[=+] ]] || return 2
+                continue
+            fi
+            decoded=""; quote=""; escaped=0
+            while [ -n "$rhs" ]; do
+                char="${rhs:0:1}"; rhs="${rhs:1}"
+                if [ "$escaped" = 1 ]; then
+                    [[ "$char" =~ ^[0-9.]$ ]] || return 2
+                    decoded+="$char"; escaped=0
+                elif [ "$char" = "\\" ] && [ "$quote" != "'" ]; then
+                    # Inside double quotes bash preserves backslashes before
+                    # digits/dots, so those are not numeric literal values.
+                    [ -z "$quote" ] || return 2
+                    escaped=1
+                elif [ "$char" = "'" ] || [ "$char" = '"' ]; then
+                    if [ -z "$quote" ]; then quote="$char"
+                    elif [ "$quote" = "$char" ]; then quote=""
+                    else return 2; fi
+                else
+                    [[ "$char" =~ ^[0-9.]$ ]] || return 2
+                    decoded+="$char"
+                fi
+            done
+            [ -z "$quote" ] && [ "$escaped" = 0 ] || return 2
+            if [ "$guarded" = 0 ] || [ "$found" = 0 ]; then value="$decoded"; found=1; fi
+        done <"$record/$file"
+    done
+    case "$key" in
+        PLEBIAN_OS_RELEASE_MODE) [[ "$value" =~ ^[01]$ ]] || return 2 ;;
+        PLEBIAN_OS_VERSION) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 2 ;;
+        *) return 2 ;;
+    esac
+    printf '%s\n' "$value"
+}
+
 apply_selected_closure() {
     local pre_sha post_sha selector_pre selector_post selector_expected
     local updater_pre updater_post updater_expected rc=0 record
@@ -1416,7 +1483,7 @@ apply_selected_closure() {
     # shell writing into the stage would leave something root cannot hand back.
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$SELECTOR_DST" "$UPDATER_DST" "$STAGE" "$RECOVERY_BASE" \
-        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" <<'ROOT_APPLY' || rc=$?
+        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_APPLY'
 set -euo pipefail
 umask 077
 env_path="$1"; selector_path="$2"; updater_path="$3"; stage="$4"; base="$5"; fail_after="$6"
@@ -1525,6 +1592,10 @@ for i in "${!tool_paths[@]}"; do
     fi
 done
 cp -- "$stage/closure.env" "$record/closure.env"
+record_version="$(record_release_value PLEBIAN_OS_VERSION)" || exit 6
+record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
+printf 'PLEBIAN_OS_VERSION=%s\nPLEBIAN_OS_RELEASE_MODE=%s\n' \
+    "$record_version" "$record_mode" >"$record/release-metadata.env"
 cp -- "$stage/meta" "$record/meta"
 [ "$fail_after" != backup ] || exit 9
 env_tmp="$(mktemp "$(dirname -- "$env_path")/.session.env.XXXXXX")"
@@ -1551,6 +1622,7 @@ env_tmp=""
 env_moved=1
 printf '%s\n' "$record"
 ROOT_APPLY
+    ) || rc=$?
     if [ "$rc" -ne 0 ]; then
         post_sha="$(sha256sum "$SESSION_ENV" 2>/dev/null | awk '{print $1}')" || post_sha=""
         selector_post="$(installed_tool_fingerprint "$SELECTOR_DST")"
@@ -1599,7 +1671,7 @@ apply_split_closure() {
         "$SESSION_ENV" "$CLOSURE_ENV" "$SELECTOR_DST" "$UPDATER_DST" \
         "$STAGE" "$RECOVERY_BASE" "$SELECTOR_MODE" \
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" "$config_uid" "$config_gid" \
-        >"$STAGE/record" <<'ROOT_SPLIT_APPLY' || rc=$?
+        >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_SPLIT_APPLY'
 set -euo pipefail
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
@@ -1704,6 +1776,10 @@ for i in "${!paths[@]}"; do
         printf '%s\n' 0 >"$record/$key.existed"
     fi
 done
+record_version="$(record_release_value PLEBIAN_OS_VERSION)" || exit 6
+record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
+printf 'PLEBIAN_OS_VERSION=%s\nPLEBIAN_OS_RELEASE_MODE=%s\n' \
+    "$record_version" "$record_mode" >"$record/release-metadata.env"
 cp -- "$stage/meta" "$record/meta"
 cp -- "$stage/closure.env" "$record/selected-closure.env"
 for file in "$record"/*; do sync -f "$file"; done
@@ -1740,6 +1816,7 @@ done
 sync -f "$(dirname -- "$closure_path")"
 printf '%s\n' "$record"
 ROOT_SPLIT_APPLY
+    ) || rc=$?
     if [ "$rc" -ne 0 ]; then
         session_post="$(installed_tool_fingerprint "$SESSION_ENV")"
         closure_post="$(installed_tool_fingerprint "$CLOSURE_ENV")"
@@ -1806,7 +1883,7 @@ rollback_previous_closure() {
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$SELECTOR_DST" "$UPDATER_DST" "$RECOVERY_BASE" \
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
-        >"$STAGE/record" <<'ROOT_ROLLBACK' || rc=$?
+        >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_ROLLBACK'
 set -euo pipefail
 umask 077
 env_path="$1"; selector_path="$2"; updater_path="$3"; base="$4"; fail_after="$5"
@@ -1843,17 +1920,6 @@ fi
 # gone). The security policy is written before a switch that can still roll
 # back, so it is not evidence, and a machine an administrator unpinned by hand
 # can still undo a selection. The record is read as data, never sourced.
-record_release_value() {
-    local line value=""
-    while IFS= read -r line; do
-        line="${line#"if [ -z \"\${$1+x}\" ]; then "}"
-        case "$line" in
-            "$1="*) value="${line#"$1="}"; value="${value%"; fi"}" ;;
-        esac
-    done <"$record/session.env"
-    value="${value#\'}"
-    printf '%s\n' "${value%\'}"
-}
 apt_root="${env_path%/etc/pleb/session.env}/etc/apt"
 migrated=0
 if [ ! -e "$apt_root/sources.list.d/plebian-os-snapshot.sources" ]; then
@@ -1862,9 +1928,10 @@ if [ ! -e "$apt_root/sources.list.d/plebian-os-snapshot.sources" ]; then
         if [ -e "$evidence" ]; then migrated=1; fi
     done
 fi
-record_version="$(record_release_value PLEBIAN_OS_VERSION)"
+record_version="$(record_release_value PLEBIAN_OS_VERSION)" || exit 6
+record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
 if [ "$migrated" = 1 ] \
-    && [ "$(record_release_value PLEBIAN_OS_RELEASE_MODE)" = 1 ] \
+    && [ "$record_mode" = 1 ] \
     && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
     && [ "$record_version" != 0.2.2 ] \
     && [ "$(printf '%s\n%s\n' "$record_version" 0.2.2 | sort -V | head -n 1)" = "$record_version" ]; then
@@ -2026,8 +2093,10 @@ env_moved=1
 restored_marked=1
 printf '%s\n' "$record"
 ROOT_ROLLBACK
+    ) || rc=$?
     case "$rc" in
         0) ;;
+        6) die "recovery release metadata is missing, invalid, or ambiguous; no files were restored" ;;
         4) die "no closure to roll back to under $RECOVERY_BASE — this tool has not replaced a closure on this machine" ;;
         5)
             prev="$(cat "$STAGE/record")"
@@ -2053,7 +2122,7 @@ rollback_split_closure() {
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$CLOSURE_ENV" "$SELECTOR_DST" "$UPDATER_DST" \
         "$RECOVERY_BASE" "$SELECTOR_MODE" \
-        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" <<'ROOT_SPLIT_ROLLBACK' || rc=$?
+        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_SPLIT_ROLLBACK'
 set -euo pipefail
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
@@ -2067,6 +2136,29 @@ for candidate in "$base"/closure-rollback.*; do
     record="$candidate"
 done
 [ -n "$record" ] || exit 4
+
+# Apply the same live-APT downgrade floor as legacy rollback, reading the
+# saved split pair in configuration order. Never source recovery records.
+if [ "$mode" = image ]; then
+    apt_root="${session_path%/etc/pleb/session.env}/etc/apt"
+    migrated=0
+    if [ ! -e "$apt_root/sources.list.d/plebian-os-snapshot.sources" ]; then
+        for evidence in "$apt_root/sources.list.plebian-os-installer-snapshot" \
+            "$apt_root/sources.list.d/plebian-os-debian.sources"; do
+            if [ -e "$evidence" ]; then migrated=1; fi
+        done
+    fi
+    record_version="$(record_release_value PLEBIAN_OS_VERSION)" || exit 6
+    record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
+    if [ "$migrated" = 1 ] \
+        && [ "$record_mode" = 1 ] \
+        && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [ "$record_version" != 0.2.2 ] \
+        && [ "$(printf '%s\n%s\n' "$record_version" 0.2.2 | sort -V | head -n 1)" = "$record_version" ]; then
+        printf '%s\n' "$record_version"
+        exit 5
+    fi
+fi
 names=(session.env closure.env)
 paths=("$session_path" "$closure_path")
 keys=(session closure)
@@ -2079,6 +2171,7 @@ if [ "$mode" = image ]; then
 fi
 current_dir="$(mktemp -d "$base/.closure-rollback-current.XXXXXX")"
 current_existed=() moved=()
+restored_marked=0
 restore_copy() {
     local src="$1" dst="$2" tmp
     tmp="$(mktemp "$(dirname -- "$dst")/.plebian-os-restore.XXXXXX")" || return 1
@@ -2092,14 +2185,20 @@ cleanup() {
         set +e
         rollback_ok=1
         for ((i=${#paths[@]}-1; i>=0; i--)); do
-            [ "${moved[$i]}" = 1 ] || continue
+            [ "${moved[$i]:-0}" = 1 ] || continue
             if [ "${current_existed[$i]}" = 1 ]; then
                 restore_copy "$current_dir/${names[$i]}" "${paths[$i]}" || rollback_ok=0
             else
                 rm -f -- "${paths[$i]}" || rollback_ok=0
             fi
         done
-        [ "$rollback_ok" = 1 ] || rc=10
+        if [ "$restored_marked" = 1 ]; then
+            rm -f -- "$record/restored" || rollback_ok=0
+        fi
+        if [ "$rollback_ok" != 1 ]; then
+            printf 'rollback compensation incomplete; current files retained at %s\n' "$current_dir" >&2
+            exit 10
+        fi
     fi
     rm -rf -- "$current_dir"
     exit "$rc"
@@ -2135,11 +2234,13 @@ for i in "${order[@]}"; do
     moved[$i]=1
     [ "$fail_after" != "${boundaries[$i]}" ] || exit 9
 done
+restored_marked=1
 printf '%s\n' "restored=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$record/restored"
 sync -f "$record/restored"
 sync -f "$record"
 printf '%s\n' "$record"
 ROOT_SPLIT_ROLLBACK
+    ) || rc=$?
     if [ "$rc" -ne 0 ]; then
         session_post="$(installed_tool_fingerprint "$SESSION_ENV")"
         closure_post="$(installed_tool_fingerprint "$CLOSURE_ENV")"
@@ -2151,6 +2252,7 @@ ROOT_SPLIT_ROLLBACK
                 && [ "$selector_post" = "$selector_pre" ] \
                 && [ "$updater_post" = "$updater_pre" ]; then
             case "$rc" in
+                6) die "recovery release metadata is missing, invalid, or ambiguous; no files were restored" ;;
                 4) die "no split closure to roll back to" ;;
                 9) die "injected split rollback failure; the selected session, closure, and tools were retained" ;;
                 *) die "split closure rollback failed with status $rc; the selected bytes were retained" ;;
