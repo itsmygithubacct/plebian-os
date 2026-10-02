@@ -28,10 +28,13 @@ PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
 PLEBIAN_OS_INSTALL_WAYDROID=1
 PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175
 
-# The model compliance carrier and the licence interface it binds. A carrier
-# change moves these pins in both files (tests/test_model_compliance_carrier.py AC-12).
+# The RC5 model compliance carrier and the licence interface it binds. This
+# candidate has no acceptance receipt yet: the all-zero receipt pin is an
+# explicit fail-closed placeholder, not a release approval. Independent review
+# must create ACCEPTANCE.json and replace this pin before release mode builds.
+# A carrier change moves these pins in both files (AC-12).
 PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.2-model-compliance
-PLEBIAN_OS_VOICE_CARRIER_SHA256=9555eab199288e3045e83473fb5a0a58678b2408847046d6834875d6a5bf5588
-PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=26c7dfd5e2b525851cf7494bfdc5bfd49eade6c0d6e0d968c17fc48ef2cca08b
-KILIX_LICENSE_REF=993c8ec0df87c677521652b7c3a8ca9797ce2cba
-PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=2eb91210ed4a4f566b7bb2a2a58c32b4aaef6b16
+PLEBIAN_OS_VOICE_CARRIER_SHA256=82e807a96225ea21910fdb88747924c182959c62afee0bd81aae6741149c6c4c
+PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+KILIX_LICENSE_REF=ca8a0f479893ab9c8cd6cadc2716c474aaad2820
+PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=247d3caf1a05370b848ba0c558c6fb3bef04066f
