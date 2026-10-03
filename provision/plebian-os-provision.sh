@@ -1304,6 +1304,14 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/sbin/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
     /usr/local/bin/pleb-session
+    /usr/local/bin/pleb-lock
+    /usr/local/lib/pleb/displays.py
+    /usr/local/lib/pleb/capture_sources.py
+    /usr/local/lib/pleb/capture_worker.py
+    /usr/local/lib/pleb/capture_portal.py
+    /usr/local/share/xdg-desktop-portal/portals/pleb.portal
+    /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
+    /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
@@ -1348,6 +1356,14 @@ PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
 # files are removed. rmdir is intentional: unexpected contents are retained
 # and turn the rollback into a reported, inspectable failure.
 PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
+    /usr/local/lib
+    /usr/local/lib/pleb
+    /usr/local/share/xdg-desktop-portal
+    /usr/local/share/xdg-desktop-portal/portals
+    /usr/local/share/dbus-1
+    /usr/local/share/dbus-1/services
+    /etc/wireplumber
+    /etc/wireplumber/wireplumber.conf.d
     /usr/local/libexec
     /usr/local/libexec/plebian-os
     /etc/modprobe.d
@@ -6118,23 +6134,22 @@ fi
 # its backends from <desktop>-portals.conf. With no such file every interface
 # fell to a "last-resort fallback" the portal logs as such, and the Settings
 # interface timed out on the way. Name the backend explicitly: gtk, for every
-# interface it implements. ScreenCast and Screenshot are deliberately unmapped
-# -- gtk does not provide them and this image runs PulseAudio, not a PipeWire
-# daemon, so nothing here could serve them; leaving them absent is the honest
-# declaration rather than a fallback that changes with the portal's version.
+# interface it implements, and Pleb for its user-selected X11 captures.
+# WirePlumber's video-only profile keeps PulseAudio in charge of audio.
 PORTALS_CONF=/etc/xdg-desktop-portal/pleb-portals.conf
 log "declaring the portal backends for the Pleb desktop"
 if [ "$DRY_RUN" = 1 ]; then
-    echo "    + write $PORTALS_CONF ([preferred] default=gtk)"
+    echo "    + write $PORTALS_CONF ([preferred] default=gtk, captures=pleb)"
 else
     mkdir -p "$(dirname "$PORTALS_CONF")"
     cat > "$PORTALS_CONF" <<EOF
 # Managed by plebian-os-provision. Portal backends for XDG_CURRENT_DESKTOP=Pleb.
 # gtk implements FileChooser, AppChooser, Print, Notification, Inhibit, Access,
-# Account, Email, DynamicLauncher, Lockdown and Settings. ScreenCast and
-# Screenshot are intentionally not provided on this desktop.
+# Account, Email, DynamicLauncher, Lockdown and Settings. Pleb provides capture.
 [preferred]
 default=gtk
+org.freedesktop.impl.portal.ScreenCast=pleb
+org.freedesktop.impl.portal.Screenshot=pleb
 EOF
 fi
 

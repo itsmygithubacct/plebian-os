@@ -44,6 +44,10 @@ BASE_BROWSER_PACKAGES = {"chromium"}
 LAZY_BROWSER_PACKAGES = {"firefox-esr"}
 DESKTOP_SCREENSHOT_PACKAGES = {"xfce4-screenshooter"}
 DISPLAY_ARRANGER_PACKAGES = {"python3-tk", "python3-xlib", "x11-xserver-utils"}
+DESKTOP_CAPTURE_PACKAGES = {
+    "pipewire", "pipewire-bin", "wireplumber", "gstreamer1.0-pipewire", "gstreamer1.0-x",
+    "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gir1.2-gst-plugins-base-1.0", "gir1.2-gtk-3.0", "python3-gi-cairo",
+}
 DESKTOP_SERVICE_PACKAGES = {
     "xss-lock", "i3lock", "xssproxy", "xfce4-power-manager", "xfconf", "lxpolkit",
     "blueman", "pulseaudio-module-bluetooth", "udisks2", "udiskie", "gnome-disk-utility",
@@ -231,6 +235,11 @@ def qualification_packages():
 
 
 class DependencyManifestTests(unittest.TestCase):
+    def test_capture_has_a_video_session_manager_on_both_install_paths(self):
+        for packages in (preseed_packages(), install_deps_packages()):
+            self.assertLessEqual(DESKTOP_CAPTURE_PACKAGES, packages)
+            self.assertNotIn("pipewire-pulse", packages)
+
     def test_display_arranger_prerequisites_are_on_both_install_paths(self):
         self.assertLessEqual(DISPLAY_ARRANGER_PACKAGES, preseed_packages())
         self.assertLessEqual(DISPLAY_ARRANGER_PACKAGES, install_deps_packages())

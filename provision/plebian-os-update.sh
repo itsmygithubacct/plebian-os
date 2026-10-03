@@ -584,6 +584,8 @@ PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/ses
 # this privileged whole-stack transaction rather than feeding caller-controlled
 # paths into its root rollback routine.
 SESSION_BIN_DST="${SESSION_BIN_DST:-/usr/local/bin/pleb-session}"
+PLEB_LOCK_DST="${PLEB_LOCK_DST:-/usr/local/bin/pleb-lock}"
+PLEB_DISPLAYS_DST="${PLEB_DISPLAYS_DST:-/usr/local/lib/pleb/displays.py}"
 XSESSION_DST="${XSESSION_DST:-/usr/share/xsessions/pleb.desktop}"
 KILIX_LINK="${KILIX_LINK:-/usr/local/bin/kilix}"
 KILIX_SETTINGS_LINK="${KILIX_SETTINGS_LINK:-/usr/local/bin/kilix-settings}"
@@ -747,6 +749,8 @@ _PROVENANCE_STAGE=""
 
 require_standard_install_destinations() {
     if [ "$SESSION_BIN_DST" != /usr/local/bin/pleb-session ] \
+        || [ "$PLEB_LOCK_DST" != /usr/local/bin/pleb-lock ] \
+        || [ "$PLEB_DISPLAYS_DST" != /usr/local/lib/pleb/displays.py ] \
         || [ "$XSESSION_DST" != /usr/share/xsessions/pleb.desktop ] \
         || [ "$KILIX_LINK" != /usr/local/bin/kilix ] \
         || [ "$KILIX_SETTINGS_LINK" != /usr/local/bin/kilix-settings ] \
@@ -1024,6 +1028,15 @@ paths=(
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/pleb-session
+    /usr/local/bin/pleb-lock
+    /usr/local/lib/pleb/displays.py
+    /usr/local/lib/pleb/capture_sources.py
+    /usr/local/lib/pleb/capture_worker.py
+    /usr/local/lib/pleb/capture_portal.py
+    /usr/local/share/xdg-desktop-portal/portals/pleb.portal
+    /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
+    /etc/xdg-desktop-portal/pleb-portals.conf
+    /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
@@ -1043,6 +1056,15 @@ paths=(
     /var/lib/plebian-os/apt-sources.list
 )
 managed_dirs=(
+    /usr/local/lib
+    /usr/local/lib/pleb
+    /usr/local/share/xdg-desktop-portal
+    /usr/local/share/xdg-desktop-portal/portals
+    /usr/local/share/dbus-1
+    /usr/local/share/dbus-1/services
+    /etc/xdg-desktop-portal
+    /etc/wireplumber
+    /etc/wireplumber/wireplumber.conf.d
     /usr/local/libexec
     /usr/local/libexec/plebian-os
     /usr/local/share/plebian-os
@@ -1154,6 +1176,15 @@ paths=(
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/pleb-session
+    /usr/local/bin/pleb-lock
+    /usr/local/lib/pleb/displays.py
+    /usr/local/lib/pleb/capture_sources.py
+    /usr/local/lib/pleb/capture_worker.py
+    /usr/local/lib/pleb/capture_portal.py
+    /usr/local/share/xdg-desktop-portal/portals/pleb.portal
+    /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
+    /etc/xdg-desktop-portal/pleb-portals.conf
+    /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
@@ -1173,6 +1204,15 @@ paths=(
     /var/lib/plebian-os/apt-sources.list
 )
 managed_dirs=(
+    /usr/local/lib
+    /usr/local/lib/pleb
+    /usr/local/share/xdg-desktop-portal
+    /usr/local/share/xdg-desktop-portal/portals
+    /usr/local/share/dbus-1
+    /usr/local/share/dbus-1/services
+    /etc/xdg-desktop-portal
+    /etc/wireplumber
+    /etc/wireplumber/wireplumber.conf.d
     /usr/local/libexec
     /usr/local/libexec/plebian-os
     /usr/local/share/plebian-os
