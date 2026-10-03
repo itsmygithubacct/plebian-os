@@ -90,13 +90,15 @@ native_runtime_command() {
                     '[ "$NATIVE_TRANSACTION_STARTED" = 0 ]\n')
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = self.calls()
-                self.assertEqual([r[0] for r in calls], ['prepare', 'apply', 'commit', 'finish'])
+                self.assertEqual([r[0] for r in calls], ['install-dependencies', 'prepare', 'apply', 'commit', 'finish'])
                 token = (target / 'native-transaction').read_text().strip()
                 self.assertRegex(token, r'^[0-9a-f]{32}$')
-                self.assertEqual(calls[0][1:3], ['--transaction', token])
-                for command in calls[1:]:
+                self.assertEqual(calls[1][1:3], ['--transaction', token])
+                for command in calls[2:]:
                     self.assertEqual(command[1:], [token])
-                args = dict(zip(calls[0][1::2], calls[0][2::2]))
+                args = dict(zip(calls[1][1::2], calls[1][2::2]))
+                dependency_args = dict(zip(calls[0][1::2], calls[0][2::2]))
+                self.assertEqual(dependency_args, {key: value for key, value in args.items() if key != '--transaction'})
                 self.assertEqual(args['--sha256'], VALUES['PLEBIAN_OS_NATIVE_DEB_SHA256'])
                 self.assertEqual(args['--bytes'], '4')
                 self.assertEqual(args['--source-commit'], VALUES['PLEBIAN_OS_NATIVE_SOURCE_REF'])
@@ -116,8 +118,20 @@ native_runtime_command() {
                 self.assertEqual(result.returncode, 0, result.stderr)
                 token = (self.outer / 'native-transaction').read_text().strip()
                 expected = ['prepare', 'rollback'] if failure == 'prepare' else ['prepare', 'apply', 'rollback']
-                self.assertEqual([row[0] for row in self.calls()], expected)
+                self.assertEqual([row[0] for row in self.calls()], ['install-dependencies', *expected])
                 self.assertEqual(self.calls()[-1], ['rollback', token, '--allow-unpublished'])
+
+    def test_failed_dependency_preparation_never_claims_native_transaction(self):
+        for source in SCRIPTS:
+            with self.subTest(source=source):
+                self.events.unlink(missing_ok=True)
+                result = self.run_shell(source,
+                    'if apply_selected_native_runtime "$OUTER" 0; then exit 99; fi\n'
+                    'rollback_native_runtime_transaction\n[ "$NATIVE_TRANSACTION_STARTED" = 0 ]\n',
+                    fail='install-dependencies')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([row[0] for row in self.calls()], ['install-dependencies'])
+                self.assertFalse((self.outer / 'native-transaction').exists())
 
     def test_checksum_size_and_private_directory_refusals_precede_helper(self):
         for index, (source, problem) in enumerate((s, p) for s in SCRIPTS for p in ('checksum', 'size', 'directory')):

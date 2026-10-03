@@ -791,6 +791,14 @@ apply_selected_native_runtime() {
         warn "native archive checksum differs from the selected closure"
         return 1
     }
+    # Dependency preparation is separate from the native package journal.
+    # Legacy offers select no custom archives; byte-pinned installed runtimes
+    # refuse replacement before any dependency download or mutation.
+    native_runtime_command install-dependencies \
+        --artifact "$stage" --sha256 "$PLEBIAN_OS_NATIVE_DEB_SHA256" \
+        --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
+        --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
+        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || return 1
     NATIVE_TRANSACTION_TOKEN="$(/usr/bin/python3 -I -B -c 'import secrets; print(secrets.token_hex(16))')" \
         || return 1
     [[ "$NATIVE_TRANSACTION_TOKEN" =~ ^[0-9a-f]{32}$ ]] || return 1

@@ -41,9 +41,28 @@ whole archive supplies that independent authority.
 
 `native_runtime.py` is intended for the fixed deployed root-owned OS helper,
 invoked with isolated system Python and its fixed sibling modules. There is no
-CLI/environment alternate root, downloader, source builder, package-name
+CLI/environment alternate root, source builder, package-name
 override or dependency-forcing mode. Library tests use explicit private roots
 and a synthetic backend; that is not a production installation escape hatch.
+
+`install-dependencies` is a separate preparation operation before the native
+transaction token is created. It independently verifies the complete selected
+native offer and reads its embedded dependency lock. Old offers need no custom
+download. A custom offer must select both ORT runtime and development archives,
+with matching versions, exact byte counts and hashes, and the fixed HTTPS
+release URLs. Both downloads and package identities pass before a single dpkg
+installation. Matching installed versions are reinstalled because development
+archives can share a version while differing in bytes. Active native operations,
+unmanaged installations, unhealthy/newer dependencies and legacy v1 runtimes
+that pin exact dependency bytes refuse before downloading or mutating.
+
+This preparation holds the same native and package-manager locks. It does not
+extend the one-package rollback journal: dependency replacements remain after
+an outer or native rollback. Only a verified v2 runtime with the existing
+owning-package checksum and minimum-version policy may remain installed across
+that replacement. Legacy v1 needs an explicit migration, not relaxed checks.
+The source/synthetic tests do not establish public artifact availability or an
+actual download/dpkg deployment; those require separate retained acceptance.
 
 ## State and outer transaction
 

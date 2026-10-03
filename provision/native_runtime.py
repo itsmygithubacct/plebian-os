@@ -2,8 +2,10 @@
 """One-package prepare/apply/commit/finish/rollback for the selected OS runtime.
 
 Run only as root, through the fixed deployed helper, with explicit artifact
-authority. Never builds a checkout, downloads, loads a model, restores global
-dpkg state, forces dependencies, or adopts an unknown existing installation.
+authority. The separate install-dependencies preparation downloads only custom
+ORT archives bound by that offer; the native transaction never downloads.
+Never builds a checkout, loads a model, restores global dpkg state, forces
+dependencies, or adopts an unknown existing installation.
 commit remains reversible until the enclosing stack transaction calls finish.
 Interrupted/incomplete recovery retains a journal; this is not crash atomicity.
 """
@@ -20,6 +22,7 @@ import re
 import secrets
 import signal
 import sys
+import tempfile
 
 
 def sibling(name):
@@ -296,6 +299,14 @@ class Dpkg:
             self.run(['/usr/bin/dpkg', '--admindir=/var/lib/dpkg', '--root=/', '--triggers', '--install', str(path)])
         self.audit()
 
+    def install_dependencies(self, paths):
+        need(self.mutation is not None, 'dependency mutation requires both database locks')
+        self.audit()
+        with self.mutation():
+            self.run(['/usr/bin/dpkg', '--admindir=/var/lib/dpkg', '--root=/',
+                      '--triggers', '--install', *map(str, paths)])
+        self.audit()
+
     def purge(self):
         need(self.mutation is not None, 'package mutation requires both database locks')
         self.audit(exclude_native=True)
@@ -385,6 +396,56 @@ class Manager:
             source_commit=value.get('source_commit'), content_commit=value.get('content_commit'))
         need(inspected == value, 'cached package metadata differs from independently selected bytes')
         return inspected
+
+    def install_dependencies(self, data, **selection):
+        # This preparation is separate from the one-package rollback journal.
+        # Only v2's owner/checksum compatibility policy can survive a dependency
+        # replacement. Reject legacy v1 before even downloading either archive.
+        records = artifact.custom_dependency_records(data, **selection)
+        if not records:
+            return
+        with self.locked():
+            need(self.read_json(ACTIVE, missing=True) is None,
+                 'dependency preparation refuses an active native transaction')
+            current = self.metadata(self.read_json(CURRENT, missing=True))
+            need(current is None or 'runtime_libraries' in current,
+                 'legacy byte-pinned runtime requires explicit migration before dependency replacement')
+            self.backend.verify(current)
+            for name, row in records.items():
+                old = self.backend.status(name + ':amd64')
+                need(old is None or (old['status'] == 'install ok installed'
+                     and old['architecture'] == 'amd64'
+                     and self.backend.version_at_least(row['version'], old['version'])),
+                     'custom dependency would downgrade or replace an unhealthy package: ' + name)
+            self.backend.audit()
+            cache = self.tree.root / BASE / 'cache'
+            with tempfile.TemporaryDirectory(prefix='ort-', dir=cache) as directory:
+                relative = str(Path(directory).relative_to(self.tree.root))
+                self.tree.private_directory(relative)
+                paths = []
+                for name in ('libonnxruntime1.21', 'libonnxruntime-dev'):
+                    row = records[name]
+                    path = Path(directory) / row['filename']
+                    self.backend.run(['/usr/bin/curl', '-q', '--fail', '--silent', '--show-error',
+                        '--location', '--proto', '=https', '--proto-redir', '=https',
+                        '--connect-timeout', '15', '--max-time', '120', '--max-filesize',
+                        str(row['bytes']), '--output', str(path), '--', row['url']])
+                    raw = self.tree.read(relative + '/' + row['filename'], maximum=row['bytes'])
+                    need(len(raw) == row['bytes'] and hashlib.sha256(raw).hexdigest() == row['sha256'],
+                         'downloaded custom dependency differs from selected archive: ' + name)
+                    _, out, err = self.backend.run(['/usr/bin/dpkg-deb', '--show',
+                        '--showformat=${Package}\n${Version}\n${Architecture}\n', str(path)])
+                    need(not err and out == f'{name}\n{row["version"]}\namd64\n'.encode(),
+                         'custom dependency package identity differs: ' + name)
+                    paths.append(path)
+                # Both archives pass before any mutation. Reinstall even when
+                # versions match: earlier development archives used this version.
+                self.backend.install_dependencies(paths)
+                for name, row in records.items():
+                    need(self.backend.status(name + ':amd64') == {
+                        'status': 'install ok installed', 'version': row['version'], 'architecture': 'amd64'},
+                        'custom dependency did not become fully installed: ' + name)
+                self.backend.verify(current)
 
     def journal_name(self, token):
         need(type(token) is str and TOKEN.fullmatch(token), 'invalid native transaction token')
@@ -567,11 +628,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
     prepare = sub.add_parser('prepare')
-    prepare.add_argument('--artifact', type=Path, required=True)
-    prepare.add_argument('--sha256', required=True)
-    prepare.add_argument('--bytes', dest='byte_count', type=int, required=True)
-    prepare.add_argument('--source-commit', required=True)
-    prepare.add_argument('--content-commit', required=True)
+    dependencies = sub.add_parser('install-dependencies',
+        help='prepare custom ORT dependencies separately from native rollback')
+    for selected in (prepare, dependencies):
+        selected.add_argument('--artifact', type=Path, required=True)
+        selected.add_argument('--sha256', required=True)
+        selected.add_argument('--bytes', dest='byte_count', type=int, required=True)
+        selected.add_argument('--source-commit', required=True)
+        selected.add_argument('--content-commit', required=True)
     prepare.add_argument('--transaction', help='fresh caller-recorded 32-character lowercase hex token')
     for name in ('apply', 'commit', 'finish'):
         sub.add_parser(name).add_argument('transaction')
@@ -585,14 +649,18 @@ def main():
         parser.exit(1, 'native runtime helper requires root\n')
     os.umask(0o077)
     processes.enable_subreaper()
-    runner = processes.Runner()
+    runner = processes.Runner(seconds=360 if args.command == 'install-dependencies' else 180)
     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(number, runner.cancel)
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     try:
         with state.Tree() as tree:
             manager = Manager(tree, Dpkg(tree, runner))
-            if args.command == 'prepare':
+            if args.command == 'install-dependencies':
+                manager.install_dependencies(artifact.read_archive(args.artifact),
+                    sha256=args.sha256, byte_count=args.byte_count,
+                    source_commit=args.source_commit, content_commit=args.content_commit)
+            elif args.command == 'prepare':
                 data = artifact.read_archive(args.artifact)
                 token = manager.prepare(data, transaction=args.transaction,
                     sha256=args.sha256, byte_count=args.byte_count,

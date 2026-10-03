@@ -414,6 +414,38 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
             'content_bundle_sha256': receipt['bundle_sha256']}
 
 
+def custom_dependency_records(data, **selection):
+    """Read optional custom ORT authority only after the entire offer passes."""
+    inspect_package(data, **selection)
+    installed = tar_members(expand_xz(ar_members(data)['data.tar.xz'], MAX_DATA),
+                            dotted=True, maximum_members=64)
+    packages = json_object(installed[DOC + 'debian-dependencies.json'][1])['packages']
+    return validate_custom_dependencies(packages)
+
+
+def validate_custom_dependencies(packages):
+    selected = {name: row for name, row in packages.items() if row.get('archive') == 'kilix'}
+    if not selected:
+        return {}
+    require(set(selected) == {'libonnxruntime1.21', 'libonnxruntime-dev'},
+            'custom dependencies must select both ORT packages and no others')
+    versions = set()
+    for name, row in selected.items():
+        require(type(row.get('version')) is str
+                and re.fullmatch(r'[A-Za-z0-9.+:~_-]{1,100}', row['version'])
+                and '+kilix' in row['version'], 'invalid custom ORT version')
+        versions.add(row['version'])
+        filename = name + '_' + row['version'] + '_amd64.deb'
+        require(row.get('filename') == filename and row.get('provision') == 'ort'
+                and type(row.get('bytes')) is int and 0 < row['bytes'] <= MAX_ARCHIVE
+                and type(row.get('sha256')) is str and DIGEST.fullmatch(row['sha256'])
+                and row.get('url') == 'https://github.com/itsmygithubacct/kilix-encodec/'
+                    'releases/download/ort-deb-rc5/' + filename,
+                'invalid custom ORT archive authority')
+    require(len(versions) == 1, 'custom ORT runtime and headers must share one version')
+    return selected
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--artifact', type=Path, required=True)
