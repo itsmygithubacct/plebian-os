@@ -115,12 +115,13 @@ class SelectedClosureGateTests(unittest.TestCase):
         environment = {
             "PATH": os.defpath, "HOME": str(self.root),
             "PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1",
-            "PLEBIAN_OS_REPO": str(self.remote),
+            "FIXTURE_PUBLISHED_REPO": str(self.remote),
             "PLEBIAN_OS_VERSION": "0.2.2",
         }
         return subprocess.run([
             "bash", "-c",
             'update_path=$1; shift; source "$update_path"; '
+            'PLEBIAN_OS_REPO=$FIXTURE_PUBLISHED_REPO; '
             'select_latest_release_if_needed; '
             'printf "SELECTED:%s:%s\\n" "$PLEBIAN_OS_VERSION" "$restart_arg"',
             "bash", str(ROOT / "provision" / "plebian-os-update.sh"), *options,
