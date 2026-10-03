@@ -43,6 +43,15 @@ PLAYALONG_BUILD_PACKAGES = {"libsdl2-dev", "libsndfile1-dev", "pkg-config"}
 BASE_BROWSER_PACKAGES = {"chromium"}
 LAZY_BROWSER_PACKAGES = {"firefox-esr"}
 DESKTOP_SCREENSHOT_PACKAGES = {"xfce4-screenshooter"}
+DISPLAY_ARRANGER_PACKAGES = {"python3-tk", "python3-xlib", "x11-xserver-utils"}
+DESKTOP_SERVICE_PACKAGES = {
+    "xss-lock", "i3lock", "xssproxy", "xfce4-power-manager", "xfconf", "lxpolkit",
+    "blueman", "pulseaudio-module-bluetooth", "udisks2", "udiskie", "gnome-disk-utility",
+    "cups", "cups-client", "system-config-printer", "system-config-printer-udev",
+    "pavucontrol", "ibus", "ibus-gtk", "ibus-gtk3", "ibus-gtk4", "orca", "at-spi2-core",
+    "python3-dbus", "python3-gi", "gir1.2-notify-0.7",
+    "xdg-utils", "desktop-file-utils", "shared-mime-info",
+}
 
 # X keeps no clipboard store: a selection lives only as long as the client that
 # owns it, so without a manager, copying in an app and closing it loses the
@@ -222,6 +231,10 @@ def qualification_packages():
 
 
 class DependencyManifestTests(unittest.TestCase):
+    def test_display_arranger_prerequisites_are_on_both_install_paths(self):
+        self.assertLessEqual(DISPLAY_ARRANGER_PACKAGES, preseed_packages())
+        self.assertLessEqual(DISPLAY_ARRANGER_PACKAGES, install_deps_packages())
+
     def test_qualification_group_is_not_in_the_base_image(self):
         qual = qualification_packages()
         self.assertEqual(qual, {"xserver-xephyr"})
@@ -370,6 +383,10 @@ class DependencyManifestTests(unittest.TestCase):
         # than one that works on neither, because it is not reproducible.
         self.assertLessEqual(CLIPBOARD_PACKAGES, install_deps_packages())
         self.assertLessEqual(CLIPBOARD_PACKAGES, preseed_packages())
+
+    def test_desktop_services_do_not_depend_on_recommends(self):
+        for packages in (install_deps_packages(), preseed_packages()):
+            self.assertLessEqual(DESKTOP_SERVICE_PACKAGES, packages)
 
     def test_shell_linter_is_on_both_paths(self):
         # shellcheck is a default from 0.2.2 RC3 onward, so local checks match CI.

@@ -6174,6 +6174,13 @@ EOF
     write_session_default GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
     write_session_default GPU_TERMINAL_SETTINGS_FILE "$GPU_TERMINAL_SETTINGS_FILE"
     write_session_default PLEBIAN_OS_MANAGED_INSTALL 1
+    if [ "$KIOSK" = 1 ]; then
+        write_session_default PLEB_SESSION_SERVICES off
+    else
+        write_session_default PLEB_SESSION_SERVICES on
+    fi
+    write_session_default PLEB_IDLE_LOCK_SECONDS 600
+    write_session_default PLEB_INPUT_METHOD auto
     write_session_default PLEB_DIR "$PLEB_DIR"
     write_session_default PLEB_STORAGE_HOME "$PLEB_STORAGE_HOME"
     write_session_default PLEB_CONFIG_HOME "$PLEB_CONFIG_HOME"

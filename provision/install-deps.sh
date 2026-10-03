@@ -164,7 +164,7 @@ DEP_GROUPS=(
     # PDF Conversion uses this standard-library venv support with a
     # hash-locked pip install independently of uv. The coordinated 0.1.9
     # release also installs its required, verified uv pin as system tooling.
-    "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
+    "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv python3-tk"
     # Playalong links SDL2 for output and libsndfile for stem decode. Keep the
     # runtime libraries explicit rather than relying on the -dev toolchain.
     # Kilix Amp links libfluidsynth in-process and reads a General MIDI
@@ -221,6 +221,11 @@ DEP_GROUPS=(
     # screenshot tool. It must be explicit because no XFCE desktop task is
     # installed and --no-install-recommends cannot supply it incidentally.
     "desktop screenshots|xfce4-screenshooter"
+    "desktop lock + power + authorization|xss-lock i3lock xssproxy xfce4-power-manager xfconf lxpolkit"
+    "desktop file and URI handlers|xdg-utils desktop-file-utils shared-mime-info"
+    "desktop bluetooth + removable media|blueman pulseaudio-module-bluetooth udisks2 udiskie gnome-disk-utility gir1.2-notify-0.7"
+    "desktop physical printers|cups cups-client system-config-printer system-config-printer-udev"
+    "desktop sound + input methods + accessibility|pavucontrol ibus ibus-gtk ibus-gtk3 ibus-gtk4 orca at-spi2-core"
     # The audio server is PulseAudio (the "audio" group above). xdg-desktop-portal
     # depends on libpipewire and probes for a PipeWire daemon at start; none is
     # installed, so its ScreenCast/Screenshot interfaces are unavailable and it
