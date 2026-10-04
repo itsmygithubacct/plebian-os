@@ -3791,12 +3791,50 @@ _apt_source_entry_disables_trust() {
 # or this provisioner scans instead of restoring it. Returns 0 to retire it by
 # rename, 2 when an identical retired copy already exists, and 1 for any other
 # source. A conflicting retired copy dies before anything moves.
+# True when FILE is the sources.list Debian Installer wrote on a snapshot image.
+# Images up to 0.1.x marked it with the generator's comment line. Since the
+# generator started emitting the supplemental suites itself (34061b7) it writes
+# no marker, so recognise the content too: every active line must be a deb or
+# deb-src entry for this machine's recorded snapshot timestamp on
+# snapshot.debian.org, for the base, -updates or -security suite of this
+# codename. Anything else on an active line - an operator mirror, another
+# timestamp, another suite - means the file is not ours to retire.
+_is_installer_snapshot_source() {
+    local file="$1" stamp codename line kind uri suite rest active=0
+    grep -qxF '# Plebian-OS snapshot validity policy' "$file" && return 0
+    stamp="$(head -n 1 "$APT_ETC_ROOT/plebian-os/apt-snapshot" 2>/dev/null)" || return 1
+    [[ "$stamp" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] || return 1
+    codename="$(_apt_codename)" || return 1
+    [ -n "$codename" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%%#*}"
+        read -r kind rest <<<"$line" || true
+        [ -n "$kind" ] || continue
+        case "$kind" in deb|deb-src) ;; *) return 1 ;; esac
+        # Optional [ option=value ... ] block; installer entries may carry one.
+        if [[ "$rest" == \[* ]]; then
+            [[ "$rest" == *\]* ]] || return 1
+            rest="${rest#*]}"
+        fi
+        read -r uri suite rest <<<"$rest" || true
+        [[ "$uri" =~ ^https?://snapshot\.debian\.org/archive/debian(-security)?/${stamp}/?$ ]] || return 1
+        if [[ "$uri" == *debian-security* ]]; then
+            [ "$suite" = "$codename-security" ] || return 1
+        else
+            case "$suite" in "$codename"|"$codename-updates") ;; *) return 1 ;; esac
+        fi
+        [ -n "$rest" ] || return 1
+        active=1
+    done < "$file"
+    [ "$active" = 1 ]
+}
+
 _retire_installer_snapshot_source() {
     local live="$1" backup="$1.plebian-os-disabled"
     local retired="$APT_ETC_ROOT/apt/sources.list.plebian-os-installer-snapshot"
     [ "$live" = "$APT_ETC_ROOT/apt/sources.list" ] || return 1
     [ -f "$backup" ] && [ ! -L "$backup" ] || return 1
-    grep -qxF '# Plebian-OS snapshot validity policy' "$backup" || return 1
+    _is_installer_snapshot_source "$backup" || return 1
     if [ -e "$retired" ] || [ -L "$retired" ]; then
         if [ -f "$retired" ] && [ ! -L "$retired" ] && cmp -s "$backup" "$retired"; then
             return 2

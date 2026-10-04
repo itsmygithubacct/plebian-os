@@ -986,6 +986,92 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             )
             self.assertEqual(coverage.returncode, 1, coverage.stderr)
 
+    def _generated_installer_sources_list(self, base: Path) -> str:
+        """What apt-setup assembles on a snapshot image today: the cdrom comment,
+        the snapshot mirror chosen through the transformed preseed, and the real
+        apt-snapshot generator's supplemental suites. No marker line: since the
+        generator stopped writing one, real machines carry none."""
+        carrier = base / "apt-snapshot-carrier"
+        carrier.write_text("20260727T000000Z\n")
+        fragment = base / "generator-output"
+        root = base / "generator-root"
+        root.mkdir()
+        result = subprocess.run(
+            [str(ROOT / "provision" / "plebian-os-apt-snapshot-generator"), str(fragment), str(carrier)],
+            env={**os.environ, "ROOT": str(root)}, capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        mirror = "http://snapshot.debian.org/archive/debian/20260727T000000Z/"
+        return (
+            "#deb cdrom:[Debian GNU/Linux 13.5.0 _Trixie_ - Official amd64 NETINST]/ trixie contrib main non-free-firmware\n"
+            "\n"
+            f"deb {mirror} trixie main non-free-firmware\n"
+            f"deb-src {mirror} trixie main non-free-firmware\n"
+            "\n"
+            + fragment.read_text()
+        )
+
+    def test_generated_installer_sources_list_is_retired_on_live_switch(self):
+        # Regression: retirement was keyed on a marker the generator stopped
+        # writing in 34061b7, so real installs restored the snapshot
+        # trixie-updates/trixie-security lines; with the global validity
+        # override removed, apt-get update then failed on their expired
+        # Release files.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            before = self._installer_snapshot_state(etc)
+            apt = etc / "apt"
+            installer = self._generated_installer_sources_list(base)
+            self.assertNotIn("Plebian-OS snapshot validity policy", installer)
+            self.assertIn("trixie-security", installer)
+            (apt / "sources.list.plebian-os-disabled").write_text(installer)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((apt / "sources.list").exists(),
+                             "the snapshot installer sources.list was restored as a live source")
+            self.assertEqual(
+                (apt / "sources.list.plebian-os-installer-snapshot").read_text(), installer
+            )
+            managed = (sources / "plebian-os-debian.sources").read_text()
+            self.assertIn("Suites: trixie-security\n", managed)
+            self.assertEqual(self._apt_updates(base), 1)
+            del before
+
+    def test_snapshot_lines_beside_an_operator_line_are_restored_not_retired(self):
+        # Content classification must not swallow an operator's own entry.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            apt = etc / "apt"
+            mixed = self._generated_installer_sources_list(base) + "deb https://example.org/debian trixie main\n"
+            (apt / "sources.list.plebian-os-disabled").write_text(mixed)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((apt / "sources.list").read_text(), mixed)
+            self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
+
+    def test_other_snapshot_timestamp_is_restored_not_retired(self):
+        # An operator's own pin to a different snapshot is theirs to keep.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, _sources, env = self._apt_tree(base)
+            self._installer_snapshot_state(etc)
+            apt = etc / "apt"
+            other = self._generated_installer_sources_list(base).replace("20260727T000000Z", "20250101T000000Z")
+            (apt / "sources.list.plebian-os-disabled").write_text(other)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((apt / "sources.list").read_text(), other)
+            self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
+
     def test_unmarked_inventoried_sources_list_is_restored_not_retired(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
