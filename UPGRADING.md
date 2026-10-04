@@ -163,6 +163,23 @@ source for those Debian suites turns off signature or replay checks with
 step fails, the stack update still stands and the updater exits non-zero; fix
 the reported apt problem and run `plebian-os-update` again. Machines on
 0.1.7-0.2.0 stay on the snapshot until they reach 0.2.2 one release at a time.
+
+Which `sources.list` counts as the installer's. Images built with the
+installer digest record (`/etc/plebian-os/installer-sources.list.sha256`,
+written by a Debian Installer finish hook after the installer's last edit)
+retire only those exact bytes. Earlier 0.2.2 development images carry no record
+and are recognised by their complete generated layout: the two
+`snapshot.debian.org` `trixie-updates` and `trixie-security` lines the snapshot
+generator writes for the install timestamp in `/etc/plebian-os/build-info.env`,
+plus only the plain `trixie` entries for that same snapshot. The same step also
+repairs a development machine whose earlier live switch had put that file back
+as its active `sources.list`. To keep a `sources.list` of your own that would
+otherwise match, add this exact line anywhere in it:
+
+    # plebian-os: keep
+
+A file containing that line is never retired, restored as yours, and left in
+place on every later update.
 Machines upgraded from 0.2.1 keep the previous Waydroid first-use helper, which
 installs the closure's exact `weston` version, until they are reprovisioned.
 

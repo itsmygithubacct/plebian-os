@@ -1,0 +1,24 @@
+#!/bin/sh
+# Debian-Installer finish-install hook installed by a snapshot-pinned image
+# (preseed early_command) as /usr/lib/finish-install.d/93plebian-installer-sources.
+#
+# Records the digest of the sources.list Debian Installer leaves in the target,
+# so the first live-sources switch can retire exactly those bytes and nothing an
+# operator wrote. It must run after the last installer writer of that file:
+# late_command (07preseed) is too early, because 10apt-cdrom-setup still comments
+# out the CD-ROM entries and appends its explanation. finish-install runs its
+# hooks in filename order and unmounts the target at 95umount, so 93 is after
+# every writer and before the target goes away.
+#
+# TARGET is an explicit test seam; production always uses /target.
+set -eu
+
+target="${TARGET:-/target}"
+list="$target/etc/apt/sources.list"
+record="$target/etc/plebian-os/installer-sources.list.sha256"
+
+[ -f "$list" ] && [ ! -L "$list" ] || exit 0
+mkdir -p "$target/etc/plebian-os"
+(cd "$target/etc/apt" && sha256sum sources.list) > "$record.new"
+chmod 0644 "$record.new"
+mv -f "$record.new" "$record"

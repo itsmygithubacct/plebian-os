@@ -1689,6 +1689,8 @@ d-i apt-setup/services-select multiselect
 d-i preseed/early_command string set -e; \\
     mkdir -p /usr/lib/apt-setup/generators; \\
     install -m 0755 /cdrom/plebian-os/plebian-os-apt-snapshot-generator /usr/lib/apt-setup/generators/02plebian-snapshot; \\
+    mkdir -p /usr/lib/finish-install.d; \\
+    install -m 0755 /cdrom/plebian-os/plebian-os-installer-sources-digest /usr/lib/finish-install.d/93plebian-installer-sources; \\
     mkdir -p /etc/apt/apt.conf.d; \\
     printf '%s\\n' 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99plebian-os-snapshot
 EOF
@@ -1756,6 +1758,7 @@ cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-select-closure.sh" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-record-installed-user" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-apt-snapshot-generator" "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-installer-sources-digest" "$EXTRACT/plebian-os/"
 if [ -n "${PLEBIAN_OS_APT_SNAPSHOT:-}" ]; then
     install -m 0644 "$INSTALLER_APT_SNAPSHOT" "$EXTRACT/plebian-os/apt-snapshot"
 fi

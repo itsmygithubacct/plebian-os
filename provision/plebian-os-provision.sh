@@ -3805,15 +3805,17 @@ _installer_snapshot_stamp() {
     printf '%s\n' "$stamp"
 }
 
-# True only when FILE is the sources.list Debian Installer wrote. Ownership is
-# proved, not inferred from a timestamp match:
+# True when FILE is the sources.list Debian Installer wrote. New images prove
+# it; older ones can only be recognised by layout, which an operator can
+# override:
 #   - an operator line '# plebian-os: keep' always keeps the file theirs;
 #   - images that recorded the installer file's digest at install time
-#     (installer-sources.list.sha256) retire exactly those bytes and nothing
-#     else;
+#     (installer-sources.list.sha256, written by the 93plebian-installer-sources
+#     finish-install hook after the last installer writer) retire exactly those
+#     bytes and nothing else;
 #   - images from before that record (since 34061b7, whose generator stopped
-#     writing the marker) are recognised only by their complete generated
-#     layout: both literal lines the apt-snapshot generator writes for the
+#     writing the marker) are recognised - a layout match, not proof of
+#     authorship - only by their complete generated layout: both literal lines the apt-snapshot generator writes for the
 #     install timestamp, and otherwise only the plain deb/deb-src entries
 #     apt-setup writes for the base suite from the same snapshot mirror.
 # The legacy marker is honoured only for inventoried backups, by the caller.
@@ -3855,6 +3857,9 @@ _retire_installer_snapshot_source() {
     local retired="$APT_ETC_ROOT/apt/sources.list.plebian-os-installer-snapshot"
     [ "$live" = "$APT_ETC_ROOT/apt/sources.list" ] || return 1
     [ -f "$backup" ] && [ ! -L "$backup" ] || return 1
+    # The operator's keep line outranks every ownership rule, the legacy
+    # marker included.
+    ! grep -qxF '# plebian-os: keep' "$backup" || return 1
     grep -qxF '# Plebian-OS snapshot validity policy' "$backup" \
         || _installer_snapshot_layout "$backup" || return 1
     if [ -e "$retired" ] || [ -L "$retired" ]; then

@@ -593,7 +593,9 @@ snapshot: apt tracks the live Debian `trixie`, `trixie-updates`, and
 `trixie-security` suites with replay protection enabled, and
 `unattended-upgrades` applies Debian security updates daily without rebooting.
 The installer's snapshot `sources.list` is retired to
-`/etc/apt/sources.list.plebian-os-installer-snapshot`; sources Plebian-OS
+`/etc/apt/sources.list.plebian-os-installer-snapshot` (a file you want kept
+as your own can carry the line `# plebian-os: keep`; see
+[UPGRADING.md](UPGRADING.md#debian-security-updates)); sources Plebian-OS
 disabled for the install are restored, and operator sources that already
 provide live Debian are used as they are.
 Enabled release-mode `uv` installs require exact version/checksum pins and are

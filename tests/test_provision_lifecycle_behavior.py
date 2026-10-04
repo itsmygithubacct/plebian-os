@@ -1159,6 +1159,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         bad = {
             "absent": None,
             "duplicate-key": self.BUILD_INFO + "PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z\n",
+            "duplicate-key-empty-second": self.BUILD_INFO + "PLEBIAN_OS_APT_SNAPSHOT=\n",
             "quoted": "PLEBIAN_OS_APT_SNAPSHOT='20260727T000000Z'\n",
             "crlf": "PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z\r\n",
             "other-snapshot": "PLEBIAN_OS_APT_SNAPSHOT=20250101T000000Z\n",
@@ -1205,6 +1206,91 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 apt, result = self._pending_switch(base, text, record=record_of(installer))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((apt / "sources.list").read_text(), text, name)
+
+    @staticmethod
+    def _apt_cdrom_setup_cleanup(text: str) -> str:
+        """What Debian Installer's 10apt-cdrom-setup finish hook does after
+        late_command: comment out active cdrom entries and append its notes."""
+        out = "".join(("#" + l) if l.startswith("deb cdrom:") else l for l in text.splitlines(keepends=True))
+        return out + ("\n# This system was installed using removable media other than\n"
+                      "# CD/DVD/BD (e.g. USB stick, SD card, ISO image file).\n")
+
+    def _run_digest_hook(self, target: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["sh", str(ROOT / "provision" / "plebian-os-installer-sources-digest")],
+            env={**os.environ, "TARGET": str(target)}, capture_output=True, text=True)
+
+    def test_installer_digest_hook_after_cdrom_cleanup_lets_the_live_switch_retire(self):
+        # r3 review: the digest must describe the bytes first boot sees, i.e.
+        # after 10apt-cdrom-setup. Pre-cleanup apt-setup output (active cdrom
+        # line) -> cleanup -> 93 hook -> activation backup -> live retirement.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            generated = self._generated_installer_sources_list(base)
+            pre_cleanup = generated.replace("#deb cdrom:", "deb cdrom:", 1)
+            final = self._apt_cdrom_setup_cleanup(pre_cleanup)
+            target = base / "target"
+            (target / "etc" / "apt").mkdir(parents=True)
+            (target / "etc" / "apt" / "sources.list").write_text(final)
+            hook = self._run_digest_hook(target)
+            self.assertEqual(hook.returncode, 0, hook.stderr)
+            record = (target / "etc" / "plebian-os" / "installer-sources.list.sha256").read_text()
+            self.assertEqual(record, self._record_for(final))
+            apt, result = self._pending_switch(base, final, record=record)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((apt / "sources.list").exists())
+            self.assertEqual((apt / "sources.list.plebian-os-installer-snapshot").read_text(), final)
+
+    def test_a_pre_cleanup_digest_would_never_match(self):
+        # Why the hook is not in late_command: a digest of the pre-cleanup bytes
+        # does not describe the file first boot disables, so it is kept.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            pre_cleanup = self._generated_installer_sources_list(base).replace("#deb cdrom:", "deb cdrom:", 1)
+            final = self._apt_cdrom_setup_cleanup(pre_cleanup)
+            apt, result = self._pending_switch(base, final, record=self._record_for(pre_cleanup))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((apt / "sources.list").read_text(), final)
+
+    def test_digest_hook_ignores_a_missing_or_symlinked_sources_list(self):
+        with tempfile.TemporaryDirectory() as td:
+            target = Path(td) / "target"
+            (target / "etc" / "apt").mkdir(parents=True)
+            self.assertEqual(self._run_digest_hook(target).returncode, 0)
+            self.assertFalse((target / "etc" / "plebian-os" / "installer-sources.list.sha256").exists())
+            (target / "real").write_text("deb http://x trixie main\n")
+            (target / "etc" / "apt" / "sources.list").symlink_to(target / "real")
+            self.assertEqual(self._run_digest_hook(target).returncode, 0)
+            self.assertFalse((target / "etc" / "plebian-os" / "installer-sources.list.sha256").exists())
+
+    def test_keep_line_outranks_the_legacy_marker_on_a_backup(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            text = ("# Plebian-OS snapshot validity policy\n# plebian-os: keep\n"
+                    f"deb {self.SNAP} trixie main\ndeb https://example.org/debian trixie main\n")
+            apt, result = self._pending_switch(base, text)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((apt / "sources.list").read_text(), text)
+            self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
+
+    def test_symlinked_provenance_never_authorises_retirement(self):
+        for name in ("build-info", "digest-record"):
+            with self.subTest(name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                installer = self._generated_installer_sources_list(base)
+                real = base / "real-provenance"
+                if name == "build-info":
+                    real.write_text(self.BUILD_INFO)
+                    apt, result = self._pending_switch(
+                        base, installer, build_info=None,
+                        body=f"ln -s {str(real)!r} \"$APT_ETC_ROOT/plebian-os/build-info.env\"\nconfigure_apt_snapshot\n")
+                else:
+                    real.write_text(self._record_for(installer))
+                    apt, result = self._pending_switch(
+                        base, installer,
+                        body=f"ln -s {str(real)!r} \"$APT_ETC_ROOT/plebian-os/installer-sources.list.sha256\"\nconfigure_apt_snapshot\n")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((apt / "sources.list").read_text(), installer, name)
 
     def test_finish_release_apt_install_retires_the_generated_installer_source(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1304,6 +1390,36 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertIn("cannot retire the active installer snapshot source", result.stderr)
             self.assertEqual((apt / "sources.list").read_text(), installer)
             self.assertEqual((apt / "sources.list.plebian-os-installer-snapshot").read_text(), "# something else\n")
+
+    def test_repair_rollback_restores_an_active_duplicate(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            installer = self._generated_installer_sources_list(base)
+            def setup(etc):
+                (etc / "apt" / "sources.list.plebian-os-installer-snapshot").write_text(installer)
+                (etc / "apt" / "sources.list.d" / "operator.list").write_text(
+                    "deb [check-valid-until=no] https://deb.debian.org/debian trixie main\n")
+                self._index_targets(base, "operator.list", "https://deb.debian.org/debian trixie main @SOURCE@:1\n")
+            apt, result = self._after_defective_switch(base, installer, self.BUILD_INFO, extra=setup)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual((apt / "sources.list").read_text(), installer)
+            self.assertEqual((apt / "sources.list.plebian-os-installer-snapshot").read_text(), installer)
+
+    def test_repair_signal_during_the_switch_rolls_back_the_active_move(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            installer = self._generated_installer_sources_list(base)
+            def term_on_indextargets(etc):
+                stub = base / "bin" / "apt-get"
+                # indextargets runs inside a command substitution: signal the
+                # provisioner shell, the subshell's parent.
+                stub.write_text('#!/bin/sh\nif [ "${1:-}" = indextargets ]; then '
+                                'kill -TERM "$(ps -o ppid= -p "$PPID" | tr -d " ")"; fi\nexit 1\n')
+                stub.chmod(0o755)
+            apt, result = self._after_defective_switch(base, installer, self.BUILD_INFO, extra=term_on_indextargets)
+            self.assertEqual(result.returncode, 143, result.stderr)
+            self.assertEqual((apt / "sources.list").read_text(), installer)
+            self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
 
     def test_repair_rolls_back_when_the_live_switch_fails_later(self):
         # An operator source that disables replay checks fails the switch after
