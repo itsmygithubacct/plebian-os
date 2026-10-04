@@ -1031,6 +1031,8 @@ paths=(
     /usr/local/bin/pleb-lock
     /usr/local/lib/pleb/displays.py
     /usr/local/lib/pleb/capture_sources.py
+    /usr/local/lib/pleb/capture_registry.py
+    /usr/local/lib/pleb/capture_screenshot.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
     /usr/local/lib/pleb/capture_transport.so
@@ -1180,6 +1182,8 @@ paths=(
     /usr/local/bin/pleb-lock
     /usr/local/lib/pleb/displays.py
     /usr/local/lib/pleb/capture_sources.py
+    /usr/local/lib/pleb/capture_registry.py
+    /usr/local/lib/pleb/capture_screenshot.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
     /usr/local/lib/pleb/capture_transport.so
