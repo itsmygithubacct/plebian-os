@@ -229,7 +229,7 @@ DEP_GROUPS=(
     # PulseAudio owns audio. Pleb supplies an X11 capture backend and the
     # distribution installs WirePlumber's video-only profile. Neither
     # pipewire-pulse nor an audio-hardware monitor is part of this group.
-    "desktop capture transport|pipewire pipewire-bin wireplumber gstreamer1.0-pipewire gstreamer1.0-x gstreamer1.0-plugins-base gstreamer1.0-plugins-good gir1.2-gst-plugins-base-1.0 gir1.2-gtk-3.0 python3-gi-cairo"
+    "desktop capture transport|pipewire pipewire-bin wireplumber libpipewire-0.3-dev gstreamer1.0-pipewire gstreamer1.0-x gstreamer1.0-plugins-base gstreamer1.0-plugins-good gir1.2-gst-plugins-base-1.0 gir1.2-gtk-3.0 python3-gi-cairo"
     "desktop notifications + portal|python3-dbus python3-gi dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     # F100's sandbox must not depend on portal/systemd dependency accidents.
     # These are the minimum F118-S0 identities; newer Debian security builds are accepted.

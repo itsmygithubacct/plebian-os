@@ -45,7 +45,7 @@ LAZY_BROWSER_PACKAGES = {"firefox-esr"}
 DESKTOP_SCREENSHOT_PACKAGES = {"xfce4-screenshooter"}
 DISPLAY_ARRANGER_PACKAGES = {"python3-tk", "python3-xlib", "x11-xserver-utils"}
 DESKTOP_CAPTURE_PACKAGES = {
-    "pipewire", "pipewire-bin", "wireplumber", "gstreamer1.0-pipewire", "gstreamer1.0-x",
+    "pipewire", "pipewire-bin", "wireplumber", "libpipewire-0.3-dev", "gstreamer1.0-pipewire", "gstreamer1.0-x",
     "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gir1.2-gst-plugins-base-1.0", "gir1.2-gtk-3.0", "python3-gi-cairo",
 }
 DESKTOP_SERVICE_PACKAGES = {

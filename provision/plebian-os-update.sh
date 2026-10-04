@@ -1033,6 +1033,7 @@ paths=(
     /usr/local/lib/pleb/capture_sources.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
+    /usr/local/lib/pleb/capture_transport.so
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
@@ -1181,6 +1182,7 @@ paths=(
     /usr/local/lib/pleb/capture_sources.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
+    /usr/local/lib/pleb/capture_transport.so
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
