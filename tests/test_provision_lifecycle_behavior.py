@@ -1072,6 +1072,140 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertEqual((apt / "sources.list").read_text(), other)
             self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
 
+    SNAP = "http://snapshot.debian.org/archive/debian/20260727T000000Z/"
+    SEC = "http://snapshot.debian.org/archive/debian-security/20260727T000000Z/"
+
+    def _pending_switch(self, base: Path, installer: str, carrier: str | None = "20260727T000000Z\n",
+                        build_info: str | None = None, body: str = "configure_apt_snapshot\n"):
+        """Run the pending snapshot-to-live switch over INSTALLER as the
+        inventoried sources.list backup; return (apt dir, result)."""
+        etc, _sources, env = self._apt_tree(base)
+        self._installer_snapshot_state(etc)
+        apt = etc / "apt"
+        state = etc / "plebian-os"
+        (apt / "sources.list.plebian-os-disabled").write_text(installer)
+        if carrier is None:
+            (state / "apt-snapshot").unlink()
+        else:
+            (state / "apt-snapshot").write_text(carrier)
+        if build_info is not None:
+            (state / "build-info.env").write_text(build_info)
+        result = self._run_library(self._release_body(base) + body, env)
+        return apt, result
+
+    def test_installer_layout_variants_are_retired(self):
+        variants = {
+            "https": lambda t: t.replace("http://", "https://"),
+            "no-trailing-slash": lambda t: t.replace("20260727T000000Z/", "20260727T000000Z"),
+            "trailing-comment": lambda t: t.replace("non-free-firmware\n", "non-free-firmware # installer\n", 1),
+        }
+        for name, change in variants.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                installer = change(self._generated_installer_sources_list(base))
+                apt, result = self._pending_switch(base, installer)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((apt / "sources.list").exists(), name)
+                self.assertEqual((apt / "sources.list.plebian-os-installer-snapshot").read_text(), installer)
+
+    def test_non_installer_layouts_are_restored_not_retired(self):
+        snap, sec = self.SNAP, self.SEC
+        cases = {
+            "options": f"deb [signed-by=/etc/apt/keyrings/local.gpg] {snap} trixie main\n",
+            "deb-src-only": f"deb-src {snap} trixie main\n",
+            "backports-suite": f"deb {snap} trixie main\ndeb {snap} trixie-backports main\n",
+            "security-suite-on-debian": f"deb {snap} trixie main\ndeb {snap} trixie-security main\n",
+            "updates-suite-on-security": f"deb {snap} trixie main\ndeb {sec} trixie-updates main\n",
+            "no-components": f"deb {snap} trixie\n",
+            "no-base-binary": f"deb {snap} trixie-updates main\ndeb {sec} trixie-security main\n",
+            "other-codename": f"deb {snap} bookworm main\n",
+            "other-host": "deb http://deb.debian.org/debian trixie main\n",
+            "empty": "",
+            "comment-only": "# deb http://deb.debian.org/debian trixie main\n",
+        }
+        for name, text in cases.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as td:
+                apt, result = self._pending_switch(Path(td), text)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((apt / "sources.list").read_text(), text, name)
+                self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists(), name)
+
+    def test_malformed_carrier_never_authorises_retirement(self):
+        # A present carrier is authoritative: it must hold exactly one valid
+        # timestamp, and a bad one is not rescued by build-info provenance.
+        info = "PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z\n"
+        for name, carrier in {
+            "trailing-garbage": "20260727T000000Z\ngarbage\n",
+            "two-timestamps": "20260727T000000Z\n20260727T000000Z\n",
+            "empty": "",
+            "malformed": "2026-07-27\n",
+            "extra-trailing-newlines": "20260727T000000Z\n\n",
+        }.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                installer = self._generated_installer_sources_list(base)
+                apt, result = self._pending_switch(base, installer, carrier=carrier, build_info=info)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((apt / "sources.list").read_text(), installer, name)
+
+    def test_finish_release_apt_install_retires_the_generated_installer_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            installer = self._generated_installer_sources_list(base)
+            apt, result = self._pending_switch(base, installer, body="finish_release_apt_install\n")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((apt / "sources.list").exists())
+            self.assertEqual((apt / "sources.list.plebian-os-installer-snapshot").read_text(), installer)
+
+    def _after_defective_switch(self, base: Path, active: str, build_info: str | None):
+        """The state the marker-only implementation left on a real install: the
+        installer file restored as the active sources.list beside the managed
+        live source, with carrier, inventory and backup all gone."""
+        etc, sources, env = self._apt_tree(base)
+        apt = etc / "apt"
+        state = etc / "plebian-os"
+        state.mkdir(exist_ok=True)
+        (apt / "sources.list").write_text(active)
+        (sources / "plebian-os-debian.sources").write_text(
+            "Types: deb\nURIs: https://deb.debian.org/debian\nSuites: trixie trixie-updates\n"
+            "Components: main contrib non-free non-free-firmware\n"
+            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n\n"
+            "Types: deb\nURIs: https://security.debian.org/debian-security\nSuites: trixie-security\n"
+            "Components: main contrib non-free non-free-firmware\n"
+            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n")
+        if build_info is not None:
+            (state / "build-info.env").write_text(build_info)
+        # A later release's runtime snapshot differs from the install snapshot.
+        body = self._release_body(base) + "PLEBIAN_OS_APT_SNAPSHOT=20261001T000000Z\nconfigure_apt_snapshot\n"
+        return apt, self._run_library(body, env)
+
+    def test_repair_retires_installer_source_left_active_by_defective_switch(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            installer = self._generated_installer_sources_list(base)
+            apt, result = self._after_defective_switch(
+                base, installer, "PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z\n")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((apt / "sources.list").exists(),
+                             "the active installer snapshot source was not repaired")
+            self.assertEqual((apt / "sources.list.plebian-os-installer-snapshot").read_text(), installer)
+            self.assertEqual(self._apt_updates(base), 1)
+
+    def test_repair_leaves_operator_or_unprovable_sources_list_alone(self):
+        info = "PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z\n"
+        for name, extra, build_info in (
+            ("operator-line", "deb https://example.org/debian trixie main\n", info),
+            ("no-build-info", "", None),
+            ("runtime-snapshot-only", "", "PLEBIAN_OS_VERSION=0.2.2\n"),
+        ):
+            with self.subTest(name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                active = self._generated_installer_sources_list(base) + extra
+                apt, result = self._after_defective_switch(base, active, build_info)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((apt / "sources.list").read_text(), active, name)
+                self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists(), name)
+
     def test_unmarked_inventoried_sources_list_is_restored_not_retired(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

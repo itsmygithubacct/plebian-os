@@ -3791,42 +3791,62 @@ _apt_source_entry_disables_trust() {
 # or this provisioner scans instead of restoring it. Returns 0 to retire it by
 # rename, 2 when an identical retired copy already exists, and 1 for any other
 # source. A conflicting retired copy dies before anything moves.
-# True when FILE is the sources.list Debian Installer wrote on a snapshot image.
-# Images up to 0.1.x marked it with the generator's comment line. Since the
-# generator started emitting the supplemental suites itself (34061b7) it writes
-# no marker, so recognise the content too: every active line must be a deb or
-# deb-src entry for this machine's recorded snapshot timestamp on
-# snapshot.debian.org, for the base, -updates or -security suite of this
-# codename. Anything else on an active line - an operator mirror, another
-# timestamp, another suite - means the file is not ours to retire.
-_is_installer_snapshot_source() {
-    local file="$1" stamp codename line kind uri suite rest active=0
-    grep -qxF '# Plebian-OS snapshot validity policy' "$file" && return 0
-    stamp="$(head -n 1 "$APT_ETC_ROOT/plebian-os/apt-snapshot" 2>/dev/null)" || return 1
+# The snapshot timestamp this machine was installed from. The first-boot carrier
+# is authoritative while it exists and must hold exactly one timestamp; once the
+# live switch has removed it, the build-info that Debian Installer copied from
+# the ISO (preseed late_command; never rewritten by updates) is the install
+# provenance. The runtime PLEBIAN_OS_APT_SNAPSHOT is not used: after an update
+# it names the new release's snapshot, not the one the installer wrote.
+_installer_snapshot_stamp() {
+    local carrier="$APT_ETC_ROOT/plebian-os/apt-snapshot"
+    local info="$APT_ETC_ROOT/plebian-os/build-info.env" stamp size
+    if [ -e "$carrier" ] || [ -L "$carrier" ]; then
+        [ -f "$carrier" ] && [ ! -L "$carrier" ] || return 1
+        stamp="$(cat "$carrier")" || return 1
+        size="$(wc -c < "$carrier")" || return 1
+        # One timestamp and at most its terminating newline.
+        [ "$size" -le $(( ${#stamp} + 1 )) ] || return 1
+    else
+        [ -f "$info" ] && [ ! -L "$info" ] || return 1
+        [ "$(grep -c '^PLEBIAN_OS_APT_SNAPSHOT=' "$info")" = 1 ] || return 1
+        stamp="$(sed -n 's/^PLEBIAN_OS_APT_SNAPSHOT=//p' "$info")" || return 1
+    fi
     [[ "$stamp" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] || return 1
+    printf '%s\n' "$stamp"
+}
+
+# True when FILE is the sources.list Debian Installer wrote on a snapshot image.
+# Images built before 34061b7 (including 0.2.1) carry the generator's marker
+# comment. Since that commit the generator emits the supplemental suites itself
+# and writes no marker, so the exact installer layout is recognised too: every
+# active line is a plain deb or deb-src entry - no [options], which apt-setup
+# never writes - for the install snapshot timestamp on snapshot.debian.org; the
+# debian archive carries only the codename and -updates suites, debian-security
+# only -security; and a binary entry for the base suite is present. Anything
+# else - options, another mirror, timestamp or suite, a deb-src-only file -
+# keeps the file the operator's.
+_is_installer_snapshot_source() {
+    local file="$1" stamp codename line kind uri suite rest base=0
+    grep -qxF '# Plebian-OS snapshot validity policy' "$file" && return 0
+    stamp="$(_installer_snapshot_stamp)" || return 1
     codename="$(_apt_codename)" || return 1
     [ -n "$codename" ] || return 1
     while IFS= read -r line || [ -n "$line" ]; do
         line="${line%%#*}"
-        read -r kind rest <<<"$line" || true
+        read -r kind uri suite rest <<<"$line" || true
         [ -n "$kind" ] || continue
         case "$kind" in deb|deb-src) ;; *) return 1 ;; esac
-        # Optional [ option=value ... ] block; installer entries may carry one.
-        if [[ "$rest" == \[* ]]; then
-            [[ "$rest" == *\]* ]] || return 1
-            rest="${rest#*]}"
-        fi
-        read -r uri suite rest <<<"$rest" || true
-        [[ "$uri" =~ ^https?://snapshot\.debian\.org/archive/debian(-security)?/${stamp}/?$ ]] || return 1
-        if [[ "$uri" == *debian-security* ]]; then
-            [ "$suite" = "$codename-security" ] || return 1
-        else
-            case "$suite" in "$codename"|"$codename-updates") ;; *) return 1 ;; esac
-        fi
         [ -n "$rest" ] || return 1
-        active=1
+        if [[ "$uri" =~ ^https?://snapshot\.debian\.org/archive/debian-security/${stamp}/?$ ]]; then
+            [ "$suite" = "$codename-security" ] || return 1
+        elif [[ "$uri" =~ ^https?://snapshot\.debian\.org/archive/debian/${stamp}/?$ ]]; then
+            case "$suite" in "$codename"|"$codename-updates") ;; *) return 1 ;; esac
+            [ "$kind" = deb ] && [ "$suite" = "$codename" ] && base=1
+        else
+            return 1
+        fi
     done < "$file"
-    [ "$active" = 1 ]
+    [ "$base" = 1 ]
 }
 
 _retire_installer_snapshot_source() {
@@ -3928,6 +3948,7 @@ restore_live_apt_sources() {
         echo "    + preflight $inventory and every managed backup before changing apt"
         echo "    + restore exactly the inventoried *.plebian-os-disabled sources, then remove only Plebian-OS snapshot files"
         echo "    + retire the Debian Installer snapshot sources.list -> $retired"
+        echo "    + also retire an active installer snapshot sources.list an earlier live switch restored"
         echo "    + ensure live Debian and security sources ($live_src unless operator sources already provide them)"
         echo "    + remove Plebian-OS's global Check-Valid-Until overrides; refuse live sources while a global Check-Valid-Until or Check-Date override remains, or an operator source disables apt checks"
         echo "    + apt-get update (a failure warns; apt retries on its daily timer)"
@@ -3959,6 +3980,26 @@ restore_live_apt_sources() {
             die "cannot restore apt sources safely: both $live and $backup exist"
         fi
     done
+
+    # Repair: before the installer file was recognised by content, a live
+    # switch restored it as an active source, removing the carrier and the
+    # inventory with it. Its snapshot -updates/-security entries then fail
+    # apt-get update once their Release files expire. Retire it the same way.
+    local active_list="$apt_dir/sources.list" active_retire="" listed=0
+    for live in "${managed[@]}"; do [ "$live" = "$active_list" ] && listed=1; done
+    if [ "$listed" = 0 ] && [ -f "$active_list" ] && [ ! -L "$active_list" ] \
+            && _is_installer_snapshot_source "$active_list"; then
+        if [ -e "$retired" ] || [ -L "$retired" ]; then
+            if [ -f "$retired" ] && [ ! -L "$retired" ] && cmp -s "$active_list" "$retired"; then
+                active_retire=duplicate
+            else
+                die "cannot retire the active installer snapshot source: both $active_list and $retired exist"
+            fi
+        else
+            active_retire=retire
+        fi
+        log "retiring the installer snapshot sources.list that an earlier live switch left active"
+    fi
 
     codename="$(_apt_codename)"
     txn="$(mktemp -d "$state_dir/.apt-restore.XXXXXX")" \
@@ -4011,6 +4052,16 @@ EOF
             break
         fi
     done
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ] && [ -n "$active_retire" ]; then
+        target="$retired"
+        [ "$active_retire" = retire ] || target="$txn/installer-snapshot-duplicate"
+        if mv -T "$active_list" "$target"; then
+            moved_from+=("$active_list")
+            moved_to+=("$target")
+        else
+            failed=1
+        fi
+    fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
         rm -f "$src" "$marker" "$inventory" || failed=1
     fi
