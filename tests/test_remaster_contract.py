@@ -872,6 +872,24 @@ class RemasterContractTests(unittest.TestCase):
         )
         self.assertNotRegex(late, r";\s*\\?\s*true\s*$")
 
+    def test_installer_records_the_sources_list_digest_it_wrote(self):
+        # The live switch retires the installer sources.list only on proof of
+        # ownership; for new images that proof is this install-time digest.
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        late = preseed.split("d-i preseed/late_command string", 1)[1]
+        self.assertIn(
+            "if [ -f /target/etc/apt/sources.list ]; then (cd /target/etc/apt && sha256sum sources.list)"
+            " > /target/etc/plebian-os/installer-sources.list.sha256;",
+            late,
+        )
+        line = next(l for l in late.splitlines() if "installer-sources.list.sha256" in l)
+        # No shell expansion inside the debconf value, and no pipe to mask failure.
+        self.assertNotIn("$", line)
+        self.assertNotIn("|", line)
+        # Recorded after apt-setup (late_command) and before firstboot runs.
+        self.assertLess(late.index("installer-sources.list.sha256"),
+                        late.index("systemctl enable plebian-os-firstboot.service"))
+
     def test_snapshot_generation_executes_exact_three_suite_contract(self):
         snapshot = "20260727T000000Z"
         generator = ROOT / "provision" / "plebian-os-apt-snapshot-generator"

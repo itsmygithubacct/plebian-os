@@ -3791,62 +3791,63 @@ _apt_source_entry_disables_trust() {
 # or this provisioner scans instead of restoring it. Returns 0 to retire it by
 # rename, 2 when an identical retired copy already exists, and 1 for any other
 # source. A conflicting retired copy dies before anything moves.
-# The snapshot timestamp this machine was installed from. The first-boot carrier
-# is authoritative while it exists and must hold exactly one timestamp; once the
-# live switch has removed it, the build-info that Debian Installer copied from
-# the ISO (preseed late_command; never rewritten by updates) is the install
-# provenance. The runtime PLEBIAN_OS_APT_SNAPSHOT is not used: after an update
-# it names the new release's snapshot, not the one the installer wrote.
+# Install provenance, never the mutable state: Debian Installer copies the
+# ISO's build-info here (preseed late_command) and nothing rewrites it. The
+# first-boot carrier is not used: snapshot activation rewrites it with the
+# current pin, which after a development snapshot change no longer names the
+# snapshot the installer wrote. Exactly one plain timestamp value is accepted.
 _installer_snapshot_stamp() {
-    local carrier="$APT_ETC_ROOT/plebian-os/apt-snapshot"
-    local info="$APT_ETC_ROOT/plebian-os/build-info.env" stamp size
-    if [ -e "$carrier" ] || [ -L "$carrier" ]; then
-        [ -f "$carrier" ] && [ ! -L "$carrier" ] || return 1
-        stamp="$(cat "$carrier")" || return 1
-        size="$(wc -c < "$carrier")" || return 1
-        # One timestamp and at most its terminating newline.
-        [ "$size" -le $(( ${#stamp} + 1 )) ] || return 1
-    else
-        [ -f "$info" ] && [ ! -L "$info" ] || return 1
-        [ "$(grep -c '^PLEBIAN_OS_APT_SNAPSHOT=' "$info")" = 1 ] || return 1
-        stamp="$(sed -n 's/^PLEBIAN_OS_APT_SNAPSHOT=//p' "$info")" || return 1
-    fi
+    local info="$APT_ETC_ROOT/plebian-os/build-info.env" stamp
+    [ -f "$info" ] && [ ! -L "$info" ] || return 1
+    [ "$(grep -c '^PLEBIAN_OS_APT_SNAPSHOT=' "$info")" = 1 ] || return 1
+    stamp="$(sed -n 's/^PLEBIAN_OS_APT_SNAPSHOT=//p' "$info")" || return 1
     [[ "$stamp" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] || return 1
     printf '%s\n' "$stamp"
 }
 
-# True when FILE is the sources.list Debian Installer wrote on a snapshot image.
-# Images built before 34061b7 (including 0.2.1) carry the generator's marker
-# comment. Since that commit the generator emits the supplemental suites itself
-# and writes no marker, so the exact installer layout is recognised too: every
-# active line is a plain deb or deb-src entry - no [options], which apt-setup
-# never writes - for the install snapshot timestamp on snapshot.debian.org; the
-# debian archive carries only the codename and -updates suites, debian-security
-# only -security; and a binary entry for the base suite is present. Anything
-# else - options, another mirror, timestamp or suite, a deb-src-only file -
-# keeps the file the operator's.
-_is_installer_snapshot_source() {
-    local file="$1" stamp codename line kind uri suite rest base=0
-    grep -qxF '# Plebian-OS snapshot validity policy' "$file" && return 0
+# True only when FILE is the sources.list Debian Installer wrote. Ownership is
+# proved, not inferred from a timestamp match:
+#   - an operator line '# plebian-os: keep' always keeps the file theirs;
+#   - images that recorded the installer file's digest at install time
+#     (installer-sources.list.sha256) retire exactly those bytes and nothing
+#     else;
+#   - images from before that record (since 34061b7, whose generator stopped
+#     writing the marker) are recognised only by their complete generated
+#     layout: both literal lines the apt-snapshot generator writes for the
+#     install timestamp, and otherwise only the plain deb/deb-src entries
+#     apt-setup writes for the base suite from the same snapshot mirror.
+# The legacy marker is honoured only for inventoried backups, by the caller.
+_installer_snapshot_layout() {
+    local file="$1" record="$APT_ETC_ROOT/plebian-os/installer-sources.list.sha256"
+    local stamp codename line kind uri suite rest digest want updates=0 security=0 base=0
+    grep -qxF '# plebian-os: keep' "$file" && return 1
+    if [ -e "$record" ] || [ -L "$record" ]; then
+        [ -f "$record" ] && [ ! -L "$record" ] || return 1
+        # Exactly the one line `sha256sum sources.list` printed at install.
+        want="$(cat "$record")" || return 1
+        [[ "$want" =~ ^[0-9a-f]{64}\ \ sources\.list$ ]] \
+            && [ "$(wc -c < "$record")" = $(( ${#want} + 1 )) ] || return 1
+        digest="$(sha256sum < "$file")" || return 1
+        [ "${digest%% *}" = "${want%% *}" ]
+        return
+    fi
     stamp="$(_installer_snapshot_stamp)" || return 1
     codename="$(_apt_codename)" || return 1
     [ -n "$codename" ] || return 1
+    local generated_updates="deb http://snapshot.debian.org/archive/debian/$stamp trixie-updates main contrib non-free non-free-firmware"
+    local generated_security="deb http://snapshot.debian.org/archive/debian-security/$stamp trixie-security main contrib non-free non-free-firmware"
     while IFS= read -r line || [ -n "$line" ]; do
-        line="${line%%#*}"
+        if [ "$line" = "$generated_updates" ]; then updates=1; continue; fi
+        if [ "$line" = "$generated_security" ]; then security=1; continue; fi
+        case "$line" in ''|'#'*) continue ;; esac
         read -r kind uri suite rest <<<"$line" || true
-        [ -n "$kind" ] || continue
         case "$kind" in deb|deb-src) ;; *) return 1 ;; esac
-        [ -n "$rest" ] || return 1
-        if [[ "$uri" =~ ^https?://snapshot\.debian\.org/archive/debian-security/${stamp}/?$ ]]; then
-            [ "$suite" = "$codename-security" ] || return 1
-        elif [[ "$uri" =~ ^https?://snapshot\.debian\.org/archive/debian/${stamp}/?$ ]]; then
-            case "$suite" in "$codename"|"$codename-updates") ;; *) return 1 ;; esac
-            [ "$kind" = deb ] && [ "$suite" = "$codename" ] && base=1
-        else
-            return 1
-        fi
+        [ -n "$rest" ] && [[ "$rest" != *'#'* ]] || return 1
+        [[ "$uri" =~ ^https?://snapshot\.debian\.org/archive/debian/${stamp}/?$ ]] || return 1
+        [ "$suite" = "$codename" ] || return 1
+        [ "$kind" = deb ] && base=1
     done < "$file"
-    [ "$base" = 1 ]
+    [ "$updates" = 1 ] && [ "$security" = 1 ] && [ "$base" = 1 ]
 }
 
 _retire_installer_snapshot_source() {
@@ -3854,7 +3855,8 @@ _retire_installer_snapshot_source() {
     local retired="$APT_ETC_ROOT/apt/sources.list.plebian-os-installer-snapshot"
     [ "$live" = "$APT_ETC_ROOT/apt/sources.list" ] || return 1
     [ -f "$backup" ] && [ ! -L "$backup" ] || return 1
-    _is_installer_snapshot_source "$backup" || return 1
+    grep -qxF '# Plebian-OS snapshot validity policy' "$backup" \
+        || _installer_snapshot_layout "$backup" || return 1
     if [ -e "$retired" ] || [ -L "$retired" ]; then
         if [ -f "$retired" ] && [ ! -L "$retired" ] && cmp -s "$backup" "$retired"; then
             return 2
@@ -3988,7 +3990,7 @@ restore_live_apt_sources() {
     local active_list="$apt_dir/sources.list" active_retire="" listed=0
     for live in "${managed[@]}"; do [ "$live" = "$active_list" ] && listed=1; done
     if [ "$listed" = 0 ] && [ -f "$active_list" ] && [ ! -L "$active_list" ] \
-            && _is_installer_snapshot_source "$active_list"; then
+            && _installer_snapshot_layout "$active_list"; then
         if [ -e "$retired" ] || [ -L "$retired" ]; then
             if [ -f "$retired" ] && [ ! -L "$retired" ] && cmp -s "$active_list" "$retired"; then
                 active_retire=duplicate
