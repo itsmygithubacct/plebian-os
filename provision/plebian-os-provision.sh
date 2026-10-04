@@ -3825,10 +3825,14 @@ _installer_snapshot_layout() {
     grep -qxF '# plebian-os: keep' "$file" && return 1
     if [ -e "$record" ] || [ -L "$record" ]; then
         [ -f "$record" ] && [ ! -L "$record" ] || return 1
-        # Exactly the one line `sha256sum sources.list` printed at install.
-        want="$(cat "$record")" || return 1
-        [[ "$want" =~ ^[0-9a-f]{64}\ \ sources\.list$ ]] \
-            && [ "$(wc -c < "$record")" = $(( ${#want} + 1 )) ] || return 1
+        # Exactly the one line `sha256sum sources.list` printed at install,
+        # checked on the raw bytes: 79 bytes, of which the first 78 match the
+        # line (the pattern fixes their length; a NUL dropped by command
+        # substitution cannot satisfy it) and the last is the newline.
+        [ "$(wc -c < "$record")" = 79 ] || return 1
+        want="$(head -c 78 "$record")" || return 1
+        [[ "$want" =~ ^[0-9a-f]{64}\ \ sources\.list$ ]] || return 1
+        [ "$(tail -c 1 "$record" | od -An -tx1 | tr -d ' \n')" = 0a ] || return 1
         digest="$(sha256sum < "$file")" || return 1
         [ "${digest%% *}" = "${want%% *}" ]
         return

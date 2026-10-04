@@ -1198,6 +1198,10 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             ("malformed-record", lambda i: i, lambda i: self._record_for(i).replace("  sources.list", "")),
             ("record-two-lines", lambda i: i, lambda i: self._record_for(i) * 2),
             ("record-extra-blank-line", lambda i: i, lambda i: self._record_for(i) + "\n"),
+            ("record-nul-for-newline", lambda i: i, lambda i: self._record_for(i)[:-1] + "\0"),
+            ("record-no-final-newline", lambda i: i, lambda i: self._record_for(i)[:-1]),
+            ("record-wrong-filename", lambda i: i, lambda i: self._record_for(i).replace("sources.list", "sources.lisx")),
+            ("record-nul-inside-line", lambda i: i, lambda i: self._record_for(i).replace("  ", " \0", 1)),
         ):
             with self.subTest(name), tempfile.TemporaryDirectory() as td:
                 base = Path(td)
