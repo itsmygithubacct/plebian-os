@@ -17,11 +17,16 @@
 # Disable OS-layer refresh with PLEBIAN_OS_SELF_UPDATE=0.
 #
 # Usage: plebian-os-update [--restart] [--revalidate-current]
+#        plebian-os-update --recover-interrupted
 # By default the running graphical session is left alone. Pass --restart to ask
 # Pleb to restart it only after the stack update has completed successfully.
 # By default the newest published stable Plebian-OS release is selected before
 # the stack is refreshed. Pass --revalidate-current only for recovery or
 # diagnostics when the selected release must not change.
+# An update stopped by power loss or a kill leaves its recovery data behind with
+# no failure record. Later updates refuse to start until
+# --recover-interrupted has restored the installation from before it (or, when
+# the interrupted update had already committed, cleared what it left).
 #
 # Run as the Pleb user; `pleb install` elevates via sudo where it needs root.
 # Deployed to the target as /usr/local/bin/plebian-os-update and offered by
@@ -629,6 +634,7 @@ PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="${PLEBIAN_OS_UV_INSTALLER_MAX_BYTES:-}"
 
 restart_arg=--no-restart
 select_latest_release=1
+recover_interrupted=0
 # Set only after the complete local-candidate gate succeeds. These are reset
 # unconditionally so caller-provided environment cannot opt into the bypass.
 _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
@@ -639,6 +645,7 @@ while [ "$#" -gt 0 ]; do
         -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'; exit 0 ;;
         --restart) restart_arg=--restart ;;
         --revalidate-current) select_latest_release=0 ;;
+        --recover-interrupted) recover_interrupted=1 ;;
         *) die "unknown option: $1 (try --help)" ;;
     esac
     shift
@@ -2063,6 +2070,136 @@ stack_transaction_cleanup() {
     exit "$rc"
 }
 
+# --- interrupted updates -----------------------------------------------------
+# A live transaction directory names its owner; one whose owner is gone (or
+# that predates owner records) and that has no failure-reason was abandoned by
+# a process that never reached its EXIT trap: a kill, a crash, a power cut.
+
+process_start_ticks() {
+    local stat
+    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+    stat="${stat##*) }"
+    # Field 22 overall is the 20th after the parenthesised command name.
+    awk '{print $20}' <<<"$stat"
+}
+
+record_stack_transaction_owner() {
+    local dir="$1" start boot
+    start="$(process_start_ticks "$$")" || return 1
+    boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" || return 1
+    printf 'pid=%s\nstart=%s\nboot=%s\n' "$$" "$start" "$boot" >"$dir/owner.new" \
+        && mv -f -- "$dir/owner.new" "$dir/owner"
+}
+
+stack_transaction_owner_alive() {
+    local dir="$1" pid start boot now
+    [ -f "$dir/owner" ] || return 1
+    pid="$(sed -n 's/^pid=\([0-9]\+\)$/\1/p' "$dir/owner")"
+    start="$(sed -n 's/^start=\([0-9]\+\)$/\1/p' "$dir/owner")"
+    boot="$(sed -n 's/^boot=\(.*\)$/\1/p' "$dir/owner")"
+    [ -n "$pid" ] && [ -n "$start" ] || return 1
+    [ "$boot" = "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" ] || return 1
+    now="$(process_start_ticks "$pid")" || return 1
+    [ "$now" = "$start" ]
+}
+
+interrupted_stack_transactions() {
+    local dir
+    for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
+        [ "$dir" != "${_STACK_TXN_DIR:-}" ] || continue
+        [ ! -e "$dir/failure-reason" ] || continue    # reported; has its own procedure
+        stack_transaction_owner_alive "$dir" && continue
+        printf '%s\n' "$dir"
+    done
+}
+
+refuse_interrupted_stack_transaction() {
+    local found
+    found="$(interrupted_stack_transactions)"
+    [ -n "$found" ] || return 0
+    warn "a previous plebian-os-update stopped before it finished (power loss or a kill),"
+    warn "so this machine may be part-way between two installations. Recovery data:"
+    while IFS= read -r dir; do warn "  $dir"; done <<<"$found"
+    die "run 'plebian-os-update --recover-interrupted' first; it restores the installation from before that update"
+}
+
+recover_interrupted_stack_transaction() {
+    local -a orphans=()
+    local orphan root token
+    acquire_kilix_transaction_lock
+    mapfile -t orphans < <(interrupted_stack_transactions)
+    if [ "${#orphans[@]}" -eq 0 ]; then
+        log "no interrupted update to recover"
+        release_kilix_transaction_lock
+        return 0
+    fi
+    [ "${#orphans[@]}" -eq 1 ] \
+        || die "several interrupted updates were found; inspect them one at a time: ${orphans[*]}"
+    orphan="${orphans[0]}"
+    root=""
+    if [ -f "$orphan/root-transaction" ]; then
+        root="$(head -n 1 -- "$orphan/root-transaction")"
+        validate_root_transaction_dir "$root" \
+            || die "the interrupted update recorded an unsafe root recovery path: $root"
+    fi
+    token=""
+    if [ -f "$orphan/native-transaction" ]; then
+        token="$(head -n 1 -- "$orphan/native-transaction")"
+        [[ "$token" =~ ^[0-9a-f]{32}$ ]] \
+            || die "the interrupted update recorded an invalid native transaction token"
+    fi
+    _STACK_TXN_DIR="$orphan"
+    _STACK_ROOT_TXN_DIR="$root"
+    NATIVE_TRANSACTION_TOKEN="$token"
+    NATIVE_TRANSACTION_STARTED=0
+    [ -z "$token" ] || NATIVE_TRANSACTION_STARTED=1
+    record_stack_transaction_owner "$orphan" \
+        || die "could not take over the interrupted update's recovery data"
+
+    if [ -f "$orphan/committed" ]; then
+        log "the interrupted update had already committed the new installation; finishing its cleanup"
+        finish_native_runtime_transaction || {
+            release_kilix_transaction_lock
+            return 70
+        }
+    elif [ -f "$orphan/active" ]; then
+        [ -n "$root" ] || die "the interrupted update left no root recovery path; inspect $orphan"
+        warn "restoring the installation from before the update interrupted at $(stat -c '%y' -- "$orphan" | cut -d. -f1)"
+        _STACK_TXN_ACTIVE=1
+        if ! rollback_stack_transaction; then
+            {
+                printf 'exit-status: interrupted\n'
+                printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+                printf 'failing-command: plebian-os-update --recover-interrupted\n'
+                printf 'rollback-complete: no\n'
+                printf 'recover-with: plebian-os-select-closure --rollback\n'
+                printf 'then: plebian-os-update --restart\n'
+            } >"$orphan/failure-reason" 2>/dev/null || true
+            warn "recovery was incomplete; recovery data retained at $orphan${root:+ and $root}"
+            release_kilix_transaction_lock
+            return 70
+        fi
+        _STACK_TXN_ACTIVE=0
+        log "restored the installation from before the interrupted update"
+        warn "if that update had selected a newer release, run 'plebian-os-select-closure --rollback'"
+        warn "to select the previous one again, or 'plebian-os-update' to finish moving forward"
+    else
+        log "the interrupted update stopped before it changed anything; removing its recovery data"
+    fi
+    if [ -n "$root" ] && ! remove_root_stack_snapshot "$root"; then
+        warn "root recovery data could not be removed: $root"
+        release_kilix_transaction_lock
+        return 70
+    fi
+    rm -rf -- "$orphan"
+    _STACK_TXN_DIR=""
+    _STACK_ROOT_TXN_DIR=""
+    release_kilix_transaction_lock
+    return 0
+}
+
 begin_stack_transaction() {
     _STACK_KILIX_ROLLBACK_CONTROLLED=0
     require_standard_install_destinations
@@ -2075,6 +2212,8 @@ begin_stack_transaction() {
     _STACK_TXN_DIR="$(mktemp -d "$PLEB_STATE_HOME/stack-rollback.XXXXXX")" \
         || die "could not create stack rollback state"
     chmod 0700 "$_STACK_TXN_DIR"
+    record_stack_transaction_owner "$_STACK_TXN_DIR" \
+        || die "could not record the stack transaction owner"
     trap stack_transaction_cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -2109,6 +2248,11 @@ begin_stack_transaction() {
         || die "could not snapshot the installed OS/Pleb layer"
     validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
         || die "root stack snapshot returned an unsafe recovery path"
+    # A process that dies without its EXIT trap takes these facts with it;
+    # --recover-interrupted reads them back from the transaction directory.
+    printf '%s\n' "$_STACK_ROOT_TXN_DIR" >"$_STACK_TXN_DIR/root-transaction" \
+        || die "could not record the root recovery path"
+    : >"$_STACK_TXN_DIR/active" || die "could not mark the stack transaction active"
     _STACK_TXN_ACTIVE=1
     begin_kilix_engine_mutation
     rm -f -- "$PLEB_STATE_HOME/kilix-fork-built-ref" \
@@ -2120,6 +2264,7 @@ commit_stack_transaction() {
     commit_kilix_engine_generation \
         || die "could not commit the coherent Kilix generation transaction"
     _STACK_TXN_COMMITTED=1
+    : >"$_STACK_TXN_DIR/committed" 2>/dev/null || true
     _STACK_TXN_ACTIVE=0
     if ! finish_native_runtime_transaction; then
         _STACK_TXN_RETAIN=1
@@ -4091,6 +4236,11 @@ fi
 # updater from a fresh environment.  If no newer release exists, this returns
 # and the already-selected closure is revalidated normally.
 # Before the release hop below: that already changes the selected closure.
+if [ "$recover_interrupted" = 1 ]; then
+    recover_interrupted_stack_transaction
+    exit $?
+fi
+refuse_interrupted_stack_transaction
 refuse_per_user_source_layout
 preflight_release_apt_provenance
 select_latest_release_if_needed
