@@ -46,10 +46,12 @@ class InterruptedUpdateTests(unittest.TestCase):
         return subprocess.run(["bash", "-c", script], env=env, text=True,
                               capture_output=True, check=False, timeout=60)
 
-    def orphan(self, name="stack-rollback.Abc123", owner=None, **markers):
+    DEAD = "pid=999999\nstart=1\nboot=gone\n"
+
+    def orphan(self, name="stack-rollback.Abc123", owner=DEAD, **markers):
         d = self.state / name
         d.mkdir(mode=0o700)
-        if owner is not None:
+        if owner is not None:                    # owner=None: left by an earlier updater
             (d / "owner").write_text(owner)
         for key, value in markers.items():
             (d / key.replace("_", "-")).write_text(value)
@@ -60,6 +62,7 @@ class InterruptedUpdateTests(unittest.TestCase):
 
     def test_only_transactions_whose_owner_is_gone_count_as_interrupted(self):
         live = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(live.wait)
         self.addCleanup(live.kill)
         start = Path(f"/proc/{live.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
         alive = self.orphan("stack-rollback.Live01",
@@ -70,8 +73,9 @@ class InterruptedUpdateTests(unittest.TestCase):
                                owner=f"pid={live.pid}\nstart={start}\nboot=another-boot\n")
         reused = self.orphan("stack-rollback.Reuse1",   # same PID, a different process
                              owner=f"pid={live.pid}\nstart={int(start) + 1}\nboot={self.boot_id()}\n")
-        legacy = self.orphan("stack-rollback.Legacy")
+        legacy = self.orphan("stack-rollback.Legacy", owner=None)
         self.orphan("stack-rollback.Failed", failure_reason="exit-status: 1\n")
+        self.orphan("stack-rollback.Native", native_finish_pending="token\n")
         result = self.run_lib("interrupted_stack_transactions\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         listed = set(result.stdout.split())
@@ -159,6 +163,37 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertIn("several interrupted updates", result.stderr)
         self.assertNotIn("rollback dir=", self.log.read_text())
 
+    def test_kept_creations_survive_recovery(self):
+        orphan = self.orphan(root_transaction=ROOT_TXN + "\n", active="")
+        (orphan / "kilix95.created").mkdir()
+        result = self.run_lib(
+            "rollback_stack_transaction() { echo \"rollback dir=$_STACK_TXN_DIR\" >>\"$LOG\"; _STACK_TXN_RETAIN=1; }\n"
+            "recover_interrupted_stack_transaction\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((orphan / "kilix95.created").is_dir(), "what the rollback kept stays kept")
+        self.assertIn("rollback-complete: yes", (orphan / "failure-reason").read_text())
+        self.assertNotIn("remove-root", self.log.read_text())
+        self.assertEqual(self.run_lib("interrupted_stack_transactions\n").stdout.strip(), "")
+
+    def test_an_earlier_updaters_leftover_is_never_deleted(self):
+        orphan = self.orphan(owner=None)
+        (orphan / "kilix.head").write_text("0123abc\n")
+        result = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertEqual(result.returncode, 70)
+        self.assertTrue((orphan / "kilix.head").exists())
+        self.assertIn("plebian-os-select-closure --rollback", (orphan / "failure-reason").read_text())
+        log = self.log.read_text()
+        self.assertNotIn("rollback dir=", log)
+        self.assertNotIn("remove-root", log)
+
+    def test_an_active_update_without_a_root_path_is_refused(self):
+        orphan = self.orphan(active="")
+        result = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no root recovery path", result.stderr)
+        self.assertNotIn("rollback dir=", self.log.read_text())
+        self.assertTrue(orphan.exists())
+
     def test_the_markers_are_written_where_a_kill_can_leave_them(self):
         text = UPDATE_PATH.read_text()
         begin = text[text.index("\nbegin_stack_transaction() {"):]
@@ -166,9 +201,19 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertLess(begin.index("record_stack_transaction_owner"), begin.index("record_stack_checkout"))
         self.assertLess(begin.index('"$_STACK_TXN_DIR/root-transaction"'), begin.index("_STACK_TXN_ACTIVE=1"))
         self.assertLess(begin.index('"$_STACK_TXN_DIR/active"'), begin.index("_STACK_TXN_ACTIVE=1"))
+        # active must exist before the first change to the installation
+        self.assertLess(begin.index('"$_STACK_TXN_DIR/active"'), begin.index("begin_kilix_engine_mutation"))
+        self.assertLess(begin.index('"$_STACK_TXN_DIR/active"'),
+                        begin.index('rm -f -- "$PLEB_STATE_HOME/kilix-fork-built-ref"'))
+        # the cleanup trap is armed before anything that can fail
+        self.assertLess(begin.index("trap stack_transaction_cleanup EXIT"),
+                        begin.index("record_stack_transaction_owner"))
+        self.assertIn('"$_STACK_TXN_DIR/committed.prepared"', begin)
         commit = text[text.index("\ncommit_stack_transaction() {"):]
         commit = commit[:commit.index("\n}\n")]
         self.assertLess(commit.index("_STACK_TXN_COMMITTED=1"), commit.index('"$_STACK_TXN_DIR/committed"'))
+        self.assertIn('mv -f -- "$_STACK_TXN_DIR/committed.prepared" "$_STACK_TXN_DIR/committed"', commit)
+        self.assertIn('"$_STACK_TXN_DIR/native-finish-pending"', commit)
         main = text.index('if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then\n    return 0')
         self.assertLess(text.index("\n    recover_interrupted_stack_transaction\n", main),
                         text.index("\nselect_latest_release_if_needed\n", main))

@@ -2110,6 +2110,7 @@ interrupted_stack_transactions() {
         [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
         [ "$dir" != "${_STACK_TXN_DIR:-}" ] || continue
         [ ! -e "$dir/failure-reason" ] || continue    # reported; has its own procedure
+        [ ! -e "$dir/native-finish-pending" ] || continue   # committed; native cleanup only
         stack_transaction_owner_alive "$dir" && continue
         printf '%s\n' "$dir"
     done
@@ -2150,6 +2151,22 @@ recover_interrupted_stack_transaction() {
         [[ "$token" =~ ^[0-9a-f]{32}$ ]] \
             || die "the interrupted update recorded an invalid native transaction token"
     fi
+    if [ ! -f "$orphan/owner" ]; then
+        # Written by an updater that kept no markers: nothing says how far it
+        # got, so its rollback data is never deleted automatically.
+        {
+            printf 'exit-status: interrupted (left by an earlier updater)\n'
+            printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+            printf 'rollback-complete: no\n'
+            printf 'recover-with: plebian-os-select-closure --rollback\n'
+            printf 'then: plebian-os-update --restart\n'
+        } >"$orphan/failure-reason" 2>/dev/null || true
+        warn "$orphan was left by an earlier updater that recorded no progress markers;"
+        warn "its recovery data is kept. Restore by hand: plebian-os-select-closure --rollback,"
+        warn "then plebian-os-update --restart"
+        release_kilix_transaction_lock
+        return 70
+    fi
     _STACK_TXN_DIR="$orphan"
     _STACK_ROOT_TXN_DIR="$root"
     NATIVE_TRANSACTION_TOKEN="$token"
@@ -2182,6 +2199,18 @@ recover_interrupted_stack_transaction() {
             return 70
         fi
         _STACK_TXN_ACTIVE=0
+        if [ "${_STACK_TXN_RETAIN:-0}" = 1 ]; then
+            {
+                printf 'exit-status: interrupted\n'
+                printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+                printf 'rollback-complete: yes\n'
+                printf 'retained: files the interrupted update created are kept here for inspection\n'
+            } >"$orphan/failure-reason" 2>/dev/null || true
+            log "restored the installation from before the interrupted update"
+            warn "what the interrupted update had created is kept at $orphan${root:+ and $root}"
+            release_kilix_transaction_lock
+            return 0
+        fi
         log "restored the installation from before the interrupted update"
         warn "if that update had selected a newer release, run 'plebian-os-select-closure --rollback'"
         warn "to select the previous one again, or 'plebian-os-update' to finish moving forward"
@@ -2212,13 +2241,16 @@ begin_stack_transaction() {
     _STACK_TXN_DIR="$(mktemp -d "$PLEB_STATE_HOME/stack-rollback.XXXXXX")" \
         || die "could not create stack rollback state"
     chmod 0700 "$_STACK_TXN_DIR"
-    record_stack_transaction_owner "$_STACK_TXN_DIR" \
-        || die "could not record the stack transaction owner"
     trap stack_transaction_cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
     trap 'exit 129' HUP
     trap 'exit 141' PIPE
+    record_stack_transaction_owner "$_STACK_TXN_DIR" \
+        || die "could not record the stack transaction owner"
+    # Renamed into place at commit, so marking the commit needs no free space.
+    : >"$_STACK_TXN_DIR/committed.prepared" \
+        || die "could not prepare the stack transaction commit marker"
 
     record_stack_checkout "$PLEB_DIR" pleb pleb
     case "$PLEBIAN_OS_SELF_UPDATE" in
@@ -2264,10 +2296,13 @@ commit_stack_transaction() {
     commit_kilix_engine_generation \
         || die "could not commit the coherent Kilix generation transaction"
     _STACK_TXN_COMMITTED=1
-    : >"$_STACK_TXN_DIR/committed" 2>/dev/null || true
+    mv -f -- "$_STACK_TXN_DIR/committed.prepared" "$_STACK_TXN_DIR/committed" 2>/dev/null \
+        || : >"$_STACK_TXN_DIR/committed" 2>/dev/null || true
     _STACK_TXN_ACTIVE=0
     if ! finish_native_runtime_transaction; then
         _STACK_TXN_RETAIN=1
+        printf 'native cleanup pending for token %s\n' "$NATIVE_TRANSACTION_TOKEN" \
+            >"$_STACK_TXN_DIR/native-finish-pending" 2>/dev/null || true
         warn "coherent stack committed; retaining $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
         trap - EXIT INT TERM HUP PIPE
         release_kilix_transaction_lock
