@@ -29,7 +29,8 @@ class PortalsConfigTests(unittest.TestCase):
         block = PROVISION[PROVISION.index("PORTALS_CONF="):PROVISION.index("# ── 5. session mode")]
         self.assertIn("[preferred]", block)
         self.assertIn("default=gtk", block)
-        self.assertIn("ScreenCast", block, "the deliberate omission must be stated, not implied")
+        self.assertIn("org.freedesktop.impl.portal.ScreenCast=pleb", block)
+        self.assertIn("org.freedesktop.impl.portal.Screenshot=pleb", block)
 
     def test_it_is_written_inside_the_root_transaction(self):
         # Otherwise a rollback would leave it behind, or a failed provision
@@ -43,6 +44,25 @@ class PortalsConfigTests(unittest.TestCase):
 
     def test_dry_run_announces_it(self):
         self.assertIn("+ write $PORTALS_CONF", PROVISION)
+
+    def test_capture_configuration_and_runtime_are_protected_by_both_transactions(self):
+        provision_paths = PROVISION[PROVISION.index("PROVISION_ROOT_TRANSACTION_PATHS=("):]
+        provision_paths = provision_paths[:provision_paths.index(")\n")]
+        updater = (ROOT / "provision/plebian-os-update.sh").read_text()
+        for path in (
+            "/usr/local/bin/pleb-lock", "/usr/local/lib/pleb/displays.py",
+            "/usr/local/lib/pleb/capture_sources.py", "/usr/local/lib/pleb/capture_worker.py",
+            "/usr/local/lib/pleb/capture_registry.py", "/usr/local/lib/pleb/capture_screenshot.py",
+            "/usr/local/lib/pleb/capture_portal.py", "/usr/local/lib/pleb/capture_transport.so",
+            "/usr/local/share/xdg-desktop-portal/portals/pleb.portal",
+            "/usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service",
+            "/etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf",
+            CONF,
+        ):
+            with self.subTest(path=path):
+                self.assertIn(path, provision_paths)
+                self.assertEqual(updater.count("    " + path + "\n"), 2,
+                                 "snapshot and restore must protect the same exact artifact")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,16 @@ regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  �
    (no desktop task)          (networked)     (+ desktop provider)      (visible Kilix chrome)
 ```
 
+The RC5 desktop-completion candidate adds account locking and power services,
+monitor scaling, device setup controls, and Pleb's user-selected X11 capture
+portal. Capture uses PipeWire with WirePlumber's `video-only` profile; PulseAudio
+continues to handle audio. The locally built capture transport supplies
+descriptor-backed video buffers. Firefox ESR capture through a private
+application bus has component VM evidence, including user consent and Stop
+sharing. These local candidate sources still require release
+selection, Chromium qualification, and a complete installed
+desktop acceptance run before they establish RC5 desktop completeness.
+
 ## 0.2.1 development status
 
 This checkout contains early source work for 0.2.1; it is not a release

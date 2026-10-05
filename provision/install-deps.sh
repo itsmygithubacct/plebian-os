@@ -164,7 +164,7 @@ DEP_GROUPS=(
     # PDF Conversion uses this standard-library venv support with a
     # hash-locked pip install independently of uv. The coordinated 0.1.9
     # release also installs its required, verified uv pin as system tooling.
-    "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv"
+    "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv python3-tk"
     # Playalong links SDL2 for output and libsndfile for stem decode. Keep the
     # runtime libraries explicit rather than relying on the -dev toolchain.
     # Kilix Amp links libfluidsynth in-process and reads a General MIDI
@@ -221,15 +221,15 @@ DEP_GROUPS=(
     # screenshot tool. It must be explicit because no XFCE desktop task is
     # installed and --no-install-recommends cannot supply it incidentally.
     "desktop screenshots|xfce4-screenshooter"
-    # The audio server is PulseAudio (the "audio" group above). xdg-desktop-portal
-    # depends on libpipewire and probes for a PipeWire daemon at start; none is
-    # installed, so its ScreenCast/Screenshot interfaces are unavailable and it
-    # logs "Failed connect to PipeWire" once per session. That is the intended
-    # state, declared in /etc/xdg-desktop-portal/pleb-portals.conf, not a
-    # half-install: adding pipewire+wireplumber would put two audio servers on
-    # one machine, and the libraries cannot be dropped while the portal needs
-    # them. libpipewire-0.3-dev arrives through libfluidsynth-dev in the build
-    # toolchain, for the same reason.
+    "desktop lock + power + authorization|xss-lock i3lock xssproxy xfce4-power-manager xfconf lxpolkit"
+    "desktop file and URI handlers|xdg-utils desktop-file-utils shared-mime-info"
+    "desktop bluetooth + removable media|blueman pulseaudio-module-bluetooth udisks2 udiskie gnome-disk-utility gir1.2-notify-0.7"
+    "desktop physical printers|cups cups-client system-config-printer system-config-printer-udev"
+    "desktop sound + input methods + accessibility|pavucontrol ibus ibus-gtk ibus-gtk3 ibus-gtk4 orca at-spi2-core"
+    # PulseAudio owns audio. Pleb supplies an X11 capture backend and the
+    # distribution installs WirePlumber's video-only profile. Neither
+    # pipewire-pulse nor an audio-hardware monitor is part of this group.
+    "desktop capture transport|pipewire pipewire-bin wireplumber libpipewire-0.3-dev gstreamer1.0-pipewire gstreamer1.0-x gstreamer1.0-plugins-base gstreamer1.0-plugins-good gir1.2-gst-plugins-base-1.0 gir1.2-gtk-3.0 python3-gi-cairo"
     "desktop notifications + portal|python3-dbus python3-gi dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     # F100's sandbox must not depend on portal/systemd dependency accidents.
     # These are the minimum F118-S0 identities; newer Debian security builds are accepted.
