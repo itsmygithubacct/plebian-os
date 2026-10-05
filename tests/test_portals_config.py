@@ -1,4 +1,5 @@
 """The Pleb desktop declares its portal backends instead of falling back."""
+import re
 import unittest
 from pathlib import Path
 
@@ -53,7 +54,8 @@ class PortalsConfigTests(unittest.TestCase):
             "/usr/local/bin/pleb-lock", "/usr/local/lib/pleb/displays.py",
             "/usr/local/lib/pleb/capture_sources.py", "/usr/local/lib/pleb/capture_worker.py",
             "/usr/local/lib/pleb/capture_registry.py", "/usr/local/lib/pleb/capture_screenshot.py",
-            "/usr/local/lib/pleb/capture_portal.py", "/usr/local/lib/pleb/capture_transport.so",
+            "/usr/local/lib/pleb/capture_portal.py", "/usr/local/lib/pleb/capture_session.py",
+            "/usr/local/lib/pleb/capture_transport.so",
             "/usr/local/share/xdg-desktop-portal/portals/pleb.portal",
             "/usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service",
             "/etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf",
@@ -63,6 +65,35 @@ class PortalsConfigTests(unittest.TestCase):
                 self.assertIn(path, provision_paths)
                 self.assertEqual(updater.count("    " + path + "\n"), 2,
                                  "snapshot and restore must protect the same exact artifact")
+
+    @staticmethod
+    def protected_pleb_modules(text, start):
+        block = text[text.index(start):]
+        block = block[:block.index(")\n")]
+        prefix = "/usr/local/lib/pleb/"
+        return sorted(line.strip()[len(prefix):] for line in block.splitlines()
+                      if line.strip().startswith(prefix) and line.strip().endswith(".py"))
+
+    def test_both_transactions_protect_the_same_pleb_modules(self):
+        updater = (ROOT / "provision/plebian-os-update.sh").read_text()
+        snapshot = updater[updater.index("ROOT_SNAPSHOT"):]
+        restore = updater[updater.index("ROOT_RESTORE"):]
+        provision = self.protected_pleb_modules(PROVISION, "PROVISION_ROOT_TRANSACTION_PATHS=(")
+        self.assertIn("capture_session.py", provision)
+        self.assertEqual(self.protected_pleb_modules(snapshot, "paths=("), provision)
+        self.assertEqual(self.protected_pleb_modules(restore, "paths=("), provision)
+
+    def test_every_module_pleb_installs_is_protected(self):
+        # The list lives in the sibling pleb repository (PLEB_CAPTURE_MODULES in
+        # lib/install.sh). A hand-typed copy here once left out the lock guard,
+        # so a failed provision or update could not roll back cleanly.
+        install = ROOT.parent / "pleb" / "lib" / "install.sh"
+        if not install.exists():
+            self.skipTest(f"no sibling pleb checkout at {install.parent.parent}")
+        found = re.search(r'^PLEB_CAPTURE_MODULES="([^"]+)"$', install.read_text(), re.M)
+        self.assertIsNotNone(found, "pleb no longer declares PLEB_CAPTURE_MODULES")
+        provision = self.protected_pleb_modules(PROVISION, "PROVISION_ROOT_TRANSACTION_PATHS=(")
+        self.assertEqual(provision, sorted(found.group(1).split()))
 
 
 if __name__ == "__main__":
