@@ -1,5 +1,6 @@
 """The Pleb desktop declares its portal backends instead of falling back."""
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -87,10 +88,18 @@ class PortalsConfigTests(unittest.TestCase):
         # The list lives in the sibling pleb repository (PLEB_CAPTURE_MODULES in
         # lib/install.sh). A hand-typed copy here once left out the lock guard,
         # so a failed provision or update could not roll back cleanly.
-        install = ROOT.parent / "pleb" / "lib" / "install.sh"
-        if not install.exists():
-            self.skipTest(f"no sibling pleb checkout at {install.parent.parent}")
-        found = re.search(r'^PLEB_CAPTURE_MODULES="([^"]+)"$', install.read_text(), re.M)
+        # Compare against the Pleb commit the release selects, not whatever the
+        # sibling's working tree holds.
+        pleb = ROOT.parent / "pleb"
+        if not (pleb / ".git").exists():
+            self.skipTest(f"no sibling pleb checkout at {pleb}")
+        manifest = (ROOT / "releases/0.2.2.env").read_text()
+        ref = re.search(r"^PLEB_REF=([0-9a-f]{40})$", manifest, re.M).group(1)
+        shown = subprocess.run(["git", "-C", str(pleb), "show", f"{ref}:lib/install.sh"],
+                               capture_output=True, text=True)
+        if shown.returncode:
+            self.skipTest(f"sibling pleb checkout lacks PLEB_REF {ref[:12]}")
+        found = re.search(r'^PLEB_CAPTURE_MODULES="([^"]+)"$', shown.stdout, re.M)
         self.assertIsNotNone(found, "pleb no longer declares PLEB_CAPTURE_MODULES")
         provision = self.protected_pleb_modules(PROVISION, "PROVISION_ROOT_TRANSACTION_PATHS=(")
         self.assertEqual(provision, sorted(found.group(1).split()))
