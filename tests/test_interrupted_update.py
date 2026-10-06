@@ -35,7 +35,9 @@ class InterruptedUpdateTests(unittest.TestCase):
 
     def run_lib(self, body, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
-        env.update({"HOME": str(self.tmp / "home"), "LOG": str(self.log), **extra})
+        env.update({"HOME": str(self.tmp / "home"), "LOG": str(self.log),
+                    # never this machine's own installation record
+                    "PLEBIAN_OS_INSTALLED_VERSIONS": str(self.tmp / "no-versions.env"), **extra})
         script = (
             "set -euo pipefail\n"
             "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
@@ -172,7 +174,7 @@ class InterruptedUpdateTests(unittest.TestCase):
             "rollback_stack_transaction() { echo \"rollback dir=$_STACK_TXN_DIR\" >>\"$LOG\"; _STACK_TXN_RETAIN=1; }\n"
             "recover_interrupted_stack_transaction\n")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("was not rolled back: it still selects release", result.stderr)
+        self.assertIn("could not compare /etc/pleb/closure.env with the installation", result.stderr)
         self.assertTrue((orphan / "kilix95.created").is_dir(), "what the rollback kept stays kept")
         self.assertIn("rollback-complete: yes", (orphan / "failure-reason").read_text())
         self.assertNotIn("remove-root", self.log.read_text())
@@ -186,7 +188,7 @@ class InterruptedUpdateTests(unittest.TestCase):
     def assert_current_note(self, d):
         note = (d / "failure-reason").read_text()
         self.assertIn("blocks-updates: no", note)
-        self.assertIn("advice: run plebian-os-update to reinstall the selected release", note)
+        self.assertIn("advice: plebian-os-update --revalidate-current reinstalls the selected", note)
         self.assertNotIn("--rollback", note, "rollback advice is wrong once the machine updated since")
 
     def test_earlier_updaters_leftovers_never_block_and_are_kept(self):
@@ -236,20 +238,108 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertIn("no interrupted update to recover", alone.stdout)
         self.assertEqual(self.run_lib("interrupted_stack_transactions\n").stdout.strip(), "")
 
-    def test_after_a_rollback_recovery_names_the_selection_it_left_in_place(self):
-        self.orphan(root_transaction=ROOT_TXN + "\n", active="")
-        result = self.run_lib("PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=87991f7b70ab41cb5105\n"
-                              "recover_interrupted_stack_transaction\n")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("still selects release 0.2.2 (Plebian-OS 87991f7b70ab)", result.stderr)
-        self.assertIn("plebian-os-update                      installs the selected release now",
-                      result.stderr)
-        self.assertIn("plebian-os-select-closure --rollback   selects the previous closure again",
-                      result.stderr)
-        cleared = self.orphan("stack-rollback.Clear1", root_transaction=ROOT_TXN + "\n")
-        quiet = self.run_lib("recover_interrupted_stack_transaction\n")
-        self.assertFalse(cleared.exists())
-        self.assertNotIn("still selects", quiet.stderr, "nothing was rolled back, nothing to say")
+    INSTALLED = ("PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=1111111111111111aaaa\n"
+                 "PLEB_REF=p1\nKILIX_REF=k1\nKILIX95_REF=n1\n")
+
+    def recover_with_installed(self, selected, installed=INSTALLED):
+        versions = self.tmp / "versions.env"
+        versions.unlink(missing_ok=True)
+        if installed is not None:
+            versions.write_text(installed)
+        return self.run_lib(selected + "recover_interrupted_stack_transaction\n",
+                            PLEBIAN_OS_INSTALLED_VERSIONS=str(versions))
+
+    def test_recovery_states_whether_the_selection_matches_the_installation(self):
+        same = "PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=1111111111111111aaaa\nPLEB_REF=p1\nKILIX_REF=k1\nKILIX95_REF=n1\n"
+        newer = same.replace("1111111111111111aaaa", "87991f7b70ab41cb5105").replace("k1", "k2")
+        for branch in ("rolled back", "cleared"):
+            with self.subTest(branch=branch):
+                markers = {"active": ""} if branch == "rolled back" else {}
+                self.orphan(f"stack-rollback.{branch[:4]}A1", root_transaction=ROOT_TXN + "\n", **markers)
+                agree = self.recover_with_installed(same)
+                self.assertEqual(agree.returncode, 0, agree.stderr)
+                self.assertIn("the selected closure matches the installation (release 0.2.2)", agree.stdout)
+                self.assertNotIn("Choose one", agree.stderr)
+                self.orphan(f"stack-rollback.{branch[:4]}B1", root_transaction=ROOT_TXN + "\n", **markers)
+                split = self.recover_with_installed(newer)
+                self.assertIn("selects release 0.2.2 (Plebian-OS 87991f7b70ab),", split.stderr)
+                self.assertIn("but release 0.2.2 (Plebian-OS 111111111111) is installed", split.stderr)
+                self.assertIn("plebian-os-update --revalidate-current   installs the selected release",
+                              split.stderr)
+                self.assertIn("plebian-os-select-closure --rollback     selects the previous closure again",
+                              split.stderr)
+        self.orphan("stack-rollback.NoVer1", root_transaction=ROOT_TXN + "\n")
+        unknown = self.recover_with_installed(newer, installed=None)
+        self.assertIn("could not compare /etc/pleb/closure.env with the installation", unknown.stderr)
+
+    def test_a_dry_run_rollback_is_refused_rather_than_performed(self):
+        root = self.tmp / "root"
+        (root / "etc/pleb").mkdir(parents=True)
+        (root / "etc/pleb/session.env").write_text("KEEP=1\n")
+        env = {"HOME": str(self.tmp / "home"), "PATH": os.environ["PATH"], "LANG": "C",
+               "PLEBIAN_OS_CLOSURE_TEST_ROOT": str(root)}
+        done = subprocess.run([str(ROOT / "provision" / "plebian-os-select-closure.sh"),
+                               "--rollback", "--dry-run"], env=env, text=True,
+                              capture_output=True, check=False, timeout=60)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("--dry-run applies to a selection only", done.stderr)
+        self.assertEqual((root / "etc/pleb/session.env").read_text(), "KEEP=1\n")
+
+    def test_a_leftover_holding_a_native_transaction_says_when_it_can_block(self):
+        d = self.orphan("stack-rollback.Nat001", owner=None, native_transaction="ab" * 16 + "\n")
+        self.run_lib("note_legacy_stack_leftovers\n")
+        note = (d / "failure-reason").read_text()
+        self.assertIn(f"blocks-updates: no, unless its native transaction {'ab' * 16} is still active", note)
+        self.assertIn("plebian-os-native-runtime status", note)
+
+    def test_the_note_dates_the_leftover_not_itself(self):
+        d = self.orphan("stack-rollback.Aug001", owner=None)
+        for name in ("kilix.head", "pleb.ref"):
+            (d / name).write_text("x\n")
+        os.utime(d / "kilix.head", (1754820000, 1754820000))      # 2025-08-10T10:00:00Z
+        os.utime(d / "pleb.ref", (1754906400, 1754906400))        # 2025-08-11T10:00:00Z
+        self.run_lib("note_legacy_stack_leftovers\n")
+        self.assertIn("contents-last-modified: 2025-08-11T10:00:00Z", (d / "failure-reason").read_text())
+
+    def test_the_note_never_writes_through_a_link_or_destroys_an_old_note(self):
+        outside = self.tmp / "outside.txt"
+        linked = self.orphan("stack-rollback.Link01", owner=None)
+        (linked / "failure-reason").symlink_to(outside)
+        self.run_lib("note_legacy_stack_leftovers\n")
+        self.assertFalse(outside.exists(), "a failure-reason link is never followed")
+        locked = self.orphan("stack-rollback.Lock01", owner=None, failure_reason=self.RC5_NOTE)
+        locked.chmod(0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        self.run_lib("note_legacy_stack_leftovers\n")
+        self.assertEqual((locked / "failure-reason").read_text(), self.RC5_NOTE,
+                         "a write that cannot complete leaves the old note whole")
+        self.assertFalse((locked / "failure-reason.new").exists())
+        target = self.tmp / "elsewhere"
+        target.mkdir()
+        (self.state / "stack-rollback.Dirlnk").symlink_to(target)
+        self.run_lib("note_legacy_stack_leftovers\n")
+        self.assertFalse((target / "failure-reason").exists(), "a linked leftover is never noted")
+
+    def test_an_rc5_transaction_that_lost_its_owner_still_blocks(self):
+        for marker in ("active", "committed", "committed.prepared", "root-transaction",
+                       "native-finish-pending"):
+            with self.subTest(marker=marker):
+                d = self.orphan(f"stack-rollback.M{marker[:5]}", owner=None)
+                (d / marker).write_text("")
+                listed = self.run_lib("interrupted_stack_transactions\n").stdout.split()
+                if marker == "native-finish-pending":
+                    self.assertNotIn(str(d), listed, "committed; native cleanup only")
+                else:
+                    self.assertIn(str(d), listed)
+                self.run_lib("note_legacy_stack_leftovers\n")
+                self.assertFalse((d / "failure-reason").exists(), "not an earlier updater's")
+                subprocess.run(["rm", "-rf", str(d)], check=True)
+
+    def test_each_kept_leftover_is_named(self):
+        old = [self.orphan(f"stack-rollback.Nam00{i}", owner=None) for i in (1, 2)]
+        result = self.run_lib("note_legacy_stack_leftovers\n")
+        for d in old:
+            self.assertIn(f"kept an earlier updater's leftover (no progress recorded): {d}", result.stderr)
 
     def test_a_normal_update_notes_leftovers_before_deciding_to_refuse(self):
         text = UPDATE_PATH.read_text()
@@ -300,6 +390,32 @@ class InterruptedUpdateTests(unittest.TestCase):
         relocated = run("--rollback")
         self.assertIn("stack-rollback.Dead02", relocated.stderr)
         self.assertIn("--recover-interrupted", relocated.stderr)
+        # The updater's precedence: the caller's environment, then session.env and
+        # closure.env sourced over it, then the defaults.
+        def found_in(where, session_text, **env_extra):
+            (where / "stack-rollback.Dead03").mkdir(parents=True, exist_ok=True)
+            (where / "stack-rollback.Dead03" / "owner").write_text("pid=999999\nstart=1\nboot=gone\n")
+            (root / "etc/pleb/session.env").write_text(session_text)
+            env.update(env_extra)
+            try:
+                return "stack-rollback.Dead03" in run("--rollback").stderr
+            finally:
+                for key in env_extra:
+                    env.pop(key, None)
+                subprocess.run(["rm", "-rf", str(where / "stack-rollback.Dead03")], check=True)
+        mine, theirs = self.tmp / "mine/state", self.tmp / "theirs/state"
+        self.assertTrue(found_in(theirs, f"PLEB_STATE_HOME={theirs}\n", PLEB_STATE_HOME=str(mine)),
+                        "an unguarded session.env assignment wins, as when the updater sources it")
+        self.assertTrue(found_in(mine, f'if [ -z "${{PLEB_STATE_HOME+x}}" ]; then PLEB_STATE_HOME={theirs}; fi\n',
+                                 PLEB_STATE_HOME=str(mine)), "a guarded one keeps the caller's value")
+        self.assertTrue(found_in(home / ".local/gpu_terminal/pleb/state", "", PLEB_STATE_HOME=""),
+                        "an empty value means the default")
+        self.assertTrue(found_in(home / "custom/state", 'PLEB_STORAGE_HOME="$HOME/custom"\n'),
+                        "session.env expressions see the caller's environment")
+        (root / "etc/pleb/closure.env").write_text(f"PLEB_STORAGE_HOME={self.tmp / 'closure'}\n")
+        self.assertTrue(found_in(self.tmp / "closure/state", ""),
+                        "closure.env is sourced after session.env, as the updater does")
+        (root / "etc/pleb/closure.env").unlink()
 
     def test_an_active_update_without_a_root_path_is_refused(self):
         orphan = self.orphan(active="")

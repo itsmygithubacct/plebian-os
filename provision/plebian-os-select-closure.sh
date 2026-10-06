@@ -2159,9 +2159,10 @@ select_closure() {
 
 # ── an interrupted update must be recovered before a new selection ─────────
 # Selecting a closure while an update is waiting for recovery leaves the
-# machine pinned to a release that is not installed. The three functions below
+# machine pinned to a release that is not installed. The four functions below
 # are copied verbatim from plebian-os-update (tests/test_interrupted_update.py
-# keeps them identical); the state directory is derived the same way.
+# keeps them identical); the state directory is derived the same way, by
+# sourcing session.env and closure.env over the caller's environment.
 process_start_ticks() {
     local stat
     stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
@@ -2182,6 +2183,15 @@ stack_transaction_owner_alive() {
     [ "$now" = "$start" ]
 }
 
+is_legacy_stack_leftover() {
+    local marker
+    [ ! -e "$1/owner" ] || return 1
+    for marker in active committed committed.prepared root-transaction native-finish-pending; do
+        [ ! -e "$1/$marker" ] || return 1
+    done
+    return 0
+}
+
 interrupted_stack_transactions() {
     local dir
     for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
@@ -2190,23 +2200,27 @@ interrupted_stack_transactions() {
         [ "$dir" != "${_STACK_TXN_DIR:-}" ] || continue
         [ ! -e "$dir/failure-reason" ] || continue    # reported; has its own procedure
         [ ! -e "$dir/native-finish-pending" ] || continue   # committed; native cleanup only
-        [ -f "$dir/owner" ] || continue                     # an earlier updater's; never blocks
+        is_legacy_stack_leftover "$dir" && continue        # an earlier updater's; never blocks
         stack_transaction_owner_alive "$dir" && continue
         printf '%s\n' "$dir"
     done
 }
 
 selector_state_home() {
-    local -A configured=()
-    local name value
-    if [ -f "$SESSION_ENV" ]; then read_env_file_into configured "$SESSION_ENV"; fi
-    for name in GPU_TERMINAL_HOME PLEB_STORAGE_HOME PLEB_STATE_HOME; do
-        value="${!name:-${configured[$name]:-}}"
-        printf -v "$name" '%s' "$value"
-    done
-    GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"
-    PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
-    PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
+    # Exactly the updater's derivation: its environment, then session.env and
+    # closure.env sourced over it (their self-guarding assignments keep a
+    # caller's value), then the same defaults.
+    PLEB_STATE_HOME="$(
+        set +eu
+        # shellcheck source=/dev/null
+        if [ -f "$SESSION_ENV" ]; then . "$SESSION_ENV"; fi
+        # shellcheck source=/dev/null
+        if [ -f "$CLOSURE_ENV" ]; then . "$CLOSURE_ENV"; fi
+        GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"
+        PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
+        printf '%s' "${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
+    )"
+    [ -n "$PLEB_STATE_HOME" ] || die "could not determine Pleb's state directory"
 }
 
 refuse_selection_during_interrupted_update() {
@@ -2251,6 +2265,9 @@ done
 
 [ -z "$DEVELOPMENT_COMMIT" ] || [ "$MODE" = select ] \
     || die "--development-commit requires a target selection, not --show or --rollback"
+# Only a selection has a dry run; --rollback and --show would ignore the flag.
+[ "$DRY_RUN" = 0 ] || [ "$MODE" = select ] \
+    || die "--dry-run applies to a selection only, not --show or --rollback"
 
 umask 077
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-closure.XXXXXX")"
