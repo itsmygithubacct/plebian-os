@@ -263,7 +263,7 @@ class InterruptedUpdateTests(unittest.TestCase):
                 self.orphan(f"stack-rollback.{branch[:4]}B1", root_transaction=ROOT_TXN + "\n", **markers)
                 split = self.recover_with_installed(newer)
                 self.assertIn("selects release 0.2.2 (Plebian-OS 87991f7b70ab),", split.stderr)
-                self.assertIn("but release 0.2.2 (Plebian-OS 111111111111) is installed", split.stderr)
+                self.assertIn("but release 0.2.2 (Plebian-OS 111111111111) is installed (differs: PLEBIAN_OS_REF KILIX_REF)", split.stderr)
                 self.assertIn("plebian-os-update --revalidate-current   installs the selected release",
                               split.stderr)
                 self.assertIn("plebian-os-select-closure --rollback     selects the previous closure again",
@@ -271,6 +271,62 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.orphan("stack-rollback.NoVer1", root_transaction=ROOT_TXN + "\n")
         unknown = self.recover_with_installed(newer, installed=None)
         self.assertIn("could not compare /etc/pleb/closure.env with the installation", unknown.stderr)
+
+    def test_each_kind_of_disagreement_is_named(self):
+        base = "PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=1111111111111111aaaa\nPLEB_REF=p1\nKILIX_REF=k1\nKILIX95_REF=n1\n"
+        cases = {"PLEBIAN_OS_REF": base.replace("1111111111111111aaaa", "2222222222222222bbbb"),
+                 "KILIX95_REF": base.replace("n1", "n2")}
+        for key, selected in cases.items():
+            with self.subTest(differs=key):
+                self.orphan(f"stack-rollback.D{key[:6]}", root_transaction=ROOT_TXN + "\n")
+                result = self.recover_with_installed(selected)
+                self.assertIn(f"is installed (differs: {key}). Choose one:", result.stderr)
+                self.assertNotIn("matches the installation", result.stdout)
+
+    def test_agreement_needs_the_plebian_os_ref_on_both_sides(self):
+        selected = "PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=1111111111111111aaaa\n"
+        for name, installed in (("empty", ""), ("no refs", "PLEBIAN_OS_RELEASE=0.2.2\n"),
+                                ("unpinned", "PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=''\n"),
+                                ("broken", "PLEBIAN_OS_REF=(\n")):
+            with self.subTest(installed=name):
+                d = self.orphan(f"stack-rollback.E{name[:5].replace(' ', '')}",
+                                root_transaction=ROOT_TXN + "\n")
+                result = self.recover_with_installed(selected, installed=installed)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse(d.exists(), "recovery completes whatever versions.env holds")
+                self.assertNotIn("matches the installation", result.stdout)
+                self.assertIn("could not compare /etc/pleb/closure.env with the installation",
+                              result.stderr)
+
+    def test_only_earlier_leftovers_still_get_the_selection_report(self):
+        # The laptop's own path: nothing owned to recover, pins possibly ahead.
+        self.orphan("stack-rollback.Old001", owner=None)
+        result = self.recover_with_installed(
+            "PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=2222222222222222bbbb\n"
+            "PLEB_REF=p1\nKILIX_REF=k1\nKILIX95_REF=n1\n")
+        self.assertIn("no interrupted update to recover", result.stdout)
+        self.assertIn("is installed (differs: PLEBIAN_OS_REF)", result.stderr)
+
+    def test_a_directory_squatting_on_the_temporary_note_is_skipped_not_fatal(self):
+        squat = self.orphan("stack-rollback.Squat1", owner=None)
+        (squat / "failure-reason.new").mkdir()
+        other = self.orphan("stack-rollback.Other1", owner=None)
+        result = self.run_lib("note_legacy_stack_leftovers\nrefuse_interrupted_stack_transaction\necho went-on\n")
+        self.assertIn("went-on", result.stdout, result.stderr)
+        self.assertFalse((squat / "failure-reason").exists())
+        self.assert_current_note(other)
+
+    def test_an_rc5_note_does_not_date_its_own_leftover(self):
+        d = self.orphan("stack-rollback.Rc5Age", owner=None, failure_reason=self.RC5_NOTE)
+        (d / "kilix.head").write_text("x\n")
+        os.utime(d / "kilix.head", (1754820000, 1754820000))      # 2025-08-10T10:00:00Z
+        self.run_lib("note_legacy_stack_leftovers\n")
+        self.assertIn("contents-last-modified: 2025-08-10T10:00:00Z", (d / "failure-reason").read_text())
+
+    def test_the_updaters_older_failure_note_advises_revalidation(self):
+        text = UPDATE_PATH.read_text()
+        self.assertNotIn("printf 'then: plebian-os-update --restart\\n'", text)
+        self.assertEqual(text.count("printf 'then: plebian-os-update --revalidate-current --restart\\n'"), 2)
 
     def test_a_dry_run_rollback_is_refused_rather_than_performed(self):
         root = self.tmp / "root"
@@ -350,7 +406,7 @@ class InterruptedUpdateTests(unittest.TestCase):
         select = (ROOT / "provision" / "plebian-os-select-closure.sh").read_text()
         update = UPDATE_PATH.read_text()
         for name in ("process_start_ticks", "stack_transaction_owner_alive",
-                     "interrupted_stack_transactions"):
+                     "is_legacy_stack_leftover", "interrupted_stack_transactions"):
             pattern = re.compile(r"^%s\(\) \{\n.*?^\}\n" % name, re.S | re.M)
             self.assertEqual(pattern.search(select).group(0), pattern.search(update).group(0), name)
 

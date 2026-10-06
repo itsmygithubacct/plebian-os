@@ -2059,7 +2059,7 @@ stack_transaction_cleanup() {
                 printf 'rollback-complete: %s\n' \
                     "$([ "$rollback_ok" = 1 ] && echo yes || echo no)"
                 printf 'recover-with: plebian-os-select-closure --rollback\n'
-                printf 'then: plebian-os-update --restart\n'
+                printf 'then: plebian-os-update --revalidate-current --restart\n'
             } > "$_STACK_TXN_DIR/failure-reason" 2>/dev/null || true
             warn "why it stopped: $_STACK_TXN_DIR/failure-reason"
         fi
@@ -2159,7 +2159,7 @@ note_legacy_stack_leftovers() {
             | { grep -v '/failure-reason' || true; } | sort -n | tail -n 1 | cut -d' ' -f1)"
         native="$(head -n 1 -- "$dir/native-transaction" 2>/dev/null || true)"
         tmp="$dir/failure-reason.new"
-        rm -f -- "$tmp"
+        rm -f -- "$tmp" 2>/dev/null || continue             # e.g. a directory there
         if ! ( set -C
             {
                 printf '%s\n' "$LEGACY_LEFTOVER_HEADER"
@@ -2206,6 +2206,7 @@ refuse_interrupted_stack_transaction() {
 # whether they agree; if not, name the one command for each way to agree.
 report_selection_against_installation() {
     local installed="${PLEBIAN_OS_INSTALLED_VERSIONS:-/var/lib/plebian-os/versions.env}" key sel inst differ=0 known=1
+    local -a differing=()
     local -a keys=(PLEBIAN_OS_RELEASE PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF) values=()
     if [ -r "$installed" ] && [ ! -L "$installed" ]; then
         mapfile -t values < <(env -i bash --noprofile --norc -c '
@@ -2218,14 +2219,19 @@ report_selection_against_installation() {
     if [ "$known" = 1 ]; then
         for key in "${!keys[@]}"; do
             sel="${!keys[$key]:-}"; inst="${values[$key]}"
-            [ -z "$sel" ] || [ -z "$inst" ] || [ "$sel" = "$inst" ] || differ=1
+            [ -n "$sel" ] && [ -n "$inst" ] || continue
+            [ "$sel" = "$inst" ] || { differ=1; differing+=("${keys[$key]}"); }
         done
+        # Agreement needs evidence: the Plebian-OS ref on both sides at least.
+        [ -n "${PLEBIAN_OS_REF:-}" ] && [ -n "${values[1]}" ] || known=0
+    fi
+    if [ "$known" = 1 ]; then
         if [ "$differ" = 0 ]; then
             log "the selected closure matches the installation (release ${PLEBIAN_OS_RELEASE:-${values[0]:-unknown}})"
             return 0
         fi
         warn "/etc/pleb/closure.env selects release ${PLEBIAN_OS_RELEASE:-unknown} (Plebian-OS ${PLEBIAN_OS_REF:0:12}),"
-        warn "but release ${values[0]:-unknown} (Plebian-OS ${values[1]:0:12}) is installed. Choose one:"
+        warn "but release ${values[0]:-unknown} (Plebian-OS ${values[1]:0:12}) is installed (differs: ${differing[*]}). Choose one:"
     else
         warn "could not compare /etc/pleb/closure.env with the installation; if they differ, choose one:"
     fi
@@ -2241,6 +2247,7 @@ recover_interrupted_stack_transaction() {
     mapfile -t owned < <(interrupted_stack_transactions)
     if [ "${#owned[@]}" -eq 0 ]; then
         log "no interrupted update to recover"
+        report_selection_against_installation
         release_kilix_transaction_lock
         return 0
     fi
@@ -2284,7 +2291,7 @@ recover_interrupted_stack_transaction() {
                 printf 'failing-command: plebian-os-update --recover-interrupted\n'
                 printf 'rollback-complete: no\n'
                 printf 'recover-with: plebian-os-select-closure --rollback\n'
-                printf 'then: plebian-os-update --restart\n'
+                printf 'then: plebian-os-update --revalidate-current --restart\n'
             } >"$orphan/failure-reason" 2>/dev/null || true
             warn "recovery was incomplete; recovery data retained at $orphan${root:+ and $root}"
             release_kilix_transaction_lock
