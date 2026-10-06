@@ -2059,7 +2059,7 @@ stack_transaction_cleanup() {
                 printf 'rollback-complete: %s\n' \
                     "$([ "$rollback_ok" = 1 ] && echo yes || echo no)"
                 printf 'recover-with: plebian-os-select-closure --rollback\n'
-                printf 'then: plebian-os-update --restart\n'
+                printf 'then: plebian-os-update --revalidate-current --restart\n'
             } > "$_STACK_TXN_DIR/failure-reason" 2>/dev/null || true
             warn "why it stopped: $_STACK_TXN_DIR/failure-reason"
         fi
@@ -2071,9 +2071,16 @@ stack_transaction_cleanup() {
 }
 
 # --- interrupted updates -----------------------------------------------------
-# A live transaction directory names its owner; one whose owner is gone (or
-# that predates owner records) and that has no failure-reason was abandoned by
-# a process that never reached its EXIT trap: a kill, a crash, a power cut.
+# A live transaction directory names its owner; one whose owner is gone and
+# that has no failure-reason was abandoned by a process that never reached its
+# EXIT trap: a kill, a crash, a power cut. Only those block an update.
+#
+# A directory with no owner record was left by an updater that predates these
+# markers. Nothing in it says how far that run got, and on a machine that has
+# updated successfully since, it describes an installation that no longer
+# exists, so restoring from it would be wrong. Such leftovers are noted once,
+# kept for inspection, and never block: a full update reinstalls the selected
+# release either way.
 
 process_start_ticks() {
     local stat
@@ -2103,6 +2110,18 @@ stack_transaction_owner_alive() {
     [ "$now" = "$start" ]
 }
 
+# Left by an updater older than these markers: no owner record, and none of
+# the files only a marker-writing updater creates. An RC5-or-later transaction
+# that lost its owner file still carries those, and still blocks.
+is_legacy_stack_leftover() {
+    local marker
+    [ ! -e "$1/owner" ] || return 1
+    for marker in active committed committed.prepared root-transaction native-finish-pending; do
+        [ ! -e "$1/$marker" ] || return 1
+    done
+    return 0
+}
+
 interrupted_stack_transactions() {
     local dir
     for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
@@ -2111,9 +2130,64 @@ interrupted_stack_transactions() {
         [ "$dir" != "${_STACK_TXN_DIR:-}" ] || continue
         [ ! -e "$dir/failure-reason" ] || continue    # reported; has its own procedure
         [ ! -e "$dir/native-finish-pending" ] || continue   # committed; native cleanup only
+        is_legacy_stack_leftover "$dir" && continue        # an earlier updater's; never blocks
         stack_transaction_owner_alive "$dir" && continue
         printf '%s\n' "$dir"
     done
+}
+
+# The note written beside an earlier updater's leftover. Its first line also
+# marks notes written by RC5, whose advice (select-closure --rollback) was
+# wrong on a machine that had updated since; those are rewritten.
+LEGACY_LEFTOVER_HEADER='exit-status: interrupted (left by an earlier updater)'
+
+note_legacy_stack_leftovers() {
+    local dir noted=0 newest tmp native
+    for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
+        is_legacy_stack_leftover "$dir" || continue
+        [ ! -L "$dir/failure-reason" ] || continue          # never written through
+        if [ -e "$dir/failure-reason" ]; then
+            [ "$(head -n 1 -- "$dir/failure-reason" 2>/dev/null)" = "$LEGACY_LEFTOVER_HEADER" ] \
+                || continue                                  # the old updater's own report
+            grep -qx 'recover-with: plebian-os-select-closure --rollback' "$dir/failure-reason" \
+                || continue                                  # already the current wording
+        fi
+        # When that updater last wrote here, measured before this note exists.
+        newest="$( { stat -c '%Y %n' -- "$dir"/* 2>/dev/null || true; } \
+            | { grep -v '/failure-reason' || true; } | sort -n | tail -n 1 | cut -d' ' -f1)"
+        native="$(head -n 1 -- "$dir/native-transaction" 2>/dev/null || true)"
+        tmp="$dir/failure-reason.new"
+        rm -f -- "$tmp" 2>/dev/null || continue             # e.g. a directory there
+        if ! ( set -C
+            {
+                printf '%s\n' "$LEGACY_LEFTOVER_HEADER"
+                printf 'contents-last-modified: %s\n' \
+                    "$( [ -n "$newest" ] && date -u -d "@$newest" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+                printf 'noted: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+                printf 'rollback-complete: unknown (that updater recorded no progress)\n'
+                if [ -n "$native" ]; then
+                    printf 'blocks-updates: no, unless its native transaction %s is still active\n' "$native"
+                    printf '  (plebian-os-update then stops with "native transaction already active";\n'
+                    printf '  inspect /usr/local/sbin/plebian-os-native-runtime status as root)\n'
+                else
+                    printf 'blocks-updates: no\n'
+                fi
+                printf 'advice: plebian-os-update --revalidate-current reinstalls the selected\n'
+                printf '  release; keep this directory only to inspect it, then remove it\n'
+            } >"$tmp" ) 2>/dev/null || ! mv -fT -- "$tmp" "$dir/failure-reason" 2>/dev/null; then
+            rm -f -- "$tmp"
+            continue
+        fi
+        noted=$((noted + 1))
+        warn "kept an earlier updater's leftover (no progress recorded): $dir"
+    done
+    if [ "$noted" -gt 0 ]; then
+        warn "these do not block updates; 'plebian-os-update --revalidate-current' reinstalls"
+        warn "the selected release. Remove them once you no longer need them."
+    fi
+    return 0
 }
 
 refuse_interrupted_stack_transaction() {
@@ -2126,39 +2200,56 @@ refuse_interrupted_stack_transaction() {
     die "run 'plebian-os-update --recover-interrupted' first; it restores the installation from before that update"
 }
 
+# The selector writes /etc/pleb/closure.env in its own transaction before the
+# update runs, so recovering the update leaves that selection in place. Compare
+# it with what is installed (versions.env, which a rollback restores) and say
+# whether they agree; if not, name the one command for each way to agree.
+report_selection_against_installation() {
+    local installed="${PLEBIAN_OS_INSTALLED_VERSIONS:-/var/lib/plebian-os/versions.env}" key sel inst differ=0 known=1
+    local -a differing=()
+    local -a keys=(PLEBIAN_OS_RELEASE PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF) values=()
+    if [ -r "$installed" ] && [ ! -L "$installed" ]; then
+        mapfile -t values < <(env -i bash --noprofile --norc -c '
+            set +u; . "$1" || exit 1; shift
+            for key in "$@"; do printf "%s\n" "${!key:-}"; done' bash "$installed" "${keys[@]}" 2>/dev/null)
+        [ "${#values[@]}" -eq "${#keys[@]}" ] || known=0
+    else
+        known=0
+    fi
+    if [ "$known" = 1 ]; then
+        for key in "${!keys[@]}"; do
+            sel="${!keys[$key]:-}"; inst="${values[$key]}"
+            [ -n "$sel" ] && [ -n "$inst" ] || continue
+            [ "$sel" = "$inst" ] || { differ=1; differing+=("${keys[$key]}"); }
+        done
+        # Agreement needs evidence: the Plebian-OS ref on both sides at least.
+        [ -n "${PLEBIAN_OS_REF:-}" ] && [ -n "${values[1]}" ] || known=0
+    fi
+    if [ "$known" = 1 ]; then
+        if [ "$differ" = 0 ]; then
+            log "the selected closure matches the installation (release ${PLEBIAN_OS_RELEASE:-${values[0]:-unknown}})"
+            return 0
+        fi
+        warn "/etc/pleb/closure.env selects release ${PLEBIAN_OS_RELEASE:-unknown} (Plebian-OS ${PLEBIAN_OS_REF:0:12}),"
+        warn "but release ${values[0]:-unknown} (Plebian-OS ${values[1]:0:12}) is installed (differs: ${differing[*]}). Choose one:"
+    else
+        warn "could not compare /etc/pleb/closure.env with the installation; if they differ, choose one:"
+    fi
+    warn "  plebian-os-update --revalidate-current   installs the selected release"
+    warn "  plebian-os-select-closure --rollback     selects the previous closure again"
+}
+
 recover_interrupted_stack_transaction() {
-    local -a orphans=() owned=()
-    local orphan root token kept_status=0
+    local -a owned=()
+    local orphan root token
     acquire_kilix_transaction_lock
-    mapfile -t orphans < <(interrupted_stack_transactions)
-    if [ "${#orphans[@]}" -eq 0 ]; then
+    note_legacy_stack_leftovers
+    mapfile -t owned < <(interrupted_stack_transactions)
+    if [ "${#owned[@]}" -eq 0 ]; then
         log "no interrupted update to recover"
+        report_selection_against_installation
         release_kilix_transaction_lock
         return 0
-    fi
-    for orphan in "${orphans[@]}"; do
-        if [ -f "$orphan/owner" ]; then
-            owned+=("$orphan")
-            continue
-        fi
-        # Written by an updater that kept no markers: nothing says how far it
-        # got, so its rollback data is never deleted automatically. Every such
-        # leftover is reported and kept in one pass, so none blocks updates.
-        {
-            printf 'exit-status: interrupted (left by an earlier updater)\n'
-            printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
-            printf 'rollback-complete: no\n'
-            printf 'recover-with: plebian-os-select-closure --rollback\n'
-            printf 'then: plebian-os-update --restart\n'
-        } >"$orphan/failure-reason" 2>/dev/null || true
-        warn "$orphan was left by an earlier updater that recorded no progress markers;"
-        warn "its recovery data is kept. Restore by hand: plebian-os-select-closure --rollback,"
-        warn "then plebian-os-update --restart"
-        kept_status=70           # a hand restore is still owed, whatever else recovers
-    done
-    if [ "${#owned[@]}" -eq 0 ]; then
-        release_kilix_transaction_lock
-        return "$kept_status"
     fi
     [ "${#owned[@]}" -eq 1 ] \
         || die "several interrupted updates were found; inspect them one at a time: ${owned[*]}"
@@ -2200,7 +2291,7 @@ recover_interrupted_stack_transaction() {
                 printf 'failing-command: plebian-os-update --recover-interrupted\n'
                 printf 'rollback-complete: no\n'
                 printf 'recover-with: plebian-os-select-closure --rollback\n'
-                printf 'then: plebian-os-update --restart\n'
+                printf 'then: plebian-os-update --revalidate-current --restart\n'
             } >"$orphan/failure-reason" 2>/dev/null || true
             warn "recovery was incomplete; recovery data retained at $orphan${root:+ and $root}"
             release_kilix_transaction_lock
@@ -2216,14 +2307,15 @@ recover_interrupted_stack_transaction() {
             } >"$orphan/failure-reason" 2>/dev/null || true
             log "restored the installation from before the interrupted update"
             warn "what the interrupted update had created is kept at $orphan${root:+ and $root}"
+            report_selection_against_installation
             release_kilix_transaction_lock
-            return "$kept_status"
+            return 0
         fi
         log "restored the installation from before the interrupted update"
-        warn "if that update had selected a newer release, run 'plebian-os-select-closure --rollback'"
-        warn "to select the previous one again, or 'plebian-os-update' to finish moving forward"
+        report_selection_against_installation
     else
         log "the interrupted update stopped before it changed anything; removing its recovery data"
+        report_selection_against_installation
     fi
     if [ -n "$root" ] && ! remove_root_stack_snapshot "$root"; then
         warn "root recovery data could not be removed: $root"
@@ -2234,7 +2326,7 @@ recover_interrupted_stack_transaction() {
     _STACK_TXN_DIR=""
     _STACK_ROOT_TXN_DIR=""
     release_kilix_transaction_lock
-    return "$kept_status"
+    return 0
 }
 
 begin_stack_transaction() {
@@ -4283,6 +4375,7 @@ if [ "$recover_interrupted" = 1 ]; then
     recover_interrupted_stack_transaction
     exit $?
 fi
+note_legacy_stack_leftovers
 refuse_interrupted_stack_transaction
 refuse_per_user_source_layout
 preflight_release_apt_provenance
