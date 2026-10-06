@@ -203,7 +203,7 @@ class InterruptedUpdateTests(unittest.TestCase):
         old = self.orphan("stack-rollback.Old001", owner=None)
         mine = self.orphan("stack-rollback.New002", root_transaction=ROOT_TXN + "\n", active="")
         result = self.run_lib("recover_interrupted_stack_transaction\n")
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 70, "the hand restore of the old one is still owed")
         self.assertIn(f"rollback dir={mine} ", self.log.read_text())
         self.assertFalse(mine.exists())
         self.assertTrue((old / "failure-reason").exists())

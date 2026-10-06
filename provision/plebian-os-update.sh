@@ -2128,7 +2128,7 @@ refuse_interrupted_stack_transaction() {
 
 recover_interrupted_stack_transaction() {
     local -a orphans=() owned=()
-    local orphan root token
+    local orphan root token kept_status=0
     acquire_kilix_transaction_lock
     mapfile -t orphans < <(interrupted_stack_transactions)
     if [ "${#orphans[@]}" -eq 0 ]; then
@@ -2154,10 +2154,11 @@ recover_interrupted_stack_transaction() {
         warn "$orphan was left by an earlier updater that recorded no progress markers;"
         warn "its recovery data is kept. Restore by hand: plebian-os-select-closure --rollback,"
         warn "then plebian-os-update --restart"
+        kept_status=70           # a hand restore is still owed, whatever else recovers
     done
     if [ "${#owned[@]}" -eq 0 ]; then
         release_kilix_transaction_lock
-        return 70
+        return "$kept_status"
     fi
     [ "${#owned[@]}" -eq 1 ] \
         || die "several interrupted updates were found; inspect them one at a time: ${owned[*]}"
@@ -2216,7 +2217,7 @@ recover_interrupted_stack_transaction() {
             log "restored the installation from before the interrupted update"
             warn "what the interrupted update had created is kept at $orphan${root:+ and $root}"
             release_kilix_transaction_lock
-            return 0
+            return "$kept_status"
         fi
         log "restored the installation from before the interrupted update"
         warn "if that update had selected a newer release, run 'plebian-os-select-closure --rollback'"
@@ -2233,7 +2234,7 @@ recover_interrupted_stack_transaction() {
     _STACK_TXN_DIR=""
     _STACK_ROOT_TXN_DIR=""
     release_kilix_transaction_lock
-    return 0
+    return "$kept_status"
 }
 
 begin_stack_transaction() {
