@@ -2127,7 +2127,7 @@ refuse_interrupted_stack_transaction() {
 }
 
 recover_interrupted_stack_transaction() {
-    local -a orphans=()
+    local -a orphans=() owned=()
     local orphan root token
     acquire_kilix_transaction_lock
     mapfile -t orphans < <(interrupted_stack_transactions)
@@ -2136,9 +2136,32 @@ recover_interrupted_stack_transaction() {
         release_kilix_transaction_lock
         return 0
     fi
-    [ "${#orphans[@]}" -eq 1 ] \
-        || die "several interrupted updates were found; inspect them one at a time: ${orphans[*]}"
-    orphan="${orphans[0]}"
+    for orphan in "${orphans[@]}"; do
+        if [ -f "$orphan/owner" ]; then
+            owned+=("$orphan")
+            continue
+        fi
+        # Written by an updater that kept no markers: nothing says how far it
+        # got, so its rollback data is never deleted automatically. Every such
+        # leftover is reported and kept in one pass, so none blocks updates.
+        {
+            printf 'exit-status: interrupted (left by an earlier updater)\n'
+            printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
+            printf 'rollback-complete: no\n'
+            printf 'recover-with: plebian-os-select-closure --rollback\n'
+            printf 'then: plebian-os-update --restart\n'
+        } >"$orphan/failure-reason" 2>/dev/null || true
+        warn "$orphan was left by an earlier updater that recorded no progress markers;"
+        warn "its recovery data is kept. Restore by hand: plebian-os-select-closure --rollback,"
+        warn "then plebian-os-update --restart"
+    done
+    if [ "${#owned[@]}" -eq 0 ]; then
+        release_kilix_transaction_lock
+        return 70
+    fi
+    [ "${#owned[@]}" -eq 1 ] \
+        || die "several interrupted updates were found; inspect them one at a time: ${owned[*]}"
+    orphan="${owned[0]}"
     root=""
     if [ -f "$orphan/root-transaction" ]; then
         root="$(head -n 1 -- "$orphan/root-transaction")"
@@ -2150,22 +2173,6 @@ recover_interrupted_stack_transaction() {
         token="$(head -n 1 -- "$orphan/native-transaction")"
         [[ "$token" =~ ^[0-9a-f]{32}$ ]] \
             || die "the interrupted update recorded an invalid native transaction token"
-    fi
-    if [ ! -f "$orphan/owner" ]; then
-        # Written by an updater that kept no markers: nothing says how far it
-        # got, so its rollback data is never deleted automatically.
-        {
-            printf 'exit-status: interrupted (left by an earlier updater)\n'
-            printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
-            printf 'rollback-complete: no\n'
-            printf 'recover-with: plebian-os-select-closure --rollback\n'
-            printf 'then: plebian-os-update --restart\n'
-        } >"$orphan/failure-reason" 2>/dev/null || true
-        warn "$orphan was left by an earlier updater that recorded no progress markers;"
-        warn "its recovery data is kept. Restore by hand: plebian-os-select-closure --rollback,"
-        warn "then plebian-os-update --restart"
-        release_kilix_transaction_lock
-        return 70
     fi
     _STACK_TXN_DIR="$orphan"
     _STACK_ROOT_TXN_DIR="$root"

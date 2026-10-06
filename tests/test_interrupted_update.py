@@ -186,6 +186,29 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertNotIn("rollback dir=", log)
         self.assertNotIn("remove-root", log)
 
+    def test_several_earlier_leftovers_are_all_kept_and_stop_blocking(self):
+        old = [self.orphan(f"stack-rollback.Old00{i}", owner=None) for i in (1, 2)]
+        blocked = self.run_lib("refuse_interrupted_stack_transaction\necho went-on\n")
+        self.assertNotIn("went-on", blocked.stdout)
+        result = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertEqual(result.returncode, 70, result.stderr)
+        self.assertNotIn("several interrupted updates", result.stderr)
+        for d in old:
+            self.assertIn("rollback-complete: no", (d / "failure-reason").read_text())
+        after = self.run_lib("refuse_interrupted_stack_transaction\necho went-on\n")
+        self.assertIn("went-on", after.stdout, after.stderr)
+        self.assertNotIn("rollback dir=", self.log.read_text())
+
+    def test_an_earlier_leftover_beside_an_interrupted_update_does_not_hide_it(self):
+        old = self.orphan("stack-rollback.Old001", owner=None)
+        mine = self.orphan("stack-rollback.New002", root_transaction=ROOT_TXN + "\n", active="")
+        result = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"rollback dir={mine} ", self.log.read_text())
+        self.assertFalse(mine.exists())
+        self.assertTrue((old / "failure-reason").exists())
+        self.assertEqual(self.run_lib("interrupted_stack_transactions\n").stdout.strip(), "")
+
     def test_an_active_update_without_a_root_path_is_refused(self):
         orphan = self.orphan(active="")
         result = self.run_lib("recover_interrupted_stack_transaction\n")
