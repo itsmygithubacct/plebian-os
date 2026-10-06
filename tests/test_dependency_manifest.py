@@ -473,6 +473,12 @@ class DependencyManifestTests(unittest.TestCase):
             ("at", {"bubblewrap": "0.11.0-2+deb13u1", "libseccomp2": "2.6.0-2"}, 0),
             ("above", {"bubblewrap": "0.11.0-2+deb13u2", "libseccomp2": "2.6.1-1"}, 0),
             ("absent", {"libseccomp2": "2.6.0-2"}, 1),
+            # A multiarch host (i386 enabled, e.g. for Steam) has one record per
+            # architecture; every one must meet the floor.
+            ("multiarch at", {"bubblewrap": ("0.11.0-2+deb13u1", "0.11.0-2+deb13u1"),
+                              "libseccomp2": "2.6.0-2"}, 0),
+            ("multiarch one below", {"bubblewrap": ("0.11.0-2+deb13u1", "0.11.0-2"),
+                                     "libseccomp2": "2.6.0-2"}, 1),
         )
         # Every other default group's floors are met exactly, so only the
         # F100 sandbox floors vary between the cases. They are read from the
@@ -492,8 +498,11 @@ class DependencyManifestTests(unittest.TestCase):
                 bindir = base / "bin"
                 bindir.mkdir()
                 log = base / "apt.log"
+                # Like dpkg-query, print one record per installed architecture,
+                # each followed by whatever the -f format ends with.
                 installed = "".join(
-                    f"  {name}) printf 'install ok installed\\t%s' {shlex.quote(version)} ;;\n"
+                    f"  {name}) for v in {' '.join(shlex.quote(v) for v in ((version,) if isinstance(version, str) else version))}; "
+                    f"do printf \"install ok installed\\t%s$end\" \"$v\"; done ;;\n"
                     for name, version in versions.items()
                 )
                 stubs = {
@@ -501,7 +510,9 @@ class DependencyManifestTests(unittest.TestCase):
                     "id": f'#!/bin/sh\n[ "${{1:-}}" != -u ] || {{ echo 0; exit 0; }}\n'
                           f'exec {real_id} "$@"\n',
                     "apt-get": f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {str(log)!r}\n",
-                    "dpkg-query": "#!/bin/sh\nfor package; do :; done\n"
+                    "dpkg-query": "#!/bin/sh\nend=''\n"
+                                  "case \"$*\" in *'\\n'*) end='\\n' ;; esac\n"
+                                  "for package; do :; done\n"
                                   f'case "$package" in\n{installed}  *) exit 1 ;;\nesac\n',
                     "dpkg": f'#!/bin/sh\n[ "${{1:-}}" = --compare-versions ] || exit 2\n'
                             f'exec {dpkg} "$@"\n',

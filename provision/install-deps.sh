@@ -369,9 +369,18 @@ for entry in "${DEP_GROUPS[@]}"; do
         pkg="${floor%%=*}"
         # dpkg-query expands these package fields; the shell must not.
         # shellcheck disable=SC2016
-        installed="$(dpkg-query -W -f='${Status}\t${Version}' "$pkg" 2>/dev/null || true)"
-        if [ "${installed%%$'\t'*}" != "install ok installed" ] \
-            || ! dpkg --compare-versions "${installed#*$'\t'}" ge "${floor#*=}"; then
+        # One line per installed architecture: a multiarch host (i386 for Steam,
+        # for example) has several, and every one must meet the floor.
+        installed="$(dpkg-query -W -f='${Status}\t${Version}\n' "$pkg" 2>/dev/null || true)"
+        below=0
+        [ -n "$installed" ] || below=1
+        while IFS=$'\t' read -r status version; do
+            if [ "$status" != "install ok installed" ] \
+                || ! dpkg --compare-versions "$version" ge "${floor#*=}"; then
+                below=1
+            fi
+        done <<<"$installed"
+        if [ "$below" = 1 ]; then
             warn "GROUP FAILED: $name ($pkg is below the release floor ${floor#*=})"
             failed+=("$name")
             break
