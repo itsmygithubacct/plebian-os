@@ -79,7 +79,9 @@ class InterruptedUpdateTests(unittest.TestCase):
         result = self.run_lib("interrupted_stack_transactions\n")
         self.assertEqual(result.returncode, 0, result.stderr)
         listed = set(result.stdout.split())
-        self.assertEqual(listed, {str(dead), str(rebooted), str(reused), str(legacy)})
+        # An earlier updater's leftover records no owner and never counts.
+        self.assertEqual(listed, {str(dead), str(rebooted), str(reused)})
+        self.assertNotIn(str(legacy), listed)
         self.assertNotIn(str(alive), listed)
 
     def test_own_owner_record_reads_as_alive(self):
@@ -170,44 +172,134 @@ class InterruptedUpdateTests(unittest.TestCase):
             "rollback_stack_transaction() { echo \"rollback dir=$_STACK_TXN_DIR\" >>\"$LOG\"; _STACK_TXN_RETAIN=1; }\n"
             "recover_interrupted_stack_transaction\n")
         self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("was not rolled back: it still selects release", result.stderr)
         self.assertTrue((orphan / "kilix95.created").is_dir(), "what the rollback kept stays kept")
         self.assertIn("rollback-complete: yes", (orphan / "failure-reason").read_text())
         self.assertNotIn("remove-root", self.log.read_text())
         self.assertEqual(self.run_lib("interrupted_stack_transactions\n").stdout.strip(), "")
 
-    def test_an_earlier_updaters_leftover_is_never_deleted(self):
-        orphan = self.orphan(owner=None)
-        (orphan / "kilix.head").write_text("0123abc\n")
-        result = self.run_lib("recover_interrupted_stack_transaction\n")
-        self.assertEqual(result.returncode, 70)
-        self.assertTrue((orphan / "kilix.head").exists())
-        self.assertIn("plebian-os-select-closure --rollback", (orphan / "failure-reason").read_text())
+    RC5_NOTE = ("exit-status: interrupted (left by an earlier updater)\n"
+                "when: 2026-10-06T15:50:00Z\nrollback-complete: no\n"
+                "recover-with: plebian-os-select-closure --rollback\n"
+                "then: plebian-os-update --restart\n")
+
+    def assert_current_note(self, d):
+        note = (d / "failure-reason").read_text()
+        self.assertIn("blocks-updates: no", note)
+        self.assertIn("advice: run plebian-os-update to reinstall the selected release", note)
+        self.assertNotIn("--rollback", note, "rollback advice is wrong once the machine updated since")
+
+    def test_earlier_updaters_leftovers_never_block_and_are_kept(self):
+        # The laptop's RC5 update: six such directories from August and
+        # September refused the update even though it had updated since.
+        old = [self.orphan(f"stack-rollback.Old00{i}", owner=None) for i in (1, 2, 3)]
+        (old[0] / "kilix.head").write_text("0123abc\n")
+        result = self.run_lib("note_legacy_stack_leftovers\n"
+                              "refuse_interrupted_stack_transaction\necho went-on\n")
+        self.assertIn("went-on", result.stdout, result.stderr)
+        self.assertIn("do not block updates", result.stderr)
+        for d in old:
+            self.assertTrue(d.is_dir(), "kept for inspection")
+            self.assert_current_note(d)
+        self.assertTrue((old[0] / "kilix.head").exists())
+        again = self.run_lib("note_legacy_stack_leftovers\n")
+        self.assertNotIn("kept an earlier updater", again.stderr, "noted once, not every run")
         log = self.log.read_text()
         self.assertNotIn("rollback dir=", log)
         self.assertNotIn("remove-root", log)
 
-    def test_several_earlier_leftovers_are_all_kept_and_stop_blocking(self):
-        old = [self.orphan(f"stack-rollback.Old00{i}", owner=None) for i in (1, 2)]
-        blocked = self.run_lib("refuse_interrupted_stack_transaction\necho went-on\n")
-        self.assertNotIn("went-on", blocked.stdout)
-        result = self.run_lib("recover_interrupted_stack_transaction\n")
-        self.assertEqual(result.returncode, 70, result.stderr)
-        self.assertNotIn("several interrupted updates", result.stderr)
-        for d in old:
-            self.assertIn("rollback-complete: no", (d / "failure-reason").read_text())
-        after = self.run_lib("refuse_interrupted_stack_transaction\necho went-on\n")
-        self.assertIn("went-on", after.stdout, after.stderr)
-        self.assertNotIn("rollback dir=", self.log.read_text())
+    def test_rc5_notes_with_rollback_advice_are_rewritten_and_others_left(self):
+        rc5 = self.orphan("stack-rollback.Rc5001", owner=None, failure_reason=self.RC5_NOTE)
+        theirs = self.orphan("stack-rollback.Old001", owner=None,
+                             failure_reason="exit-status: 1\nrecover-with: plebian-os-select-closure --rollback\n")
+        current = self.orphan("stack-rollback.Cur001", owner=None)
+        self.run_lib("note_legacy_stack_leftovers\n")
+        before = (current / "failure-reason").read_bytes()
+        result = self.run_lib("note_legacy_stack_leftovers\n")
+        self.assert_current_note(rc5)
+        self.assertEqual((theirs / "failure-reason").read_text(),
+                         "exit-status: 1\nrecover-with: plebian-os-select-closure --rollback\n",
+                         "an old updater's own failure report is its record; never rewritten")
+        self.assertEqual((current / "failure-reason").read_bytes(), before)
+        self.assertNotIn("kept an earlier updater", result.stderr)
 
-    def test_an_earlier_leftover_beside_an_interrupted_update_does_not_hide_it(self):
+    def test_recovery_notes_leftovers_and_recovers_only_an_owned_update(self):
         old = self.orphan("stack-rollback.Old001", owner=None)
         mine = self.orphan("stack-rollback.New002", root_transaction=ROOT_TXN + "\n", active="")
         result = self.run_lib("recover_interrupted_stack_transaction\n")
-        self.assertEqual(result.returncode, 70, "the hand restore of the old one is still owed")
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"rollback dir={mine} ", self.log.read_text())
         self.assertFalse(mine.exists())
-        self.assertTrue((old / "failure-reason").exists())
+        self.assert_current_note(old)
+        alone = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertEqual(alone.returncode, 0, alone.stderr)
+        self.assertIn("no interrupted update to recover", alone.stdout)
         self.assertEqual(self.run_lib("interrupted_stack_transactions\n").stdout.strip(), "")
+
+    def test_after_a_rollback_recovery_names_the_selection_it_left_in_place(self):
+        self.orphan(root_transaction=ROOT_TXN + "\n", active="")
+        result = self.run_lib("PLEBIAN_OS_RELEASE=0.2.2\nPLEBIAN_OS_REF=87991f7b70ab41cb5105\n"
+                              "recover_interrupted_stack_transaction\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("still selects release 0.2.2 (Plebian-OS 87991f7b70ab)", result.stderr)
+        self.assertIn("plebian-os-update                      installs the selected release now",
+                      result.stderr)
+        self.assertIn("plebian-os-select-closure --rollback   selects the previous closure again",
+                      result.stderr)
+        cleared = self.orphan("stack-rollback.Clear1", root_transaction=ROOT_TXN + "\n")
+        quiet = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertFalse(cleared.exists())
+        self.assertNotIn("still selects", quiet.stderr, "nothing was rolled back, nothing to say")
+
+    def test_a_normal_update_notes_leftovers_before_deciding_to_refuse(self):
+        text = UPDATE_PATH.read_text()
+        self.assertIn("\nnote_legacy_stack_leftovers\nrefuse_interrupted_stack_transaction\n", text)
+
+    def test_the_selector_copies_the_updaters_detection_exactly(self):
+        import re
+        select = (ROOT / "provision" / "plebian-os-select-closure.sh").read_text()
+        update = UPDATE_PATH.read_text()
+        for name in ("process_start_ticks", "stack_transaction_owner_alive",
+                     "interrupted_stack_transactions"):
+            pattern = re.compile(r"^%s\(\) \{\n.*?^\}\n" % name, re.S | re.M)
+            self.assertEqual(pattern.search(select).group(0), pattern.search(update).group(0), name)
+
+    def test_the_selector_refuses_to_pin_a_release_while_an_update_awaits_recovery(self):
+        home = self.tmp / "home"
+        state = home / ".local/gpu_terminal/pleb/state"
+        state.mkdir(parents=True)
+        (state / "stack-rollback.Dead01").mkdir()
+        (state / "stack-rollback.Dead01" / "owner").write_text("pid=999999\nstart=1\nboot=gone\n")
+        (state / "stack-rollback.Old001").mkdir()              # an earlier updater's: ignored
+        root = self.tmp / "root"
+        (root / "etc/pleb").mkdir(parents=True)
+        (root / "etc/pleb/session.env").write_text("")
+        env = {"HOME": str(home), "PATH": os.environ["PATH"], "LANG": "C",
+               "PLEBIAN_OS_CLOSURE_TEST_ROOT": str(root)}
+        select = str(ROOT / "provision" / "plebian-os-select-closure.sh")
+        run = lambda *a: subprocess.run([select, *a], env=env, text=True,
+                                        capture_output=True, check=False, timeout=60)
+        for args in (("--rollback",), ("0.2.2", "--offline")):
+            refused = run(*args)
+            self.assertNotEqual(refused.returncode, 0, args)
+            self.assertIn("plebian-os-update --recover-interrupted", refused.stderr, args)
+            self.assertIn("stack-rollback.Dead01", refused.stderr)
+            self.assertNotIn("stack-rollback.Old001", refused.stderr)
+        self.assertEqual(sorted(p.name for p in (root / "etc/pleb").iterdir()), ["session.env"],
+                         "nothing was written")
+        dry = run("0.2.2", "--offline", "--dry-run")
+        self.assertIn("a real selection would be refused", dry.stderr)
+        subprocess.run(["rm", "-rf", str(state / "stack-rollback.Dead01")], check=True)
+        clear = run("--rollback")
+        self.assertNotIn("--recover-interrupted", clear.stderr, "no pending recovery, no refusal")
+        # session.env may move Pleb's storage; the selector looks where the updater looks.
+        moved = self.tmp / "elsewhere/state"
+        (moved / "stack-rollback.Dead02").mkdir(parents=True)
+        (moved / "stack-rollback.Dead02" / "owner").write_text("pid=999999\nstart=1\nboot=gone\n")
+        (root / "etc/pleb/session.env").write_text(f"PLEB_STATE_HOME={moved}\n")
+        relocated = run("--rollback")
+        self.assertIn("stack-rollback.Dead02", relocated.stderr)
+        self.assertIn("--recover-interrupted", relocated.stderr)
 
     def test_an_active_update_without_a_root_path_is_refused(self):
         orphan = self.orphan(active="")

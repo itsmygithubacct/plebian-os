@@ -2157,6 +2157,69 @@ select_closure() {
     log "To put the previous closure back, invoke this selector with --rollback."
 }
 
+# ── an interrupted update must be recovered before a new selection ─────────
+# Selecting a closure while an update is waiting for recovery leaves the
+# machine pinned to a release that is not installed. The three functions below
+# are copied verbatim from plebian-os-update (tests/test_interrupted_update.py
+# keeps them identical); the state directory is derived the same way.
+process_start_ticks() {
+    local stat
+    stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1
+    stat="${stat##*) }"
+    # Field 22 overall is the 20th after the parenthesised command name.
+    awk '{print $20}' <<<"$stat"
+}
+
+stack_transaction_owner_alive() {
+    local dir="$1" pid start boot now
+    [ -f "$dir/owner" ] || return 1
+    pid="$(sed -n 's/^pid=\([0-9]\+\)$/\1/p' "$dir/owner")"
+    start="$(sed -n 's/^start=\([0-9]\+\)$/\1/p' "$dir/owner")"
+    boot="$(sed -n 's/^boot=\(.*\)$/\1/p' "$dir/owner")"
+    [ -n "$pid" ] && [ -n "$start" ] || return 1
+    [ "$boot" = "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" ] || return 1
+    now="$(process_start_ticks "$pid")" || return 1
+    [ "$now" = "$start" ]
+}
+
+interrupted_stack_transactions() {
+    local dir
+    for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
+        [ "$dir" != "${_STACK_TXN_DIR:-}" ] || continue
+        [ ! -e "$dir/failure-reason" ] || continue    # reported; has its own procedure
+        [ ! -e "$dir/native-finish-pending" ] || continue   # committed; native cleanup only
+        [ -f "$dir/owner" ] || continue                     # an earlier updater's; never blocks
+        stack_transaction_owner_alive "$dir" && continue
+        printf '%s\n' "$dir"
+    done
+}
+
+selector_state_home() {
+    local -A configured=()
+    local name value
+    if [ -f "$SESSION_ENV" ]; then read_env_file_into configured "$SESSION_ENV"; fi
+    for name in GPU_TERMINAL_HOME PLEB_STORAGE_HOME PLEB_STATE_HOME; do
+        value="${!name:-${configured[$name]:-}}"
+        printf -v "$name" '%s' "$value"
+    done
+    GPU_TERMINAL_HOME="${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}"
+    PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
+    PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
+}
+
+refuse_selection_during_interrupted_update() {
+    local found
+    selector_state_home
+    found="$(interrupted_stack_transactions)"
+    [ -n "$found" ] || return 0
+    warn "a previous plebian-os-update stopped before it finished, and its recovery is pending:"
+    while IFS= read -r dir; do warn "  $dir"; done <<<"$found"
+    [ "$DRY_RUN" = 1 ] && { warn "a real selection would be refused until that is recovered"; return 0; }
+    die "run 'plebian-os-update --recover-interrupted' first; selecting now would pin a release that is not installed"
+}
+
 usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
 }
@@ -2195,6 +2258,10 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-closure.XXXXXX")"
 if [ ! -f "$SESSION_ENV" ] && [ "$SELECTOR_MODE" != standalone ]; then
     die "no installed session configuration at $SESSION_ENV — this tool runs on a provisioned machine, not in a source checkout"
 fi
+
+case "$MODE" in
+    rollback|select) refuse_selection_during_interrupted_update ;;
+esac
 
 case "$MODE" in
     show)
