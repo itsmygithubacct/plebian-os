@@ -395,6 +395,8 @@ class IdleLockMigration(unittest.TestCase):
         ("backtick", b"A=`id -u`\n"),
         ("double quote with a dollar", b'A="$B"\n'),
         ("CRLF", b"A=1\r\n"),
+        ("CR inside a comment", b"# a\rb\n"),
+        ("NUL inside a comment", b"# a\x00b\n"),
         ("NUL", b"A=a\x00b\n"),
         ("non-UTF-8 comment", b"# \xff\xfe\x80\n"),
         ("control character before export", b"\x0bexport PLEB_IDLE_LOCK_SECONDS\n"),
@@ -509,6 +511,20 @@ class IdleLockMigration(unittest.TestCase):
         self.assertNotIn(b"600 -> 0", r.stdout)
         self.assertEqual(self.env_path.read_bytes(), before)
         self.assertEqual([p.name for p in self.env_path.parent.iterdir()], ["session.env"])
+
+    def test_an_installed_file_that_does_not_match_is_never_reported_as_success(self):
+        before = BASEB + OLD
+        self.env_path.write_bytes(before)
+        script = as_user(under(session_env_script(), self.fx.root))
+        stubs = self.fx.tmp / "bin"
+        stubs.mkdir(exist_ok=True)
+        (stubs / "mv").write_text('#!/bin/sh\nprintf corrupted > "$4"\n')
+        (stubs / "mv").chmod(0o755)
+        r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script.encode(), capture_output=True,
+                           env={"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(self.fx.tmp)})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn(b"600 -> 0", r.stdout)
+        self.assertIn(b"does not match", r.stderr)
 
     def test_migration_runs_inside_the_update_transaction(self):
         text = UPDATE.read_text()
