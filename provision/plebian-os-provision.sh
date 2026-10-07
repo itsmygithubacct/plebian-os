@@ -6323,7 +6323,7 @@ EOF
     else
         write_session_default PLEB_SESSION_SERVICES on
     fi
-    write_session_default PLEB_IDLE_LOCK_SECONDS 600
+    write_session_default PLEB_IDLE_LOCK_SECONDS 0
     write_session_default PLEB_INPUT_METHOD auto
     write_session_default PLEB_DIR "$PLEB_DIR"
     write_session_default PLEB_STORAGE_HOME "$PLEB_STORAGE_HOME"

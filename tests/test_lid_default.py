@@ -94,5 +94,13 @@ class LidDefault(unittest.TestCase):
         self.assertNotRegex(src, r"kill\s+-HUP.*logind")
 
 
+class IdleLockDefault(unittest.TestCase):
+    def test_idle_screen_lock_is_off_by_default(self):
+        # Owner request (RC6): no automatic screen lock. The manual lock keys
+        # and an operator's own PLEB_IDLE_LOCK_SECONDS are unaffected.
+        self.assertIn("write_session_default PLEB_IDLE_LOCK_SECONDS 0\n", PROVISION.read_text())
+        self.assertNotRegex(PROVISION.read_text(), r"PLEB_IDLE_LOCK_SECONDS [1-9]")
+
+
 if __name__ == "__main__":
     unittest.main()

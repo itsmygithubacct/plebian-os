@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## Unreleased
 
+- The idle screen lock is off by default: `/etc/pleb/session.env` now sets
+  `PLEB_IDLE_LOCK_SECONDS=0` (was 600). Super-L, Ctrl-Alt-L and `pleb lock` still
+  lock; set a number of seconds in session.env to turn the idle lock back on.
+
 - Closing the lid does nothing by default. Provisioning, the preseed and updates install
   `/etc/systemd/logind.conf.d/50-plebian-lid.conf` (`HandleLidSwitch`,
   `HandleLidSwitchExternalPower` and `HandleLidSwitchDocked` = `ignore`) for the
