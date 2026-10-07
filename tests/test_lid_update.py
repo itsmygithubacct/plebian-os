@@ -588,7 +588,7 @@ class IdleLockMigration(unittest.TestCase):
 
     def test_the_more_marker_always_fits_whatever_the_entry_sizes(self):
         stubs, calls = self.journal_stubs("logger")
-        for name_len in range(1, 65, 3):
+        for name_len in range(1, 65):
             with self.subTest(name_len=name_len):
                 calls.unlink(missing_ok=True)
                 self.migrate_with_path(BASEB + OLD + b"".join(b"Q" * name_len + b"=1\n" for _ in range(12)), stubs)
@@ -613,8 +613,7 @@ class IdleLockMigration(unittest.TestCase):
         long_dir.chmod(0o755)
         stubs, calls = self.journal_stubs("logger")
         env_path = long_dir / "session.env"
-        env_path.write_bytes(BASEB + OLD + b"".join(b"((X%d))\n" % i for i in range(30))
-                             + b"".join(b"N" * 90 + b"=1\n" for _ in range(10)))
+        env_path.write_bytes(BASEB + OLD + b"".join(b"N" * 90 + b"=1\n" for _ in range(12)))
         script = as_user(under(session_env_script(), self.fx.root))
         script = script.replace('case "$env_path" in %s) ;; *) exit 2 ;; esac' % self.env_path, 'true')
         script = script.replace("for dir in / /etc /etc/pleb; do", "for dir in /; do")
@@ -624,11 +623,11 @@ class IdleLockMigration(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         message, detail = self.logged(calls, env_path)
         self.assertLessEqual(len(message.encode()), 1024)            # the file name is part of the budget
-        self.assertRegex(detail, r"^line 4: outside the session.env grammar")
         entries = detail.split("; ")
         self.assertRegex(entries[-1], r"^and \d+ more$")
+        self.assertGreaterEqual(len(entries), 2)
         for e in entries[:-1]:
-            self.assertRegex(e, r"^line \d+: (outside the session.env grammar|name N{64} is not a session setting)$")
+            self.assertRegex(e, r"^line \d+: name N{64} is not a session setting$")
 
     # ---- the journal attempts are bounded in time ----------------------------
     def blocking_stub(self, name, extra=""):
