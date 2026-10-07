@@ -25,7 +25,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   gets its default appended, and the missing window-manager and alias defaults
   are added. Any other file is **not written at all** (no defaults, no comment)
   and the update prints one note naming the file, the lines involved and the
-  manual change (`PLEB_IDLE_LOCK_SECONDS=0`). The final-newline state is kept,
+  manual change (`PLEB_IDLE_LOCK_SECONDS=0`); the note (at most 1 KiB, at most
+  eight problems, names cut at 64 characters) is also logged to the system journal
+  with `logger -t plebian-os-update` (`systemd-cat` as a fallback; with neither,
+  the printed note is the only record). The final-newline state is kept,
   the result is re-checked with the same rules, and success is reported only
   after the installed file has been re-read. A 600 next to a reference such as
   `printf "$PLEB_IDLE_LOCK_SECONDS"` is therefore reported, not migrated;

@@ -2620,9 +2620,30 @@ PLEB_STORAGE_HOME PLEB_WM PLEB_WM_TIMEOUT
 """.split())
 NAME = r'[A-Z][A-Z0-9_]*'
 WORD = r"(?:[A-Za-z0-9_./:@%+,=~\u0080-\U0010ffff-]|\\[^\n])*"
-# bash printf %q: a string with control characters is $'...' using \a \b \t \n \v
-# \f \r \E, a 3-digit octal for other control/non-printable bytes, \\ and \'.
-ANSIC = r"\$'(?:[^'\\\x00-\x1f\x7f]|\\(?:[abEfnrtv\\']|[0-7]{3}))*'"
+# bash printf %q writes a string that contains a control character as $'...' using
+# \a \b \t \n \v \f \r \E for those bytes, a 3-digit octal for the other
+# control bytes and DEL, \\ and \' for backslash and quote, and the raw
+# printable text (bytes >= 0x80 are raw or octal depending on the locale). The
+# gate accepts that form only: octals for bytes printf %q really escapes
+# (001-006, 016-032, 034-037, 177 and 200-377; never 000, never printable ASCII,
+# never a byte that has a named escape), the named escapes, and at least one
+# control escape in the string (otherwise printf %q would not have used $'...').
+# Octal 200-377 is a safe literal superset (a locale-independent spelling of a
+# high byte): ANSI-C quoting performs no expansion.
+ANSIC = r"(?P<ansi>\$'(?:[^'\\\x00-\x1f\x7f]|\\(?:[abEfnrtv\\']|[0-7]{3}))*')"
+CONTROL_OCTALS = {*range(1, 7), *range(14, 27), *range(28, 32), 127, *range(128, 256)}
+
+def ansic_canonical(text):
+    body = text[2:-1]
+    has_control = False
+    for m in re.finditer(r"\\([abEfnrtv]|[0-7]{3}|.)", body):
+        e = m.group(1)
+        if e in 'abEfnrtv' and len(e) == 1: has_control = True
+        elif len(e) == 3:
+            if int(e, 8) not in CONTROL_OCTALS: return False
+            has_control = True
+    return has_control
+
 VAL = rf"(?:{WORD}|'[^'\n]*'|\"[^$`\\\"\n]*\"|{ANSIC})"
 BLANK = re.compile(r'[ \t]*')
 COMMENT = re.compile(r'[ \t]*#[^\n]*')
@@ -2660,20 +2681,24 @@ def analyze(data):
             if line.endswith('\\'): problems.append((n, 'comment ending in a backslash'))
             continue
         m = ASSIGN.fullmatch(line)
+        if m and m.group('ansi') and not ansic_canonical(m.group('ansi')):
+            problems.append((n, 'ANSI-C quoted value that printf %q would not write')); continue
         if m:
-            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)} is not a session setting'))
+            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)[:64]} is not a session setting'))
             elif re.search(r'#[^\n]*\\$', line): problems.append((n, 'comment ending in a backslash'))
             else: defined.add(m.group(1)); operator |= (m.group(1) == IDLE)
             continue
         m = GUARD.fullmatch(line)
+        if m and m.group('ansi') and not ansic_canonical(m.group('ansi')):
+            problems.append((n, 'ANSI-C quoted value that printf %q would not write')); continue
         if m and m.group(1) == m.group(2):
-            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)} is not a session setting'))
+            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)[:64]} is not a session setting'))
             else: defined.add(m.group(1)); operator |= (m.group(1) == IDLE)
             continue
         m = EXPORT.fullmatch(line)
         if m:
             odd = [x for x in m.group(1).split() if x not in NAMES]
-            if odd: problems.append((n, f'name {odd[0]} is not a session setting'))
+            if odd: problems.append((n, f'name {odd[0][:64]} is not a session setting'))
             continue
         problems.append((n, 'outside the session.env grammar'))
     return problems, defined, inherited, operator
@@ -2681,7 +2706,9 @@ def analyze(data):
 data = open(src, 'rb').read()
 problems, defined, inherited, operator = analyze(data)
 if problems:
-    print('uncertain|' + '; '.join(f'line {n}: {why}' for n, why in sorted(problems)[:8])); sys.exit(0)
+    detail = '; '.join(f'line {n}: {why}' for n, why in sorted(problems)[:8])
+    if len(problems) > 8: detail += f'; and {len(problems) - 8} more'
+    print('uncertain|' + detail[:700]); sys.exit(0)
 text = data.decode('utf-8')
 migrate = bool(inherited) and not operator
 out = text
@@ -2711,17 +2738,18 @@ case "$decision" in
         detail="${decision#uncertain|}"
         note="$env_path was not changed: it is outside the grammar this update can read safely ($detail); no session defaults were added and PLEB_IDLE_LOCK_SECONDS was left as is. To have no automatic screen lock, make sure it sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on."
         printf 'plebian-os-update: NOTE: %s\n' "$note" >&2
-        # Durable record, beside the audio hold-off log the OS layer already keeps.
-        record_dir=/var/lib/plebian-os
-        record="$record_dir/session-env-migration.log"
-        if [ -d "$record_dir" ] && [ ! -L "$record_dir" ] && [ ! -L "$record" ] \
-                && [ "$(stat -c '%u' "$record_dir")" = 0 ]; then
-            printf '%s\t%s\tunchanged\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$env_path" "$detail" >>"$record" \
-                && chmod 0644 "$record" \
-                && printf 'plebian-os-update: this note is also recorded in %s\n' "$record" >&2 \
-                || printf 'plebian-os-update: could not record this note in %s\n' "$record" >&2
+        # Durable record: the system journal, which rotates, bounds and protects
+        # it (no file of our own). One bounded message; the stderr NOTE stays.
+        msg="plebian-os-update: session.env unchanged: $env_path ($detail)"
+        msg="${msg:0:1024}"
+        if command -v logger >/dev/null 2>&1 \
+                && logger -t plebian-os-update -p user.notice -- "$msg" 2>/dev/null; then
+            printf 'plebian-os-update: this note is also recorded in the system journal (journalctl -t plebian-os-update)\n' >&2
+        elif command -v systemd-cat >/dev/null 2>&1 \
+                && printf '%s\n' "$msg" | systemd-cat -t plebian-os-update -p notice 2>/dev/null; then
+            printf 'plebian-os-update: this note is also recorded in the system journal (journalctl -t plebian-os-update)\n' >&2
         else
-            printf 'plebian-os-update: could not record this note: %s is not a root-owned directory\n' "$record_dir" >&2
+            printf 'plebian-os-update: neither logger nor systemd-cat is available; this note is not recorded anywhere else\n' >&2
         fi
         exit 0 ;;
     unchanged) exit 0 ;;

@@ -411,6 +411,15 @@ class IdleLockMigration(unittest.TestCase):
         ("ANSI-C with an unknown escape", b"KILIX_DESKTOP_COMMAND=$'a\\xzzb'\n"),
         ("ANSI-C with an expansion-looking escape", b"KILIX_DESKTOP_COMMAND=$'a\\u00e9'\n"),
         ("ANSI-C unterminated", b"KILIX_DESKTOP_COMMAND=$'a\n"),
+        ("ANSI-C NUL escape", b"KILIX_DESKTOP_COMMAND=$'a\\000b\\t'\n"),
+        ("ANSI-C octal for a printable byte", b"KILIX_DESKTOP_COMMAND=$'a\\101\\t'\n"),
+        ("ANSI-C octal for a byte with a named escape", b"KILIX_DESKTOP_COMMAND=$'a\\011'\n"),
+        ("ANSI-C octal for ESC", b"KILIX_DESKTOP_COMMAND=$'a\\033'\n"),
+        ("ANSI-C without any control escape", b"KILIX_DESKTOP_COMMAND=$'plain text'\n"),
+        ("ANSI-C with only backslash escapes", b"KILIX_DESKTOP_COMMAND=$'a\\\\b'\n"),
+        ("ANSI-C octal above 377", b"KILIX_DESKTOP_COMMAND=$'a\\400\\t'\n"),
+        ("ANSI-C raw control byte", b"KILIX_DESKTOP_COMMAND=$'a\x01b'\n"),
+        ("ANSI-C in a guard, non-canonical", b'if [ -z "${KILIX_DESKTOP_COMMAND+x}" ]; then KILIX_DESKTOP_COMMAND=$\'a\\101\\t\'; fi\n'),
     )
 
     def test_anything_outside_the_grammar_is_not_written_and_is_reported(self):
@@ -493,46 +502,92 @@ class IdleLockMigration(unittest.TestCase):
         for special in ("OPTIND", "RANDOM", "SECONDS", "LINENO", "IFS", "PATH", "BASH_ENV", "HISTSIZE", "HOME"):
             self.assertNotIn(special, listed)
 
-    # ---- durable record and locations ---------------------------------------
-    def record_path(self):
-        d = self.fx.root / "var/lib/plebian-os"
-        return d / "session-env-migration.log"
+    # ---- durable record: the system journal ----------------------------------
+    def journal_stubs(self, *tools):
+        """PATH stubs that record their arguments and stdin; returns (bin dir, call log)."""
+        stubs = self.fx.tmp / "jbin"
+        stubs.mkdir(exist_ok=True)
+        calls = self.fx.tmp / "journal-calls"
+        for tool in tools:
+            (stubs / tool).write_text(f'#!/bin/sh\n{{ echo "{tool} $*"; cat 2>/dev/null; }} >> {calls}\n')
+            (stubs / tool).chmod(0o755)
+        return stubs, calls
 
-    def test_the_note_is_recorded_durably_with_lines(self):
+    def migrate_with_path(self, data, stubs, base="/usr/bin:/bin"):
+        self.env_path.write_bytes(data)
+        self.env_path.chmod(0o644)
+        script = as_user(under(session_env_script(), self.fx.root))
+        r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script.encode(), capture_output=True,
+                           env={"PATH": f"{stubs}:{base}", "HOME": str(self.fx.tmp)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.out, self.err = r.stdout, r.stderr
+        return self.env_path.read_bytes()
+
+    def test_the_note_goes_to_the_journal_via_logger_with_a_bounded_message(self):
+        stubs, calls = self.journal_stubs("logger")
         before = BASEB + OLD + b"FOO=1\n((PLEB_IDLE_LOCK_SECONDS += 1))\n"
-        self.migrate(before)
-        rec = self.record_path()
-        self.assertTrue(rec.exists())
-        row = rec.read_text().splitlines()[-1].split("\t")
-        self.assertRegex(row[0], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-        self.assertEqual(row[1], str(self.env_path))
-        self.assertEqual(row[2], "unchanged")
-        self.assertIn("line 5: outside the session.env grammar", row[3])
-        self.assertIn(str(rec).encode(), self.err)
-        self.migrate(before)
-        self.assertEqual(len(rec.read_text().splitlines()), 2)
+        self.assertEqual(self.migrate_with_path(before, stubs), before)
+        line = calls.read_text().splitlines()[0]
+        self.assertTrue(line.startswith("logger -t plebian-os-update -p user.notice -- "), line)
+        self.assertIn(str(self.env_path), line)
+        self.assertIn("line 5: outside the session.env grammar", line)
+        self.assertLessEqual(len(line.split("-- ", 1)[1].encode()), 1024)
+        self.assertIn(b"recorded in the system journal", self.err)
+        self.assertFalse((self.fx.root / "var/lib/plebian-os/session-env-migration.log").exists())
+
+    def test_the_journal_message_is_bounded_whatever_the_file_holds(self):
+        stubs, calls = self.journal_stubs("logger")
+        many = b"".join(b"((X%d))\n" % i for i in range(60))
+        long_name = b"A" * 5000 + b"=1\n"
+        self.migrate_with_path(BASEB + OLD + many + long_name, stubs)
+        message = calls.read_text().splitlines()[0].split("-- ", 1)[1]
+        self.assertLessEqual(len(message.encode()), 1024)
+        self.assertIn("more", message)                      # at most 8 problems listed, the rest counted
+        self.assertEqual(message.count("line "), 8)
+        self.assertLessEqual(max(len(w) for w in message.split()), 120)
+        self.migrate_with_path(BASEB + OLD + b"A" * 5000 + b"=1\n", stubs)
+        self.assertLessEqual(max(len(w) for w in calls.read_text().split()), 120)
+
+    def test_systemd_cat_is_used_when_logger_is_missing_and_stderr_alone_when_neither_exists(self):
+        stubs, calls = self.journal_stubs("systemd-cat")
+        before = BASEB + OLD + b"((X))\n"
+        # logger may exist on the host: shadow it with a failing stub
+        (stubs / "logger").write_text("#!/bin/sh\nexit 1\n")
+        (stubs / "logger").chmod(0o755)
+        self.migrate_with_path(before, stubs)
+        text = calls.read_text()
+        self.assertIn("systemd-cat -t plebian-os-update -p notice", text)
+        self.assertIn(str(self.env_path), text)
+        none = self.fx.tmp / "nobin"
+        none.mkdir()
+        for name in ("logger", "systemd-cat"):
+            (none / name).write_text("#!/bin/sh\nexit 127\n")
+            (none / name).chmod(0o755)
+        self.migrate_with_path(before, none)
+        self.assertIn(b"NOTE:", self.err)
+        self.assertIn(b"not recorded anywhere else", self.err)
+
+    def test_a_certain_file_makes_no_journal_entry_and_no_file_is_written_in_var_lib(self):
+        stubs, calls = self.journal_stubs("logger", "systemd-cat")
+        self.migrate_with_path(BASEB + OLD, stubs)
+        self.assertFalse(calls.exists())
+        d = self.fx.root / "var/lib/plebian-os"
+        self.assertEqual(sorted(p.name for p in d.iterdir()), [])
+
+    def test_the_removed_log_file_is_gone_from_the_sources(self):
+        for path in ("provision/plebian-os-update.sh", "provision/plebian-os-provision.sh"):
+            self.assertNotIn("session-env-migration", (ROOT / path).read_text())
 
     def test_raw_byte_problems_give_the_byte_offset_and_the_line(self):
+        stubs, calls = self.journal_stubs("logger")
         for label, data, expect in (("NUL", BASEB + b"# a\x00b\n", "line 3: NUL byte at byte offset %d" % (len(BASEB) + 3)),
                                     ("CR", BASEB + b"# a\rb\n", "line 3: carriage return at byte offset %d" % (len(BASEB) + 3)),
                                     ("non-UTF-8", BASEB + b"# \xff\n", "line 3: not UTF-8 at byte offset %d" % (len(BASEB) + 2))):
             with self.subTest(label):
-                self.migrate(data)
+                calls.unlink(missing_ok=True)
+                self.migrate_with_path(data, stubs)
                 self.assertIn(expect.encode(), self.err)
-                self.assertIn(expect, self.record_path().read_text())
-
-    def test_a_certain_file_writes_no_record(self):
-        self.migrate(BASEB + OLD)
-        self.assertFalse(self.record_path().exists())
-
-    def test_no_record_is_written_through_a_symlinked_log(self):
-        d = self.fx.root / "var/lib/plebian-os"
-        victim = self.fx.tmp / "victim"
-        victim.write_text("keep\n")
-        (d / "session-env-migration.log").symlink_to(victim)
-        self.migrate(BASEB + OLD + b"((X))\n")
-        self.assertEqual(victim.read_text(), "keep\n")
-        self.assertIn(b"could not record", self.err)
+                self.assertIn(expect, calls.read_text())
 
     # ---- every file the provisioner renders passes the gate -------------------
     def test_every_provisioner_rendered_shape_passes_the_gate(self):
@@ -562,6 +617,20 @@ class IdleLockMigration(unittest.TestCase):
         self.assertNotIn(NOTE, self.err, self.err)
         self.assertTrue(migrated.startswith(before))
         self.assertIn(b"600 -> 0", self.out)
+
+    def test_every_canonical_printf_q_ansi_c_form_passes(self):
+        # the real printf %q over every byte 1-255 in both locales, forced into $'...' by a tab
+        for locale in ("C", "C.UTF-8"):
+            for byte in range(1, 256):
+                with self.subTest(locale=locale, byte=byte):
+                    r = subprocess.run(["bash", "-c", 'printf "%q" "$(printf "x\\t\\\\x%02x" ' + str(byte) + ')y"'],
+                                       capture_output=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": locale})
+                    quoted = r.stdout
+                    if r.returncode or not quoted.startswith(b"$'"):
+                        continue
+                    before = BASEB + OLD + b"KILIX_DESKTOP_COMMAND=" + quoted + b"\n"
+                    self.assertEqual(self.migrate(before), before.replace(OLD, NEWB))
+                    self.assertNotIn(NOTE, self.err)
 
     def test_values_the_provisioner_could_only_render_as_ansi_c_quoting_are_uncertain(self):
         before = BASEB + OLD + b"A=$'a\\nb'\n"
