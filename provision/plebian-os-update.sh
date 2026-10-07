@@ -2562,41 +2562,77 @@ if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])KILIX_RUN_ALIASES[=+] ]]; then
     names+=(KILIX_RUN_ALIASES)
     values+=(1)
 fi
-# No automatic screen lock by default (owner answers 18/19). The decision is by
-# ASSIGNMENTS only, read from the file text (never sourced): after the one exact
-# line older provisioners generated (the 600 default) is set aside, any remaining
-# non-comment text in which the name is followed by `=`, `:=` or `+=` is an
-# operator assignment. That covers bare `NAME=`, `export NAME=`, `readonly NAME=`,
-# `declare`/`local` forms, a differently valued guarded default
-# (`if [ -z "${NAME+x}" ]; then NAME=900; fi`) and `: "${NAME:=900}"`. Mentions
-# without an assignment (`export NAME`, `printf "$NAME"`, a test, a comment) are
-# not choices. `read NAME`, `printf -v NAME` and `eval` are not recognised. With
-# no assignment the inherited line becomes 0, and a missing entry gets 0 appended;
-# with one, the file is left alone, so an operator timeout stays, and
-# PLEB_AUTO_LOCK is a different name and is never touched.
+# No automatic screen lock by default (owner answers 18/19). Shell cannot be
+# classified safely by pattern, so only what is certain is acted on, and the
+# text is never sourced or evaluated. The non-comment logical lines (a trailing
+# backslash joins the next line) that contain PLEB_IDLE_LOCK_SECONDS are sorted:
+#   - exactly the line older provisioners generated (the 600 default): migratable;
+#   - exactly `export PLEB_IDLE_LOCK_SECONDS` (whitespace around it allowed):
+#     harmless;
+#   - anything else (any assignment form, reference, quoted example, here-doc,
+#     continuation): uncertain.
+# No such line: the default 0 is appended. Inherited line and only harmless
+# lines: the inherited line becomes 0 in place. Any uncertain line: the idle
+# setting is left exactly as it is and the update says so. Lines that are not
+# rewritten, including a last line without a newline, stay byte-identical.
 old_idle='if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi'
 migrate_idle=0
-operator_text="$(grep -vxF -- "$old_idle" "$env_path" | sed -e 's/#.*$//' || true)"
-if [[ ! "$operator_text" =~ (^|[^A-Za-z0-9_])PLEB_IDLE_LOCK_SECONDS(:=|\+=|=) ]]; then
-    if grep -qxF -- "$old_idle" "$env_path"; then
-        migrate_idle=1
+idle_uncertain=()
+inherited_count=0
+mention_count=0
+physical=0 start=0 logical=''
+classify_idle_line() {
+    local text="$1" first="$2" trimmed
+    trimmed="${text#"${text%%[![:space:]]*}"}"
+    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+    case "$trimmed" in '#'*) return 0 ;; esac
+    [[ "$text" == *PLEB_IDLE_LOCK_SECONDS* ]] || return 0
+    mention_count=$((mention_count + 1))
+    if [ "$text" = "$old_idle" ]; then
+        inherited_count=$((inherited_count + 1))
+    elif [ "$trimmed" = 'export PLEB_IDLE_LOCK_SECONDS' ]; then
+        :
     else
-        names+=(PLEB_IDLE_LOCK_SECONDS)
-        values+=(0)
+        idle_uncertain+=("$first")
     fi
+}
+while IFS= read -r line || [ -n "$line" ]; do
+    physical=$((physical + 1))
+    [ -n "$logical" ] || start="$physical"
+    if [[ "$line" == *'\' ]]; then
+        logical+="${line%\\}"
+        continue
+    fi
+    logical+="$line"
+    classify_idle_line "$logical" "$start"
+    logical=''
+done <"$env_path"
+[ -z "$logical" ] || classify_idle_line "$logical" "$start"
+if [ "${#idle_uncertain[@]}" -gt 0 ]; then
+    printf '%s\n' \
+        "plebian-os-update: NOTE: $env_path line(s) ${idle_uncertain[*]} mention PLEB_IDLE_LOCK_SECONDS in a form this update does not rewrite; PLEB_IDLE_LOCK_SECONDS was left unchanged." \
+        "plebian-os-update: to have no automatic screen lock, make sure $env_path sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on." >&2
+elif [ "$mention_count" -eq 0 ]; then
+    names+=(PLEB_IDLE_LOCK_SECONDS)
+    values+=(0)
+elif [ "$inherited_count" -gt 0 ]; then
+    migrate_idle=1
 fi
 [ "${#names[@]}" -gt 0 ] || [ "$migrate_idle" = 1 ] || exit 0
 tmp="$(mktemp /etc/pleb/.session.env.XXXXXX)"
 trap 'rm -f -- "$tmp"' EXIT
 {
     if [ "$migrate_idle" = 1 ]; then
-        while IFS= read -r line || [ -n "$line" ]; do
+        # Line by line, keeping each line's own terminator: a final line
+        # without a newline stays without one.
+        while IFS= read -r line; do
             if [ "$line" = "$old_idle" ]; then
                 write_session_default PLEB_IDLE_LOCK_SECONDS 0
             else
                 printf '%s\n' "$line"
             fi
         done <"$env_path"
+        [ -z "${line:-}" ] || printf '%s' "$line"
     else
         cat -- "$env_path"
     fi

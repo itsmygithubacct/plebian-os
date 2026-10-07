@@ -281,6 +281,7 @@ class IdleLockMigration(unittest.TestCase):
         r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script, capture_output=True, text=True,
                            env={"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)})
         self.assertEqual(r.returncode, 0, r.stderr)
+        self.stderr = r.stderr
         return self.env_path.read_text()
 
     def effective(self, text):
@@ -309,31 +310,73 @@ class IdleLockMigration(unittest.TestCase):
                 before = BASE + line
                 self.assertEqual(self.migrate(before), before)
 
-    def test_mentions_without_an_assignment_do_not_block_the_migration(self):
+    NOTE = "mention PLEB_IDLE_LOCK_SECONDS in a form this update does not rewrite"
+
+    def test_harmless_export_and_comments_do_not_block_the_migration(self):
         for label, extra in (("bare export", "export PLEB_IDLE_LOCK_SECONDS\n"),
-                             ("read-only use", 'printf "%s\\n" "$PLEB_IDLE_LOCK_SECONDS" >/dev/null\n'),
-                             ("a test of it", '[ -n "${PLEB_IDLE_LOCK_SECONDS+x}" ] && :\n'),
+                             ("bare export with spaces", "  export PLEB_IDLE_LOCK_SECONDS  \n"),
                              ("a comment", "# PLEB_IDLE_LOCK_SECONDS controls auto locking\n"),
-                             ("a longer name", "PLEB_IDLE_LOCK_SECONDS_NOTE=1\n"),
-                             ("the auto-lock opt-in", "PLEB_AUTO_LOCK=on\n")):
+                             ("an indented comment", "   # PLEB_IDLE_LOCK_SECONDS=123\n"),
+                             ("the auto-lock opt-in", "PLEB_AUTO_LOCK=on\n"),
+                             ("a longer unrelated name", "PLEB_IDLE_LOCK_MINUTES=1\n")):
             for position in ("after", "before"):
                 with self.subTest(label, position=position):
                     before = (BASE + OLD_IDLE + extra) if position == "after" else (BASE + extra + OLD_IDLE)
-                    want = before.replace(OLD_IDLE, NEW_IDLE)
                     after = self.migrate(before)
-                    self.assertEqual(after, want)
+                    self.assertEqual(after, before.replace(OLD_IDLE, NEW_IDLE))
+                    self.assertNotIn(self.NOTE, self.stderr)
                     self.assertEqual(self.migrate(after), after)
                     self.assertEqual(self.effective(after), "0")
 
-    def test_every_recognised_assignment_form_keeps_the_operator_choice(self):
-        for extra in ("PLEB_IDLE_LOCK_SECONDS=123\n", "export PLEB_IDLE_LOCK_SECONDS=123\n",
-                      "readonly PLEB_IDLE_LOCK_SECONDS=123\n", "declare -x PLEB_IDLE_LOCK_SECONDS=123\n",
-                      "local PLEB_IDLE_LOCK_SECONDS=123\n", ': "${PLEB_IDLE_LOCK_SECONDS:=123}"\n',
-                      "PLEB_IDLE_LOCK_SECONDS+=1\n", "  PLEB_IDLE_LOCK_SECONDS=123 # mine\n",
-                      'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=900; fi\n'):
-            with self.subTest(extra=extra):
-                before = BASE + OLD_IDLE + extra
-                self.assertEqual(self.migrate(before), before)
+    UNCERTAIN = (
+        ("plain assignment", "PLEB_IDLE_LOCK_SECONDS=123\n"),
+        ("export assignment", "export PLEB_IDLE_LOCK_SECONDS=123\n"),
+        ("readonly", "readonly PLEB_IDLE_LOCK_SECONDS=123\n"),
+        ("default form", ': "${PLEB_IDLE_LOCK_SECONDS:=123}"\n'),
+        ("append", "PLEB_IDLE_LOCK_SECONDS+=1\n"),
+        ("array element", "PLEB_IDLE_LOCK_SECONDS[0]=123\n"),
+        ("arithmetic", "((PLEB_IDLE_LOCK_SECONDS += 1))\n"),
+        ("read", "read -r PLEB_IDLE_LOCK_SECONDS <<<'123'\n"),
+        ("printf -v", "printf -v PLEB_IDLE_LOCK_SECONDS '%s' 123\n"),
+        ("indirect eval", "name=PLEB_IDLE_LOCK_SECONDS\neval \"$name+=1\"\n"),
+        ("read-only reference", 'printf "%s\\n" "$PLEB_IDLE_LOCK_SECONDS" >/dev/null\n'),
+        ("quoted example", "printf '%s\\n' 'PLEB_IDLE_LOCK_SECONDS=123' >/dev/null\n"),
+        ("here-doc example", "cat <<'TEXT' >/dev/null\nPLEB_IDLE_LOCK_SECONDS=123\nTEXT\n"),
+        ("hash before the assignment", "note='#'; PLEB_IDLE_LOCK_SECONDS+=1\n"),
+        ("continued name", "PLEB_IDLE_LOCK_\\\nSECONDS+=1\n"),
+        ("continued operator", "PLEB_IDLE_LOCK_SECONDS\\\n+=1\n"),
+        ("guarded other value", 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=900; fi\n'),
+        ("test of it", '[ -n "${PLEB_IDLE_LOCK_SECONDS+x}" ] && :\n'),
+        ("trailing comment", "PLEB_IDLE_LOCK_SECONDS=123 # mine\n"),
+    )
+
+    def test_anything_else_mentioning_the_name_is_preserved_and_reported(self):
+        for label, extra in self.UNCERTAIN:
+            for position in ("after", "before"):
+                with self.subTest(label, position=position):
+                    before = (BASE + OLD_IDLE + extra) if position == "after" else (BASE + extra + OLD_IDLE)
+                    after = self.migrate(before)
+                    self.assertEqual(after, before)
+                    self.assertIn(self.NOTE, self.stderr)
+                    self.assertIn(str(self.env_path), self.stderr)
+                    self.assertIn("PLEB_IDLE_LOCK_SECONDS=0", self.stderr)
+                    self.assertEqual(self.migrate(after), after)
+
+    def test_the_report_names_the_offending_line_numbers(self):
+        before = BASE + OLD_IDLE + "FOO=1\nPLEB_IDLE_LOCK_SECONDS=123\n"
+        self.migrate(before)
+        self.assertIn("line(s) 5 mention", self.stderr)
+
+    def test_unrelated_final_line_without_a_newline_stays_without_one(self):
+        before = BASE + OLD_IDLE + "# last line, no newline"
+        after = self.migrate(before)
+        self.assertEqual(after, before.replace(OLD_IDLE, NEW_IDLE))
+        self.assertFalse(after.endswith("\n"))
+
+    def test_a_missing_entry_is_appended_after_an_unterminated_file(self):
+        after = self.migrate(BASE.rstrip("\n"))
+        self.assertTrue(after.startswith(BASE.rstrip("\n") + "\n"))
+        self.assertIn(NEW_IDLE, after)
 
     def test_migration_never_sources_operator_text(self):
         marker = self.fx.tmp / "ran"

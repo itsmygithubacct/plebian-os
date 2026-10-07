@@ -12,17 +12,23 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   the desktop unlocked. Super-L, Ctrl-Alt-L, `pleb lock` and `loginctl lock-session`
   still lock. Set a positive `PLEB_IDLE_LOCK_SECONDS` (or `PLEB_AUTO_LOCK=on`) in
   session.env to turn automatic locking back on. `plebian-os-update` migrates
-  existing installs (in its transaction, with rollback) by assignments only,
-  reading the file text and never sourcing it. Setting aside the one exact line
-  older provisioners generated (the 600 default), any non-comment text where the
-  name is followed by `=`, `:=` or `+=` (bare, `export`, `readonly`, `declare`,
-  `local`, a differently valued guarded default, `: "${NAME:=...}"`) is an operator
-  choice and the file is left alone, whatever its value, including a typed 600 or
-  an opt-in. Otherwise the inherited line becomes 0 in place, or, if there is no
-  such line, `PLEB_IDLE_LOCK_SECONDS=0` is appended. A mere mention (`export NAME`,
-  a read-only use, a test, a comment, a longer name) is not a choice and does not
-  block this; `read`, `printf -v` and `eval` assignments are not recognised.
-  `PLEB_AUTO_LOCK` is never changed. All other lines stay byte-identical. The
+  existing installs (in its transaction, with rollback), acting only on what is
+  certain and never sourcing or evaluating the file. Of the non-comment lines
+  (a trailing backslash joins the next line) that contain
+  `PLEB_IDLE_LOCK_SECONDS`: the exact line older provisioners generated (the 600
+  default) is migratable, and `export PLEB_IDLE_LOCK_SECONDS` alone is harmless;
+  anything else (an assignment in any form, a read-only reference, a quoted
+  example, a here-doc, a continuation) is uncertain. With no such line,
+  `PLEB_IDLE_LOCK_SECONDS=0` is appended; with the inherited line and only
+  harmless lines, the inherited line becomes 0 in place; with any uncertain line
+  the setting is left exactly as it is and the update prints a note naming the
+  file, the line numbers and the one-line change (`PLEB_IDLE_LOCK_SECONDS=0`) to
+  make by hand. So an operator's own value stays, and so does a 600 that merely
+  sits next to a reference such as `printf "$PLEB_IDLE_LOCK_SECONDS"` (reported,
+  not migrated). Settings made by sourcing another file are invisible to the
+  update. Lines that are not rewritten, including a last line without a newline,
+  stay byte-identical.
+  `PLEB_AUTO_LOCK` is never changed. The
   migration runs in the updater that carries it, so an update started by an older
   installed updater deploys the new one and the next `plebian-os-update` migrates.
   A `lock-screen-suspend-hibernate` value already stored in a user's Xfce settings
