@@ -2706,9 +2706,25 @@ def analyze(data):
 data = open(src, 'rb').read()
 problems, defined, inherited, operator = analyze(data)
 if problems:
-    detail = '; '.join(f'line {n}: {why}' for n, why in sorted(problems)[:8])
-    if len(problems) > 8: detail += f'; and {len(problems) - 8} more'
-    print('uncertain|' + detail[:700]); sys.exit(0)
+    # Whole problem entries only, within a budget that keeps the journal message
+    # (prefix + file name + detail) under 1 KiB; room for "and N more" is always
+    # reserved, and no entry is cut in half.
+    entries = [f'line {n}: {why}' for n, why in sorted(problems)]
+    budget = min(700, 1024 - len(f'plebian-os-update: session.env unchanged: {src} ()'.encode()))
+    reserve = len('; and 99999 more')
+    shown, used = [], 0
+    for i, e in enumerate(entries):
+        cost = len(e.encode()) + (2 if shown else 0)
+        left = len(entries) - i
+        if len(shown) < 8 and used + cost + (0 if left == 1 else reserve) <= budget:
+            shown.append(e); used += cost
+        else:
+            break
+    detail = '; '.join(shown)
+    if len(shown) < len(entries):
+        more = f'and {len(entries) - len(shown)} more'
+        detail = (detail + '; ' + more) if shown else more
+    print('uncertain|' + detail); sys.exit(0)
 text = data.decode('utf-8')
 migrate = bool(inherited) and not operator
 out = text
@@ -2739,17 +2755,41 @@ case "$decision" in
         note="$env_path was not changed: it is outside the grammar this update can read safely ($detail); no session defaults were added and PLEB_IDLE_LOCK_SECONDS was left as is. To have no automatic screen lock, make sure it sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on."
         printf 'plebian-os-update: NOTE: %s\n' "$note" >&2
         # Durable record: the system journal, which rotates, bounds and protects
-        # it (no file of our own). One bounded message; the stderr NOTE stays.
+        # it (no file of our own). One bounded message, each attempt bounded in
+        # time; a failure or timeout is not fatal and the stderr NOTE stays.
         msg="plebian-os-update: session.env unchanged: $env_path ($detail)"
         msg="${msg:0:1024}"
-        if command -v logger >/dev/null 2>&1 \
-                && logger -t plebian-os-update -p user.notice -- "$msg" 2>/dev/null; then
+        bounded() {
+            local secs="$1" pid i rc
+            shift
+            if command -v timeout >/dev/null 2>&1; then
+                timeout -k 2 "$secs" "$@"
+                return
+            fi
+            "$@" & pid=$!
+            for ((i = 0; i < secs * 10; i++)); do
+                kill -0 "$pid" 2>/dev/null || { wait "$pid"; return; }
+                read -r -t 0.1 <> <(:) 2>/dev/null || true
+            done
+            kill -KILL "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            return 124
+        }
+        recorded=0 tried=''
+        if command -v logger >/dev/null 2>&1; then
+            tried="logger"
+            bounded 5 logger -t plebian-os-update -p user.notice -- "$msg" 2>/dev/null && recorded=1
+        fi
+        if [ "$recorded" = 0 ] && command -v systemd-cat >/dev/null 2>&1; then
+            tried="${tried:+$tried, }systemd-cat"
+            bounded 5 systemd-cat -t plebian-os-update -p notice <<<"$msg" 2>/dev/null && recorded=1
+        fi
+        if [ "$recorded" = 1 ]; then
             printf 'plebian-os-update: this note is also recorded in the system journal (journalctl -t plebian-os-update)\n' >&2
-        elif command -v systemd-cat >/dev/null 2>&1 \
-                && printf '%s\n' "$msg" | systemd-cat -t plebian-os-update -p notice 2>/dev/null; then
-            printf 'plebian-os-update: this note is also recorded in the system journal (journalctl -t plebian-os-update)\n' >&2
+        elif [ -n "$tried" ]; then
+            printf 'plebian-os-update: %s failed or timed out (5 s limit each); no additional record was made\n' "$tried" >&2
         else
-            printf 'plebian-os-update: neither logger nor systemd-cat is available; this note is not recorded anywhere else\n' >&2
+            printf 'plebian-os-update: neither logger nor systemd-cat is installed; no additional record was made\n' >&2
         fi
         exit 0 ;;
     unchanged) exit 0 ;;

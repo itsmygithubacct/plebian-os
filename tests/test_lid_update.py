@@ -44,6 +44,16 @@ class Fixture:
         self.conf = self.dd / NAME
         self.prov = self.root / "usr/local/sbin/plebian-os-provision"
 
+    def safe_bin(self):
+        """A directory whose logger/systemd-cat do nothing, so no test can reach the host journal."""
+        d = self.tmp / "safe-bin"
+        if not d.exists():
+            d.mkdir()
+            for tool in ("logger", "systemd-cat"):
+                (d / tool).write_text("#!/bin/sh\ncat >/dev/null 2>&1\nexit 0\n")
+                (d / tool).chmod(0o755)
+        return d
+
     def mkdd(self):
         self.dd.mkdir(parents=True)
         self.dd.chmod(0o755)
@@ -286,7 +296,7 @@ class IdleLockMigration(unittest.TestCase):
         self.env_path.chmod(0o644)
         script = as_user(under(session_env_script(), self.fx.root))
         r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script.encode(), capture_output=True,
-                           env={"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)})
+                           env={"PATH": f"{self.fx.safe_bin()}:/usr/bin:/bin", "HOME": str(self.fx.tmp)})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.out, self.err = r.stdout, r.stderr
         return self.env_path.read_bytes()
@@ -517,8 +527,9 @@ class IdleLockMigration(unittest.TestCase):
         self.env_path.write_bytes(data)
         self.env_path.chmod(0o644)
         script = as_user(under(session_env_script(), self.fx.root))
-        r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script.encode(), capture_output=True,
-                           env={"PATH": f"{stubs}:{base}", "HOME": str(self.fx.tmp)})
+        r = subprocess.run(["/bin/bash", "-s", "--", str(self.env_path)], input=script.encode(), capture_output=True,
+                           env={"PATH": f"{stubs}:{base}" if base.startswith("/nonexistent")
+                                else f"{stubs}:{self.fx.safe_bin()}:{base}", "HOME": str(self.fx.tmp)})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.out, self.err = r.stdout, r.stderr
         return self.env_path.read_bytes()
@@ -535,47 +546,168 @@ class IdleLockMigration(unittest.TestCase):
         self.assertIn(b"recorded in the system journal", self.err)
         self.assertFalse((self.fx.root / "var/lib/plebian-os/session-env-migration.log").exists())
 
+    @staticmethod
+    def logged(calls, env_path):
+        """First logger message, split into (whole message, detail between the parentheses)."""
+        message = calls.read_text().splitlines()[0].split("-- ", 1)[1]
+        prefix = f"plebian-os-update: session.env unchanged: {env_path} ("
+        assert message.startswith(prefix) and message.endswith(")"), message
+        return message, message[len(prefix):-1]
+
     def test_the_journal_message_is_bounded_whatever_the_file_holds(self):
         stubs, calls = self.journal_stubs("logger")
         many = b"".join(b"((X%d))\n" % i for i in range(60))
         long_name = b"A" * 5000 + b"=1\n"
         self.migrate_with_path(BASEB + OLD + many + long_name, stubs)
-        message = calls.read_text().splitlines()[0].split("-- ", 1)[1]
-        self.assertLessEqual(len(message.encode()), 1024)
-        self.assertIn("more", message)                      # at most 8 problems listed, the rest counted
-        self.assertEqual(message.count("line "), 8)
-        self.assertLessEqual(max(len(w) for w in message.split()), 120)
-        self.migrate_with_path(BASEB + OLD + b"A" * 5000 + b"=1\n", stubs)
-        self.assertLessEqual(max(len(w) for w in calls.read_text().split()), 120)
+        message, detail = self.logged(calls, self.env_path)
+        self.assertLessEqual(len(message.encode()), 1024)             # whole-message byte limit
+        self.assertRegex(detail, r"; and \d+ more$")                    # the rest is counted
+        self.assertLessEqual(detail.count("line "), 8)
 
-    def test_the_logged_detail_is_cut_at_700_characters_and_names_at_64(self):
+    def test_setting_names_are_cut_at_64_characters(self):
+        stubs, calls = self.journal_stubs("logger")
+        self.migrate_with_path(BASEB + OLD + b"A" * 5000 + b"=1\n", stubs)
+        message, detail = self.logged(calls, self.env_path)
+        self.assertIn("name " + "A" * 64 + " is not a session setting", detail)
+        self.assertNotIn("A" * 65, detail)
+
+    def test_complete_entries_only_with_room_for_the_more_marker(self):
         stubs, calls = self.journal_stubs("logger")
         problems = b"".join(b"X" * (5000 + i) + b"=1\n" for i in range(10))
         self.migrate_with_path(BASEB + OLD + problems, stubs)
-        message = calls.read_text().splitlines()[0].split("-- ", 1)[1]
-        detail = message[message.index("(") + 1:message.rindex(")")] if ")" in message else message[message.index("(") + 1:]
+        message, detail = self.logged(calls, self.env_path)
+        entries = detail.split("; ")
+        marker = entries.pop()
+        self.assertRegex(marker, r"^and \d+ more$")
+        self.assertGreaterEqual(len(entries), 1)
+        for e in entries:   # every shown entry is complete, with its real line number
+            self.assertRegex(e, r"^line \d+: name X{64} is not a session setting$")
+        self.assertEqual(len(entries) + int(marker.split()[1]), 10)
         self.assertLessEqual(len(detail), 700)
-        self.assertNotIn("X" * 65, message)
-        self.assertIn("X" * 64, message)
+        self.assertLessEqual(len(message.encode()), 1024)
+
+    def test_a_single_unfittable_problem_still_gets_a_marker(self):
+        stubs, calls = self.journal_stubs("logger")
+        self.migrate_with_path(BASEB + OLD + b"((X))\n", stubs)
+        message, detail = self.logged(calls, self.env_path)
+        self.assertEqual(detail, "line 4: outside the session.env grammar")
+
+    def test_a_long_tmpdir_changes_nothing_that_matters(self):
+        long_dir = self.fx.root / ("d" * 120) / ("e" * 120) / ("f" * 120)
+        long_dir.mkdir(parents=True)
+        long_dir.chmod(0o755)
+        stubs, calls = self.journal_stubs("logger")
+        env_path = long_dir / "session.env"
+        env_path.write_bytes(BASEB + OLD + b"".join(b"((X%d))\n" % i for i in range(30)))
+        script = as_user(under(session_env_script(), self.fx.root))
+        script = script.replace('case "$env_path" in %s) ;; *) exit 2 ;; esac' % self.env_path, 'true')
+        script = script.replace("for dir in / /etc /etc/pleb; do", "for dir in /; do")
+        script = script.replace(f"{self.fx.root}/etc/pleb/.session.env", str(long_dir / ".session.env"))
+        r = subprocess.run(["bash", "-s", "--", str(env_path)], input=script.encode(), capture_output=True,
+                           env={"PATH": f"{stubs}:{self.fx.safe_bin()}:/usr/bin:/bin", "HOME": str(self.fx.tmp)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        message, detail = self.logged(calls, env_path)
+        self.assertLessEqual(len(message.encode()), 1024)
+        self.assertRegex(detail, r"^line 4: outside the session.env grammar")
+        for e in detail.split("; ")[:-1]:
+            self.assertRegex(e, r"^line \d+: outside the session.env grammar$")
+
+    # ---- the journal attempts are bounded in time ----------------------------
+    def blocking_stub(self, name, extra=""):
+        stubs = self.fx.tmp / "jbin"
+        stubs.mkdir(exist_ok=True)
+        (stubs / name).write_text(f'#!/bin/sh\n{extra}\ncat >/dev/null 2>&1 &\nexec sleep 60\n')
+        (stubs / name).chmod(0o755)
+        return stubs
+
+    def timed_run(self, before, stubs, base="/usr/bin:/bin"):
+        import time
+        start = time.monotonic()
+        after = self.migrate_with_path(before, stubs, base)
+        return after, time.monotonic() - start
+
+    def test_a_blocking_logger_is_bounded_and_the_file_stays_preserved(self):
+        stubs = self.blocking_stub("logger")
+        (stubs / "systemd-cat").write_text("#!/bin/sh\nexit 1\n")
+        (stubs / "systemd-cat").chmod(0o755)
+        before = BASEB + OLD + b"((X))\n"
+        after, took = self.timed_run(before, stubs)
+        self.assertEqual(after, before)
+        self.assertLess(took, 20)
+        self.assertIn(b"NOTE:", self.err)
+        self.assertIn(b"failed or timed out", self.err)
+        self.assertIn(b"no additional record was made", self.err)
+
+    def test_a_blocking_systemd_cat_fallback_is_bounded_too(self):
+        stubs = self.blocking_stub("systemd-cat")
+        (stubs / "logger").write_text("#!/bin/sh\nexit 1\n")
+        (stubs / "logger").chmod(0o755)
+        before = BASEB + OLD + b"((X))\n"
+        after, took = self.timed_run(before, stubs)
+        self.assertEqual(after, before)
+        self.assertLess(took, 20)
+        self.assertIn(b"logger, systemd-cat failed or timed out", self.err)
+
+    def test_both_blocking_stays_nonfatal_within_twice_the_bound(self):
+        stubs = self.blocking_stub("logger")
+        self.blocking_stub("systemd-cat")
+        before = BASEB + OLD + b"((X))\n"
+        after, took = self.timed_run(before, stubs)
+        self.assertEqual(after, before)
+        self.assertLess(took, 25)
+        self.assertIn(b"NOTE:", self.err)
+
+    def test_without_a_timeout_binary_the_builtin_bound_still_applies(self):
+        bin_dir = self.fx.tmp / "isolated"
+        bin_dir.mkdir()
+        for tool in ("stat", "id", "python3", "mktemp", "rm", "sleep", "cat", "date", "sha256sum", "chmod", "mv", "grep", "sed"):
+            (bin_dir / tool).symlink_to("/usr/bin/" + tool)
+        self.blocking_stub("logger")
+        (self.fx.tmp / "jbin" / "logger").rename(bin_dir / "logger")
+        before = BASEB + OLD + b"((X))\n"
+        after, took = self.timed_run(before, bin_dir, base="/nonexistent")
+        self.assertEqual(after, before)
+        self.assertLess(took, 20)
+        self.assertGreaterEqual(took, 4)           # it really waited for the bound
+        self.assertIn(b"failed or timed out", self.err)
+
+    def test_not_installed_and_failed_are_told_apart(self):
+        none = self.fx.tmp / "nobin"
+        none.mkdir()
+        for tool in ("stat", "id", "python3", "mktemp", "rm"):
+            (none / tool).symlink_to("/usr/bin/" + tool)
+        before = BASEB + OLD + b"((X))\n"
+        self.migrate_with_path(before, none, base="/nonexistent")
+        self.assertIn(b"neither logger nor systemd-cat is installed; no additional record was made", self.err)
+        self.assertNotIn(b"failed or timed out", self.err)
+        stubs = self.fx.tmp / "jbin"
+        stubs.mkdir(exist_ok=True)
+        for tool in ("logger", "systemd-cat"):
+            (stubs / tool).write_text("#!/bin/sh\nexit 1\n")
+            (stubs / tool).chmod(0o755)
+        self.migrate_with_path(before, stubs)
+        self.assertIn(b"failed or timed out", self.err)
+        self.assertNotIn(b"is installed", self.err)
 
     def test_systemd_cat_is_used_when_logger_is_missing_and_stderr_alone_when_neither_exists(self):
         stubs, calls = self.journal_stubs("systemd-cat")
         before = BASEB + OLD + b"((X))\n"
-        # logger may exist on the host: shadow it with a failing stub
         (stubs / "logger").write_text("#!/bin/sh\nexit 1\n")
         (stubs / "logger").chmod(0o755)
         self.migrate_with_path(before, stubs)
         text = calls.read_text()
         self.assertIn("systemd-cat -t plebian-os-update -p notice", text)
         self.assertIn(str(self.env_path), text)
-        none = self.fx.tmp / "nobin"
-        none.mkdir()
-        for name in ("logger", "systemd-cat"):
-            (none / name).write_text("#!/bin/sh\nexit 127\n")
-            (none / name).chmod(0o755)
-        self.migrate_with_path(before, none)
-        self.assertIn(b"NOTE:", self.err)
-        self.assertIn(b"not recorded anywhere else", self.err)
+
+    def test_no_test_path_can_reach_the_host_journal(self):
+        safe = self.fx.safe_bin()
+        for tool in ("logger", "systemd-cat"):
+            r = subprocess.run(["bash", "-c", f"command -v {tool}"], capture_output=True, text=True,
+                               env={"PATH": f"{safe}:/usr/bin:/bin"})
+            self.assertEqual(r.stdout.strip(), str(safe / tool))
+        # the plain helper puts the do-nothing tools first
+        self.migrate(BASEB + OLD + b"((X))\n")
+        self.assertIn(b"recorded in the system journal", self.err)   # served by the stub, not journald
 
     def test_a_certain_file_makes_no_journal_entry_and_no_file_is_written_in_var_lib(self):
         stubs, calls = self.journal_stubs("logger", "systemd-cat")
