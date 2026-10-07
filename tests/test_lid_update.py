@@ -310,7 +310,7 @@ class IdleLockMigration(unittest.TestCase):
                 before = BASE + line
                 self.assertEqual(self.migrate(before), before)
 
-    NOTE = "mention PLEB_IDLE_LOCK_SECONDS in a form this update does not rewrite"
+    NOTE = "plebian-os-update: NOTE: "
 
     def test_harmless_export_and_comments_do_not_block_the_migration(self):
         for label, extra in (("bare export", "export PLEB_IDLE_LOCK_SECONDS\n"),
@@ -365,7 +365,7 @@ class IdleLockMigration(unittest.TestCase):
     def test_the_report_names_the_offending_line_numbers(self):
         before = BASE + OLD_IDLE + "FOO=1\nPLEB_IDLE_LOCK_SECONDS=123\n"
         self.migrate(before)
-        self.assertIn("line(s) 5 mention", self.stderr)
+        self.assertIn("line(s) 5 mention PLEB_IDLE_LOCK_SECONDS in a form this update does not rewrite", self.stderr)
 
     def test_unrelated_final_line_without_a_newline_stays_without_one(self):
         before = BASE + OLD_IDLE + "# last line, no newline"
