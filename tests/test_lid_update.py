@@ -548,6 +548,16 @@ class IdleLockMigration(unittest.TestCase):
         self.migrate_with_path(BASEB + OLD + b"A" * 5000 + b"=1\n", stubs)
         self.assertLessEqual(max(len(w) for w in calls.read_text().split()), 120)
 
+    def test_the_logged_detail_is_cut_at_700_characters_and_names_at_64(self):
+        stubs, calls = self.journal_stubs("logger")
+        problems = b"".join(b"X" * (5000 + i) + b"=1\n" for i in range(10))
+        self.migrate_with_path(BASEB + OLD + problems, stubs)
+        message = calls.read_text().splitlines()[0].split("-- ", 1)[1]
+        detail = message[message.index("(") + 1:message.rindex(")")] if ")" in message else message[message.index("(") + 1:]
+        self.assertLessEqual(len(detail), 700)
+        self.assertNotIn("X" * 65, message)
+        self.assertIn("X" * 64, message)
+
     def test_systemd_cat_is_used_when_logger_is_missing_and_stderr_alone_when_neither_exists(self):
         stubs, calls = self.journal_stubs("systemd-cat")
         before = BASEB + OLD + b"((X))\n"
