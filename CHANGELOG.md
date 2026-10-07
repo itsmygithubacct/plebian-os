@@ -12,9 +12,17 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   the desktop unlocked. Super-L, Ctrl-Alt-L, `pleb lock` and `loginctl lock-session`
   still lock. Set a positive `PLEB_IDLE_LOCK_SECONDS` (or `PLEB_AUTO_LOCK=on`) in
   session.env to turn automatic locking back on. `plebian-os-update` migrates
-  existing installs (in its transaction, with rollback): a missing entry gets 0,
-  and the exact line older provisioners generated (the 600 default) becomes 0;
-  any other value, including an operator-written 600 or an opt-in, is kept. The
+  existing installs (in its transaction, with rollback) by assignments only,
+  reading the file text and never sourcing it. Setting aside the one exact line
+  older provisioners generated (the 600 default), any non-comment text where the
+  name is followed by `=`, `:=` or `+=` (bare, `export`, `readonly`, `declare`,
+  `local`, a differently valued guarded default, `: "${NAME:=...}"`) is an operator
+  choice and the file is left alone, whatever its value, including a typed 600 or
+  an opt-in. Otherwise the inherited line becomes 0 in place, or, if there is no
+  such line, `PLEB_IDLE_LOCK_SECONDS=0` is appended. A mere mention (`export NAME`,
+  a read-only use, a test, a comment, a longer name) is not a choice and does not
+  block this; `read`, `printf -v` and `eval` assignments are not recognised.
+  `PLEB_AUTO_LOCK` is never changed. All other lines stay byte-identical. The
   migration runs in the updater that carries it, so an update started by an older
   installed updater deploys the new one and the next `plebian-os-update` migrates.
   A `lock-screen-suspend-hibernate` value already stored in a user's Xfce settings

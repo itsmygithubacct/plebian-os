@@ -2562,19 +2562,28 @@ if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])KILIX_RUN_ALIASES[=+] ]]; then
     names+=(KILIX_RUN_ALIASES)
     values+=(1)
 fi
-# No automatic screen lock by default (owner answers 18/19). The one line older
-# provisioners generated is migrated from 600 to 0, and only that exact line,
-# and only when nothing else assigns the name: an operator who wrote any other
-# value or shape (including a bare 600 or an opt-in) keeps it. A missing entry
-# gets the new default instead of Pleb's built-in 600.
+# No automatic screen lock by default (owner answers 18/19). The decision is by
+# ASSIGNMENTS only, read from the file text (never sourced): after the one exact
+# line older provisioners generated (the 600 default) is set aside, any remaining
+# non-comment text in which the name is followed by `=`, `:=` or `+=` is an
+# operator assignment. That covers bare `NAME=`, `export NAME=`, `readonly NAME=`,
+# `declare`/`local` forms, a differently valued guarded default
+# (`if [ -z "${NAME+x}" ]; then NAME=900; fi`) and `: "${NAME:=900}"`. Mentions
+# without an assignment (`export NAME`, `printf "$NAME"`, a test, a comment) are
+# not choices. `read NAME`, `printf -v NAME` and `eval` are not recognised. With
+# no assignment the inherited line becomes 0, and a missing entry gets 0 appended;
+# with one, the file is left alone, so an operator timeout stays, and
+# PLEB_AUTO_LOCK is a different name and is never touched.
 old_idle='if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi'
 migrate_idle=0
-if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])PLEB_IDLE_LOCK_SECONDS[=+] ]]; then
-    names+=(PLEB_IDLE_LOCK_SECONDS)
-    values+=(0)
-elif [ "$(grep -cF -- 'PLEB_IDLE_LOCK_SECONDS' <<<"$config_text")" = 1 ] \
-        && grep -qxF -- "$old_idle" "$env_path"; then
-    migrate_idle=1
+operator_text="$(grep -vxF -- "$old_idle" "$env_path" | sed -e 's/#.*$//' || true)"
+if [[ ! "$operator_text" =~ (^|[^A-Za-z0-9_])PLEB_IDLE_LOCK_SECONDS(:=|\+=|=) ]]; then
+    if grep -qxF -- "$old_idle" "$env_path"; then
+        migrate_idle=1
+    else
+        names+=(PLEB_IDLE_LOCK_SECONDS)
+        values+=(0)
+    fi
 fi
 [ "${#names[@]}" -gt 0 ] || [ "$migrate_idle" = 1 ] || exit 0
 tmp="$(mktemp /etc/pleb/.session.env.XXXXXX)"

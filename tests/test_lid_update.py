@@ -284,7 +284,7 @@ class IdleLockMigration(unittest.TestCase):
         return self.env_path.read_text()
 
     def effective(self, text):
-        r = subprocess.run(["bash", "-c", f'set -eu; unset PLEB_IDLE_LOCK_SECONDS; . {self.env_path}; echo "${{PLEB_IDLE_LOCK_SECONDS:-600}}"'],
+        r = subprocess.run(["bash", "-c", f'set -e; unset PLEB_IDLE_LOCK_SECONDS; . {self.env_path}; echo "${{PLEB_IDLE_LOCK_SECONDS:-600}}"'],
                            capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
         return r.stdout.strip()
 
@@ -308,6 +308,53 @@ class IdleLockMigration(unittest.TestCase):
             with self.subTest(label):
                 before = BASE + line
                 self.assertEqual(self.migrate(before), before)
+
+    def test_mentions_without_an_assignment_do_not_block_the_migration(self):
+        for label, extra in (("bare export", "export PLEB_IDLE_LOCK_SECONDS\n"),
+                             ("read-only use", 'printf "%s\\n" "$PLEB_IDLE_LOCK_SECONDS" >/dev/null\n'),
+                             ("a test of it", '[ -n "${PLEB_IDLE_LOCK_SECONDS+x}" ] && :\n'),
+                             ("a comment", "# PLEB_IDLE_LOCK_SECONDS controls auto locking\n"),
+                             ("a longer name", "PLEB_IDLE_LOCK_SECONDS_NOTE=1\n"),
+                             ("the auto-lock opt-in", "PLEB_AUTO_LOCK=on\n")):
+            for position in ("after", "before"):
+                with self.subTest(label, position=position):
+                    before = (BASE + OLD_IDLE + extra) if position == "after" else (BASE + extra + OLD_IDLE)
+                    want = before.replace(OLD_IDLE, NEW_IDLE)
+                    after = self.migrate(before)
+                    self.assertEqual(after, want)
+                    self.assertEqual(self.migrate(after), after)
+                    self.assertEqual(self.effective(after), "0")
+
+    def test_every_recognised_assignment_form_keeps_the_operator_choice(self):
+        for extra in ("PLEB_IDLE_LOCK_SECONDS=123\n", "export PLEB_IDLE_LOCK_SECONDS=123\n",
+                      "readonly PLEB_IDLE_LOCK_SECONDS=123\n", "declare -x PLEB_IDLE_LOCK_SECONDS=123\n",
+                      "local PLEB_IDLE_LOCK_SECONDS=123\n", ': "${PLEB_IDLE_LOCK_SECONDS:=123}"\n',
+                      "PLEB_IDLE_LOCK_SECONDS+=1\n", "  PLEB_IDLE_LOCK_SECONDS=123 # mine\n",
+                      'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=900; fi\n'):
+            with self.subTest(extra=extra):
+                before = BASE + OLD_IDLE + extra
+                self.assertEqual(self.migrate(before), before)
+
+    def test_migration_never_sources_operator_text(self):
+        marker = self.fx.tmp / "ran"
+        before = BASE + OLD_IDLE + f"touch {marker}\n"
+        self.migrate(before)
+        self.assertFalse(marker.exists())
+
+    def test_rollback_after_a_migration_that_follows_a_reference(self):
+        before = BASE + OLD_IDLE + "export PLEB_IDLE_LOCK_SECONDS\n"
+        self.env_path.write_text(before)
+        self.env_path.chmod(0o644)
+        snap, rest = scripts()
+        snap, rest = as_user(under(snap, self.fx.root)), as_user(under(rest, self.fx.root))
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)}
+        txn = subprocess.run(["bash", "-c", "set -euo pipefail\n" + snap], env=env, capture_output=True, text=True)
+        self.assertEqual(txn.returncode, 0, txn.stderr)
+        self.assertEqual(self.migrate(before), before.replace(OLD_IDLE, NEW_IDLE))
+        r = subprocess.run(["bash", "-s", "--", txn.stdout.strip().splitlines()[-1]],
+                           input="systemctl() { :; }\nset -euo pipefail\n" + rest, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.env_path.read_text(), before)
 
     def test_old_default_plus_an_operator_assignment_is_left_alone(self):
         before = BASE + "PLEB_IDLE_LOCK_SECONDS=300\n" + OLD_IDLE
