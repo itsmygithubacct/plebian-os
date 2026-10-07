@@ -195,6 +195,7 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         required_paths = {
             "/etc/modprobe.d/plebian-os-no-beep.conf",
             "/etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf",
+            "/etc/systemd/logind.conf.d/50-plebian-lid.conf",
             "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
             "/usr/local/share/plebian-os/VERSION",
             "/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf",
@@ -223,6 +224,7 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         self.assertIn("/usr/local/share/doc/plebian-os/installer", dirs)
         self.assertIn("/usr/lib/plebian-os/waydroid", dirs)
         self.assertIn("/etc/pleb", dirs)
+        self.assertIn("/etc/systemd/logind.conf.d", dirs)
         self.assertIn("/etc/xdg-desktop-portal", dirs)
 
         account = self._run(

@@ -4,6 +4,14 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+- Closing the lid does nothing by default. Provisioning, the preseed and updates install
+  `/etc/systemd/logind.conf.d/50-plebian-lid.conf` (`HandleLidSwitch`,
+  `HandleLidSwitchExternalPower` and `HandleLidSwitchDocked` = `ignore`) for the
+  no-session case; other logind drop-ins are untouched and logind is not restarted
+  (it applies at the next boot). The Pleb session defaults the same through Pleb.
+
 ## [0.2.2] — 2026-09-23
 
 - The lifecycle successor binds Pleb's session children and Kilix's transcript

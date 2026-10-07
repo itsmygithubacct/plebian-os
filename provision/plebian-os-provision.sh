@@ -1282,6 +1282,7 @@ PROVISION_ROOT_TRANSACTION_BUILDING=0
 PROVISION_ROOT_TRANSACTION_PATHS=(
     /etc/modprobe.d/plebian-os-no-beep.conf
     /etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
+    /etc/systemd/logind.conf.d/50-plebian-lid.conf
     "$DESKTOP_WALLPAPER_DST"
     "$VERSION_MARKER_DST"
     "$LIGHTDM_GREETER_CONFIG_DST"
@@ -1372,6 +1373,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /usr/local/libexec/plebian-os
     /etc/modprobe.d
     /etc/systemd/system.conf.d
+    /etc/systemd/logind.conf.d
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/lightdm/lightdm.conf.d
     /etc/xdg-desktop-portal
@@ -3558,6 +3560,28 @@ install_quiet_console_defaults() {
 # Managed by plebian-os-provision. Keep boot/login scope status lines off tty1.
 [Manager]
 ShowStatus=no
+EOF
+}
+
+install_lid_defaults() {
+    local conf=/etc/systemd/logind.conf.d/50-plebian-lid.conf
+    log "closing the lid does nothing unless a session says otherwise -> $conf"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $conf (HandleLidSwitch*=ignore)"
+        return
+    fi
+    mkdir -p "$(dirname "$conf")"
+    # Only this file is written; other drop-ins (an owner's 10-*.conf) stay.
+    # logind is not restarted: the drop-in applies at the next boot. A session
+    # running xfce4-power-manager decides the lid itself (its inhibitor).
+    cat > "$conf" <<'EOF'
+# Managed by plebian-os-provision. Lid close does nothing without a session
+# policy (greeter, console). The Pleb session's xfce4-power-manager setting
+# (xfce4-power-manager-settings) decides while a session runs.
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
 EOF
 }
 
@@ -5797,6 +5821,7 @@ install_no_beep_defaults
 # packages whose user units this has to look at.
 disable_audio_holding_user_units
 install_quiet_console_defaults
+install_lid_defaults
 install_desktop_wallpaper
 install_version_marker
 install_lightdm_greeter_branding
