@@ -2564,30 +2564,94 @@ trap 'rm -f -- "$tmp"' EXIT
 decision="$(python3 - "$env_path" "$tmp" <<'PY_SESSION_GATE'
 import re, sys
 src, dst = sys.argv[1], sys.argv[2]
-NAME = r'[A-Za-z_][A-Za-z0-9_]*'
+# Names an assignment may use: what plebian-os-provision.sh renders into
+# session.env (write_session_default, the export lines, PLEB_RESPAWN) plus every
+# variable pleb-session reads from the session environment (_pleb_release_vars
+# and _pleb_vars) and the documented operator settings (PLEB_WM, PLEB_AUTO_LOCK,
+# PLEB_IDLE_LOCK_SECONDS, KILIX_RUN_ALIASES). Anything else, notably bash special
+# and integer variables (OPTIND, RANDOM, SECONDS, LINENO, BASH_*, HIST*, IFS, PATH),
+# makes the file uncertain. A test keeps this list complete against those sources.
+NAMES = frozenset("""
+GPU_TERMINAL_HOME GPU_TERMINAL_SETTINGS_FILE GPU_TERMINAL_SOURCE_HOME KILIX
+KILIX95_ALLOW_MUTABLE_REF KILIX95_ALLOW_UNPINNED_INSTALL
+KILIX95_AUTO_INSTALL KILIX95_BRANCH KILIX95_CACHE_HOME KILIX95_CONFIG_HOME
+KILIX95_DATA_HOME KILIX95_DIR KILIX95_REF KILIX95_REPO KILIX95_SESSION_HOME
+KILIX95_STATE_HOME KILIX95_STORAGE_HOME KILIX_ALLOW_MUTABLE_REF KILIX_BRANCH
+KILIX_BUILD_DIRECTORY KILIX_CACHE_HOME KILIX_CAP_ALLOW_MUTABLE_REF
+KILIX_CAP_AUTO_INSTALL KILIX_CAP_DIR KILIX_CAP_REF KILIX_CAP_REPO
+KILIX_CAP_TRUST_EXISTING_CHECKOUT KILIX_CONFIG_HOME KILIX_DATA_HOME
+KILIX_DESKTOP_COMMAND KILIX_DESKTOP_DIR KILIX_DESKTOP_FLAVOR
+KILIX_DESKTOP_NAME KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_SDK_BRANCH
+KILIX_DESKTOP_SDK_REF KILIX_DESKTOP_SDK_REPO KILIX_DIR KILIX_ICEWM_BRANCH
+KILIX_ICEWM_REF KILIX_ICEWM_REPO KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF
+KILIX_LAND_DESKTOP_ASSETS KILIX_LAND_DESKTOP_AUDIO
+KILIX_LAND_DESKTOP_AUTO_INSTALL KILIX_LAND_DESKTOP_CONFIG_HOME
+KILIX_LAND_DESKTOP_DIR KILIX_LAND_DESKTOP_EXTERNAL_APPS
+KILIX_LAND_DESKTOP_REF KILIX_LAND_DESKTOP_REPO
+KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT KILIX_MEDIA_SDK_BRANCH
+KILIX_MEDIA_SDK_REF KILIX_MEDIA_SDK_REPO KILIX_PREBUILT_HOME
+KILIX_PREBUILT_SHA256 KILIX_PREBUILT_VERSION KILIX_REF KILIX_REPO
+KILIX_RUN_ALIASES KILIX_RUN_ALIAS_APPS KILIX_RUN_ALIAS_EXCLUDE_APPS
+KILIX_SESSION_HOME KILIX_STATE_DIRECTORY KILIX_STORAGE_HOME
+KILIX_SYSTEM_MONITOR_BRANCH KILIX_SYSTEM_MONITOR_REF
+KILIX_SYSTEM_MONITOR_REPO KILIX_TUI_UTILS_ALLOW_MUTABLE_REF
+KILIX_TUI_UTILS_AUTO_INSTALL KILIX_TUI_UTILS_DIR KILIX_TUI_UTILS_REF
+KILIX_TUI_UTILS_REPO KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT
+KILIX_VOICE_LIB_SHA256 KILIX_VOICE_LIB_URL KILIX_VOICE_LIB_VERSION
+KILIX_VOICE_MODEL_SHA256 KILIX_VOICE_MODEL_URL KILIX_VOICE_REF
+KILIX_WAYDROID_BRANCH KILIX_WAYDROID_REF KILIX_WAYDROID_REPO
+PLEBIAN_OS_APT_SNAPSHOT PLEBIAN_OS_BRANCH PLEBIAN_OS_BUILD_KILIX_FORK
+PLEBIAN_OS_DIR PLEBIAN_OS_INSTALL_UV PLEBIAN_OS_INSTALL_VOICE_MODEL
+PLEBIAN_OS_INSTALL_WAYDROID PLEBIAN_OS_KILIX_GO_MIN_VERSION
+PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64
+PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_MANAGED_INSTALL
+PLEBIAN_OS_NATIVE_CONTENT_REF PLEBIAN_OS_NATIVE_DEB_BYTES
+PLEBIAN_OS_NATIVE_DEB_SHA256 PLEBIAN_OS_NATIVE_DEB_URL
+PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_REF PLEBIAN_OS_RELEASE
+PLEBIAN_OS_RELEASE_MODE PLEBIAN_OS_REPO PLEBIAN_OS_SESSION_HOME
+PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_UV_INSTALLER_MAX_BYTES
+PLEBIAN_OS_UV_INSTALLER_SHA256 PLEBIAN_OS_UV_VERSION PLEBIAN_OS_VERSION
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 PLEB_AUTO_LOCK PLEB_BG PLEB_BRANCH
+PLEB_CACHE_HOME PLEB_CONFIG_HOME PLEB_DATA_HOME PLEB_DESKTOP PLEB_DIR
+PLEB_IDLE_LOCK_SECONDS PLEB_INPUT_METHOD PLEB_KILIX_ARGS PLEB_LOG
+PLEB_NO_FILL PLEB_OPENBOX_CONFIG PLEB_RECOVER_CRASHES PLEB_REF PLEB_REPO
+PLEB_RESPAWN PLEB_SESSION_HOME PLEB_SESSION_SERVICES PLEB_STATE_HOME
+PLEB_STORAGE_HOME PLEB_WM PLEB_WM_TIMEOUT
+""".split())
+NAME = r'[A-Z][A-Z0-9_]*'
 WORD = r"(?:[A-Za-z0-9_./:@%+,=~\u0080-\U0010ffff-]|\\[^\n])*"
-VAL = rf"(?:{WORD}|'[^'\n]*'|\"[^$`\\\"\n]*\")"
+# bash printf %q: a string with control characters is $'...' using \a \b \t \n \v
+# \f \r \E, a 3-digit octal for other control/non-printable bytes, \\ and \'.
+ANSIC = r"\$'(?:[^'\\\x00-\x1f\x7f]|\\(?:[abEfnrtv\\']|[0-7]{3}))*'"
+VAL = rf"(?:{WORD}|'[^'\n]*'|\"[^$`\\\"\n]*\"|{ANSIC})"
 BLANK = re.compile(r'[ \t]*')
 COMMENT = re.compile(r'[ \t]*#[^\n]*')
 ASSIGN = re.compile(rf'[ \t]*(?:export[ \t]+)?({NAME})={VAL}(?:[ \t]+#[^\n]*)?[ \t]*')
-EXPORT = re.compile(rf'[ \t]*export(?:[ \t]+{NAME})+[ \t]*')
+EXPORT = re.compile(rf'[ \t]*export((?:[ \t]+{NAME})+)[ \t]*')
 GUARD = re.compile(rf'if \[ -z "\$\{{({NAME})\+x\}}" \]; then ({NAME})={VAL}; fi')
 IDLE = 'PLEB_IDLE_LOCK_SECONDS'
-OLD = f'if [ -z "${{{IDLE}+x}}" ]; then {IDLE}=600; fi'
-NEW = f'if [ -z "${{{IDLE}+x}}" ]; then {IDLE}=0; fi'
+def guard(n, v): return f'if [ -z "${{{n}+x}}" ]; then {n}={v}; fi'
+OLD = guard(IDLE, '600')
+NEW = guard(IDLE, '0')
 WANT = (('PLEB_WM', 'openbox'), ('KILIX_RUN_ALIASES', '1'), (IDLE, '0'))
+# An unterminated final line is accepted only if this updater itself wrote it.
+OURS = {OLD, NEW} | {guard(n, v) for n, v in WANT}
 
 def analyze(data):
     """Return (problems, defined, inherited_line_numbers, operator_assigns_idle)."""
     problems, defined, inherited, operator = [], set(), [], False
-    if b'\0' in data: problems.append((0, 'NUL byte'))
-    if b'\r' in data: problems.append((0, 'carriage return'))
+    line_of = lambda off: data.count(b'\n', 0, off) + 1
+    for label, needle in (('NUL byte', b'\0'), ('carriage return', b'\r')):
+        i = data.find(needle)
+        if i >= 0: problems.append((line_of(i), f'{label} at byte offset {i}'))
     try: text = data.decode('utf-8')
-    except UnicodeDecodeError: problems.append((0, 'not UTF-8')); return problems, defined, inherited, operator
+    except UnicodeDecodeError as e:
+        problems.append((line_of(e.start), f'not UTF-8 at byte offset {e.start}'))
+        return problems, defined, inherited, operator
     lines = text.split('\n')
     last = lines.pop()  # '' when the file ends with a newline
     if last != '':
-        if last not in (OLD, NEW): problems.append((len(lines) + 1, 'unterminated final line'))
+        if last not in OURS: problems.append((len(lines) + 1, 'unterminated final line'))
         lines.append(last)
     for n, line in enumerate(lines, 1):
         if line == OLD: inherited.append(n); defined.add(IDLE); continue
@@ -2597,20 +2661,27 @@ def analyze(data):
             continue
         m = ASSIGN.fullmatch(line)
         if m:
-            if re.search(r'#[^\n]*\\$', line): problems.append((n, 'comment ending in a backslash'))
-            defined.add(m.group(1)); operator |= (m.group(1) == IDLE); continue
+            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)} is not a session setting'))
+            elif re.search(r'#[^\n]*\\$', line): problems.append((n, 'comment ending in a backslash'))
+            else: defined.add(m.group(1)); operator |= (m.group(1) == IDLE)
+            continue
         m = GUARD.fullmatch(line)
         if m and m.group(1) == m.group(2):
-            defined.add(m.group(1)); operator |= (m.group(1) == IDLE); continue
-        if EXPORT.fullmatch(line): continue
+            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)} is not a session setting'))
+            else: defined.add(m.group(1)); operator |= (m.group(1) == IDLE)
+            continue
+        m = EXPORT.fullmatch(line)
+        if m:
+            odd = [x for x in m.group(1).split() if x not in NAMES]
+            if odd: problems.append((n, f'name {odd[0]} is not a session setting'))
+            continue
         problems.append((n, 'outside the session.env grammar'))
     return problems, defined, inherited, operator
 
 data = open(src, 'rb').read()
 problems, defined, inherited, operator = analyze(data)
 if problems:
-    shown = ' '.join(sorted({str(n) if n else why for n, why in problems}, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 0, x))[:8])
-    print('uncertain', shown); sys.exit(0)
+    print('uncertain|' + '; '.join(f'line {n}: {why}' for n, why in sorted(problems)[:8])); sys.exit(0)
 text = data.decode('utf-8')
 migrate = bool(inherited) and not operator
 out = text
@@ -2618,14 +2689,17 @@ if migrate:
     parts = re.findall(r'[^\n]*\n|[^\n]+', text)
     out = ''.join((NEW + ('\n' if p.endswith('\n') else '')) if p.rstrip('\n') == OLD else p for p in parts)
 added = [(n, v) for n, v in WANT if n not in defined and not (n == IDLE and operator)]
+# The file's end keeps the state it had (terminated or not); a newline is added
+# before the additions only because shell needs it between two lines.
+terminated = data.endswith(b'\n') or data == b''
 if added:
-    if out and not out.endswith('\n'): out += '\n'
-    out += '# Added by plebian-os-update — session defaults.\n'
-    for n, v in added: out += f'if [ -z "${{{n}+x}}" ]; then {n}={v}; fi\n'
+    block = ['# Added by plebian-os-update — session defaults.'] + [guard(n, v) for n, v in added]
+    sep = '\n' if out and not out.endswith('\n') else ''
+    out = out + sep + '\n'.join(block) + ('\n' if terminated else '')
 raw = out.encode('utf-8')
 again = analyze(raw)
-if again[0] or (migrate and OLD in out.split('\n')) or raw.endswith(b'\n') != (data.endswith(b'\n') or bool(added)):
-    print('uncertain result-verification'); sys.exit(0)
+if again[0] or (migrate and OLD in out.split('\n')) or raw.endswith(b'\n') != terminated:
+    print('uncertain|result-verification'); sys.exit(0)
 if raw == data:
     print('unchanged'); sys.exit(0)
 open(dst, 'wb').write(raw)
@@ -2633,10 +2707,22 @@ print('write|' + (' '.join(n for n, _ in added) or '-') + '|' + ('migrated' if m
 PY_SESSION_GATE
 )" || exit 1
 case "$decision" in
-    uncertain*)
-        printf '%s\n' \
-            "plebian-os-update: NOTE: $env_path was not changed: it is outside the grammar this update can read safely (${decision#uncertain }); no session defaults were added and PLEB_IDLE_LOCK_SECONDS was left as is." \
-            "plebian-os-update: to have no automatic screen lock, make sure $env_path sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on." >&2
+    uncertain\|*)
+        detail="${decision#uncertain|}"
+        note="$env_path was not changed: it is outside the grammar this update can read safely ($detail); no session defaults were added and PLEB_IDLE_LOCK_SECONDS was left as is. To have no automatic screen lock, make sure it sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on."
+        printf 'plebian-os-update: NOTE: %s\n' "$note" >&2
+        # Durable record, beside the audio hold-off log the OS layer already keeps.
+        record_dir=/var/lib/plebian-os
+        record="$record_dir/session-env-migration.log"
+        if [ -d "$record_dir" ] && [ ! -L "$record_dir" ] && [ ! -L "$record" ] \
+                && [ "$(stat -c '%u' "$record_dir")" = 0 ]; then
+            printf '%s\t%s\tunchanged\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$env_path" "$detail" >>"$record" \
+                && chmod 0644 "$record" \
+                && printf 'plebian-os-update: this note is also recorded in %s\n' "$record" >&2 \
+                || printf 'plebian-os-update: could not record this note in %s\n' "$record" >&2
+        else
+            printf 'plebian-os-update: could not record this note: %s is not a root-owned directory\n' "$record_dir" >&2
+        fi
         exit 0 ;;
     unchanged) exit 0 ;;
     write\|*) ;;

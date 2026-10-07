@@ -306,7 +306,6 @@ class IdleLockMigration(unittest.TestCase):
         ("indented comment", b"   # note\n"),
         ("comment holding code", b'# if [ "$PLEB_IDLE_LOCK_SECONDS" = 600 ]; then PLEB_IDLE_LOCK_SECONDS=123; fi\n'),
         ("auto-lock opt-in", b"PLEB_AUTO_LOCK=on\n"),
-        ("unrelated longer name", b"PLEB_IDLE_LOCK_MINUTES=1\n"),
         ("kiosk line with a trailing comment", b"PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)\n"),
         ("blank lines", b"\n\n"),
         ("odd comment bytes are NOT ok", None),
@@ -401,6 +400,17 @@ class IdleLockMigration(unittest.TestCase):
         ("non-UTF-8 comment", b"# \xff\xfe\x80\n"),
         ("control character before export", b"\x0bexport PLEB_IDLE_LOCK_SECONDS\n"),
         ("unterminated unrelated final line", b"FOO=last"),
+        ("unknown name", b"PLEB_IDLE_LOCK_MINUTES=1\n"),
+        ("special variable OPTIND", b"OPTIND=PLEB_IDLE_LOCK_SECONDS+=1\n"),
+        ("quoted special variable", b"SECONDS='PLEB_IDLE_LOCK_SECONDS+=1'\n"),
+        ("RANDOM", b"RANDOM=1\n"), ("LINENO", b"LINENO=1\n"), ("BASH_ENV", b"BASH_ENV=/tmp/x\n"),
+        ("HISTSIZE", b"HISTSIZE=1\n"), ("IFS", b"IFS=x\n"), ("PATH", b"PATH=/tmp\n"),
+        ("special in a guard", b'if [ -z "${OPTIND+x}" ]; then OPTIND=1; fi\n'),
+        ("special in an export", b"export OPTIND\n"),
+        ("lowercase name", b"foo=1\n"),
+        ("ANSI-C with an unknown escape", b"KILIX_DESKTOP_COMMAND=$'a\\xzzb'\n"),
+        ("ANSI-C with an expansion-looking escape", b"KILIX_DESKTOP_COMMAND=$'a\\u00e9'\n"),
+        ("ANSI-C unterminated", b"KILIX_DESKTOP_COMMAND=$'a\n"),
     )
 
     def test_anything_outside_the_grammar_is_not_written_and_is_reported(self):
@@ -441,14 +451,99 @@ class IdleLockMigration(unittest.TestCase):
         self.assertEqual(self.migrate(before), before)
         self.assertFalse(marker.exists())
 
+    # ---- final newline with additions ----------------------------------------
+    def test_additions_keep_the_end_of_the_file_in_its_original_state(self):
+        guard = lambda n, v: f'if [ -z "${{{n}+x}}" ]; then {n}={v}; fi'.encode()
+        wm, al = guard("PLEB_WM", "openbox"), guard("KILIX_RUN_ALIASES", "1")
+        for label, present in (("neither", b""), ("wm only", wm + b"\n"), ("aliases only", al + b"\n")):
+            for terminated in (False, True):
+                with self.subTest(label, terminated=terminated):
+                    before = present + OLD.rstrip(b"\n") + (b"\n" if terminated else b"")
+                    after = self.migrate(before)
+                    self.assertEqual(after.endswith(b"\n"), terminated, after[-60:])
+                    self.assertNotIn(NOTE, self.err)
+                    self.assertTrue(after.startswith(present))
+                    self.assertIn(NEWB.rstrip(b"\n"), after)
+                    # shell needs the newline between the old last line and the additions
+                    self.assertNotIn(b"fi#", after)
+                    self.assertNotIn(b"fiif", after)
+                    self.assertEqual(self.migrate(after), after, "repeat")
+                    self.assertEqual(self.effective(after), "0")
+
+    def test_unterminated_file_with_only_missing_defaults_added_stays_unterminated(self):
+        before = BASEB.replace(b"KILIX_RUN_ALIASES", b"KILIX_RUN_ALIASES").rstrip(b"\n") + b"\n" + NEWB.rstrip(b"\n")
+        after = self.migrate(before)
+        self.assertEqual(after, before)
+
+    # ---- names ---------------------------------------------------------------
+    def test_the_allowlist_covers_everything_the_provisioner_and_pleb_session_define(self):
+        text = UPDATE.read_text()
+        listed = set(re.search(r'NAMES = frozenset\("""\n(.*?)\n""".split\(\)\)', text, re.S).group(1).split())
+        prov = PROVISION.read_text()
+        rendered = set(re.findall(r"write_session_default ([A-Z_][A-Z0-9_]*)", prov[prov.index("PLEB_ENV=/etc/pleb/session.env"):]))
+        for line in re.findall(r"printf '%s\\n' 'export ([^']*)'", prov):
+            rendered |= set(line.split())
+        pleb_session = ROOT.parent / "rc6-lid-pleb" / "bin" / "pleb-session"
+        if pleb_session.exists():
+            src = pleb_session.read_text()
+            for block in re.findall(r'_pleb_(?:release_)?vars="([^"]*)"', src):
+                rendered |= {w for w in block.split() if re.fullmatch(r"[A-Z][A-Z0-9_]*", w)}
+        rendered |= {"PLEB_RESPAWN", "PLEB_WM", "KILIX_RUN_ALIASES", "PLEB_IDLE_LOCK_SECONDS", "PLEB_AUTO_LOCK"}
+        self.assertEqual(sorted(rendered - listed), [])
+        for special in ("OPTIND", "RANDOM", "SECONDS", "LINENO", "IFS", "PATH", "BASH_ENV", "HISTSIZE", "HOME"):
+            self.assertNotIn(special, listed)
+
+    # ---- durable record and locations ---------------------------------------
+    def record_path(self):
+        d = self.fx.root / "var/lib/plebian-os"
+        return d / "session-env-migration.log"
+
+    def test_the_note_is_recorded_durably_with_lines(self):
+        before = BASEB + OLD + b"FOO=1\n((PLEB_IDLE_LOCK_SECONDS += 1))\n"
+        self.migrate(before)
+        rec = self.record_path()
+        self.assertTrue(rec.exists())
+        row = rec.read_text().splitlines()[-1].split("\t")
+        self.assertRegex(row[0], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(row[1], str(self.env_path))
+        self.assertEqual(row[2], "unchanged")
+        self.assertIn("line 5: outside the session.env grammar", row[3])
+        self.assertIn(str(rec).encode(), self.err)
+        self.migrate(before)
+        self.assertEqual(len(rec.read_text().splitlines()), 2)
+
+    def test_raw_byte_problems_give_the_byte_offset_and_the_line(self):
+        for label, data, expect in (("NUL", BASEB + b"# a\x00b\n", "line 3: NUL byte at byte offset %d" % (len(BASEB) + 3)),
+                                    ("CR", BASEB + b"# a\rb\n", "line 3: carriage return at byte offset %d" % (len(BASEB) + 3)),
+                                    ("non-UTF-8", BASEB + b"# \xff\n", "line 3: not UTF-8 at byte offset %d" % (len(BASEB) + 2))):
+            with self.subTest(label):
+                self.migrate(data)
+                self.assertIn(expect.encode(), self.err)
+                self.assertIn(expect, self.record_path().read_text())
+
+    def test_a_certain_file_writes_no_record(self):
+        self.migrate(BASEB + OLD)
+        self.assertFalse(self.record_path().exists())
+
+    def test_no_record_is_written_through_a_symlinked_log(self):
+        d = self.fx.root / "var/lib/plebian-os"
+        victim = self.fx.tmp / "victim"
+        victim.write_text("keep\n")
+        (d / "session-env-migration.log").symlink_to(victim)
+        self.migrate(BASEB + OLD + b"((X))\n")
+        self.assertEqual(victim.read_text(), "keep\n")
+        self.assertIn(b"could not record", self.err)
+
     # ---- every file the provisioner renders passes the gate -------------------
     def test_every_provisioner_rendered_shape_passes_the_gate(self):
         text = PROVISION.read_text()
         fn = re.search(r"^write_session_default\(\) \{\n.*?^\}\n", text, re.M | re.S).group(0)
-        values = ["", "0", "600", "openbox", "/home/releaseci/.local/gpu_terminal/sources", "git://10.0.2.2/pleb.git",
+        values = ["", "0", "600", "openbox", "xterm\t-e bash", "tab\there", "line\nbreak", "cr\rhere", "bell\a\b\f\v",
+                  "esc\x1b[0m", "ctl\x01\x7f", "it's\ttab", "back\\slash\tx", "a\\nb", 'q"uote\t', "$HOME\tdollar",
+                  "xterm -T caf\u00e9\t-e", "/home/releaseci/.local/gpu_terminal/sources", "git://10.0.2.2/pleb.git",
                   "https://example.org/a/libkilix_0.1.5+git320ce.d9a1_amd64.deb", "20260727T000000Z",
                   "a b", "it's", 'say "hi"', "$HOME", "`id`", "tilde~", "café /hôme", "a;b", "a&b", "a(b)", "a=b"]
-        lines = [f'write_session_default NAME_{i} {shlex_quote(v)}' for i, v in enumerate(values)]
+        lines = [f'write_session_default {REAL_NAMES[i % len(REAL_NAMES)]} {shlex_quote(v)}' for i, v in enumerate(values)]
         script = fn + "\n" + "\n".join(lines) + "\nprintf '%s\\n' 'export GPU_TERMINAL_SETTINGS_FILE'\n" \
             "printf '%s\\n' 'export KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY KILIX_CACHE_HOME'\n" \
             "printf '%s\\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'\n" \
@@ -534,7 +629,11 @@ class IdleLockMigration(unittest.TestCase):
 
     def test_provisioner_default_is_zero_and_the_old_line_is_the_migrated_shape(self):
         self.assertIn("write_session_default PLEB_IDLE_LOCK_SECONDS 0\n", PROVISION.read_text())
-        self.assertIn('OLD = f\'if [ -z "${{{IDLE}+x}}" ]; then {IDLE}=600; fi\'', UPDATE.read_text())
+        self.assertIn("OLD = guard(IDLE, '600')", UPDATE.read_text())
+
+
+REAL_NAMES = ["KILIX_DESKTOP_COMMAND", "PLEB_WM", "PLEB_DIR", "KILIX_DESKTOP_NAME", "GPU_TERMINAL_HOME", "PLEB_CONFIG_HOME",
+              "KILIX_DESKTOP_PROVIDER", "KILIX95_DIR", "PLEB_STATE_HOME", "KILIX_DIR"]
 
 
 def shlex_quote(v: str) -> str:
