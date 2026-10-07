@@ -17,7 +17,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   file and renaming it into place (a symlink at the path is replaced, never
   followed). `plebian-os-update` applies the same provisioner function after
   `pleb install` (`reapply_lid_defaults`), inside the update's root transaction,
-  so existing installs gain the file on their next update; the managed
+  so existing installs gain the file on an update run by this updater. An
+  update run by an already installed older updater deploys the new updater but
+  cannot apply the file itself, so the first update after upgrading deploys and
+  the next `plebian-os-update` applies it. The managed
   `pleb install` does not install a logind file itself. Other logind drop-ins are
   untouched and logind is not restarted: the file applies at the next boot. The
   Pleb session defaults the same through Pleb.
