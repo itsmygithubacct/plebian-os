@@ -6,9 +6,19 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## Unreleased
 
-- The idle screen lock is off by default: `/etc/pleb/session.env` now sets
-  `PLEB_IDLE_LOCK_SECONDS=0` (was 600). Super-L, Ctrl-Alt-L and `pleb lock` still
-  lock; set a number of seconds in session.env to turn the idle lock back on.
+- No automatic screen lock by default. `/etc/pleb/session.env` is provisioned with
+  `PLEB_IDLE_LOCK_SECONDS=0` (was 600), which in Pleb means no lock on idle, on
+  display power-off, or before suspend/hibernate, and waking from suspend shows
+  the desktop unlocked. Super-L, Ctrl-Alt-L, `pleb lock` and `loginctl lock-session`
+  still lock. Set a positive `PLEB_IDLE_LOCK_SECONDS` (or `PLEB_AUTO_LOCK=on`) in
+  session.env to turn automatic locking back on. `plebian-os-update` migrates
+  existing installs (in its transaction, with rollback): a missing entry gets 0,
+  and the exact line older provisioners generated (the 600 default) becomes 0;
+  any other value, including an operator-written 600 or an opt-in, is kept. The
+  migration runs in the updater that carries it, so an update started by an older
+  installed updater deploys the new one and the next `plebian-os-update` migrates.
+  A `lock-screen-suspend-hibernate` value already stored in a user's Xfce settings
+  is kept; only a never-set value is seeded to off.
 
 - Closing the lid does nothing by default. Provisioning, the preseed and updates install
   `/etc/systemd/logind.conf.d/50-plebian-lid.conf` (`HandleLidSwitch`,
@@ -21,7 +31,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   update run by an already installed older updater deploys the new updater but
   cannot apply the file itself, so the first update after upgrading deploys and
   the next `plebian-os-update` applies it. The managed
-  `pleb install` does not install a logind file itself. Other logind drop-ins are
+  `pleb install` does not install a logind file itself. The staging file is a
+  fixed name listed in the provisioner's and updater's transaction inventories, so
+  an interrupted write leaves nothing behind. Other logind drop-ins are
   untouched and logind is not restarted: the file applies at the next boot. The
   Pleb session defaults the same through Pleb.
 

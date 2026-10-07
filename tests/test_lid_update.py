@@ -37,7 +37,7 @@ class Fixture:
         tc.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
         self.root = self.tmp / "root"
         for d in ("", "usr", "usr/local", "usr/local/share", "usr/local/sbin", "etc", "etc/lightdm",
-                  "etc/systemd", "var", "var/lib", "var/lib/plebian-os"):
+                  "etc/pleb", "etc/systemd", "var", "var/lib", "var/lib/plebian-os"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
             (self.root / d).chmod(0o755)
         self.dd = self.root / "etc/systemd/logind.conf.d"
@@ -59,6 +59,11 @@ class Fixture:
                 for p in sorted(self.root.rglob("*"))}
 
 
+def session_env_script():
+    text = UPDATE.read_text()
+    return text[text.index("<<'ROOT_SESSION_ENV'") + len("<<'ROOT_SESSION_ENV'\n"):text.index("\nROOT_SESSION_ENV")]
+
+
 def scripts():
     text = UPDATE.read_text()
     snap = text[text.index("<<'ROOT_SNAPSHOT'") + len("<<'ROOT_SNAPSHOT'\n"):text.index("\nROOT_SNAPSHOT")]
@@ -68,6 +73,7 @@ def scripts():
 
 def as_user(text: str) -> str:
     # The scripts demand root ownership; the scratch tree is owned by the suite's user.
+    text = text.replace('"$owner" = 0 ]', '"$owner" = "$(id -u)" ]')
     return re.sub(r"(%u' [^\n]*?\)\")\s*= 0", r'\1 = "$(id -u)"', text)
 
 
@@ -253,6 +259,162 @@ class LinkedDestinationWrite(unittest.TestCase):
         self.assertIn("mv -f /target/etc/systemd/logind.conf.d/.50-plebian-lid.conf.new "
                       "/target/etc/systemd/logind.conf.d/50-plebian-lid.conf", text)
         self.assertIn("chown root:root /target/etc/systemd/logind.conf.d/.50-plebian-lid.conf.new", text)
+
+
+OLD_IDLE = 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi\n'
+NEW_IDLE = 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=0; fi\n'
+BASE = ('if [ -z "${PLEB_WM+x}" ]; then PLEB_WM=openbox; fi\n'
+        'if [ -z "${KILIX_RUN_ALIASES+x}" ]; then KILIX_RUN_ALIASES=1; fi\n')
+
+
+class IdleLockMigration(unittest.TestCase):
+    """migrate_pleb_session_env: the former generated 600 becomes 0; choices stay."""
+
+    def setUp(self):
+        self.fx = Fixture(self)
+        self.env_path = self.fx.root / "etc/pleb/session.env"
+
+    def migrate(self, text):
+        self.env_path.write_text(text)
+        self.env_path.chmod(0o644)
+        script = as_user(under(session_env_script(), self.fx.root))
+        r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script, capture_output=True, text=True,
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return self.env_path.read_text()
+
+    def effective(self, text):
+        r = subprocess.run(["bash", "-c", f'set -eu; unset PLEB_IDLE_LOCK_SECONDS; . {self.env_path}; echo "${{PLEB_IDLE_LOCK_SECONDS:-600}}"'],
+                           capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
+        return r.stdout.strip()
+
+    def test_old_generated_default_becomes_zero_and_other_lines_are_kept(self):
+        before = "# operator comment\n" + BASE + OLD_IDLE + 'FOO=bar\n'
+        after = self.migrate(before)
+        self.assertEqual(after, "# operator comment\n" + BASE + NEW_IDLE + 'FOO=bar\n')
+        self.assertEqual(self.effective(after), "0")
+
+    def test_missing_entry_gets_the_new_default(self):
+        after = self.migrate(BASE)
+        self.assertIn(NEW_IDLE, after)
+        self.assertEqual(self.effective(after), "0")
+
+    def test_explicit_values_are_preserved(self):
+        for label, line in (("explicit zero", "PLEB_IDLE_LOCK_SECONDS=0\n"),
+                            ("explicit nonzero opt-in", "PLEB_IDLE_LOCK_SECONDS=123\n"),
+                            ("operator wrote 600", "PLEB_IDLE_LOCK_SECONDS=600\n"),
+                            ("exported", "export PLEB_IDLE_LOCK_SECONDS=300\n"),
+                            ("other guarded value", 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=900; fi\n')):
+            with self.subTest(label):
+                before = BASE + line
+                self.assertEqual(self.migrate(before), before)
+
+    def test_old_default_plus_an_operator_assignment_is_left_alone(self):
+        before = BASE + "PLEB_IDLE_LOCK_SECONDS=300\n" + OLD_IDLE
+        self.assertEqual(self.migrate(before), before)
+
+    def test_commented_old_default_is_not_the_setting(self):
+        before = BASE + "# " + OLD_IDLE
+        after = self.migrate(before)
+        self.assertIn(NEW_IDLE, after)
+        self.assertIn("# " + OLD_IDLE, after)
+
+    def test_repeated_updates_are_idempotent(self):
+        once = self.migrate(BASE + OLD_IDLE)
+        self.assertEqual(self.migrate(once), once)
+        missing = self.migrate(BASE)
+        self.assertEqual(self.migrate(missing), missing)
+
+    def test_rollback_after_migration_restores_the_old_file(self):
+        before = BASE + OLD_IDLE
+        self.env_path.write_text(before)
+        self.env_path.chmod(0o644)
+        snap, rest = scripts()
+        snap, rest = as_user(under(snap, self.fx.root)), as_user(under(rest, self.fx.root))
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)}
+        txn = subprocess.run(["bash", "-c", "set -euo pipefail\n" + snap], env=env, capture_output=True, text=True)
+        self.assertEqual(txn.returncode, 0, txn.stderr)
+        self.assertEqual(self.migrate(before), BASE + NEW_IDLE)
+        self.env_path.write_text(BASE + NEW_IDLE)
+        r = subprocess.run(["bash", "-s", "--", txn.stdout.strip().splitlines()[-1]],
+                           input="systemctl() { :; }\nset -euo pipefail\n" + rest, env=env, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.env_path.read_text(), before)
+
+    def test_migration_runs_inside_the_update_transaction(self):
+        text = UPDATE.read_text()
+        self.assertIn("/etc/pleb/session.env\n", text[text.index("paths=("):text.index("managed_dirs=(")])
+        main = text[text.index("    reapply_lid_defaults\n    test_fail_after_boundary lid-defaults"):]
+        self.assertLess(main.index("migrate_pleb_session_env"), main.index("write_final_provenance"))
+
+    def test_provisioner_default_is_zero_and_the_old_line_is_the_migrated_shape(self):
+        self.assertIn("write_session_default PLEB_IDLE_LOCK_SECONDS 0\n", PROVISION.read_text())
+        self.assertIn(OLD_IDLE.strip(), UPDATE.read_text())
+
+
+class InterruptedWrite(unittest.TestCase):
+    """SIGTERM between staging and rename: the real restore leaves nothing behind."""
+
+    def run_interrupted(self, fx, existing):
+        import signal, time
+        if existing:
+            fx.mkdd()
+            (fx.dd / "10-no-sleep-on-ac.conf").write_bytes(OWNER)
+            fx.conf.write_text("old\n")
+            fx.conf.chmod(0o640)
+        snap, rest = scripts()
+        snap, rest = as_user(under(snap, fx.root)), as_user(under(rest, fx.root))
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(fx.tmp)}
+        txn = subprocess.run(["bash", "-c", "set -euo pipefail\n" + snap], env=env, capture_output=True, text=True)
+        self.assertEqual(txn.returncode, 0, txn.stderr)
+        fx.install_provisioner()
+        stubs = fx.tmp / "bin"
+        stubs.mkdir()
+        (stubs / "mv").write_text(f"#!/bin/sh\n: > {fx.tmp}/at-mv\nexec sleep 30\n")
+        (stubs / "mv").chmod(0o755)
+        p = subprocess.Popen(["bash", "-c", "set -euo pipefail\nexport PLEBIAN_OS_PROVISION_LIB_ONLY=1\n"
+                              f"source {fx.prov}\nDRY_RUN=0\ninstall_lid_defaults\n"],
+                             env={**env, "PATH": f"{stubs}:/usr/bin:/bin"}, start_new_session=True)
+        for _ in range(100):
+            if (fx.tmp / "at-mv").exists():
+                break
+            time.sleep(.1)
+        self.assertTrue((fx.tmp / "at-mv").exists())
+        self.assertTrue((fx.dd / ".50-plebian-lid.conf.stage").exists(), "the stage should exist before the rename")
+        os.killpg(p.pid, signal.SIGTERM)
+        p.wait(timeout=10)
+        r = subprocess.run(["bash", "-s", "--", txn.stdout.strip().splitlines()[-1]],
+                           input="systemctl() { :; }\nset -euo pipefail\n" + rest, env=env, capture_output=True, text=True)
+        return r
+
+    def test_new_directory_is_removed_completely(self):
+        fx = Fixture(self)
+        r = self.run_interrupted(fx, existing=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse(fx.dd.exists())
+
+    def test_existing_directory_keeps_only_its_original_files(self):
+        fx = Fixture(self)
+        r = self.run_interrupted(fx, existing=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(sorted(p.name for p in fx.dd.iterdir()), ["10-no-sleep-on-ac.conf", NAME])
+        self.assertEqual(fx.conf.read_text(), "old\n")
+        self.assertEqual(stat.S_IMODE(fx.conf.stat().st_mode), 0o640)
+        self.assertEqual((fx.dd / "10-no-sleep-on-ac.conf").read_bytes(), OWNER)
+
+    def test_stage_is_in_every_inventory_and_stale_stages_are_replaced(self):
+        stage = "/etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage"
+        self.assertEqual(UPDATE.read_text().count(stage + "\n"), 2)
+        self.assertEqual(PROVISION.read_text().count(stage + "\n"), 1)
+        fx = Fixture(self)
+        fx.mkdd()
+        (fx.dd / ".50-plebian-lid.conf.stage").write_text("stale\n")
+        fx.install_provisioner()
+        r = subprocess.run(["bash", "-c", "set -euo pipefail\nexport PLEBIAN_OS_PROVISION_LIB_ONLY=1\n"
+                            f"source {fx.prov}\nDRY_RUN=0\ninstall_lid_defaults\n"],
+                           env={"PATH": "/usr/bin:/bin", "HOME": str(fx.tmp)}, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual([p.name for p in fx.dd.iterdir()], [NAME])
 
 
 if __name__ == "__main__":

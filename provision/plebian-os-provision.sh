@@ -1283,6 +1283,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /etc/modprobe.d/plebian-os-no-beep.conf
     /etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
     /etc/systemd/logind.conf.d/50-plebian-lid.conf
+    /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     "$DESKTOP_WALLPAPER_DST"
     "$VERSION_MARKER_DST"
     "$LIGHTDM_GREETER_CONFIG_DST"
@@ -3581,7 +3582,11 @@ install_lid_defaults() {
     fi
     dir="$(dirname "$conf")"
     mkdir -p "$dir" || return 1
-    stage="$(mktemp "$dir/.$(basename "$conf").XXXXXX")" || return 1
+    # A fixed name, so the transaction (provisioner and updater alike) lists
+    # exactly this path: an interruption, even an uncatchable one, leaves nothing
+    # the rollback does not remove, and nothing is swept by wildcard.
+    stage="$dir/.$(basename "$conf").stage"
+    rm -f -- "$stage" || return 1
     if ! cat > "$stage" <<'EOF'
 # Managed by plebian-os-provision. Lid close does nothing without a session
 # policy (greeter, console). The Pleb session's xfce4-power-manager setting

@@ -1026,6 +1026,7 @@ paths=(
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /etc/systemd/logind.conf.d/50-plebian-lid.conf
+    /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -1180,6 +1181,7 @@ paths=(
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /etc/systemd/logind.conf.d/50-plebian-lid.conf
+    /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -2524,7 +2526,7 @@ migrate_pleb_session_env() {
     local -a elevate=()
     [ -e "$env_path" ] || return 0
     [ "$(id -u)" = 0 ] || elevate=(sudo)
-    log "applying the window manager session defaults to $env_path (existing values win)"
+    log "applying the session defaults to $env_path (window manager, no automatic lock; existing values win)"
     "${elevate[@]}" bash -s -- "$env_path" <<'ROOT_SESSION_ENV'
 set -euo pipefail
 env_path="$1"
@@ -2560,23 +2562,50 @@ if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])KILIX_RUN_ALIASES[=+] ]]; then
     names+=(KILIX_RUN_ALIASES)
     values+=(1)
 fi
-[ "${#names[@]}" -gt 0 ] || exit 0
+# No automatic screen lock by default (owner answers 18/19). The one line older
+# provisioners generated is migrated from 600 to 0, and only that exact line,
+# and only when nothing else assigns the name: an operator who wrote any other
+# value or shape (including a bare 600 or an opt-in) keeps it. A missing entry
+# gets the new default instead of Pleb's built-in 600.
+old_idle='if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi'
+migrate_idle=0
+if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])PLEB_IDLE_LOCK_SECONDS[=+] ]]; then
+    names+=(PLEB_IDLE_LOCK_SECONDS)
+    values+=(0)
+elif [ "$(grep -cF -- 'PLEB_IDLE_LOCK_SECONDS' <<<"$config_text")" = 1 ] \
+        && grep -qxF -- "$old_idle" "$env_path"; then
+    migrate_idle=1
+fi
+[ "${#names[@]}" -gt 0 ] || [ "$migrate_idle" = 1 ] || exit 0
 tmp="$(mktemp /etc/pleb/.session.env.XXXXXX)"
 trap 'rm -f -- "$tmp"' EXIT
 {
-    cat -- "$env_path"
-    if [ -s "$env_path" ] && [ -n "$(tail -c 1 -- "$env_path")" ]; then
-        printf '\n'
+    if [ "$migrate_idle" = 1 ]; then
+        while IFS= read -r line || [ -n "$line" ]; do
+            if [ "$line" = "$old_idle" ]; then
+                write_session_default PLEB_IDLE_LOCK_SECONDS 0
+            else
+                printf '%s\n' "$line"
+            fi
+        done <"$env_path"
+    else
+        cat -- "$env_path"
     fi
-    printf '%s\n' '# Added by plebian-os-update — window manager session defaults.'
-    for i in "${!names[@]}"; do
-        write_session_default "${names[$i]}" "${values[$i]}"
-    done
+    if [ "${#names[@]}" -gt 0 ]; then
+        if [ -s "$env_path" ] && [ -n "$(tail -c 1 -- "$env_path")" ]; then
+            printf '\n'
+        fi
+        printf '%s\n' '# Added by plebian-os-update — session defaults.'
+        for i in "${!names[@]}"; do
+            write_session_default "${names[$i]}" "${values[$i]}"
+        done
+    fi
 } >"$tmp"
 chmod 0644 "$tmp"
 mv -fT -- "$tmp" "$env_path"
 trap - EXIT
-printf 'plebian-os-update: added %s to %s\n' "${names[*]}" "$env_path"
+[ "${#names[@]}" -eq 0 ] || printf 'plebian-os-update: added %s to %s\n' "${names[*]}" "$env_path"
+[ "$migrate_idle" = 0 ] || printf 'plebian-os-update: PLEB_IDLE_LOCK_SECONDS 600 -> 0 (no automatic lock) in %s\n' "$env_path"
 ROOT_SESSION_ENV
 }
 
