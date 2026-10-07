@@ -85,7 +85,7 @@ class LidDefault(unittest.TestCase):
         values = dict(re.findall(r"'(HandleLidSwitch\w*)=(\w+)'", line))
         self.assertEqual(values, EXPECTED)
         self.assertIn("'[Login]'", line)
-        self.assertIn("chmod 0644 /target/etc/systemd/logind.conf.d/" + NAME, text)
+        self.assertIn("chmod 0644 /target/etc/systemd/logind.conf.d/." + NAME + ".new", text)
         self.assertNotIn("10-no-sleep-on-ac", text + PROVISION.read_text())
 
     def test_logind_is_not_restarted(self):

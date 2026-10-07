@@ -13,8 +13,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Closing the lid does nothing by default. Provisioning, the preseed and updates install
   `/etc/systemd/logind.conf.d/50-plebian-lid.conf` (`HandleLidSwitch`,
   `HandleLidSwitchExternalPower` and `HandleLidSwitchDocked` = `ignore`) for the
-  no-session case; other logind drop-ins are untouched and logind is not restarted
-  (it applies at the next boot). The Pleb session defaults the same through Pleb.
+  no-session case. The preseed and the provisioner write it by staging a regular
+  file and renaming it into place (a symlink at the path is replaced, never
+  followed). `plebian-os-update` applies the same provisioner function after
+  `pleb install` (`reapply_lid_defaults`), inside the update's root transaction,
+  so existing installs gain the file on their next update; the managed
+  `pleb install` does not install a logind file itself. Other logind drop-ins are
+  untouched and logind is not restarted: the file applies at the next boot. The
+  Pleb session defaults the same through Pleb.
 
 ## [0.2.2] — 2026-09-23
 

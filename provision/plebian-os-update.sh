@@ -1025,6 +1025,7 @@ paths=(
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
+    /etc/systemd/logind.conf.d/50-plebian-lid.conf
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -1086,6 +1087,7 @@ managed_dirs=(
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/ssh/sshd_config.d
+    /etc/systemd/logind.conf.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
     /etc/pleb
@@ -1098,7 +1100,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir "$txn/items"
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /etc/systemd \
     /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
@@ -1151,7 +1153,7 @@ case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
 [ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
 mode="$(stat -c '%a' "$txn")"
 (( (8#$mode & 8#077) == 0 )) || exit 2
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /etc/systemd \
     /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
@@ -1177,6 +1179,7 @@ paths=(
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
+    /etc/systemd/logind.conf.d/50-plebian-lid.conf
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -1238,6 +1241,7 @@ managed_dirs=(
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/ssh/sshd_config.d
+    /etc/systemd/logind.conf.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
     /etc/pleb
@@ -3765,6 +3769,57 @@ reapply_audio_holdoff() {
     esac
 }
 
+# Closing the lid does nothing by default. A machine provisioned before that
+# default has no 50-plebian-lid.conf, firstboot does not rerun on it, and the
+# managed `pleb install` leaves logind policy to this layer, so the update
+# applies it: the provisioner's own install_lid_defaults, sourced in library mode
+# exactly as the audio hold-off above (same safety gate, same elevation), inside
+# the update's root snapshot so a later failure restores the old object and
+# removes a directory this created. logind is neither restarted nor signalled;
+# the drop-in applies at the next boot.
+reapply_lid_defaults() {
+    local provisioner="$AUDIO_HOLDOFF_PROVISIONER" test_mode=0 rc=0 self_update
+    local -a elevate=()
+    if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        test_mode=1
+        provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-$provisioner}"
+    fi
+    case "${PLEBIAN_OS_SELF_UPDATE:-1}" in
+        1|yes|true|on) self_update=1 ;;
+        *) self_update=0 ;;
+    esac
+    audio_holdoff_provisioner_is_safe "$provisioner" "$test_mode" \
+        || die "installed provisioner is missing or unsafe: $provisioner"
+    if ! grep -q '^install_lid_defaults() {' "$provisioner" \
+        || ! grep -q '^if \[ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 \]; then' \
+            "$provisioner"; then
+        rc=98
+    else
+        [ "$(id -u)" = 0 ] || elevate=(sudo)
+        log "making lid close do nothing by default (applies at next boot)"
+        "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 \
+            PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 bash -c '
+            set -uo pipefail
+            . "$1" || exit 97
+            declare -F install_lid_defaults >/dev/null || exit 98
+            DRY_RUN=0
+            install_lid_defaults
+        ' reapply-lid-defaults "$provisioner" || rc=$?
+    fi
+    case "$rc:$self_update" in
+        0:*) return 0 ;;
+        98:0)
+            warn "the installed provisioner ($provisioner) predates the lid default,"
+            warn "  and OS-layer self-update is disabled, so closing the lid may"
+            warn "  still suspend; update with OS-layer self-update enabled."
+            return 0
+            ;;
+        98:*) die "the provisioner this update just deployed ($provisioner) does not carry the lid default" ;;
+        97:*) die "the installed provisioner could not be loaded to apply the lid default: $provisioner" ;;
+        *) die "the lid default did not complete (exit $rc)" ;;
+    esac
+}
+
 # Mirrors refuse_amd64_only_inputs in plebian-os-provision.sh for the pins this
 # update hands to `pleb install`. On any other architecture the x86_64 Vosk
 # wheel and the fallback amd64 kitty bundle checksum fail late, inside the
@@ -4446,6 +4501,8 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     # function's own header for why an update needs this at all.
     reapply_audio_holdoff
     test_fail_after_boundary audio-holdoff
+    reapply_lid_defaults
+    test_fail_after_boundary lid-defaults
     # Only now — after the dependency install and the whole component update
     # have succeeded — may the persisted session select the new window manager.
     # `pleb install` is the step that adds the openbox package and installs the

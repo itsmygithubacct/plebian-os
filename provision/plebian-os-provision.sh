@@ -3563,18 +3563,26 @@ ShowStatus=no
 EOF
 }
 
+# Shared by the provisioner and `plebian-os-update` (which sources this file in
+# library mode, like the audio hold-off), so a fresh install and an update write
+# the same file. The drop-in is staged as a regular file beside its destination
+# and rename(2)d over it: a symlink already at the path is replaced, never
+# followed, so another drop-in it pointed at is not truncated. Ownership and mode
+# are explicit. logind is not restarted or signalled: the drop-in applies at the
+# next boot. A session running xfce4-power-manager decides the lid itself (its
+# inhibitor). The caller's transaction snapshots the destination and its
+# directory, so a later failure restores the original object.
 install_lid_defaults() {
-    local conf=/etc/systemd/logind.conf.d/50-plebian-lid.conf
+    local conf=/etc/systemd/logind.conf.d/50-plebian-lid.conf dir stage
     log "closing the lid does nothing unless a session says otherwise -> $conf"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + write $conf (HandleLidSwitch*=ignore)"
-        return
+        return 0
     fi
-    mkdir -p "$(dirname "$conf")"
-    # Only this file is written; other drop-ins (an owner's 10-*.conf) stay.
-    # logind is not restarted: the drop-in applies at the next boot. A session
-    # running xfce4-power-manager decides the lid itself (its inhibitor).
-    cat > "$conf" <<'EOF'
+    dir="$(dirname "$conf")"
+    mkdir -p "$dir" || return 1
+    stage="$(mktemp "$dir/.$(basename "$conf").XXXXXX")" || return 1
+    if ! cat > "$stage" <<'EOF'
 # Managed by plebian-os-provision. Lid close does nothing without a session
 # policy (greeter, console). The Pleb session's xfce4-power-manager setting
 # (xfce4-power-manager-settings) decides while a session runs.
@@ -3583,6 +3591,14 @@ HandleLidSwitch=ignore
 HandleLidSwitchExternalPower=ignore
 HandleLidSwitchDocked=ignore
 EOF
+    then
+        rm -f -- "$stage"
+        return 1
+    fi
+    # Production runs as root; a suite running as a user cannot chown.
+    if ! chmod 0644 "$stage"; then rm -f -- "$stage"; return 1; fi
+    if [ "$(id -u)" = 0 ] && ! chown root:root "$stage"; then rm -f -- "$stage"; return 1; fi
+    if ! mv -fT -- "$stage" "$conf"; then rm -f -- "$stage"; return 1; fi
 }
 
 _apt_source_path_allowed() {
