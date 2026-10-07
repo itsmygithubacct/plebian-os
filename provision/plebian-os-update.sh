@@ -2542,115 +2542,116 @@ owner="$(stat -c '%u' "$env_path")"
 mode="$(stat -c '%a' "$env_path")"
 [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || exit 2
 [ "$(stat -c '%s' -- "$env_path")" -le 1048576 ] || exit 2
-# Mirrors write_session_default in plebian-os-provision.sh: a self-guarding
-# assignment, so an explicit value set earlier in the file still wins when
-# pleb-session sources it.
-write_session_default() {
-    local name="$1" value="$2"
-    printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
-}
-# Comments are stripped first so the file's own documentation of a setting is
-# not mistaken for the setting; `NAME=` and `${NAME+x}` both define it.
-config_text="$(sed -e 's/#.*$//' -- "$env_path")"
-names=()
-values=()
-if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])PLEB_WM[=+] ]]; then
-    names+=(PLEB_WM)
-    values+=(openbox)
-fi
-if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])KILIX_RUN_ALIASES[=+] ]]; then
-    names+=(KILIX_RUN_ALIASES)
-    values+=(1)
-fi
-# No automatic screen lock by default (owner answers 18/19). Shell cannot be
-# classified safely by pattern, so only what is certain is acted on, and the
-# text is never sourced or evaluated. The non-comment logical lines (a trailing
-# backslash joins the next line) that contain PLEB_IDLE_LOCK_SECONDS are sorted:
-#   - exactly the line older provisioners generated (the 600 default): migratable;
-#   - exactly `export PLEB_IDLE_LOCK_SECONDS` (whitespace around it allowed):
-#     harmless;
-#   - anything else (any assignment form, reference, quoted example, here-doc,
-#     continuation): uncertain.
-# No such line: the default 0 is appended. Inherited line and only harmless
-# lines: the inherited line becomes 0 in place. Any uncertain line: the idle
-# setting is left exactly as it is and the update says so. Lines that are not
-# rewritten, including a last line without a newline, stay byte-identical.
-old_idle='if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi'
-migrate_idle=0
-idle_uncertain=()
-inherited_count=0
-mention_count=0
-physical=0 start=0 logical=''
-classify_idle_line() {
-    local text="$1" first="$2" trimmed
-    trimmed="${text#"${text%%[![:space:]]*}"}"
-    trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
-    case "$trimmed" in '#'*) return 0 ;; esac
-    [[ "$text" == *PLEB_IDLE_LOCK_SECONDS* ]] || return 0
-    mention_count=$((mention_count + 1))
-    if [ "$text" = "$old_idle" ]; then
-        inherited_count=$((inherited_count + 1))
-    elif [ "$trimmed" = 'export PLEB_IDLE_LOCK_SECONDS' ]; then
-        :
-    else
-        idle_uncertain+=("$first")
-    fi
-}
-while IFS= read -r line || [ -n "$line" ]; do
-    physical=$((physical + 1))
-    [ -n "$logical" ] || start="$physical"
-    if [[ "$line" == *'\' ]]; then
-        logical+="${line%\\}"
-        continue
-    fi
-    logical+="$line"
-    classify_idle_line "$logical" "$start"
-    logical=''
-done <"$env_path"
-[ -z "$logical" ] || classify_idle_line "$logical" "$start"
-if [ "${#idle_uncertain[@]}" -gt 0 ]; then
-    printf '%s\n' \
-        "plebian-os-update: NOTE: $env_path line(s) ${idle_uncertain[*]} mention PLEB_IDLE_LOCK_SECONDS in a form this update does not rewrite; PLEB_IDLE_LOCK_SECONDS was left unchanged." \
-        "plebian-os-update: to have no automatic screen lock, make sure $env_path sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on." >&2
-elif [ "$mention_count" -eq 0 ]; then
-    names+=(PLEB_IDLE_LOCK_SECONDS)
-    values+=(0)
-elif [ "$inherited_count" -gt 0 ]; then
-    migrate_idle=1
-fi
-[ "${#names[@]}" -gt 0 ] || [ "$migrate_idle" = 1 ] || exit 0
+# The decision is made on the raw bytes of the whole file by a closed grammar,
+# never by sourcing, evaluating or per-line guessing (python3 is a hard
+# dependency of this stack). The grammar is exactly what plebian-os-provision.sh
+# renders into session.env: the guarded defaults `write_session_default` prints
+# (value from printf %q: a bare word, '' or backslash-escaped characters), the
+# `export NAME NAME...` lines, `#` comment lines, an optional trailing `# ...`
+# comment (the kiosk `PLEB_RESPAWN=1   # ...` line), and operator lines of the
+# same shapes. Any other line, any NUL, CR or non-UTF-8 byte, any comment
+# ending in a backslash, and any unterminated final line other than the exact
+# inherited one makes the WHOLE file uncertain: it is not written at all (no
+# defaults, no comment) and one NOTE names the file, the lines and the manual
+# change. A file that passes: the exact inherited PLEB_IDLE_LOCK_SECONDS=600
+# line becomes 0 (unless the operator assigns the name elsewhere, which wins and
+# leaves the file alone), a missing name gets its default appended, and bare
+# `export NAME` lines are harmless. The final-newline state is preserved, the
+# result is re-parsed with the same grammar, and success is printed only after
+# the installed file is re-read and matches.
 tmp="$(mktemp /etc/pleb/.session.env.XXXXXX)"
 trap 'rm -f -- "$tmp"' EXIT
-{
-    if [ "$migrate_idle" = 1 ]; then
-        # Line by line, keeping each line's own terminator: a final line
-        # without a newline stays without one.
-        while IFS= read -r line; do
-            if [ "$line" = "$old_idle" ]; then
-                write_session_default PLEB_IDLE_LOCK_SECONDS 0
-            else
-                printf '%s\n' "$line"
-            fi
-        done <"$env_path"
-        [ -z "${line:-}" ] || printf '%s' "$line"
-    else
-        cat -- "$env_path"
-    fi
-    if [ "${#names[@]}" -gt 0 ]; then
-        if [ -s "$env_path" ] && [ -n "$(tail -c 1 -- "$env_path")" ]; then
-            printf '\n'
-        fi
-        printf '%s\n' '# Added by plebian-os-update — session defaults.'
-        for i in "${!names[@]}"; do
-            write_session_default "${names[$i]}" "${values[$i]}"
-        done
-    fi
-} >"$tmp"
+decision="$(python3 - "$env_path" "$tmp" <<'PY_SESSION_GATE'
+import re, sys
+src, dst = sys.argv[1], sys.argv[2]
+NAME = r'[A-Za-z_][A-Za-z0-9_]*'
+WORD = r"(?:[A-Za-z0-9_./:@%+,=~\u0080-\U0010ffff-]|\\[^\n])*"
+VAL = rf"(?:{WORD}|'[^'\n]*'|\"[^$`\\\"\n]*\")"
+BLANK = re.compile(r'[ \t]*')
+COMMENT = re.compile(r'[ \t]*#[^\n]*')
+ASSIGN = re.compile(rf'[ \t]*(?:export[ \t]+)?({NAME})={VAL}(?:[ \t]+#[^\n]*)?[ \t]*')
+EXPORT = re.compile(rf'[ \t]*export(?:[ \t]+{NAME})+[ \t]*')
+GUARD = re.compile(rf'if \[ -z "\$\{{({NAME})\+x\}}" \]; then ({NAME})={VAL}; fi')
+IDLE = 'PLEB_IDLE_LOCK_SECONDS'
+OLD = f'if [ -z "${{{IDLE}+x}}" ]; then {IDLE}=600; fi'
+NEW = f'if [ -z "${{{IDLE}+x}}" ]; then {IDLE}=0; fi'
+WANT = (('PLEB_WM', 'openbox'), ('KILIX_RUN_ALIASES', '1'), (IDLE, '0'))
+
+def analyze(data):
+    """Return (problems, defined, inherited_line_numbers, operator_assigns_idle)."""
+    problems, defined, inherited, operator = [], set(), [], False
+    if b'\0' in data: problems.append((0, 'NUL byte'))
+    if b'\r' in data: problems.append((0, 'carriage return'))
+    try: text = data.decode('utf-8')
+    except UnicodeDecodeError: problems.append((0, 'not UTF-8')); return problems, defined, inherited, operator
+    lines = text.split('\n')
+    last = lines.pop()  # '' when the file ends with a newline
+    if last != '':
+        if last not in (OLD, NEW): problems.append((len(lines) + 1, 'unterminated final line'))
+        lines.append(last)
+    for n, line in enumerate(lines, 1):
+        if line == OLD: inherited.append(n); defined.add(IDLE); continue
+        if BLANK.fullmatch(line): continue
+        if COMMENT.fullmatch(line):
+            if line.endswith('\\'): problems.append((n, 'comment ending in a backslash'))
+            continue
+        m = ASSIGN.fullmatch(line)
+        if m:
+            if re.search(r'#[^\n]*\\$', line): problems.append((n, 'comment ending in a backslash'))
+            defined.add(m.group(1)); operator |= (m.group(1) == IDLE); continue
+        m = GUARD.fullmatch(line)
+        if m and m.group(1) == m.group(2):
+            defined.add(m.group(1)); operator |= (m.group(1) == IDLE); continue
+        if EXPORT.fullmatch(line): continue
+        problems.append((n, 'outside the session.env grammar'))
+    return problems, defined, inherited, operator
+
+data = open(src, 'rb').read()
+problems, defined, inherited, operator = analyze(data)
+if problems:
+    shown = ' '.join(sorted({str(n) if n else why for n, why in problems}, key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else 0, x))[:8])
+    print('uncertain', shown); sys.exit(0)
+text = data.decode('utf-8')
+migrate = bool(inherited) and not operator
+out = text
+if migrate:
+    parts = re.findall(r'[^\n]*\n|[^\n]+', text)
+    out = ''.join((NEW + ('\n' if p.endswith('\n') else '')) if p.rstrip('\n') == OLD else p for p in parts)
+added = [(n, v) for n, v in WANT if n not in defined and not (n == IDLE and operator)]
+if added:
+    if out and not out.endswith('\n'): out += '\n'
+    out += '# Added by plebian-os-update — session defaults.\n'
+    for n, v in added: out += f'if [ -z "${{{n}+x}}" ]; then {n}={v}; fi\n'
+raw = out.encode('utf-8')
+again = analyze(raw)
+if again[0] or (migrate and OLD in out.split('\n')) or raw.endswith(b'\n') != (data.endswith(b'\n') or bool(added)):
+    print('uncertain result-verification'); sys.exit(0)
+if raw == data:
+    print('unchanged'); sys.exit(0)
+open(dst, 'wb').write(raw)
+print('write|' + (' '.join(n for n, _ in added) or '-') + '|' + ('migrated' if migrate else 'kept'))
+PY_SESSION_GATE
+)" || exit 1
+case "$decision" in
+    uncertain*)
+        printf '%s\n' \
+            "plebian-os-update: NOTE: $env_path was not changed: it is outside the grammar this update can read safely (${decision#uncertain }); no session defaults were added and PLEB_IDLE_LOCK_SECONDS was left as is." \
+            "plebian-os-update: to have no automatic screen lock, make sure $env_path sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on." >&2
+        exit 0 ;;
+    unchanged) exit 0 ;;
+    write\|*) ;;
+    *) exit 1 ;;
+esac
 chmod 0644 "$tmp"
+expected="$(sha256sum -- "$tmp")" || exit 1
+expected="${expected%% *}"
 mv -fT -- "$tmp" "$env_path"
 trap - EXIT
-[ "${#names[@]}" -eq 0 ] || printf 'plebian-os-update: added %s to %s\n' "${names[*]}" "$env_path"
-[ "$migrate_idle" = 0 ] || printf 'plebian-os-update: PLEB_IDLE_LOCK_SECONDS 600 -> 0 (no automatic lock) in %s\n' "$env_path"
+actual="$(sha256sum -- "$env_path")" || exit 1
+[ "${actual%% *}" = "$expected" ] || { echo "plebian-os-update: $env_path does not match what was written" >&2; exit 1; }
+IFS='|' read -r _ added migrated <<<"$decision"
+[ "$added" = - ] || printf 'plebian-os-update: added %s to %s\n' "$added" "$env_path"
+[ "$migrated" != migrated ] || printf 'plebian-os-update: PLEB_IDLE_LOCK_SECONDS 600 -> 0 (no automatic lock) in %s\n' "$env_path"
 ROOT_SESSION_ENV
 }
 

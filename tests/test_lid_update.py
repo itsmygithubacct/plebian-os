@@ -261,175 +261,254 @@ class LinkedDestinationWrite(unittest.TestCase):
         self.assertIn("chown root:root /target/etc/systemd/logind.conf.d/.50-plebian-lid.conf.new", text)
 
 
-OLD_IDLE = 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi\n'
-NEW_IDLE = 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=0; fi\n'
-BASE = ('if [ -z "${PLEB_WM+x}" ]; then PLEB_WM=openbox; fi\n'
-        'if [ -z "${KILIX_RUN_ALIASES+x}" ]; then KILIX_RUN_ALIASES=1; fi\n')
+OLD = b'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi\n'
+NEWB = OLD.replace(b"=600;", b"=0;")
+OLD_IDLE, NEW_IDLE = OLD.decode(), NEWB.decode()
+BASEB = (b'if [ -z "${PLEB_WM+x}" ]; then PLEB_WM=openbox; fi\n'
+         b'if [ -z "${KILIX_RUN_ALIASES+x}" ]; then KILIX_RUN_ALIASES=1; fi\n')
+NOTE = b"plebian-os-update: NOTE: "
 
 
 class IdleLockMigration(unittest.TestCase):
-    """migrate_pleb_session_env: the former generated 600 becomes 0; choices stay."""
+    """migrate_pleb_session_env: a whole-file grammar gate on raw bytes decides.
+
+    Passing file: the exact generated 600 line becomes 0, a missing name gets its
+    default, an operator assignment is left alone. Anything outside the grammar the
+    provisioner renders: the file is not written at all and one NOTE says so.
+    """
 
     def setUp(self):
         self.fx = Fixture(self)
         self.env_path = self.fx.root / "etc/pleb/session.env"
 
-    def migrate(self, text):
-        self.env_path.write_text(text)
+    def migrate(self, data: bytes):
+        self.env_path.write_bytes(data)
         self.env_path.chmod(0o644)
         script = as_user(under(session_env_script(), self.fx.root))
-        r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script, capture_output=True, text=True,
+        r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script.encode(), capture_output=True,
                            env={"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)})
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.stderr = r.stderr
-        return self.env_path.read_text()
+        self.out, self.err = r.stdout, r.stderr
+        return self.env_path.read_bytes()
 
-    def effective(self, text):
-        r = subprocess.run(["bash", "-c", f'set -e; unset PLEB_IDLE_LOCK_SECONDS; . {self.env_path}; echo "${{PLEB_IDLE_LOCK_SECONDS:-600}}"'],
+    def effective(self, data: bytes):
+        self.env_path.write_bytes(data)
+        r = subprocess.run(["bash", "-c", f'unset PLEB_IDLE_LOCK_SECONDS; . {self.env_path}; echo "${{PLEB_IDLE_LOCK_SECONDS:-600}}"'],
                            capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"})
         return r.stdout.strip()
 
-    def test_old_generated_default_becomes_zero_and_other_lines_are_kept(self):
-        before = "# operator comment\n" + BASE + OLD_IDLE + 'FOO=bar\n'
-        after = self.migrate(before)
-        self.assertEqual(after, "# operator comment\n" + BASE + NEW_IDLE + 'FOO=bar\n')
-        self.assertEqual(self.effective(after), "0")
-
-    def test_missing_entry_gets_the_new_default(self):
-        after = self.migrate(BASE)
-        self.assertIn(NEW_IDLE, after)
-        self.assertEqual(self.effective(after), "0")
-
-    def test_explicit_values_are_preserved(self):
-        for label, line in (("explicit zero", "PLEB_IDLE_LOCK_SECONDS=0\n"),
-                            ("explicit nonzero opt-in", "PLEB_IDLE_LOCK_SECONDS=123\n"),
-                            ("operator wrote 600", "PLEB_IDLE_LOCK_SECONDS=600\n"),
-                            ("exported", "export PLEB_IDLE_LOCK_SECONDS=300\n"),
-                            ("other guarded value", 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=900; fi\n')):
-            with self.subTest(label):
-                before = BASE + line
-                self.assertEqual(self.migrate(before), before)
-
-    NOTE = "plebian-os-update: NOTE: "
-
-    def test_harmless_export_and_comments_do_not_block_the_migration(self):
-        for label, extra in (("bare export", "export PLEB_IDLE_LOCK_SECONDS\n"),
-                             ("bare export with spaces", "  export PLEB_IDLE_LOCK_SECONDS  \n"),
-                             ("a comment", "# PLEB_IDLE_LOCK_SECONDS controls auto locking\n"),
-                             ("an indented comment", "   # PLEB_IDLE_LOCK_SECONDS=123\n"),
-                             ("the auto-lock opt-in", "PLEB_AUTO_LOCK=on\n"),
-                             ("a longer unrelated name", "PLEB_IDLE_LOCK_MINUTES=1\n")):
-            for position in ("after", "before"):
-                with self.subTest(label, position=position):
-                    before = (BASE + OLD_IDLE + extra) if position == "after" else (BASE + extra + OLD_IDLE)
-                    after = self.migrate(before)
-                    self.assertEqual(after, before.replace(OLD_IDLE, NEW_IDLE))
-                    self.assertNotIn(self.NOTE, self.stderr)
-                    self.assertEqual(self.migrate(after), after)
-                    self.assertEqual(self.effective(after), "0")
-
-    UNCERTAIN = (
-        ("plain assignment", "PLEB_IDLE_LOCK_SECONDS=123\n"),
-        ("export assignment", "export PLEB_IDLE_LOCK_SECONDS=123\n"),
-        ("readonly", "readonly PLEB_IDLE_LOCK_SECONDS=123\n"),
-        ("default form", ': "${PLEB_IDLE_LOCK_SECONDS:=123}"\n'),
-        ("append", "PLEB_IDLE_LOCK_SECONDS+=1\n"),
-        ("array element", "PLEB_IDLE_LOCK_SECONDS[0]=123\n"),
-        ("arithmetic", "((PLEB_IDLE_LOCK_SECONDS += 1))\n"),
-        ("read", "read -r PLEB_IDLE_LOCK_SECONDS <<<'123'\n"),
-        ("printf -v", "printf -v PLEB_IDLE_LOCK_SECONDS '%s' 123\n"),
-        ("indirect eval", "name=PLEB_IDLE_LOCK_SECONDS\neval \"$name+=1\"\n"),
-        ("read-only reference", 'printf "%s\\n" "$PLEB_IDLE_LOCK_SECONDS" >/dev/null\n'),
-        ("quoted example", "printf '%s\\n' 'PLEB_IDLE_LOCK_SECONDS=123' >/dev/null\n"),
-        ("here-doc example", "cat <<'TEXT' >/dev/null\nPLEB_IDLE_LOCK_SECONDS=123\nTEXT\n"),
-        ("hash before the assignment", "note='#'; PLEB_IDLE_LOCK_SECONDS+=1\n"),
-        ("continued name", "PLEB_IDLE_LOCK_\\\nSECONDS+=1\n"),
-        ("continued operator", "PLEB_IDLE_LOCK_SECONDS\\\n+=1\n"),
-        ("guarded other value", 'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=900; fi\n'),
-        ("test of it", '[ -n "${PLEB_IDLE_LOCK_SECONDS+x}" ] && :\n'),
-        ("trailing comment", "PLEB_IDLE_LOCK_SECONDS=123 # mine\n"),
+    # ---- what migrates -------------------------------------------------------
+    GATE_OK = (
+        ("bare export", b"export PLEB_IDLE_LOCK_SECONDS\n"),
+        ("bare export with spaces", b"  export PLEB_IDLE_LOCK_SECONDS  \n"),
+        ("multi-name export (as rendered)", b"export KILIX_CONFIG_HOME PLEB_IDLE_LOCK_SECONDS\n"),
+        ("comment", b"# PLEB_IDLE_LOCK_SECONDS=123\n"),
+        ("indented comment", b"   # note\n"),
+        ("comment holding code", b'# if [ "$PLEB_IDLE_LOCK_SECONDS" = 600 ]; then PLEB_IDLE_LOCK_SECONDS=123; fi\n'),
+        ("auto-lock opt-in", b"PLEB_AUTO_LOCK=on\n"),
+        ("unrelated longer name", b"PLEB_IDLE_LOCK_MINUTES=1\n"),
+        ("kiosk line with a trailing comment", b"PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)\n"),
+        ("blank lines", b"\n\n"),
+        ("odd comment bytes are NOT ok", None),
     )
 
-    def test_anything_else_mentioning_the_name_is_preserved_and_reported(self):
+    def test_gate_passing_files_migrate_the_inherited_line(self):
+        for label, extra in self.GATE_OK:
+            if extra is None:
+                continue
+            for position in ("after", "before"):
+                with self.subTest(label, position=position):
+                    before = BASEB + OLD + extra if position == "after" else BASEB + extra + OLD
+                    after = self.migrate(before)
+                    self.assertEqual(after, before.replace(OLD, NEWB))
+                    self.assertNotIn(NOTE, self.err)
+                    self.assertIn(b"600 -> 0", self.out)
+                    self.assertEqual(self.migrate(after), after)
+                    self.assertEqual(self.out, b"")
+                    self.assertEqual(self.effective(after), "0")
+
+    def test_missing_entry_is_appended_and_a_comment_mention_does_not_count(self):
+        for before in (BASEB, BASEB + b"# PLEB_IDLE_LOCK_SECONDS is documented here\n", b""):
+            with self.subTest(before=before):
+                after = self.migrate(before)
+                self.assertTrue(after.endswith(NEWB))
+                self.assertTrue(after.startswith(before))
+                self.assertEqual(self.migrate(after), after)
+
+    def test_success_output_lists_every_added_name(self):
+        self.migrate(b"")
+        self.assertIn(b"added PLEB_WM KILIX_RUN_ALIASES PLEB_IDLE_LOCK_SECONDS to", self.out)
+
+    def test_unterminated_final_inherited_line_is_migrated_and_stays_unterminated(self):
+        before = BASEB + OLD.rstrip(b"\n")
+        after = self.migrate(before)
+        self.assertEqual(after, BASEB + NEWB.rstrip(b"\n"))
+        self.assertIn(b"600 -> 0", self.out)
+        self.assertEqual(self.migrate(after), after)
+
+    # ---- operator choices (certain: kept silently) ---------------------------
+    OPERATOR = (
+        b"PLEB_IDLE_LOCK_SECONDS=123\n", b"export PLEB_IDLE_LOCK_SECONDS=123\n",
+        b"PLEB_IDLE_LOCK_SECONDS=600\n", b"PLEB_IDLE_LOCK_SECONDS='45'\n", b'PLEB_IDLE_LOCK_SECONDS="45"\n',
+        b"PLEB_IDLE_LOCK_SECONDS=0\n", b"PLEB_IDLE_LOCK_SECONDS=123 # mine\n",
+        b'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=900; fi\n',
+    )
+
+    def test_a_certain_operator_assignment_keeps_the_file_byte_identical(self):
+        for extra in self.OPERATOR:
+            for position in ("after", "before"):
+                with self.subTest(extra=extra, position=position):
+                    before = BASEB + OLD + extra if position == "after" else BASEB + extra + OLD
+                    self.assertEqual(self.migrate(before), before)
+                    self.assertEqual(self.out, b"")
+                    self.assertNotIn(NOTE, self.err)
+
+    # ---- uncertain files: nothing written, one NOTE --------------------------
+    UNCERTAIN = (
+        ("arithmetic", b"((PLEB_IDLE_LOCK_SECONDS += 1))\n"),
+        ("arithmetic increment", b"((PLEB_IDLE_LOCK_SECONDS++))\n"),
+        ("array element", b"PLEB_IDLE_LOCK_SECONDS[0]=123\n"),
+        ("array append", b"PLEB_IDLE_LOCK_SECONDS[0]+=1\n"),
+        ("append", b"PLEB_IDLE_LOCK_SECONDS+=1\n"),
+        ("default form", b': "${PLEB_IDLE_LOCK_SECONDS:=123}"\n'),
+        ("readonly", b"readonly PLEB_IDLE_LOCK_SECONDS=123\n"),
+        ("read", b"read -r PLEB_IDLE_LOCK_SECONDS <<<'123'\n"),
+        ("printf -v", b"printf -v PLEB_IDLE_LOCK_SECONDS '%s' 123\n"),
+        ("indirect eval", b'name=PLEB_IDLE_LOCK_SECONDS\neval "$name+=1"\n'),
+        ("read-only reference", b'printf "%s\\n" "$PLEB_IDLE_LOCK_SECONDS" >/dev/null\n'),
+        ("quoted example", b"printf '%s\\n' 'PLEB_IDLE_LOCK_SECONDS=123' >/dev/null\n"),
+        ("here-doc example", b"cat <<'TEXT' >/dev/null\nPLEB_IDLE_LOCK_SECONDS=123\nTEXT\n"),
+        ("hash before the assignment", b"note='#'; PLEB_IDLE_LOCK_SECONDS+=1\n"),
+        ("continued name", b"PLEB_IDLE_LOCK_\\\nSECONDS+=1\n"),
+        ("continued operator", b"PLEB_IDLE_LOCK_SECONDS\\\n+=1\n"),
+        ("continued export", b"export PLEB_IDLE_LOCK_\\\nSECONDS\n"),
+        ("empty continuation", b"\\\n"),
+        ("comment ending in a backslash hides a choice", b"# operator note \\\nPLEB_IDLE_LOCK_SECONDS=123\n"),
+        ("indented comment backslash", b"   # note \\\nPLEB_IDLE_LOCK_SECONDS=123\n"),
+        ("trailing comment ending in a backslash", b"PLEB_IDLE_LOCK_SECONDS=123 # mine \\\n"),
+        ("multiline quote with a hash line", b'note="\n# $((PLEB_IDLE_LOCK_SECONDS += 1))\n"\n'),
+        ("test of the name", b'[ -n "${PLEB_IDLE_LOCK_SECONDS+x}" ] && :\n'),
+        ("command", b"touch /nonexistent-marker\n"),
+        ("sourcing", b". /etc/other.env\n"),
+        ("semicolon list", b"A=1; B=2\n"),
+        ("command substitution", b"A=$(id -u)\n"),
+        ("backtick", b"A=`id -u`\n"),
+        ("double quote with a dollar", b'A="$B"\n'),
+        ("CRLF", b"A=1\r\n"),
+        ("NUL", b"A=a\x00b\n"),
+        ("non-UTF-8 comment", b"# \xff\xfe\x80\n"),
+        ("control character before export", b"\x0bexport PLEB_IDLE_LOCK_SECONDS\n"),
+        ("unterminated unrelated final line", b"FOO=last"),
+    )
+
+    def test_anything_outside_the_grammar_is_not_written_and_is_reported(self):
         for label, extra in self.UNCERTAIN:
             for position in ("after", "before"):
                 with self.subTest(label, position=position):
-                    before = (BASE + OLD_IDLE + extra) if position == "after" else (BASE + extra + OLD_IDLE)
-                    after = self.migrate(before)
-                    self.assertEqual(after, before)
-                    self.assertIn(self.NOTE, self.stderr)
-                    self.assertIn(str(self.env_path), self.stderr)
-                    self.assertIn("PLEB_IDLE_LOCK_SECONDS=0", self.stderr)
-                    self.assertEqual(self.migrate(after), after)
+                    before = BASEB + OLD + extra if position == "after" else BASEB + extra + OLD
+                    self.assertEqual(self.migrate(before), before)
+                    self.assertIn(NOTE + str(self.env_path).encode(), self.err)
+                    self.assertIn(b"PLEB_IDLE_LOCK_SECONDS=0", self.err)
+                    self.assertEqual(self.out, b"", "no success output for an unchanged file")
+                    self.assertEqual(self.migrate(before), before)
 
-    def test_the_report_names_the_offending_line_numbers(self):
-        before = BASE + OLD_IDLE + "FOO=1\nPLEB_IDLE_LOCK_SECONDS=123\n"
+    def test_an_uncertain_file_gains_no_defaults_and_no_comment(self):
+        for label, extra in self.UNCERTAIN:
+            with self.subTest(label):
+                before = extra  # no WM, aliases or idle default present at all
+                self.assertEqual(self.migrate(before), before)
+                self.assertIn(NOTE, self.err)
+
+    def test_the_note_names_the_offending_lines(self):
+        before = BASEB + OLD + b"FOO=1\n((PLEB_IDLE_LOCK_SECONDS += 1))\n"
         self.migrate(before)
-        self.assertIn("line(s) 5 mention PLEB_IDLE_LOCK_SECONDS in a form this update does not rewrite", self.stderr)
+        self.assertIn(b"5", self.err.split(b"\n")[0])
+        self.assertIn(str(self.env_path).encode(), self.err)
 
-    def test_unrelated_final_line_without_a_newline_stays_without_one(self):
-        before = BASE + OLD_IDLE + "# last line, no newline"
-        after = self.migrate(before)
-        self.assertEqual(after, before.replace(OLD_IDLE, NEW_IDLE))
-        self.assertFalse(after.endswith("\n"))
+    def test_the_inherited_line_inside_a_continuation_or_heredoc_is_not_migrated(self):
+        for before in (BASEB + OLD.replace(b"then ", b"then \\\n"),
+                       BASEB + b"cat <<'TEXT' >/dev/null\n" + OLD + b"TEXT\n",
+                       BASEB + b"\\\n" + OLD):
+            with self.subTest(before=before):
+                self.assertEqual(self.migrate(before), before)
+                self.assertIn(NOTE, self.err)
 
-    def test_a_missing_entry_is_appended_after_an_unterminated_file(self):
-        after = self.migrate(BASE.rstrip("\n"))
-        self.assertTrue(after.startswith(BASE.rstrip("\n") + "\n"))
-        self.assertIn(NEW_IDLE, after)
-
-    def test_migration_never_sources_operator_text(self):
+    def test_operator_text_is_never_executed(self):
         marker = self.fx.tmp / "ran"
-        before = BASE + OLD_IDLE + f"touch {marker}\n"
-        self.migrate(before)
+        before = BASEB + OLD + f"touch {marker}\n".encode()
+        self.assertEqual(self.migrate(before), before)
         self.assertFalse(marker.exists())
 
-    def test_rollback_after_a_migration_that_follows_a_reference(self):
-        before = BASE + OLD_IDLE + "export PLEB_IDLE_LOCK_SECONDS\n"
-        self.env_path.write_text(before)
-        self.env_path.chmod(0o644)
-        snap, rest = scripts()
-        snap, rest = as_user(under(snap, self.fx.root)), as_user(under(rest, self.fx.root))
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)}
-        txn = subprocess.run(["bash", "-c", "set -euo pipefail\n" + snap], env=env, capture_output=True, text=True)
-        self.assertEqual(txn.returncode, 0, txn.stderr)
-        self.assertEqual(self.migrate(before), before.replace(OLD_IDLE, NEW_IDLE))
-        r = subprocess.run(["bash", "-s", "--", txn.stdout.strip().splitlines()[-1]],
-                           input="systemctl() { :; }\nset -euo pipefail\n" + rest, env=env, capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.env_path.read_text(), before)
-
-    def test_old_default_plus_an_operator_assignment_is_left_alone(self):
-        before = BASE + "PLEB_IDLE_LOCK_SECONDS=300\n" + OLD_IDLE
-        self.assertEqual(self.migrate(before), before)
-
-    def test_commented_old_default_is_not_the_setting(self):
-        before = BASE + "# " + OLD_IDLE
+    # ---- every file the provisioner renders passes the gate -------------------
+    def test_every_provisioner_rendered_shape_passes_the_gate(self):
+        text = PROVISION.read_text()
+        fn = re.search(r"^write_session_default\(\) \{\n.*?^\}\n", text, re.M | re.S).group(0)
+        values = ["", "0", "600", "openbox", "/home/releaseci/.local/gpu_terminal/sources", "git://10.0.2.2/pleb.git",
+                  "https://example.org/a/libkilix_0.1.5+git320ce.d9a1_amd64.deb", "20260727T000000Z",
+                  "a b", "it's", 'say "hi"', "$HOME", "`id`", "tilde~", "café /hôme", "a;b", "a&b", "a(b)", "a=b"]
+        lines = [f'write_session_default NAME_{i} {shlex_quote(v)}' for i, v in enumerate(values)]
+        script = fn + "\n" + "\n".join(lines) + "\nprintf '%s\\n' 'export GPU_TERMINAL_SETTINGS_FILE'\n" \
+            "printf '%s\\n' 'export KILIX_CONFIG_HOME KILIX_STATE_DIRECTORY KILIX_CACHE_HOME'\n" \
+            "printf '%s\\n' 'PLEB_RESPAWN=1   # hard kiosk: respawn kilix if it exits (set by --kiosk)'\n" \
+            "write_session_default PLEB_IDLE_LOCK_SECONDS 0\n"
+        rendered = subprocess.run(["bash", "-c", script], capture_output=True, env={"PATH": "/usr/bin:/bin", "LC_ALL": "C.UTF-8"})
+        self.assertEqual(rendered.returncode, 0, rendered.stderr)
+        before = rendered.stdout
         after = self.migrate(before)
-        self.assertIn(NEW_IDLE, after)
-        self.assertIn("# " + OLD_IDLE, after)
+        self.assertNotIn(NOTE, self.err, self.err)
+        # only the missing window-manager defaults are appended; nothing is rewritten
+        self.assertTrue(after.startswith(before))
+        self.assertEqual(self.migrate(after), after)
+        # the same shapes with the inherited 600 default migrate
+        old = before.replace(b"PLEB_IDLE_LOCK_SECONDS=0", b"PLEB_IDLE_LOCK_SECONDS=600")
+        migrated = self.migrate(old)
+        self.assertNotIn(NOTE, self.err, self.err)
+        self.assertTrue(migrated.startswith(before))
+        self.assertIn(b"600 -> 0", self.out)
 
-    def test_repeated_updates_are_idempotent(self):
-        once = self.migrate(BASE + OLD_IDLE)
-        self.assertEqual(self.migrate(once), once)
-        missing = self.migrate(BASE)
-        self.assertEqual(self.migrate(missing), missing)
+    def test_values_the_provisioner_could_only_render_as_ansi_c_quoting_are_uncertain(self):
+        before = BASEB + OLD + b"A=$'a\\nb'\n"
+        self.assertEqual(self.migrate(before), before)
+        self.assertIn(NOTE, self.err)
 
+    def test_a_real_installed_session_env_passes_the_gate(self):
+        sample = ROOT.parent.parent.parent / "research/gpu_terminal/0.2.2-rc6/lid-default/vm/update-logs/session.env.before"
+        if not sample.exists():
+            self.skipTest("the VM sample is not on this machine")
+        before = sample.read_bytes()
+        self.assertEqual(self.migrate(before), before.replace(OLD, NEWB))
+        self.assertNotIn(NOTE, self.err)
+
+    # ---- transaction ---------------------------------------------------------
     def test_rollback_after_migration_restores_the_old_file(self):
-        before = BASE + OLD_IDLE
-        self.env_path.write_text(before)
+        before = BASEB + OLD
+        self.env_path.write_bytes(before)
         self.env_path.chmod(0o644)
         snap, rest = scripts()
         snap, rest = as_user(under(snap, self.fx.root)), as_user(under(rest, self.fx.root))
         env = {"PATH": "/usr/bin:/bin", "HOME": str(self.fx.tmp)}
         txn = subprocess.run(["bash", "-c", "set -euo pipefail\n" + snap], env=env, capture_output=True, text=True)
         self.assertEqual(txn.returncode, 0, txn.stderr)
-        self.assertEqual(self.migrate(before), BASE + NEW_IDLE)
-        self.env_path.write_text(BASE + NEW_IDLE)
+        self.assertEqual(self.migrate(before), BASEB + NEWB)
         r = subprocess.run(["bash", "-s", "--", txn.stdout.strip().splitlines()[-1]],
                            input="systemctl() { :; }\nset -euo pipefail\n" + rest, env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.env_path.read_text(), before)
+        self.assertEqual(self.env_path.read_bytes(), before)
+
+    def test_a_failed_write_never_reports_success(self):
+        before = BASEB + OLD
+        self.env_path.write_bytes(before)
+        script = as_user(under(session_env_script(), self.fx.root))
+        stubs = self.fx.tmp / "bin"
+        stubs.mkdir(exist_ok=True)
+        (stubs / "mv").write_text("#!/bin/sh\nexit 1\n")
+        (stubs / "mv").chmod(0o755)
+        r = subprocess.run(["bash", "-s", "--", str(self.env_path)], input=script.encode(), capture_output=True,
+                           env={"PATH": f"{stubs}:/usr/bin:/bin", "HOME": str(self.fx.tmp)})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn(b"600 -> 0", r.stdout)
+        self.assertEqual(self.env_path.read_bytes(), before)
+        self.assertEqual([p.name for p in self.env_path.parent.iterdir()], ["session.env"])
 
     def test_migration_runs_inside_the_update_transaction(self):
         text = UPDATE.read_text()
@@ -439,7 +518,12 @@ class IdleLockMigration(unittest.TestCase):
 
     def test_provisioner_default_is_zero_and_the_old_line_is_the_migrated_shape(self):
         self.assertIn("write_session_default PLEB_IDLE_LOCK_SECONDS 0\n", PROVISION.read_text())
-        self.assertIn(OLD_IDLE.strip(), UPDATE.read_text())
+        self.assertIn('OLD = f\'if [ -z "${{{IDLE}+x}}" ]; then {IDLE}=600; fi\'', UPDATE.read_text())
+
+
+def shlex_quote(v: str) -> str:
+    import shlex
+    return shlex.quote(v)
 
 
 class InterruptedWrite(unittest.TestCase):

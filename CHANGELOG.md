@@ -12,22 +12,24 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   the desktop unlocked. Super-L, Ctrl-Alt-L, `pleb lock` and `loginctl lock-session`
   still lock. Set a positive `PLEB_IDLE_LOCK_SECONDS` (or `PLEB_AUTO_LOCK=on`) in
   session.env to turn automatic locking back on. `plebian-os-update` migrates
-  existing installs (in its transaction, with rollback), acting only on what is
-  certain and never sourcing or evaluating the file. Of the non-comment lines
-  (a trailing backslash joins the next line) that contain
-  `PLEB_IDLE_LOCK_SECONDS`: the exact line older provisioners generated (the 600
-  default) is migratable, and `export PLEB_IDLE_LOCK_SECONDS` alone is harmless;
-  anything else (an assignment in any form, a read-only reference, a quoted
-  example, a here-doc, a continuation) is uncertain. With no such line,
-  `PLEB_IDLE_LOCK_SECONDS=0` is appended; with the inherited line and only
-  harmless lines, the inherited line becomes 0 in place; with any uncertain line
-  the setting is left exactly as it is and the update prints a note naming the
-  file, the line numbers and the one-line change (`PLEB_IDLE_LOCK_SECONDS=0`) to
-  make by hand. So an operator's own value stays, and so does a 600 that merely
-  sits next to a reference such as `printf "$PLEB_IDLE_LOCK_SECONDS"` (reported,
-  not migrated). Settings made by sourcing another file are invisible to the
-  update. Lines that are not rewritten, including a last line without a newline,
-  stay byte-identical.
+  existing installs (in its transaction, with rollback) by a whole-file check on
+  the raw bytes, never by sourcing or guessing. The file must consist only of the
+  shapes the provisioner itself renders (blank lines, `#` comments, `NAME=value`
+  and `export NAME=value` with a plain, single-quoted or simply double-quoted
+  value, `export NAME ...`, the guarded `if [ -z "${NAME+x}" ]; then NAME=value; fi`
+  default, an optional trailing comment) with no NUL, CR or non-UTF-8 bytes, no
+  continuation or comment ending in a backslash, no here-doc, no unterminated
+  final line (except the inherited one). Such a file is changed: the exact line
+  older provisioners generated (the 600 default) becomes 0 in place unless the
+  operator assigns the name elsewhere (then it is left alone), a missing name
+  gets its default appended, and the missing window-manager and alias defaults
+  are added. Any other file is **not written at all** (no defaults, no comment)
+  and the update prints one note naming the file, the lines involved and the
+  manual change (`PLEB_IDLE_LOCK_SECONDS=0`). The final-newline state is kept,
+  the result is re-checked with the same rules, and success is reported only
+  after the installed file has been re-read. A 600 next to a reference such as
+  `printf "$PLEB_IDLE_LOCK_SECONDS"` is therefore reported, not migrated;
+  settings made by sourcing another file are invisible to the update.
   `PLEB_AUTO_LOCK` is never changed. The
   migration runs in the updater that carries it, so an update started by an older
   installed updater deploys the new one and the next `plebian-os-update` migrates.
