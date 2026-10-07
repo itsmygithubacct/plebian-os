@@ -671,6 +671,20 @@ class IdleLockMigration(unittest.TestCase):
         self.assertGreaterEqual(took, 4)           # it really waited for the bound
         self.assertIn(b"failed or timed out", self.err)
 
+    def test_without_a_timeout_binary_systemd_cat_still_receives_the_message(self):
+        bin_dir = self.fx.tmp / "isolated2"
+        bin_dir.mkdir()
+        for tool in ("stat", "id", "python3", "mktemp", "rm", "cat", "date", "sleep"):
+            (bin_dir / tool).symlink_to("/usr/bin/" + tool)
+        calls = self.fx.tmp / "calls2"
+        (bin_dir / "systemd-cat").write_text(f'#!/bin/sh\n{{ echo "argv: $*"; cat; }} >> {calls}\n')
+        (bin_dir / "systemd-cat").chmod(0o755)
+        self.migrate_with_path(BASEB + OLD + b"((X))\n", bin_dir, base="/nonexistent")
+        text = calls.read_text()
+        self.assertIn("argv: -t plebian-os-update -p notice", text)
+        self.assertIn("plebian-os-update: session.env unchanged: " + str(self.env_path), text)
+        self.assertIn(b"recorded in the system journal", self.err)
+
     def test_not_installed_and_failed_are_told_apart(self):
         none = self.fx.tmp / "nobin"
         none.mkdir()

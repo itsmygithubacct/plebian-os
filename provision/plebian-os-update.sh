@@ -2766,7 +2766,7 @@ case "$decision" in
                 timeout -k 2 "$secs" "$@"
                 return
             fi
-            "$@" & pid=$!
+            "$@" 0<&0 & pid=$!
             for ((i = 0; i < secs * 10; i++)); do
                 kill -0 "$pid" 2>/dev/null || { wait "$pid"; return; }
                 read -r -t 0.1 <> <(:) 2>/dev/null || true
