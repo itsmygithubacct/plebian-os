@@ -313,11 +313,11 @@ class ReleaseVersioningTests(unittest.TestCase):
             'KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"', provision)
         self.assertIn(
             'KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"', updater)
-        self.assertRegex(
-            updater,
-            r'if \[\[ ! "\$config_text" =~ .*KILIX_RUN_ALIASES.*\]\]; then\n'
-            r'\s+names\+=\(KILIX_RUN_ALIASES\)\n\s+values\+=\(1\)',
-        )
+        # The session.env migration appends the default only when the name is not
+        # already defined in a file that passed the grammar gate, so an operator's
+        # explicit KILIX_RUN_ALIASES (including 0) is kept.
+        self.assertIn("('KILIX_RUN_ALIASES', '1')", updater)
+        self.assertIn("added = [(n, v) for n, v in WANT if n not in defined", updater)
         self.assertIn('"GUI routes in Kilix"', acceptance)
         self.assertIn("alias chromium | grep -Fq ' run chromium'", acceptance)
         for path in (
