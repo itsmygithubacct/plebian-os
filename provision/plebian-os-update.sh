@@ -1045,8 +1045,12 @@ paths=(
     /usr/local/lib/pleb/capture_screenshot.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
+    /usr/local/lib/pleb/shortcut_keys.py
+    /usr/local/lib/pleb/global_shortcuts.py
     /usr/local/lib/pleb/capture_transport.so
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
+    /usr/local/share/xdg-desktop-portal/portals/pleb-shortcuts.portal
+    /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.shortcuts.service
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
     /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
@@ -1200,8 +1204,12 @@ paths=(
     /usr/local/lib/pleb/capture_screenshot.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
+    /usr/local/lib/pleb/shortcut_keys.py
+    /usr/local/lib/pleb/global_shortcuts.py
     /usr/local/lib/pleb/capture_transport.so
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
+    /usr/local/share/xdg-desktop-portal/portals/pleb-shortcuts.portal
+    /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.shortcuts.service
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
     /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
