@@ -24,10 +24,12 @@ PLANTED = (
     "voice/models/lgraph-en-us",
     "voice/models/vibevoice-asr-bitnet",
     "voice/models/whisper-small-en",
+    "voice/models/whistle",
     "desktop-apps/assets/vosk-model-small-en-us-0.15",
     "desktop-apps/assets/vosk-model-en-us-0.22-lgraph",
     "desktop-apps/assets/vibevoice-asr-bitnet",
     "desktop-apps/assets/faster-whisper-small-en",
+    "desktop-apps/assets/whistle",
     "voice/lib/current",
 )
 
@@ -79,6 +81,17 @@ class GuestCheckTests(unittest.TestCase):
                 (Path(data) / "voice" / "models").mkdir(parents=True, exist_ok=True)
                 (Path(data) / relative).mkdir(parents=True, exist_ok=True)
                 self.assertNotEqual(self.run_check(Path(data)), 0)
+
+    def test_whistle_dangling_links_fail_the_image(self):
+        for relative in ("voice/models/whistle", "desktop-apps/assets/whistle"):
+            with self.subTest(path=relative), tempfile.TemporaryDirectory() as data:
+                root = Path(data)
+                (root / "voice/models").mkdir(parents=True)
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.symlink_to(root / "missing-weights")
+                self.assertNotEqual(self.run_check(root), 0)
+                self.assertEqual(CensusTests().census(root), [str(target)])
 
 
 if __name__ == "__main__":

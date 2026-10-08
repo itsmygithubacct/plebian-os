@@ -34,6 +34,27 @@ LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
 # Whistle's pinned authority is an application record; its release inclusion
 # is separately bound by this carrier's owner determination and review seats.
 LICENCE_RECORD_DIRS = {"whistle": "app-records"}
+
+
+def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
+    if model != "whistle":
+        return [] if "Determined by | The owner" in text else ["missing owner determination"]
+    # The owner authorized this optional engine's RC6 integration. Licence
+    # identity comes from the pinned upstream declaration, not an invented
+    # owner statement accepting a licence. First-use agreement stays separate.
+    required = (
+        "Owner request on 2026-10-08, verbatim:",
+        "> should we integrat this optional engine into rc6 now and push following rules at ~/research/github/README.md ?",
+        "Licence: Apache-2.0. Licensor: Cactus Compute, Inc.",
+        "This record is not end-user licence acceptance or final image qualification.",
+        entry["licence_text_sha256s"][0],
+    )
+    gaps = ["missing Whistle authorization/evidence: " + value for value in required if value not in text]
+    if entry["licence_ids"] != ["apache-2.0"] or entry["licensors"] != ["Cactus Compute, Inc."]:
+        gaps.append("Whistle upstream licence identity differs from the authorization record")
+    return gaps
+
+
 VERSION = (ROOT / "VERSION").read_text().strip()
 CARRIER = ROOT / "releases" / f"{VERSION}-model-compliance"
 GENERATOR = ROOT / "build" / "generate-model-compliance.py"
@@ -473,9 +494,27 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             self.assertTrue(path.is_file(), item["path"])
             self.assertEqual(sha256(path.read_bytes()), item["sha256"], item["path"])
             text = path.read_text()
-            self.assertIn("Determined by | The owner", text, item["path"])
+            self.assertEqual(determination_gaps(item["model"], text, carrier["models"][item["model"]]),
+                             [], item["path"])
             covered.add(item["model"])
         self.assertEqual(covered, set(carrier["models"]))
+
+    def test_whistle_authorization_requires_the_real_request_and_upstream_evidence(self):
+        carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
+        entry = carrier["models"]["whistle"]
+        text = (CARRIER / "determinations/whistle/OWNER-RC6-WHISTLE-2026-10-08.md").read_text()
+        self.assertEqual(determination_gaps("whistle", text, entry), [])
+        for before, after in (
+            ("> should we integrat", "> please inspect"),
+            ("Licence: Apache-2.0.", "Licence: MIT."),
+            ("Cactus Compute, Inc.", "Another licensor"),
+            (entry["licence_text_sha256s"][0], "0" * 64),
+            ("This record is not end-user licence acceptance", "This record is end-user licence acceptance"),
+        ):
+            with self.subTest(changed=before):
+                self.assertNotEqual(text.replace(before, after), text)
+                self.assertTrue(determination_gaps("whistle", text.replace(before, after), entry))
+        self.assertTrue(determination_gaps("small-en-us", text, entry))
 
     # AC-7
     def test_acceptance_receipt_names_two_independent_seats(self):

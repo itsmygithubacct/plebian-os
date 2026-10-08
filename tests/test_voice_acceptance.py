@@ -110,6 +110,7 @@ class VoiceAcceptanceTests(unittest.TestCase):
                     "whisper-small-en", "whisper", True,
                     486100128, "463.6 MiB",
                 ),
+                ("whistle", "whistle", True, 16937647, "16.2 MiB"),
             ):
                 records.append({
                     "id": model,
@@ -163,6 +164,14 @@ class VoiceAcceptanceTests(unittest.TestCase):
             invalid_documents.append((
                 "missing files", invalid, "installed state disagrees",
             ))
+            for key, value, reason in (
+                ("engine", "whisper", "entries differ"),
+                ("download_bytes", 1, "download size differs"),
+                ("installed", True, "installed state disagrees"),
+            ):
+                invalid = clone()
+                invalid["models"][-1][key] = value
+                invalid_documents.append(("Whistle " + key, invalid, reason))
             for label, invalid, message in invalid_documents:
                 with self.subTest(label=label):
                     refused = validate(invalid)
