@@ -601,6 +601,30 @@ class IdleLockMigration(unittest.TestCase):
                 for e in shown:
                     self.assertRegex(e, r"^line \d+: name Q+ is not a session setting$")
 
+    def test_the_marker_is_reserved_from_the_real_total_for_any_digit_count(self):
+        stubs, calls = self.journal_stubs("logger")
+        names = [1] * 8
+        base = sum(len(f"line {4 + i}: name Q is not a session setting") for i in range(8)) + 14
+        for total in (9, 99999, 100008, 200008):
+            with self.subTest(total=total):
+                calls.unlink(missing_ok=True)
+                # entries that fit exactly within budget minus a 5-digit-sized reserve
+                left = 700 - len("; and 99999 more") - base
+                sizes = list(names)
+                for i in range(8):
+                    add = min(63, left)
+                    sizes[i] += add
+                    left -= add
+                self.assertEqual(left, 0)
+                data = BASEB + OLD + b"".join(b"Q" * n + b"=1\n" for n in sizes) + b"X=1\n" * (total - 8)
+                self.migrate_with_path(data, stubs)
+                message, detail = self.logged(calls, self.env_path)
+                self.assertLessEqual(len(detail.encode()), 700)
+                self.assertLessEqual(len(message.encode()), 1024)
+                *shown, marker = detail.split("; ")
+                self.assertRegex(marker, r"^and \d+ more$")
+                self.assertEqual(len(shown) + int(marker.split()[1]), total)
+
     def test_a_single_unfittable_problem_still_gets_a_marker(self):
         stubs, calls = self.journal_stubs("logger")
         self.migrate_with_path(BASEB + OLD + b"((X))\n", stubs)
@@ -674,38 +698,52 @@ class IdleLockMigration(unittest.TestCase):
         self.assertLess(took, 25)
         self.assertIn(b"NOTE:", self.err)
 
-    def test_without_a_timeout_binary_the_builtin_bound_still_applies(self):
+    def test_without_a_timeout_binary_journal_delivery_is_skipped_not_unbounded(self):
         bin_dir = self.fx.tmp / "isolated"
         bin_dir.mkdir()
-        for tool in ("stat", "id", "python3", "mktemp", "rm", "sleep", "cat", "date", "sha256sum", "chmod", "mv", "grep", "sed"):
+        for tool in ("stat", "id", "python3", "mktemp", "rm", "cat", "date", "sleep", "sha256sum", "chmod", "mv"):
             (bin_dir / tool).symlink_to("/usr/bin/" + tool)
-        self.blocking_stub("logger")
-        (self.fx.tmp / "jbin" / "logger").rename(bin_dir / "logger")
+        calls = self.fx.tmp / "calls3"
+        for tool in ("logger", "systemd-cat"):
+            (bin_dir / tool).write_text(f'#!/bin/sh\necho "{tool} called" >> {calls}\nexec sleep 60\n')
+            (bin_dir / tool).chmod(0o755)
         before = BASEB + OLD + b"((X))\n"
         after, took = self.timed_run(before, bin_dir, base="/nonexistent")
         self.assertEqual(after, before)
-        self.assertLess(took, 20)
-        self.assertGreaterEqual(took, 4)           # it really waited for the bound
-        self.assertIn(b"failed or timed out", self.err)
+        self.assertLess(took, 5)
+        self.assertFalse(calls.exists(), "no logging tool may run without a bound")
+        self.assertIn(b"NOTE:", self.err)
+        self.assertIn(b"timeout unavailable; no additional record was made", self.err)
 
-    def test_without_a_timeout_binary_systemd_cat_still_receives_the_message(self):
-        bin_dir = self.fx.tmp / "isolated2"
-        bin_dir.mkdir()
-        for tool in ("stat", "id", "python3", "mktemp", "rm", "cat", "date", "sleep"):
-            (bin_dir / tool).symlink_to("/usr/bin/" + tool)
-        calls = self.fx.tmp / "calls2"
-        (bin_dir / "systemd-cat").write_text(f'#!/bin/sh\n{{ echo "argv: $*"; cat; }} >> {calls}\n')
-        (bin_dir / "systemd-cat").chmod(0o755)
-        self.migrate_with_path(BASEB + OLD + b"((X))\n", bin_dir, base="/nonexistent")
-        text = calls.read_text()
-        self.assertIn("argv: -t plebian-os-update -p notice", text)
-        self.assertIn("plebian-os-update: session.env unchanged: " + str(self.env_path), text)
-        self.assertIn(b"recorded in the system journal", self.err)
+    def test_descendants_of_a_blocking_logging_tool_do_not_outlive_the_timeout(self):
+        stubs = self.fx.tmp / "jbin"
+        stubs.mkdir(exist_ok=True)
+        pidfile = self.fx.tmp / "descendant-pid"
+        child = ("import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                 f"open({str(pidfile)!r}, 'w').write(str(os.getpid())); time.sleep(120)")
+        (stubs / "logger").write_text("#!/usr/bin/python3\nimport signal, subprocess, time\n"
+                                      "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                                      f"subprocess.Popen(['/usr/bin/python3', '-c', {child!r}])\ntime.sleep(120)\n")
+        (stubs / "logger").chmod(0o755)
+        (stubs / "systemd-cat").write_text("#!/bin/sh\nexit 1\n")
+        (stubs / "systemd-cat").chmod(0o755)
+        before = BASEB + OLD + b"((X))\n"
+        after, took = self.timed_run(before, stubs)
+        self.assertEqual(after, before)
+        self.assertLess(took, 25)
+        self.assertTrue(pidfile.exists(), "the descendant never started")
+        pid = int(pidfile.read_text())
+        import time as _t
+        _t.sleep(0.5)
+        alive = Path(f"/proc/{pid}").exists() and "State:\tZ" not in Path(f"/proc/{pid}/status").read_text()
+        if alive:
+            os.kill(pid, 9)
+        self.assertFalse(alive, "the TERM-ignoring descendant outlived the bound")
 
     def test_not_installed_and_failed_are_told_apart(self):
         none = self.fx.tmp / "nobin"
         none.mkdir()
-        for tool in ("stat", "id", "python3", "mktemp", "rm"):
+        for tool in ("stat", "id", "python3", "mktemp", "rm", "timeout"):
             (none / tool).symlink_to("/usr/bin/" + tool)
         before = BASEB + OLD + b"((X))\n"
         self.migrate_with_path(before, none, base="/nonexistent")

@@ -2711,7 +2711,7 @@ if problems:
     # reserved, and no entry is cut in half.
     entries = [f'line {n}: {why}' for n, why in sorted(problems)]
     budget = min(700, 1024 - len(f'plebian-os-update: session.env unchanged: {src} ()'.encode()))
-    reserve = len('; and 99999 more')
+    reserve = len(f'; and {len(entries)} more')   # sized from the real count, any number of digits
     shown, used = [], 0
     for i, e in enumerate(entries):
         cost = len(e.encode()) + (2 if shown else 0)
@@ -2759,33 +2759,29 @@ case "$decision" in
         # time; a failure or timeout is not fatal and the stderr NOTE stays.
         msg="plebian-os-update: session.env unchanged: $env_path ($detail)"
         msg="${msg:0:1024}"
+        # timeout (coreutils, an Essential package) runs the command in its own
+        # process group and, on expiry, signals the whole group (TERM, then KILL
+        # after 2 s), so descendants of the logging tool do not outlive it.
         bounded() {
-            local secs="$1" pid i rc
+            local secs="$1"
             shift
-            if command -v timeout >/dev/null 2>&1; then
-                timeout -k 2 "$secs" "$@"
-                return
-            fi
-            "$@" 0<&0 & pid=$!
-            for ((i = 0; i < secs * 10; i++)); do
-                kill -0 "$pid" 2>/dev/null || { wait "$pid"; return; }
-                read -r -t 0.1 <> <(:) 2>/dev/null || true
-            done
-            kill -KILL "$pid" 2>/dev/null
-            wait "$pid" 2>/dev/null
-            return 124
+            timeout -k 2 "$secs" "$@"
         }
-        recorded=0 tried=''
-        if command -v logger >/dev/null 2>&1; then
+        recorded=0 tried='' skipped=0
+        if ! command -v timeout >/dev/null 2>&1; then
+            skipped=1
+        elif command -v logger >/dev/null 2>&1; then
             tried="logger"
             bounded 5 logger -t plebian-os-update -p user.notice -- "$msg" 2>/dev/null && recorded=1
         fi
-        if [ "$recorded" = 0 ] && command -v systemd-cat >/dev/null 2>&1; then
+        if [ "$skipped" = 0 ] && [ "$recorded" = 0 ] && command -v systemd-cat >/dev/null 2>&1; then
             tried="${tried:+$tried, }systemd-cat"
             bounded 5 systemd-cat -t plebian-os-update -p notice <<<"$msg" 2>/dev/null && recorded=1
         fi
         if [ "$recorded" = 1 ]; then
             printf 'plebian-os-update: this note is also recorded in the system journal (journalctl -t plebian-os-update)\n' >&2
+        elif [ "$skipped" = 1 ]; then
+            printf 'plebian-os-update: timeout unavailable; no additional record was made\n' >&2
         elif [ -n "$tried" ]; then
             printf 'plebian-os-update: %s failed or timed out (5 s limit each); no additional record was made\n' "$tried" >&2
         else
