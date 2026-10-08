@@ -2368,6 +2368,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                     "whisper-small-en", "whisper", True,
                     486100128, "463.6 MiB",
                 ),
+                ("whistle", "whistle", True, 16937647, "16.2 MiB"),
             ):
                 records.append({
                     "id": model,
@@ -2495,6 +2496,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 "whisper-small-en", "whisper", True,
                 486100128, "463.6 MiB",
             ),
+            ("whistle", "whistle", True, 16937647, "16.2 MiB"),
         ):
             catalog_records.append({
                 "id": model,
