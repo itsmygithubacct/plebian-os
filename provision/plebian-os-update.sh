@@ -2760,12 +2760,14 @@ case "$decision" in
         msg="plebian-os-update: session.env unchanged: $env_path ($detail)"
         msg="${msg:0:1024}"
         # timeout (coreutils, an Essential package) runs the command in its own
-        # process group and, on expiry, signals the whole group (TERM, then KILL
-        # after 2 s), so descendants of the logging tool do not outlive it.
+        # process group; at the deadline it sends KILL to that whole group. A
+        # hard kill rather than TERM then KILL, because `-k` only escalates while
+        # the direct child is alive: a tool that exits on TERM would leave a
+        # TERM-ignoring descendant running.
         bounded() {
             local secs="$1"
             shift
-            timeout -k 2 "$secs" "$@"
+            timeout -s KILL "$secs" "$@"
         }
         recorded=0 tried='' skipped=0
         if ! command -v timeout >/dev/null 2>&1; then

@@ -716,29 +716,45 @@ class IdleLockMigration(unittest.TestCase):
         self.assertIn(b"timeout unavailable; no additional record was made", self.err)
 
     def test_descendants_of_a_blocking_logging_tool_do_not_outlive_the_timeout(self):
-        stubs = self.fx.tmp / "jbin"
-        stubs.mkdir(exist_ok=True)
-        pidfile = self.fx.tmp / "descendant-pid"
-        child = ("import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                 f"open({str(pidfile)!r}, 'w').write(str(os.getpid())); time.sleep(120)")
-        (stubs / "logger").write_text("#!/usr/bin/python3\nimport signal, subprocess, time\n"
-                                      "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                                      f"subprocess.Popen(['/usr/bin/python3', '-c', {child!r}])\ntime.sleep(120)\n")
-        (stubs / "logger").chmod(0o755)
-        (stubs / "systemd-cat").write_text("#!/bin/sh\nexit 1\n")
-        (stubs / "systemd-cat").chmod(0o755)
-        before = BASEB + OLD + b"((X))\n"
-        after, took = self.timed_run(before, stubs)
-        self.assertEqual(after, before)
-        self.assertLess(took, 25)
-        self.assertTrue(pidfile.exists(), "the descendant never started")
-        pid = int(pidfile.read_text())
-        import time as _t
-        _t.sleep(0.5)
-        alive = Path(f"/proc/{pid}").exists() and "State:\tZ" not in Path(f"/proc/{pid}/status").read_text()
-        if alive:
-            os.kill(pid, 9)
-        self.assertFalse(alive, "the TERM-ignoring descendant outlived the bound")
+        # Both tools; the parent either ignores TERM or (the ordinary case) exits on it,
+        # leaving a TERM-ignoring child that a TERM-then-KILL escalation would not reach.
+        for tool in ("logger", "systemd-cat"):
+            for parent_ignores_term in (True, False):
+                with self.subTest(tool=tool, parent_ignores_term=parent_ignores_term):
+                    self.fx = Fixture(self)
+                    self.env_path = self.fx.root / "etc/pleb/session.env"
+                    stubs = self.fx.tmp / "jbin"
+                    stubs.mkdir(exist_ok=True)
+                    pidfile = self.fx.tmp / "descendant-pid"
+                    child = ("import os, signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                             f"open({str(pidfile)!r}, 'w').write(str(os.getpid())); time.sleep(120)")
+                    ignore = "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if parent_ignores_term else ""
+                    (stubs / tool).write_text("#!/usr/bin/python3\nimport signal, subprocess, sys, time\n" + ignore +
+                                              "sys.stdin.read() if " + repr(tool == "systemd-cat") + " else None\n"
+                                              f"subprocess.Popen(['/usr/bin/python3', '-c', {child!r}])\ntime.sleep(120)\n")
+                    (stubs / tool).chmod(0o755)
+                    other = "systemd-cat" if tool == "logger" else "logger"
+                    (stubs / other).write_text("#!/bin/sh\nexit 1\n")
+                    (stubs / other).chmod(0o755)
+                    before = BASEB + OLD + b"((X))\n"
+                    after, took = self.timed_run(before, stubs)
+                    self.assertEqual(after, before)                       # file preserved
+                    self.assertLess(took, 25)                             # nonfatal, bounded
+                    self.assertIn(b"NOTE:", self.err)                     # the NOTE is kept
+                    self.assertIn(b"failed or timed out", self.err)
+                    self.assertTrue(pidfile.exists(), "the descendant never started")
+                    pid = int(pidfile.read_text())
+                    import time as _t
+                    _t.sleep(0.5)
+                    alive = Path(f"/proc/{pid}").exists() and "State:\tZ" not in Path(f"/proc/{pid}/status").read_text()
+                    if alive:
+                        os.kill(pid, 9)
+                    self.assertFalse(alive, "a TERM-ignoring descendant outlived the bound")
+
+    def test_the_deadline_is_a_hard_kill_of_the_whole_group(self):
+        text = UPDATE.read_text()
+        self.assertEqual(text.count("timeout -s KILL \"$secs\" \"$@\""), 1)
+        self.assertNotIn("timeout -k", text)
 
     def test_not_installed_and_failed_are_told_apart(self):
         none = self.fx.tmp / "nobin"
