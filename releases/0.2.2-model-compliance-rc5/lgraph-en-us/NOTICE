@@ -1,0 +1,14 @@
+Plebian-OS 0.2.2 conveyance notice for lgraph-en-us.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS does not distribute these model bytes.
+
+Artifact: vosk-model-en-us-0.22-lgraph (provider kilix-voice, version 0.22-lgraph)
+Source: https://alphacephei.com/vosk/models/vosk-model-en-us-0.22-lgraph.zip
+Upstream host: alphacephei.com
+Download size: 130557655 bytes
+Archive sha256: d9838b4aaa82a75c4a17f5aca300eaca129aaab2a7cbf951bafbb500eb9c4334
+Installed member manifest digest: 97cbc1923387b57d6f7910ac01f71bf08fcb912765a64218499e0c81bf408928
+Licence(s): apache-2.0
+Licensor(s): Appen; Alpha Cephei
+Licence, advisory and attribution texts: licence-texts/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt, licence-texts/0a35a0ec6cc8a56038d2ec1455e2cb5c7a325207f73a541763e96fe398e7bca2.txt, licence-texts/23387fa902a7fd36d8e9bf72e8ffd1182efac26029e89dd14b16249b0c002573.txt
+Owner determination: determinations/lgraph-en-us/OWNER-DETERMINATION-lgraph-en-us.md

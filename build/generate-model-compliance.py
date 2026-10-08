@@ -93,7 +93,7 @@ LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
 # Models whose only download route is the model catalog itself: `kilix stt
 # --install` runs `kilix models install`, the licence screen, and fetches
 # nothing on its own, so there is no separate receipt check to cite.
-CATALOG_INSTALLED_MODELS = frozenset({"whisper-small-en"})
+CATALOG_INSTALLED_MODELS = frozenset({"whisper-small-en", "whistle"})
 
 
 def licence_record_id(model: str) -> str:

@@ -1,8 +1,8 @@
 mode: first-use-upstream-download
 No model weights are present in this image, and provisioning downloads none.
-vibevoice-asr-bitnet reaches a machine only when a user installs it; it is downloaded from
-huggingface.co and verified against the pinned digests before installation.
+small-en-us reaches a machine only when a user installs it; it is downloaded from
+alphacephei.com and verified against the pinned digests before installation.
 No install route downloads it until a kilix-license receipt covers it:
 The model catalog shows the licence and records the receipt, and
 The speech install command, voice installer and Bonsai pull command first ask
-`kilix-stt --check-licence` (kilix-voice cba6048cc7d8b6f33a1af5cc3cf84e5c1c34e802).
+`kilix-stt --check-licence` (kilix-voice a12be47e289ca03fccd46840276add1833df5760).

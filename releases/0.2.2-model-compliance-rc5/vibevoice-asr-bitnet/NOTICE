@@ -1,0 +1,13 @@
+Plebian-OS 0.2.2 conveyance notice for vibevoice-asr-bitnet.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS does not distribute these model bytes.
+
+Artifact: vibevoice-asr-bitnet (provider kilix-bonsai, version 66e78021ab8f5f06133d1ab421ba4d348bda97c9)
+Source: https://huggingface.co/microsoft/VibeVoice-ASR-BitNet/resolve/66e78021ab8f5f06133d1ab421ba4d348bda97c9/README.md
+Upstream host: huggingface.co
+Download size: 1705771590 bytes
+Installed member manifest digest: 826e6ace027b98a4237ff73064e7bf855fe4a79c0e9bd334eb1b041c0920a3e7
+Licence(s): mit, apache-2.0
+Licensor(s): Microsoft Corporation; Alibaba Cloud
+Licence, advisory and attribution texts: licence-texts/98a96c38494df4963951e32b81ec4effebe4c8a812ab8d9e7d185d59e86fe2fc.txt, licence-texts/832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e.txt, licence-texts/9ef874baa37eb4edc5fd731ad7c2587149986f9dff4760679421735e5b6daee3.txt, licence-texts/7f7a9f0f246a7dca9c3337dad59f29abc61de9ebbaf8e7a778283007b4f3f6e7.txt
+Owner determination: determinations/vibevoice-asr-bitnet/OWNER-DETERMINATION-vibevoice-asr-bitnet.md, determinations/vibevoice-asr-bitnet/OWNER-RULING-C2-AMENDMENT-2026-09-29.md, determinations/vibevoice-asr-bitnet/OWNER-RULING-J1-J2-2026-09-25.md

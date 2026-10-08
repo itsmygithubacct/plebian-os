@@ -1,0 +1,13 @@
+Plebian-OS 0.2.2 conveyance notice for whistle.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS does not distribute these model bytes.
+
+Artifact: whistle (provider kilix-voice, version b358ddadd89b7a713b5aa131f23032d3cca1b251)
+Source: https://huggingface.co/Cactus-Compute/whistle/resolve/b358ddadd89b7a713b5aa131f23032d3cca1b251/LICENSE
+Upstream host: huggingface.co
+Download size: 16937647 bytes
+Installed member manifest digest: 407cec51d26bc0574b09619c271007a49ec3289d1cee8e5fb73271d1088669c1
+Licence(s): apache-2.0
+Licensor(s): Cactus Compute, Inc.
+Licence, advisory and attribution texts: licence-texts/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt, licence-texts/7c3fcc8ea6bb04afe8bfb5df6a8f94aad77af760c936e30bde3a1c81a8bad5bc.txt
+Owner determination: determinations/whistle/OWNER-RC6-WHISTLE-2026-10-08.md

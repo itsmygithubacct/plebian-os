@@ -1,0 +1,14 @@
+Plebian-OS 0.2.2 conveyance notice for small-en-us.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS does not distribute these model bytes.
+
+Artifact: vosk-model-small-en-us-0.15 (provider kilix-voice, version 0.15)
+Source: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+Upstream host: alphacephei.com
+Download size: 41205931 bytes
+Archive sha256: 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498
+Installed member manifest digest: 1523d976c7609d33dc4e908115e22126c9f06b0a670511cd0fd7090075900341
+Licence(s): apache-2.0
+Licensor(s): Alpha Cephei Inc.
+Licence, advisory and attribution texts: licence-texts/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt, licence-texts/eb08af7e312af21876578253bbb4c184d3f940a9286ef8bf52a801e64c9d9c6d.txt
+Owner determination: determinations/small-en-us/OWNER-DETERMINATION-small-en-us.md

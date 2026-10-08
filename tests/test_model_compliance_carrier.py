@@ -31,6 +31,9 @@ ROOT = Path(__file__).resolve().parents[1]
 # The one speech model whose licence record names its upstream artifact rather
 # than the catalog id; spelled here, not imported from the generator it checks.
 LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
+# Whistle's pinned authority is an application record; its release inclusion
+# is separately bound by this carrier's owner determination and review seats.
+LICENCE_RECORD_DIRS = {"whistle": "app-records"}
 VERSION = (ROOT / "VERSION").read_text().strip()
 CARRIER = ROOT / "releases" / f"{VERSION}-model-compliance"
 GENERATOR = ROOT / "build" / "generate-model-compliance.py"
@@ -153,12 +156,12 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
     voice_ref = carrier["voice_ref"]
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
-        # Whisper's install hands off to the model catalog (the licence screen)
+        # Whisper and Whistle installation hands off to the model catalog (the licence screen)
         # rather than asking the receipt check itself; say so, and nothing more.
         route = (f"hands the download to that model catalog\nand fetches no weights "
-                 f"itself (kilix-voice {voice_ref})." if model == "whisper-small-en"
+                 f"itself (kilix-voice {voice_ref})." if model in {"whisper-small-en", "whistle"}
                  else f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).")
-        if model == "whisper-small-en" and "--check-licence" in delivery:
+        if model in {"whisper-small-en", "whistle"} and "--check-licence" in delivery:
             gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
         for claim in ("No model weights are present in this image, and "
                       "provisioning downloads none.",
@@ -381,7 +384,7 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         for model, entry in carrier["models"].items():
             upstream = subprocess.run(
                 ["git", "-C", str(license_), "--no-replace-objects", "show",
-                 f"{ref}:src/kilix_license/data/records/{LICENCE_RECORD_IDS.get(model, model)}.json"],
+                 f"{ref}:src/kilix_license/data/{LICENCE_RECORD_DIRS.get(model, 'records')}/{LICENCE_RECORD_IDS.get(model, model)}.json"],
                 capture_output=True, check=True).stdout
             self.assertEqual((CARRIER / model / "LICENCE-RECORD.json").read_bytes(),
                              upstream, model)
