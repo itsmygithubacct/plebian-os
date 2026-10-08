@@ -4,6 +4,58 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+- No automatic screen lock by default. `/etc/pleb/session.env` is provisioned with
+  `PLEB_IDLE_LOCK_SECONDS=0` (was 600), which in Pleb means no lock on idle, on
+  display power-off, or before suspend/hibernate, and waking from suspend shows
+  the desktop unlocked. Super-L, Ctrl-Alt-L, `pleb lock` and `loginctl lock-session`
+  still lock. Set a positive `PLEB_IDLE_LOCK_SECONDS` (or `PLEB_AUTO_LOCK=on`) in
+  session.env to turn automatic locking back on. `plebian-os-update` migrates
+  existing installs (in its transaction, with rollback) by a whole-file check on
+  the raw bytes, never by sourcing or guessing. The file must consist only of the
+  shapes the provisioner itself renders (blank lines, `#` comments, `NAME=value`
+  and `export NAME=value` with a plain, single-quoted or simply double-quoted
+  value, `export NAME ...`, the guarded `if [ -z "${NAME+x}" ]; then NAME=value; fi`
+  default, an optional trailing comment) with no NUL, CR or non-UTF-8 bytes, no
+  continuation or comment ending in a backslash, no here-doc, no unterminated
+  final line (except the inherited one). Such a file is changed: the exact line
+  older provisioners generated (the 600 default) becomes 0 in place unless the
+  operator assigns the name elsewhere (then it is left alone), a missing name
+  gets its default appended, and the missing window-manager and alias defaults
+  are added. Any other file is **not written at all** (no defaults, no comment)
+  and the update prints one note naming the file, the lines involved and the
+  manual change (`PLEB_IDLE_LOCK_SECONDS=0`); the note (at most 1 KiB, at most
+  eight problems, names cut at 64 characters) is also logged to the system journal
+  with `logger -t plebian-os-update` (`systemd-cat` as a fallback; with neither,
+  the printed note is the only record). The final-newline state is kept,
+  the result is re-checked with the same rules, and success is reported only
+  after the installed file has been re-read. A 600 next to a reference such as
+  `printf "$PLEB_IDLE_LOCK_SECONDS"` is therefore reported, not migrated;
+  settings made by sourcing another file are invisible to the update.
+  `PLEB_AUTO_LOCK` is never changed. The
+  migration runs in the updater that carries it, so an update started by an older
+  installed updater deploys the new one and the next `plebian-os-update` migrates.
+  A `lock-screen-suspend-hibernate` value already stored in a user's Xfce settings
+  is kept; only a never-set value is seeded to off.
+
+- Closing the lid does nothing by default. Provisioning, the preseed and updates install
+  `/etc/systemd/logind.conf.d/50-plebian-lid.conf` (`HandleLidSwitch`,
+  `HandleLidSwitchExternalPower` and `HandleLidSwitchDocked` = `ignore`) for the
+  no-session case. The preseed and the provisioner write it by staging a regular
+  file and renaming it into place (a symlink at the path is replaced, never
+  followed). `plebian-os-update` applies the same provisioner function after
+  `pleb install` (`reapply_lid_defaults`), inside the update's root transaction,
+  so existing installs gain the file on an update run by this updater. An
+  update run by an already installed older updater deploys the new updater but
+  cannot apply the file itself, so the first update after upgrading deploys and
+  the next `plebian-os-update` applies it. The managed
+  `pleb install` does not install a logind file itself. The staging file is a
+  fixed name listed in the provisioner's and updater's transaction inventories, so
+  an interrupted write leaves nothing behind. Other logind drop-ins are
+  untouched and logind is not restarted: the file applies at the next boot. The
+  Pleb session defaults the same through Pleb.
+
 ## [0.2.2] — 2026-09-23
 
 - The lifecycle successor binds Pleb's session children and Kilix's transcript

@@ -1282,6 +1282,8 @@ PROVISION_ROOT_TRANSACTION_BUILDING=0
 PROVISION_ROOT_TRANSACTION_PATHS=(
     /etc/modprobe.d/plebian-os-no-beep.conf
     /etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
+    /etc/systemd/logind.conf.d/50-plebian-lid.conf
+    /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     "$DESKTOP_WALLPAPER_DST"
     "$VERSION_MARKER_DST"
     "$LIGHTDM_GREETER_CONFIG_DST"
@@ -1372,6 +1374,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /usr/local/libexec/plebian-os
     /etc/modprobe.d
     /etc/systemd/system.conf.d
+    /etc/systemd/logind.conf.d
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/lightdm/lightdm.conf.d
     /etc/xdg-desktop-portal
@@ -3559,6 +3562,48 @@ install_quiet_console_defaults() {
 [Manager]
 ShowStatus=no
 EOF
+}
+
+# Shared by the provisioner and `plebian-os-update` (which sources this file in
+# library mode, like the audio hold-off), so a fresh install and an update write
+# the same file. The drop-in is staged as a regular file beside its destination
+# and rename(2)d over it: a symlink already at the path is replaced, never
+# followed, so another drop-in it pointed at is not truncated. Ownership and mode
+# are explicit. logind is not restarted or signalled: the drop-in applies at the
+# next boot. A session running xfce4-power-manager decides the lid itself (its
+# inhibitor). The caller's transaction snapshots the destination and its
+# directory, so a later failure restores the original object.
+install_lid_defaults() {
+    local conf=/etc/systemd/logind.conf.d/50-plebian-lid.conf dir stage
+    log "closing the lid does nothing unless a session says otherwise -> $conf"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $conf (HandleLidSwitch*=ignore)"
+        return 0
+    fi
+    dir="$(dirname "$conf")"
+    mkdir -p "$dir" || return 1
+    # A fixed name, so the transaction (provisioner and updater alike) lists
+    # exactly this path: an interruption, even an uncatchable one, leaves nothing
+    # the rollback does not remove, and nothing is swept by wildcard.
+    stage="$dir/.$(basename "$conf").stage"
+    rm -f -- "$stage" || return 1
+    if ! cat > "$stage" <<'EOF'
+# Managed by plebian-os-provision. Lid close does nothing without a session
+# policy (greeter, console). The Pleb session's xfce4-power-manager setting
+# (xfce4-power-manager-settings) decides while a session runs.
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+EOF
+    then
+        rm -f -- "$stage"
+        return 1
+    fi
+    # Production runs as root; a suite running as a user cannot chown.
+    if ! chmod 0644 "$stage"; then rm -f -- "$stage"; return 1; fi
+    if [ "$(id -u)" = 0 ] && ! chown root:root "$stage"; then rm -f -- "$stage"; return 1; fi
+    if ! mv -fT -- "$stage" "$conf"; then rm -f -- "$stage"; return 1; fi
 }
 
 _apt_source_path_allowed() {
@@ -5801,6 +5846,7 @@ install_no_beep_defaults
 # packages whose user units this has to look at.
 disable_audio_holding_user_units
 install_quiet_console_defaults
+install_lid_defaults
 install_desktop_wallpaper
 install_version_marker
 install_lightdm_greeter_branding
@@ -6302,7 +6348,7 @@ EOF
     else
         write_session_default PLEB_SESSION_SERVICES on
     fi
-    write_session_default PLEB_IDLE_LOCK_SECONDS 600
+    write_session_default PLEB_IDLE_LOCK_SECONDS 0
     write_session_default PLEB_INPUT_METHOD auto
     write_session_default PLEB_DIR "$PLEB_DIR"
     write_session_default PLEB_STORAGE_HOME "$PLEB_STORAGE_HOME"

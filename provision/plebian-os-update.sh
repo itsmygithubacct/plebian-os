@@ -1025,6 +1025,8 @@ paths=(
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
+    /etc/systemd/logind.conf.d/50-plebian-lid.conf
+    /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -1086,6 +1088,7 @@ managed_dirs=(
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/ssh/sshd_config.d
+    /etc/systemd/logind.conf.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
     /etc/pleb
@@ -1098,7 +1101,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir "$txn/items"
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /etc/systemd \
     /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
@@ -1151,7 +1154,7 @@ case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
 [ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
 mode="$(stat -c '%a' "$txn")"
 (( (8#$mode & 8#077) == 0 )) || exit 2
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm \
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /etc/systemd \
     /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
@@ -1177,6 +1180,8 @@ paths=(
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
+    /etc/systemd/logind.conf.d/50-plebian-lid.conf
+    /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /etc/systemd/system/plebian-os-firstboot.service
@@ -1238,6 +1243,7 @@ managed_dirs=(
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/ssh/sshd_config.d
+    /etc/systemd/logind.conf.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
     /etc/pleb
@@ -2520,7 +2526,7 @@ migrate_pleb_session_env() {
     local -a elevate=()
     [ -e "$env_path" ] || return 0
     [ "$(id -u)" = 0 ] || elevate=(sudo)
-    log "applying the window manager session defaults to $env_path (existing values win)"
+    log "applying the session defaults to $env_path (window manager, no automatic lock; existing values win)"
     "${elevate[@]}" bash -s -- "$env_path" <<'ROOT_SESSION_ENV'
 set -euo pipefail
 env_path="$1"
@@ -2536,43 +2542,268 @@ owner="$(stat -c '%u' "$env_path")"
 mode="$(stat -c '%a' "$env_path")"
 [ "$owner" = 0 ] && (( (8#$mode & 8#22) == 0 )) || exit 2
 [ "$(stat -c '%s' -- "$env_path")" -le 1048576 ] || exit 2
-# Mirrors write_session_default in plebian-os-provision.sh: a self-guarding
-# assignment, so an explicit value set earlier in the file still wins when
-# pleb-session sources it.
-write_session_default() {
-    local name="$1" value="$2"
-    printf 'if [ -z "${%s+x}" ]; then %s=%q; fi\n' "$name" "$name" "$value"
-}
-# Comments are stripped first so the file's own documentation of a setting is
-# not mistaken for the setting; `NAME=` and `${NAME+x}` both define it.
-config_text="$(sed -e 's/#.*$//' -- "$env_path")"
-names=()
-values=()
-if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])PLEB_WM[=+] ]]; then
-    names+=(PLEB_WM)
-    values+=(openbox)
-fi
-if [[ ! "$config_text" =~ (^|[^A-Za-z0-9_])KILIX_RUN_ALIASES[=+] ]]; then
-    names+=(KILIX_RUN_ALIASES)
-    values+=(1)
-fi
-[ "${#names[@]}" -gt 0 ] || exit 0
+# The decision is made on the raw bytes of the whole file by a closed grammar,
+# never by sourcing, evaluating or per-line guessing (python3 is a hard
+# dependency of this stack). The grammar is exactly what plebian-os-provision.sh
+# renders into session.env: the guarded defaults `write_session_default` prints
+# (value from printf %q: a bare word, '' or backslash-escaped characters), the
+# `export NAME NAME...` lines, `#` comment lines, an optional trailing `# ...`
+# comment (the kiosk `PLEB_RESPAWN=1   # ...` line), and operator lines of the
+# same shapes. Any other line, any NUL, CR or non-UTF-8 byte, any comment
+# ending in a backslash, and any unterminated final line other than the exact
+# inherited one makes the WHOLE file uncertain: it is not written at all (no
+# defaults, no comment) and one NOTE names the file, the lines and the manual
+# change. A file that passes: the exact inherited PLEB_IDLE_LOCK_SECONDS=600
+# line becomes 0 (unless the operator assigns the name elsewhere, which wins and
+# leaves the file alone), a missing name gets its default appended, and bare
+# `export NAME` lines are harmless. The final-newline state is preserved, the
+# result is re-parsed with the same grammar, and success is printed only after
+# the installed file is re-read and matches.
 tmp="$(mktemp /etc/pleb/.session.env.XXXXXX)"
 trap 'rm -f -- "$tmp"' EXIT
-{
-    cat -- "$env_path"
-    if [ -s "$env_path" ] && [ -n "$(tail -c 1 -- "$env_path")" ]; then
-        printf '\n'
-    fi
-    printf '%s\n' '# Added by plebian-os-update — window manager session defaults.'
-    for i in "${!names[@]}"; do
-        write_session_default "${names[$i]}" "${values[$i]}"
-    done
-} >"$tmp"
+decision="$(python3 - "$env_path" "$tmp" <<'PY_SESSION_GATE'
+import re, sys
+src, dst = sys.argv[1], sys.argv[2]
+# Names an assignment may use: what plebian-os-provision.sh renders into
+# session.env (write_session_default, the export lines, PLEB_RESPAWN) plus every
+# variable pleb-session reads from the session environment (_pleb_release_vars
+# and _pleb_vars) and the documented operator settings (PLEB_WM, PLEB_AUTO_LOCK,
+# PLEB_IDLE_LOCK_SECONDS, KILIX_RUN_ALIASES). Anything else, notably bash special
+# and integer variables (OPTIND, RANDOM, SECONDS, LINENO, BASH_*, HIST*, IFS, PATH),
+# makes the file uncertain. A test keeps this list complete against those sources.
+NAMES = frozenset("""
+GPU_TERMINAL_HOME GPU_TERMINAL_SETTINGS_FILE GPU_TERMINAL_SOURCE_HOME KILIX
+KILIX95_ALLOW_MUTABLE_REF KILIX95_ALLOW_UNPINNED_INSTALL
+KILIX95_AUTO_INSTALL KILIX95_BRANCH KILIX95_CACHE_HOME KILIX95_CONFIG_HOME
+KILIX95_DATA_HOME KILIX95_DIR KILIX95_REF KILIX95_REPO KILIX95_SESSION_HOME
+KILIX95_STATE_HOME KILIX95_STORAGE_HOME KILIX_ALLOW_MUTABLE_REF KILIX_BRANCH
+KILIX_BUILD_DIRECTORY KILIX_CACHE_HOME KILIX_CAP_ALLOW_MUTABLE_REF
+KILIX_CAP_AUTO_INSTALL KILIX_CAP_DIR KILIX_CAP_REF KILIX_CAP_REPO
+KILIX_CAP_TRUST_EXISTING_CHECKOUT KILIX_CONFIG_HOME KILIX_DATA_HOME
+KILIX_DESKTOP_COMMAND KILIX_DESKTOP_DIR KILIX_DESKTOP_FLAVOR
+KILIX_DESKTOP_NAME KILIX_DESKTOP_PROVIDER KILIX_DESKTOP_SDK_BRANCH
+KILIX_DESKTOP_SDK_REF KILIX_DESKTOP_SDK_REPO KILIX_DIR KILIX_ICEWM_BRANCH
+KILIX_ICEWM_REF KILIX_ICEWM_REPO KILIX_LAND_DESKTOP_ALLOW_MUTABLE_REF
+KILIX_LAND_DESKTOP_ASSETS KILIX_LAND_DESKTOP_AUDIO
+KILIX_LAND_DESKTOP_AUTO_INSTALL KILIX_LAND_DESKTOP_CONFIG_HOME
+KILIX_LAND_DESKTOP_DIR KILIX_LAND_DESKTOP_EXTERNAL_APPS
+KILIX_LAND_DESKTOP_REF KILIX_LAND_DESKTOP_REPO
+KILIX_LAND_DESKTOP_TRUST_EXISTING_CHECKOUT KILIX_MEDIA_SDK_BRANCH
+KILIX_MEDIA_SDK_REF KILIX_MEDIA_SDK_REPO KILIX_PREBUILT_HOME
+KILIX_PREBUILT_SHA256 KILIX_PREBUILT_VERSION KILIX_REF KILIX_REPO
+KILIX_RUN_ALIASES KILIX_RUN_ALIAS_APPS KILIX_RUN_ALIAS_EXCLUDE_APPS
+KILIX_SESSION_HOME KILIX_STATE_DIRECTORY KILIX_STORAGE_HOME
+KILIX_SYSTEM_MONITOR_BRANCH KILIX_SYSTEM_MONITOR_REF
+KILIX_SYSTEM_MONITOR_REPO KILIX_TUI_UTILS_ALLOW_MUTABLE_REF
+KILIX_TUI_UTILS_AUTO_INSTALL KILIX_TUI_UTILS_DIR KILIX_TUI_UTILS_REF
+KILIX_TUI_UTILS_REPO KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT
+KILIX_VOICE_LIB_SHA256 KILIX_VOICE_LIB_URL KILIX_VOICE_LIB_VERSION
+KILIX_VOICE_MODEL_SHA256 KILIX_VOICE_MODEL_URL KILIX_VOICE_REF
+KILIX_WAYDROID_BRANCH KILIX_WAYDROID_REF KILIX_WAYDROID_REPO
+PLEBIAN_OS_APT_SNAPSHOT PLEBIAN_OS_BRANCH PLEBIAN_OS_BUILD_KILIX_FORK
+PLEBIAN_OS_DIR PLEBIAN_OS_INSTALL_UV PLEBIAN_OS_INSTALL_VOICE_MODEL
+PLEBIAN_OS_INSTALL_WAYDROID PLEBIAN_OS_KILIX_GO_MIN_VERSION
+PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64
+PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_MANAGED_INSTALL
+PLEBIAN_OS_NATIVE_CONTENT_REF PLEBIAN_OS_NATIVE_DEB_BYTES
+PLEBIAN_OS_NATIVE_DEB_SHA256 PLEBIAN_OS_NATIVE_DEB_URL
+PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_REF PLEBIAN_OS_RELEASE
+PLEBIAN_OS_RELEASE_MODE PLEBIAN_OS_REPO PLEBIAN_OS_SESSION_HOME
+PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_UV_INSTALLER_MAX_BYTES
+PLEBIAN_OS_UV_INSTALLER_SHA256 PLEBIAN_OS_UV_VERSION PLEBIAN_OS_VERSION
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 PLEB_AUTO_LOCK PLEB_BG PLEB_BRANCH
+PLEB_CACHE_HOME PLEB_CONFIG_HOME PLEB_DATA_HOME PLEB_DESKTOP PLEB_DIR
+PLEB_IDLE_LOCK_SECONDS PLEB_INPUT_METHOD PLEB_KILIX_ARGS PLEB_LOG
+PLEB_NO_FILL PLEB_OPENBOX_CONFIG PLEB_RECOVER_CRASHES PLEB_REF PLEB_REPO
+PLEB_RESPAWN PLEB_SESSION_HOME PLEB_SESSION_SERVICES PLEB_STATE_HOME
+PLEB_STORAGE_HOME PLEB_WM PLEB_WM_TIMEOUT
+""".split())
+NAME = r'[A-Z][A-Z0-9_]*'
+WORD = r"(?:[A-Za-z0-9_./:@%+,=~\u0080-\U0010ffff-]|\\[^\n])*"
+# bash printf %q writes a string that contains a control character as $'...' using
+# \a \b \t \n \v \f \r \E for those bytes, a 3-digit octal for the other
+# control bytes and DEL, \\ and \' for backslash and quote, and the raw
+# printable text (bytes >= 0x80 are raw or octal depending on the locale). The
+# gate accepts that form only: octals for bytes printf %q really escapes
+# (001-006, 016-032, 034-037, 177 and 200-377; never 000, never printable ASCII,
+# never a byte that has a named escape), the named escapes, and at least one
+# control escape in the string (otherwise printf %q would not have used $'...').
+# Octal 200-377 is a safe literal superset (a locale-independent spelling of a
+# high byte): ANSI-C quoting performs no expansion.
+ANSIC = r"(?P<ansi>\$'(?:[^'\\\x00-\x1f\x7f]|\\(?:[abEfnrtv\\']|[0-7]{3}))*')"
+CONTROL_OCTALS = {*range(1, 7), *range(14, 27), *range(28, 32), 127, *range(128, 256)}
+
+def ansic_canonical(text):
+    body = text[2:-1]
+    has_control = False
+    for m in re.finditer(r"\\([abEfnrtv]|[0-7]{3}|.)", body):
+        e = m.group(1)
+        if e in 'abEfnrtv' and len(e) == 1: has_control = True
+        elif len(e) == 3:
+            if int(e, 8) not in CONTROL_OCTALS: return False
+            has_control = True
+    return has_control
+
+VAL = rf"(?:{WORD}|'[^'\n]*'|\"[^$`\\\"\n]*\"|{ANSIC})"
+BLANK = re.compile(r'[ \t]*')
+COMMENT = re.compile(r'[ \t]*#[^\n]*')
+ASSIGN = re.compile(rf'[ \t]*(?:export[ \t]+)?({NAME})={VAL}(?:[ \t]+#[^\n]*)?[ \t]*')
+EXPORT = re.compile(rf'[ \t]*export((?:[ \t]+{NAME})+)[ \t]*')
+GUARD = re.compile(rf'if \[ -z "\$\{{({NAME})\+x\}}" \]; then ({NAME})={VAL}; fi')
+IDLE = 'PLEB_IDLE_LOCK_SECONDS'
+def guard(n, v): return f'if [ -z "${{{n}+x}}" ]; then {n}={v}; fi'
+OLD = guard(IDLE, '600')
+NEW = guard(IDLE, '0')
+WANT = (('PLEB_WM', 'openbox'), ('KILIX_RUN_ALIASES', '1'), (IDLE, '0'))
+# An unterminated final line is accepted only if this updater itself wrote it.
+OURS = {OLD, NEW} | {guard(n, v) for n, v in WANT}
+
+def analyze(data):
+    """Return (problems, defined, inherited_line_numbers, operator_assigns_idle)."""
+    problems, defined, inherited, operator = [], set(), [], False
+    line_of = lambda off: data.count(b'\n', 0, off) + 1
+    for label, needle in (('NUL byte', b'\0'), ('carriage return', b'\r')):
+        i = data.find(needle)
+        if i >= 0: problems.append((line_of(i), f'{label} at byte offset {i}'))
+    try: text = data.decode('utf-8')
+    except UnicodeDecodeError as e:
+        problems.append((line_of(e.start), f'not UTF-8 at byte offset {e.start}'))
+        return problems, defined, inherited, operator
+    lines = text.split('\n')
+    last = lines.pop()  # '' when the file ends with a newline
+    if last != '':
+        if last not in OURS: problems.append((len(lines) + 1, 'unterminated final line'))
+        lines.append(last)
+    for n, line in enumerate(lines, 1):
+        if line == OLD: inherited.append(n); defined.add(IDLE); continue
+        if BLANK.fullmatch(line): continue
+        if COMMENT.fullmatch(line):
+            if line.endswith('\\'): problems.append((n, 'comment ending in a backslash'))
+            continue
+        m = ASSIGN.fullmatch(line)
+        if m and m.group('ansi') and not ansic_canonical(m.group('ansi')):
+            problems.append((n, 'ANSI-C quoted value that printf %q would not write')); continue
+        if m:
+            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)[:64]} is not a session setting'))
+            elif re.search(r'#[^\n]*\\$', line): problems.append((n, 'comment ending in a backslash'))
+            else: defined.add(m.group(1)); operator |= (m.group(1) == IDLE)
+            continue
+        m = GUARD.fullmatch(line)
+        if m and m.group('ansi') and not ansic_canonical(m.group('ansi')):
+            problems.append((n, 'ANSI-C quoted value that printf %q would not write')); continue
+        if m and m.group(1) == m.group(2):
+            if m.group(1) not in NAMES: problems.append((n, f'name {m.group(1)[:64]} is not a session setting'))
+            else: defined.add(m.group(1)); operator |= (m.group(1) == IDLE)
+            continue
+        m = EXPORT.fullmatch(line)
+        if m:
+            odd = [x for x in m.group(1).split() if x not in NAMES]
+            if odd: problems.append((n, f'name {odd[0][:64]} is not a session setting'))
+            continue
+        problems.append((n, 'outside the session.env grammar'))
+    return problems, defined, inherited, operator
+
+data = open(src, 'rb').read()
+problems, defined, inherited, operator = analyze(data)
+if problems:
+    # Whole problem entries only, within a budget that keeps the journal message
+    # (prefix + file name + detail) under 1 KiB; room for "and N more" is always
+    # reserved, and no entry is cut in half.
+    entries = [f'line {n}: {why}' for n, why in sorted(problems)]
+    budget = min(700, 1024 - len(f'plebian-os-update: session.env unchanged: {src} ()'.encode()))
+    reserve = len(f'; and {len(entries)} more')   # sized from the real count, any number of digits
+    shown, used = [], 0
+    for i, e in enumerate(entries):
+        cost = len(e.encode()) + (2 if shown else 0)
+        left = len(entries) - i
+        if len(shown) < 8 and used + cost + (0 if left == 1 else reserve) <= budget:
+            shown.append(e); used += cost
+        else:
+            break
+    detail = '; '.join(shown)
+    if len(shown) < len(entries):
+        more = f'and {len(entries) - len(shown)} more'
+        detail = (detail + '; ' + more) if shown else more
+    print('uncertain|' + detail); sys.exit(0)
+text = data.decode('utf-8')
+migrate = bool(inherited) and not operator
+out = text
+if migrate:
+    parts = re.findall(r'[^\n]*\n|[^\n]+', text)
+    out = ''.join((NEW + ('\n' if p.endswith('\n') else '')) if p.rstrip('\n') == OLD else p for p in parts)
+added = [(n, v) for n, v in WANT if n not in defined and not (n == IDLE and operator)]
+# The file's end keeps the state it had (terminated or not); a newline is added
+# before the additions only because shell needs it between two lines.
+terminated = data.endswith(b'\n') or data == b''
+if added:
+    block = ['# Added by plebian-os-update — session defaults.'] + [guard(n, v) for n, v in added]
+    sep = '\n' if out and not out.endswith('\n') else ''
+    out = out + sep + '\n'.join(block) + ('\n' if terminated else '')
+raw = out.encode('utf-8')
+again = analyze(raw)
+if again[0] or (migrate and OLD in out.split('\n')) or raw.endswith(b'\n') != terminated:
+    print('uncertain|result-verification'); sys.exit(0)
+if raw == data:
+    print('unchanged'); sys.exit(0)
+open(dst, 'wb').write(raw)
+print('write|' + (' '.join(n for n, _ in added) or '-') + '|' + ('migrated' if migrate else 'kept'))
+PY_SESSION_GATE
+)" || exit 1
+case "$decision" in
+    uncertain\|*)
+        detail="${decision#uncertain|}"
+        note="$env_path was not changed: it is outside the grammar this update can read safely ($detail); no session defaults were added and PLEB_IDLE_LOCK_SECONDS was left as is. To have no automatic screen lock, make sure it sets PLEB_IDLE_LOCK_SECONDS=0 (the new default); any positive value keeps locking on."
+        printf 'plebian-os-update: NOTE: %s\n' "$note" >&2
+        # Durable record: the system journal, which rotates, bounds and protects
+        # it (no file of our own). One bounded message, each attempt bounded in
+        # time; a failure or timeout is not fatal and the stderr NOTE stays.
+        msg="plebian-os-update: session.env unchanged: $env_path ($detail)"
+        msg="${msg:0:1024}"
+        # timeout (coreutils, an Essential package) runs the command in its own
+        # process group; at the deadline it sends KILL to that whole group. A
+        # hard kill rather than TERM then KILL, because `-k` only escalates while
+        # the direct child is alive: a tool that exits on TERM would leave a
+        # TERM-ignoring descendant running.
+        bounded() {
+            local secs="$1"
+            shift
+            timeout -s KILL "$secs" "$@"
+        }
+        recorded=0 tried='' skipped=0
+        if ! command -v timeout >/dev/null 2>&1; then
+            skipped=1
+        elif command -v logger >/dev/null 2>&1; then
+            tried="logger"
+            bounded 5 logger -t plebian-os-update -p user.notice -- "$msg" 2>/dev/null && recorded=1
+        fi
+        if [ "$skipped" = 0 ] && [ "$recorded" = 0 ] && command -v systemd-cat >/dev/null 2>&1; then
+            tried="${tried:+$tried, }systemd-cat"
+            bounded 5 systemd-cat -t plebian-os-update -p notice <<<"$msg" 2>/dev/null && recorded=1
+        fi
+        if [ "$recorded" = 1 ]; then
+            printf 'plebian-os-update: this note is also recorded in the system journal (journalctl -t plebian-os-update)\n' >&2
+        elif [ "$skipped" = 1 ]; then
+            printf 'plebian-os-update: timeout unavailable; no additional record was made\n' >&2
+        elif [ -n "$tried" ]; then
+            printf 'plebian-os-update: %s failed or timed out (5 s limit each); no additional record was made\n' "$tried" >&2
+        else
+            printf 'plebian-os-update: neither logger nor systemd-cat is installed; no additional record was made\n' >&2
+        fi
+        exit 0 ;;
+    unchanged) exit 0 ;;
+    write\|*) ;;
+    *) exit 1 ;;
+esac
 chmod 0644 "$tmp"
+expected="$(sha256sum -- "$tmp")" || exit 1
+expected="${expected%% *}"
 mv -fT -- "$tmp" "$env_path"
 trap - EXIT
-printf 'plebian-os-update: added %s to %s\n' "${names[*]}" "$env_path"
+actual="$(sha256sum -- "$env_path")" || exit 1
+[ "${actual%% *}" = "$expected" ] || { echo "plebian-os-update: $env_path does not match what was written" >&2; exit 1; }
+IFS='|' read -r _ added migrated <<<"$decision"
+[ "$added" = - ] || printf 'plebian-os-update: added %s to %s\n' "$added" "$env_path"
+[ "$migrated" != migrated ] || printf 'plebian-os-update: PLEB_IDLE_LOCK_SECONDS 600 -> 0 (no automatic lock) in %s\n' "$env_path"
 ROOT_SESSION_ENV
 }
 
@@ -3765,6 +3996,57 @@ reapply_audio_holdoff() {
     esac
 }
 
+# Closing the lid does nothing by default. A machine provisioned before that
+# default has no 50-plebian-lid.conf, firstboot does not rerun on it, and the
+# managed `pleb install` leaves logind policy to this layer, so the update
+# applies it: the provisioner's own install_lid_defaults, sourced in library mode
+# exactly as the audio hold-off above (same safety gate, same elevation), inside
+# the update's root snapshot so a later failure restores the old object and
+# removes a directory this created. logind is neither restarted nor signalled;
+# the drop-in applies at the next boot.
+reapply_lid_defaults() {
+    local provisioner="$AUDIO_HOLDOFF_PROVISIONER" test_mode=0 rc=0 self_update
+    local -a elevate=()
+    if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        test_mode=1
+        provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-$provisioner}"
+    fi
+    case "${PLEBIAN_OS_SELF_UPDATE:-1}" in
+        1|yes|true|on) self_update=1 ;;
+        *) self_update=0 ;;
+    esac
+    audio_holdoff_provisioner_is_safe "$provisioner" "$test_mode" \
+        || die "installed provisioner is missing or unsafe: $provisioner"
+    if ! grep -q '^install_lid_defaults() {' "$provisioner" \
+        || ! grep -q '^if \[ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 \]; then' \
+            "$provisioner"; then
+        rc=98
+    else
+        [ "$(id -u)" = 0 ] || elevate=(sudo)
+        log "making lid close do nothing by default (applies at next boot)"
+        "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 \
+            PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 bash -c '
+            set -uo pipefail
+            . "$1" || exit 97
+            declare -F install_lid_defaults >/dev/null || exit 98
+            DRY_RUN=0
+            install_lid_defaults
+        ' reapply-lid-defaults "$provisioner" || rc=$?
+    fi
+    case "$rc:$self_update" in
+        0:*) return 0 ;;
+        98:0)
+            warn "the installed provisioner ($provisioner) predates the lid default,"
+            warn "  and OS-layer self-update is disabled, so closing the lid may"
+            warn "  still suspend; update with OS-layer self-update enabled."
+            return 0
+            ;;
+        98:*) die "the provisioner this update just deployed ($provisioner) does not carry the lid default" ;;
+        97:*) die "the installed provisioner could not be loaded to apply the lid default: $provisioner" ;;
+        *) die "the lid default did not complete (exit $rc)" ;;
+    esac
+}
+
 # Mirrors refuse_amd64_only_inputs in plebian-os-provision.sh for the pins this
 # update hands to `pleb install`. On any other architecture the x86_64 Vosk
 # wheel and the fallback amd64 kitty bundle checksum fail late, inside the
@@ -4446,6 +4728,8 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     # function's own header for why an update needs this at all.
     reapply_audio_holdoff
     test_fail_after_boundary audio-holdoff
+    reapply_lid_defaults
+    test_fail_after_boundary lid-defaults
     # Only now — after the dependency install and the whole component update
     # have succeeded — may the persisted session select the new window manager.
     # `pleb install` is the step that adds the openbox package and installs the
