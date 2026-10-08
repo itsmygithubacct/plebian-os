@@ -39,6 +39,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
@@ -361,7 +362,18 @@ def enablement_of(text):
 def model_the_image(root, resolved):
     """Recreate, under `root`, the user units the install path would enable."""
     enabled = []
+    installed = {}
     for _package, source, text in shipped_user_units(resolved):
+        # A package's file list can name both a unit and a vendor enablement
+        # symlink to it (for example foo.service and target.wants/foo.service).
+        # They describe one unit in this name-based image model, not two
+        # installations. Refuse conflicting definitions instead of allowing
+        # package enumeration order to choose the unit the guard sees.
+        if source.name in installed:
+            if installed[source.name] != text:
+                raise ValueError(f"conflicting packaged unit: {source.name}")
+            continue
+        installed[source.name] = text
         install = enablement_of(text)
         install_unit(root, source.name, text, enable=bool(install),
                      wants=install[0] if install else "default.target",
@@ -369,6 +381,40 @@ def model_the_image(root, resolved):
         if install:
             enabled.append(source.name)
     return sorted(enabled)
+
+
+class ImageModelDuplicateTests(unittest.TestCase):
+    def test_packaged_unit_and_enablement_alias_remain_a_detectable_holder(self):
+        text = a_holding_unit("Packaged login audio holder")
+        unit = Path("/usr/lib/systemd/user/login-audio.service")
+        alias = unit.parent / "default.target.wants" / unit.name
+        # Either package-list order must retain the same real unit and its
+        # enablement. These fixtures do not depend on the runner having IBus.
+        for sources in ((unit, alias), (alias, unit), (unit, alias, unit)):
+            with self.subTest(sources=sources), tempfile.TemporaryDirectory() as tmp:
+                root = make_root(tmp)
+                rows = [("fixture", path, text) for path in sources]
+                with mock.patch(__name__ + ".shipped_user_units", return_value=rows):
+                    self.assertEqual(model_the_image(root, {}), [unit.name])
+                self.assertEqual((root / str(unit).lstrip("/")).read_text(), text)
+                self.assertEqual(len(enablement_links(root, unit.name)), 1)
+                self.assertEqual(held_units(root), [unit.name])
+                result = apply_holdoff(root)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(held_units(root), [])
+                self.assertTrue(unit_cannot_start_at_login(root, unit.name))
+
+    def test_conflicting_same_name_cannot_silently_hide_a_holder(self):
+        clean = "[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=default.target\n"
+        holding = a_holding_unit("Conflicting audio holder")
+        for definitions in ((clean, holding), (holding, clean)):
+            with self.subTest(definitions=definitions), tempfile.TemporaryDirectory() as tmp:
+                root = make_root(tmp)
+                rows = [("fixture", Path(directory) / "login-audio.service", text)
+                        for directory, text in zip(USER_UNIT_DIRS, definitions)]
+                with mock.patch(__name__ + ".shipped_user_units", return_value=rows):
+                    with self.assertRaisesRegex(ValueError, "conflicting packaged unit"):
+                        model_the_image(root, {})
 
 
 def units_the_install_path_never_asked_for(resolved, named):
