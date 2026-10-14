@@ -31,6 +31,13 @@ VALUES = {
 }
 
 
+QT_SELECTION = {
+    'PLEBIAN_OS_QT_RUNTIME_URL': 'https://example.invalid/releases/qt.tar.xz',
+    'PLEBIAN_OS_QT_RUNTIME_SHA256': 'd' * 64,
+    'PLEBIAN_OS_QT_RUNTIME_BYTES': '1000',
+}
+
+
 def shell_function(source, name):
     text = (ROOT / source).read_text()
     start = text.index(name + '() {\n')
@@ -141,7 +148,7 @@ class NativeClosureTests(unittest.TestCase):
                 values = {**VALUES, 'PLEBIAN_OS_NATIVE_DEB_URL':
                     f'https://example.invalid:{port}/native.deb'}
                 manifest = fixture._f120_manifest_text(PLEBIAN_OS_VERSION='0.2.2',
-                    PLEBIAN_OS_REF='v0.2.2', **values)
+                    PLEBIAN_OS_REF='v0.2.2', **{**QT_SELECTION, **values})
                 commit = fixture._source(base, manifest, version='0.2.2',
                     release='0.2.2', tag=None)
                 result = fixture._run(base, '0.2.2', '--offline',
@@ -223,12 +230,12 @@ class NativeClosureTests(unittest.TestCase):
             env = fixture._machine(base)
             before = env.read_bytes()
             manifest = fixture._f120_manifest_text(PLEBIAN_OS_VERSION='0.2.2',
-                PLEBIAN_OS_REF='v0.2.2', **VALUES)
+                PLEBIAN_OS_REF='v0.2.2', **{**QT_SELECTION, **VALUES})
             commit = fixture._source(base, manifest, version='0.2.2', release='0.2.2', tag=None)
             result = fixture._run(base, '0.2.2', '--offline', '--development-commit', commit)
             self.assertEqual(result.returncode, 0, result.stderr)
             selected = fixture._values(env)
-            for key, value in VALUES.items():
+            for key, value in {**VALUES, **QT_SELECTION}.items():
                 self.assertEqual(selected[key], value)
             for key, value in closure_fixture.OPERATOR_VALUES:
                 self.assertEqual(selected[key], value)
@@ -246,7 +253,7 @@ class NativeClosureTests(unittest.TestCase):
                 before = env.read_bytes()
                 selected = {} if missing is None else {k: v for k, v in VALUES.items() if k != missing}
                 manifest = fixture._f120_manifest_text(PLEBIAN_OS_VERSION='0.2.2',
-                    PLEBIAN_OS_REF='v0.2.2', **selected)
+                    PLEBIAN_OS_REF='v0.2.2', **{**QT_SELECTION, **selected})
                 commit = fixture._source(base, manifest, version='0.2.2', release='0.2.2', tag=None)
                 result = fixture._run(base, '0.2.2', '--offline', '--development-commit', commit)
                 self.assertNotEqual(result.returncode, 0)

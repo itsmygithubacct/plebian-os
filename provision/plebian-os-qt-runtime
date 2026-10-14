@@ -1,0 +1,357 @@
+#!/usr/bin/python3 -IB
+"""Install or verify the two selected RC6 Debian Qt GUI packages."""
+
+import argparse
+import base64
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import tarfile
+import tempfile
+
+
+STATE = Path("/var/lib/plebian-os/qt-runtime")
+PREFERENCE = Path("/etc/apt/preferences.d/plebian-os-qt-runtime")
+HOOK = Path("/etc/apt/apt.conf.d/93plebian-os-qt-runtime")
+PACKAGES = {"libqt5gui5t64": "5.15.15", "libqt6gui6": "6.8.2"}
+
+
+def runtime_files(name):
+    qt = PACKAGES[name]
+    major = qt.split(".")[0]
+    return {
+        f"/usr/lib/x86_64-linux-gnu/libQt{major}Gui.so.{qt}",
+        f"/usr/lib/x86_64-linux-gnu/libQt{major}XcbQpa.so.{qt}",
+        f"/usr/lib/x86_64-linux-gnu/qt{major}/plugins/platforms/libqxcb.so",
+    }
+
+
+def state_directories():
+    for path in (STATE.parent, STATE, STATE / "packages"):
+        path.mkdir(mode=0o755, exist_ok=True)
+        info = path.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise ValueError("unsafe Qt runtime state directory")
+
+
+def snapshot(directory):
+    """Save exact prior GUI packages before the enclosing OS transaction mutates them."""
+    if (directory.parent.is_symlink() or directory.parent.stat().st_uid != 0
+            or directory.parent.stat().st_mode & 0o077):
+        raise ValueError("Qt snapshot requires a private root-owned transaction directory")
+    directory.mkdir(mode=0o700)
+    prior = {"packages": [], "files": {}}
+    for path in (PREFERENCE, HOOK, STATE / "RUNTIME.json"):
+        prior["files"][str(path)] = base64.b64encode(path.read_bytes()).decode() if path.exists() else None
+    for name in PACKAGES:
+        query = subprocess.run(["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Version}", name],
+                               capture_output=True, text=True)
+        if query.returncode == 1 or query.stdout.startswith(("not-installed\n", "config-files\n")):
+            prior["packages"].append({"Package": name, "Version": None})
+            continue
+        query.check_returncode()
+        status, version = query.stdout.splitlines()
+        if status != "installed" or not re.fullmatch(r"[A-Za-z0-9.+~:-]+", version):
+            raise ValueError(f"cannot snapshot incomplete Qt package: {name}")
+        cached = STATE / "packages" / f"{name}_{version}_amd64.deb"
+        if cached.exists():
+            archive = directory / cached.name
+            shutil.copyfile(cached, archive)
+        else:
+            subprocess.run(["/usr/bin/apt-get", "download", f"{name}={version}"], cwd=directory, check=True)
+            matches = list(directory.glob(f"{name}_*.deb"))
+            if len(matches) != 1:
+                raise ValueError(f"the prior Qt package archive is unavailable: {name}")
+            archive = matches[0]
+        info = subprocess.check_output(["/usr/bin/dpkg-deb", "-f", str(archive), "Package", "Version", "Architecture"], text=True)
+        metadata = dict(line.split(": ", 1) for line in info.splitlines())
+        if metadata != {"Package": name, "Version": version, "Architecture": "amd64"}:
+            raise ValueError("prior Qt package archive metadata differs from installed selection")
+        files = []
+        process = subprocess.Popen(["/usr/bin/dpkg-deb", "--fsys-tarfile", str(archive)], stdout=subprocess.PIPE)
+        with process.stdout, tarfile.open(fileobj=process.stdout, mode="r|") as payload:
+            for member in payload:
+                path = "/" + member.name.removeprefix("./")
+                if path in runtime_files(name) and member.isfile():
+                    files.append({"path": path, "bytes": member.size,
+                                  "sha256": hashlib.file_digest(payload.extractfile(member), "sha256").hexdigest()})
+        if process.wait() or {f["path"] for f in files} != runtime_files(name):
+            raise ValueError("prior Qt archive is missing its GUI/QPA/plugin files")
+        verify_files(files)
+        prior["packages"].append({**metadata, "path": archive.name, "sha256": digest(archive), "files": files})
+    atomic_write(directory / "SNAPSHOT.json", json.dumps(prior, indent=2) + "\n")
+
+
+def restore(directory):
+    if (directory.is_symlink() or directory.stat().st_uid != 0
+            or directory.stat().st_mode & 0o077):
+        raise ValueError("Qt restore requires a private root-owned snapshot")
+    prior = json.loads((directory / "SNAPSHOT.json").read_text())
+    records = prior["packages"]
+    if len(records) != 2 or {r["Package"] for r in records} != PACKAGES.keys():
+        raise ValueError("invalid Qt package snapshot")
+    expected = {str(PREFERENCE), str(HOOK), str(STATE / "RUNTIME.json")}
+    if set(prior["files"]) != expected:
+        raise ValueError("invalid Qt configuration snapshot")
+    archives = []
+    absent = []
+    for record in records:
+        if record["Version"] is None:
+            absent.append(record["Package"])
+            continue
+        path = (directory / record["path"]).resolve(strict=True)
+        if not path.is_relative_to(directory.resolve()) or digest(path) != record["sha256"]:
+            raise ValueError("prior Qt package archive changed")
+        archives.append(str(path))
+    HOOK.unlink(missing_ok=True)
+    preference = prior["files"][str(PREFERENCE)]
+    if preference is None:
+        PREFERENCE.unlink(missing_ok=True)
+    else:
+        atomic_write(PREFERENCE, base64.b64decode(preference, validate=True).decode())
+    if archives:
+        subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
+                        "--allow-downgrades", "install", *archives], check=True)
+    if absent:
+        # dpkg refuses dependent applications; never remove unrelated packages.
+        installed = [name for name in absent if subprocess.run(
+            ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}", name],
+            capture_output=True, text=True).stdout == "installed"]
+        if installed:
+            subprocess.run(["/usr/bin/dpkg", "--remove", *installed], check=True)
+    for path in (PREFERENCE, STATE / "RUNTIME.json", HOOK):
+        value = prior["files"][str(path)]
+        if value is None:
+            path.unlink(missing_ok=True)
+        else:
+            atomic_write(path, base64.b64decode(value, validate=True).decode())
+    for record in records:
+        query = subprocess.run(["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Version}", record["Package"]],
+                               capture_output=True, text=True)
+        if record["Version"] is None:
+            if query.returncode == 0 and query.stdout.startswith("installed\n"):
+                raise ValueError("Qt package absent before the transaction remains installed")
+        elif query.stdout != "installed\n" + record["Version"]:
+            raise ValueError("previous Qt package version was not restored")
+        else:
+            verify_files(record["files"])
+    if (STATE / "RUNTIME.json").exists():
+        verify(read_manifest(STATE / "RUNTIME.json"))
+
+
+def install_bundle(path, expected_sha, expected_bytes):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size != expected_bytes:
+            raise ValueError("Qt runtime bundle must be a regular file of the selected size")
+        raw = stream.read(expected_bytes + 1)
+    if len(raw) != expected_bytes or hashlib.sha256(raw).hexdigest() != expected_sha:
+        raise ValueError("Qt runtime bundle differs from the selected release closure")
+    state_directories()
+    with tempfile.TemporaryDirectory(prefix="stage-", dir=STATE) as directory:
+        root = Path(directory)
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r|xz") as archive:
+            count = total = 0
+            for member in archive:
+                count += 1
+                total += member.size
+                if count > 3 or not member.isfile() or total > 134217728:
+                    raise ValueError("Qt runtime bundle must contain its manifest and two GUI packages")
+                target = root / member.name
+                if (member.name.startswith("/") or ".." in Path(member.name).parts
+                        or member.size > 134217728):
+                    raise ValueError("invalid Qt runtime bundle member")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.extractfile(member) as source, target.open("xb") as output:
+                    shutil.copyfileobj(source, output)
+            if count != 3:
+                raise ValueError("Qt runtime bundle is incomplete")
+        main(["--install", str(root / "RUNTIME.json"), "--package-root", str(root)])
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def read_manifest(path):
+    records = json.loads(path.read_text())
+    if len(records) != 2 or {r["Package"] for r in records} != PACKAGES.keys():
+        raise ValueError("the RC6 Qt manifest must contain exactly the two GUI packages")
+    for record in records:
+        qt = PACKAGES[record["Package"]]
+        if (record["qt"] != qt or record["Architecture"] != "amd64"
+                or not record["Version"].startswith(qt + "+dfsg-")
+                or not re.fullmatch(r"[A-Za-z0-9.+~:-]+", record["Version"])
+                or "+plebianrc6." not in record["Version"]):
+            raise ValueError("incorrect RC6 Qt package version or architecture")
+        files = runtime_files(record["Package"])
+        if {f["path"] for f in record["files"]} != files or len(record["files"]) != 3:
+            raise ValueError("incomplete Qt GUI/QPA/plugin digest set")
+        for item in [record, *record["files"]]:
+            if (not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+                    or type(item["bytes"]) is not int or not 0 < item["bytes"] <= 134217728):
+                raise ValueError("invalid Qt digest")
+    return records
+
+
+def preferences(records):
+    return "".join(
+        f"Package: {r['Package']}\nPin: version {r['Version']}\nPin-Priority: 1001\n\n"
+        for r in records)
+
+
+def atomic_write(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(prefix=".qt-runtime-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+            os.fchmod(stream.fileno(), 0o644)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def verify_files(files):
+    for item in files:
+        path = Path(item["path"])
+        if (path.is_symlink() or not path.is_file()
+                or path.stat().st_size != item["bytes"] or digest(path) != item["sha256"]):
+            raise ValueError(f"the selected Qt runtime changed: {path}")
+
+
+def verify(records):
+    if PREFERENCE.read_text() != preferences(records):
+        raise ValueError("the selected Qt package preferences changed")
+    for record in records:
+        version = subprocess.check_output(
+            ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Version}", record["Package"]], text=True)
+        if version != "installed\n" + record["Version"]:
+            raise ValueError(f"the selected Qt package was replaced: {record['Package']}")
+        verify_files(record["files"])
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--verify", action="store_true")
+    action.add_argument("--plan", type=Path, metavar="RUNTIME_JSON")
+    action.add_argument("--install", type=Path, metavar="RUNTIME_JSON")
+    action.add_argument("--snapshot", type=Path)
+    action.add_argument("--restore", type=Path)
+    action.add_argument("--install-bundle", type=Path)
+    parser.add_argument("--package-root", type=Path)
+    parser.add_argument("--sha256")
+    parser.add_argument("--bytes", type=int)
+    args = parser.parse_args(argv)
+    if args.snapshot or args.restore or args.install_bundle:
+        if os.geteuid() != 0:
+            raise PermissionError("Qt package operations require root")
+        if args.snapshot:
+            snapshot(args.snapshot)
+        elif args.restore:
+            restore(args.restore)
+        else:
+            if (not args.sha256 or not re.fullmatch(r"[0-9a-f]{64}", args.sha256)
+                    or args.bytes is None or not 0 < args.bytes <= 134217728):
+                parser.error("--install-bundle requires an exact SHA-256 and byte count")
+            install_bundle(args.install_bundle, args.sha256, args.bytes)
+        return
+    if args.verify:
+        verify(read_manifest(STATE / "RUNTIME.json"))
+        print("Plebian-OS selected Qt runtime verified")
+        return
+    records = read_manifest(args.install or args.plan)
+    if args.package_root is None:
+        parser.error("--package-root is required for --plan and --install")
+    root = args.package_root.resolve(strict=True)
+    archives = []
+    for record in records:
+        path = (root / record["path"]).resolve(strict=True)
+        if (not path.is_relative_to(root) or not path.is_file()
+                or path.stat().st_size != record["bytes"]
+                or digest(path) != record["sha256"]):
+            raise ValueError("Qt package archive does not match the selected manifest")
+        info = subprocess.check_output(
+            ["/usr/bin/dpkg-deb", "-f", str(path), "Package", "Version", "Architecture"], text=True)
+        metadata = dict(line.split(": ", 1) for line in info.splitlines())
+        if any(metadata[key] != record[key] for key in ("Package", "Version", "Architecture")):
+            raise ValueError("Qt package metadata does not match the selected manifest")
+        archives.append(str(path))
+    if args.plan:
+        print(preferences(records), end="")
+        print("apt-get --no-install-recommends --no-remove install", *archives)
+        return
+    if os.geteuid() != 0:
+        raise PermissionError("Qt package installation requires root")
+    if subprocess.check_output(["/usr/bin/dpkg", "--print-architecture"], text=True).strip() != "amd64":
+        raise ValueError("the selected RC6 Qt runtime is for amd64")
+    state_directories()
+    before = PREFERENCE.read_text() if PREFERENCE.exists() else None
+    old_state = (STATE / "RUNTIME.json").read_text() if (STATE / "RUNTIME.json").exists() else None
+    old_records = read_manifest(STATE / "RUNTIME.json") if old_state else None
+    old_hook = HOOK.read_text() if HOOK.exists() else None
+    cache = STATE / "packages"
+    cache.mkdir(parents=True, exist_ok=True)
+    if old_records:
+        verify(old_records)
+        for record in old_records:
+            cached = cache / f"{record['Package']}_{record['Version']}_{record['Architecture']}.deb"
+            if digest(cached) != record["sha256"]:
+                raise ValueError("the previous selected Qt package cannot be restored")
+            replacement = next(r for r in records if r["Package"] == record["Package"])
+            if (replacement["Version"] == record["Version"]
+                    and replacement["sha256"] != record["sha256"]):
+                raise ValueError("a changed Qt artifact requires a new package version")
+    for record, archive in zip(records, archives):
+        cached = cache / f"{record['Package']}_{record['Version']}_{record['Architecture']}.deb"
+        shutil.copyfile(archive, cached)
+        if digest(cached) != record["sha256"]:
+            raise ValueError("cached Qt package does not match the selected manifest")
+    # The previous manifest must not grade the new packages during this hop.
+    HOOK.unlink(missing_ok=True)
+    try:
+        atomic_write(PREFERENCE, preferences(records))
+        subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
+                        "install", *archives], check=True)
+        atomic_write(STATE / "RUNTIME.json", json.dumps(records, indent=2) + "\n")
+        verify(records)
+    except BaseException:
+        if before is None:
+            PREFERENCE.unlink(missing_ok=True)
+        else:
+            atomic_write(PREFERENCE, before)
+        try:
+            if old_state:
+                atomic_write(STATE / "RUNTIME.json", old_state)
+                previous = [str(cache / f"{r['Package']}_{r['Version']}_{r['Architecture']}.deb")
+                            for r in old_records]
+                subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
+                                "--allow-downgrades", "install", *previous], check=True)
+                verify(old_records)
+            else:
+                (STATE / "RUNTIME.json").unlink(missing_ok=True)
+        finally:
+            if old_hook:
+                atomic_write(HOOK, old_hook)
+        raise
+    atomic_write(HOOK, 'DPkg::Post-Invoke { "/usr/local/sbin/plebian-os-qt-runtime --verify"; };\n')
+    print("Plebian-OS selected Qt runtime installed and verified")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        raise SystemExit(f"plebian-os-qt-runtime: {exc}")

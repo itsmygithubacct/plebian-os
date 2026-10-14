@@ -489,6 +489,9 @@ PLEBIAN_OS_NATIVE_DEB_SHA256="${PLEBIAN_OS_NATIVE_DEB_SHA256:-}"
 PLEBIAN_OS_NATIVE_DEB_BYTES="${PLEBIAN_OS_NATIVE_DEB_BYTES:-}"
 PLEBIAN_OS_NATIVE_SOURCE_REF="${PLEBIAN_OS_NATIVE_SOURCE_REF:-}"
 PLEBIAN_OS_NATIVE_CONTENT_REF="${PLEBIAN_OS_NATIVE_CONTENT_REF:-}"
+PLEBIAN_OS_QT_RUNTIME_URL="${PLEBIAN_OS_QT_RUNTIME_URL:-}"
+PLEBIAN_OS_QT_RUNTIME_SHA256="${PLEBIAN_OS_QT_RUNTIME_SHA256:-}"
+PLEBIAN_OS_QT_RUNTIME_BYTES="${PLEBIAN_OS_QT_RUNTIME_BYTES:-}"
 KILIX_VOICE_LIB_VERSION="${KILIX_VOICE_LIB_VERSION:-}"
 KILIX_VOICE_LIB_URL="${KILIX_VOICE_LIB_URL:-}"
 KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
@@ -1016,6 +1019,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/libexec/plebian-os/native_package.py
     /usr/local/libexec/plebian-os/native_state.py
     /usr/local/libexec/plebian-os/native_process.py
@@ -1178,6 +1182,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/libexec/plebian-os/native_package.py
     /usr/local/libexec/plebian-os/native_state.py
     /usr/local/libexec/plebian-os/native_process.py
@@ -1841,6 +1846,31 @@ commit_kilix_engine_generation() {
     fi
 }
 
+validate_qt_release_closure() {
+    local version="$1" mode="$2" key present=0 authority port
+    local url_pattern='^https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*$'
+    for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
+        [ -z "${!key:-}" ] || present=$((present + 1))
+    done
+    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+        return 0
+    fi
+    [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
+    [[ "$PLEBIAN_OS_QT_RUNTIME_URL" =~ $url_pattern ]] && [ "${#PLEBIAN_OS_QT_RUNTIME_URL}" -le 2048 ] \
+        || { echo 'Qt runtime URL must be a bounded HTTPS URL without credentials' >&2; return 1; }
+    authority="${PLEBIAN_OS_QT_RUNTIME_URL#https://}"
+    authority="${authority%%[/?]*}"
+    if [[ "$authority" == *:* ]]; then
+        port="${authority#*:}"
+        [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$port" -le 65535 ] \
+            || { echo 'invalid Qt runtime HTTPS port' >&2; return 1; }
+    fi
+    [[ "$PLEBIAN_OS_QT_RUNTIME_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || { echo 'Qt runtime checksum must be a lowercase SHA-256' >&2; return 1; }
+    [[ "$PLEBIAN_OS_QT_RUNTIME_BYTES" =~ ^[1-9][0-9]{0,8}$ ]] && [ "$PLEBIAN_OS_QT_RUNTIME_BYTES" -le 134217728 ] \
+        || { echo 'Qt runtime byte count must be in 1..134217728' >&2; return 1; }
+}
+
 validate_native_release_closure() {
     local version="$1" mode="$2" key present=0
     local authority port
@@ -1893,6 +1923,62 @@ validate_native_release_closure() {
 # process's active journal. A failed outer rollback keeps the deployed helper.
 NATIVE_TRANSACTION_TOKEN=
 NATIVE_TRANSACTION_STARTED=0
+
+qt_download_archive() {
+    /usr/bin/prlimit --fsize="$PLEBIAN_OS_QT_RUNTIME_BYTES:$PLEBIAN_OS_QT_RUNTIME_BYTES" -- \
+        /usr/bin/timeout --signal=TERM --kill-after=5s 305s \
+        /usr/bin/curl --disable --fail --silent --show-error --location \
+        --proto '=https' --proto-redir '=https' --max-redirs 5 \
+        --connect-timeout 20 --max-time 300 --max-filesize "$PLEBIAN_OS_QT_RUNTIME_BYTES" \
+        --output "$1" --url "$PLEBIAN_OS_QT_RUNTIME_URL"
+}
+
+apply_selected_qt_runtime() {
+    local outer="$1" dry_run="$2" version="${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" stage
+    validate_qt_release_closure "$version" "$PLEBIAN_OS_RELEASE_MODE" || return 1
+    [ -n "$PLEBIAN_OS_QT_RUNTIME_URL" ] || return 0
+    if [ "$dry_run" = 1 ]; then
+        log "would install and verify the exact selected Qt runtime inside the OS transaction"
+        return 0
+    fi
+    stage="$(mktemp "$outer/qt-runtime.XXXXXX")" || return 1
+    chmod 0600 -- "$stage" || return 1
+    qt_download_archive "$stage" || return 1
+    # Snapshot packages before installation. The root helper checks held bundle
+    # bytes independently; the outer transaction retains the prior packages.
+    qt_runtime_command --snapshot "$_STACK_ROOT_TXN_DIR/qt-runtime" || return 1
+    qt_runtime_command --install-bundle "$stage" \
+        --sha256 "$PLEBIAN_OS_QT_RUNTIME_SHA256" --bytes "$PLEBIAN_OS_QT_RUNTIME_BYTES"
+}
+
+rollback_qt_runtime_transaction() {
+    local snapshot="$_STACK_ROOT_TXN_DIR/qt-runtime" probe=0
+    [ "$_STACK_ROOT_TXN_DIR" != "" ] || return 0
+    qt_runtime_snapshot_probe "$snapshot/SNAPSHOT.json" || probe=$?
+    case "$probe" in
+        0) return 0 ;;
+        10) ;;
+        *) warn "could not inspect the Qt package recovery snapshot"; return 1 ;;
+    esac
+    qt_runtime_command --restore "$snapshot" || {
+        warn "Qt package rollback failed; retaining the current helper and root recovery snapshots"
+        return 1
+    }
+}
+
+qt_runtime_command() {
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    "${elevate[@]}" /usr/local/sbin/plebian-os-qt-runtime "$@"
+}
+
+qt_runtime_snapshot_probe() {
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    # Distinguish an absent snapshot (0) from sudo/inspection failure. A failed
+    # elevation must retain the outer snapshot instead of skipping Qt rollback.
+    "${elevate[@]}" /bin/sh -c 'if [ -f "$1" ]; then exit 10; fi' qt-snapshot "$1"
+}
 
 native_download_archive() {
     local output="$1"
@@ -1992,6 +2078,7 @@ native_runtime_command() {
 rollback_stack_transaction() {
     local failed=0 kilix_rollback_ready=0
     warn "stack update failed; restoring the previous coherent installation"
+    rollback_qt_runtime_transaction || return 1
     rollback_native_runtime_transaction || {
         warn "retaining the current OS helper and whole-stack recovery snapshots"
         return 1
@@ -2652,6 +2739,7 @@ PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64
 PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_MANAGED_INSTALL
 PLEBIAN_OS_NATIVE_CONTENT_REF PLEBIAN_OS_NATIVE_DEB_BYTES
 PLEBIAN_OS_NATIVE_DEB_SHA256 PLEBIAN_OS_NATIVE_DEB_URL
+PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES
 PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_REF PLEBIAN_OS_RELEASE
 PLEBIAN_OS_RELEASE_MODE PLEBIAN_OS_REPO PLEBIAN_OS_SESSION_HOME
 PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_UV_INSTALLER_MAX_BYTES
@@ -3204,6 +3292,7 @@ stage_and_validate_os_layer() {
         "$prov/plebian-os-install-kilix-vulkan-tts"
         "$prov/plebian-os-install-kilix-ollama-runtime"
         "$prov/plebian-os-native-runtime"
+        "$prov/plebian-os-qt-runtime"
         "$prov/native_package.py"
         "$prov/native_state.py"
         "$prov/native_process.py"
@@ -3241,6 +3330,8 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-install-kilix-ollama-runtime"
     [ ! -L "$prov/plebian-os-native-runtime" ] || die "unsafe native helper entry-point symlink"
     install -m 0755 "$prov/plebian-os-native-runtime" "$stage/plebian-os-native-runtime"
+    [ ! -L "$prov/plebian-os-qt-runtime" ] || die "unsafe Qt runtime helper symlink"
+    install -m 0755 "$prov/plebian-os-qt-runtime" "$stage/plebian-os-qt-runtime"
     for file in native_package.py native_state.py native_process.py native_runtime.py; do
         [ ! -L "$prov/$file" ] || die "unsafe native helper source symlink: $file"
         install -m 0644 "$prov/$file" "$stage/$file"
@@ -3261,7 +3352,7 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-select-closure" \
         "$stage/plebian-os-native-runtime" \
         || die "staged OS-layer shell validation failed"
-    python3 - "$stage/plebian-os-passwd" \
+    python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-passwd" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-kilix-vulkan-tts" \
         "$stage/plebian-os-install-kilix-ollama-runtime" \
@@ -3437,6 +3528,7 @@ names=(
     native_state.py
     native_process.py
     native_runtime.py
+    plebian-os-qt-runtime
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -3459,9 +3551,10 @@ dests=(
     /usr/local/libexec/plebian-os/native_state.py
     /usr/local/libexec/plebian-os/native_process.py
     /usr/local/libexec/plebian-os/native_runtime.py
+    /usr/local/sbin/plebian-os-qt-runtime
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0644 0644 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 131072 131072 131072 131072 131072)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -3639,7 +3732,7 @@ bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
     "${new_paths[5]}" "${new_paths[11]}" "${new_paths[15]}"
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" \
     "${new_paths[14]}" "${new_paths[16]}" "${new_paths[17]}" \
-    "${new_paths[18]}" "${new_paths[19]}" <<'PY'
+    "${new_paths[18]}" "${new_paths[19]}" "${new_paths[20]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
@@ -3759,6 +3852,7 @@ self_update_os_layer() {
         native_state.py
         native_process.py
         native_runtime.py
+        plebian-os-qt-runtime
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
@@ -4115,6 +4209,9 @@ stack_env=(
     "PLEBIAN_OS_NATIVE_DEB_BYTES=$PLEBIAN_OS_NATIVE_DEB_BYTES"
     "PLEBIAN_OS_NATIVE_SOURCE_REF=$PLEBIAN_OS_NATIVE_SOURCE_REF"
     "PLEBIAN_OS_NATIVE_CONTENT_REF=$PLEBIAN_OS_NATIVE_CONTENT_REF"
+    "PLEBIAN_OS_QT_RUNTIME_URL=$PLEBIAN_OS_QT_RUNTIME_URL"
+    "PLEBIAN_OS_QT_RUNTIME_SHA256=$PLEBIAN_OS_QT_RUNTIME_SHA256"
+    "PLEBIAN_OS_QT_RUNTIME_BYTES=$PLEBIAN_OS_QT_RUNTIME_BYTES"
     "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
     "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
     "GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"
@@ -4367,6 +4464,9 @@ stage_final_provenance() {
         provenance_kv PLEBIAN_OS_NATIVE_DEB_BYTES "$PLEBIAN_OS_NATIVE_DEB_BYTES"
         provenance_kv PLEBIAN_OS_NATIVE_SOURCE_REF "$PLEBIAN_OS_NATIVE_SOURCE_REF"
         provenance_kv PLEBIAN_OS_NATIVE_CONTENT_REF "$PLEBIAN_OS_NATIVE_CONTENT_REF"
+        provenance_kv PLEBIAN_OS_QT_RUNTIME_URL "$PLEBIAN_OS_QT_RUNTIME_URL"
+        provenance_kv PLEBIAN_OS_QT_RUNTIME_SHA256 "$PLEBIAN_OS_QT_RUNTIME_SHA256"
+        provenance_kv PLEBIAN_OS_QT_RUNTIME_BYTES "$PLEBIAN_OS_QT_RUNTIME_BYTES"
         provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
         provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
         provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
@@ -4710,6 +4810,7 @@ refuse_interrupted_stack_transaction
 refuse_per_user_source_layout
 preflight_release_apt_provenance
 select_latest_release_if_needed
+validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" "$PLEBIAN_OS_RELEASE_MODE" || die "invalid Qt runtime closure"
 validate_native_release_closure "${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" \
     "$PLEBIAN_OS_RELEASE_MODE" || die "invalid native runtime closure"
 
@@ -4751,6 +4852,9 @@ begin_stack_transaction
 self_update_os_layer
 reconcile_legacy_remote_login
 test_fail_after_boundary os-layer
+apply_selected_qt_runtime "$_STACK_TXN_DIR" 0 \
+    || die "selected Qt runtime could not be installed/verified"
+test_fail_after_boundary qt-runtime
 refresh_os_dependencies
 test_fail_after_boundary dependencies
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \

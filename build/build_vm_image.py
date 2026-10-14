@@ -298,6 +298,31 @@ def default_iso_filename(name: str) -> str:
     return f"plebian-os-{name}.iso"
 
 
+QT_RELEASE_KEYS = (
+    "PLEBIAN_OS_QT_RUNTIME_URL", "PLEBIAN_OS_QT_RUNTIME_SHA256", "PLEBIAN_OS_QT_RUNTIME_BYTES",
+)
+
+
+def validate_qt_release_closure(values: dict[str, str], release: str, mode: str) -> None:
+    selected = [values.get(key, "") for key in QT_RELEASE_KEYS]
+    if not any(selected) and (release != "0.2.2" or mode != "1"):
+        return
+    if not all(selected):
+        die("Qt runtime closure requires all three exact fields")
+    url, digest, size = selected
+    if len(url) > 2048 or not re.fullmatch(r"https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*", url):
+        die("Qt runtime URL must be a bounded HTTPS URL without credentials")
+    authority = url[len("https://"):].split("/", 1)[0].split("?", 1)[0]
+    if ":" in authority:
+        port = authority.split(":", 1)[1]
+        if not re.fullmatch(r"[1-9][0-9]{0,4}", port) or int(port) > 65535:
+            die("invalid Qt runtime HTTPS port")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        die("Qt runtime checksum must be a lowercase SHA-256")
+    if not re.fullmatch(r"[1-9][0-9]{0,8}", size) or int(size) > 134217728:
+        die("Qt runtime byte count must be in 1..134217728")
+
+
 NATIVE_RELEASE_KEYS = (
     "PLEBIAN_OS_NATIVE_DEB_URL", "PLEBIAN_OS_NATIVE_DEB_SHA256",
     "PLEBIAN_OS_NATIVE_DEB_BYTES", "PLEBIAN_OS_NATIVE_SOURCE_REF",
@@ -370,8 +395,9 @@ def apply_release_manifest(release: str | None = None) -> None:
         return values
 
     manifest_values = read_assignments(manifest, "release manifest")
+    validate_qt_release_closure(manifest_values, release, "1")
     validate_native_release_closure(manifest_values, release, "1")
-    for key in NATIVE_RELEASE_KEYS:
+    for key in (*NATIVE_RELEASE_KEYS, *QT_RELEASE_KEYS):
         os.environ[key] = manifest_values.get(key, "")
     for key, val in manifest_values.items():
         os.environ[key] = val
@@ -2030,6 +2056,8 @@ if default is not None:
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]
+    if os.environ.get("PLEBIAN_OS_QT_RUNTIME_URL"):
+        checks.append(("selected Qt runtime", "/usr/local/sbin/plebian-os-qt-runtime --verify"))
     if cfg.desktop:
         checks.append(("first-page Kilix desktop", first_page_desktop))
     # The clickable fork engine only exists when fork-building is on (the default);
@@ -2156,6 +2184,7 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "PLEBIAN_OS_NETINST_URL",
         "PLEBIAN_OS_NETINST_SHA256",
         "PLEBIAN_OS_APT_SNAPSHOT",
+        *QT_RELEASE_KEYS,
         "PLEBIAN_OS_INSTALL_UV",
         "PLEBIAN_OS_UV_VERSION",
         "PLEBIAN_OS_UV_INSTALLER_SHA256",

@@ -53,6 +53,22 @@ one reviewed target closure; mixing old and new release pins is unsupported.
 The Debian snapshot is the install-time resolution pin; it does not freeze an
 installed machine's Debian packages.
 
+RC6 additionally delivers the patched Qt5 and Qt6 GUI packages as one
+checksum-bound runtime bundle. Only `libqt5gui5t64` and `libqt6gui6` are pinned
+to their qualified package versions; other Debian security updates continue
+normally. `/usr/local/sbin/plebian-os-qt-runtime --verify` checks those versions
+and the installed QtGui, QtXcbQpa, and XCB plugin bytes. The OS updater saves
+the actual prior GUI package archives before replacement and restores them if
+the enclosing update fails.
+
+A later qualified Qt bundle must use a higher `+plebianrc6.N` package version
+and move all three `PLEBIAN_OS_QT_RUNTIME_*` release fields together. The same
+version cannot carry changed package bytes. Do not remove the two preferences
+before a replacement has passed runtime qualification. A Qt upstream/ABI
+version change also updates the runtime helper's supported versions and file
+digests; keep the complete corresponding Debian source packages with the
+binary artifacts.
+
 Beginning with 0.2.2, release-controlled pins live in `closure.env` rather than
 beside operator choices. Image installs use root-owned mode-0644
 `/etc/pleb/closure.env`; standalone Pleb installs use user-owned mode-0600

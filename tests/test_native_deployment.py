@@ -37,6 +37,7 @@ SOURCES = {
     'plebian-os-install-kilix-vulkan-tts': 'provision/plebian-os-install-kilix-vulkan-tts',
     'plebian-os-install-kilix-ollama-runtime': 'provision/plebian-os-install-kilix-ollama-runtime',
     **{name: 'provision/' + name for name in NATIVE},
+    'plebian-os-qt-runtime': 'provision/plebian-os-qt-runtime',
 }
 
 
@@ -168,7 +169,7 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
         copied.mkdir()
         target = self.base / 'target'
         (target / 'usr/local/sbin').mkdir(parents=True)
-        for name in NATIVE:
+        for name in (*NATIVE, 'plebian-os-qt-runtime'):
             shutil.copy2(ROOT / 'provision' / name, copied / name)
         snippet = text[start:end].replace('\\\n', '\n')
         snippet = snippet.replace('/cdrom/plebian-os', shlex.quote(str(copied)))
@@ -209,7 +210,7 @@ class BootstrapNativeHelpersTests(unittest.TestCase):
         self.modules = self.root / 'usr/local/libexec/plebian-os'
         self.source = self.base / 'source'
         self.source.mkdir()
-        for name in NATIVE:
+        for name in (*NATIVE, 'plebian-os-qt-runtime'):
             shutil.copy2(ROOT / 'provision' / name, self.source / name)
         text = (ROOT / 'provision/plebian-os-provision.sh').read_text()
         start = text.index('install_native_runtime_helpers() {')
