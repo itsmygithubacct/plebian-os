@@ -1923,6 +1923,7 @@ validate_native_release_closure() {
 # process's active journal. A failed outer rollback keeps the deployed helper.
 NATIVE_TRANSACTION_TOKEN=
 NATIVE_TRANSACTION_STARTED=0
+QT_RUNTIME_TRANSACTION_STARTED=0
 
 qt_download_archive() {
     /usr/bin/prlimit --fsize="$PLEBIAN_OS_QT_RUNTIME_BYTES:$PLEBIAN_OS_QT_RUNTIME_BYTES" -- \
@@ -1941,22 +1942,26 @@ apply_selected_qt_runtime() {
         log "would install and verify the exact selected Qt runtime inside the OS transaction"
         return 0
     fi
+    [ "$QT_RUNTIME_TRANSACTION_STARTED" = 0 ] || return 1
     stage="$(mktemp "$outer/qt-runtime.XXXXXX")" || return 1
     chmod 0600 -- "$stage" || return 1
     qt_download_archive "$stage" || return 1
     # Snapshot packages before installation. The root helper checks held bundle
     # bytes independently; the outer transaction retains the prior packages.
     qt_runtime_command --snapshot "$_STACK_ROOT_TXN_DIR/qt-runtime" || return 1
+    (umask 077; set -C; printf '1\n' >"$outer/qt-runtime-transaction") || return 1
+    QT_RUNTIME_TRANSACTION_STARTED=1
     qt_runtime_command --install-bundle "$stage" \
         --sha256 "$PLEBIAN_OS_QT_RUNTIME_SHA256" --bytes "$PLEBIAN_OS_QT_RUNTIME_BYTES"
 }
 
 rollback_qt_runtime_transaction() {
     local snapshot="$_STACK_ROOT_TXN_DIR/qt-runtime" probe=0
-    [ "$_STACK_ROOT_TXN_DIR" != "" ] || return 0
+    [ "$QT_RUNTIME_TRANSACTION_STARTED" = 1 ] || return 0
+    [ "$_STACK_ROOT_TXN_DIR" != "" ] || return 1
     qt_runtime_snapshot_probe "$snapshot/SNAPSHOT.json" || probe=$?
     case "$probe" in
-        0) return 0 ;;
+        0) warn "Qt package recovery snapshot is missing"; return 1 ;;
         10) ;;
         *) warn "could not inspect the Qt package recovery snapshot"; return 1 ;;
     esac
@@ -1964,6 +1969,7 @@ rollback_qt_runtime_transaction() {
         warn "Qt package rollback failed; retaining the current helper and root recovery snapshots"
         return 1
     }
+    QT_RUNTIME_TRANSACTION_STARTED=0
 }
 
 qt_runtime_command() {
@@ -2404,6 +2410,12 @@ recover_interrupted_stack_transaction() {
     fi
     _STACK_TXN_DIR="$orphan"
     _STACK_ROOT_TXN_DIR="$root"
+    QT_RUNTIME_TRANSACTION_STARTED=0
+    if [ -f "$orphan/qt-runtime-transaction" ]; then
+        [ ! -L "$orphan/qt-runtime-transaction" ] && [ "$(cat "$orphan/qt-runtime-transaction")" = 1 ] \
+            || die "the interrupted update recorded an invalid Qt transaction marker"
+        QT_RUNTIME_TRANSACTION_STARTED=1
+    fi
     NATIVE_TRANSACTION_TOKEN="$token"
     NATIVE_TRANSACTION_STARTED=0
     [ -z "$token" ] || NATIVE_TRANSACTION_STARTED=1

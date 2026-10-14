@@ -669,14 +669,26 @@ desktop_wallpaper_matches_expected_hash \
             "plebian-os-install-ollama-converter",
             "plebian-os-install-kilix-vulkan-tts",
             "plebian-os-install-kilix-ollama-runtime",
-            "modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0644 0644 0644 0644)",
-            "1048576 1048576 1048576 33554432 1048576 1048576 1048576 131072 131072 131072 131072 131072)",
             'python3 - "${new_paths[8]}" "${new_paths[9]}"',
             'python3 - "${new_paths[10]}"',
             'python3 - "${new_paths[2]}" "${new_paths[12]}"',
             '"${new_paths[5]}" "${new_paths[11]}"',
         ):
             self.assertIn(marker, root_deploy)
+
+        def deployment_array(name):
+            match = re.search(r"(?m)^" + name + r"=\((.*?)\)$", root_deploy, re.S)
+            self.assertIsNotNone(match, name)
+            return match.group(1).split()
+        names = deployment_array("names")
+        modes = deployment_array("modes")
+        limits = deployment_array("max_sizes")
+        self.assertEqual(len(names), len(modes))
+        self.assertEqual(len(names), len(limits))
+        for name in ("ATTRIBUTION.md", "COPYING.GPL-2", "lightdm-gtk-greeter.conf"):
+            index = names.index(name)
+            self.assertEqual(modes[index], "0644")
+            self.assertEqual(limits[index], "1048576")
 
         snapshot = update[
             update.index("<<'ROOT_SNAPSHOT'"):update.index("\nROOT_SNAPSHOT")

@@ -2292,6 +2292,9 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "PLEBIAN_OS_NATIVE_DEB_BYTES": "405204",
             "PLEBIAN_OS_NATIVE_SOURCE_REF": "b" * 40,
             "PLEBIAN_OS_NATIVE_CONTENT_REF": "c" * 40,
+            "PLEBIAN_OS_QT_RUNTIME_URL": "https://example.invalid/releases/qt.tar.xz",
+            "PLEBIAN_OS_QT_RUNTIME_SHA256": "d" * 64,
+            "PLEBIAN_OS_QT_RUNTIME_BYTES": "1000",
         }
         valid = self._run_library("validate_release_inputs\n", env)
         self.assertEqual(valid.returncode, 0, valid.stderr)

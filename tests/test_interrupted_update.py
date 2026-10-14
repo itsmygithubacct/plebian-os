@@ -132,6 +132,16 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertFalse(orphan.exists())
         self.assertIn("restored the installation", result.stdout)
 
+    def test_started_qt_transaction_survives_interrupted_recovery(self):
+        orphan = self.orphan(root_transaction=ROOT_TXN + "\n", active="",
+                             qt_runtime_transaction="1\n")
+        result = self.run_lib(
+            'rollback_stack_transaction() { echo "qt=$QT_RUNTIME_TRANSACTION_STARTED" >>"$LOG"; }\n'
+            'recover_interrupted_stack_transaction\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("qt=1", self.log.read_text())
+        self.assertFalse(orphan.exists())
+
     def test_a_failed_recovery_keeps_the_data_and_hands_over_to_the_manual_procedure(self):
         orphan = self.orphan(root_transaction=ROOT_TXN + "\n", active="")
         result = self.run_lib("recover_interrupted_stack_transaction\n", ROLLBACK_RC="1")

@@ -1635,23 +1635,22 @@ class VoiceReleaseContractTests(unittest.TestCase):
         these paths are read-only reports.
         """
         contract = '"kilix", "stt", "--install", model, "--default", model'
-        # The two files that require the row carry `--install` exactly once,
-        # and that once is the comparison itself. Any second occurrence would
-        # be something this image does with the action rather than something it
-        # requires of the row, so counting is the whole check.
+        # Count the exact flag token; Qt's --install-bundle is a separate flag.
+        # The shipped-surface scan below additionally ties each install to stt.
+        install_flag = re.compile(r"(?<![\w-])--install(?![\w-])")
         for name in ("provision/plebian-os-provision.sh",
                      "build/build_vm_image.py"):
             text = (ROOT / name).read_text(encoding="utf-8")
             with self.subTest(script=name):
                 self.assertIn(contract, text)
                 self.assertEqual(
-                    text.count("--install"), 1,
+                    len(install_flag.findall(text)), 1,
                     f"{name} may require the install action, never run it")
         for name in ("provision/plebian-os-update.sh",
                      "build/remaster-iso.sh"):
             text = (ROOT / name).read_text(encoding="utf-8")
             with self.subTest(script=name):
-                self.assertNotIn("--install", text)
+                self.assertIsNone(install_flag.search(text))
         # OS-V-FIX-VERIFY V6 / mutant MV-15: this used to name four files, and
         # a caller added to a fifth — bootstrap.sh — survived the whole suite.
         # The fact item 6 asserts is about the tree, so the check is now about

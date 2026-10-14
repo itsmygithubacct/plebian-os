@@ -71,6 +71,7 @@ class QtClosureTests(unittest.TestCase):
                 code = setup + 'begin_provision_root_transaction\n'
                 code += 'mkdir -m 700 "$PROVISION_ROOT_TRANSACTION_DIR/qt-runtime"\n'
                 code += 'printf snapshot >"$PROVISION_ROOT_TRANSACTION_DIR/qt-runtime/SNAPSHOT.json"\n'
+                code += 'QT_RUNTIME_TRANSACTION_STARTED=1\n'
                 code += f'printf changed >{q(paths["existing"])}\n'
                 code += 'qt_runtime_command() {\n'
                 code += '[ "$1" = --restore ]\n'
@@ -82,14 +83,55 @@ class QtClosureTests(unittest.TestCase):
 
     def test_update_retains_recovery_when_snapshot_inspection_fails(self):
         function = closure.shell_function('provision/plebian-os-update.sh', 'rollback_qt_runtime_transaction')
-        for probe, expected in ((0, 0), (10, 0), (71, 1)):
+        for probe, expected in ((0, 1), (10, 0), (71, 1)):
             command = function + '\n_STACK_ROOT_TXN_DIR=/var/lib/plebian-os/private\n'
+            command += 'QT_RUNTIME_TRANSACTION_STARTED=1\n'
             command += 'warn() { :; }\nqt_runtime_snapshot_probe() { return "$PROBE"; }\n'
             command += 'qt_runtime_command() { echo restored; }\nrollback_qt_runtime_transaction\n'
             result = subprocess.run(['/bin/bash', '-euc', command],
                 env={'PATH': '/usr/bin:/bin', 'PROBE': str(probe)}, text=True, capture_output=True)
             self.assertEqual(result.returncode, expected, result.stderr)
             self.assertEqual('restored' in result.stdout, probe == 10)
+
+    def test_unused_qt_transaction_never_elevates_during_rollback(self):
+        function = closure.shell_function('provision/plebian-os-update.sh', 'rollback_qt_runtime_transaction')
+        command = function + '\n_STACK_ROOT_TXN_DIR=/var/lib/plebian-os/private\n'
+        command += 'QT_RUNTIME_TRANSACTION_STARTED=0\n'
+        command += 'qt_runtime_snapshot_probe() { exit 99; }\nrollback_qt_runtime_transaction\n'
+        result = subprocess.run(['/bin/bash', '-euc', command], capture_output=True)
+        self.assertEqual(result.returncode, 0)
+
+    def test_apply_records_interrupted_recovery_before_package_mutation(self):
+        for source in ('provision/plebian-os-provision.sh', 'provision/plebian-os-update.sh'):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as outer:
+                command = '\n'.join(closure.shell_function(source, name) for name in
+                    ('validate_qt_release_closure', 'apply_selected_qt_runtime', 'rollback_qt_runtime_transaction'))
+                command += r'''
+QT_RUNTIME_TRANSACTION_STARTED=0
+PROVISION_ROOT_TRANSACTION_DIR="$OUTER"
+_STACK_ROOT_TXN_DIR="$OUTER"
+qt_download_archive() { printf data >"$1"; }
+qt_runtime_snapshot_probe() { return 10; }
+qt_runtime_command() {
+    case "$1" in
+        --snapshot) mkdir "$2"; printf snapshot >"$2/SNAPSHOT.json" ;;
+        --install-bundle)
+            [ "$QT_RUNTIME_TRANSACTION_STARTED" = 1 ] && [ "$(cat "$OUTER/qt-runtime-transaction")" = 1 ] || exit 99
+            return 71 ;;
+        --restore) printf restored ;;
+        *) exit 98 ;;
+    esac
+}
+if apply_selected_qt_runtime "$OUTER" 0; then exit 97; fi
+[ "$QT_RUNTIME_TRANSACTION_STARTED" = 1 ]
+rollback_qt_runtime_transaction
+[ "$QT_RUNTIME_TRANSACTION_STARTED" = 0 ]
+'''
+                result = subprocess.run(['/bin/bash', '-euc', command],
+                    env={'PATH': '/usr/bin:/bin', 'OUTER': outer, 'PLEBIAN_OS_RELEASE': '0.2.2',
+                         'PLEBIAN_OS_RELEASE_MODE': '1', **VALUES}, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, 'restored')
 
 
 class QtPackageTests(unittest.TestCase):

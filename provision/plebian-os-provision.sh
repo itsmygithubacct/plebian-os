@@ -756,6 +756,7 @@ restore_persisted_policy() {
 # process's active journal. A failed outer rollback keeps the deployed helper.
 NATIVE_TRANSACTION_TOKEN=
 NATIVE_TRANSACTION_STARTED=0
+QT_RUNTIME_TRANSACTION_STARTED=0
 
 qt_download_archive() {
     /usr/bin/prlimit --fsize="$PLEBIAN_OS_QT_RUNTIME_BYTES:$PLEBIAN_OS_QT_RUNTIME_BYTES" -- \
@@ -774,24 +775,29 @@ apply_selected_qt_runtime() {
         log "would install and verify the exact selected Qt runtime inside the OS transaction"
         return 0
     fi
+    [ "$QT_RUNTIME_TRANSACTION_STARTED" = 0 ] || return 1
     stage="$(mktemp "$outer/qt-runtime.XXXXXX")" || return 1
     chmod 0600 -- "$stage" || return 1
     qt_download_archive "$stage" || return 1
     # Snapshot packages before installation. The root helper checks held bundle
     # bytes independently; the outer transaction retains the prior packages.
     qt_runtime_command --snapshot "$PROVISION_ROOT_TRANSACTION_DIR/qt-runtime" || return 1
+    (umask 077; set -C; printf '1\n' >"$outer/qt-runtime-transaction") || return 1
+    QT_RUNTIME_TRANSACTION_STARTED=1
     qt_runtime_command --install-bundle "$stage" \
         --sha256 "$PLEBIAN_OS_QT_RUNTIME_SHA256" --bytes "$PLEBIAN_OS_QT_RUNTIME_BYTES"
 }
 
 rollback_qt_runtime_transaction() {
     local snapshot="$PROVISION_ROOT_TRANSACTION_DIR/qt-runtime"
-    [ "$PROVISION_ROOT_TRANSACTION_DIR" != "" ] || return 0
-    test -f "$snapshot/SNAPSHOT.json" || return 0
+    [ "$QT_RUNTIME_TRANSACTION_STARTED" = 1 ] || return 0
+    [ "$PROVISION_ROOT_TRANSACTION_DIR" != "" ] || return 1
+    test -f "$snapshot/SNAPSHOT.json" || return 1
     qt_runtime_command --restore "$snapshot" || {
         warn "Qt package rollback failed; retaining the current helper and root recovery snapshots"
         return 1
     }
+    QT_RUNTIME_TRANSACTION_STARTED=0
 }
 
 qt_runtime_command() {
