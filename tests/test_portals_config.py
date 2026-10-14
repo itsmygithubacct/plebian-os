@@ -102,7 +102,9 @@ class PortalsConfigTests(unittest.TestCase):
         found = re.search(r'^PLEB_CAPTURE_MODULES="([^"]+)"$', shown.stdout, re.M)
         self.assertIsNotNone(found, "pleb no longer declares PLEB_CAPTURE_MODULES")
         provision = self.protected_pleb_modules(PROVISION, "PROVISION_ROOT_TRANSACTION_PATHS=(")
-        self.assertEqual(provision, sorted(found.group(1).split()))
+        # Screensaver support is installed separately from capture modules.
+        self.assertIn('"$PLEB_ROOT/lib/screensaver.py"', shown.stdout)
+        self.assertEqual(provision, sorted(found.group(1).split() + ["screensaver.py"]))
 
 
 if __name__ == "__main__":
