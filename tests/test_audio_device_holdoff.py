@@ -146,7 +146,12 @@ def install_unit(root, name, text, enable=True, wants="default.target",
         link.parent.mkdir(parents=True, exist_ok=True)
         # Debian writes these absolute; the rule must resolve them inside the
         # root rather than following them out onto the build host.
-        link.symlink_to(f"/{unit_dir}/{name}")
+        target = f"/{unit_dir}/{name}"
+        # Multiple package file lists can describe the same installed unit.
+        # Enabling an already-enabled unit is idempotent; a conflicting link
+        # must still fail instead of being silently replaced.
+        if not (link.is_symlink() and os.readlink(link) == target):
+            link.symlink_to(target)
     return unit_path
 
 

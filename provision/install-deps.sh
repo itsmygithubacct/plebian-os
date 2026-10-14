@@ -221,7 +221,7 @@ DEP_GROUPS=(
     # screenshot tool. It must be explicit because no XFCE desktop task is
     # installed and --no-install-recommends cannot supply it incidentally.
     "desktop screenshots|xfce4-screenshooter"
-    "desktop lock + power + authorization|xss-lock i3lock xssproxy xfce4-power-manager xfconf lxpolkit"
+    "desktop lock + power + authorization|xss-lock i3lock libxss1 libx11-6 xfce4-power-manager xfconf lxpolkit"
     "desktop file and URI handlers|xdg-utils desktop-file-utils shared-mime-info"
     "desktop bluetooth + removable media|blueman pulseaudio-module-bluetooth udisks2 udiskie gnome-disk-utility gir1.2-notify-0.7"
     "desktop physical printers|cups cups-client system-config-printer system-config-printer-udev"
@@ -230,7 +230,10 @@ DEP_GROUPS=(
     # distribution installs WirePlumber's video-only profile. Neither
     # pipewire-pulse nor an audio-hardware monitor is part of this group.
     "desktop capture transport|pipewire pipewire-bin wireplumber libpipewire-0.3-dev gstreamer1.0-pipewire gstreamer1.0-x gstreamer1.0-plugins-base gstreamer1.0-plugins-good gir1.2-gst-plugins-base-1.0 gir1.2-gtk-3.0 python3-gi-cairo"
-    "desktop notifications + portal|python3-dbus python3-gi dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
+    # The shared Kilix SDK creates one delegated transient user scope per bus.
+    # PAM owns the user manager; no ambient private cgroup path or global
+    # service/manager environment override is installed.
+    "desktop notifications + portal|systemd libpam-systemd polkitd python3-dbus python3-gi dbus-user-session dbus-x11 xfce4-notifyd libnotify-bin xdg-desktop-portal xdg-desktop-portal-gtk"
     # F100's sandbox must not depend on portal/systemd dependency accidents.
     # These are the minimum F118-S0 identities; newer Debian security builds are accepted.
     "F100 sandbox runtime|bubblewrap=0.11.0-2+deb13u1 libseccomp2=2.6.0-2"

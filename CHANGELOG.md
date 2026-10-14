@@ -6,6 +6,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- RC6 disables automatic idle locking by default and leaves lid-close behavior
+  to the desktop session's power policy. Fresh installs and updates install the
+  same logind defaults. Updates preserve explicit operator settings and leave
+  unfamiliar session configuration unchanged, with a diagnostic. Rollback
+  includes the lid configuration and screensaver integration files.
+
 - The lifecycle successor binds Pleb's session children and Kilix's transcript
   and native-window observers to their actual parent processes. Kilix selects
   telemetry `ca58e4a`; automatic samplers exit after their last registered
