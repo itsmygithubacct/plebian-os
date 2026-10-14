@@ -5,6 +5,8 @@ import runpy
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "provision/plebian-os-install-diarization-converter"
@@ -68,6 +70,16 @@ class DiarizationConverterInstallerTests(unittest.TestCase):
         verify.__globals__["ARCHIVE_SHA256"] = "0" * 64
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             verify(archive)
+
+    def test_missing_openmp_dependency_fails_before_filesystem_changes(self):
+        main = self.ns["main"]
+        with mock.patch("sys.argv", [str(HELPER)]), \
+                mock.patch("os.geteuid", return_value=0), \
+                mock.patch("platform.machine", return_value="x86_64"), \
+                mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "")), \
+                mock.patch.dict(main.__globals__, {"secure_directory": mock.Mock(side_effect=AssertionError("filesystem mutated"))}):
+            with self.assertRaisesRegex(ValueError, "libgomp1"):
+                main()
 
     def test_helper_is_delivered_in_image_and_upgrade(self):
         for relative in ("build/remaster-iso.sh", "preseed/preseed.cfg",

@@ -129,6 +129,12 @@ def main():
         return
     if os.geteuid() != 0 or platform.machine() != "x86_64":
         raise ValueError("run as root on x86_64")
+    dependency = subprocess.run(
+        ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}", "libgomp1:amd64"],
+        capture_output=True, text=True,
+    )
+    if dependency.returncode or dependency.stdout.strip() != "installed":
+        raise ValueError("install the Debian libgomp1 package before the converter")
     secure_directory(DESTINATION.parent)
     lock_fd = os.open(DESTINATION.parent / ".diarization-converter.lock",
                       os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)

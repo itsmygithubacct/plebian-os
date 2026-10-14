@@ -201,6 +201,7 @@ DEP_GROUPS=(
     # on a fresh install. 3.10.3-1 is in the 0.2.2 apt snapshot.
     "images|feh"
     "session-log archiving|zstd"
+    "optional diarization converter OpenMP runtime|libgomp1"
     # F103 exposes the common archive formats from both its TUI and app. Keep
     # the command providers and their runtime libraries present independently
     # of its uv-locked Python/Brotli application environment.
