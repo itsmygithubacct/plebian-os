@@ -5266,7 +5266,8 @@ voice_dictation_asset_paths() {
                 "$assets_root/vosk-model-small-en-us-0.15" \
                 "$assets_root/vosk-model-en-us-0.22-lgraph" \
                 "$assets_root/vibevoice-asr-bitnet" \
-                "$assets_root/faster-whisper-small-en" "$assets_root/whistle"; do
+                "$assets_root/faster-whisper-small-en" "$assets_root/whistle" \
+                "$assets_root/kilix-diarization-cpu"; do
             [ -e "$entry" ] || [ -L "$entry" ] || continue
             printf '%s\n' "$entry"
         done

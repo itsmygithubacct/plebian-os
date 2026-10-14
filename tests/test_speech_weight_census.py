@@ -30,6 +30,7 @@ PLANTED = (
     "desktop-apps/assets/vibevoice-asr-bitnet",
     "desktop-apps/assets/faster-whisper-small-en",
     "desktop-apps/assets/whistle",
+    "desktop-apps/assets/kilix-diarization-cpu",
     "voice/lib/current",
 )
 
@@ -82,8 +83,9 @@ class GuestCheckTests(unittest.TestCase):
                 (Path(data) / relative).mkdir(parents=True, exist_ok=True)
                 self.assertNotEqual(self.run_check(Path(data)), 0)
 
-    def test_whistle_dangling_links_fail_the_image(self):
-        for relative in ("voice/models/whistle", "desktop-apps/assets/whistle"):
+    def test_optional_asset_dangling_links_fail_the_image(self):
+        for relative in ("voice/models/whistle", "desktop-apps/assets/whistle",
+                         "desktop-apps/assets/kilix-diarization-cpu"):
             with self.subTest(path=relative), tempfile.TemporaryDirectory() as data:
                 root = Path(data)
                 (root / "voice/models").mkdir(parents=True)

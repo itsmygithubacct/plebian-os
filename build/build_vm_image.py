@@ -1564,6 +1564,7 @@ SPEECH_WEIGHT_PATHS = (
     "desktop-apps/assets/vibevoice-asr-bitnet",
     "desktop-apps/assets/faster-whisper-small-en",
     "desktop-apps/assets/whistle",
+    "desktop-apps/assets/kilix-diarization-cpu",
 )
 
 
