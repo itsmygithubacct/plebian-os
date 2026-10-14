@@ -1224,6 +1224,7 @@ def verify_update_rollback(cfg: Config, askpass: str) -> None:
         "/usr/local/sbin/plebian-os-provision",
         "/usr/local/sbin/plebian-os-install-deps",
         "/usr/local/sbin/plebian-os-install-ollama-converter",
+        "/usr/local/sbin/plebian-os-install-diarization-converter",
         "/usr/local/sbin/plebian-os-install-kilix-vulkan-tts",
         "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
         "/usr/local/sbin/plebian-os-passwd",
@@ -2038,6 +2039,12 @@ if default is not None:
             "timeout 30 /usr/local/sbin/plebian-os-install-ollama-converter "
             "--dry-run | grep -Fqx '  sha256: "
             "8759ab3d3a92d86ba3ba24fab7e6adde08eaf2f941e6c79118373e4f41e0af8c'",
+        ),
+        (
+            "optional diarization converter installer",
+            "test -x /usr/local/sbin/plebian-os-install-diarization-converter && "
+            "timeout 30 /usr/local/sbin/plebian-os-install-diarization-converter "
+            "--dry-run | grep -Fqx 'Optional software only; no model weights or licence receipts.'",
         ),
         (
             "optional Kilix Vulkan TTS installer",

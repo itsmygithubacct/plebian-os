@@ -34,6 +34,7 @@ SOURCES = {
     'lightdm-gtk-greeter.conf': 'provision/lightdm-gtk-greeter.conf',
     'plebian-os-select-closure': 'provision/plebian-os-select-closure.sh',
     'plebian-os-install-ollama-converter': 'provision/plebian-os-install-ollama-converter',
+    'plebian-os-install-diarization-converter': 'provision/plebian-os-install-diarization-converter',
     'plebian-os-install-kilix-vulkan-tts': 'provision/plebian-os-install-kilix-vulkan-tts',
     'plebian-os-install-kilix-ollama-runtime': 'provision/plebian-os-install-kilix-ollama-runtime',
     **{name: 'provision/' + name for name in NATIVE},

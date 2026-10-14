@@ -1373,6 +1373,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
     /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-diarization-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
@@ -6030,9 +6031,34 @@ if [ -n "$OLLAMA_CONVERTER_INSTALLER_SRC" ]; then
         log "installing optional Ollama converter installer -> /usr/local/sbin/plebian-os-install-ollama-converter"
         install -m 0755 "$OLLAMA_CONVERTER_INSTALLER_SRC" \
             /usr/local/sbin/plebian-os-install-ollama-converter
+    /usr/local/sbin/plebian-os-install-diarization-converter
     fi
 else
     warn "optional Ollama converter installer not found; continuing without it"
+fi
+
+# Software only; downloaded solely on explicit invocation.
+DIARIZATION_CONVERTER_INSTALLER_SRC=""
+for cand in \
+    "$SELF_DIR/plebian-os-install-diarization-converter" \
+    /usr/local/sbin/plebian-os-install-diarization-converter; do
+    [ -r "$cand" ] && DIARIZATION_CONVERTER_INSTALLER_SRC="$cand" && break
+done
+if [ -n "$DIARIZATION_CONVERTER_INSTALLER_SRC" ]; then
+    if [ "$DIARIZATION_CONVERTER_INSTALLER_SRC" = \
+        /usr/local/sbin/plebian-os-install-diarization-converter ]; then
+        log "optional diarization converter installer already present at /usr/local/sbin/plebian-os-install-diarization-converter"
+    elif [ "$DRY_RUN" = 1 ]; then
+        log "installing optional diarization converter installer -> /usr/local/sbin/plebian-os-install-diarization-converter"
+        echo "    + install -m 0755 $DIARIZATION_CONVERTER_INSTALLER_SRC /usr/local/sbin/plebian-os-install-diarization-converter"
+    else
+        log "installing optional diarization converter installer -> /usr/local/sbin/plebian-os-install-diarization-converter"
+        install -m 0755 "$DIARIZATION_CONVERTER_INSTALLER_SRC" \
+            /usr/local/sbin/plebian-os-install-diarization-converter
+    /usr/local/sbin/plebian-os-install-diarization-converter
+    fi
+else
+    warn "optional diarization converter installer not found; continuing without it"
 fi
 
 # Likewise, ship the exact source-build helper without invoking it. The native

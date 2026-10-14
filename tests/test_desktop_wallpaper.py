@@ -667,6 +667,7 @@ desktop_wallpaper_matches_expected_hash \
             "lightdm-gtk-greeter.conf",
             "plebian-os-select-closure",
             "plebian-os-install-ollama-converter",
+            "plebian-os-install-diarization-converter",
             "plebian-os-install-kilix-vulkan-tts",
             "plebian-os-install-kilix-ollama-runtime",
             'python3 - "${new_paths[8]}" "${new_paths[9]}"',
