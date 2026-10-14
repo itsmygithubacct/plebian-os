@@ -6,6 +6,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Add optional checksum-verified offline Voicebox installation and transactional
+  update rollback without replacing user data or acquiring models.
+
 - RC6 disables automatic idle locking by default and leaves lid-close behavior
   to the desktop session's power policy. Fresh installs and updates install the
   same logind defaults. Updates preserve explicit operator settings and leave
