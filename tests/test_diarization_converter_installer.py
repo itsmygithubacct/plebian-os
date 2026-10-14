@@ -71,15 +71,19 @@ class DiarizationConverterInstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SHA-256"):
             verify(archive)
 
-    def test_missing_openmp_dependency_fails_before_filesystem_changes(self):
+    def test_missing_runtime_dependency_fails_before_filesystem_changes(self):
         main = self.ns["main"]
-        with mock.patch("sys.argv", [str(HELPER)]), \
-                mock.patch("os.geteuid", return_value=0), \
-                mock.patch("platform.machine", return_value="x86_64"), \
-                mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "")), \
-                mock.patch.dict(main.__globals__, {"secure_directory": mock.Mock(side_effect=AssertionError("filesystem mutated"))}):
-            with self.assertRaisesRegex(ValueError, "libgomp1"):
-                main()
+        for index, package in enumerate(("libgomp1", "libgfortran5", "libquadmath0")):
+            responses = [subprocess.CompletedProcess([], 0, "installed", "")] * index
+            responses.append(subprocess.CompletedProcess([], 1, "", ""))
+            with self.subTest(package=package), \
+                    mock.patch("sys.argv", [str(HELPER)]), \
+                    mock.patch("os.geteuid", return_value=0), \
+                    mock.patch("platform.machine", return_value="x86_64"), \
+                    mock.patch("subprocess.run", side_effect=responses), \
+                    mock.patch.dict(main.__globals__, {"secure_directory": mock.Mock(side_effect=AssertionError("filesystem mutated"))}):
+                with self.assertRaisesRegex(ValueError, package):
+                    main()
 
     def test_helper_is_delivered_in_image_and_upgrade(self):
         for relative in ("build/remaster-iso.sh", "preseed/preseed.cfg",
