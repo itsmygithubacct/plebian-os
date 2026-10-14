@@ -6,7 +6,7 @@ Artifact: kilix-diarization-cpu (provider kilix-transcribe, version 032b8131a7ad
 Source: https://www.modelscope.cn/api/v1/models/iic/speech_campplus_sv_en_voxceleb_16k/repo?Revision=032b8131a7ad812f87061955ca974c99060c5a03&FilePath=campplus_voxceleb.bin
 Upstream host: www.modelscope.cn
 Download size: 35350616 bytes
-Installed member manifest digest: 063106757069a25960af4881ac11deee58f546368b4bb71fe9174c1c8075d685
+Installed member manifest digest: 045752fe9a6a112794993a79dd4b95e6d41a58bcc88afb500bbbab6aa30696ac
 Licence(s): apache-2.0
 Licensor(s): IIC / Alibaba Cloud; pyannote contributors; sherpa-onnx contributors; Microsoft and bundled runtime contributors
 Licence, advisory and attribution texts: licence-texts/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt, licence-texts/14d7016ad68e7394d6e6b78d96cc2ae431c905287b89674cfdf021e79e62b8ba.txt, licence-texts/54b36539688fe450074a0105a2e43719837c321e4cf0eff8d7884a2d92ad21ad.txt, licence-texts/598ee20c7456841a757590b5c4ba7ad044893b4df768a3195cf8efe2d036a611.txt, licence-texts/8923cff8327b3291650bb1658bb7f3d12dd117a6a66aabaf67926221c19a0439.txt

@@ -16,10 +16,10 @@ import tempfile
 ARCHIVE_URL = (
     "https://github.com/itsmygithubacct/kilix-transcribe/releases/download/"
     "rc6-diarization-converter-20261014/"
-    "kilix-diarization-converter-0c02af0-linux-x86_64.tar.zst"
+    "kilix-diarization-converter-0e3c3ae-linux-x86_64.tar.zst"
 )
-ARCHIVE_SHA256 = "1d8c7c36d00fae8711dbf5d9285548966e61139fe858d2b1e3443131c0d69d6d"
-ARCHIVE_SIZE = 196_516_916
+ARCHIVE_SHA256 = "95bcc771be0863ebf874a5b5cd55a5bbc96c5d899ad4b0a1d566ed8cabedfdb8"
+ARCHIVE_SIZE = 196_411_670
 MAX_UNPACKED_BYTES = 1200 * 1024 * 1024
 MAX_MEMBERS = 50000
 DESTINATION = Path("/usr/lib/plebian-os/kilix-diarization-convert")
