@@ -2,6 +2,7 @@
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import shlex
 import sys
@@ -11,7 +12,8 @@ import unittest
 
 import test_provision_transaction as root_fixture
 
-HOST = Path(__file__).resolve().parents[2] / 'kilix'
+HOST = Path(os.environ.get('PLEBIAN_OS_KILIX_REPO',
+                           Path(__file__).resolve().parents[2] / 'kilix')).resolve()
 sys.path.insert(0, str(HOST / 'config'))
 from kilix_sdk import voicebox
 
