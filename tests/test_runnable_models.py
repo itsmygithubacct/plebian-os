@@ -37,11 +37,27 @@ class RunnableModelTests(unittest.TestCase):
                              "set PLEBIAN_OS_KILIX_VOICE_REPO")
         catalog = show(voice, self.pins["KILIX_VOICE_REF"], "voicelib/models.py")
         for model in self.runnable:
+            if model == "kilix-diarization-cpu":
+                # Optional generic-catalog asset; the separate Transcribe
+                # route below owns it, not the dictation model protocol.
+                continue
             with self.subTest(model=model):
                 entry = re.search(rf'ModelSpec\(\s*"{re.escape(model)}",\s*\w+,\s*\d+,\s*(True|False),',
                                   catalog)
                 self.assertIsNotNone(entry, f"{model} is not in the pinned voice catalog")
                 self.assertEqual(entry.group(1), "True", f"{model} is not runnable at KILIX_VOICE_REF")
+
+    def test_the_pinned_kilix_exposes_the_managed_diarization_route(self):
+        self.assertIn("kilix-diarization-cpu", self.runnable)
+        kilix = carrier.repo_holding("PLEBIAN_OS_KILIX_REPO", "kilix", self.pins["KILIX_REF"])
+        self.assertIsNotNone(kilix, "no kilix checkout holds KILIX_REF")
+        provider = show(kilix, self.pins["KILIX_REF"], "config/kilix_sdk/transcribe_provider.py")
+        self.assertIsNotNone(provider, "KILIX_REF has no managed Transcribe provider")
+        self.assertRegex(provider, r"(?m)^PROVIDER_REF = '[0-9a-f]{40}'$")
+        self.assertIn("DIARIZATION_MODEL = 'kilix-diarization-cpu'", provider)
+        self.assertIn("prep.add_argument('--diarization'", provider)
+        self.assertIn('consumer_schema="kilix.transcribe.diarization-runtime"', provider)
+        self.assertIn('DiarizationRuntime(root,model_source=diarization)', provider)
 
     def test_the_pinned_kilix_builds_the_vibevoice_runtime(self):
         self.assertIn("vibevoice-asr-bitnet", self.runnable)

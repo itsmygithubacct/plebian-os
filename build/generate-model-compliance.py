@@ -108,7 +108,10 @@ def advertised_models() -> list[tuple[str, bool]]:
     found = re.findall(r'\(\s*"([a-z0-9.-]+)", "[a-z]+", (True|False), \d+,', block)
     if not found:
         raise SystemExit("could not read the advertised speech-model catalog")
-    return [(name, flag == "True") for name, flag in found]
+    # Diarization uses the generic Content catalog, not the dictation protocol.
+    return [(name, flag == "True") for name, flag in found] + [
+        ("kilix-diarization-cpu", True),
+    ]
 
 
 def extract(repo: Path, ref: str, dest: Path) -> None:
@@ -148,7 +151,13 @@ def delivery_text(model: str, host: str, runnable: bool, voice_ref: str) -> str:
         "No install route downloads it until a kilix-license receipt covers it:",
         "The model catalog shows the licence and records the receipt, and",
     ]
-    if model in CATALOG_INSTALLED_MODELS:
+    if model == "kilix-diarization-cpu":
+        lines += [
+            "The generic model catalog downloads pinned upstream inputs and converts them locally.",
+            "Transcribe checks the covering receipt and installed manifest before diarization.",
+            "Conversion software is installed separately; no model is selected by default.",
+        ]
+    elif model in CATALOG_INSTALLED_MODELS:
         lines += [
             "The speech install command hands the download to that model catalog",
             f"and fetches no weights itself (kilix-voice {voice_ref}).",
@@ -229,6 +238,10 @@ def build(args) -> dict[str, bytes]:
                 if getattr(component, "exception_text_sha256", None)]
             digests += [item.text_sha256 for item in record.advisories]
             digests += [item.text_sha256 for item in record.statements]
+            if model == "kilix-diarization-cpu":
+                authority = json.loads((scratch / "license" / "src" / "kilix_license"
+                                        / "data" / "determinations-diarization.json").read_bytes())
+                digests.append(authority["authority"]["native_software_notice_sha256"])
             licence_ids = [item.license_id for item in asset.licenses]
             licensors = []
             for item in asset.licenses:
@@ -335,6 +348,7 @@ def build(args) -> dict[str, bytes]:
             "release_id": carrier["release_id"],
             "schema": ACCEPTANCE_SCHEMA,
             "seats": seats,
+            "seat_scope": "Historical reviews of the exact source tuples named in each record; not reviews of subsequent carrier additions.",
         }
         files["ACCEPTANCE.json"] = canonical(acceptance) + b"\n"
     listing = "".join(f"{sha256(files[name])}  {name}\n" for name in sorted(files))

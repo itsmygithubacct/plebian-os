@@ -33,10 +33,15 @@ ROOT = Path(__file__).resolve().parents[1]
 LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
 # Whistle's pinned authority is an application record; its release inclusion
 # is separately bound by this carrier's owner determination and review seats.
-LICENCE_RECORD_DIRS = {"whistle": "app-records"}
+LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records"}
 
 
 def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
+    if model == "kilix-diarization-cpu":
+        # Existing digest-specific determination; do not invent an owner signature.
+        expected = "54b36539688fe450074a0105a2e43719837c321e4cf0eff8d7884a2d92ad21ad"
+        return [] if hashlib.sha256(text.encode()).hexdigest() == expected else [
+            "diarization checkpoint determination differs from the recorded authority"]
     if model != "whistle":
         return [] if "Determined by | The owner" in text else ["missing owner determination"]
     # The owner authorized this optional engine's RC6 integration. Licence
@@ -129,7 +134,8 @@ def advertised_models(provision: str) -> list[tuple[str, bool]]:
     block = provision[provision.index("validate_voice_model_catalog() {"):]
     block = block[:block.index("\n}\n")]
     return [(name, flag == "True") for name, flag in re.findall(
-        r'\(\s*"([a-z0-9.-]+)", "[a-z]+", (True|False),', block)]
+        r'\(\s*"([a-z0-9.-]+)", "[a-z]+", (True|False),', block)] + [
+            ("kilix-diarization-cpu", True)]
 
 
 def coverage_gaps(provision: str, root: Path = CARRIER) -> list[str]:
@@ -182,6 +188,10 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         route = (f"hands the download to that model catalog\nand fetches no weights "
                  f"itself (kilix-voice {voice_ref})." if model in {"whisper-small-en", "whistle"}
                  else f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).")
+        if model == "kilix-diarization-cpu":
+            route = "Transcribe checks the covering receipt and installed manifest before diarization."
+            if "--check-licence" in delivery or "kilix-voice" in delivery:
+                gaps.append("diarization DELIVERY names the unrelated dictation install route")
         if model in {"whisper-small-en", "whistle"} and "--check-licence" in delivery:
             gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
         for claim in ("No model weights are present in this image, and "
