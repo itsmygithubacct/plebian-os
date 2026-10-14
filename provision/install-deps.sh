@@ -221,7 +221,7 @@ DEP_GROUPS=(
     # screenshot tool. It must be explicit because no XFCE desktop task is
     # installed and --no-install-recommends cannot supply it incidentally.
     "desktop screenshots|xfce4-screenshooter"
-    "desktop lock + power + authorization|xss-lock i3lock libxss1 libx11-6 xfce4-power-manager xfconf lxpolkit"
+    "desktop lock + power + authorization|xss-lock i3lock libxss1 libx11-6 libxres1 xfce4-power-manager xfconf lxpolkit"
     "desktop file and URI handlers|xdg-utils desktop-file-utils shared-mime-info"
     "desktop bluetooth + removable media|blueman pulseaudio-module-bluetooth udisks2 udiskie gnome-disk-utility gir1.2-notify-0.7"
     "desktop physical printers|cups cups-client system-config-printer system-config-printer-udev"
@@ -252,7 +252,7 @@ DEP_GROUPS=(
     # development module selected by its pinned CMake configuration explicit;
     # relying on transitive packages makes a fresh --no-install-recommends
     # image fail one pkg-config check at a time on first selection.
-    "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libsqlite3-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libxcomposite-dev libxdamage-dev libxfixes-dev libimlib2-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
+    "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libsqlite3-dev libx11-dev libxres-dev libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libxcomposite-dev libxdamage-dev libxfixes-dev libimlib2-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
     # F106's collector is read-only. dmidecode is invoked only through its
     # separately reviewed fixed privileged helper; no mutating hardware tools
     # or automatic sensors-detect run is part of provisioning.
