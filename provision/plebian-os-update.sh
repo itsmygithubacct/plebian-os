@@ -1546,6 +1546,34 @@ restore_stack_path() {
     fi
 }
 
+# The optional program and all product data are separate. Retain code generations
+# as recovery residue; the transaction restores only the exact selection record.
+# Hold the same directory flock used by the host through snapshot, mutation and
+# rollback, so an active private window cannot race an OS update.
+acquire_voicebox_delivery_lock() {
+    local root="$KILIX_DATA_HOME/voicebox"
+    [ -d "$root" ] || [ -n "${KILIX_VOICEBOX_PACKAGE:-}" ] || return 0
+    /usr/bin/python3 -I -B "$KILIX_DIR/config/kilix_sdk/voicebox.py" lockcheck --root "$root" \
+        || die "Voicebox delivery root refused"
+    exec {KILIX_VOICEBOX_TRANSACTION_FD}<"$root"
+    export KILIX_VOICEBOX_TRANSACTION_FD
+    flock -n -x "$KILIX_VOICEBOX_TRANSACTION_FD" \
+        || die "Voicebox is in use; close its private tab before updating"
+    /usr/bin/python3 -I -B "$KILIX_DIR/config/kilix_sdk/voicebox.py" lockcheck --root "$root" \
+        || die "Voicebox transaction root changed"
+}
+
+install_optional_voicebox_update() {
+    local package="${KILIX_VOICEBOX_PACKAGE:-}" digest="${KILIX_VOICEBOX_PACKAGE_SHA256:-}"
+    [ -n "$package$digest" ] || return 0
+    [[ "$package" == /* && "$digest" =~ ^[0-9a-f]{64}$ ]] \
+        || die "Voicebox requires an explicit absolute offline package and SHA256"
+    [ -f "$package" ] && [ ! -L "$package" ] || die "Voicebox offline package is unavailable"
+    /usr/bin/python3 -I -B "$KILIX_DIR/config/kilix_sdk/voicebox.py" update \
+        --root "$KILIX_DATA_HOME/voicebox" --package "$package" --sha256 "$digest" \
+        || die "optional Voicebox update refused"
+}
+
 validate_kilix_fork_stamp_path() {
     local stamp="$KILIX_STATE_DIRECTORY/fork-built-ref" owner mode links
     if [ -e "$stamp" ] || [ -L "$stamp" ]; then
@@ -2013,6 +2041,7 @@ rollback_stack_transaction() {
     restore_stack_path "$KILIX_VOICE_STAMP" kilix-voice-stamp file || failed=1
     restore_stack_path "$KILIX_VOICE_LIBRARY_LINK" kilix-voice-library file || failed=1
     restore_stack_path "$KILIX_VOICE_MODEL_LINK" kilix-voice-model file || failed=1
+    restore_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection file || failed=1
     restore_stack_path \
         "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
@@ -2395,6 +2424,8 @@ begin_stack_transaction() {
     snapshot_stack_path "$KILIX_VOICE_STAMP" kilix-voice-stamp
     snapshot_stack_path "$KILIX_VOICE_LIBRARY_LINK" kilix-voice-library
     snapshot_stack_path "$KILIX_VOICE_MODEL_LINK" kilix-voice-model
+    acquire_voicebox_delivery_lock
+    snapshot_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection
     snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
@@ -4366,6 +4397,9 @@ stage_final_provenance() {
         provenance_kv KILIX_SESSION_HOME "$KILIX_SESSION_HOME"
         provenance_kv KILIX_BUILD_DIRECTORY "$KILIX_BUILD_DIRECTORY"
         provenance_kv KILIX_DATA_HOME "$KILIX_DATA_HOME"
+        if [ -f "$KILIX_DATA_HOME/voicebox/selection.json" ]; then
+            provenance_kv KILIX_VOICEBOX_SELECTION_SHA256 "$(sha256sum "$KILIX_DATA_HOME/voicebox/selection.json" | awk '{print $1}')"
+        fi
         provenance_kv KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
         provenance_kv KILIX_PREBUILT_HOME "$KILIX_PREBUILT_HOME"
         provenance_kv KILIX_COMMIT "$kilix_commit"
@@ -4753,6 +4787,8 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     migrate_pleb_session_env \
         || die "could not apply the window manager session defaults to /etc/pleb/session.env"
     test_fail_after_boundary session-env
+    install_optional_voicebox_update
+    test_fail_after_boundary voicebox
     write_final_provenance
     test_fail_after_boundary provenance
 else

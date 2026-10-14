@@ -1279,6 +1279,8 @@ PROVISION_ROOT_TRANSACTION_DIR=""
 PROVISION_ROOT_TRANSACTION_ACTIVE=0
 PROVISION_ROOT_TRANSACTION_COMMITTED=0
 PROVISION_ROOT_TRANSACTION_BUILDING=0
+PROVISION_VOICEBOX_SNAPSHOT_READY=0
+PROVISION_VOICEBOX_ROOT=""
 PROVISION_ROOT_TRANSACTION_PATHS=(
     /etc/modprobe.d/plebian-os-no-beep.conf
     /etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
@@ -1679,6 +1681,10 @@ remove_provision_root_transaction() {
 rollback_provision_root_transaction() {
     local txn="$PROVISION_ROOT_TRANSACTION_DIR"
     warn "provisioning failed; restoring the previous root-managed OS/Pleb files"
+    restore_provision_voicebox_selection || {
+        warn "Voicebox selection restoration failed; retaining recovery data at $txn"
+        return 1
+    }
     rollback_native_runtime_transaction || {
         warn "retaining the current OS helper and root recovery data at $txn"
         return 1
@@ -1751,6 +1757,11 @@ cleanup() {
             flock -u "$KILIX_PROVISION_LOCK_FD" 2>/dev/null || true
             exec {KILIX_PROVISION_LOCK_FD}>&-
             KILIX_PROVISION_LOCK_FD=""
+        fi
+        if [ -n "${KILIX_VOICEBOX_TRANSACTION_FD:-}" ]; then
+            flock -u "$KILIX_VOICEBOX_TRANSACTION_FD" 2>/dev/null || true
+            exec {KILIX_VOICEBOX_TRANSACTION_FD}>&-
+            unset KILIX_VOICEBOX_TRANSACTION_FD
         fi
     fi
     [ "$cleanup_failed" = 0 ] || return 70
@@ -4513,6 +4524,52 @@ require_release_apt_provenance() {
     fi
 }
 
+begin_provision_voicebox_selection() {
+    local root="$KILIX_DATA_HOME/voicebox" helper="$KILIX_DIR/config/kilix_sdk/voicebox.py"
+    [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
+        || die "optional Voicebox promotion requires the active provision transaction"
+    [ "$PROVISION_VOICEBOX_SNAPSHOT_READY" = 0 ] || return 0
+    as_user env "${install_env[@]}" /usr/bin/python3 -I -B "$helper" lockcheck --root "$root" \
+        || die "Voicebox delivery root refused"
+    exec {KILIX_VOICEBOX_TRANSACTION_FD}<"$root"
+    export KILIX_VOICEBOX_TRANSACTION_FD
+    flock -n -x "$KILIX_VOICEBOX_TRANSACTION_FD" \
+        || die "Voicebox is in use; close its private tab before provisioning"
+    as_user env "${install_env[@]}" "KILIX_VOICEBOX_TRANSACTION_FD=$KILIX_VOICEBOX_TRANSACTION_FD" \
+        /usr/bin/python3 -I -B "$helper" selection-snapshot --root "$root" \
+        >"$PROVISION_ROOT_TRANSACTION_DIR/voicebox-selection.json" \
+        || die "could not bind the previous Voicebox selection"
+    chmod 0600 "$PROVISION_ROOT_TRANSACTION_DIR/voicebox-selection.json"
+    PROVISION_VOICEBOX_ROOT="$root"
+    PROVISION_VOICEBOX_SNAPSHOT_READY=1
+}
+
+restore_provision_voicebox_selection() {
+    [ "$PROVISION_VOICEBOX_SNAPSHOT_READY" = 1 ] || return 0
+    as_user env "${install_env[@]}" "KILIX_VOICEBOX_TRANSACTION_FD=$KILIX_VOICEBOX_TRANSACTION_FD" \
+        /usr/bin/python3 -I -B "$KILIX_DIR/config/kilix_sdk/voicebox.py" selection-restore \
+        --root "$PROVISION_VOICEBOX_ROOT" <"$PROVISION_ROOT_TRANSACTION_DIR/voicebox-selection.json" \
+        || return 1
+    PROVISION_VOICEBOX_SNAPSHOT_READY=0
+}
+
+install_optional_voicebox() {
+    local package="${KILIX_VOICEBOX_PACKAGE:-}" digest="${KILIX_VOICEBOX_PACKAGE_SHA256:-}"
+    [ -n "$package$digest" ] || return 0
+    [[ "$package" == /* && "$digest" =~ ^[0-9a-f]{64}$ ]] \
+        || die "Voicebox requires an explicit absolute offline package and SHA256"
+    [ -f "$package" ] && [ ! -L "$package" ] \
+        || die "Voicebox offline package is unavailable"
+    if [ "$DRY_RUN" = 1 ]; then
+        log "Voicebox optional offline package selected: $digest (no model acquisition)"
+        return 0
+    fi
+    begin_provision_voicebox_selection
+    as_user env "${install_env[@]}" "KILIX_VOICEBOX_TRANSACTION_FD=$KILIX_VOICEBOX_TRANSACTION_FD" "$KILIX_DIR/kilix" voicebox prepare \
+        --root "$KILIX_DATA_HOME/voicebox" --package "$package" --sha256 "$digest" \
+        || die "optional Voicebox installation refused"
+}
+
 write_source_tool_manifest() {
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + record resolved source commits, apt indexes, and tool versions -> /var/lib/plebian-os/{versions.env,apt-sources.list}"
@@ -4586,6 +4643,9 @@ write_source_tool_manifest() {
         provenance_kv KILIX_SESSION_HOME "$KILIX_SESSION_HOME"
         provenance_kv KILIX_BUILD_DIRECTORY "$KILIX_BUILD_DIRECTORY"
         provenance_kv KILIX_DATA_HOME "$KILIX_DATA_HOME"
+        if [ -f "$KILIX_DATA_HOME/voicebox/selection.json" ]; then
+            provenance_kv KILIX_VOICEBOX_SELECTION_SHA256 "$(sha256sum "$KILIX_DATA_HOME/voicebox/selection.json" | awk '{print $1}')"
+        fi
         provenance_kv KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
         provenance_kv KILIX_PREBUILT_HOME "$KILIX_PREBUILT_HOME"
         provenance_kv KILIX_COMMIT "$kilix_commit"
@@ -6540,6 +6600,7 @@ fi
 # Capture the final state only now: dependency installation, pleb install, Go
 # setup, Kilix fork compilation, and all optional providers have completed.
 write_package_manifest
+install_optional_voicebox
 write_source_tool_manifest
 
 commit_provision_root_transaction
