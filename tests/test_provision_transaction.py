@@ -237,6 +237,24 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             account.stdout.strip(), "/var/lib/AccountsService/users/pleb"
         )
 
+    def test_every_production_file_parent_is_accounted(self):
+        result = self._run(
+            "TARGET_USER=pleb\n"
+            "prepare_provision_root_transaction_paths\n"
+            "printf 'file\\t%s\\n' \"${PROVISION_ROOT_TRANSACTION_PATHS[@]}\"\n"
+            "printf 'directory\\t%s\\n' "
+            "\"${PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS[@]}\" "
+            "\"${PROVISION_ROOT_TRANSACTION_MANAGED_DIRS[@]}\" "
+            "\"$PROVISION_ROOT_TRANSACTION_BASE\"\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        inventory = [line.split("\t", 1) for line in result.stdout.splitlines()]
+        paths = {Path(path) for kind, path in inventory if kind == "file"}
+        directories = {Path(path) for kind, path in inventory if kind == "directory"}
+        self.assertTrue(paths)
+        missing = {str(path.parent) for path in paths if path.parent not in directories}
+        self.assertEqual(missing, set(), f"unaccounted production parents: {sorted(missing)}")
+
     def test_main_transaction_window_starts_before_files_and_commits_last(self):
         source = PROVISION.read_text()
         dependencies = source.rindex(

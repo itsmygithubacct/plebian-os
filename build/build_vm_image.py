@@ -1123,8 +1123,15 @@ def wait_for_provisioning(cfg: Config, timeout_s: int,
                 return
             if "FAILED" in out:
                 print()
-                logs = ssh(cfg, "journalctl -u plebian-os-firstboot --no-pager | tail -30", askpass)
-                die("first-boot provisioning FAILED:\n" + (logs.stdout if logs else ""))
+                journal_cmd = "/usr/bin/journalctl -u plebian-os-firstboot.service --no-pager -n 30"
+                # The ordinary test account cannot read the system journal.
+                # Use its existing optional sudo grant without prompting or
+                # passing the SSH credential into the diagnostic command.
+                logs = ssh(cfg, "sudo -n " + journal_cmd, askpass) if cfg.nopasswd_sudo else None
+                if logs is None or logs.returncode != 0:
+                    logs = ssh(cfg, journal_cmd, askpass)
+                detail = (logs.stdout + logs.stderr) if logs is not None else ""
+                die("first-boot provisioning FAILED:\n" + detail)
             if phase == "install":
                 phase = "provision"
                 print()

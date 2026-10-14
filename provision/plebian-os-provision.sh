@@ -1435,6 +1435,7 @@ PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
     /
     /etc
     /etc/systemd
+    /etc/systemd/system
     /etc/lightdm
     /etc/sudoers.d
     /usr
@@ -1443,6 +1444,8 @@ PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
     /usr/local/sbin
     /usr/local/share
     /usr/share
+    /usr/share/polkit-1
+    /usr/share/polkit-1/rules.d
     /var
     /var/lib
 )

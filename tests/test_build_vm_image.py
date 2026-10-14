@@ -440,6 +440,48 @@ class VmBuilderEnvTests(unittest.TestCase):
             vm.verify_provisioning(cfg(), "askpass")
         self.assertGreater(remote.call_count, 1)
 
+    def test_firstboot_failure_reads_system_journal_with_existing_sudo_grant(self):
+        failed = SimpleNamespace(returncode=0, stdout="FAILED\n", stderr="")
+        journal = SimpleNamespace(returncode=0, stdout="transaction refused\n", stderr="")
+        with mock.patch.object(vm, "ssh", side_effect=(failed, journal)) as remote, \
+                mock.patch.object(vm, "info"), \
+                mock.patch.object(vm, "die", side_effect=SystemExit(1)) as fatal, \
+                self.assertRaises(SystemExit):
+            vm.wait_for_provisioning(cfg(nopasswd_sudo=True), 30, ("askpass", "credential"))
+        self.assertEqual(remote.call_count, 2)
+        command = remote.call_args_list[1].args[1]
+        self.assertEqual(command, "sudo -n /usr/bin/journalctl -u "
+                         "plebian-os-firstboot.service --no-pager -n 30")
+        self.assertNotIn("strong-secret", command)
+        self.assertIn("transaction refused", fatal.call_args.args[0])
+
+    def test_firstboot_failure_falls_back_when_sudo_diagnostics_unavailable(self):
+        failed = SimpleNamespace(returncode=0, stdout="FAILED\n", stderr="")
+        denied = SimpleNamespace(returncode=1, stdout="", stderr="sudo unavailable\n")
+        journal = SimpleNamespace(returncode=0, stdout="-- No entries --\n",
+                                  stderr="system journal permission denied\n")
+        for privileged_result in (denied, None):
+            with self.subTest(privileged_result=privileged_result), \
+                    mock.patch.object(vm, "ssh", side_effect=(failed, privileged_result, journal)) as remote, \
+                    mock.patch.object(vm, "info"), \
+                    mock.patch.object(vm, "die", side_effect=SystemExit(1)) as fatal, \
+                    self.assertRaises(SystemExit):
+                vm.wait_for_provisioning(cfg(nopasswd_sudo=True), 30, ("askpass", "credential"))
+            self.assertEqual(remote.call_count, 3)
+            self.assertTrue(remote.call_args_list[-1].args[1].startswith("/usr/bin/journalctl "))
+            self.assertIn("system journal permission denied", fatal.call_args.args[0])
+
+    def test_firstboot_failure_uses_unprivileged_journal_without_sudo_grant(self):
+        failed = SimpleNamespace(returncode=0, stdout="FAILED\n", stderr="")
+        journal = SimpleNamespace(returncode=0, stdout="visible journal\n", stderr="")
+        with mock.patch.object(vm, "ssh", side_effect=(failed, journal)) as remote, \
+                mock.patch.object(vm, "info"), \
+                mock.patch.object(vm, "die", side_effect=SystemExit(1)), \
+                self.assertRaises(SystemExit):
+            vm.wait_for_provisioning(cfg(nopasswd_sudo=False), 30, ("askpass", "credential"))
+        self.assertEqual(remote.call_count, 2)
+        self.assertTrue(remote.call_args_list[-1].args[1].startswith("/usr/bin/journalctl "))
+
     def test_guest_timeout_budget_counts_each_loop_iteration(self):
         command = ("timeout 5 a && for t in x y z; do timeout 10 \"$t\" || exit 1; "
                    "done && timeout 7 b")
