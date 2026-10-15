@@ -661,15 +661,44 @@ if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
 fi
 
 acquire_update_lock() {
-    local lock="$PLEB_STATE_HOME/update.lock"
+    local lock="$PLEB_STATE_HOME/update.lock" fd fd_path path_identity fd_identity
     command -v flock >/dev/null 2>&1 \
         || die "flock is required to serialize stack updates (install util-linux)"
     mkdir -p "$PLEB_STATE_HOME"
-    exec 9>>"$lock"
-    chmod 0600 "$lock" \
-        || die "could not secure update lock: $lock"
+    if [ -n "${PLEB_UPDATE_LOCK_FD:-}" ]; then
+        fd="$PLEB_UPDATE_LOCK_FD"
+        [[ "$fd" =~ ^[0-9]+$ ]] \
+            || die "PLEB_UPDATE_LOCK_FD must be a numeric inherited descriptor"
+        fd_path="/proc/$$/fd/$fd"
+        [ -e "$fd_path" ] \
+            || die "PLEB_UPDATE_LOCK_FD=$fd is not open in this process"
+        [ -f "$lock" ] && [ ! -L "$lock" ] \
+            && [ "$(stat -c '%u:%h' -- "$lock" 2>/dev/null)" = "$EUID:1" ] \
+            || die "inherited Pleb update lock is not an owned regular file: $lock"
+        path_identity="$(stat -c '%d:%i' -- "$lock" 2>/dev/null)" \
+            || die "could not inspect the Pleb update lock"
+        fd_identity="$(stat -Lc '%d:%i' -- "$fd_path" 2>/dev/null)" \
+            || die "could not inspect the inherited Pleb update-lock descriptor"
+        [ "$fd_identity" = "$path_identity" ] \
+            || die "PLEB_UPDATE_LOCK_FD does not refer to $lock"
+        # Older Pleb callers created this empty file under umask 022. Repair
+        # only the verified owned inode, then recheck its path binding.
+        chmod 0600 -- "$fd_path" || die "could not secure inherited update lock"
+        [ "$(stat -c '%u:%a:%h:%d:%i' -- "$lock" 2>/dev/null)" = "$EUID:600:1:$fd_identity" ] \
+            || die "inherited Pleb update lock changed before handoff: $lock"
+        # The named-hop caller holds this open-file-description lock across
+        # selection, apply and recovery. Duplication preserves that ownership;
+        # child cleanup closes its references and never unlocks the caller.
+        exec 9>&"$fd" || die "could not borrow the Pleb update lock"
+    else
+        exec 9>>"$lock"
+        chmod 0600 "$lock" \
+            || die "could not secure update lock: $lock"
+    fi
     flock -n 9 \
         || die "another Pleb/Plebian-OS update is already running (lock: $lock)"
+    PLEB_UPDATE_LOCK_FD=9
+    export PLEB_UPDATE_LOCK_FD
 }
 
 _STACK_KILIX_LOCK_FD=""

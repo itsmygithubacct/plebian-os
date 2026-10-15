@@ -173,6 +173,31 @@ path_fingerprint() {
     fi
 }
 
+verify_installed_target_ref() {
+    local component="$1" checkout_dir="$2" selected_ref="$3" installed_ref
+    [[ "$selected_ref" =~ ^[0-9a-f]{40}$ ]] \
+        || die "selected $component ref is not an exact commit"
+    installed_ref="$(git -C "$checkout_dir" rev-parse --verify HEAD)"
+    must "installed-$component-ref-matches-target" "$installed_ref/$selected_ref" \
+        test "$installed_ref" = "$selected_ref"
+}
+
+preserved_sentinel_path() {
+    local path="$1" expected="$2" kind="$3" candidate
+    local -a candidates=("$path")
+    if [ "$kind" = modified-tracked ]; then
+        candidates+=("$path.local" "$path.local."*)
+    fi
+    for candidate in "${candidates[@]}"; do
+        [ -f "$candidate" ] && [ ! -L "$candidate" ] || continue
+        if [ "$(sha256sum -- "$candidate" | awk '{print $1}')" = "$expected" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
 home_manifest() {
     local output="$1"
     HOME_ROOT="$home_root" python3 - "$output" <<'PY'
@@ -396,18 +421,25 @@ must "single-command-hop-succeeds" "pleb update --to $target; exit=$success_rc" 
 "$pleb_bin" update --show >"$report/show-after.txt" 2>"$report/show-after.stderr"
 selected="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-after.txt" | head -n 1)"
 must "selected-release-is-target" "$selected/$target" test "$selected" = "$target"
+for component in pleb kilix; do
+    case "$component" in
+        pleb) ref_key=PLEB_REF; checkout_dir="$pleb_dir" ;;
+        kilix) ref_key=KILIX_REF; checkout_dir="$kilix_dir" ;;
+    esac
+    selected_ref="$(sed -n "s/^  $ref_key=\\([^ ]*\\).*/\\1/p" "$report/show-after.txt" | head -n 1)"
+    verify_installed_target_ref "$component" "$checkout_dir" "$selected_ref"
+done
 
 sentinel_total=0
 sentinel_pass=0
+: >"$report/sentinel-locations.tsv"
 while IFS=$'\t' read -r path expected kind; do
     sentinel_total=$((sentinel_total + 1))
-    actual_path="$path"
-    if [ "$kind" = modified-tracked ]; then actual_path="$path.local"; fi
-    if [ -f "$actual_path" ] \
-        && [ "$(sha256sum "$actual_path" | awk '{print $1}')" = "$expected" ]; then
+    if actual_path="$(preserved_sentinel_path "$path" "$expected" "$kind")"; then
         sentinel_pass=$((sentinel_pass + 1))
+        printf '%s\t%s\n' "$path" "$actual_path" >>"$report/sentinel-locations.tsv"
     else
-        die "sentinel did not survive byte-identically: $actual_path"
+        die "sentinel did not survive byte-identically at its original or recovery path: $path"
     fi
 done <"$sentinels"
 record_check "all-sentinels-byte-identical" pass "$sentinel_pass/$sentinel_total"

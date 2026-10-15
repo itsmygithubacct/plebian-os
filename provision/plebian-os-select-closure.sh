@@ -287,6 +287,7 @@ MODE=select
 OS_COMMIT=""
 SOURCE_VERSION=""
 STAGE=""
+STANDALONE_PLEB_BOOTSTRAP=""
 
 cleanup_stage() {
     [ -z "$STAGE" ] || rm -rf -- "$STAGE"
@@ -2124,6 +2125,59 @@ ROOT_SPLIT_ROLLBACK
     fi
 }
 
+stage_standalone_pleb_bootstrap() {
+    local dir target path entry
+    [ "$SELECTOR_MODE" = standalone ] && [ -n "${PLEB_UPDATE_LOCK_FD:-}" ] \
+        || return 0
+    dir="${PLEBIAN_OS_PLEB_DIR:-${BEFORE[PLEB_DIR]:-}}"
+    target="${COMPONENT_TARGET[PLEB_REF]:-}"
+    [ -n "$target" ] && [ "$target" = "${CLOSURE[PLEB_REF]:-}" ] \
+        || closure_reject "standalone bootstrap requires the validated Pleb target"
+    [ "$(git -C "$dir" rev-parse --verify HEAD 2>/dev/null)" != "$target" ] \
+        || return 0
+    # The 0.2.1 caller starts its child from this checkout but treats a
+    # borrowed lock as proof an OS updater already moved it. Stage only the
+    # selected Pleb's existing self-update helpers, before any closure write.
+    # Fixed paths and regular Git blob modes avoid extracting arbitrary trees.
+    mkdir -p -- "$STAGE/pleb-bootstrap/lib"
+    for path in lib/common.sh lib/storage.sh lib/update.sh lib/preserve.sh lib/closure.sh; do
+        entry="$(git -C "$dir" ls-tree "$target" -- "$path")"
+        case "$entry" in
+            "100644 blob "*$'\t'"$path"|"100755 blob "*$'\t'"$path") ;;
+            *) closure_reject "selected Pleb bootstrap helper is not a regular blob: $path" ;;
+        esac
+        git -C "$dir" show "$target:$path" >"$STAGE/pleb-bootstrap/$path" \
+            || closure_reject "could not stage selected Pleb helper $path"
+        bash -n "$STAGE/pleb-bootstrap/$path" \
+            || closure_reject "selected Pleb helper does not parse: $path"
+    done
+    STANDALONE_PLEB_BOOTSTRAP="$STAGE/pleb-bootstrap"
+}
+
+bootstrap_standalone_pleb() {
+    local dir target
+    [ -n "$STANDALONE_PLEB_BOOTSTRAP" ] || return 0
+    dir="${PLEBIAN_OS_PLEB_DIR:-${BEFORE[PLEB_DIR]:-}}"
+    target="${COMPONENT_TARGET[PLEB_REF]}"
+    log "bootstrapping standalone Pleb ${target:0:12} under the invoking updater's lock"
+    env "PLEB_ROOT=$dir" "PLEB_DIR=$dir" \
+        "PLEB_REPO=${CLOSURE[PLEB_REPO]}" "PLEB_REF=$target" "PLEB_BRANCH=" \
+        "PLEB_ENV_USER=$SESSION_ENV" "PLEB_CLOSURE_USER=$CLOSURE_ENV" \
+        "PLEB_RELEASE_HOP_APPLY=1" \
+        bash -s -- "$STANDALONE_PLEB_BOOTSTRAP" "$dir" "$target" <<'PLEB_BOOTSTRAP'
+set -euo pipefail
+source "$1/lib/common.sh"
+source "$1/lib/update.sh"
+_acquire_update_lock
+trap _update_cleanup EXIT
+_prepare_pleb_self_update
+[ "$_PLEB_SELF_UPDATE_OK" = 1 ] || die "selected Pleb self-update is disabled or unavailable"
+_update_pleb_self --local-ref
+[ "$(git -C "$2" rev-parse --verify HEAD)" = "$3" ] \
+    || die "standalone Pleb did not reach the selected commit"
+PLEB_BOOTSTRAP
+}
+
 select_closure() {
     read_installed_configuration
     if [ -z "$SOURCE_DIR" ]; then
@@ -2138,6 +2192,7 @@ select_closure() {
     build_selected_closure
     prepare_component_ancestry_checks
     stage_target_tools
+    stage_standalone_pleb_bootstrap
     log "release $TARGET closure validated from ${SOURCE_DIR}: releases/$TARGET.env @ $OS_COMMIT"
     announce_closure_move
     if split_layout_active; then
@@ -2152,6 +2207,11 @@ select_closure() {
             return 0
         fi
         apply_split_closure
+        if ! bootstrap_standalone_pleb; then
+            warn "standalone Pleb bootstrap failed; restoring the previous closure"
+            rollback_split_closure
+            die "standalone Pleb bootstrap failed; the previous closure is restored"
+        fi
         if [ -n "$DEVELOPMENT_COMMIT" ]; then
             log "development $TARGET closure selected in $CLOSURE_ENV at $OS_COMMIT; operator choices remain in $SESSION_ENV; no release acceptance claimed."
         else

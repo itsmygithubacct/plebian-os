@@ -1287,6 +1287,114 @@ snapshot_kilix_engine_generation
             self.assertTrue((build / "previous").is_symlink())
 
 
+class UpdateLockHandoffTests(unittest.TestCase):
+    def _env(self, home, inherited=None):
+        env = {**os.environ, "HOME": str(home),
+               "PLEB_STATE_HOME": str(home / "state"),
+               "PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY": "1"}
+        env.pop("PLEB_UPDATE_LOCK_FD", None)
+        if inherited is not None:
+            env["PLEB_UPDATE_LOCK_FD"] = str(inherited)
+        return env
+
+    def _argv(self, body="acquire_update_lock\n"):
+        return ["bash", "-c", "set -euo pipefail\n"
+                f"source {str(UPDATE_PATH)!r}\n" + body]
+
+    def test_inherited_caller_lock_survives_nested_cleanup_and_excludes_competitor(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            state = home / "state"
+            state.mkdir(mode=0o700)
+            # The old named-hop caller exports a held descriptor >=10. The
+            # updater must share its open file description, not reopen its path.
+            original = os.open(state / "update.lock", os.O_RDWR | os.O_CREAT, 0o644)
+            os.fchmod(original, 0o644)
+            held = fcntl.fcntl(original, fcntl.F_DUPFD_CLOEXEC, 10)
+            os.close(original)
+            fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            child = subprocess.Popen(
+                self._argv("acquire_update_lock\n"
+                           "trap stack_transaction_cleanup EXIT\n"
+                           "[ \"$PLEB_UPDATE_LOCK_FD\" = 9 ]\n"
+                           "[ \"$(stat -c '%a' \"$PLEB_STATE_HOME/update.lock\")\" = 600 ]\n"
+                           "bash -c 'set -euo pipefail; script=\"$1\"; set --; source \"$script\"; "
+                           "acquire_update_lock; trap stack_transaction_cleanup EXIT' nested "
+                           f"{str(UPDATE_PATH)!r}\n"
+                           "[ \"$(stat -Lc '%d:%i' /proc/$$/fd/9)\" = "
+                           "\"$(stat -c '%d:%i' \"$PLEB_STATE_HOME/update.lock\")\" ]\n"
+                           "printf 'ACQUIRED\\n'\nread -r finish\n"),
+                env=self._env(home, held), pass_fds=(held,), text=True,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            try:
+                with selectors.DefaultSelector() as ready:
+                    ready.register(child.stdout, selectors.EVENT_READ)
+                    self.assertTrue(ready.select(10), "inherited lock acquisition timed out")
+                    self.assertEqual(child.stdout.readline(), "ACQUIRED\n")
+                competitor = subprocess.run(self._argv(), env=self._env(home),
+                                            capture_output=True, text=True, timeout=10)
+                self.assertNotEqual(competitor.returncode, 0)
+                self.assertIn("already running", competitor.stderr)
+                _out, error = child.communicate("finish\n", timeout=10)
+                self.assertEqual(child.returncode, 0, error)
+                competitor_fd = os.open(state / "update.lock", os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(competitor_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(competitor_fd)
+                fcntl.flock(held, fcntl.LOCK_UN)
+                successor = subprocess.run(self._argv(), env=self._env(home),
+                                           capture_output=True, text=True, timeout=10)
+                self.assertEqual(successor.returncode, 0, successor.stderr)
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate(timeout=10)
+                os.close(held)
+
+    def test_inherited_lock_rejects_invalid_closed_and_wrong_path_descriptors(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            state = home / "state"
+            state.mkdir(mode=0o700)
+            (state / "update.lock").touch(mode=0o600)
+            wrong = os.open(home / "other.lock", os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                for value, passed, diagnostic in (
+                    ("invalid", (), "numeric inherited descriptor"),
+                    ("9999", (), "not open in this process"),
+                    (str(wrong), (wrong,), "does not refer to"),
+                ):
+                    with self.subTest(value=value):
+                        result = subprocess.run(self._argv(), env=self._env(home, value),
+                                                pass_fds=passed, capture_output=True,
+                                                text=True, timeout=10)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(diagnostic, result.stderr)
+            finally:
+                os.close(wrong)
+
+    def test_same_path_descriptor_cannot_bypass_another_open_file_description_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            state = home / "state"
+            state.mkdir(mode=0o700)
+            held = os.open(state / "update.lock", os.O_RDWR | os.O_CREAT, 0o600)
+            other = os.open(state / "update.lock", os.O_RDWR)
+            try:
+                fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                result = subprocess.run(self._argv(), env=self._env(home, other),
+                                        pass_fds=(other,), capture_output=True,
+                                        text=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("already running", result.stderr)
+            finally:
+                os.close(other)
+                os.close(held)
+
+
 class KilixTransactionLockWaitTests(unittest.TestCase):
     HARNESS = r'''
 set -euo pipefail
