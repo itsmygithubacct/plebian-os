@@ -1343,6 +1343,41 @@ class UpdateLockHandoffTests(unittest.TestCase):
         return ["bash", "-c", "set -euo pipefail\n"
                 f"source {str(UPDATE_PATH)!r}\n" + body]
 
+    def test_nested_install_update_and_failure_receive_component_ownership_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            packet = home / "stack-env.sh"
+            packet.write_text(re.search(r"^stack_env=\(.*?^\)", UPDATE, re.M | re.S).group())
+            consumer = home / "consumer"
+            consumer.write_text(
+                '#!/bin/bash\nset -euo pipefail\n'
+                '[ "$PLEB_RELEASE_HOP_APPLY" = 1 ]\n[ "$PLEB_SELF_UPDATE" = 0 ]\n'
+                '[ "$PLEB_UPDATE_LOCK_FD" = 9 ]\n'
+                'flock -n "$PLEB_UPDATE_LOCK_FD"\nflock -n "$KILIX_TRANSACTION_LOCK_FD"\n'
+                'printf "CHILD %s\\n" "$1"\nexit "${CHILD_STATUS:-0}"\n'
+            )
+            consumer.chmod(0o755)
+            body = (
+                'acquire_update_lock\n'
+                'exec {engine}>"$PLEB_STATE_HOME/engine.lock"\nflock -n "$engine"\n'
+                'KILIX_TRANSACTION_LOCK_FD="$engine"\n'
+                'KILIX_TRANSACTION_LOCK_PATH="$PLEB_STATE_HOME/engine.lock"\n'
+                'unset PLEB_RELEASE_HOP_APPLY PLEB_SELF_UPDATE\n'
+                f'source {str(packet)!r}\n'
+                '[ -z "${PLEB_RELEASE_HOP_APPLY+x}" ]\n'
+                f'env "${{stack_env[@]}}" {str(consumer)!r} install\n'
+                f'env "${{stack_env[@]}}" {str(consumer)!r} update --no-restart\n'
+                'set +e\n'
+                f'env "${{stack_env[@]}}" CHILD_STATUS=7 {str(consumer)!r} update --no-restart\n'
+                'status=$?\nset -e\n[ "$status" = 7 ]\n'
+                'if flock -n "$PLEB_STATE_HOME/update.lock" true; then exit 91; fi\n'
+                'if flock -n "$PLEB_STATE_HOME/engine.lock" true; then exit 92; fi\n'
+            )
+            result = subprocess.run(self._argv(body), env=self._env(home),
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["CHILD install", "CHILD update", "CHILD update"])
+
     def test_inherited_caller_lock_survives_nested_cleanup_and_excludes_competitor(self):
         with tempfile.TemporaryDirectory() as td:
             home = Path(td)

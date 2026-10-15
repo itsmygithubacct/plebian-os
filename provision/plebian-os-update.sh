@@ -4320,6 +4320,10 @@ stack_env=(
     "PLEB_SESSION_HOME=$PLEB_SESSION_HOME"
     "PLEB_DATA_HOME=$PLEB_DATA_HOME"
     "PLEB_UPDATE_LOCK_FD=9"
+    # These children apply components within this live outer transaction; they
+    # must not recover its release-hop marker or move the OS-owned Pleb tree.
+    "PLEB_RELEASE_HOP_APPLY=1"
+    "PLEB_SELF_UPDATE=0"
     "KILIX_DIR=$KILIX_DIR"
     "KILIX_STORAGE_HOME=$KILIX_STORAGE_HOME"
     "KILIX_CONFIG_HOME=$KILIX_CONFIG_HOME"
