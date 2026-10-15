@@ -3422,11 +3422,12 @@ stage_and_validate_os_layer() {
     install -m 0644 "$prov/lightdm-gtk-greeter.conf" "$stage/lightdm-gtk-greeter.conf"
     install -m 0755 "$prov/plebian-os-select-closure.sh" "$stage/plebian-os-select-closure"
 
-    bash -n "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
+    for file in "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
         "$stage/plebian-os-select-closure" \
-        "$stage/plebian-os-native-runtime" \
-        || die "staged OS-layer shell validation failed"
+        "$stage/plebian-os-native-runtime"; do
+        bash -n "$file" || die "staged OS-layer shell validation failed: $file"
+    done
     python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-passwd" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-diarization-converter" \
@@ -3806,16 +3807,21 @@ for i in "${!new_paths[@]}"; do
         false
     }
 done
-bash -n "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[15]}"
+# Recheck executable syntax before any installed file is backed up or replaced.
+for file in "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[16]}"; do
+    bash -n "$file"
+done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" \
-    "${new_paths[14]}" "${new_paths[16]}" "${new_paths[17]}" \
-    "${new_paths[18]}" "${new_paths[19]}" "${new_paths[20]}" <<'PY'
+    "${new_paths[14]}" "${new_paths[15]}" "${new_paths[17]}" \
+    "${new_paths[18]}" "${new_paths[19]}" "${new_paths[20]}" \
+    "${new_paths[21]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
     compile(pathlib.Path(name).read_text(), name, "exec")
 PY
+# Validate service and other data formats separately.
 grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^\[Service\]$' "${new_paths[4]}" \
     && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \

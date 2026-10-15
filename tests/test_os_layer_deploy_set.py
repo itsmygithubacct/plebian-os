@@ -14,7 +14,9 @@ adding a file to one list and not another fails here instead of on a user's
 machine in the middle of an upgrade.
 """
 import re
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -140,6 +142,74 @@ class OsLayerDeploySetTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertNotIn("GUARD-PASSED", result.stdout)
         self.assertIn("one expected hash per staged file", result.stderr)
+
+
+class OsLayerSyntaxValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.text = UPDATE.read_text()
+        block = root_block(self.text)
+        self.names = array("names", block)
+        start = block.index("# Recheck executable syntax before")
+        end = block.index("# Validate service and other data formats separately.", start)
+        self.root_syntax = block[start:end]
+        # Never execute the privileged deployment around this read-only check.
+        self.assertNotIn("sudo", self.root_syntax)
+        self.assertNotIn("mv ", self.root_syntax)
+        staging = function_body("stage_and_validate_os_layer", self.text)
+        start = staging.index('    for file in "$stage/plebian-os-provision"')
+        end = staging.index('    python3 - "$stage/plebian-os-qt-runtime"', start)
+        self.staging_shell_syntax = staging[start:end]
+
+    def _stage(self, stage):
+        aliases = {
+            "plebian-os-provision": "provision/plebian-os-provision.sh",
+            "plebian-os-install-deps": "provision/install-deps.sh",
+            "plebian-os-update": "provision/plebian-os-update.sh",
+            "plebian-os-select-closure": "provision/plebian-os-select-closure.sh",
+            "VERSION": "VERSION",
+            "desktop-wallpaper.png": "assets/desktop/plebian-os.png",
+            "ATTRIBUTION.md": "assets/installer/ATTRIBUTION.md",
+            "COPYING.GPL-2": "assets/COPYING.GPL-2",
+        }
+        for name in self.names:
+            shutil.copyfile(ROOT / aliases.get(name, "provision/" + name), stage / name)
+
+    def _run(self, stage, *, root=True):
+        prelude = ('set -euo pipefail\nstage="$1"\n'
+                   'die() { printf "%s\\n" "$*" >&2; exit 1; }\n')
+        if root:
+            prelude += 'new_paths=()\n'
+            prelude += ''.join(f'new_paths+=("$stage/{name}")\n' for name in self.names)
+        return subprocess.run(
+            ["bash", "-c", prelude + (self.root_syntax if root else self.staging_shell_syntax),
+             "syntax-check", str(stage)], capture_output=True, text=True, check=False,
+        )
+
+    def test_actual_deploy_payload_uses_the_correct_interpreters(self):
+        with tempfile.TemporaryDirectory() as td:
+            stage = Path(td)
+            self._stage(stage)
+            result = self._run(stage)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = self._run(stage, root=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_every_relevant_nonfirst_script_is_really_checked(self):
+        for name, invalid in (
+            ("plebian-os-native-runtime", "#!/bin/sh\nif then\n"),
+            ("plebian-os-update", "#!/bin/bash\nif then\n"),
+            ("plebian-os-install-kilix-ollama-runtime", "def broken(\n"),
+            ("plebian-os-qt-runtime", "def broken(\n"),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
+                stage = Path(td)
+                self._stage(stage)
+                (stage / name).write_text(invalid)
+                result = self._run(stage)
+                self.assertNotEqual(result.returncode, 0, name)
+                self.assertIn(name, result.stderr)
+                if name in ("plebian-os-native-runtime", "plebian-os-update"):
+                    self.assertNotEqual(self._run(stage, root=False).returncode, 0, name)
 
 
 if __name__ == "__main__":
