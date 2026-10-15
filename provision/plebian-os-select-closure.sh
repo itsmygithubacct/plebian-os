@@ -2178,6 +2178,21 @@ _update_pleb_self --local-ref
 PLEB_BOOTSTRAP
 }
 
+preflight_image_source_checkouts() {
+    [ "$SELECTOR_MODE" = image ] && [ -n "${PLEB_UPDATE_LOCK_FD:-}" ] || return 0
+    # Refuse before advancing the closure. The 0.2.1 caller cannot reconcile
+    # with its restored old updater under an inherited lock after an apply
+    # preflight failure, and leaves an incomplete transition marker behind.
+    # Reuse the target updater's existing guard without entering a transaction.
+    env -u PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY \
+        "PLEB_DIR=${PLEBIAN_OS_PLEB_DIR:-${BEFORE[PLEB_DIR]:-}}" \
+        "KILIX_DIR=${PLEBIAN_OS_KILIX_DIR:-${BEFORE[KILIX_DIR]:-}}" \
+        "KILIX95_DIR=${PLEBIAN_OS_KILIX95_DIR:-${BEFORE[KILIX95_DIR]:-}}" \
+        "PLEBIAN_OS_DIR=${BEFORE[PLEBIAN_OS_DIR]:-}" \
+        "PLEBIAN_OS_SELF_UPDATE=${BEFORE[PLEBIAN_OS_SELF_UPDATE]:-1}" \
+        "$STAGE/plebian-os-update" --check-source-checkouts
+}
+
 select_closure() {
     read_installed_configuration
     if [ -z "$SOURCE_DIR" ]; then
@@ -2193,6 +2208,7 @@ select_closure() {
     prepare_component_ancestry_checks
     stage_target_tools
     stage_standalone_pleb_bootstrap
+    preflight_image_source_checkouts
     log "release $TARGET closure validated from ${SOURCE_DIR}: releases/$TARGET.env @ $OS_COMMIT"
     announce_closure_move
     if split_layout_active; then

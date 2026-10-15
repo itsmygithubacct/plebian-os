@@ -7,6 +7,8 @@
 # performs the successful hop with one `pleb update --to` command, and emits a
 # checksummed evidence directory.  It deliberately does not create tags or a
 # release manifest: those are release-owner inputs, not qualification output.
+# The image lane proves the documented dirty-checkout refusal, then explicitly
+# moves its ten checkout fixtures aside with checksums before the clean hop.
 set -euo pipefail
 
 usage() {
@@ -44,6 +46,8 @@ kilix_dir=""
 session_env=""
 closure_env=""
 disposable=0
+image_operator_files=0
+declare -A image_resolved_paths=()
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -196,6 +200,51 @@ preserved_sentinel_path() {
         fi
     done
     return 1
+}
+
+resolve_image_checkout_fixtures() {
+    local path expected kind repo relative saved count=0
+    case "$report/" in "$pleb_dir/"*|"$kilix_dir/"*)
+        die "operator resolution must be outside participating checkouts" ;;
+    esac
+    : >"$report/operator-resolution.tsv"
+    : >"$report/OPERATOR-RESOLUTION.sha256"
+    while IFS=$'\t' read -r path expected kind; do
+        case "$kind" in untracked|modified-tracked) ;; *) continue ;; esac
+        case "$path" in
+            "$pleb_dir/"*) repo="$pleb_dir"; relative="pleb/${path#"$pleb_dir/"}" ;;
+            "$kilix_dir/"*) repo="$kilix_dir"; relative="kilix/${path#"$kilix_dir/"}" ;;
+            *) die "checkout fixture lies outside participating checkouts: $path" ;;
+        esac
+        [ -f "$path" ] && [ ! -L "$path" ] || die "unsafe checkout fixture: $path"
+        saved="$report/operator-resolved-${relative//\//--}"
+        [ ! -e "$saved" ] && [ ! -L "$saved" ] || die "operator recovery path exists: $saved"
+        cp -p -- "$path" "$saved"
+        [ "$(sha256sum -- "$saved" | awk '{print $1}')" = "$expected" ] \
+            || die "operator move-aside verification failed: $path"
+        sync -f "$saved"
+        printf '%s\t%s\t%s\t%s\n' "$path" "$saved" "$expected" "$kind" \
+            >>"$report/operator-resolution.tsv"
+        printf '%s  %s\n' "$expected" "${saved#"$report/"}" \
+            >>"$report/OPERATOR-RESOLUTION.sha256"
+        count=$((count + 1))
+    done <"$sentinels"
+    [ "$count" = 10 ] || die "operator move-aside requires all ten checkout fixtures"
+    sync -f "$report/operator-resolution.tsv"
+    sync -f "$report/OPERATOR-RESOLUTION.sha256"
+    sync -f "$report"
+    while IFS=$'\t' read -r path saved expected kind; do
+        [ "$(sha256sum -- "$path" | awk '{print $1}')" = "$expected" ] \
+            || die "checkout fixture changed before operator move-aside: $path"
+        mv -- "$path" "$saved"
+        image_resolved_paths["$path"]="$saved"
+        if [ "$kind" = modified-tracked ]; then
+            case "$path" in "$pleb_dir/"*) repo="$pleb_dir" ;; *) repo="$kilix_dir" ;; esac
+            git -C "$repo" restore --source=HEAD --worktree -- "${path#"$repo/"}"
+        fi
+    done <"$report/operator-resolution.tsv"
+    (cd "$report" && sha256sum -c OPERATOR-RESOLUTION.sha256)
+    image_operator_files="$count"
 }
 
 home_manifest() {
@@ -388,6 +437,63 @@ git_snapshot "$pleb_dir" pleb-before
 git_snapshot "$kilix_dir" kilix-before
 home_manifest "$report/home-before.tsv"
 
+if [ "$shape" = image ]; then
+    printf 'Image checkout policy: proving refusal, then checksummed operator move-aside per UPGRADING.md.\n'
+    selector_before="$(path_fingerprint /usr/local/bin/plebian-os-select-closure)"
+    updater_before="$(path_fingerprint /usr/local/bin/plebian-os-update)"
+    git_snapshot "$os_dir" os-before-dirty-refusal
+    git_snapshot "$kilix95_dir" kilix95-before-dirty-refusal
+    set +e
+    "$pleb_bin" update --to "$target" --yes --no-restart \
+        >"$report/dirty-refusal.stdout" 2>"$report/dirty-refusal.stderr"
+    dirty_rc=$?
+    set -e
+    printf '%s\n' "$dirty_rc" >"$report/dirty-refusal.exit"
+    must "dirty-image-hop-refuses" "exit=$dirty_rc" test "$dirty_rc" -ne 0
+    must "dirty-image-refusal-is-the-cleanliness-guard" "whole-stack guard" \
+        grep -q 'has local changes; refusing a whole-stack update' "$report/dirty-refusal.stderr"
+    for component in pleb kilix os kilix95; do
+        case "$component" in
+            pleb) checkout_dir="$pleb_dir"; before_prefix=pleb-before ;;
+            kilix) checkout_dir="$kilix_dir"; before_prefix=kilix-before ;;
+            os) checkout_dir="$os_dir"; before_prefix=os-before-dirty-refusal ;;
+            kilix95) checkout_dir="$kilix95_dir"; before_prefix=kilix95-before-dirty-refusal ;;
+        esac
+        git_snapshot "$checkout_dir" "$component-after-dirty-refusal"
+        for field in head status; do
+            must "dirty-refusal-preserves-$component-$field" "1/1" \
+                cmp -s "$report/$before_prefix.$field" "$report/$component-after-dirty-refusal.$field"
+        done
+    done
+    for item in session closure settings engine selector updater; do
+        case "$item" in
+            session) path="$session_env"; expected="$session_before" ;;
+            closure) path="$closure_env"; expected="$closure_before" ;;
+            settings) path="$settings_file"; expected="$settings_before" ;;
+            engine) path="$engine_current"; expected="$engine_before" ;;
+            selector) path=/usr/local/bin/plebian-os-select-closure; expected="$selector_before" ;;
+            updater) path=/usr/local/bin/plebian-os-update; expected="$updater_before" ;;
+        esac
+        must "dirty-refusal-preserves-$item" "$path" test "$(path_fingerprint "$path")" = "$expected"
+    done
+    while IFS=$'\t' read -r path expected kind; do
+        must "dirty-refusal-preserves-sentinel" "$path" \
+            test "$(sha256sum -- "$path" | awk '{print $1}')" = "$expected"
+    done <"$sentinels"
+    must "dirty-refusal-clears-incomplete-transition" "selection never advanced" \
+        test ! -e "${PLEB_STATE_HOME:-$HOME/.local/gpu_terminal/pleb/state}/release-hop/active"
+    resolve_image_checkout_fixtures
+    must "image-operator-move-aside-is-complete" "$image_operator_files/10" \
+        test "$image_operator_files" -eq 10
+    must "image-pleb-checkout-resolved-clean" "$pleb_dir" test -z \
+        "$(git -C "$pleb_dir" status --porcelain=v1 --untracked-files=all)"
+    must "image-kilix-checkout-resolved-clean" "$kilix_dir" test -z \
+        "$(git -C "$kilix_dir" status --porcelain=v1 --untracked-files=all)"
+fi
+git_snapshot "$pleb_dir" pleb-before-failure
+git_snapshot "$kilix_dir" kilix-before-failure
+home_manifest "$report/home-before-failure.tsv"
+
 failure_boundary=closure
 set +e
 PLEBIAN_OS_SELECT_TEST_FAIL_AFTER="$failure_boundary" \
@@ -397,12 +503,14 @@ failure_rc=$?
 set -e
 printf '%s\n' "$failure_rc" >"$report/induced-failure.exit"
 must "induced-hop-fails" "boundary=$failure_boundary exit=$failure_rc" test "$failure_rc" -ne 0
+must "induced-closure-boundary-was-reached" "$failure_boundary" \
+    grep -q 'injected split-closure failure' "$report/induced-failure.stderr"
 git_snapshot "$pleb_dir" pleb-after-failure
 git_snapshot "$kilix_dir" kilix-after-failure
-must "failure-restores-pleb-head" "1/1" cmp -s "$report/pleb-before.head" "$report/pleb-after-failure.head"
-must "failure-restores-pleb-status" "1/1" cmp -s "$report/pleb-before.status" "$report/pleb-after-failure.status"
-must "failure-restores-kilix-head" "1/1" cmp -s "$report/kilix-before.head" "$report/kilix-after-failure.head"
-must "failure-restores-kilix-status" "1/1" cmp -s "$report/kilix-before.status" "$report/kilix-after-failure.status"
+must "failure-restores-pleb-head" "1/1" cmp -s "$report/pleb-before-failure.head" "$report/pleb-after-failure.head"
+must "failure-restores-pleb-status" "1/1" cmp -s "$report/pleb-before-failure.status" "$report/pleb-after-failure.status"
+must "failure-restores-kilix-head" "1/1" cmp -s "$report/kilix-before-failure.head" "$report/kilix-after-failure.head"
+must "failure-restores-kilix-status" "1/1" cmp -s "$report/kilix-before-failure.status" "$report/kilix-after-failure.status"
 must "failure-restores-session-env" "$session_env" test "$(path_fingerprint "$session_env")" = "$session_before"
 must "failure-restores-closure-env" "$closure_env" test "$(path_fingerprint "$closure_env")" = "$closure_before"
 must "failure-restores-settings" "$settings_file" \
@@ -410,12 +518,14 @@ must "failure-restores-settings" "$settings_file" \
 must "failure-restores-engine-generation" "$engine_current" \
     test "$(path_fingerprint "$engine_current")" = "$engine_before"
 home_manifest "$report/home-after-failure.tsv"
-diff -u "$report/home-before.tsv" "$report/home-after-failure.tsv" \
+diff -u "$report/home-before-failure.tsv" "$report/home-after-failure.tsv" \
     >"$report/home-induced-failure.diff" || true
 
+set +e
 "$pleb_bin" update --to "$target" --yes --no-restart \
     >"$report/success.stdout" 2>"$report/success.stderr"
 success_rc=$?
+set -e
 printf '%s\n' "$success_rc" >"$report/success.exit"
 must "single-command-hop-succeeds" "pleb update --to $target; exit=$success_rc" test "$success_rc" -eq 0
 "$pleb_bin" update --show >"$report/show-after.txt" 2>"$report/show-after.stderr"
@@ -435,7 +545,13 @@ sentinel_pass=0
 : >"$report/sentinel-locations.tsv"
 while IFS=$'\t' read -r path expected kind; do
     sentinel_total=$((sentinel_total + 1))
-    if actual_path="$(preserved_sentinel_path "$path" "$expected" "$kind")"; then
+    if [ -n "${image_resolved_paths[$path]:-}" ]; then
+        actual_path="${image_resolved_paths[$path]}"
+        test "$(sha256sum -- "$actual_path" | awk '{print $1}')" = "$expected" \
+            || die "operator-resolved sentinel changed: $actual_path"
+        sentinel_pass=$((sentinel_pass + 1))
+        printf '%s\t%s\n' "$path" "$actual_path" >>"$report/sentinel-locations.tsv"
+    elif actual_path="$(preserved_sentinel_path "$path" "$expected" "$kind")"; then
         sentinel_pass=$((sentinel_pass + 1))
         printf '%s\t%s\n' "$path" "$actual_path" >>"$report/sentinel-locations.tsv"
     else
@@ -449,9 +565,12 @@ must "successful-hop-preserves-settings" "$settings_file" \
     test "$(path_fingerprint "$settings_file")" = "$settings_before"
 
 preserve_root="${PLEB_STATE_HOME:-$HOME/.local/gpu_terminal/pleb/state}/update-preserve"
-mapfile -t preservation_manifests < <(find "$preserve_root" -type f -name MANIFEST.sha256 -print 2>/dev/null | sort)
-[ "${#preservation_manifests[@]}" -gt 0 ] \
-    || die "no checksummed preservation records were produced"
+preservation_manifests=()
+if [ "$shape" = standalone ]; then
+    mapfile -t preservation_manifests < <(find "$preserve_root" -type f -name MANIFEST.sha256 -print 2>/dev/null | sort)
+    [ "${#preservation_manifests[@]}" -gt 0 ] \
+        || die "no checksummed automatic preservation records were produced"
+fi
 preservation_pass=0
 for manifest in "${preservation_manifests[@]}"; do
     if (cd "$(dirname "$manifest")" && sha256sum -c MANIFEST.sha256 >/dev/null); then
@@ -474,7 +593,7 @@ diff -u "$report/home-before.tsv" "$report/home-after-success.tsv" \
     >"$report/home-success.diff" || true
 git_snapshot "$pleb_dir" pleb-after-success
 git_snapshot "$kilix_dir" kilix-after-success
-record_check "evidence-artifacts-written" pass "home manifests 3/3; hop logs 2/2"
+record_check "evidence-artifacts-written" pass "home manifests 4/4; failure/success hop logs 2/2"
 
 export F109_REPORT_SHAPE="$shape" F109_REPORT_TARGET="$target"
 export F109_REPORT_CURRENT="$current" F109_REPORT_VIRT="$virt"
@@ -487,6 +606,7 @@ export F109_REPORT_CHECK_PASS="$check_pass" F109_REPORT_CHECK_TOTAL="$check_tota
 export F109_REPORT_SENTINEL_PASS="$sentinel_pass" F109_REPORT_SENTINEL_TOTAL="$sentinel_total"
 export F109_REPORT_PRESERVE_PASS="$preservation_pass"
 export F109_REPORT_PRESERVE_TOTAL="${#preservation_manifests[@]}"
+export F109_REPORT_OPERATOR_FILES="$image_operator_files"
 F109_REPORT_PLEB_HEAD="$(cat "$report/pleb-after-success.head")"
 F109_REPORT_KILIX_HEAD="$(cat "$report/kilix-after-success.head")"
 export F109_REPORT_PLEB_HEAD F109_REPORT_KILIX_HEAD
@@ -514,6 +634,7 @@ report = {
         "dry_run_command_denominator": 1,
         "successful_hop_commands": 1,
         "successful_hop_command_denominator": 1,
+        "dirty_preflight_refusal_commands": int(os.environ["F109_REPORT_SHAPE"] == "image"),
     },
     "starting_fixture": {
         "pleb_ref": os.environ["F109_REPORT_FROM_PLEB_REF"],
@@ -540,8 +661,16 @@ report = {
         "verified": integer("F109_REPORT_PRESERVE_PASS"),
         "total": integer("F109_REPORT_PRESERVE_TOTAL"),
     },
+    "operator_checkout_resolution": {
+        "required": os.environ["F109_REPORT_SHAPE"] == "image",
+        "files_moved_aside": integer("F109_REPORT_OPERATOR_FILES"),
+        "automatic_preservation_claimed": False,
+        "manifest": "OPERATOR-RESOLUTION.sha256" if integer("F109_REPORT_OPERATOR_FILES") else None,
+        "locations": "operator-resolution.tsv" if integer("F109_REPORT_OPERATOR_FILES") else None,
+    },
     "artifacts": {
         "home_before": "home-before.tsv",
+        "home_before_induced_failure": "home-before-failure.tsv",
         "home_after_induced_failure": "home-after-failure.tsv",
         "home_after_success": "home-after-success.tsv",
         "home_success_diff": "home-success.diff",

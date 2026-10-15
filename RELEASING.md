@@ -559,7 +559,12 @@ together.
    closure, runs the target dry-run before mutation, plants 13/13 modified,
    untracked, license, asset, and catalog sentinels, induces a closure-commit
    failure, proves compensation, and then executes exactly one successful
-   `pleb update --to` command. The controller retrieves and verifies both
+   `pleb update --to` command. The image lane first proves the whole-stack
+   dirty-checkout refusal without advancing the closure, then explicitly moves
+   its ten checkout fixtures outside the checkouts with verified checksums,
+   as required by [UPGRADING.md](UPGRADING.md). Those operator-resolved files
+   are distinguished from the standalone lane's automatic preservation.
+   The controller retrieves and verifies both
    `SHA256SUMS`, reboots each successful guest, and verifies the target release
    after reboot. Retain the combined report and both 2/2 guest evidence sets;
    any runner, retrieval, checksum, reboot, or post-reboot failure leaves that

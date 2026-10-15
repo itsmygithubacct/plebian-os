@@ -39,6 +39,9 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
             '"dry-run-preserves-engine-generation"',
             '"failure-restores-engine-generation"',
             '"declared-sentinel-corpus-is-complete"',
+            '"induced-closure-boundary-was-reached"',
+            '"dirty-image-refusal-is-the-cleanliness-guard"',
+            '"dirty-refusal-clears-incomplete-transition"',
             '${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}',
             '"dry_run_command_denominator": 1',
             '"successful_hop_command_denominator": 1',
@@ -153,6 +156,72 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("--from must be X.Y.Z", result.stderr)
             self.assertFalse(report.exists())
+
+    def test_image_operator_resolution_preserves_ten_files_and_refuses_bad_hash(self):
+        source = RUNNER.read_text()
+        helper = source[source.index("resolve_image_checkout_fixtures() {"):]
+        helper = helper[:helper.index("\n}\n") + 3]
+        for corrupt in (False, True):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                repos = [base / "pleb", base / "kilix"]
+                records = []
+                for repo in repos:
+                    repo.mkdir()
+                    git = ["git", "-C", str(repo)]
+                    subprocess.run(git + ["init", "-q"], check=True)
+                    readme = repo / "README.md"
+                    readme.write_text("release bytes\n")
+                    subprocess.run(git + ["add", "README.md"], check=True)
+                    subprocess.run(git + ["-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                                          "commit", "-qm", "fixture"], check=True)
+                    readme.write_bytes(b"owner readme\x00\xff\n")
+                    records.append((readme, "modified-tracked", readme.read_bytes()))
+                (repos[0] / "scripts").mkdir()
+                for index in range(7):
+                    path = repos[0] / "scripts" / f"camera-{index}.sh"
+                    path.write_text(f"#!/bin/sh\necho {index}\n")
+                    path.chmod(0o700)
+                    records.append((path, "untracked", path.read_bytes()))
+                binary = repos[1] / "operator.bin"
+                binary.write_bytes(b"operator\x00\xff")
+                records.append((binary, "untracked", binary.read_bytes()))
+                report = base / "report"
+                report.mkdir(mode=0o700)
+                sentinels = report / "sentinels.tsv"
+                sentinels.write_text("".join(
+                    f"{path}\t{'0' * 64 if corrupt and index == 0 else hashlib.sha256(data).hexdigest()}\t{kind}\n"
+                    for index, (path, kind, data) in enumerate(records)
+                ))
+                result = subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c",
+                     'die() { printf "%s\\n" "$*" >&2; exit 1; };\n' + helper +
+                     '\nreport="$1"; pleb_dir="$2"; kilix_dir="$3"; sentinels="$report/sentinels.tsv"; '
+                     'declare -A image_resolved_paths=(); image_operator_files=0; '
+                     'resolve_image_checkout_fixtures; [ "$image_operator_files" = 10 ]; '
+                     '[ "${#image_resolved_paths[@]}" = 10 ]',
+                     "bash", str(report), str(repos[0]), str(repos[1])],
+                    capture_output=True, text=True, check=False,
+                )
+                if corrupt:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("verification failed", result.stderr)
+                    for path, _, data in records:
+                        self.assertEqual(path.read_bytes(), data)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    mapping = [line.split("\t") for line in (report / "operator-resolution.tsv").read_text().splitlines()]
+                    self.assertEqual(len(mapping), 10)
+                    for original, saved, expected, kind in mapping:
+                        self.assertEqual(hashlib.sha256(Path(saved).read_bytes()).hexdigest(), expected)
+                        self.assertEqual(Path(saved).parent, report, "evidence extraction permits flat regular files")
+                        if kind == "modified-tracked":
+                            self.assertEqual(Path(original).read_text(), "release bytes\n")
+                        else:
+                            self.assertFalse(Path(original).exists())
+                    for repo in repos:
+                        self.assertEqual(subprocess.check_output(
+                            ["git", "-C", str(repo), "status", "--porcelain"], text=True), "")
 
     def test_host_controller_binds_two_guests_artifact_and_reboot(self):
         source = HOST_RUNNER.read_text()

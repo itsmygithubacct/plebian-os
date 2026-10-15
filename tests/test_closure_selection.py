@@ -6,6 +6,7 @@ release-controlled keys into /etc/pleb/session.env as one unit, without
 touching a single operator-controlled choice.
 """
 
+import fcntl
 import os
 import re
 import shlex
@@ -216,7 +217,7 @@ class ClosureSelectionTests(unittest.TestCase):
         ) + "\n"
 
     def _run(self, base: Path, *args, fail_after=None, check_ancestry=False,
-             env_extra=None, trust_tag=True):
+             env_extra=None, trust_tag=True, pass_fds=()):
         env = {
             "HOME": str(base / "home"),
             "PATH": os.environ["PATH"],
@@ -240,7 +241,7 @@ class ClosureSelectionTests(unittest.TestCase):
             if tag.returncode == 0:
                 env["PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA"] = tag.stdout.strip()
         return subprocess.run([str(SELECT), *args], env=env, text=True,
-                              capture_output=True, check=False)
+                              capture_output=True, check=False, pass_fds=pass_fds)
 
     @staticmethod
     def _component_history(path: Path, count=2):
@@ -900,6 +901,54 @@ class ClosureSelectionTests(unittest.TestCase):
                 )
                 retried = self._run(base, "--rollback")
                 self.assertEqual(retried.returncode, 0, retried.stderr)
+
+    def test_image_source_refusal_precedes_selection_and_clean_retry_keeps_caller_lock(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sources = base / "home/.local/gpu_terminal/sources"
+            pleb, kilix, kilix95 = sources / "pleb", sources / "kilix", sources / "kilix-desktops/kilix-95"
+            histories = [self._component_history(repo) for repo in (pleb, kilix, kilix95)]
+            pins = dict(zip(("PLEB_REF", "KILIX_REF", "KILIX95_REF"), (h[-1] for h in histories)))
+            os_head = self._source(base, self._manifest_text(**pins))
+            previous = {**dict(INSTALLED_RELEASE_VALUES), "PLEBIAN_OS_REF": os_head,
+                        **dict(zip(pins, (h[0] for h in histories)))}
+            session = self._machine(base, release=list(previous.items()))
+            before = session.read_bytes()
+            self._seed_core_public_caches(base, pleb, kilix, kilix95)
+            for repo, history in zip((pleb, kilix, kilix95), histories):
+                subprocess.run(["git", "-C", str(repo), "checkout", "-q", "--detach", history[0]], check=True)
+            owner = pleb / "operator.bin"
+            owner.write_bytes(b"owner bytes\x00\xff")
+            state = base / "home/.local/gpu_terminal/pleb/state"
+            state.mkdir(parents=True)
+            lock = state / "update.lock"
+            fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                args = dict(check_ancestry=True, pass_fds=(fd,), env_extra={"PLEB_UPDATE_LOCK_FD": str(fd)})
+                refused = self._run(base, "0.1.8", "--offline", **args)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("has local changes; refusing a whole-stack update", refused.stderr)
+                self.assertEqual(session.read_bytes(), before)
+                self.assertFalse(session.with_name("closure.env").exists())
+                self.assertFalse((base / "root/usr/local/bin/plebian-os-update").exists())
+                self.assertEqual(owner.read_bytes(), b"owner bytes\x00\xff")
+                for repo, history in zip((pleb, kilix, kilix95), histories):
+                    self.assertEqual(subprocess.check_output(
+                        ["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip(), history[0])
+                owner.replace(base / "operator-moved-aside.bin")
+                selected = self._run(base, "0.1.8", "--offline", **args)
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                self.assertEqual(self._values(session)["PLEB_REF"], pins["PLEB_REF"])
+                self.assertEqual((base / "operator-moved-aside.bin").read_bytes(), b"owner bytes\x00\xff")
+                competitor = os.open(lock, os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(competitor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(competitor)
+            finally:
+                os.close(fd)
 
     def test_standalone_split_selects_and_rolls_back_without_os_tooling(self):
         with tempfile.TemporaryDirectory() as td:

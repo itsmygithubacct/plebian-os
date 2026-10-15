@@ -1287,6 +1287,48 @@ snapshot_kilix_engine_generation
             self.assertTrue((build / "previous").is_symlink())
 
 
+class SourceCheckoutPreflightTests(unittest.TestCase):
+    def test_production_query_is_read_only_and_refuses_tracked_and_untracked_changes(self):
+        with tempfile.TemporaryDirectory() as td:
+            home = Path(td)
+            repos = {name: home / "sources" / name for name in ("pleb", "kilix", "kilix95", "os")}
+            for repo in repos.values():
+                repo.mkdir(parents=True)
+                git = ["git", "-C", str(repo)]
+                subprocess.run(git + ["init", "-q"], check=True)
+                (repo / "README.md").write_text("release bytes\n")
+                subprocess.run(git + ["add", "README.md"], check=True)
+                subprocess.run(git + ["-c", "user.name=test", "-c", "user.email=test@example.invalid",
+                                      "commit", "-qm", "fixture"], check=True)
+            data = home / "not-allocated-data"
+            env = {"HOME": str(home), "PATH": os.environ["PATH"], "LANG": "C",
+                   "GPU_TERMINAL_HOME": str(data), "GPU_TERMINAL_SOURCE_HOME": str(home / "sources"),
+                   "PLEB_DIR": str(repos["pleb"]), "KILIX_DIR": str(repos["kilix"]),
+                   "KILIX95_DIR": str(repos["kilix95"]), "PLEBIAN_OS_DIR": str(repos["os"])}
+
+            def run():
+                return subprocess.run(["bash", str(UPDATE_PATH), "--check-source-checkouts"],
+                                      env=env, capture_output=True, text=True, timeout=10)
+
+            self.assertEqual(run().returncode, 0)
+            self.assertFalse(data.exists(), "read-only preflight allocated persistent storage")
+            for name, tracked in (("pleb", True), ("kilix", False), ("kilix95", True), ("os", False)):
+                with self.subTest(component=name, tracked=tracked):
+                    path = repos[name] / ("README.md" if tracked else "operator.bin")
+                    path.write_bytes(b"owner bytes\x00\xff\n")
+                    result = run()
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("has local changes; refusing a whole-stack update", result.stderr)
+                    self.assertEqual(path.read_bytes(), b"owner bytes\x00\xff\n")
+                    self.assertFalse(data.exists())
+                    if tracked:
+                        path.write_text("release bytes\n")
+                    else:
+                        path.unlink()
+            self.assertEqual(run().returncode, 0)
+            self.assertFalse(data.exists())
+
+
 class UpdateLockHandoffTests(unittest.TestCase):
     def _env(self, home, inherited=None):
         env = {**os.environ, "HOME": str(home),

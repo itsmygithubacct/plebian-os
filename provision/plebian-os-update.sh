@@ -18,6 +18,9 @@
 #
 # Usage: plebian-os-update [--restart] [--revalidate-current]
 #        plebian-os-update --recover-interrupted
+#        plebian-os-update --check-source-checkouts
+# --check-source-checkouts checks the whole-stack cleanliness precondition
+# without allocating storage, acquiring locks, selecting or applying a release.
 # By default the running graphical session is left alone. Pass --restart to ask
 # Pleb to restart it only after the stack update has completed successfully.
 # By default the newest published stable Plebian-OS release is selected before
@@ -407,6 +410,10 @@ selected_release_environment_keys() {
 
 # Help needs no installed selector and no configuration, so answer it before
 # either is read; a machine that has never been provisioned can still ask.
+check_source_checkouts=0
+for _source_check_arg in "$@"; do
+    [ "$_source_check_arg" != --check-source-checkouts ] || check_source_checkouts=1
+done
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     for _help_arg in "$@"; do
         case "$_help_arg" in
@@ -415,7 +422,8 @@ if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     done
 fi
 
-if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] \
+        && [ "$check_source_checkouts" != 1 ]; then
     release_keys="$(selected_release_environment_keys)" \
         || die "could not prepare a clean selected-release environment"
     clean_release_env=(env)
@@ -437,7 +445,7 @@ if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     fi
 fi
 
-if [ -r /etc/pleb/session.env ]; then
+if [ "$check_source_checkouts" != 1 ] && [ -r /etc/pleb/session.env ]; then
     root_config_safe_to_source /etc/pleb/session.env \
         || die "refusing to source unsafe /etc/pleb/session.env as root"
     # shellcheck source=/dev/null
@@ -446,7 +454,8 @@ fi
 # The target selector splits release pins out of session.env before the
 # first update from 0.2.1. Read those pins before deriving any defaults, even
 # while the installed Pleb still predates the split configuration format.
-if [ -e /etc/pleb/closure.env ] || [ -L /etc/pleb/closure.env ]; then
+if [ "$check_source_checkouts" != 1 ] \
+        && { [ -e /etc/pleb/closure.env ] || [ -L /etc/pleb/closure.env ]; }; then
     root_config_safe_to_source /etc/pleb/closure.env \
         || die "refusing to source unsafe /etc/pleb/closure.env as root"
     [ -r /etc/pleb/closure.env ] \
@@ -649,6 +658,7 @@ while [ "$#" -gt 0 ]; do
         --restart) restart_arg=--restart ;;
         --revalidate-current) select_latest_release=0 ;;
         --recover-interrupted) recover_interrupted=1 ;;
+        --check-source-checkouts) check_source_checkouts=1 ;;
         *) die "unknown option: $1 (try --help)" ;;
     esac
     shift
@@ -656,7 +666,8 @@ done
 
 # Repair the complete coordinated data tree before the update lock is the first
 # writer on an older or freshly created installation.
-if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] \
+        && [ "$check_source_checkouts" != 1 ]; then
     allocate_coordinated_private_storage
 fi
 
@@ -772,7 +783,8 @@ acquire_kilix_transaction_lock() {
     KILIX_TRANSACTION_LOCK_PATH="$lock_path"
     export KILIX_TRANSACTION_LOCK_FD KILIX_TRANSACTION_LOCK_PATH
 }
-if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] \
+        && [ "$check_source_checkouts" != 1 ]; then
     acquire_update_lock
     acquire_kilix_transaction_lock
 fi
@@ -904,6 +916,23 @@ require_clean_transaction_checkout() {
         || die "could not inspect $label checkout at $dir"
     [ -z "$dirty" ] \
         || die "$label checkout at $dir has local changes; refusing a whole-stack update whose rollback could overwrite them"
+}
+
+check_stack_source_checkouts() {
+    local index dir
+    local -a dirs=("$PLEB_DIR" "$KILIX_DIR" "$KILIX95_DIR")
+    local -a labels=(pleb kilix "kilix 95")
+    case "$PLEBIAN_OS_SELF_UPDATE" in
+        1|yes|true|on) dirs+=("$PLEBIAN_OS_DIR"); labels+=(plebian-os) ;;
+    esac
+    for index in "${!dirs[@]}"; do
+        dir="${dirs[$index]}"
+        if [ -d "$dir/.git" ] || [ -f "$dir/.git" ]; then
+            require_clean_transaction_checkout "$dir" "${labels[$index]}"
+        elif [ -e "$dir" ] || [ -L "$dir" ]; then
+            die "${labels[$index]} path at $dir exists but is not a git checkout"
+        fi
+    done
 }
 
 record_stack_checkout() {
@@ -4843,6 +4872,10 @@ write_final_provenance() {
 # only after all production functions have been parsed.
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
     return 0
+fi
+if [ "$check_source_checkouts" = 1 ]; then
+    GIT_OPTIONAL_LOCKS=0 check_stack_source_checkouts
+    exit 0
 fi
 
 # A normal update first moves to the newest published coordinated closure.  Do
