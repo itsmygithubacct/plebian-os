@@ -802,7 +802,7 @@ release_preflight() {
     local key missing=() actual_commit expected_commit
     for key in \
         PLEBIAN_OS_REF PLEBIAN_OS_NETINST_URL PLEBIAN_OS_NETINST_SHA256 \
-        PLEBIAN_OS_APT_SNAPSHOT PLEB_REF KILIX_REF KILIX95_REF \
+        PLEB_REF KILIX_REF KILIX95_REF \
         KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
         PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
@@ -847,10 +847,11 @@ release_preflight() {
         PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
         is_hex_len "${!key}" 64 || { echo "release mode requires a 64-character $key" >&2; exit 1; }
     done
-    case "$PLEBIAN_OS_APT_SNAPSHOT" in
+    case "${PLEBIAN_OS_APT_SNAPSHOT-unset}" in
+        '') ;; # Explicit live Debian sources, including security updates.
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
-        *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT" >&2; exit 1 ;;
+        *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=${PLEBIAN_OS_APT_SNAPSHOT-unset}" >&2; exit 1 ;;
     esac
     actual_commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
     expected_commit="$(git -C "$HERE" rev-parse "${PLEBIAN_OS_REF}^{commit}" 2>/dev/null || true)"
@@ -1094,7 +1095,6 @@ release_mode_check() {
     local missing=()
     for key in \
         PLEBIAN_OS_REF PLEBIAN_OS_NETINST_URL PLEBIAN_OS_NETINST_SHA256 \
-        PLEBIAN_OS_APT_SNAPSHOT \
         PLEB_REF KILIX_REF KILIX95_REF \
         KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_VERSION \
@@ -1114,10 +1114,11 @@ release_mode_check() {
     validate_uv_release_closure
     validate_f120_release_roots
     validate_voice_release_closure
-    case "$PLEBIAN_OS_APT_SNAPSHOT" in
+    case "${PLEBIAN_OS_APT_SNAPSHOT-unset}" in
+        '') ;; # Explicit live Debian sources, including security updates.
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
-        *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT" >&2; exit 1 ;;
+        *) echo "invalid PLEBIAN_OS_APT_SNAPSHOT=${PLEBIAN_OS_APT_SNAPSHOT-unset}" >&2; exit 1 ;;
     esac
     local actual_commit expected_commit
     actual_commit="$(git -C "$HERE" rev-parse HEAD 2>/dev/null || true)"
@@ -1703,7 +1704,15 @@ INSTALLER_APT_SNAPSHOT="$WORK/installer-apt-snapshot"
 
 apply_installer_snapshot() {
     local seed="$1" snapshot_carrier="$2" ts="${PLEBIAN_OS_APT_SNAPSHOT:-}"
-    [ -n "$ts" ] || return 0
+    if [ -z "$ts" ]; then
+        echo "    apt sources: live Debian trixie, updates and security"
+        # Snapshot-only exact versions can disappear from live mirrors after a
+        # security update, and pinning libssl3t64 conflicts with current headers.
+        # Keep package names/ABIs; firstboot's dependency installer enforces the
+        # release version floors. Snapshot remasters retain the original pins.
+        sed -i -E '/^d-i pkgsel\/include string /,/^d-i pkgsel\/upgrade /s/([a-z0-9][a-z0-9+.-]*(:[a-z0-9-]+)?)=[^[:space:]\\]+/\1/g' "$seed"
+        return 0
+    fi
     case "$ts" in
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z|\
         [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;

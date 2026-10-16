@@ -373,6 +373,40 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertIn("phase=lifetime", result.stdout)
             self.assertEqual(self._apt_updates(base), 0)
 
+    def test_fresh_live_release_keeps_live_sources_before_recording_install(self):
+        for existing_sources in (False, True):
+            with self.subTest(existing_sources=existing_sources), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                etc, sources, env = self._apt_tree(base)
+                live = sources / "debian.sources"
+                if existing_sources:
+                    live.write_text(
+                        "Types: deb\nURIs: https://deb.debian.org/debian\n"
+                        "Suites: trixie trixie-updates\nComponents: main\n\n"
+                        "Types: deb\nURIs: https://security.debian.org/debian-security\n"
+                        "Suites: trixie-security\nComponents: main\n"
+                    )
+                    self._index_targets(base, live.name, LIVE_DEBIAN_TARGETS)
+                else:
+                    self._index_targets(base, "plebian-os-debian.sources", LIVE_DEBIAN_TARGETS)
+                result = self._run_library(
+                    self._release_body(base, recorded=False)
+                    + "PLEBIAN_OS_APT_SNAPSHOT=\n"
+                    + "configure_apt_snapshot\nconfigure_apt_snapshot\n"
+                    + 'printf "phase=%s\\n" "$APT_PROVENANCE_PHASE"\n', env,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertFalse((base / "versions.env").exists())
+                self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
+                self.assertEqual(list(etc.rglob("*.plebian-os-disabled")), [])
+                self.assertIn("phase=lifetime", result.stdout)
+                policy = etc / "apt/apt.conf.d/52plebian-os-security-upgrades"
+                self.assertTrue(policy.is_file())
+                self.assertNotIn("snapshot.debian.org", "".join(
+                    p.read_text() for p in sources.glob("*.sources")))
+                if not existing_sources:
+                    self.assertIn("policy-at-update=yes", (base / "apt.log").read_text())
+
     def test_installer_snapshot_sources_list_is_retired_not_restored(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
@@ -3015,6 +3049,28 @@ class PersistedPinTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("PLEB_REF=explicit", result.stdout)
             self.assertIn("KILIX_REF=persisted", result.stdout)
+
+    def test_empty_live_policy_survives_session_and_old_firstboot_snapshot(self):
+        for selected_live in (False, True):
+            with self.subTest(selected_live=selected_live), tempfile.TemporaryDirectory() as td:
+                session_env = Path(td) / "session.env"
+                self._session_env(session_env, {
+                    "PLEBIAN_OS_APT_SNAPSHOT": "" if selected_live else "20260727T000000Z",
+                })
+                firstboot = Path(td) / "firstboot.env"
+                firstboot.write_text('PLEBIAN_OS_APT_SNAPSHOT="20260712T000000Z"\n')
+                extra = f"export PLEBIAN_OS_FIRSTBOOT_ENV={str(firstboot)!r}\n"
+                # Exercise both a selected empty closure and an explicit empty
+                # environment overriding older installed/firstboot snapshots.
+                extra += "unset PLEBIAN_OS_APT_SNAPSHOT\n" if selected_live else "export PLEBIAN_OS_APT_SNAPSHOT=\n"
+                result = self._run(
+                    session_env,
+                    "restore_installed_closure\nrestore_persisted_policy\n"
+                    + 'printf "APT=<%s>\\n" "$PLEBIAN_OS_APT_SNAPSHOT"\n',
+                    extra=extra,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("APT=<>", result.stdout)
 
     def test_restoring_pins_leaves_unrelated_session_settings_alone(self):
         with tempfile.TemporaryDirectory() as td:

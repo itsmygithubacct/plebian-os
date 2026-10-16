@@ -20,7 +20,7 @@
 #   5. (optional) grants the target user passwordless sudo (--nopasswd-sudo)
 #
 # It is idempotent: re-running updates the checkouts, reconciles apt (a release
-# installs from its Debian snapshot, then tracks live Debian security sources)
+# uses signed Debian sources, with an optional historical install snapshot)
 # and kiosk/sudo state, re-asserts the session, and rewrites final provenance.
 # Run as root (the firstboot service does) or via sudo. --dry-run prints the
 # plan without touching anything.
@@ -185,7 +185,12 @@ for _persisted_key in "${RELEASE_CONTROLLED_KEYS[@]}" "${PROVIDER_PIN_KEYS[@]}" 
                       "${OPTIONAL_DESKTOP_AUTO_INSTALL_KEYS[@]}"; do
     case " ${PROVISION_OWNED_KEYS[*]} " in *" $_persisted_key "*) continue ;; esac
     PERSISTED_SESSION_KEYS+=("$_persisted_key")
-    [ -z "${!_persisted_key:-}" ] || PERSISTED_KEY_EXPLICIT["$_persisted_key"]=1
+    if [ "$_persisted_key" = PLEBIAN_OS_APT_SNAPSHOT ]; then
+        # An explicitly empty snapshot selects live Debian sources.
+        [ -z "${!_persisted_key+x}" ] || PERSISTED_KEY_EXPLICIT["$_persisted_key"]=1
+    else
+        [ -z "${!_persisted_key:-}" ] || PERSISTED_KEY_EXPLICIT["$_persisted_key"]=1
+    fi
 done
 unset _persisted_key
 
@@ -418,10 +423,10 @@ PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-}"           # default after target user is kn
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file below if empty
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
-PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}" # snapshot.debian.org ts = reproducible apt
 # Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
 # shellcheck disable=SC2034
-PLEBIAN_OS_APT_SNAPSHOT_EXPLICIT="${PLEBIAN_OS_APT_SNAPSHOT:+1}"
+PLEBIAN_OS_APT_SNAPSHOT_EXPLICIT="${PLEBIAN_OS_APT_SNAPSHOT+1}"
+PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}" # empty = live Debian; timestamp = reproducible apt
 INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
 # Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
 # shellcheck disable=SC2034
@@ -664,7 +669,7 @@ restore_installed_closure() {
             missing+=("$key")
             continue
         fi
-        [ -n "$value" ] || continue
+        [ -n "$value" ] || [ "$key" = PLEBIAN_OS_APT_SNAPSHOT ] || continue
         # The machine answered for this key, so /etc/default must not answer for
         # it again below, even where the value matches what this run already had.
         PERSISTED_KEY_RESTORED["$key"]=1
@@ -717,7 +722,7 @@ PERSISTED_POLICY=(
     "PLEBIAN_OS_INSTALL_UV"         "INSTALL_UV"             '^[01]$'
     "PLEBIAN_OS_INSTALL_VOICE_MODEL" "INSTALL_VOICE_MODEL"   '^[01]$'
     "PLEBIAN_OS_INSTALL_WAYDROID"   "INSTALL_WAYDROID"      '^[01]$'
-    "PLEBIAN_OS_APT_SNAPSHOT"       "PLEBIAN_OS_APT_SNAPSHOT" '^[0-9]{8}(T[0-9]{6}Z)?$'
+    "PLEBIAN_OS_APT_SNAPSHOT"       "PLEBIAN_OS_APT_SNAPSHOT" '^([0-9]{8}(T[0-9]{6}Z)?)?$'
     "PLEBIAN_OS_LIVE_SECURITY_UPDATES" "LIVE_SECURITY_UPDATES" '^[01]$'
 )
 
@@ -727,7 +732,10 @@ read_firstboot_env_value() {
         2>/dev/null | tail -1)" || return 1
     value="${value%\"}"; value="${value#\"}"
     value="${value%\'}"; value="${value#\'}"
-    [ -n "$value" ] || return 1
+    [ -n "$value" ] || {
+        [ "$key" = PLEBIAN_OS_APT_SNAPSHOT ] \
+            && grep -q "^[[:space:]]*$key=" "$PLEBIAN_OS_FIRSTBOOT_ENV"
+    } || return 1
     printf '%s\n' "$value"
 }
 
@@ -4303,7 +4311,8 @@ EOF
     fi
 }
 
-# Release machines resolve their first-boot package closure from a
+# Releases with an empty snapshot use signed live Debian sources from install.
+# Historical releases resolve their first-boot package closure from a
 # snapshot.debian.org timestamp so it is reproducible, then track live Debian
 # once that closure is recorded (see finish_release_apt_install): the timestamp
 # is install provenance, not a lifetime pin. A non-release timestamp stays a pin
@@ -4316,8 +4325,10 @@ configure_apt_snapshot() {
 
 _configure_apt_snapshot() {
     if [ -z "$PLEBIAN_OS_APT_SNAPSHOT" ]; then
-        [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] \
-            && die "release mode requires PLEBIAN_OS_APT_SNAPSHOT; refusing live package drift"
+        APT_PROVENANCE_PHASE=lifetime
+        if release_apt_lifecycle; then
+            install_security_upgrade_policy
+        fi
         restore_live_apt_sources
         return 0
     fi

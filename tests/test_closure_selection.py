@@ -1103,6 +1103,22 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("KILIX_REF", result.stderr)
             self.assertIn("PLEB_REF", result.stderr)
 
+    def test_explicit_live_policy_clears_the_installed_snapshot(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            self._source(base, self._manifest_text(PLEBIAN_OS_APT_SNAPSHOT=""))
+            result = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(self._values(env)["PLEBIAN_OS_APT_SNAPSHOT"], "")
+
+    def test_omitted_apt_policy_is_refused(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            self._source(base, self._manifest_text(drop=("PLEBIAN_OS_APT_SNAPSHOT",)))
+            self._refuses(base, "PLEBIAN_OS_APT_SNAPSHOT must be declared")
+
     def test_undeclared_branch_key_is_refused_by_name(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

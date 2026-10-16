@@ -128,8 +128,13 @@ class ReleaseVersioningTests(unittest.TestCase):
             self.assertTrue(re.search(rf"^{key}=[0-9a-f]{{64}}$", m, re.M),
                             f"{key} should be a real sha256")
         self.assertRegex(m, r"(?m)^PLEBIAN_OS_NETINST_URL=https://")
-        self.assertRegex(m, r"(?m)^PLEBIAN_OS_APT_SNAPSHOT=\d{8}T\d{6}Z$")
+        self.assertRegex(m, r"(?m)^PLEBIAN_OS_APT_SNAPSHOT=(\d{8}T\d{6}Z)?$")
         self.assertRegex(m, r"(?m)^PLEBIAN_OS_KILIX_GO_VERSION=go\d+\.\d+\.\d+$")
+
+    def test_rc6_explicitly_requires_live_debian_sources(self):
+        for name in ("0.2.2.env", "0.2.2.requirements"):
+            text = _read("releases", name)
+            self.assertRegex(text, r"(?m)^PLEBIAN_OS_APT_SNAPSHOT=$")
 
     def test_remaster_loads_release_manifest(self):
         r = _read("build", "remaster-iso.sh")

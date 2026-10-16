@@ -47,11 +47,12 @@ silently discarded.
 Release-controlled keys include the coordinated version/release mode, every
 `*_REF` source pin in the release manifest (ten as of 0.2.2, since the
 system-monitor, desktop-SDK, IceWM, media-SDK and Waydroid components joined
-the closure in 0.2.1), the Debian snapshot and installer input, the Kilix
+the closure in 0.2.1), the Debian source policy and installer input, the Kilix
 engine and Go pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
 one reviewed target closure; mixing old and new release pins is unsupported.
-The Debian snapshot is the install-time resolution pin; it does not freeze an
-installed machine's Debian packages.
+RC6 declares `PLEBIAN_OS_APT_SNAPSHOT=` to use signed live Debian sources from
+installation onward. A historical nonempty timestamp remains an install-time
+resolution pin; it does not freeze an installed 0.2.2 machine's Debian packages.
 
 RC6 additionally delivers the patched Qt5 and Qt6 GUI packages as one
 checksum-bound runtime bundle. Only `libqt5gui5t64` and `libqt6gui6` are pinned
@@ -111,7 +112,8 @@ release-controlled by the rules above:
 
 - The package sources move from the release's Debian snapshot to live Debian
   with daily security updates, after the first successful update to 0.2.2
-  commits; see **Debian security updates** below.
+  commits; fresh RC6 media uses live Debian throughout installation and first
+  boot. See **Debian security updates** below.
 - `feh` is newly installed as the still-image viewer. An upgrader who already
   has another image viewer keeps it; this only adds the package.
 - `/etc/xdg-desktop-portal/pleb-portals.conf` is a new **release-managed** file,
@@ -162,9 +164,16 @@ release-controlled by the rules above:
 
 ## Debian security updates
 
-Beginning with 0.2.2, a release machine installs its package closure from the
-release's `snapshot.debian.org` timestamp and then tracks live Debian. A fresh
-0.2.2 install switches at the end of first boot. An installed 0.2.1 machine
+Fresh RC6 0.2.2 media installs from the signed live Debian `trixie`,
+`trixie-updates`, and `trixie-security` archives, and first boot keeps those
+sources. `PLEBIAN_OS_APT_SNAPSHOT=` in the release manifest explicitly selects
+this policy. Package version floors remain enforced, and the exact installed
+versions are recorded in `/var/lib/plebian-os/packages.list`. A live install
+does not depend on `snapshot.debian.org` being reachable.
+
+Historical images with a nonempty `PLEBIAN_OS_APT_SNAPSHOT` retain their
+timestamped install closure and switch to live Debian at the end of first boot
+when running the 0.2.2 provisioner. An installed 0.2.1 machine
 switches after its first successful `plebian-os-update` to 0.2.2 commits: the
 updater runs `plebian-os-provision --reconcile-apt-sources`, which retires the
 installer's snapshot `sources.list`, restores sources Plebian-OS had disabled,

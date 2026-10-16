@@ -976,6 +976,46 @@ class RemasterContractTests(unittest.TestCase):
                 ],
             )
 
+    def test_live_installer_uses_current_packages_and_signed_three_suite_sources(self):
+        original = (ROOT / "preseed" / "preseed.cfg").read_text()
+        function = self.source_section(
+            "apply_installer_snapshot() {", "\n\napply_installer_snapshot ",
+        )
+        harness = (
+            "set -euo pipefail\n" + function
+            + '\napply_installer_snapshot "$1" "$2"\n'
+        )
+        for snapshot in ("", "20260727T000000Z"):
+            with self.subTest(snapshot=snapshot), tempfile.TemporaryDirectory() as td:
+                seed = Path(td) / "preseed.cfg"
+                carrier = Path(td) / "apt-snapshot"
+                seed.write_text(original)
+                subprocess.run(
+                    ["bash", "-c", harness, "apt-policy-test", str(seed), str(carrier)],
+                    env={**os.environ, "PLEBIAN_OS_APT_SNAPSHOT": snapshot},
+                    text=True, capture_output=True, check=True,
+                )
+                rendered = seed.read_text()
+                package_block = re.search(
+                    r"^d-i pkgsel/include string (.*?)^d-i pkgsel/upgrade",
+                    rendered, re.M | re.S,
+                ).group(1)
+                if snapshot:
+                    self.assertIn("libssl3t64=3.5.6-1~deb13u2", package_block)
+                    self.assertTrue(carrier.is_file())
+                    continue
+                self.assertFalse(carrier.exists())
+                self.assertNotIn("=", package_block)
+                self.assertIn("libssl3t64", package_block.split())
+                self.assertIn("libonnxruntime1.21", package_block.split())
+                self.assertIn("d-i mirror/http/hostname string deb.debian.org\n", rendered)
+                self.assertIn("d-i mirror/suite string trixie\n", rendered)
+                self.assertIn("d-i apt-setup/services-select multiselect security, updates\n", rendered)
+                self.assertIn("d-i apt-setup/security_host string security.debian.org\n", rendered)
+                self.assertNotIn("snapshot.debian.org", rendered)
+                self.assertNotIn("Check-Valid-Until", rendered)
+                self.assertNotIn("02plebian-snapshot", rendered)
+
     def test_snapshot_generator_writes_target_apt_policy(self):
         generator = ROOT / "provision" / "plebian-os-apt-snapshot-generator"
         with tempfile.TemporaryDirectory() as td:

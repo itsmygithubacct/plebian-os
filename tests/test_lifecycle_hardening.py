@@ -893,7 +893,6 @@ class ProvisioningLifecycleTests(unittest.TestCase):
 
     def test_release_snapshot_update_fails_closed(self):
         self.assertIn("PLEBIAN_OS_RELEASE_MODE", PROVISION)
-        self.assertIn("release mode requires PLEBIAN_OS_APT_SNAPSHOT", PROVISION)
         self.assertIn("apt-get update against snapshot", PROVISION)
         self.assertIn("refusing an unpinned/stale package closure", PROVISION)
         self.assertIn("release install closure resolved from an index other than snapshot",

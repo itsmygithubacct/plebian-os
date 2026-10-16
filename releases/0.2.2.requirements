@@ -11,12 +11,15 @@
 
 # The 2026-08-25 latest-stable recheck retained Debian 13.5.0 as the newest
 # immutable archived amd64 netinst. Debian 13.6.0 is current, but has no
-# archive URL yet. The signed snapshot remains the accepted 13.6-era package
-# closure, independent of the bootstrap media version.
+# archive URL yet. RC6 uses this verified bootstrap media with signed live
+# trixie, trixie-updates and trixie-security packages. snapshot.debian.org is
+# unsuitable for the normal network installer: an outage prevents installation.
+# Empty PLEBIAN_OS_APT_SNAPSHOT explicitly selects live Debian sources through
+# both installation and first boot; installed package versions are recorded.
 PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/cdimage/archive/13.5.0/amd64/iso-cd/debian-13.5.0-amd64-netinst.iso
 PLEBIAN_OS_NETINST_SHA256=95838884f5ea6c82421dfe6baaa5a639dbbe6756c1e380f9fe7a7cb0c1949d2a
 PLEBIAN_OS_NETINST_MAX_BYTES=791674880
-PLEBIAN_OS_APT_SNAPSHOT=20260727T000000Z
+PLEBIAN_OS_APT_SNAPSHOT=
 
 PLEBIAN_OS_INSTALL_UV=1
 PLEBIAN_OS_UV_VERSION=0.12.5

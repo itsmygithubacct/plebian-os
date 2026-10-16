@@ -233,7 +233,6 @@ REQUIRED_VALUE_KEYS=(
     KILIX_MEDIA_SDK_REF
     KILIX_WAYDROID_REPO
     KILIX_WAYDROID_REF
-    PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
     PLEBIAN_OS_INSTALL_UV
@@ -534,6 +533,9 @@ validate_release_closure() {
     done
     [ "${#missing[@]}" -eq 0 ] \
         || closure_reject "incomplete closure — no value for: ${missing[*]}"
+    # Empty explicitly selects live Debian; an omitted policy is incomplete.
+    [ -n "${MANIFEST[PLEBIAN_OS_APT_SNAPSHOT]+x}" ] \
+        || closure_reject "incomplete closure — PLEBIAN_OS_APT_SNAPSHOT must be declared, even empty"
 
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
@@ -582,7 +584,7 @@ validate_release_closure() {
             "an https git URL"
     done
     require_manifest_format PLEBIAN_OS_APT_SNAPSHOT \
-        '^[0-9]{8}T[0-9]{6}Z$' "a snapshot.debian.org timestamp"
+        '^([0-9]{8}T[0-9]{6}Z)?$' "empty for live Debian or a snapshot.debian.org timestamp"
     require_manifest_format PLEBIAN_OS_NETINST_URL '^https://' "an https URL"
     require_manifest_format PLEBIAN_OS_NETINST_SHA256 '^[0-9a-f]{64}$' \
         "a 64-character lowercase SHA-256"
