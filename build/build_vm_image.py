@@ -1705,6 +1705,50 @@ def source_provenance_command(values: dict[str, str], path: str = "/var/lib/pleb
     return "bash -c " + shlex.quote("\n".join(commands))
 
 
+def live_debian_security_source_command(
+    apt_root: str = "/etc/apt",
+    provisioner: str = "/usr/local/sbin/plebian-os-provision",
+) -> str:
+    """Check active security package indexes, independent of source layout.
+
+    apt parses both sources.list and Deb822 (including disabled entries). The
+    installed provisioner's existing entry parser checks signature/replay
+    overrides on the precise source entries apt reports. HTTP is safe here
+    because apt verifies archive signatures; HTTPS is not a trust substitute.
+    """
+    script = (
+        "export PLEBIAN_OS_PROVISION_LIB_ONLY=1\n"
+        f". {shlex.quote(provisioner)} >/dev/null 2>&1 || exit 2\n"
+        "declare -F _apt_source_entry_disables_trust >/dev/null || exit 2\n"
+        "for key in APT::Get::AllowUnauthenticated Acquire::AllowInsecureRepositories "
+        "Acquire::AllowWeakRepositories Acquire::AllowDowngradeToInsecureRepositories; do\n"
+        "    value=\"$(apt-config shell V \"$key/b\")\" || exit 2\n"
+        "    [ \"$value\" != \"V='true'\" ] || exit 1\n"
+        "done\n"
+        "targets=\"$(apt-get indextargets --no-release-info "
+        f"-o {shlex.quote('Dir::Etc::SourceList=' + apt_root + '/sources.list')} "
+        f"-o {shlex.quote('Dir::Etc::SourceParts=' + apt_root + '/sources.list.d')} "
+        "--format '$(SITE) $(RELEASE) $(COMPONENT) $(SOURCESENTRY) $(IDENTIFIER)')\" || exit 2\n"
+        "found=0\n"
+        "while read -r site suite component entry identifier; do\n"
+        "    [ \"$suite\" = trixie-security ] && [ \"$component\" = main ] "
+        "&& [ \"$identifier\" = Packages ] || continue\n"
+        "    case \"$site\" in\n"
+        "        http://security.debian.org/debian-security|https://security.debian.org/debian-security|"
+        "http://deb.debian.org/debian-security|https://deb.debian.org/debian-security) ;;\n"
+        "        *) continue ;;\n"
+        "    esac\n"
+        "    if _apt_source_entry_disables_trust \"$entry\"; then\n"
+        "        printf 'security source disables signature or replay checks: %s\\n' \"$entry\" >&2\n"
+        "        exit 1\n"
+        "    fi\n"
+        "    found=1\n"
+        "done <<<\"$targets\"\n"
+        "test \"$found\" = 1\n"
+    )
+    return "bash -c " + shlex.quote(script)
+
+
 def verify_provisioning(cfg: Config, askpass: str) -> None:
     """Prove the real installer→firstboot→session boundary: check the markers a
     correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
@@ -2005,9 +2049,7 @@ if default is not None:
         ("package provenance",   "test -s /var/lib/plebian-os/packages.list"),
         ("source provenance",    exact_source_provenance),
         ("apt provenance",       "test -s /var/lib/plebian-os/apt-sources.list"),
-        ("live Debian security source",
-         "grep -qx 'URIs: https://security.debian.org/debian-security' "
-         "/etc/apt/sources.list.d/plebian-os-debian.sources"),
+        ("live Debian security source", live_debian_security_source_command()),
         # Check-Date false skips the Valid-Until check too. apt-config reads
         # each value as apt does (unset prints nothing), so every spelling apt
         # takes as false fails, and so does an apt-config that cannot answer.

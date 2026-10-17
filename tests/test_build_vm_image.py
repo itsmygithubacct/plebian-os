@@ -95,6 +95,121 @@ class SourceProvenanceTests(unittest.TestCase):
                 self.assertNotEqual(self.verify({"EMPTY": ""}).returncode, 0)
 
 
+@unittest.skipUnless(shutil.which("apt-get"), "apt source parsing is required")
+class LiveSecuritySourceTests(unittest.TestCase):
+    def verify(self, files, configuration=""):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            apt = root / "apt"
+            (apt / "sources.list.d").mkdir(parents=True)
+            (root / "apt.conf.d").mkdir()
+            (root / "lists").mkdir()
+            config = root / "apt.conf"
+            config.write_text(
+                f'Dir::Etc::main "{root}/unused";\n'
+                f'Dir::Etc::parts "{root}/apt.conf.d";\n'
+                f'Dir::State::lists "{root}/lists";\n'
+                + configuration
+            )
+            for name, text in files.items():
+                (apt / name).write_text(text)
+            command = vm.live_debian_security_source_command(
+                str(apt), str(ROOT / "provision" / "plebian-os-provision.sh"))
+            return subprocess.run(
+                ["bash", "-c", command], text=True, capture_output=True,
+                env={**os.environ, "APT_CONFIG": str(config)}, check=False,
+            )
+
+    def test_stock_installer_sources_list_passes_with_both_transports(self):
+        for scheme in ("http", "https"):
+            with self.subTest(scheme=scheme):
+                result = self.verify({"sources.list": (
+                    f"deb {scheme}://deb.debian.org/debian trixie main contrib non-free non-free-firmware\n"
+                    f"deb {scheme}://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware\n"
+                    f"deb {scheme}://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware\n"
+                )})
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_deb822_sources_accept_either_official_archive_and_transport(self):
+        for host in ("deb.debian.org", "security.debian.org"):
+            for scheme in ("http", "https"):
+                with self.subTest(host=host, scheme=scheme):
+                    result = self.verify({"sources.list.d/debian.sources": (
+                        "# Existing Debian source, independent of Plebian filenames\n\n"
+                        "Types: deb\n"
+                        f"URIs: {scheme}://{host}/debian-security/\n"
+                        "Suites: trixie-security\nComponents: main\n"
+                        "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+                    )})
+                    self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_inactive_or_unrelated_sources_do_not_satisfy_security(self):
+        valid = "deb http://security.debian.org/debian-security trixie-security main\n"
+        cases = (
+            {"sources.list": "# " + valid},
+            {"sources.list.d/old.list.disabled": valid},
+            {"sources.list.d/debian.sources": (
+                "Types: deb\nURIs: https://security.debian.org/debian-security\n"
+                "Suites: trixie-security\nComponents: main\nEnabled: no\n"
+            )},
+            {"sources.list": valid.replace("deb ", "deb-src ", 1)},
+            {"sources.list": valid.replace("trixie-security", "trixie")},
+            {"sources.list": valid.replace(" main", " contrib")},
+            {"sources.list": valid.replace(
+                "http://security.debian.org/debian-security",
+                "http://snapshot.debian.org/archive/debian-security/20260727T000000Z")},
+            {"sources.list": valid.replace("security.debian.org", "security.debian.org.example.invalid")},
+        )
+        for files in cases:
+            with self.subTest(files=files):
+                result = self.verify(files)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_signature_and_replay_bypasses_refuse_in_both_formats(self):
+        for option, value in (
+            ("Trusted", "yes"), ("Allow-Insecure", "yes"),
+            ("Allow-Weak", "yes"), ("Allow-Downgrade-To-Insecure", "yes"),
+            ("Check-Valid-Until", "no"), ("Check-Date", "0"),
+        ):
+            for deb822 in (False, True):
+                with self.subTest(option=option, deb822=deb822):
+                    if deb822:
+                        files = {"sources.list.d/debian.sources": (
+                            "Types: deb\nURIs: http://security.debian.org/debian-security\n"
+                            "Suites: trixie-security\nComponents: main\n"
+                            f"{option}: {value}\n"
+                        )}
+                    else:
+                        files = {"sources.list": (
+                            f"deb [{option.lower()}={value}] http://security.debian.org/debian-security "
+                            "trixie-security main\n"
+                        )}
+                    result = self.verify(files)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn("disables signature or replay checks", result.stderr)
+
+    def test_global_signature_bypasses_refuse_even_with_an_ordinary_source(self):
+        files = {"sources.list": "deb http://security.debian.org/debian-security trixie-security main\n"}
+        for key in (
+            "APT::Get::AllowUnauthenticated", "Acquire::AllowInsecureRepositories",
+            "Acquire::AllowWeakRepositories", "Acquire::AllowDowngradeToInsecureRepositories",
+        ):
+            with self.subTest(key=key):
+                result = self.verify(files, f'{key} "true";\n')
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_explicit_secure_options_pass_and_inactive_bypasses_are_ignored(self):
+        result = self.verify({"sources.list": (
+            "# deb [trusted=yes] http://security.debian.org/debian-security trixie-security main\n"
+            "deb [trusted=no check-valid-until=yes check-date=1] "
+            "http://security.debian.org/debian-security trixie-security main\n"
+        ), "sources.list.d/disabled.sources": (
+            "Types: deb\nURIs: https://security.debian.org/debian-security\n"
+            "Suites: trixie-security\nComponents: main\nEnabled: no\nTrusted: yes\n"
+        )})
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 class SelectedClosureGateTests(unittest.TestCase):
     """Exercise acceptance-generated options against real release selection."""
 
@@ -274,7 +389,7 @@ class VmBuilderEnvTests(unittest.TestCase):
         for name in ("live Debian security source", "apt validity checks enabled",
                      "security upgrades enabled"):
             self.assertIn(f'("{name}",', verify)
-        self.assertIn("/etc/apt/sources.list.d/plebian-os-debian.sources", verify)
+        self.assertIn('("live Debian security source", live_debian_security_source_command())', verify)
         self.assertIn("/etc/apt/apt.conf.d/52plebian-os-security-upgrades", verify)
         validity = next(
             node.elts[1].value
