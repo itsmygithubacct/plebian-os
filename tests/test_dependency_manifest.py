@@ -109,7 +109,7 @@ PDF_RUNTIME_PREREQUISITE_PACKAGES = {"python3", "python3-venv"}
 
 # Browsers remain useful fallbacks, but the desktop release promises a native
 # PDF file handler with printing, forms, and annotation support.
-DEFAULT_PDF_VIEWER_PACKAGES = {"evince"}
+DEFAULT_PDF_VIEWER_PACKAGES = {"okular", "evince"}
 
 # Evince does not open raster images. The desktop needs a still-image viewer
 # on both install paths so a PNG or JPEG from a file manager is not handed

@@ -1119,6 +1119,7 @@ paths=(
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
+    /etc/xdg/mimeapps.list
     /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
     /etc/systemd/user/pipewire-pulse.service
     /etc/systemd/user/pipewire-pulse.socket
@@ -1154,6 +1155,7 @@ managed_dirs=(
     /usr/local/share/dbus-1
     /usr/local/share/dbus-1/services
     /etc/xdg-desktop-portal
+    /etc/xdg
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
     /etc/systemd/user
@@ -1287,6 +1289,7 @@ paths=(
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
+    /etc/xdg/mimeapps.list
     /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
     /etc/systemd/user/pipewire-pulse.service
     /etc/systemd/user/pipewire-pulse.socket
@@ -1322,6 +1325,7 @@ managed_dirs=(
     /usr/local/share/dbus-1
     /usr/local/share/dbus-1/services
     /etc/xdg-desktop-portal
+    /etc/xdg
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
     /etc/systemd/user

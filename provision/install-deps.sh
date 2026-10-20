@@ -197,7 +197,7 @@ DEP_GROUPS=(
     # Browsers can render a PDF, but a desktop install still needs a dedicated
     # local-document handler for file associations, printing, forms, and
     # annotations. Evince is the GTK viewer shipped by the image from 0.1.9.
-    "documents|evince"
+    "documents|okular evince"
     # feh is the still-image viewer. Evince is PDF, mpv is video, and
     # xfce4-screenshooter captures rather than opens an existing file. A file
     # manager or desktop link handing off a PNG or JPEG needs a viewer present

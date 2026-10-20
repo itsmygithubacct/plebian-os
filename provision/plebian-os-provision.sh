@@ -1514,6 +1514,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /etc/lightdm/lightdm.conf.d/50-plebian-os.conf
     /etc/lightdm/lightdm.conf.d/50-pleb-autologin.conf
     /etc/xdg-desktop-portal/pleb-portals.conf
+    /etc/xdg/mimeapps.list
     /etc/pleb/session.env
     /etc/sudoers.d/plebian-os-nopasswd
     /var/lib/plebian-os/packages.list
@@ -1570,6 +1571,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/lightdm/lightdm.conf.d
     /etc/xdg-desktop-portal
+    /etc/xdg
     /etc/pleb
     /usr/share/xsessions
     /usr/local/share/plebian-os
@@ -6632,6 +6634,39 @@ default=gtk
 org.freedesktop.impl.portal.ScreenCast=pleb
 org.freedesktop.impl.portal.Screenshot=pleb
 EOF
+fi
+
+# System defaults leave explicit per-user associations in charge.
+log "setting Evince as the default PDF viewer for applications"
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + write /etc/xdg/mimeapps.list (PDF: Evince)"
+else
+    install -d -m 0755 /etc/xdg
+    python3 - <<'PYMIME'
+import configparser
+import os
+from pathlib import Path
+import tempfile
+
+path = Path('/etc/xdg/mimeapps.list')
+config = configparser.ConfigParser(interpolation=None)
+config.optionxform = str
+if path.exists():
+    with path.open() as source:
+        config.read_file(source)
+if not config.has_section('Default Applications'):
+    config.add_section('Default Applications')
+config.set('Default Applications', 'application/pdf', 'org.gnome.Evince.desktop;')
+fd, temporary = tempfile.mkstemp(prefix='.mimeapps-', dir=path.parent)
+try:
+    with os.fdopen(fd, 'w') as target:
+        os.fchmod(target.fileno(), 0o644)
+        config.write(target, space_around_delimiters=False)
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PYMIME
 fi
 
 # ── 5. session mode: desktop provider or shell in the first Kilix page ────
