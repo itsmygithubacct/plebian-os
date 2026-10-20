@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 import test_provision_transaction as root_fixture
 
@@ -67,7 +68,12 @@ class VoiceboxProvisionTransactionTests(unittest.TestCase):
                 body += 'commit_native_runtime_transaction() { ' + refusal + 'return 42; }\ncommit_provision_root_transaction\n'
             else:
                 body += 'commit_provision_root_transaction\n' + refusal
-            result = library._run(body)
+            # The fixture selects its own storage. A live desktop's exported
+            # storage/session roots must not override that selection.
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(('KILIX_', 'GPU_TERMINAL_'))}
+            with mock.patch.dict(os.environ, env, clear=True):
+                result = library._run(body)
             self.assertEqual(result.returncode, {'provenance': 41, 'commit': 1, 'success': 0}[ending], result.stderr)
             if ending == 'success':
                 self.assertEqual(voicebox.selection(managed)['current'], digest)

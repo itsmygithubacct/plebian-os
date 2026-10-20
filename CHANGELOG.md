@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Select kilix-mpv `.4` and the matching terminal launcher after frozen RC6:
+  pixel controls, fullscreen, verified local shared-memory transport, persistent
+  diagnostics and terminal recovery. Fresh installation and updates verify the
+  package and restore the prior player on failure; system mpv remains available.
+
 - Add optional checksum-verified offline Voicebox installation and transactional
   update rollback without replacing user data or acquiring models.
 

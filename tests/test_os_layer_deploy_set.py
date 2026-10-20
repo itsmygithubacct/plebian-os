@@ -200,6 +200,7 @@ class OsLayerSyntaxValidationTests(unittest.TestCase):
             ("plebian-os-update", "#!/bin/bash\nif then\n"),
             ("plebian-os-install-kilix-ollama-runtime", "def broken(\n"),
             ("plebian-os-qt-runtime", "def broken(\n"),
+            ("plebian-os-mpv-runtime", "def broken(\n"),
         ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
                 stage = Path(td)

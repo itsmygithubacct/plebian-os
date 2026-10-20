@@ -10,6 +10,30 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
+def is_literal_print(line):
+    """An operator instruction printed as a literal does not execute that command."""
+    try:
+        body = ast.parse(line.strip()).body
+    except SyntaxError:
+        return False
+    if len(body) != 1 or not isinstance(body[0], ast.Expr):
+        return False
+    call = body[0].value
+    return (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+            and call.func.id == 'print' and len(call.args) == 1 and not call.keywords
+            and isinstance(call.args[0], ast.Constant) and isinstance(call.args[0].value, str))
+
+
+class PrintedGuidanceTests(unittest.TestCase):
+    def test_literal_guidance_is_distinct_from_execution(self):
+        self.assertTrue(is_literal_print('print("Next: kilix models install example")'))
+        for source in ('os.system("kilix models install example")',
+                       'print(os.system("kilix models install example"))',
+                       'print("kilix models install example"); execute()',
+                       'print("kilix models install example", file=open("data", "w"))'):
+            self.assertFalse(is_literal_print(source), source)
+
 # ── the first-use route, as a capability probe rather than as pin values ─────
 #
 # The release closure must carry both capabilities promised in its documents.
@@ -1676,14 +1700,14 @@ class VoiceReleaseContractTests(unittest.TestCase):
                 self.assertIn(contract, line)
         # `kilix models install` / `kilix voice install` carry no `--install`,
         # so they are scanned separately: on a shipped path they may be
-        # discussed in a comment and never run.
+        # discussed in a comment or printed as literal operator guidance, never run.
         for path in self._shipped_surface_files():
             text = (ROOT / path).read_text(encoding="utf-8", errors="replace")
             for number, line in enumerate(text.splitlines(), start=1):
                 if re.search(r"kilix (models|voice|stt) install", line):
                     with self.subTest(mention=f"{path}:{number}"):
                         self.assertTrue(
-                            line.lstrip().startswith("#"),
+                            line.lstrip().startswith("#") or is_literal_print(line),
                             f"{path}:{number} runs an install action: {line!r}")
         # …and every kilix-stt these paths actually run is a read-only report.
         for name in ("provision/plebian-os-provision.sh",

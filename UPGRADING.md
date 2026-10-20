@@ -232,6 +232,18 @@ never rolled back. User data must never be removed as rollback
 cleanup. The updater must report recovery material it could not restore and
 must not report success until the outer transaction commits.
 
+The selected `kilix-mpv` package is part of this transaction. Its download is
+bounded and checked against the release SHA-256, exact size, version and launcher
+source pin. The root helper accepts only the named player/launcher payload and
+licence documents, with no maintainer scripts or replacement of system mpv.
+Before installation it saves the previous package, or records that no player
+was installed; failure restores that selection before restoring the OS helpers.
+Verified archives are retained under `/var/lib/plebian-os/mpv-runtime/packages`
+for subsequent upgrades. A manually installed player needs its exact original
+archive in that cache before an upgrade can guarantee rollback; a missing or
+modified prior archive stops the update before changing the player. Added Debian
+dependencies follow the existing additive-package rollback policy above.
+
 ## Release gate for every version after 0.1.7
 
 The target release is not publishable until its immediately previous published

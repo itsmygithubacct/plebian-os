@@ -171,6 +171,12 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_QT_RUNTIME_URL
     PLEBIAN_OS_QT_RUNTIME_SHA256
     PLEBIAN_OS_QT_RUNTIME_BYTES
+    PLEBIAN_OS_MPV_URL
+    PLEBIAN_OS_MPV_SHA256
+    PLEBIAN_OS_MPV_BYTES
+    PLEBIAN_OS_MPV_VERSION
+    PLEBIAN_OS_MPV_SOURCE_REF
+    PLEBIAN_OS_MPV_LAUNCHER_REF
     PLEBIAN_OS_INSTALL_UV
     PLEBIAN_OS_UV_VERSION
     PLEBIAN_OS_UV_INSTALLER_SHA256
@@ -429,6 +435,31 @@ is_f120_root_key() {
 # Older closures may omit it; a strict 0.2.2 closure may not. Any partial
 # selection is invalid in development too. Keep the three standalone callers
 # identical; tests execute the complete boundary on each copy.
+validate_mpv_release_closure() {
+    local key present=0
+    for key in PLEBIAN_OS_MPV_URL PLEBIAN_OS_MPV_SHA256 PLEBIAN_OS_MPV_BYTES \
+        PLEBIAN_OS_MPV_VERSION PLEBIAN_OS_MPV_SOURCE_REF PLEBIAN_OS_MPV_LAUNCHER_REF; do
+        [ -z "${!key:-}" ] || present=$((present + 1))
+    done
+    # Legacy closures omit this component. The 0.2.2 requirements file makes
+    # its complete selection mandatory for the newly integrated release.
+    [ "$present" != 0 ] || return 0
+    [ "$present" = 6 ] || { echo 'mpv closure requires all six exact fields' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_URL" =~ ^https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb$ ]] \
+        && [ "${#PLEBIAN_OS_MPV_URL}" -le 2048 ] \
+        || { echo 'mpv package must use its immutable HTTPS release asset URL' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || { echo 'invalid mpv package SHA-256' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_BYTES" =~ ^[1-9][0-9]{0,6}$ ]] && [ "$PLEBIAN_OS_MPV_BYTES" -le 8388608 ] \
+        || { echo 'mpv package size must be in 1..8388608' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_VERSION" =~ ^[0-9][A-Za-z0-9.+~:-]{0,99}$ ]] \
+        || { echo 'invalid mpv package version' >&2; return 1; }
+    for key in PLEBIAN_OS_MPV_SOURCE_REF PLEBIAN_OS_MPV_LAUNCHER_REF; do
+        [[ "${!key}" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo 'mpv sources require full lowercase commit SHAs' >&2; return 1; }
+    done
+}
+
 validate_qt_release_closure() {
     local version="$1" mode="$2" key present=0 authority port
     local url_pattern='^https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*$'
@@ -510,7 +541,14 @@ validate_release_closure() {
     local PLEBIAN_OS_QT_RUNTIME_URL="${MANIFEST[PLEBIAN_OS_QT_RUNTIME_URL]:-}"
     local PLEBIAN_OS_QT_RUNTIME_SHA256="${MANIFEST[PLEBIAN_OS_QT_RUNTIME_SHA256]:-}"
     local PLEBIAN_OS_QT_RUNTIME_BYTES="${MANIFEST[PLEBIAN_OS_QT_RUNTIME_BYTES]:-}"
+    local PLEBIAN_OS_MPV_URL="${MANIFEST[PLEBIAN_OS_MPV_URL]:-}"
+    local PLEBIAN_OS_MPV_SHA256="${MANIFEST[PLEBIAN_OS_MPV_SHA256]:-}"
+    local PLEBIAN_OS_MPV_BYTES="${MANIFEST[PLEBIAN_OS_MPV_BYTES]:-}"
+    local PLEBIAN_OS_MPV_VERSION="${MANIFEST[PLEBIAN_OS_MPV_VERSION]:-}"
+    local PLEBIAN_OS_MPV_SOURCE_REF="${MANIFEST[PLEBIAN_OS_MPV_SOURCE_REF]:-}"
+    local PLEBIAN_OS_MPV_LAUNCHER_REF="${MANIFEST[PLEBIAN_OS_MPV_LAUNCHER_REF]:-}"
     validate_qt_release_closure "$TARGET" 1 || closure_reject "invalid Qt runtime closure"
+    validate_mpv_release_closure || closure_reject "invalid mpv closure"
     validate_native_release_closure "$TARGET" 1 || closure_reject "invalid native runtime closure"
     local key value missing=() present=()
 

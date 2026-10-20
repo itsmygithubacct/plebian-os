@@ -83,6 +83,12 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_QT_RUNTIME_URL
     PLEBIAN_OS_QT_RUNTIME_SHA256
     PLEBIAN_OS_QT_RUNTIME_BYTES
+    PLEBIAN_OS_MPV_URL
+    PLEBIAN_OS_MPV_SHA256
+    PLEBIAN_OS_MPV_BYTES
+    PLEBIAN_OS_MPV_VERSION
+    PLEBIAN_OS_MPV_SOURCE_REF
+    PLEBIAN_OS_MPV_LAUNCHER_REF
     PLEBIAN_OS_INSTALL_UV
     PLEBIAN_OS_UV_VERSION
     PLEBIAN_OS_UV_INSTALLER_SHA256
@@ -289,6 +295,12 @@ PLEBIAN_OS_NATIVE_CONTENT_REF="${PLEBIAN_OS_NATIVE_CONTENT_REF:-}"
 PLEBIAN_OS_QT_RUNTIME_URL="${PLEBIAN_OS_QT_RUNTIME_URL:-}"
 PLEBIAN_OS_QT_RUNTIME_SHA256="${PLEBIAN_OS_QT_RUNTIME_SHA256:-}"
 PLEBIAN_OS_QT_RUNTIME_BYTES="${PLEBIAN_OS_QT_RUNTIME_BYTES:-}"
+PLEBIAN_OS_MPV_URL="${PLEBIAN_OS_MPV_URL:-}"
+PLEBIAN_OS_MPV_SHA256="${PLEBIAN_OS_MPV_SHA256:-}"
+PLEBIAN_OS_MPV_BYTES="${PLEBIAN_OS_MPV_BYTES:-}"
+PLEBIAN_OS_MPV_VERSION="${PLEBIAN_OS_MPV_VERSION:-}"
+PLEBIAN_OS_MPV_SOURCE_REF="${PLEBIAN_OS_MPV_SOURCE_REF:-}"
+PLEBIAN_OS_MPV_LAUNCHER_REF="${PLEBIAN_OS_MPV_LAUNCHER_REF:-}"
 KILIX_VOICE_LIB_VERSION="${KILIX_VOICE_LIB_VERSION:-}"
 KILIX_VOICE_LIB_URL="${KILIX_VOICE_LIB_URL:-}"
 KILIX_VOICE_LIB_SHA256="${KILIX_VOICE_LIB_SHA256:-}"
@@ -765,6 +777,56 @@ restore_persisted_policy() {
 NATIVE_TRANSACTION_TOKEN=
 NATIVE_TRANSACTION_STARTED=0
 QT_RUNTIME_TRANSACTION_STARTED=0
+MPV_TRANSACTION_STARTED=0
+
+mpv_download_archive() {
+    /usr/bin/prlimit --fsize="$PLEBIAN_OS_MPV_BYTES:$PLEBIAN_OS_MPV_BYTES" -- \
+        /usr/bin/timeout --signal=TERM --kill-after=5s 305s \
+        /usr/bin/curl --disable --fail --silent --show-error --location \
+        --proto '=https' --proto-redir '=https' --max-redirs 5 \
+        --connect-timeout 20 --max-time 300 --max-filesize "$PLEBIAN_OS_MPV_BYTES" \
+        --output "$1" --url "$PLEBIAN_OS_MPV_URL"
+}
+
+apply_selected_mpv_runtime() {
+    local outer="$1" dry_run="$2" stage
+    validate_mpv_release_closure || return 1
+    [ -n "$PLEBIAN_OS_MPV_URL" ] || return 0
+    if [ "$dry_run" = 1 ]; then
+        log "would install and verify the exact selected mpv runtime inside the OS transaction"
+        return 0
+    fi
+    [ "$MPV_TRANSACTION_STARTED" = 0 ] || return 1
+    stage="$(mktemp "$outer/mpv-runtime.XXXXXX")" || return 1
+    chmod 0600 -- "$stage" || return 1
+    mpv_download_archive "$stage" || return 1
+    # Snapshot packages before installation. The root helper checks held bundle
+    # bytes independently; the outer transaction retains the prior packages.
+    mpv_runtime_command --snapshot "$PROVISION_ROOT_TRANSACTION_DIR/mpv-runtime" || return 1
+    (umask 077; set -C; printf '1\n' >"$outer/mpv-runtime-transaction") || return 1
+    MPV_TRANSACTION_STARTED=1
+    mpv_runtime_command --install-package "$stage" \
+        --sha256 "$PLEBIAN_OS_MPV_SHA256" --bytes "$PLEBIAN_OS_MPV_BYTES" \
+        --version "$PLEBIAN_OS_MPV_VERSION" --source-commit "$PLEBIAN_OS_MPV_SOURCE_REF" \
+        --launcher-commit "$PLEBIAN_OS_MPV_LAUNCHER_REF"
+}
+
+rollback_mpv_runtime_transaction() {
+    local snapshot="$PROVISION_ROOT_TRANSACTION_DIR/mpv-runtime"
+    [ "$MPV_TRANSACTION_STARTED" = 1 ] || return 0
+    [ "$PROVISION_ROOT_TRANSACTION_DIR" != "" ] || return 1
+    test -f "$snapshot/SNAPSHOT.json" || return 1
+    mpv_runtime_command --restore "$snapshot" || {
+        warn "mpv package rollback failed; retaining the current helper and root recovery snapshots"
+        return 1
+    }
+    MPV_TRANSACTION_STARTED=0
+}
+
+mpv_runtime_command() {
+    /usr/local/sbin/plebian-os-mpv-runtime "$@"
+}
+
 
 qt_download_archive() {
     /usr/bin/prlimit --fsize="$PLEBIAN_OS_QT_RUNTIME_BYTES:$PLEBIAN_OS_QT_RUNTIME_BYTES" -- \
@@ -913,6 +975,31 @@ release_requires_f120_roots() {
 # Older closures may omit it; a strict 0.2.2 closure may not. Any partial
 # selection is invalid in development too. Keep the three standalone callers
 # identical; tests execute the complete boundary on each copy.
+validate_mpv_release_closure() {
+    local key present=0
+    for key in PLEBIAN_OS_MPV_URL PLEBIAN_OS_MPV_SHA256 PLEBIAN_OS_MPV_BYTES \
+        PLEBIAN_OS_MPV_VERSION PLEBIAN_OS_MPV_SOURCE_REF PLEBIAN_OS_MPV_LAUNCHER_REF; do
+        [ -z "${!key:-}" ] || present=$((present + 1))
+    done
+    # Legacy closures omit this component. The 0.2.2 requirements file makes
+    # its complete selection mandatory for the newly integrated release.
+    [ "$present" != 0 ] || return 0
+    [ "$present" = 6 ] || { echo 'mpv closure requires all six exact fields' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_URL" =~ ^https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb$ ]] \
+        && [ "${#PLEBIAN_OS_MPV_URL}" -le 2048 ] \
+        || { echo 'mpv package must use its immutable HTTPS release asset URL' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+        || { echo 'invalid mpv package SHA-256' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_BYTES" =~ ^[1-9][0-9]{0,6}$ ]] && [ "$PLEBIAN_OS_MPV_BYTES" -le 8388608 ] \
+        || { echo 'mpv package size must be in 1..8388608' >&2; return 1; }
+    [[ "$PLEBIAN_OS_MPV_VERSION" =~ ^[0-9][A-Za-z0-9.+~:-]{0,99}$ ]] \
+        || { echo 'invalid mpv package version' >&2; return 1; }
+    for key in PLEBIAN_OS_MPV_SOURCE_REF PLEBIAN_OS_MPV_LAUNCHER_REF; do
+        [[ "${!key}" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo 'mpv sources require full lowercase commit SHAs' >&2; return 1; }
+    done
+}
+
 validate_qt_release_closure() {
     local version="$1" mode="$2" key present=0 authority port
     local url_pattern='^https://[A-Za-z0-9][A-Za-z0-9._~:/?&=%+-]*$'
@@ -986,6 +1073,7 @@ validate_native_release_closure() {
 }
 
 validate_release_inputs() {
+    validate_mpv_release_closure || return 1
     validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" "${PLEBIAN_OS_RELEASE_MODE:-0}" || return 1
     validate_native_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" \
         "${PLEBIAN_OS_RELEASE_MODE:-0}" || die "invalid native runtime closure"
@@ -1386,6 +1474,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
     /usr/local/sbin/plebian-os-qt-runtime
+    /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
     /usr/local/libexec/plebian-os/native_state.py
     /usr/local/libexec/plebian-os/native_process.py
@@ -1777,6 +1866,7 @@ rollback_provision_root_transaction() {
         warn "Voicebox selection restoration failed; retaining recovery data at $txn"
         return 1
     }
+    rollback_mpv_runtime_transaction || return 1
     rollback_qt_runtime_transaction || return 1
     rollback_native_runtime_transaction || {
         warn "retaining the current OS helper and root recovery data at $txn"
@@ -3394,7 +3484,7 @@ required_uid = 0
 entry_dir = Path('/usr/local/sbin')
 module_dir = Path('/usr/local/libexec/plebian-os')
 modules = ('native_package.py', 'native_state.py', 'native_process.py', 'native_runtime.py')
-entries = ('plebian-os-native-runtime', 'plebian-os-qt-runtime')
+entries = ('plebian-os-native-runtime', 'plebian-os-qt-runtime', 'plebian-os-mpv-runtime')
 names = (*entries, *modules)
 deployed = source_dir == entry_dir
 limit = 131072
@@ -3459,7 +3549,7 @@ for name in names:
     destination = (entry_dir if name in entries else module_dir) / name
     source = destination if deployed else source_dir / name
     data = source_bytes(source)
-    if name in modules or name == "plebian-os-qt-runtime":
+    if name in modules or name in ("plebian-os-qt-runtime", "plebian-os-mpv-runtime"):
         compile(data, str(source), 'exec')
     else:
         subprocess.run(['/bin/sh', '-n'], input=data, check=True, timeout=5)
@@ -4713,6 +4803,12 @@ write_source_tool_manifest() {
         provenance_kv PLEBIAN_OS_QT_RUNTIME_URL "$PLEBIAN_OS_QT_RUNTIME_URL"
         provenance_kv PLEBIAN_OS_QT_RUNTIME_SHA256 "$PLEBIAN_OS_QT_RUNTIME_SHA256"
         provenance_kv PLEBIAN_OS_QT_RUNTIME_BYTES "$PLEBIAN_OS_QT_RUNTIME_BYTES"
+        provenance_kv PLEBIAN_OS_MPV_URL "$PLEBIAN_OS_MPV_URL"
+        provenance_kv PLEBIAN_OS_MPV_SHA256 "$PLEBIAN_OS_MPV_SHA256"
+        provenance_kv PLEBIAN_OS_MPV_BYTES "$PLEBIAN_OS_MPV_BYTES"
+        provenance_kv PLEBIAN_OS_MPV_VERSION "$PLEBIAN_OS_MPV_VERSION"
+        provenance_kv PLEBIAN_OS_MPV_SOURCE_REF "$PLEBIAN_OS_MPV_SOURCE_REF"
+        provenance_kv PLEBIAN_OS_MPV_LAUNCHER_REF "$PLEBIAN_OS_MPV_LAUNCHER_REF"
         provenance_kv PLEBIAN_OS_APT_SNAPSHOT "$PLEBIAN_OS_APT_SNAPSHOT"
         provenance_kv GPU_TERMINAL_SOURCE_HOME "$GPU_TERMINAL_SOURCE_HOME"
         provenance_kv GPU_TERMINAL_HOME "$GPU_TERMINAL_HOME"
@@ -6022,6 +6118,8 @@ install_artwork_notices
 install_native_runtime_helpers
 apply_selected_qt_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
     || die "selected Qt runtime could not be installed/verified"
+apply_selected_mpv_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
+    || die "selected mpv runtime could not be installed/verified"
 apply_selected_native_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
     || die "selected native runtime could not be prepared/applied"
 
@@ -6651,6 +6749,12 @@ EOF
     write_session_default PLEBIAN_OS_QT_RUNTIME_URL "$PLEBIAN_OS_QT_RUNTIME_URL"
     write_session_default PLEBIAN_OS_QT_RUNTIME_SHA256 "$PLEBIAN_OS_QT_RUNTIME_SHA256"
     write_session_default PLEBIAN_OS_QT_RUNTIME_BYTES "$PLEBIAN_OS_QT_RUNTIME_BYTES"
+    write_session_default PLEBIAN_OS_MPV_URL "$PLEBIAN_OS_MPV_URL"
+    write_session_default PLEBIAN_OS_MPV_SHA256 "$PLEBIAN_OS_MPV_SHA256"
+    write_session_default PLEBIAN_OS_MPV_BYTES "$PLEBIAN_OS_MPV_BYTES"
+    write_session_default PLEBIAN_OS_MPV_VERSION "$PLEBIAN_OS_MPV_VERSION"
+    write_session_default PLEBIAN_OS_MPV_SOURCE_REF "$PLEBIAN_OS_MPV_SOURCE_REF"
+    write_session_default PLEBIAN_OS_MPV_LAUNCHER_REF "$PLEBIAN_OS_MPV_LAUNCHER_REF"
     write_session_default PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
     write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
     write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"

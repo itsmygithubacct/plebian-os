@@ -19,3 +19,10 @@ Beginning with 0.2.1, the closure also carries five repository-root tuples:
 `_REF`, its canonical HTTPS `_REPO`, and a declared-empty `_BRANCH`. Component
 versions and child gitlink SHAs are not duplicated here; they are verified from
 the manifests and Git trees selected by those root commits.
+
+The 0.2.2 terminal player selection uses `PLEBIAN_OS_MPV_URL`, `_SHA256`,
+`_BYTES`, `_VERSION`, `_SOURCE_REF` and `_LAUNCHER_REF`. The requirements file
+binds the exact published package; partial selections are refused by the image,
+selector, provisioner and updater. Installation verifies the archive and payload,
+retains the prior package for outer-transaction rollback, and records installed
+file hashes. `plebian-os-mpv-runtime --verify` checks that installed selection.

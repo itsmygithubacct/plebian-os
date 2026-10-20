@@ -298,6 +298,30 @@ def default_iso_filename(name: str) -> str:
     return f"plebian-os-{name}.iso"
 
 
+MPV_RELEASE_KEYS = tuple('PLEBIAN_OS_MPV_' + suffix for suffix in
+                         ('URL', 'SHA256', 'BYTES', 'VERSION', 'SOURCE_REF', 'LAUNCHER_REF'))
+
+
+def validate_mpv_release_closure(values: dict[str, str]) -> None:
+    selected = [values.get(key, '') for key in MPV_RELEASE_KEYS]
+    if not any(selected):
+        return  # Earlier closures omit this component; requirements enforce the new selection.
+    if not all(selected):
+        die('mpv closure requires all six exact fields')
+    url, digest, size, version, source, launcher = selected
+    if len(url) > 2048 or not re.fullmatch(
+            r'https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb', url):
+        die('mpv package must use its immutable HTTPS release asset URL')
+    if not re.fullmatch(r'[0-9a-f]{64}', digest):
+        die('invalid mpv package SHA-256')
+    if not re.fullmatch(r'[1-9][0-9]{0,6}', size) or int(size) > 8388608:
+        die('mpv package size must be in 1..8388608')
+    if not re.fullmatch(r'[0-9][A-Za-z0-9.+~:-]{0,99}', version):
+        die('invalid mpv package version')
+    if not all(re.fullmatch(r'[0-9a-f]{40}', ref) for ref in (source, launcher)):
+        die('mpv sources require full lowercase commit SHAs')
+
+
 QT_RELEASE_KEYS = (
     "PLEBIAN_OS_QT_RUNTIME_URL", "PLEBIAN_OS_QT_RUNTIME_SHA256", "PLEBIAN_OS_QT_RUNTIME_BYTES",
 )
@@ -395,9 +419,10 @@ def apply_release_manifest(release: str | None = None) -> None:
         return values
 
     manifest_values = read_assignments(manifest, "release manifest")
+    validate_mpv_release_closure(manifest_values)
     validate_qt_release_closure(manifest_values, release, "1")
     validate_native_release_closure(manifest_values, release, "1")
-    for key in (*NATIVE_RELEASE_KEYS, *QT_RELEASE_KEYS):
+    for key in (*NATIVE_RELEASE_KEYS, *QT_RELEASE_KEYS, *MPV_RELEASE_KEYS):
         os.environ[key] = manifest_values.get(key, "")
     for key, val in manifest_values.items():
         os.environ[key] = val
@@ -2113,6 +2138,8 @@ if default is not None:
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]
+    if os.environ.get("PLEBIAN_OS_MPV_URL"):
+        checks.append(("selected terminal player", "/usr/local/sbin/plebian-os-mpv-runtime --verify"))
     if os.environ.get("PLEBIAN_OS_QT_RUNTIME_URL"):
         checks.append(("selected Qt runtime", "/usr/local/sbin/plebian-os-qt-runtime --verify"))
     if cfg.desktop:
@@ -2242,6 +2269,7 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "PLEBIAN_OS_NETINST_SHA256",
         "PLEBIAN_OS_APT_SNAPSHOT",
         *QT_RELEASE_KEYS,
+        *MPV_RELEASE_KEYS,
         "PLEBIAN_OS_INSTALL_UV",
         "PLEBIAN_OS_UV_VERSION",
         "PLEBIAN_OS_UV_INSTALLER_SHA256",

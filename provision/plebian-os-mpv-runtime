@@ -1,0 +1,232 @@
+#!/usr/bin/python3 -IB
+"""Install the byte-pinned terminal player inside the OS package transaction."""
+
+import argparse
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import tarfile
+import tempfile
+
+
+STATE = Path('/var/lib/plebian-os/mpv-runtime')
+FILES = {
+    'usr/bin/kilix-mpv', 'usr/bin/kilix-video',
+    'usr/lib/kilix-mpv/terminal_video.py',
+    'usr/lib/kilix-mpv/terminal_video_errors.lua',
+    *('usr/share/doc/kilix-mpv/' + name for name in
+      ('LAUNCHER.json', 'UPSTREAM.json', 'copyright', 'LICENSE.GPL',
+       'LICENSE.LGPL', 'LICENSE.launcher')),
+}
+
+
+def digest(path):
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def private_directory(path):
+    if path.resolve() != path or path.is_symlink():
+        raise ValueError('package transaction path must be absolute without symlinks')
+    info = path.stat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+        raise ValueError('package transaction requires a private root-owned directory')
+
+
+def state_directory():
+    STATE.parent.mkdir(mode=0o755, exist_ok=True)
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    private_directory(STATE)
+    parent = STATE.parent.stat()
+    if parent.st_uid != 0 or parent.st_mode & 0o022:
+        raise ValueError('unsafe package state parent')
+
+
+def atomic_json(path, value):
+    fd, name = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(value, stream, indent=2)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def archive_info(path):
+    result = subprocess.check_output([
+        '/usr/bin/dpkg-deb', '-f', str(path), 'Package', 'Version', 'Architecture'], text=True)
+    metadata = dict(line.split(': ', 1) for line in result.splitlines())
+    if (metadata.get('Package') != 'kilix-mpv' or metadata.get('Architecture') != 'amd64'
+            or not re.fullmatch(r'[0-9][A-Za-z0-9.+~:-]{0,99}', metadata.get('Version', ''))):
+        raise ValueError('archive must be an amd64 kilix-mpv package')
+    control = subprocess.check_output(['/usr/bin/dpkg-deb', '--ctrl-tarfile', str(path)])
+    with tarfile.open(fileobj=io.BytesIO(control)) as tar:
+        for member in tar:
+            if member.name in ('.', './') and member.isdir():
+                continue
+            if member.name.removeprefix('./') not in ('control', 'md5sums') or not member.isfile():
+                raise ValueError('player package must contain no maintainer scripts or control links')
+    payload = subprocess.check_output(['/usr/bin/dpkg-deb', '--fsys-tarfile', str(path)])
+    if len(payload) > 32 * 1024 * 1024:
+        raise ValueError('player payload is too large')
+    files, launcher = {}, None
+    with tarfile.open(fileobj=io.BytesIO(payload)) as tar:
+        for member in tar:
+            name = member.name.removeprefix('./').rstrip('/')
+            if member.isdir():
+                if name not in ('', '.') and not any(f.startswith(name + '/') for f in FILES):
+                    raise ValueError('unexpected player directory')
+                continue
+            if (name not in FILES or name in files or not member.isfile()
+                    or member.uid != 0 or member.gid != 0 or member.mode & 0o7022):
+                raise ValueError('unexpected, duplicated or unsafe player payload entry')
+            data = tar.extractfile(member).read()
+            files[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'mode': member.mode}
+            if name.endswith('/LAUNCHER.json'):
+                launcher = json.loads(data)
+    if files.keys() != FILES or launcher is None:
+        raise ValueError('incomplete player package')
+    return {'version': metadata['Version'], 'files': files, 'launcher': launcher['commit']}
+
+
+def installed_version():
+    result = subprocess.run(['/usr/bin/dpkg-query', '-W', '-f=${db:Status-Status}\n${Version}',
+                             'kilix-mpv'], capture_output=True, text=True)
+    if result.returncode == 1 or result.stdout.startswith(('not-installed\n', 'config-files\n')):
+        return None
+    result.check_returncode()
+    status, version = result.stdout.splitlines()
+    if status != 'installed':
+        raise ValueError('player package is in an incomplete dpkg state')
+    return version
+
+
+def verify(record):
+    if installed_version() != record['version'] or set(record['files']) != FILES:
+        raise ValueError('installed player selection differs')
+    for name, expected in record['files'].items():
+        path = Path('/') / name
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0
+                or stat.S_IMODE(info.st_mode) != expected['mode']
+                or digest(path) != expected['sha256']):
+            raise ValueError('installed player file differs: ' + name)
+
+
+def snapshot(directory):
+    private_directory(directory.parent)
+    directory.mkdir(mode=0o700)
+    version = installed_version()
+    prior = {'version': version, 'runtime': None}
+    receipt = STATE / 'RUNTIME.json'
+    if receipt.exists():
+        prior['runtime'] = json.loads(receipt.read_text())
+    if version is not None:
+        archive = STATE / 'packages' / ('kilix-mpv_' + version + '_amd64.deb')
+        if not archive.is_file() or archive.is_symlink():
+            raise ValueError('previous player archive is unavailable; retain its exact .deb before updating')
+        record = archive_info(archive)
+        verify(record)
+        shutil.copyfile(archive, directory / 'previous.deb')
+        prior.update(sha256=digest(archive), record=record)
+    atomic_json(directory / 'SNAPSHOT.json', prior)
+
+
+def restore(directory):
+    private_directory(directory)
+    prior = json.loads((directory / 'SNAPSHOT.json').read_text())
+    if prior['version'] is None:
+        subprocess.run(['/usr/bin/dpkg', '--remove', 'kilix-mpv'], check=True)
+    else:
+        archive = directory / 'previous.deb'
+        if archive.is_symlink() or digest(archive) != prior['sha256']:
+            raise ValueError('previous player archive changed')
+        record = archive_info(archive)
+        if record != prior['record'] or record['version'] != prior['version']:
+            raise ValueError('previous player archive identity differs')
+        subprocess.run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
+                        '--no-install-recommends', '--no-remove', '--allow-downgrades',
+                        'install', str(archive)], check=True)
+        verify(record)
+    if prior['runtime'] is None:
+        (STATE / 'RUNTIME.json').unlink(missing_ok=True)
+    else:
+        atomic_json(STATE / 'RUNTIME.json', prior['runtime'])
+
+
+def install(path, expected_sha, expected_bytes, version, source, launcher):
+    if (not re.fullmatch(r'[0-9a-f]{64}', expected_sha or '')
+            or not expected_bytes or not 0 < expected_bytes <= 8388608
+            or not re.fullmatch(r'[0-9a-f]{40}', source or '')
+            or not re.fullmatch(r'[0-9a-f]{40}', launcher or '')):
+        raise ValueError('installation requires exact package and source pins')
+    # Work exclusively with a private root-owned copy after opening without following links.
+    with tempfile.TemporaryDirectory(prefix='install-', dir=STATE) as temporary:
+        held = Path(temporary) / 'kilix-mpv.deb'
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size != expected_bytes:
+                raise ValueError('package size or file type differs')
+            data = stream.read(expected_bytes + 1)
+        if len(data) != expected_bytes or hashlib.sha256(data).hexdigest() != expected_sha:
+            raise ValueError('package checksum or byte count differs')
+        held.write_bytes(data)
+        record = archive_info(held)
+        if record['version'] != version or record['launcher'] != launcher:
+            raise ValueError('package version or launcher pin differs')
+        if subprocess.check_output(['/usr/bin/dpkg', '--print-architecture'], text=True).strip() != 'amd64':
+            raise ValueError('selected player requires amd64')
+        record.update(sha256=expected_sha, bytes=expected_bytes, source=source)
+        cache = STATE / 'packages'
+        cache.mkdir(mode=0o700, exist_ok=True)
+        private_directory(cache)
+        target = cache / ('kilix-mpv_' + version + '_amd64.deb')
+        if target.exists() and digest(target) != expected_sha:
+            raise ValueError('refusing different player bytes under an existing version')
+        if not target.exists():
+            os.replace(held, target)
+        subprocess.run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
+                        '--no-install-recommends', '--no-remove', 'install', str(target)], check=True)
+        verify(record)
+        atomic_json(STATE / 'RUNTIME.json', record)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument('--snapshot', type=Path)
+    action.add_argument('--restore', type=Path)
+    action.add_argument('--install-package', type=Path)
+    action.add_argument('--verify', action='store_true')
+    parser.add_argument('--sha256')
+    parser.add_argument('--bytes', type=int)
+    parser.add_argument('--version')
+    parser.add_argument('--source-commit')
+    parser.add_argument('--launcher-commit')
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.error('run as root')
+    state_directory()
+    if args.snapshot:
+        snapshot(args.snapshot)
+    elif args.restore:
+        restore(args.restore)
+    elif args.install_package:
+        install(args.install_package, args.sha256, args.bytes, args.version,
+                args.source_commit, args.launcher_commit)
+    else:
+        verify(json.loads((STATE / 'RUNTIME.json').read_text()))
+
+
+if __name__ == '__main__':
+    main()
