@@ -154,6 +154,9 @@ DEP_GROUPS=(
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
+    # Provide /usr/bin/python for scripts and tools that use the unversioned
+    # command. Debian owns the symlink and follows its default Python 3.
+    "Python command compatibility|python-is-python3"
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
     # The session runs with TERM=xterm-kitty. Kilix installs the engine's own
     # entry into the user's ~/.terminfo, but root, sudo and any other account
