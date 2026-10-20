@@ -1498,6 +1498,8 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
+    /etc/systemd/user/pipewire-pulse.service
+    /etc/systemd/user/pipewire-pulse.socket
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
@@ -1559,6 +1561,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /usr/local/share/dbus-1/services
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
+    /etc/systemd/user
     /usr/local/libexec
     /usr/local/libexec/plebian-os
     /etc/modprobe.d
@@ -2848,9 +2851,40 @@ audio_holdoff_mask_is_blocked() {
     [ -e "$override" ] || [ -L "$override" ]
 }
 
+configure_pulseaudio_ownership() {
+    local root profile unit override
+    root=$(audio_holdoff_root)
+    profile="$root/etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf"
+    # Only enforce the Pleb video-only policy once that profile is deployed.
+    # The first dependency pass can precede `pleb install`.
+    [ -f "$profile" ] || return 0
+    grep -Eq '^[[:space:]]*wireplumber\.profile[[:space:]]*=[[:space:]]*video-only' \
+        "$profile" || return 0
+    audio_holdoff_unit_file "$root" pulseaudio.service >/dev/null \
+        || { warn "video-only WirePlumber requires the PulseAudio service"; return 1; }
+    # A package recommendation can enable both Pulse servers. A mask survives
+    # later package upgrades; per-user overrides remain the user's choice.
+    for unit in pipewire-pulse.service pipewire-pulse.socket; do
+        if audio_holdoff_mask_is_blocked "$root" "$unit"; then
+            warn "refusing to replace custom audio unit: /etc/systemd/user/$unit"
+            return 1
+        fi
+    done
+    for unit in pipewire-pulse.service pipewire-pulse.socket; do
+        override="$root/etc/systemd/user/$unit"
+        if [ "$DRY_RUN" = 1 ]; then
+            echo "    + mask $unit globally; PulseAudio owns audio, PipeWire owns video"
+        elif [ ! -L "$override" ]; then
+            mkdir -p -- "$root/etc/systemd/user" || return 1
+            ln -s /dev/null "$override" || return 1
+        fi
+    done
+}
+
 disable_audio_holding_user_units() {
     local root found remaining link unit origin record stamp outcome
     root=$(audio_holdoff_root)
+    configure_pulseaudio_ownership || return 1
     log "checking for login-time daemons that would hold the default sound card"
     found=$(enabled_audio_holding_user_units)
     if [ -z "$found" ]; then

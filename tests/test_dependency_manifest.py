@@ -652,14 +652,17 @@ class DependencyManifestTests(unittest.TestCase):
         install = (ROOT / "provision" / "install-deps.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         self.assertIn("--no-install-recommends", install)
-        self.assertIn("pkgsel/install-recommends boolean false", preseed)
+        # Debian's base-installer writes the APT policy. pkgsel has no
+        # install-recommends question and silently ignores that spelling.
+        self.assertIn("base-installer/install-recommends boolean false", preseed)
+        self.assertNotIn("pkgsel/install-recommends", preseed)
 
     def test_recommends_line_not_parsed_as_a_package(self):
         # The recommends directive must sit OUTSIDE the pkgsel/include block, so
         # the drift parser never mistakes it for a package name.
         pkgs = preseed_packages()
         self.assertNotIn("boolean", pkgs)
-        self.assertNotIn("pkgsel/install-recommends", pkgs)
+        self.assertNotIn("base-installer/install-recommends", pkgs)
 
 
 if __name__ == "__main__":

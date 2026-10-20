@@ -1120,6 +1120,8 @@ paths=(
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
     /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
+    /etc/systemd/user/pipewire-pulse.service
+    /etc/systemd/user/pipewire-pulse.socket
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
@@ -1154,6 +1156,7 @@ managed_dirs=(
     /etc/xdg-desktop-portal
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
+    /etc/systemd/user
     /usr/local/libexec
     /usr/local/libexec/plebian-os
     /usr/local/share/plebian-os
@@ -1285,6 +1288,8 @@ paths=(
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
     /etc/xdg-desktop-portal/pleb-portals.conf
     /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
+    /etc/systemd/user/pipewire-pulse.service
+    /etc/systemd/user/pipewire-pulse.socket
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
     /usr/local/bin/kilix-settings
@@ -1319,6 +1324,7 @@ managed_dirs=(
     /etc/xdg-desktop-portal
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
+    /etc/systemd/user
     /usr/local/libexec
     /usr/local/libexec/plebian-os
     /usr/local/share/plebian-os

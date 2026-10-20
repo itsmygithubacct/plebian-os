@@ -226,7 +226,7 @@ DEP_GROUPS=(
     # installed and --no-install-recommends cannot supply it incidentally.
     "desktop screenshots|xfce4-screenshooter"
     "desktop lock + power + authorization|xss-lock i3lock libxss1 libx11-6 libxres1 xfce4-power-manager xfconf lxpolkit"
-    "desktop file and URI handlers|xdg-utils desktop-file-utils shared-mime-info"
+    "desktop file and URI handlers|xdg-utils xdg-user-dirs desktop-file-utils shared-mime-info"
     "desktop bluetooth + removable media|blueman pulseaudio-module-bluetooth udisks2 udiskie gnome-disk-utility gir1.2-notify-0.7"
     "desktop physical printers|cups cups-client system-config-printer system-config-printer-udev"
     "desktop sound + input methods + accessibility|pavucontrol ibus ibus-gtk ibus-gtk3 ibus-gtk4 orca at-spi2-core"
