@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Add managed coding sessions with exact launch settings, explicit folder trust,
+  focus-preserving panes, private run logs and cancellation. Fresh installs and
+  updates deliver `kilix-session` alongside the `kilix session` host verb.
+
 - Install the pinned EnCodec 24 kHz and 48 kHz converter software on fresh installs and
   updates, with root-owned runtime support and unchanged model licence gates.
 - Select the Downloads initialization and remote-print parser repairs for 0.2.2.
