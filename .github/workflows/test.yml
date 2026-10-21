@@ -61,7 +61,7 @@ jobs:
             bash -n "$shell_script"
           done
           python3 -m py_compile build/*.py provision/plebian-os-passwd \
-            provision/plebian-os-qt-runtime provision/plebian-os-mpv-runtime provision/native_*.py tests/*.py
+            provision/plebian-os-qt-runtime provision/plebian-os-mpv-runtime provision/plebian-os-install-encodec-converter provision/native_*.py tests/*.py
           shellcheck -S warning bootstrap.sh build/*.sh provision/*.sh \
             provision/plebian-os-firstboot-attempt \
             provision/plebian-os-apt-snapshot-generator \

@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Install the pinned EnCodec 24 kHz and 48 kHz converter software on fresh installs and
+  updates, with root-owned runtime support and unchanged model licence gates.
+- Select the Downloads initialization and remote-print parser repairs for 0.2.2.
+- Keep the optional diarization converter opt-in during provisioning.
+
 - Select kilix-mpv `.4` and the matching terminal launcher after frozen RC6:
   pixel controls, fullscreen, verified local shared-memory transport, persistent
   diagnostics and terminal recovery. Fresh installation and updates verify the

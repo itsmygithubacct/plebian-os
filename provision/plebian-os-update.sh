@@ -1091,6 +1091,7 @@ paths=(
     /usr/local/libexec/plebian-os/native_runtime.py
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-diarization-converter
+    /usr/local/sbin/plebian-os-install-encodec-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
@@ -1261,6 +1262,7 @@ paths=(
     /usr/local/libexec/plebian-os/native_runtime.py
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-diarization-converter
+    /usr/local/sbin/plebian-os-install-encodec-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-passwd
@@ -3478,6 +3480,7 @@ stage_and_validate_os_layer() {
         "$prov/install-deps.sh"
         "$prov/plebian-os-install-ollama-converter"
         "$prov/plebian-os-install-diarization-converter"
+        "$prov/plebian-os-install-encodec-converter"
         "$prov/plebian-os-install-kilix-vulkan-tts"
         "$prov/plebian-os-install-kilix-ollama-runtime"
         "$prov/plebian-os-native-runtime"
@@ -3516,6 +3519,8 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-install-ollama-converter"
     install -m 0755 "$prov/plebian-os-install-diarization-converter" \
         "$stage/plebian-os-install-diarization-converter"
+    install -m 0755 "$prov/plebian-os-install-encodec-converter" \
+        "$stage/plebian-os-install-encodec-converter"
     install -m 0755 "$prov/plebian-os-install-kilix-vulkan-tts" \
         "$stage/plebian-os-install-kilix-vulkan-tts"
     install -m 0755 "$prov/plebian-os-install-kilix-ollama-runtime" \
@@ -3550,6 +3555,7 @@ stage_and_validate_os_layer() {
     python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-diarization-converter" \
+        "$stage/plebian-os-install-encodec-converter" \
         "$stage/plebian-os-install-kilix-vulkan-tts" \
         "$stage/plebian-os-install-kilix-ollama-runtime" \
         "$stage/native_package.py" "$stage/native_state.py" \
@@ -3718,6 +3724,7 @@ names=(
     plebian-os-select-closure
     plebian-os-install-ollama-converter
     plebian-os-install-diarization-converter
+    plebian-os-install-encodec-converter
     plebian-os-install-kilix-vulkan-tts
     plebian-os-install-kilix-ollama-runtime
     plebian-os-native-runtime
@@ -3743,6 +3750,7 @@ dests=(
     /usr/local/bin/plebian-os-select-closure
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-diarization-converter
+    /usr/local/sbin/plebian-os-install-encodec-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
@@ -3753,8 +3761,8 @@ dests=(
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -3930,13 +3938,13 @@ for i in "${!new_paths[@]}"; do
 done
 # Recheck executable syntax before any installed file is backed up or replaced.
 for file in "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[16]}"; do
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}"; do
     bash -n "$file"
 done
-python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" \
-    "${new_paths[14]}" "${new_paths[15]}" "${new_paths[17]}" \
-    "${new_paths[18]}" "${new_paths[19]}" "${new_paths[20]}" \
-    "${new_paths[21]}" "${new_paths[22]}" <<'PY'
+python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
+    "${new_paths[15]}" "${new_paths[16]}" "${new_paths[18]}" \
+    "${new_paths[19]}" "${new_paths[20]}" "${new_paths[21]}" \
+    "${new_paths[22]}" "${new_paths[23]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
@@ -4051,6 +4059,7 @@ self_update_os_layer() {
         plebian-os-select-closure
         plebian-os-install-ollama-converter
         plebian-os-install-diarization-converter
+        plebian-os-install-encodec-converter
         plebian-os-install-kilix-vulkan-tts
         plebian-os-install-kilix-ollama-runtime
         plebian-os-native-runtime
@@ -4169,6 +4178,12 @@ reconcile_legacy_remote_login() {
 # included in the root snapshot because they are directly selected on PATH.
 # Debian package upgrades pulled in by live sources are residue as well; apt
 # source changes happen only after commit.
+run_encodec_converter_installer() {
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    "${elevate[@]}" /usr/local/sbin/plebian-os-install-encodec-converter
+}
+
 refresh_os_dependencies() {
     local helper=/usr/local/sbin/plebian-os-install-deps
     local -a elevate=()
@@ -5088,6 +5103,10 @@ apply_selected_mpv_runtime "$_STACK_TXN_DIR" 0 \
 test_fail_after_boundary mpv-runtime
 refresh_os_dependencies
 test_fail_after_boundary dependencies
+# Like apt dependencies, this verified software remains available after a
+# later stack rollback; it carries no models, receipts or active selection.
+run_encodec_converter_installer \
+    || die "required EnCodec converter installation failed"
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected native runtime could not be prepared/applied"
 test_fail_after_boundary native-runtime

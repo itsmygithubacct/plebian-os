@@ -1470,6 +1470,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/bin/plebian-os-select-closure
     /usr/local/sbin/plebian-os-install-ollama-converter
     /usr/local/sbin/plebian-os-install-diarization-converter
+    /usr/local/sbin/plebian-os-install-encodec-converter
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
@@ -6159,6 +6160,23 @@ apply_selected_mpv_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
 apply_selected_native_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
     || die "selected native runtime could not be prepared/applied"
 
+# The first-run wizard requires this software before any model is selected.
+# Installation carries no model weights and creates no licence receipts.
+ENCODEC_CONVERTER_INSTALLER_SRC=""
+for cand in "$SELF_DIR/plebian-os-install-encodec-converter" \
+    /usr/local/sbin/plebian-os-install-encodec-converter; do
+    [ -r "$cand" ] && ENCODEC_CONVERTER_INSTALLER_SRC="$cand" && break
+done
+[ -n "$ENCODEC_CONVERTER_INSTALLER_SRC" ] || die "required EnCodec converter installer is missing"
+if [ "$DRY_RUN" = 1 ]; then
+    log "installing required EnCodec conversion software (no models)"
+else
+    if [ "$ENCODEC_CONVERTER_INSTALLER_SRC" != /usr/local/sbin/plebian-os-install-encodec-converter ]; then
+        install -m 0755 "$ENCODEC_CONVERTER_INSTALLER_SRC" /usr/local/sbin/plebian-os-install-encodec-converter
+    fi
+    /usr/local/sbin/plebian-os-install-encodec-converter || die "required EnCodec converter installation failed"
+fi
+
 # Ship only the small source-closure installer. It is never invoked during
 # provisioning: the large Python converter dependencies and all model bytes
 # remain an explicit, later opt-in.
@@ -6179,7 +6197,6 @@ if [ -n "$OLLAMA_CONVERTER_INSTALLER_SRC" ]; then
         log "installing optional Ollama converter installer -> /usr/local/sbin/plebian-os-install-ollama-converter"
         install -m 0755 "$OLLAMA_CONVERTER_INSTALLER_SRC" \
             /usr/local/sbin/plebian-os-install-ollama-converter
-    /usr/local/sbin/plebian-os-install-diarization-converter
     fi
 else
     warn "optional Ollama converter installer not found; continuing without it"
@@ -6203,7 +6220,6 @@ if [ -n "$DIARIZATION_CONVERTER_INSTALLER_SRC" ]; then
         log "installing optional diarization converter installer -> /usr/local/sbin/plebian-os-install-diarization-converter"
         install -m 0755 "$DIARIZATION_CONVERTER_INSTALLER_SRC" \
             /usr/local/sbin/plebian-os-install-diarization-converter
-    /usr/local/sbin/plebian-os-install-diarization-converter
     fi
 else
     warn "optional diarization converter installer not found; continuing without it"

@@ -1257,6 +1257,7 @@ def verify_update_rollback(cfg: Config, askpass: str) -> None:
         "/usr/local/sbin/plebian-os-install-deps",
         "/usr/local/sbin/plebian-os-install-ollama-converter",
         "/usr/local/sbin/plebian-os-install-diarization-converter",
+        "/usr/local/sbin/plebian-os-install-encodec-converter",
         "/usr/local/sbin/plebian-os-install-kilix-vulkan-tts",
         "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
         "/usr/local/sbin/plebian-os-passwd",
@@ -2113,6 +2114,16 @@ if default is not None:
             "timeout 30 /usr/local/sbin/plebian-os-install-ollama-converter "
             "--dry-run | grep -Fqx '  sha256: "
             "8759ab3d3a92d86ba3ba24fab7e6adde08eaf2f941e6c79118373e4f41e0af8c'",
+        ),
+        (
+            "required EnCodec converter runtime",
+            "test -r /usr/lib/plebian-os/kilix-encodec/.converter/runtime.tar && "
+            "test -r /usr/lib/plebian-os/kilix-encodec/.converter/receipt.json && "
+            "timeout 30 /usr/lib/plebian-os/kilix-encodec/bin/kilix-encodec-convert-24khz "
+            "--help >/dev/null && "
+            "test -r /usr/lib/plebian-os/kilix-encodec/.converter-48khz/runtime.tar && "
+            "timeout 30 /usr/lib/plebian-os/kilix-encodec/bin/kilix-encodec-convert-48khz "
+            "--help >/dev/null",
         ),
         (
             "optional diarization converter installer",
