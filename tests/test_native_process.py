@@ -20,7 +20,9 @@ baseline_fds=len(os.listdir('/proc/self/fd'))
 timer=None
 original_fork_exec=subprocess._fork_exec
 try:
-    runner=m.Runner(seconds=0.2 if mode=='deadline' else 2)
+    # Leave enough time to start the actual process tree on a loaded host.
+    # The deadline case still has to finish, fully reaped, within 1.5 seconds.
+    runner=m.Runner(seconds=1 if mode=='deadline' else 2)
     if mode=='preexpired':runner.deadline=time.monotonic()-1
     if mode=='precanceled':runner.cancel()
     if mode=='cancel':

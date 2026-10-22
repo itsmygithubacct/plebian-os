@@ -649,7 +649,12 @@ def main():
         parser.exit(1, 'native runtime helper requires root\n')
     os.umask(0o077)
     processes.enable_subreaper()
-    runner = processes.Runner(seconds=360 if args.command == 'install-dependencies' else 180)
+    # Apply and rollback verify both package generations as well as their
+    # dependency ownership. On a populated workstation those checks can exceed
+    # three minutes. Keep a single bounded budget, including all child cleanup.
+    seconds = 360 if args.command in ('install-dependencies', 'apply', 'rollback') else 180
+    runner = processes.Runner(seconds=seconds)
+    print(f'native runtime: {args.command} started (limit {seconds}s)', file=sys.stderr, flush=True)
     for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(number, runner.cancel)
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
@@ -674,6 +679,7 @@ def main():
                 manager.rollback(args.transaction, allow_unpublished=args.allow_unpublished)
             else:
                 getattr(manager, args.command)(args.transaction)
+        print(f'native runtime: {args.command} completed', file=sys.stderr, flush=True)
     except (OSError, ValueError, RuntimeError) as error:
         parser.exit(1, 'native runtime refused: ' + str(error) +
                     '\nRecovery records are retained under /' + BASE + '.\n')
