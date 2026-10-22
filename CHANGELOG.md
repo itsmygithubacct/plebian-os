@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Include live pane/tab inventory routing, receipt-bound completion of staged
+  agent messages, and exact reasoning-effort settings for Codex launches.
+- Reuse unchanged interactive model licence acceptances on retry, and resolve
+  catalog-pinned model converters for installations outside the OS image.
+
 - Include AccountsService for LightDM user discovery. Deliver the optional
   NVIDIA driver helper through both ISO installation and transactional updates,
   without automatically installing a proprietary driver.
