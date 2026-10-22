@@ -36,6 +36,8 @@ jobs:
           fetch ../kilix https://github.com/itsmygithubacct/kilix.git "$kilix_ref"
           content_ref="$(git -C ../kilix rev-parse "$kilix_ref:third_party/kilix-content")"
           fetch ../kilix-content https://github.com/itsmygithubacct/kilix-content.git "$content_ref"
+          needle_ref="$(python3 -c 'import json; from pathlib import Path; c=json.loads(Path("../kilix-content/src/kilix_content/catalog/plebian.json").read_text()); print(next(x["source"]["ref"] for x in c["content"] if x["id"] == "kilix-needle"))')"
+          fetch ../kilix-needle https://github.com/itsmygithubacct/kilix-needle.git "$needle_ref"
           fetch ../kilix-voice https://github.com/itsmygithubacct/kilix-voice.git "$voice_ref"
           # The model compliance carrier's producing interfaces
           # (tests/test_model_compliance_carrier.py AC-1, AC-3, AC-4).

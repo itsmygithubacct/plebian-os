@@ -5,4 +5,4 @@ alphacephei.com and verified against the pinned digests before installation.
 No install route downloads it until a kilix-license receipt covers it:
 The model catalog shows the licence and records the receipt, and
 The speech install command, voice installer and Bonsai pull command first ask
-`kilix-stt --check-licence` (kilix-voice e970747e21da8a417149464ec71ad5fdb1d0c85d).
+`kilix-stt --check-licence` (kilix-voice 401b3efcc3801730b4b6d24cad81c9408c32df65).

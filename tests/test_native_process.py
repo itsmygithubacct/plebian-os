@@ -20,11 +20,21 @@ baseline_fds=len(os.listdir('/proc/self/fd'))
 timer=None
 original_fork_exec=subprocess._fork_exec
 try:
-    runner=m.Runner(seconds=0.2 if mode=='deadline' else 2)
+    # Leave enough time to start the actual process tree on a loaded host.
+    # The deadline case still has to finish, fully reaped, within 1.5 seconds.
+    runner=m.Runner(seconds=1 if mode=='deadline' else 2)
     if mode=='preexpired':runner.deadline=time.monotonic()-1
     if mode=='precanceled':runner.cancel()
     if mode=='cancel':
-        timer=threading.Timer(0.1,runner.cancel);timer.start()
+        # Wait for the fixture's two processes before testing their cleanup.
+        # A fixed startup delay can cancel before either exists on a busy host.
+        def cancel_started_fixture():
+            until=time.monotonic()+1
+            while time.monotonic()<until:
+                if log.exists() and len(log.read_text().splitlines())>=2:break
+                time.sleep(.002)
+            runner.cancel()
+        timer=threading.Thread(target=cancel_started_fixture);timer.start()
     if mode in ('escape-success','escape-error','deadline','cancel','fork-return','register-memory'):
         code="""
 import os,signal,sys,time
@@ -113,6 +123,32 @@ finally:
 
 
 class ProcessTests(unittest.TestCase):
+    def test_success_waits_for_a_finishing_status_logger(self):
+        # Model a normal logger draining its final input after its parent exits.
+        # It must finish and be reaped before the command can report success.
+        code = r'''
+import importlib.util, os, sys, time
+spec = importlib.util.spec_from_file_location('native_process', sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+m.enable_subreaper()
+child = """
+import os, time
+if os.fork() == 0:
+    time.sleep(0.15)
+    print('drained', flush=True)
+os._exit(0)
+"""
+start = time.monotonic()
+result = m.Runner(seconds=3).run(['/usr/bin/python3', '-I', '-B', '-c', child])
+assert result == (0, b'drained\n', b''), result
+assert time.monotonic() - start >= 0.15
+assert m.children() == set()
+'''
+        result = subprocess.run(['/usr/bin/python3', '-I', '-B', '-c', code, str(MODULE)],
+                                capture_output=True, timeout=6)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
     def run_case(self, mode):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

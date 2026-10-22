@@ -54,6 +54,7 @@ class Runner:
         process = None
         poller = None
         failure = None
+        drain_deadline = None
         try:
             poller = selectors.DefaultSelector()
             output = [bytearray(), bytearray()]
@@ -76,13 +77,19 @@ class Runner:
                         poller.unregister(key.fileobj)
                 code = process.poll()
                 if code is not None:
+                    # Package status loggers can still be consuming their last
+                    # input when dpkg exits. Allow a bounded drain, continuing
+                    # the original deadline, cancellation and ownership checks.
+                    if drain_deadline is None:
+                        drain_deadline = min(self.deadline, time.monotonic() + 1)
                     remaining = children() - before
                     for pid in remaining:
                         os.waitpid(pid, os.WNOHANG)
                     remaining = children() - before
-                    if remaining:
-                        raise CommandFailed('native command left an owned descendant')
-                    if not poller.get_map():
+                    if remaining and time.monotonic() >= drain_deadline:
+                        raise CommandFailed('native command left an owned descendant: ' +
+                                            Path(argv[0]).name)
+                    if not remaining and not poller.get_map():
                         break
             self.check()
             guard()

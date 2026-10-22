@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Include classifier-routed `kilix ask` and `kilix ask --voice`, the Ask Kilix
+  desktop entry points, and the matching Needle catalog selection. Preserve
+  desktop actions, managed sessions, native Windows support and reviewed voice
+  cleanup fixes in the same release. Verify routing in the selected source pins.
+
 - Add managed coding sessions with exact launch settings, explicit folder trust,
   focus-preserving panes, private run logs and cancellation. Fresh installs and
   updates deliver `kilix-session` alongside the `kilix session` host verb.
