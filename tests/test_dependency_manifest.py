@@ -49,6 +49,7 @@ DESKTOP_CAPTURE_PACKAGES = {
     "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gir1.2-gst-plugins-base-1.0", "gir1.2-gtk-3.0", "python3-gi-cairo",
 }
 DESKTOP_SERVICE_PACKAGES = {
+    "accountsservice",
     "xss-lock", "i3lock", "libxss1", "libx11-6", "libxres1", "xfce4-power-manager", "xfconf", "lxpolkit",
     "blueman", "pulseaudio-module-bluetooth", "udisks2", "udiskie", "gnome-disk-utility",
     "cups", "cups-client", "system-config-printer", "system-config-printer-udev",

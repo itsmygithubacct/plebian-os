@@ -1848,6 +1848,7 @@ for native_module in native_package.py native_state.py native_process.py native_
 done
 cp "$HERE/provision/plebian-os-update.sh"        "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-select-closure.sh" "$EXTRACT/plebian-os/"
+cp "$HERE/provision/plebian-os-nvidia-driver" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-record-installed-user" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-apt-snapshot-generator" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-installer-sources-digest" "$EXTRACT/plebian-os/"

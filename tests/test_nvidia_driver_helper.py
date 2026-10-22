@@ -7,6 +7,7 @@ refuses rather than installing a driver that cannot drive the card it found.
 import os
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -16,6 +17,32 @@ PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 
 
 class HelperShipsAsAnOptionalTool(unittest.TestCase):
+    def test_iso_and_late_command_deliver_the_executable(self):
+        """Run the actual media-copy and target-copy commands in a fake image."""
+        name = "plebian-os-nvidia-driver"
+        remaster = (ROOT / "build/remaster-iso.sh").read_text()
+        media_commands = [line for line in remaster.splitlines()
+                          if line.startswith("cp ") and name in line]
+        self.assertEqual(len(media_commands), 1)
+        preseed = (ROOT / "preseed/preseed.cfg").read_text()
+        late = preseed.split("d-i preseed/late_command string", 1)[1]
+        target_commands = [line.strip().removesuffix("\\")
+                           for line in late.splitlines() if name in line]
+        self.assertTrue(target_commands, "helper absent from installed image")
+        with tempfile.TemporaryDirectory() as td:
+            media, target = Path(td) / "media", Path(td) / "target"
+            (media / "plebian-os").mkdir(parents=True)
+            (target / "usr/local/bin").mkdir(parents=True)
+            script = "\n".join(media_commands + target_commands)
+            script = script.replace("/cdrom/", '"$EXTRACT"/').replace(
+                "/target/", '"$TARGET"/')
+            subprocess.run(["bash", "-euc", script], check=True,
+                           env={**os.environ, "HERE": str(ROOT),
+                                "EXTRACT": str(media), "TARGET": str(target)})
+            installed = target / "usr/local/bin" / name
+            self.assertEqual(installed.read_bytes(), HELPER.read_bytes())
+            self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
+
     def test_helper_exists_and_is_executable(self):
         self.assertTrue(HELPER.is_file(), f"{HELPER} is missing")
         self.assertTrue(os.access(HELPER, os.X_OK), f"{HELPER} is not executable")

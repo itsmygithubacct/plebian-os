@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Include AccountsService for LightDM user discovery. Deliver the optional
+  NVIDIA driver helper through both ISO installation and transactional updates,
+  without automatically installing a proprietary driver.
+
 - Include classifier-routed `kilix ask` and `kilix ask --voice`, the Ask Kilix
   desktop entry points, and the matching Needle catalog selection. Preserve
   desktop actions, managed sessions, native Windows support and reviewed voice

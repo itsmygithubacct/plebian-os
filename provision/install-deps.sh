@@ -128,7 +128,7 @@ uv_version_matches_pin() {
 # the Debian install; re-listing them here keeps this a complete, self-standing
 # dependency manifest.
 DEP_GROUPS=(
-    "X + display manager + window manager|xserver-xorg xinit lightdm openbox x11-xserver-utils x11-utils xterm"
+    "X + display manager + window manager|xserver-xorg xinit lightdm accountsservice openbox x11-xserver-utils x11-utils xterm"
     # X has no clipboard *store*: a selection is owned by a live client and
     # transferred on demand, so it ceases to exist when that client exits.
     # Full desktops hide this with a clipboard manager; a bare openbox

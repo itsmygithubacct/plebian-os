@@ -41,6 +41,7 @@ SOURCES = {
     **{name: 'provision/' + name for name in NATIVE},
     'plebian-os-qt-runtime': 'provision/plebian-os-qt-runtime',
     'plebian-os-mpv-runtime': 'provision/plebian-os-mpv-runtime',
+    'plebian-os-nvidia-driver': 'provision/plebian-os-nvidia-driver',
 }
 
 
@@ -86,7 +87,7 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
                 'NATIVE_CHECKOUT': str(self.checkout), 'NATIVE_STAGE': str(target)})
         return result, target
 
-    def test_exact_staged_bytes_modes_and_all_twenty_names(self):
+    def test_exact_staged_bytes_modes_and_all_helper_names(self):
         result, stage = self.stage('valid')
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         self.assertEqual(set(p.name for p in stage.iterdir()), set(SOURCES))

@@ -1100,6 +1100,7 @@ paths=(
     /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
+    /usr/local/bin/plebian-os-nvidia-driver
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
@@ -1271,6 +1272,7 @@ paths=(
     /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
     /usr/local/bin/plebian-os-update
     /usr/local/bin/plebian-os-select-closure
+    /usr/local/bin/plebian-os-nvidia-driver
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
@@ -3500,6 +3502,7 @@ stage_and_validate_os_layer() {
         "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2"
         "$prov/lightdm-gtk-greeter.conf"
         "$prov/plebian-os-select-closure.sh"
+        "$prov/plebian-os-nvidia-driver"
     )
     for file in "${required[@]}"; do
         [ -f "$file" ] || die "OS-layer checkout is incomplete; required file missing: $file"
@@ -3545,10 +3548,13 @@ stage_and_validate_os_layer() {
     install -m 0644 "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" "$stage/COPYING.GPL-2"
     install -m 0644 "$prov/lightdm-gtk-greeter.conf" "$stage/lightdm-gtk-greeter.conf"
     install -m 0755 "$prov/plebian-os-select-closure.sh" "$stage/plebian-os-select-closure"
+    [ ! -L "$prov/plebian-os-nvidia-driver" ] || die "unsafe NVIDIA driver helper symlink"
+    install -m 0755 "$prov/plebian-os-nvidia-driver" "$stage/plebian-os-nvidia-driver"
 
     for file in "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
         "$stage/plebian-os-select-closure" \
+        "$stage/plebian-os-nvidia-driver" \
         "$stage/plebian-os-native-runtime"; do
         bash -n "$file" || die "staged OS-layer shell validation failed: $file"
     done
@@ -3734,6 +3740,7 @@ names=(
     native_runtime.py
     plebian-os-qt-runtime
     plebian-os-mpv-runtime
+    plebian-os-nvidia-driver
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -3760,9 +3767,10 @@ dests=(
     /usr/local/libexec/plebian-os/native_runtime.py
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
+    /usr/local/bin/plebian-os-nvidia-driver
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -3938,7 +3946,7 @@ for i in "${!new_paths[@]}"; do
 done
 # Recheck executable syntax before any installed file is backed up or replaced.
 for file in "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}"; do
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[24]}"; do
     bash -n "$file"
 done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
@@ -4069,6 +4077,7 @@ self_update_os_layer() {
         native_runtime.py
         plebian-os-qt-runtime
         plebian-os-mpv-runtime
+        plebian-os-nvidia-driver
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"

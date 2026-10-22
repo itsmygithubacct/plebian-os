@@ -198,6 +198,7 @@ class OsLayerSyntaxValidationTests(unittest.TestCase):
         for name, invalid in (
             ("plebian-os-native-runtime", "#!/bin/sh\nif then\n"),
             ("plebian-os-update", "#!/bin/bash\nif then\n"),
+            ("plebian-os-nvidia-driver", "#!/bin/bash\nif then\n"),
             ("plebian-os-install-kilix-ollama-runtime", "def broken(\n"),
             ("plebian-os-qt-runtime", "def broken(\n"),
             ("plebian-os-mpv-runtime", "def broken(\n"),
@@ -209,7 +210,7 @@ class OsLayerSyntaxValidationTests(unittest.TestCase):
                 result = self._run(stage)
                 self.assertNotEqual(result.returncode, 0, name)
                 self.assertIn(name, result.stderr)
-                if name in ("plebian-os-native-runtime", "plebian-os-update"):
+                if name in ("plebian-os-native-runtime", "plebian-os-update", "plebian-os-nvidia-driver"):
                     self.assertNotEqual(self._run(stage, root=False).returncode, 0, name)
 
 
