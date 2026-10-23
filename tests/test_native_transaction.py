@@ -22,6 +22,7 @@ spec.loader.exec_module(runtime)
 
 
 class SyntheticDpkg:
+    architecture = "amd64"
     def __init__(self, populations):
         self.populations = populations
         self.installed = None

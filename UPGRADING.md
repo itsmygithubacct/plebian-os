@@ -18,6 +18,12 @@ ARM64 artifacts selected together. The selector refuses this closure on ARM64
 before changing installed release configuration, including during a dry run.
 Provisioning and updates also refuse it before their stack transactions.
 Disabling dictation or Waydroid does not bypass required runtime qualification.
+The native package inspector accepts an explicit `amd64` or `arm64` selection;
+the installed helper obtains that selection from dpkg. ARM64 offers must carry
+`tools/debian-dependencies-arm64.json` in their exact source archive. Package
+architecture, loader identity, library owners and rollback archives must match
+the native selection. This support does not supply missing ARM64 dependency
+packages or converter artifacts.
 The current Waydroid first-use closure remains AMD64-only. The optional
 diarization converter, Kilix Ollama runtime and Vulkan TTS installer also
 currently require AMD64; their ARM64 availability must be qualified separately.

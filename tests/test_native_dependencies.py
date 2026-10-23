@@ -14,16 +14,15 @@ import unittest
 
 from test_native_transaction import runtime
 
-LIBDIR = 'usr/lib/x86_64-linux-gnu/'
-
-
 @unittest.skipUnless(shutil.which('dpkg'), 'dpkg --compare-versions is required')
 class DependencyPolicyTests(unittest.TestCase):
+    architecture = "amd64"
+    libdir = "usr/lib/x86_64-linux-gnu/"
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        (self.root / LIBDIR).mkdir(parents=True)
+        (self.root / self.libdir).mkdir(parents=True)
         (self.root / 'var/lib/dpkg/info').mkdir(parents=True)
         self.installed = {}      # package -> version
         self.state = {}          # package -> dpkg status line
@@ -33,7 +32,7 @@ class DependencyPolicyTests(unittest.TestCase):
         self.owner = {}          # /absolute path -> package
         self.tree = runtime.state.Tree(self.root, uid=os.getuid())
         self.addCleanup(self.tree.close)
-        self.backend = runtime.Dpkg(self.tree, None)
+        self.backend = runtime.Dpkg(self.tree, None, architecture=self.architecture)
         self.backend.run = self.fake_dpkg
         self.backend.guard = lambda: None
         self.backend.runner = type('Runner', (), {'check': staticmethod(lambda: None)})()
@@ -54,26 +53,26 @@ class DependencyPolicyTests(unittest.TestCase):
             name = query.partition(':')[0]
             # The minimum policy qualifies every status query; the exact policy
             # of the previous package is deliberately left as it shipped.
-            self.assertIn(query, (name + ':amd64', name))
+            self.assertIn(query, (name + ':' + self.architecture, name))
             self.queries.append(query)
             if name not in self.installed:
                 return 1, b'', f'dpkg-query: no packages found matching {query}\n'.encode()
             state = self.state.get(name, 'install ok installed')
-            return 0, f'{state}\n{self.installed[name]}\n{self.arch.get(name, "amd64")}\n'.encode(), b''
+            return 0, f'{state}\n{self.installed[name]}\n{self.arch.get(name, self.architecture)}\n'.encode(), b''
         raise AssertionError(argv)
 
     def ship(self, package, version, name, data, *, md5=None):
         self.installed[package] = version
-        path = self.root / LIBDIR / name
+        path = self.root / self.libdir / name
         path.write_bytes(data)
         path.chmod(0o644)
-        self.owner['/' + LIBDIR + name] = package + ':amd64'
-        sums = self.root / 'var/lib/dpkg/info' / (package + ':amd64.md5sums')
-        line = f'{md5 or hashlib.md5(data).hexdigest()}  {LIBDIR}{name}\n'
+        self.owner['/' + self.libdir + name] = package + ':' + self.architecture
+        sums = self.root / 'var/lib/dpkg/info' / (package + ':' + self.architecture + '.md5sums')
+        line = f'{md5 or hashlib.md5(data).hexdigest()}  {self.libdir}{name}\n'
         sums.write_text((sums.read_text() if sums.exists() else '') + line)
 
     def minimum(self, built='2.41-12+deb13u3'):
-        return {'dependencies': {'libc6': built},
+        return {'architecture': self.architecture, 'dependencies': {'libc6': built},
                 'runtime_libraries': {'libc.so.6': {'package': 'libc6', 'version': built,
                                                     'built': {'bytes': 5, 'sha256': '0' * 64}}}}
 
@@ -81,7 +80,7 @@ class DependencyPolicyTests(unittest.TestCase):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
         self.backend.dependencies(self.minimum())
         self.assertTrue(self.queries)
-        self.assertTrue(all(query.endswith(':amd64') for query in self.queries), self.queries)
+        self.assertTrue(all(query.endswith(':' + self.architecture) for query in self.queries), self.queries)
 
     def test_an_older_dependency_than_built_against_refuses(self):
         self.ship('libc6', '2.41-12+deb13u2', 'libc.so.6', b'older libc')
@@ -95,31 +94,31 @@ class DependencyPolicyTests(unittest.TestCase):
 
     def test_a_library_owned_by_another_package_refuses(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        self.owner['/' + LIBDIR + 'libc.so.6'] = 'impostor:amd64'
+        self.owner['/' + self.libdir + 'libc.so.6'] = 'impostor:' + self.architecture
         with self.assertRaisesRegex(Exception, 'not owned by its recorded package'):
             self.backend.dependencies(self.minimum())
 
     def test_an_unowned_library_refuses(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        del self.owner['/' + LIBDIR + 'libc.so.6']
+        del self.owner['/' + self.libdir + 'libc.so.6']
         with self.assertRaisesRegex(Exception, 'not owned by its recorded package'):
             self.backend.dependencies(self.minimum())
 
     def test_a_writable_or_linked_library_refuses(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        (self.root / LIBDIR / 'libc.so.6').chmod(0o666)
+        (self.root / self.libdir / 'libc.so.6').chmod(0o666)
         # The bounded reader refuses it before the ownership check does.
         with self.assertRaisesRegex(Exception, 'root-owned file|trusted single-link regular file'):
             self.backend.dependencies(self.minimum())
-        (self.root / LIBDIR / 'libc.so.6').unlink()
-        (self.root / LIBDIR / 'real').write_bytes(b'patched libc')
-        (self.root / LIBDIR / 'libc.so.6').symlink_to('real')
+        (self.root / self.libdir / 'libc.so.6').unlink()
+        (self.root / self.libdir / 'real').write_bytes(b'patched libc')
+        (self.root / self.libdir / 'libc.so.6').symlink_to('real')
         with self.assertRaisesRegex(Exception, 'root-owned file'):
             self.backend.dependencies(self.minimum())
 
     def test_a_package_without_checksums_refuses(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        (self.root / 'var/lib/dpkg/info/libc6:amd64.md5sums').unlink()
+        (self.root / f'var/lib/dpkg/info/libc6:{self.architecture}.md5sums').unlink()
         with self.assertRaisesRegex(Exception, 'no dpkg checksums'):
             self.backend.dependencies(self.minimum())
 
@@ -129,13 +128,13 @@ class DependencyPolicyTests(unittest.TestCase):
 
     def test_a_path_with_two_owners_refuses(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        self.owner['/' + LIBDIR + 'libc.so.6'] = 'libc6:amd64, other:amd64'
+        self.owner['/' + self.libdir + 'libc.so.6'] = f'libc6:{self.architecture}, other:{self.architecture}'
         with self.assertRaisesRegex(Exception, 'not owned by its recorded package'):
             self.backend.dependencies(self.minimum())
 
     def test_a_checksum_list_without_the_library_refuses(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        (self.root / 'var/lib/dpkg/info/libc6:amd64.md5sums').write_text('0' * 32 + '  usr/lib/other.so\n')
+        (self.root / f'var/lib/dpkg/info/libc6:{self.architecture}.md5sums').write_text('0' * 32 + '  usr/lib/other.so\n')
         with self.assertRaisesRegex(Exception, 'differs from its package'):
             self.backend.dependencies(self.minimum())
 
@@ -161,14 +160,14 @@ class DependencyPolicyTests(unittest.TestCase):
 
     def test_a_diversion_record_beside_the_owner_is_not_an_owner(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        path = '/' + LIBDIR + 'libc.so.6'
+        path = '/' + self.libdir + 'libc.so.6'
         self.extra_search[path] = f'diversion by libc6 from: {path}\ndiversion by libc6 to: {path}.usr-is-merged\n'
         self.backend.dependencies(self.minimum())
 
     def test_the_minimum_policy_checks_the_loader_closure_it_records(self):
-        real = Path('/usr/lib/x86_64-linux-gnu/libc.so.6')
+        real = Path('/') / self.libdir / 'libc.so.6'
         if not real.exists():
-            self.skipTest('needs an amd64 libc')
+            self.skipTest('needs native ' + self.architecture + ' libc')
         metadata = self.minimum()
         metadata.update(content_commit='c' * 40, content_bundle_sha256='d' * 64)
         replies = {}
@@ -187,30 +186,42 @@ class DependencyPolicyTests(unittest.TestCase):
         original = b'L' * 8192
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', original)
         self.backend.dependencies(self.minimum())    # the whole file is hashed
-        (self.root / LIBDIR / 'libc.so.6').write_bytes(original[:6000] + b'X' + original[6001:])
+        (self.root / self.libdir / 'libc.so.6').write_bytes(original[:6000] + b'X' + original[6001:])
         with self.assertRaisesRegex(Exception, 'differs from its package'):
             self.backend.dependencies(self.minimum())
 
     def test_the_architecture_qualified_checksums_are_preferred(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        (self.root / 'var/lib/dpkg/info/libc6.md5sums').write_text('0' * 32 + '  ' + LIBDIR + 'libc.so.6\n')
+        (self.root / 'var/lib/dpkg/info/libc6.md5sums').write_text('0' * 32 + '  ' + self.libdir + 'libc.so.6\n')
         self.backend.dependencies(self.minimum())
-        (self.root / 'var/lib/dpkg/info/libc6:amd64.md5sums').write_text('0' * 32 + '  ' + LIBDIR + 'libc.so.6\n')
+        (self.root / f'var/lib/dpkg/info/libc6:{self.architecture}.md5sums').write_text('0' * 32 + '  ' + self.libdir + 'libc.so.6\n')
         (self.root / 'var/lib/dpkg/info/libc6.md5sums').unlink()
         with self.assertRaisesRegex(Exception, 'differs from its package'):
             self.backend.dependencies(self.minimum())
 
     def test_a_foreign_architecture_owner_refuses(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
-        self.owner['/' + LIBDIR + 'libc.so.6'] = 'libc6:i386'
+        self.owner['/' + self.libdir + 'libc.so.6'] = 'libc6:i386'
         with self.assertRaisesRegex(Exception, 'not owned by its recorded package'):
             self.backend.dependencies(self.minimum())
 
     def test_the_exact_policy_of_the_previous_package_is_unchanged(self):
         self.ship('libc6', '2.41-12+deb13u4', 'libc.so.6', b'patched libc')
         with self.assertRaisesRegex(Exception, 'exact installed selection'):
-            self.backend.dependencies({'dependencies': {'libc6': '2.41-12+deb13u3'},
+            self.backend.dependencies({'architecture': self.architecture, 'dependencies': {'libc6': '2.41-12+deb13u3'},
                                        'runtime_files': {}})
+
+
+class Arm64DependencyPolicyTests(DependencyPolicyTests):
+    architecture = "arm64"
+    libdir = "usr/lib/aarch64-linux-gnu/"
+
+    def test_foreign_artifact_refuses_before_query(self):
+        metadata = self.minimum()
+        metadata['architecture'] = 'amd64'
+        with self.assertRaisesRegex(Exception, 'architecture differs'):
+            self.backend.dependencies(metadata)
+        self.assertEqual(self.queries, [])
 
 
 if __name__ == '__main__':
