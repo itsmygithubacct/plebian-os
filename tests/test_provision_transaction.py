@@ -78,6 +78,118 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         )
         return setup, paths
 
+    def _accounts_layout(self, root: Path):
+        parent = root / "var/lib/AccountsService"
+        users = parent / "users"
+        users.mkdir(parents=True)
+        parent.chmod(0o775)
+        users.chmod(0o700)
+        account = users / "sample"
+        account.write_text("[User]\nXSession=existing\n")
+        account.chmod(0o600)
+        return parent, users, account
+
+    def test_package_directory_normalization_allows_snapshot_and_rollback(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parent, users, account = self._accounts_layout(root)
+            state = root / "state"
+            state.mkdir()
+            q = self._quoted
+            setup = (
+                f"PROVISION_ROOT_TRANSACTION_BASE={q(state)}\n"
+                f"PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=({q(root)} {q(root / 'var')} {q(root / 'var/lib')})\n"
+                f"PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=({q(parent)} {q(users)})\n"
+                f"PROVISION_ROOT_TRANSACTION_PATHS=({q(account)})\n"
+                f"SUDOERS={q(root / 'temporary-sudoers')}\n"
+                "TARGET_USER=\n"
+            )
+            refused = self._run(setup + "begin_provision_root_transaction\n")
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("unsafe provisioning transaction directory", refused.stderr)
+            result = self._run(
+                setup + f"normalize_accounts_service_package_directory {q(root)}\n"
+                + "begin_provision_root_transaction\n"
+                + f"printf 'changed\\n' > {q(account)}\nexit 41\n"
+            )
+            self.assertEqual(result.returncode, 41, result.stderr)
+            self.assertEqual(parent.stat().st_mode & 0o7777, 0o755)
+            self.assertEqual(users.stat().st_mode & 0o7777, 0o700)
+            self.assertEqual(account.read_text(), "[User]\nXSession=existing\n")
+            self.assertEqual(account.stat().st_mode & 0o7777, 0o600)
+            self.assertEqual(list(state.iterdir()), [])
+
+    def test_package_directory_normalization_dry_run_preserves_mode(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            parent, _, _ = self._accounts_layout(root)
+            result = self._run(
+                "DRY_RUN=1\n"
+                + f"normalize_accounts_service_package_directory {self._quoted(root)}\n"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(parent.stat().st_mode & 0o7777, 0o775)
+            self.assertIn("would normalize", result.stdout)
+
+    def test_absent_package_directory_is_not_created_by_normalization(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "var/lib").mkdir(parents=True)
+            result = self._run(
+                f"normalize_accounts_service_package_directory {self._quoted(root)}\n"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / "var/lib/AccountsService").exists())
+
+    def test_package_directory_normalization_preserves_safe_modes(self):
+        for mode in (0o700, 0o750, 0o755):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                parent, users, account = self._accounts_layout(root)
+                parent.chmod(mode)
+                result = self._run(
+                    f"normalize_accounts_service_package_directory {self._quoted(root)}\n"
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(parent.stat().st_mode & 0o7777, mode)
+                self.assertEqual(users.stat().st_mode & 0o7777, 0o700)
+                self.assertEqual(account.read_text(), "[User]\nXSession=existing\n")
+
+    def test_package_directory_normalization_refuses_other_writable_modes(self):
+        for mode in (0o777, 0o770, 0o776, 0o2775):
+            with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                parent, _, _ = self._accounts_layout(root)
+                parent.chmod(mode)
+                result = self._run(
+                    f"normalize_accounts_service_package_directory {self._quoted(root)}\n"
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(parent.stat().st_mode & 0o7777, mode)
+
+    def test_package_directory_normalization_refuses_links_and_writable_ancestors(self):
+        for replacement in ("package-link", "parent-link", "parent-writable"):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                parent, _, _ = self._accounts_layout(root)
+                if replacement == "package-link":
+                    moved = parent.with_name("saved")
+                    parent.rename(moved)
+                    parent.symlink_to("saved")
+                elif replacement == "parent-link":
+                    moved = root / "saved-lib"
+                    (root / "var/lib").rename(moved)
+                    (root / "var/lib").symlink_to(moved)
+                else:
+                    (root / "var/lib").chmod(0o775)
+                    moved = parent
+                result = self._run(
+                    f"normalize_accounts_service_package_directory {self._quoted(root)}\n"
+                )
+                self.assertNotEqual(result.returncode, 0)
+                real_package = moved / "AccountsService" if replacement == "parent-link" else moved
+                self.assertEqual(real_package.stat().st_mode & 0o7777, 0o775)
+
     def test_exit_failure_restores_files_links_modes_and_absence(self):
         with tempfile.TemporaryDirectory() as td:
             setup, paths = self._layout(Path(td))
@@ -260,13 +372,15 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         dependencies = source.rindex(
             'bash "$DEPS_SCRIPT" || die "dependency install failed'
         )
+        normalized = source.rindex("\nnormalize_accounts_service_package_directory\n")
         begun = source.rindex("\nbegin_provision_root_transaction\n")
         first_file = source.rindex("\ninstall_no_beep_defaults\n")
         pleb_install = source.rindex('"$PLEB_DIR/bin/pleb" install')
         provenance = source.rindex("\nwrite_source_tool_manifest\n")
         committed = source.rindex("\ncommit_provision_root_transaction\n")
         cleaned = source.rindex("\ncleanup\ntrap - EXIT INT TERM HUP\n")
-        self.assertLess(dependencies, begun)
+        self.assertLess(dependencies, normalized)
+        self.assertLess(normalized, begun)
         self.assertLess(begun, first_file)
         self.assertLess(first_file, pleb_install)
         self.assertLess(pleb_install, provenance)

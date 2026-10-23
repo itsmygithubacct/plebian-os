@@ -1604,6 +1604,76 @@ validate_provision_transaction_directory() {
         && (( (8#$mode & 8#100) != 0 ))
 }
 
+# The optional root argument is used by sourced library fixtures only.
+# shellcheck disable=SC2120
+normalize_accounts_service_package_directory() {
+    local root=/ result
+    # Only library fixtures can relocate the fixed package path.
+    if [ "$#" != 0 ]; then
+        [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] && [ "$#" = 1 ] \
+            || die "AccountsService package normalization has a fixed root"
+        root="$1"
+    fi
+    [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] \
+        || [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+        || die "AccountsService package normalization requires root"
+    # Debian supplies this parent as root:root 0775. Tighten that exact package
+    # mode during dependency setup, before taking the root-files snapshot. Like
+    # the dependency installation itself, this normalization survives a later
+    # root-file rollback. Never relax the transaction's no-group-write guard.
+    result="$(python3 - "$root" "$DRY_RUN" "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" <<'ACCOUNTS_SERVICE_DIRECTORY'
+import os
+import stat
+import sys
+
+access = os.O_PATH if sys.argv[2] == "1" else os.O_RDONLY
+flags = access | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+owner = os.geteuid() if sys.argv[3] == "1" else 0
+group = 0 if owner == 0 else os.getegid()
+
+def protected(fd):
+    info = os.fstat(fd)
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid != owner or mode & 0o022 or not mode & 0o100:
+        raise ValueError("unsafe AccountsService package ancestor")
+
+fd = None
+try:
+    fd = os.open(sys.argv[1], flags)
+    protected(fd)
+    for component in ("var", "lib"):
+        previous = fd
+        fd = os.open(component, flags, dir_fd=previous)
+        os.close(previous)
+        protected(fd)
+    try:
+        package = os.open("AccountsService", flags, dir_fd=fd)
+    except FileNotFoundError:
+        sys.exit(0)  # Optional package path: do not create it before snapshot.
+    os.close(fd)
+    fd = package
+    info = os.fstat(fd)
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid == owner and info.st_gid == group and mode == 0o775:
+        if sys.argv[2] == "1":
+            print("would normalize AccountsService package directory mode 0775 -> 0755")
+        else:
+            os.fchmod(fd, 0o755)
+            protected(fd)
+            print("normalized AccountsService package directory mode 0775 -> 0755")
+    else:
+        protected(fd)
+except (OSError, ValueError) as error:
+    print("AccountsService package directory: " + str(error), file=sys.stderr)
+    sys.exit(1)
+finally:
+    if fd is not None:
+        os.close(fd)
+ACCOUNTS_SERVICE_DIRECTORY
+    )" || die "could not validate AccountsService package directory"
+    [ -z "$result" ] || log "$result"
+}
+
 prepare_provision_root_transaction_paths() {
     local account_path path
     [ -n "${TARGET_USER:-}" ] || return 0
@@ -6141,6 +6211,7 @@ if [ "$DRY_RUN" = 1 ]; then
 else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
+normalize_accounts_service_package_directory
 begin_provision_root_transaction
 install_no_beep_defaults
 # Runs after the dependency install above, because that is what brings the
