@@ -200,6 +200,43 @@ verify_installed_target_ref() {
         test "$installed_ref" = "$selected_ref"
 }
 
+# Freeze the successful guest state for the host controller's post-reboot check.
+# Shell quoting binds literal paths/values; no guest input is evaluated as code.
+write_reboot_verifier() {
+    local output="$1" component ref_key checkout_dir selected_ref path expected kind actual_path
+    {
+        printf '#!/usr/bin/env bash\nset -euo pipefail\n'
+        declare -f path_fingerprint engine_fingerprint
+        printf 'test "$(cat /etc/machine-id)" = %q\n' "$(cat /etc/machine-id)"
+        printf 'test "$(%q update --show)" = %q\n' "$pleb_bin" "$(cat "$report/show-after.txt")"
+        for component in "${target_components[@]}"; do
+            case "$component" in
+                pleb) ref_key=PLEB_REF; checkout_dir="$pleb_dir" ;;
+                kilix) ref_key=KILIX_REF; checkout_dir="$kilix_dir" ;;
+                os) ref_key=PLEBIAN_OS_REF; checkout_dir="$os_dir" ;;
+                kilix95) ref_key=KILIX95_REF; checkout_dir="$kilix95_dir" ;;
+            esac
+            selected_ref="$(sed -n "s/^  $ref_key=\([^ ]*\).*/\1/p" "$report/show-after.txt" | head -n 1)"
+            [[ "$selected_ref" =~ ^[0-9a-f]{40}$ ]] || return 1
+            printf 'test "$(git -C %q rev-parse --verify HEAD)" = %q\n' "$checkout_dir" "$selected_ref"
+        done
+        for path in "$session_env" "$closure_env" "$settings_file"; do
+            printf 'test "$(path_fingerprint %q)" = %q\n' "$path" "$(path_fingerprint "$path")"
+        done
+        printf 'test "$(engine_fingerprint %q %q)" = %q\n' \
+            "$engine_build" "$engine_state" "$(engine_fingerprint "$engine_build" "$engine_state")"
+        while IFS=$'\t' read -r path expected kind; do
+            if [ -n "${image_resolved_paths[$path]:-}" ]; then
+                actual_path="${image_resolved_paths[$path]}"
+            else
+                actual_path="$(preserved_sentinel_path "$path" "$expected" "$kind")" || return 1
+            fi
+            printf 'test -f %q && test ! -L %q\n' "$actual_path" "$actual_path"
+            printf 'test "$(sha256sum -- %q | cut -d " " -f 1)" = %q\n' "$actual_path" "$expected"
+        done <"$sentinels"
+    } >"$output"
+}
+
 preserved_sentinel_path() {
     local path="$1" expected="$2" kind="$3" candidate
     local -a candidates=("$path")
@@ -550,10 +587,14 @@ must "single-command-hop-succeeds" "pleb update --to $target; exit=$success_rc" 
 "$pleb_bin" update --show >"$report/show-after.txt" 2>"$report/show-after.stderr"
 selected="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-after.txt" | head -n 1)"
 must "selected-release-is-target" "$selected/$target" test "$selected" = "$target"
-for component in pleb kilix; do
+target_components=(pleb kilix)
+if [ "$shape" = image ]; then target_components+=(os kilix95); fi
+for component in "${target_components[@]}"; do
     case "$component" in
         pleb) ref_key=PLEB_REF; checkout_dir="$pleb_dir" ;;
         kilix) ref_key=KILIX_REF; checkout_dir="$kilix_dir" ;;
+        os) ref_key=PLEBIAN_OS_REF; checkout_dir="$os_dir" ;;
+        kilix95) ref_key=KILIX95_REF; checkout_dir="$kilix95_dir" ;;
     esac
     selected_ref="$(sed -n "s/^  $ref_key=\\([^ ]*\\).*/\\1/p" "$report/show-after.txt" | head -n 1)"
     verify_installed_target_ref "$component" "$checkout_dir" "$selected_ref"
@@ -606,6 +647,12 @@ if [ "$shape" = standalone ]; then
     must "standalone-still-has-no-os-source" "$source_home/plebian-os" test ! -e "$source_home/plebian-os"
     must "standalone-still-has-no-os-updater" "/usr/local/bin/plebian-os-update" test ! -e /usr/local/bin/plebian-os-update
 fi
+
+
+write_reboot_verifier "$report/verify-after-reboot.sh" \
+    || die "could not bind the post-reboot verifier"
+must "post-reboot-verifier-matches-successful-state" "exact closure, installed refs, engine and sentinels" \
+    bash "$report/verify-after-reboot.sh"
 
 home_manifest "$report/home-after-success.tsv"
 diff -u "$report/home-before.tsv" "$report/home-after-success.tsv" \

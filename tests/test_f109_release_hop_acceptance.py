@@ -157,6 +157,62 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
                         path.write_bytes(original)
                     self.assertEqual(fingerprint(), baseline)
 
+    def test_reboot_verifier_rejects_same_version_checkout_and_sentinel_drift(self):
+        source = RUNNER.read_text()
+        helpers = []
+        for name in ("path_fingerprint", "engine_fingerprint", "preserved_sentinel_path",
+                     "write_reboot_verifier"):
+            helper = source[source.index(name + "() {"):]
+            helpers.append(helper[:helper.index("\n}\n") + 3])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            git = ["git", "-C", td]
+            subprocess.run(git + ["init", "-q"], check=True)
+            (root / "VERSION").write_text("0.2.2\n")
+            subprocess.run(git + ["add", "VERSION"], check=True)
+            refs = []
+            for message in ("old", "target"):
+                subprocess.run(git + ["-c", "user.name=test", "-c",
+                                      "user.email=test@example.invalid", "commit", "-qm",
+                                      message, "--allow-empty"], check=True)
+                refs.append(subprocess.check_output(git + ["rev-parse", "HEAD"], text=True).strip())
+            show = root / "show-after.txt"
+            show.write_text(f"  PLEBIAN_OS_VERSION=0.2.2\n  PLEB_REF={refs[1]}\n  KILIX_REF={refs[1]}\n"
+                            f"  PLEBIAN_OS_REF={refs[1]}\n  KILIX95_REF={refs[1]}\n")
+            os_source = root / "os-source"
+            subprocess.run(["git", "clone", "-q", "--no-hardlinks", td, str(os_source)], check=True)
+            pleb = root / "pleb"
+            pleb.write_text('#!/bin/sh\ncat "$(dirname "$0")/show-after.txt"\n')
+            pleb.chmod(0o700)
+            sentinel = root / "operator's file"
+            sentinel.write_bytes(b"operator bytes\x00\xff")
+            sentinels = root / "sentinels.tsv"
+            sentinels.write_text(f"{sentinel}\t{hashlib.sha256(sentinel.read_bytes()).hexdigest()}\tuntracked\n")
+            script = "\n".join(helpers) + r'''
+report="$1"; pleb_bin="$report/pleb"; pleb_dir="$report"; kilix_dir="$report"
+session_env="$report/session"; closure_env="$report/closure"; settings_file="$report/settings"
+engine_build="$report/build"; engine_state="$report/state"; sentinels="$report/sentinels.tsv"
+target_components=(pleb kilix os kilix95); declare -A image_resolved_paths=()
+os_dir="$report/os-source"; kilix95_dir="$report"
+write_reboot_verifier "$report/verify.sh"
+'''
+            subprocess.run(["bash", "-euo", "pipefail", "-c", script, "bash", td], check=True)
+
+            def verify():
+                return subprocess.run(["bash", str(root / "verify.sh")], capture_output=True).returncode
+
+            self.assertEqual(verify(), 0)
+            subprocess.run(git + ["checkout", "-q", "--detach", refs[0]], check=True)
+            self.assertNotEqual(verify(), 0, "same VERSION must not hide a stale checkout")
+            subprocess.run(git + ["checkout", "-q", "--detach", refs[1]], check=True)
+            self.assertEqual(verify(), 0)
+            subprocess.run(["git", "-C", str(os_source), "checkout", "-q", "--detach", refs[0]], check=True)
+            self.assertNotEqual(verify(), 0, "image OS revision must also survive reboot")
+            subprocess.run(["git", "-C", str(os_source), "checkout", "-q", "--detach", refs[1]], check=True)
+            self.assertEqual(verify(), 0)
+            sentinel.write_bytes(b"changed")
+            self.assertNotEqual(verify(), 0)
+
     def test_selected_target_cannot_hide_an_unchanged_installed_checkout(self):
         source = RUNNER.read_text()
         helper = source[source.index("verify_installed_target_ref() {"):]

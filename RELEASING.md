@@ -579,7 +579,11 @@ release upgrade, physical or human acceptance gate. Retain the report and
    are distinguished from the standalone lane's automatic preservation.
    The controller retrieves and verifies both
    `SHA256SUMS`, reboots each successful guest, and verifies the target release
-   after reboot. Retain the combined report and both 2/2 guest evidence sets;
+   after reboot. The checksummed guest verifier also rechecks the exact installed
+   source commits (all four on an image), selected closure, engine selectors and
+   payloads, canonical engine stamp, configuration and all preservation sentinels.
+   A matching version string alone cannot pass the reboot gate.
+   Retain the combined report and both 2/2 guest evidence sets;
    any runner, retrieval, checksum, reboot, or post-reboot failure leaves that
    lane at 0/1.
 7. Re-check that every local tag resolves to the reviewed commit and that all
