@@ -35,6 +35,37 @@ def values(path: Path) -> dict[str, str]:
 
 
 class WaydroidReleaseTests(unittest.TestCase):
+    def test_application_requires_an_exact_commit_even_outside_release_mode(self):
+        source = (ROOT / "provision/plebian-os-provision.sh").read_text()
+        function = _shell_function(source, "install_waydroid_application")
+        for ref, branch, expected in (("main", "", 1), ("a" * 40, "main", 1),
+                                      ("a" * 40, "", 0)):
+            with self.subTest(ref=ref, branch=branch):
+                result = subprocess.run(
+                    ["bash", "-c", "set -eu\n"
+                     "die() { echo \"$*\" >&2; exit 1; }\n"
+                     "log() { echo \"$*\"; }\n" + function +
+                     "\nINSTALL_WAYDROID=1 DRY_RUN=1 KILIX_WAYDROID_REF=$1 "
+                     "KILIX_WAYDROID_BRANCH=$2 install_waydroid_application\n",
+                     "test", ref, branch], capture_output=True, text=True)
+                self.assertEqual(result.returncode, expected, result.stderr)
+
+    def test_application_and_first_use_files_participate_in_both_transactions(self):
+        provision = (ROOT / "provision/plebian-os-provision.sh").read_text()
+        update = (ROOT / "provision/plebian-os-update.sh").read_text()
+        for path in ("/usr/local/bin/kilix-waydroid",
+                     "/usr/local/share/kilix-waydroid/source.tar",
+                     "/usr/local/share/kilix-waydroid/provenance.env",
+                     "/usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup",
+                     "/usr/lib/plebian-os/waydroid/waydroid-closure.env",
+                     "/usr/lib/plebian-os/waydroid/waydroid-closure.sha256"):
+            self.assertIn("    " + path + "\n", provision)
+            self.assertEqual(update.count("    " + path + "\n"), 2, path)
+        for name in ("__init__", "__main__", "cli", "first_use", "runtime", "sdk", "system"):
+            path = "/usr/local/lib/kilix-waydroid/kilix_waydroid/" + name + ".py"
+            self.assertIn("    " + path + "\n", provision)
+            self.assertEqual(update.count("    " + path + "\n"), 2, path)
+
     def test_runtime_closure_is_exact_and_bound_by_release_requirement(self):
         closure = values(CLOSURE)
         requirements = values(REQUIREMENTS_020)

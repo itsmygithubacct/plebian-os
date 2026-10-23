@@ -1127,6 +1127,19 @@ paths=(
     /etc/systemd/user/pipewire-pulse.socket
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
+    /usr/local/bin/kilix-waydroid
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/__init__.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/__main__.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/cli.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/first_use.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/runtime.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/sdk.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/system.py
+    /usr/local/share/kilix-waydroid/source.tar
+    /usr/local/share/kilix-waydroid/provenance.env
+    /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
+    /usr/lib/plebian-os/waydroid/waydroid-closure.env
+    /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
     /usr/local/bin/kilix-settings
     /usr/local/bin/kilix-temps
     /usr/local/bin/tmux-tui
@@ -1152,6 +1165,11 @@ paths=(
 managed_dirs=(
     /usr/local/lib
     /usr/local/lib/pleb
+    /usr/lib/plebian-os
+    /usr/lib/plebian-os/waydroid
+    /usr/local/lib/kilix-waydroid
+    /usr/local/lib/kilix-waydroid/kilix_waydroid
+    /usr/local/share/kilix-waydroid
     /usr/local/share/xdg-desktop-portal
     /usr/local/share/xdg-desktop-portal/portals
     /usr/local/share/dbus-1
@@ -1299,6 +1317,19 @@ paths=(
     /etc/systemd/user/pipewire-pulse.socket
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
+    /usr/local/bin/kilix-waydroid
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/__init__.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/__main__.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/cli.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/first_use.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/runtime.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/sdk.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/system.py
+    /usr/local/share/kilix-waydroid/source.tar
+    /usr/local/share/kilix-waydroid/provenance.env
+    /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
+    /usr/lib/plebian-os/waydroid/waydroid-closure.env
+    /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
     /usr/local/bin/kilix-settings
     /usr/local/bin/kilix-temps
     /usr/local/bin/tmux-tui
@@ -1324,6 +1355,11 @@ paths=(
 managed_dirs=(
     /usr/local/lib
     /usr/local/lib/pleb
+    /usr/lib/plebian-os
+    /usr/lib/plebian-os/waydroid
+    /usr/local/lib/kilix-waydroid
+    /usr/local/lib/kilix-waydroid/kilix_waydroid
+    /usr/local/share/kilix-waydroid
     /usr/local/share/xdg-desktop-portal
     /usr/local/share/xdg-desktop-portal/portals
     /usr/local/share/dbus-1
@@ -4797,6 +4833,10 @@ stage_final_provenance() {
         provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
         provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
         provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
+        if [ "$PLEBIAN_OS_INSTALL_WAYDROID" = 1 ]; then
+            provenance_kv KILIX_WAYDROID_SOURCE_ARCHIVE /usr/local/share/kilix-waydroid/source.tar
+            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "$(sha256sum /usr/local/share/kilix-waydroid/source.tar | awk '{print $1}')"
+        fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$PLEBIAN_OS_KILIX_GO_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$PLEBIAN_OS_KILIX_GO_SHA256_AMD64"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$PLEBIAN_OS_KILIX_GO_SHA256_ARM64"
