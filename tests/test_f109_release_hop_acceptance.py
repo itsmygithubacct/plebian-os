@@ -1,6 +1,8 @@
 """Static and refusal controls for F109's operator-run VM qualification lane."""
 
 import hashlib
+import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +16,49 @@ RELEASING = ROOT / "RELEASING.md"
 
 
 class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
+    @staticmethod
+    def path_helpers():
+        source = RUNNER.read_text()
+        helpers = []
+        for name in ("path_fingerprint", "engine_fingerprint", "resolve_installed_paths",
+                     "select_installed_paths", "bound_engine_fingerprint"):
+            body = source[source.index(name + "() {"):]
+            helpers.append(body[:body.index("\n}\n") + 3])
+        return "\n".join(helpers)
+
+    @staticmethod
+    def config_fixture(root):
+        # Controlled installed-library boundary: the production selector must
+        # call this module and consume persisted values, not its own defaults.
+        # Integration with the selected real Pleb resolver is checked separately.
+        lib = root / "lib"
+        lib.mkdir(exist_ok=True)
+        (lib / "common.sh").write_text(r'''
+PLEB_ENV_USER="$PLEB_ROOT/persisted.env"
+if [ -f "$PLEB_ENV_USER" ]; then . "$PLEB_ENV_USER"; fi
+KILIX_BUILD_DIRECTORY="${KILIX_BUILD_DIRECTORY:-$PLEB_ROOT/build}"
+KILIX_STATE_DIRECTORY="${KILIX_STATE_DIRECTORY:-$PLEB_ROOT/state}"
+KILIX_PREBUILT_HOME="${KILIX_PREBUILT_HOME:-$PLEB_ROOT/prebuilt}"
+GPU_TERMINAL_SETTINGS_FILE="$PLEB_ROOT/settings"
+GPU_TERMINAL_SOURCE_HOME="$PLEB_ROOT/sources"
+PLEB_STATE_HOME="$PLEB_ROOT/pleb-state"
+PLEB_ENV_SYSTEM="$PLEB_ROOT/session"
+PLEB_CLOSURE_SYSTEM="$PLEB_ROOT/closure"
+PLEB_CLOSURE_USER="$PLEB_ROOT/user-closure"
+KILIX_DIR="$PLEB_ROOT"
+PLEB_DIR="$PLEB_ROOT"
+''')
+
+    def selected_fingerprint(self, root, after_selection="", *args):
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("PLEB_", "KILIX_", "GPU_TERMINAL_"))}
+        return subprocess.run(
+            ["bash", "-euo", "pipefail", "-c", self.path_helpers() +
+             '\npleb_dir="$1"; select_installed_paths;\n' + after_selection +
+             '\nbound_engine_fingerprint', "bash", str(root), *map(str, args)],
+            env=env, capture_output=True, text=True, check=False,
+        )
+
     def test_runner_exposes_both_required_shapes_and_exact_hop(self):
         source = RUNNER.read_text()
         for token in (
@@ -157,15 +202,78 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
                         path.write_bytes(original)
                     self.assertEqual(fingerprint(), baseline)
 
+    def test_persisted_only_paths_select_real_engine_and_prebuilt_payloads(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.config_fixture(root)
+            engine = root / "operator's relocated engine"
+            build, state, prebuilt = engine / "build", engine / "state", engine / "prebuilt"
+            launchers = build / "generations" / "one" / "src/kitty/launcher"
+            launchers.mkdir(parents=True)
+            state.mkdir()
+            (prebuilt / "bin").mkdir(parents=True)
+            (prebuilt / "native-kitty").write_text("before\n")
+            (prebuilt / "bin/kitty").symlink_to("../native-kitty")
+            (build / "current").symlink_to("generations/one")
+            payloads = [launchers / "kitty", launchers / "kitten",
+                        state / "fork-built-ref", prebuilt / "bin/kitty", prebuilt / "bin/kitten"]
+            for path in payloads:
+                path.write_text("before\n")
+            (root / "persisted.env").write_text(
+                "printf 'configuration notice\\n'\n" + "\n".join(
+                    f"{name}={shlex.quote(str(value))}" for name, value in (
+                        ("KILIX_BUILD_DIRECTORY", build), ("KILIX_STATE_DIRECTORY", state),
+                        ("KILIX_PREBUILT_HOME", prebuilt))) + "\n"
+            )
+            before = self.selected_fingerprint(root)
+            self.assertEqual(before.returncode, 0, before.stderr)
+            self.assertIn("file:", before.stdout)
+            self.assertIn("configuration notice", before.stderr)
+            self.assertFalse((root / "build").exists(), "default engine path remains absent")
+            for path in payloads:
+                with self.subTest(path=path):
+                    path.write_text("changed\n")
+                    changed = self.selected_fingerprint(root)
+                    self.assertEqual(changed.returncode, 0, changed.stderr)
+                    self.assertNotEqual(changed.stdout, before.stdout)
+                    path.write_text("before\n")
+                    self.assertEqual(self.selected_fingerprint(root).stdout, before.stdout)
+
+    def test_bound_paths_refuse_persisted_route_changes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.config_fixture(root)
+            (root / "persisted.env").write_text("")
+            result = self.selected_fingerprint(
+                root, 'printf "KILIX_BUILD_DIRECTORY=%q\\n" "$2" >>"$pleb_dir/persisted.env"',
+                root / "different-build",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("effective installed paths changed", result.stderr)
+
+    def test_path_selection_refuses_unbound_or_unsupported_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self.assertNotEqual(self.selected_fingerprint(root).returncode, 0)
+            self.config_fixture(root)
+            for value in ("relative-build", "relative:/build", str(root / "line\nbreak")):
+                with self.subTest(value=value):
+                    (root / "persisted.env").write_text(
+                        "KILIX_BUILD_DIRECTORY=" + shlex.quote(value) + "\n"
+                    )
+                    self.assertNotEqual(self.selected_fingerprint(root).returncode, 0)
+
     def test_reboot_verifier_rejects_same_version_checkout_and_sentinel_drift(self):
         source = RUNNER.read_text()
         helpers = []
-        for name in ("path_fingerprint", "engine_fingerprint", "preserved_sentinel_path",
-                     "write_reboot_verifier"):
+        for name in ("path_fingerprint", "engine_fingerprint", "resolve_installed_paths",
+                     "select_installed_paths", "bound_engine_fingerprint",
+                     "preserved_sentinel_path", "write_reboot_verifier"):
             helper = source[source.index(name + "() {"):]
             helpers.append(helper[:helper.index("\n}\n") + 3])
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
+            self.config_fixture(root)
             git = ["git", "-C", td]
             subprocess.run(git + ["init", "-q"], check=True)
             (root / "VERSION").write_text("0.2.2\n")
@@ -186,21 +294,37 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
             pleb.chmod(0o700)
             sentinel = root / "operator's file"
             sentinel.write_bytes(b"operator bytes\x00\xff")
+            prebuilt = root / "prebuilt/bin/kitty"
+            prebuilt.parent.mkdir(parents=True)
+            prebuilt.write_text("selected engine\n")
             sentinels = root / "sentinels.tsv"
             sentinels.write_text(f"{sentinel}\t{hashlib.sha256(sentinel.read_bytes()).hexdigest()}\tuntracked\n")
             script = "\n".join(helpers) + r'''
 report="$1"; pleb_bin="$report/pleb"; pleb_dir="$report"; kilix_dir="$report"
 session_env="$report/session"; closure_env="$report/closure"; settings_file="$report/settings"
-engine_build="$report/build"; engine_state="$report/state"; sentinels="$report/sentinels.tsv"
+select_installed_paths; sentinels="$report/sentinels.tsv"
 target_components=(pleb kilix os kilix95); declare -A image_resolved_paths=()
 os_dir="$report/os-source"; kilix95_dir="$report"
 write_reboot_verifier "$report/verify.sh"
 '''
-            subprocess.run(["bash", "-euo", "pipefail", "-c", script, "bash", td], check=True)
+            env = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("PLEB_", "KILIX_", "GPU_TERMINAL_"))}
+            subprocess.run(["bash", "-euo", "pipefail", "-c", script, "bash", td],
+                           env=env, check=True)
 
             def verify():
-                return subprocess.run(["bash", str(root / "verify.sh")], capture_output=True).returncode
+                return subprocess.run(["bash", str(root / "verify.sh")],
+                                      env=env, capture_output=True).returncode
 
+            self.assertEqual(verify(), 0)
+            prebuilt.write_text("changed engine\n")
+            self.assertNotEqual(verify(), 0, "reboot must check the resolved prebuilt engine")
+            prebuilt.write_text("selected engine\n")
+            self.assertEqual(verify(), 0)
+            persisted = root / "persisted.env"
+            persisted.write_text("KILIX_BUILD_DIRECTORY=" + shlex.quote(str(root / "other-build")) + "\n")
+            self.assertNotEqual(verify(), 0, "reboot must resolve the installed path binding again")
+            persisted.unlink()
             self.assertEqual(verify(), 0)
             subprocess.run(git + ["checkout", "-q", "--detach", refs[0]], check=True)
             self.assertNotEqual(verify(), 0, "same VERSION must not hide a stale checkout")

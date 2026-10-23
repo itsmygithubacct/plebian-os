@@ -92,6 +92,7 @@ fi
 command -v git >/dev/null 2>&1 || die "git is required"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v sha256sum >/dev/null 2>&1 || die "sha256sum is required"
+[ "$EUID" -ne 0 ] || die "run qualification as the installed Pleb user, without sudo"
 command -v systemd-detect-virt >/dev/null 2>&1 \
     || die "systemd-detect-virt is required to prove the guest boundary"
 virt="$(systemd-detect-virt --vm 2>/dev/null || true)"
@@ -110,25 +111,8 @@ pleb_code_root="$(cd "$(dirname -- "$pleb_bin")/.." && pwd -P)"
 if [ -z "$pleb_dir" ]; then
     pleb_dir="$pleb_code_root"
 fi
-source_home="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}"
-if [ -z "$kilix_dir" ]; then
-    kilix_dir="$source_home/kilix"
-fi
 pleb_dir="$(cd "$pleb_dir" && pwd -P)"
-kilix_dir="$(cd "$kilix_dir" && pwd -P)"
 [ -d "$pleb_dir/.git" ] || die "Pleb is not a git checkout: $pleb_dir"
-[ -d "$kilix_dir/.git" ] || die "Kilix is not a git checkout: $kilix_dir"
-
-if [ -z "$session_env" ]; then
-    if [ "$shape" = image ]; then
-        session_env="/etc/pleb/session.env"
-    else
-        session_env="${PLEB_CONFIG_HOME:-$HOME/.local/gpu_terminal/pleb/config}/session.env"
-    fi
-fi
-if [ -z "$closure_env" ]; then
-    closure_env="$(dirname -- "$session_env")/closure.env"
-fi
 
 mkdir -p -- "$report"
 report="$(cd "$report" && pwd -P)"
@@ -191,6 +175,68 @@ engine_fingerprint() {
     path_fingerprint "$state_dir/fork-built-ref"
 }
 
+# Use the installed CLI's resolver, including its config precedence and root
+# safety checks. Keep config shell code in a same-user subprocess so it cannot
+# overwrite qualification variables. No exported/default-only fallback is safe.
+resolve_installed_paths() {
+    local code_root="$1"
+    [ -f "$code_root/lib/common.sh" ] || return 1
+    bash -euo pipefail -c '
+        PLEB_ROOT="$1"
+        . "$PLEB_ROOT/lib/common.sh" >&2
+        names=(KILIX_BUILD_DIRECTORY KILIX_STATE_DIRECTORY GPU_TERMINAL_SETTINGS_FILE
+               GPU_TERMINAL_SOURCE_HOME PLEB_STATE_HOME PLEB_ENV_SYSTEM PLEB_ENV_USER
+               PLEB_CLOSURE_SYSTEM PLEB_CLOSURE_USER KILIX_DIR PLEB_DIR KILIX_PREBUILT_HOME)
+        for name in "${names[@]}"; do
+            value="${!name}"
+            case "$value" in
+                *$'"'"'\n'"'"'*|*$'"'"'\r'"'"'*|*$'"'"'\t'"'"'*) exit 1 ;;
+            esac
+            case "$value" in
+                /*) ;;
+                "") case "$name" in
+                    PLEB_ENV_SYSTEM|PLEB_ENV_USER|PLEB_CLOSURE_SYSTEM|PLEB_CLOSURE_USER) ;;
+                    *) exit 1 ;;
+                    esac ;;
+                *) exit 1 ;;
+            esac
+            printf "%s\n" "$value"
+        done
+    ' bash "$code_root"
+}
+
+select_installed_paths() {
+    local -a values
+    installed_paths="$(resolve_installed_paths "$pleb_dir")" || return 1
+    mapfile -t values <<<"$installed_paths"
+    [ "${#values[@]}" -eq 12 ] || return 1
+    engine_build="${values[0]}"; engine_state="${values[1]}"
+    settings_file="${values[2]}"; source_home="${values[3]}"
+    preserve_root="${values[4]}/update-preserve"
+    installed_system_session="${values[5]}"; installed_user_session="${values[6]}"
+    installed_system_closure="${values[7]}"; installed_user_closure="${values[8]}"
+    installed_kilix_dir="${values[9]}"; installed_pleb_dir="${values[10]}"
+    engine_prebuilt="${values[11]}"
+}
+
+bound_engine_fingerprint() {
+    local actual payload path
+    actual="$(resolve_installed_paths "$pleb_dir")" || return 1
+    [ "$actual" = "$installed_paths" ] || {
+        printf '%s\n' 'acceptance-release-hop: effective installed paths changed' >&2
+        return 1
+    }
+    engine_fingerprint "$engine_build" "$engine_state"
+    for payload in kitty kitten; do
+        path="$engine_prebuilt/bin/$payload"
+        printf 'prebuilt-%s\t' "$payload"; path_fingerprint "$path"
+        if [ -L "$path" ] && [ -f "$path" ]; then
+            printf 'prebuilt-%s-target\t' "$payload"
+            sha256sum -- "$path" | cut -d ' ' -f 1 || return 1
+        fi
+    done
+}
+
 verify_installed_target_ref() {
     local component="$1" checkout_dir="$2" selected_ref="$3" installed_ref
     [[ "$selected_ref" =~ ^[0-9a-f]{40}$ ]] \
@@ -206,7 +252,9 @@ write_reboot_verifier() {
     local output="$1" component ref_key checkout_dir selected_ref path expected kind actual_path
     {
         printf '#!/usr/bin/env bash\nset -euo pipefail\n'
-        declare -f path_fingerprint engine_fingerprint
+        declare -f path_fingerprint engine_fingerprint resolve_installed_paths bound_engine_fingerprint
+        printf 'pleb_dir=%q; installed_paths=%q; engine_build=%q; engine_state=%q; engine_prebuilt=%q\n' \
+            "$pleb_dir" "$installed_paths" "$engine_build" "$engine_state" "$engine_prebuilt"
         printf 'test "$(cat /etc/machine-id)" = %q\n' "$(cat /etc/machine-id)"
         printf 'test "$(%q update --show)" = %q\n' "$pleb_bin" "$(cat "$report/show-after.txt")"
         for component in "${target_components[@]}"; do
@@ -223,8 +271,8 @@ write_reboot_verifier() {
         for path in "$session_env" "$closure_env" "$settings_file"; do
             printf 'test "$(path_fingerprint %q)" = %q\n' "$path" "$(path_fingerprint "$path")"
         done
-        printf 'test "$(engine_fingerprint %q %q)" = %q\n' \
-            "$engine_build" "$engine_state" "$(engine_fingerprint "$engine_build" "$engine_state")"
+        printf 'actual_engine="$(bound_engine_fingerprint)"\ntest "$actual_engine" = %q\n' \
+            "$(bound_engine_fingerprint)"
         while IFS=$'\t' read -r path expected kind; do
             if [ -n "${image_resolved_paths[$path]:-}" ]; then
                 actual_path="${image_resolved_paths[$path]}"
@@ -349,6 +397,24 @@ must "installed-pleb-entrypoint-is-tested" "$installed_pleb" \
     test -n "$installed_pleb" -a "$pleb_bin" = "$installed_pleb"
 must "entrypoint-matches-participating-pleb-checkout" "$pleb_dir" \
     test "$pleb_code_root" = "$pleb_dir"
+select_installed_paths || die "could not bind effective installed paths using Pleb's resolver"
+printf '%s\n' "$installed_paths" >"$report/installed-paths.before"
+must "resolver-matches-participating-pleb-checkout" "$installed_pleb_dir" \
+    test "$(cd "$installed_pleb_dir" && pwd -P)" = "$pleb_dir"
+if [ -z "$kilix_dir" ]; then kilix_dir="$installed_kilix_dir"; fi
+kilix_dir="$(cd "$kilix_dir" && pwd -P)"
+must "resolver-matches-participating-kilix-checkout" "$installed_kilix_dir" \
+    test "$(cd "$installed_kilix_dir" && pwd -P)" = "$kilix_dir"
+[ -d "$kilix_dir/.git" ] || die "Kilix is not a git checkout: $kilix_dir"
+if [ "$shape" = image ]; then
+    installed_session="$installed_system_session"; installed_closure="$installed_system_closure"
+else
+    installed_session="$installed_user_session"; installed_closure="$installed_user_closure"
+fi
+if [ -z "$session_env" ]; then session_env="$installed_session"; fi
+if [ -z "$closure_env" ]; then closure_env="$installed_closure"; fi
+must "session-path-is-bound-to-installed-config" "$session_env" test "$session_env" = "$installed_session"
+must "closure-path-is-bound-to-installed-config" "$closure_env" test "$closure_env" = "$installed_closure"
 must "pleb-checkout-starts-clean" "$pleb_dir" test -z \
     "$(git -C "$pleb_dir" status --porcelain=v1 --untracked-files=all)"
 must "kilix-checkout-starts-clean" "$kilix_dir" test -z \
@@ -400,12 +466,8 @@ must "target-differs-from-installed-release" "$current -> $target" test "$curren
 
 session_before="$(path_fingerprint "$session_env")"
 closure_before="$(path_fingerprint "$closure_env")"
-settings_file="${GPU_TERMINAL_SETTINGS_FILE:-${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}/settings.conf}"
-engine_storage="${KILIX_STORAGE_HOME:-${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}/kilix}"
-engine_build="${KILIX_BUILD_DIRECTORY:-$engine_storage/build}"
-engine_state="${KILIX_STATE_DIRECTORY:-$engine_storage/state}"
 settings_before="$(path_fingerprint "$settings_file")"
-engine_before="$(engine_fingerprint "$engine_build" "$engine_state")"
+engine_before="$(bound_engine_fingerprint)"
 printf '%s\n' "$session_before" >"$report/session.before"
 printf '%s\n' "$closure_before" >"$report/closure.before"
 printf '%s\n' "$settings_before" >"$report/settings.before"
@@ -438,7 +500,7 @@ must "dry-run-preserves-closure-env" "$closure_env" \
 must "dry-run-preserves-settings" "$settings_file" \
     test "$(path_fingerprint "$settings_file")" = "$settings_before"
 must "dry-run-preserves-engine-generation" "$engine_build" \
-    test "$(engine_fingerprint "$engine_build" "$engine_state")" = "$engine_before"
+    test "$(bound_engine_fingerprint)" = "$engine_before"
 
 sentinels="$report/sentinels.tsv"
 : >"$sentinels"
@@ -525,7 +587,7 @@ if [ "$shape" = image ]; then
             settings) path="$settings_file"; expected="$settings_before" ;;
             engine)
                 must "dirty-refusal-preserves-engine" "$engine_build" \
-                    test "$(engine_fingerprint "$engine_build" "$engine_state")" = "$engine_before"
+                    test "$(bound_engine_fingerprint)" = "$engine_before"
                 continue ;;
             selector) path=/usr/local/bin/plebian-os-select-closure; expected="$selector_before" ;;
             updater) path=/usr/local/bin/plebian-os-update; expected="$updater_before" ;;
@@ -572,7 +634,7 @@ must "failure-restores-closure-env" "$closure_env" test "$(path_fingerprint "$cl
 must "failure-restores-settings" "$settings_file" \
     test "$(path_fingerprint "$settings_file")" = "$settings_before"
 must "failure-restores-engine-generation" "$engine_build" \
-    test "$(engine_fingerprint "$engine_build" "$engine_state")" = "$engine_before"
+    test "$(bound_engine_fingerprint)" = "$engine_before"
 home_manifest "$report/home-after-failure.tsv"
 diff -u "$report/home-before-failure.tsv" "$report/home-after-failure.tsv" \
     >"$report/home-induced-failure.diff" || true
@@ -624,7 +686,6 @@ must "all-13-sentinels-are-accounted-for" "$sentinel_pass/$sentinel_total" \
 must "successful-hop-preserves-settings" "$settings_file" \
     test "$(path_fingerprint "$settings_file")" = "$settings_before"
 
-preserve_root="${PLEB_STATE_HOME:-$HOME/.local/gpu_terminal/pleb/state}/update-preserve"
 preservation_manifests=()
 if [ "$shape" = standalone ]; then
     mapfile -t preservation_manifests < <(find "$preserve_root" -type f -name MANIFEST.sha256 -print 2>/dev/null | sort)
