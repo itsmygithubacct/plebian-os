@@ -296,6 +296,36 @@ class VmBuilderEnvTests(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 vm.qemu_create(selected)
 
+    def test_qemu_efi_uses_private_variables_and_readonly_code(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(vm, "storage_dir", return_value=Path(td)), \
+                mock.patch.object(vm, "run") as invoke:
+            code, variables = Path(td) / "code.fd", Path(td) / "vars.fd"
+            code.write_bytes(b"firmware code")
+            variables.write_bytes(b"initial variables")
+            with mock.patch.object(vm, "qemu_firmware", return_value=(code, variables)):
+                directory = vm.qemu_create(cfg(firmware="efi"))
+            private = directory / "OVMF_VARS.fd"
+            self.assertNotEqual(private.stat().st_ino, variables.stat().st_ino)
+            private.write_bytes(b"guest variables")
+            self.assertEqual(variables.read_bytes(), b"initial variables")
+            self.assertEqual((directory / "OVMF_CODE.fd").stat().st_mode & 0o777, 0o400)
+            vm.qemu_start(cfg(firmware="efi"), Path(td) / "image.iso", directory)
+            argv = invoke.call_args.args[0]
+            self.assertIn(f"if=pflash,format=raw,unit=0,readonly=on,file={directory / 'OVMF_CODE.fd'}", argv)
+            self.assertIn(f"if=pflash,format=raw,unit=1,file={private}", argv)
+            record = json.loads((directory / "firmware.json").read_text())
+            self.assertEqual(record["OVMF_VARS.fd"]["sha256"],
+                             hashlib.sha256(b"initial variables").hexdigest())
+
+    def test_missing_efi_inputs_refuse_before_creating_vm_state(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(vm, "storage_dir", return_value=Path(td)), \
+                mock.patch.dict(os.environ, {"PLEBIAN_OS_OVMF_CODE": str(Path(td) / "missing")}):
+            with self.assertRaises(SystemExit):
+                vm.qemu_create(cfg(firmware="efi"))
+            self.assertFalse((Path(td) / "qemu-vms").exists())
+
     def test_qemu_report_records_hypervisor_and_target(self):
         git_results = [SimpleNamespace(stdout="a" * 40 + "\n"),
                        SimpleNamespace(stdout="")]

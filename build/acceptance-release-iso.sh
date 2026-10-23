@@ -5,7 +5,7 @@
 # This is the second release lane. acceptance-vm.sh builds an instrumented,
 # unattended derivative so it can verify the guest over SSH. This script takes
 # the already-built strict artifact, proves its release identity and dual-boot
-# layout, then starts operator-driven VirtualBox installs under both firmware
+# layout, then starts operator-driven VM installs under both firmware
 # implementations. Their reports deliberately say
 # "vm-started-no-verification"; the interactive checklist remains a separate
 # operator gate.
@@ -18,6 +18,7 @@ ROOT="$(cd "$HERE/.." && pwd)"
 RELEASE="$(cat "$ROOT/VERSION")"
 ISO=""
 FIRMWARE=both
+TARGET=virtualbox
 REPLACE=0
 DRY_RUN=0
 
@@ -27,6 +28,7 @@ Usage: build/acceptance-release-iso.sh --iso PATH [options]
 
 Options:
   --release X.Y.Z       release recorded in the strict ISO (default: VERSION)
+  --target TARGET       virtualbox or qemu (default: virtualbox)
   --firmware MODE       bios, efi, or both (default: both)
   --replace             explicitly replace same-candidate VMs/reports
   --dry-run             validate the ISO and print both VM plans only
@@ -47,6 +49,9 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || { echo "acceptance-release-iso: --release needs a version" >&2; exit 1; }
             RELEASE="$2"; shift 2 ;;
         --release=*) RELEASE="${1#--release=}"; shift ;;
+        --target)
+            [ "$#" -ge 2 ] || { echo "acceptance-release-iso: --target needs a value" >&2; exit 1; }
+            TARGET="$2"; shift 2 ;;
         --firmware)
             [ "$#" -ge 2 ] || { echo "acceptance-release-iso: --firmware needs a mode" >&2; exit 1; }
             FIRMWARE="$2"; shift 2 ;;
@@ -62,6 +67,10 @@ done
     || { echo "acceptance-release-iso: invalid release: $RELEASE" >&2; exit 1; }
 case "$FIRMWARE" in bios|efi|both) ;; *)
     echo "acceptance-release-iso: firmware must be bios, efi, or both" >&2
+    exit 1 ;;
+esac
+case "$TARGET" in virtualbox|qemu) ;; *)
+    echo "acceptance-release-iso: target must be virtualbox or qemu" >&2
     exit 1 ;;
 esac
 [ -n "$ISO" ] || ISO="$PLEBIAN_OS_ARTIFACTS/plebian-os-$RELEASE-amd64.iso"
@@ -233,9 +242,11 @@ firmwares=(bios efi)
 for firmware in "${firmwares[@]}"; do
     name="plebian-release-${RELEASE}-${short}-${firmware}"
     report="$PLEBIAN_OS_ARTIFACTS/plebian-os-${RELEASE}-${short}-exact-iso-${firmware}.json"
+    port=2222
+    [ "$firmware" != efi ] || port=2223
     args=(
-        --yes --iso "$ISO" --interactive-installer --name "$name"
-        --firmware "$firmware" --ram "$ram" --cpus "$cpus" --disk "$disk"
+        --yes --target "$TARGET" --iso "$ISO" --interactive-installer --name "$name"
+        --port "$port" --firmware "$firmware" --ram "$ram" --cpus "$cpus" --disk "$disk"
         --gui --no-wait --no-verify --report "$report"
     )
     [ "$REPLACE" = 0 ] || args+=(--replace)

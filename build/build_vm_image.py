@@ -1043,13 +1043,32 @@ def qemu_vm_dir(name: str) -> Path:
     return storage_dir("session") / "qemu-vms" / name
 
 
+def qemu_firmware() -> tuple[Path, Path]:
+    """Select a matching OVMF pair; Secure Boot is not qualified by this lane."""
+    code = Path(os.environ.get("PLEBIAN_OS_OVMF_CODE", "/usr/share/OVMF/OVMF_CODE_4M.fd"))
+    variables = Path(os.environ.get("PLEBIAN_OS_OVMF_VARS", "/usr/share/OVMF/OVMF_VARS_4M.fd"))
+    for path in (code, variables):
+        if not path.is_file() or not path.stat().st_size:
+            die(f"QEMU EFI requires a readable OVMF firmware file: {path}")
+    return code, variables
+
+
 def qemu_create(cfg: Config) -> Path:
     """Create a new, private sparse VM disk; never replace an existing VM."""
     vm_dir = qemu_vm_dir(cfg.name)
     if vm_dir.exists() or vm_dir.is_symlink():
         die(f"QEMU VM output already exists: {vm_dir}; choose a new VM name")
+    firmware = qemu_firmware() if cfg.firmware == "efi" else None
     vm_dir.parent.mkdir(parents=True, exist_ok=True)
     vm_dir.mkdir(mode=0o700)
+    if firmware:
+        records = {}
+        for source, name, mode in zip(firmware, ("OVMF_CODE.fd", "OVMF_VARS.fd"), (0o400, 0o600)):
+            destination = vm_dir / name
+            shutil.copyfile(source, destination)
+            destination.chmod(mode)
+            records[name] = {"source": str(source), "sha256": sha256_file(destination)}
+        (vm_dir / "firmware.json").write_text(json.dumps(records, indent=2) + "\n")
     run(["qemu-img", "create", "-f", "qcow2", str(vm_dir / "disk.qcow2"),
          f"{cfg.disk_gb}G"])
     return vm_dir
@@ -1071,6 +1090,9 @@ def qemu_start(cfg: Config, iso: Path, vm_dir: Path) -> None:
         "-pidfile", str(vm_dir / "qemu.pid"),
         "-display", "gtk" if cfg.gui else "none", "-daemonize",
     ]
+    if cfg.firmware == "efi":
+        argv += ["-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={vm_dir / 'OVMF_CODE.fd'}",
+                 "-drive", f"if=pflash,format=raw,unit=1,file={vm_dir / 'OVMF_VARS.fd'}"]
     run(argv)
 
 # ── SSH into the guest (password auth via SSH_ASKPASS; no sshpass needed) ─────
@@ -2418,8 +2440,6 @@ def main() -> None:
         die(f"target {target!r} is not implemented yet")
     if target == "qemu" and args.replace:
         die("QEMU VMs cannot be replaced by this builder; choose a new --name")
-    if target == "qemu" and args.firmware == "efi":
-        die("QEMU EFI is not configured; use --firmware bios")
     if target == "qemu" and args.accelerate_3d:
         die("QEMU 3D acceleration is not configured")
 
@@ -2466,8 +2486,8 @@ def main() -> None:
             warn("using a prebuilt automated ISO: builder identity options are NOT "
                  "applied; protected credentials entered here must match that ISO")
     cfg = gather_config(args)
-    if target == "qemu" and cfg.firmware != "bios":
-        die("QEMU EFI is not configured; use --firmware bios")
+    if target == "qemu" and cfg.firmware == "efi":
+        qemu_firmware()
     if args.iso and cfg.credential_generated:
         die("--generate-one-time-password cannot match a prebuilt ISO; use its protected password file")
     confirm_summary(cfg, args.yes)
@@ -2532,6 +2552,8 @@ def main() -> None:
     else:
         vm_dir = qemu_create(cfg)
         if _RECORDER is not None:
+            if cfg.firmware == "efi":
+                _RECORDER.data["firmware_inputs"] = json.loads((vm_dir / "firmware.json").read_text())
             _RECORDER.stage("QEMU VM created")
         qemu_start(cfg, iso, vm_dir)
     if _RECORDER is not None:

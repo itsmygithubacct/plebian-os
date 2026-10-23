@@ -340,3 +340,19 @@ rm -f plebian-os-<name>.iso
 - [`../preseed/preseed.cfg`](../preseed/preseed.cfg) — the install answers
 - [`../provision/plebian-os-provision.sh`](../provision/plebian-os-provision.sh)
   — the first-boot provisioner
+
+### QEMU EFI
+
+`--target qemu --firmware efi` uses OVMF with a private copy of the variable
+store for each new VM. The default pair is `/usr/share/OVMF/OVMF_CODE_4M.fd`
+and `/usr/share/OVMF/OVMF_VARS_4M.fd`; set `PLEBIAN_OS_OVMF_CODE` and
+`PLEBIAN_OS_OVMF_VARS` together to select another compatible pair. Firmware
+input hashes are retained in `firmware.json` and the acceptance report. Code
+is attached read-only, and the shared variable template is never modified.
+This lane does not qualify Secure Boot. Existing VM directories are refused.
+
+The strict ISO wrapper also accepts `--target qemu` for its interactive BIOS
+and EFI lanes. The two guests use separate loopback forwarding ports 2222 and
+2223. Set `PLEBIAN_OS_SESSION_HOME` to a private directory with a short path
+(the QMP Unix socket must fit the host path-length limit). No VM start report
+satisfies installed acceptance without completing the installer and checklist.
