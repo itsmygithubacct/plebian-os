@@ -24,15 +24,13 @@ Debian installer  ─▶  provision the selected stack  ─▶  Pleb session
  (no desktop task)       (Pleb, Kilix and providers)    (visible Kilix chrome)
 ```
 
-The RC5 desktop-completion candidate adds account locking and power services,
+The selected Pleb session supplies account locking and power services,
 monitor scaling, device setup controls, and Pleb's user-selected X11 capture
 portal. Capture uses PipeWire with WirePlumber's `video-only` profile; PulseAudio
 continues to handle audio. The locally built capture transport supplies
-descriptor-backed video buffers. Firefox ESR capture through a private
-application bus has component VM evidence, including user consent and Stop
-sharing. These local candidate sources still require release
-selection, Chromium qualification, and a complete installed
-desktop acceptance run before they establish RC5 desktop completeness.
+descriptor-backed video buffers. Pleb documents bounded Firefox ESR and Chromium
+capture evidence, including user consent and Stop sharing. These component
+checks still require complete installed-release and physical desktop acceptance.
 
 ## 0.2.2 development status
 
@@ -259,7 +257,7 @@ version, branded wallpaper, and artwork notices) from a `plebian-os` checkout, s
 installed systems too — pinned
 by `PLEBIAN_OS_REF` and disablable with
 `PLEBIAN_OS_SELF_UPDATE=0`. The selected `/etc/pleb/closure.env` pins `PLEB_REF`,
-`KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, those exact refs remain the
+`KILIX_REF`, `KILIX95_REF`, and `PLEBIAN_OS_REF`. Those exact refs remain the
 authority within the selected release instead of drifting to branch heads. The
 target selector validates the complete closure, fetches every exact component
 commit, reports each component's ancestry direction, and moves every
