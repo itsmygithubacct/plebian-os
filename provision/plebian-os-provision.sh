@@ -1503,6 +1503,16 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /etc/systemd/user/pipewire-pulse.socket
     /usr/share/xsessions/pleb.desktop
     /usr/local/bin/kilix
+    /usr/local/bin/kilix-waydroid
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/__init__.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/__main__.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/cli.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/first_use.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/runtime.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/sdk.py
+    /usr/local/lib/kilix-waydroid/kilix_waydroid/system.py
+    /usr/local/share/kilix-waydroid/source.tar
+    /usr/local/share/kilix-waydroid/provenance.env
     /usr/local/bin/kilix-settings
     /usr/local/bin/kilix-temps
     /usr/local/bin/tmux-tui
@@ -1557,6 +1567,9 @@ PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
 PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /usr/local/lib
     /usr/local/lib/pleb
+    /usr/local/lib/kilix-waydroid
+    /usr/local/lib/kilix-waydroid/kilix_waydroid
+    /usr/local/share/kilix-waydroid
     /usr/local/share/xdg-desktop-portal
     /usr/local/share/xdg-desktop-portal/portals
     /usr/local/share/dbus-1
@@ -4999,6 +5012,10 @@ write_source_tool_manifest() {
         provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
         provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
         provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
+        if [ "$INSTALL_WAYDROID" = 1 ]; then
+            provenance_kv KILIX_WAYDROID_SOURCE_ARCHIVE /usr/local/share/kilix-waydroid/source.tar
+            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "$(sha256sum /usr/local/share/kilix-waydroid/source.tar | awk '{print $1}')"
+        fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
@@ -5280,6 +5297,71 @@ checkout_pinned_ref() {
         || die "pinned $name checkout resolved to $resolved but HEAD is $actual"
     require_clean_pinned_checkout "$dir" "$name"
     log "$name pinned ref $ref verified at $actual"
+}
+
+
+install_waydroid_application() {
+    [ "$INSTALL_WAYDROID" = 1 ] || return 0
+    [[ "$KILIX_WAYDROID_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Waydroid application requires an exact KILIX_WAYDROID_REF commit"
+    [ -z "$KILIX_WAYDROID_BRANCH" ] \
+        || die "Waydroid application does not accept a mutable branch"
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install exact Waydroid app $KILIX_WAYDROID_REF into /usr/local; no Android download"
+        return 0
+    fi
+    validate_provision_root_transaction_dir "$PROVISION_ROOT_TRANSACTION_DIR" \
+        || die "Waydroid application installation requires an active root transaction"
+    local stage actual file mode source_sha
+    stage="$(mktemp -d "$PROVISION_ROOT_TRANSACTION_DIR/waydroid.XXXXXX")" \
+        || die "could not stage Waydroid application"
+    git init -q "$stage/repo" || die "could not initialize Waydroid source staging"
+    git -C "$stage/repo" fetch --depth=1 "$KILIX_WAYDROID_REPO" "$KILIX_WAYDROID_REF" \
+        || die "could not fetch exact Waydroid application"
+    actual="$(git -C "$stage/repo" rev-parse 'FETCH_HEAD^{commit}')" \
+        || die "could not resolve Waydroid application commit"
+    [ "$actual" = "$KILIX_WAYDROID_REF" ] || die "Waydroid application commit mismatch"
+    git -C "$stage/repo" archive --format=tar "$actual" >"$stage/source.tar" \
+        || die "could not archive exact Waydroid source"
+    mkdir "$stage/source" || die "could not create Waydroid build directory"
+    tar -xf "$stage/source.tar" -C "$stage/source" \
+        || die "could not extract Waydroid source"
+    make -j2 -C "$stage/source" install DESTDIR="$stage/package" PREFIX=/usr/local \
+        || die "could not package Waydroid application"
+    # Refuse a package layout that the transaction inventory cannot restore.
+    local -a package_files=(bin/kilix-waydroid
+        lib/kilix-waydroid/kilix_waydroid/__init__.py
+        lib/kilix-waydroid/kilix_waydroid/__main__.py
+        lib/kilix-waydroid/kilix_waydroid/cli.py
+        lib/kilix-waydroid/kilix_waydroid/first_use.py
+        lib/kilix-waydroid/kilix_waydroid/runtime.py
+        lib/kilix-waydroid/kilix_waydroid/sdk.py
+        lib/kilix-waydroid/kilix_waydroid/system.py
+    )
+    printf '%s\n' "${package_files[@]}" | LC_ALL=C sort >"$stage/expected"
+    (cd "$stage/package/usr/local" && find . -type f -printf '%P\n' | LC_ALL=C sort) >"$stage/actual"
+    cmp -s "$stage/expected" "$stage/actual" || die "unexpected Waydroid package layout"
+    [ -z "$(find "$stage/package" ! -type f ! -type d -print -quit)" ] \
+        || die "Waydroid package contains a non-regular object"
+    for file in "${package_files[@]}" share/kilix-waydroid/source.tar share/kilix-waydroid/provenance.env; do
+        [ ! -L "/usr/local/$file" ] \
+            && { [ ! -e "/usr/local/$file" ] || [ -f "/usr/local/$file" ]; } \
+            || die "unsafe Waydroid installed file: $file"
+    done
+    for file in "${package_files[@]}"; do
+        mode=0644
+        [ "$file" != bin/kilix-waydroid ] || mode=0755
+        install -D -o root -g root -m "$mode" "$stage/package/usr/local/$file" \
+            "/usr/local/$file" || die "could not install Waydroid package file $file"
+    done
+    source_sha="$(sha256sum "$stage/source.tar" | awk '{print $1}')"
+    printf 'KILIX_WAYDROID_REF=%s\nKILIX_WAYDROID_SOURCE_SHA256=%s\n' \
+        "$actual" "$source_sha" >"$stage/provenance.env"
+    install -D -o root -g root -m 0644 "$stage/source.tar" \
+        /usr/local/share/kilix-waydroid/source.tar || die "could not install Waydroid source"
+    install -D -o root -g root -m 0644 "$stage/provenance.env" \
+        /usr/local/share/kilix-waydroid/provenance.env || die "could not install Waydroid provenance"
+    rm -rf -- "$stage" || die "could not clean Waydroid staging"
 }
 
 ensure_plebian_os_checkout() {
@@ -6435,6 +6517,7 @@ else
         || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
 fi
 ensure_plebian_os_checkout
+install_waydroid_application
 
 # Stage the fixed, root-owned first-use helper from the exact Plebian-OS
 # checkout. INSTALL_WAYDROID means the feature is present in this release; the
