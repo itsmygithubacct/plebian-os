@@ -177,6 +177,20 @@ path_fingerprint() {
     fi
 }
 
+engine_fingerprint() {
+    local build_dir="$1" state_dir="$2" selector payload
+    for selector in current previous; do
+        printf '%s\t' "$selector"
+        path_fingerprint "$build_dir/$selector"
+        for payload in source-id src/kitty/launcher/kitty src/kitty/launcher/kitten; do
+            printf '%s/%s\t' "$selector" "$payload"
+            path_fingerprint "$build_dir/$selector/$payload"
+        done
+    done
+    printf 'fork-built-ref\t'
+    path_fingerprint "$state_dir/fork-built-ref"
+}
+
 verify_installed_target_ref() {
     local component="$1" checkout_dir="$2" selected_ref="$3" installed_ref
     [[ "$selected_ref" =~ ^[0-9a-f]{40}$ ]] \
@@ -350,9 +364,11 @@ must "target-differs-from-installed-release" "$current -> $target" test "$curren
 session_before="$(path_fingerprint "$session_env")"
 closure_before="$(path_fingerprint "$closure_env")"
 settings_file="${GPU_TERMINAL_SETTINGS_FILE:-${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}/settings.conf}"
-engine_current="${KILIX_STATE_DIRECTORY:-${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}/kilix/state}/current"
+engine_storage="${KILIX_STORAGE_HOME:-${GPU_TERMINAL_HOME:-$HOME/.local/gpu_terminal}/kilix}"
+engine_build="${KILIX_BUILD_DIRECTORY:-$engine_storage/build}"
+engine_state="${KILIX_STATE_DIRECTORY:-$engine_storage/state}"
 settings_before="$(path_fingerprint "$settings_file")"
-engine_before="$(path_fingerprint "$engine_current")"
+engine_before="$(engine_fingerprint "$engine_build" "$engine_state")"
 printf '%s\n' "$session_before" >"$report/session.before"
 printf '%s\n' "$closure_before" >"$report/closure.before"
 printf '%s\n' "$settings_before" >"$report/settings.before"
@@ -384,8 +400,8 @@ must "dry-run-preserves-closure-env" "$closure_env" \
     test "$(path_fingerprint "$closure_env")" = "$closure_before"
 must "dry-run-preserves-settings" "$settings_file" \
     test "$(path_fingerprint "$settings_file")" = "$settings_before"
-must "dry-run-preserves-engine-generation" "$engine_current" \
-    test "$(path_fingerprint "$engine_current")" = "$engine_before"
+must "dry-run-preserves-engine-generation" "$engine_build" \
+    test "$(engine_fingerprint "$engine_build" "$engine_state")" = "$engine_before"
 
 sentinels="$report/sentinels.tsv"
 : >"$sentinels"
@@ -470,7 +486,10 @@ if [ "$shape" = image ]; then
             session) path="$session_env"; expected="$session_before" ;;
             closure) path="$closure_env"; expected="$closure_before" ;;
             settings) path="$settings_file"; expected="$settings_before" ;;
-            engine) path="$engine_current"; expected="$engine_before" ;;
+            engine)
+                must "dirty-refusal-preserves-engine" "$engine_build" \
+                    test "$(engine_fingerprint "$engine_build" "$engine_state")" = "$engine_before"
+                continue ;;
             selector) path=/usr/local/bin/plebian-os-select-closure; expected="$selector_before" ;;
             updater) path=/usr/local/bin/plebian-os-update; expected="$updater_before" ;;
         esac
@@ -515,8 +534,8 @@ must "failure-restores-session-env" "$session_env" test "$(path_fingerprint "$se
 must "failure-restores-closure-env" "$closure_env" test "$(path_fingerprint "$closure_env")" = "$closure_before"
 must "failure-restores-settings" "$settings_file" \
     test "$(path_fingerprint "$settings_file")" = "$settings_before"
-must "failure-restores-engine-generation" "$engine_current" \
-    test "$(path_fingerprint "$engine_current")" = "$engine_before"
+must "failure-restores-engine-generation" "$engine_build" \
+    test "$(engine_fingerprint "$engine_build" "$engine_state")" = "$engine_before"
 home_manifest "$report/home-after-failure.tsv"
 diff -u "$report/home-before-failure.tsv" "$report/home-after-failure.tsv" \
     >"$report/home-induced-failure.diff" || true

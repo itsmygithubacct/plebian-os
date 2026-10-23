@@ -108,6 +108,55 @@ class F109ReleaseHopAcceptanceRunnerTests(unittest.TestCase):
             path.write_bytes(b"new upstream bytes\n")
             self.assertNotEqual(check().returncode, 0)
 
+    def test_engine_fingerprint_detects_generation_and_stamp_changes(self):
+        source = RUNNER.read_text()
+        helpers = []
+        for name in ("path_fingerprint", "engine_fingerprint"):
+            helper = source[source.index(name + "() {"):]
+            helpers.append(helper[:helper.index("\n}\n") + 3])
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            build, state = root / "build", root / "state"
+            state.mkdir()
+            for generation in ("first", "second"):
+                leaf = build / "generations" / ("build." + generation)
+                launchers = leaf / "src/kitty/launcher"
+                launchers.mkdir(parents=True)
+                for path in (leaf / "source-id", launchers / "kitty", launchers / "kitten"):
+                    path.write_text(generation + "\n")
+            (build / "current").symlink_to("generations/build.second")
+            (build / "previous").symlink_to("generations/build.first")
+            stamp = state / "fork-built-ref"
+            stamp.write_text("canonical stamp\n")
+
+            def fingerprint():
+                return subprocess.check_output(
+                    ["bash", "-euo", "pipefail", "-c", "\n".join(helpers) +
+                     '\nengine_fingerprint "$1" "$2"', "bash", str(build), str(state)],
+                    text=True,
+                )
+
+            baseline = fingerprint()
+            # The historical check observed this absent path in every case.
+            self.assertFalse((state / "current").exists())
+            for path in (build / "current", build / "previous", stamp,
+                         build / "current/source-id", build / "current/src/kitty/launcher/kitty",
+                         build / "previous/src/kitty/launcher/kitten"):
+                with self.subTest(path=path):
+                    if path.is_symlink():
+                        target = path.readlink()
+                        path.unlink()
+                        path.symlink_to("generations/build.missing")
+                        self.assertNotEqual(fingerprint(), baseline)
+                        path.unlink()
+                        path.symlink_to(target)
+                    else:
+                        original = path.read_bytes()
+                        path.write_bytes(b"changed\n")
+                        self.assertNotEqual(fingerprint(), baseline)
+                        path.write_bytes(original)
+                    self.assertEqual(fingerprint(), baseline)
+
     def test_selected_target_cannot_hide_an_unchanged_installed_checkout(self):
         source = RUNNER.read_text()
         helper = source[source.index("verify_installed_target_ref() {"):]
