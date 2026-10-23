@@ -45,8 +45,13 @@ and [upgrade policy](UPGRADING.md) for the exact scope.
 The selected binary artifacts target **AMD64**. ARM64 support is under
 development; architecture checks in the Qt, media, converter and other runtime
 paths must pass with matching artifacts before an ARM64 upgrade is supported.
-The Waydroid application revision is recorded for provenance; managed app
-provisioning and Android target acceptance remain pending.
+The Waydroid application is provisioned from its exact selected revision into
+root-owned managed paths, with source and provenance records and transactional
+upgrade/rollback coverage. The shared Content catalog exposes its single-instance
+Android entry. The separate checksummed first-use helper installs the Android
+runtime only on explicit request; OS provisioning does not download Android
+images. Installed-target, Android and physical acceptance remain open; the
+selected first-use runtime closure supports AMD64 only.
 
 The dependency manifest supplies
 the same compression providers, read-only hardware-discovery tools, and
