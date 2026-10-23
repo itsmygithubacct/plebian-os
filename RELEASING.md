@@ -355,6 +355,19 @@ together.
    sha256sum "plebian-os-<x.y.z>-amd64.iso"
    ```
 
+Before the VM lanes, the bounded source controls can be recorded separately:
+
+```sh
+python3 build/acceptance-source.py --report <new-external-evidence-directory>
+```
+
+This requires a clean checkout and records its commit/tree, each suite's exit,
+count, skips and log digest. It runs the existing install/update fault and
+rollback controls, including the explicitly synthetic native package backend.
+`passed-source-controls` does not satisfy an ISO, installed guest, adjacent
+release upgrade, physical or human acceptance gate. Retain the report and
+`SHA256SUMS` outside the source checkout.
+
 6. Run both VM acceptance lanes from the clean, tagged Plebian-OS candidate
    checkout. First run the instrumented automated lane:
 
