@@ -16,12 +16,12 @@ login default is the main Kilix instance with Kilix 95 loaded as its first
 page. Its 95 flavor is explicit; Kilix Cap and Kilix TUI are Kilix-pinned optional
 desktops, Kilix Land is a Kilix-pinned optional walkable desktop, and Kilix
 IceWM provides a conventional window-manager desktop inside Kilix's private X
-session. The OS itself ships none of that — it **installs like a regular Debian
-system and then pulls its pieces from GitHub**:
+session. Provisioning adds the selected Pleb and Kilix components to a regular
+Debian system using the coordinated source and artifact pins:
 
 ```
-regular Debian install  ─▶  first boot  ─▶  pull deps + pleb + kilix  ─▶  Pleb session
-   (no desktop task)          (networked)     (+ desktop provider)      (visible Kilix chrome)
+Debian installer  ─▶  provision the selected stack  ─▶  Pleb session
+ (no desktop task)       (Pleb, Kilix and providers)    (visible Kilix chrome)
 ```
 
 The RC5 desktop-completion candidate adds account locking and power services,
@@ -34,10 +34,23 @@ sharing. These local candidate sources still require release
 selection, Chromium qualification, and a complete installed
 desktop acceptance run before they establish RC5 desktop completeness.
 
-## 0.2.1 development status
+## 0.2.2 development status
 
-This checkout contains early source work for 0.2.1; it is not a release
-artifact or an accepted release closure. The current dependency manifest adds
+The reviewed source integration for 0.2.2 includes managed coding sessions,
+persistent PTY controls, durable agent mailboxes, refreshed desktop providers,
+inline media repairs, and installer/update recovery fixes. Source publication
+does not establish release readiness: final ISO, installation, upgrade,
+rollback, physical desktop and provider acceptance remain open. See the
+[release notes](releases/0.2.2-notes.md), [selected revisions](releases/0.2.2.env)
+and [upgrade policy](UPGRADING.md) for the exact scope.
+
+The selected binary artifacts target **AMD64**. ARM64 support is under
+development; architecture checks in the Qt, media, converter and other runtime
+paths must pass with matching artifacts before an ARM64 upgrade is supported.
+The Waydroid application revision is recorded for provenance; managed app
+provisioning and Android target acceptance remain pending.
+
+The dependency manifest supplies
 the same compression providers, read-only hardware-discovery tools, and
 `linux-perf` qualification package to the preseed and standalone provisioning
 paths. Their manifest parity is covered by repository tests. Vulkan inference
@@ -96,17 +109,10 @@ and the tracked listener delta before atomic installation. This local-closure
 path supports development without publishing the binary candidate or implying
 that a release carrier has been approved.
 
-The wider 0.2.1 program—including interactive identity setup, the Debian and
-Kilix/kitty refresh, expanded system monitoring and model sizing, coordinated
-lazy installs, and isolated cross-stack test runners—remains subject to its
-implementation and release gates. Planning documents are deliberately kept
-outside the published source repositories until the corresponding contracts
-are implemented and accepted.
-
-Do not use this development checkout to alter or reproduce 0.2.0 release
-artifacts. Release reproduction always starts from that release's immutable
-tag, checksummed manifest, and published notes; 0.2.1 will receive its own
-closure only after its exact accepted component commits are known.
+Release reproduction starts from that release's immutable tag, checksummed
+manifest and published notes. Development source is not a supported installed
+upgrade destination. Upgrade paths and preservation requirements are defined
+in [UPGRADING.md](UPGRADING.md).
 
 ## Watch the series
 
@@ -252,7 +258,7 @@ transaction (provisioner, dependency installer, closure selector, unit, helpers,
 version, branded wallpaper, and artwork notices) from a `plebian-os` checkout, so OS-layer fixes reach
 installed systems too — pinned
 by `PLEBIAN_OS_REF` and disablable with
-`PLEBIAN_OS_SELF_UPDATE=0`. If `/etc/pleb/session.env` pins `PLEB_REF`,
+`PLEBIAN_OS_SELF_UPDATE=0`. The selected `/etc/pleb/closure.env` pins `PLEB_REF`,
 `KILIX_REF`, `KILIX95_REF`, or `PLEBIAN_OS_REF`, those exact refs remain the
 authority within the selected release instead of drifting to branch heads. The
 target selector validates the complete closure, fetches every exact component
@@ -545,6 +551,8 @@ Plebian-OS for a desktop-shaped one.
 
 ## Requirements
 
+- An AMD64 machine for the currently selected 0.2.2 binary closure. ARM64
+  development builds require their own matching artifacts and qualification.
 - A GPU with a KMS/DRM driver for hardware GL, or llvmpipe software GL as a
   fallback (kilix is a GPU terminal). No graphics at all → the greeter still
   works; the Pleb session falls back to a screen-filled kilix or a plain xterm.
@@ -556,19 +564,18 @@ Plebian-OS for a desktop-shaped one.
   `PLEBIAN_OS_KILIX_GO_SHA256_AMD64` / `_ARM64` pins make that toolchain exact
   and integrity-checked. Exact installs must also carry Pleb's root-owned
   `.pleb-source` archive stamp; a same-version binary without the matching stamp
-  is reinstalled. The pins persist into `/etc/pleb/session.env`.
+  is reinstalled. Release-controlled pins persist into `/etc/pleb/closure.env`;
+  operator choices remain in `/etc/pleb/session.env`.
 - 4 GiB RAM is the release-tested installation baseline because the fork build
   compiles large generated Go packages during firstboot. Lower-memory runtime
   use remains possible after installation, but builders warn below 4 GiB.
 
-Session and desktop-provider selection are controlled by `/etc/pleb/session.env`
-after install, or by environment at image-build/provision time. That file is
-yours to edit: a later `sudo plebian-os-provision` merges its own values into
-it rather than writing over it, rewriting only the keys that run owns — the
-storage layout it creates, the version marker, and anything you name explicitly
-in its environment or on its command line — and leaving every other line where
-it found it, including your comments, your appended blocks, and keys nothing
-here has ever heard of. Fresh images
+Release-controlled source and artifact pins live in `/etc/pleb/closure.env`.
+The selector migrates older mixed files and updates those pins transactionally;
+do not edit them by hand. `/etc/pleb/session.env` retains operator choices,
+comments and unknown keys. Session desktop/kiosk policy is also recorded in
+`/etc/default/plebian-os`; selecting a release preserves installed choices.
+See [UPGRADING.md](UPGRADING.md) for precedence and migration details. Fresh images
 default to `PLEBIAN_OS_DESKTOP=1` and `PLEBIAN_OS_KIOSK=0`: LightDM logs into
 the main screen-filling Kilix instance with its chrome visible and the external
 Kilix-95 provider already running as page 1. Exiting Kilix returns to the greeter
@@ -594,12 +601,11 @@ images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,
 `PLEBIAN_OS_NETINST_SHA256`, `PLEBIAN_OS_APT_SNAPSHOT`, `PLEB_REF`, `KILIX_REF`,
 `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`, and the exact
 Go version/architecture checksums before building. Simpler: set
-`PLEBIAN_OS_RELEASE=0.1.7` to load the coordinated pin manifest from
-[`releases/0.1.7.env`](releases/0.1.7.env) (see
-[RELEASING.md](RELEASING.md)). The snapshot pin covers Debian Installer and
-firstboot resolution, so every installation of a release resolves the same
-package closure. Once that closure is committed, release machines leave the
-snapshot: apt tracks the live Debian `trixie`, `trixie-updates`, and
+`PLEBIAN_OS_RELEASE=0.2.2` to load the current development pin manifest from
+[`releases/0.2.2.env`](releases/0.2.2.env) (see
+[RELEASING.md](RELEASING.md)). This selects development inputs, not a supported
+release upgrade. The current manifest leaves `PLEBIAN_OS_APT_SNAPSHOT` empty:
+apt tracks the signed live Debian `trixie`, `trixie-updates`, and
 `trixie-security` suites with replay protection enabled, and
 `unattended-upgrades` applies Debian security updates daily without rebooting.
 The installer's snapshot `sources.list` is retired to
