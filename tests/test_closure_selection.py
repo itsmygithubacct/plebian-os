@@ -1924,6 +1924,32 @@ class ClosureSelectionTests(unittest.TestCase):
                           result.stdout)
 
 
+    def test_arm64_current_release_refuses_before_closure_or_tools_change(self):
+        for dry_run in (False, True):
+            with self.subTest(dry_run=dry_run), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                env_file = self._machine(base)
+                before = env_file.read_bytes()
+                manifest = (ROOT / 'releases/0.2.2.env').read_text()
+                self._source(base, manifest_text=manifest, version='0.2.2',
+                             release='0.2.2', tag='v0.2.2')
+                bindir = base / 'bin'
+                bindir.mkdir()
+                uname = bindir / 'uname'
+                uname.write_text('#!/bin/sh\necho aarch64\n')
+                uname.chmod(0o755)
+                args = ['0.2.2', '--source', str(base / 'src'), '--offline']
+                if dry_run:
+                    args.append('--dry-run')
+                result = self._run(base, *args,
+                    env_extra={'PATH': str(bindir) + ':' + os.environ['PATH']})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('no source-qualified ARM64 closure', result.stderr)
+                self.assertEqual(env_file.read_bytes(), before)
+                self.assertEqual(list((base / 'root/usr/local/bin').iterdir()), [])
+                self.assertFalse((base / 'root/etc/pleb/closure.env').exists())
+
+
 class ClosureSelectionContractTests(unittest.TestCase):
     """The selector is an operator tool with a privilege boundary and a
     documented place in the upgrade order."""

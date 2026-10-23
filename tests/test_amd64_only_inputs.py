@@ -73,6 +73,7 @@ class Amd64OnlyInputTests(unittest.TestCase):
         return f"{self.bin}{os.pathsep}/usr/bin{os.pathsep}/bin"
 
     def provision(self, machine: str, **values: str):
+        values.setdefault("PLEBIAN_OS_VERSION", "0.2.1")
         script = (
             "set -euo pipefail\n"
             "export PLEBIAN_OS_PROVISION_LIB_ONLY=1\n"
@@ -86,6 +87,7 @@ class Amd64OnlyInputTests(unittest.TestCase):
             text=True, capture_output=True, check=False)
 
     def update(self, machine: str, **values: str):
+        values.setdefault("PLEBIAN_OS_VERSION", "0.2.1")
         script = (
             "set -euo pipefail\n"
             "die() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
@@ -166,6 +168,20 @@ class Amd64OnlyInputTests(unittest.TestCase):
         text = UPDATE.read_text()
         self.assertLess(text.index("\nrefuse_amd64_only_stack_inputs\n"),
                         text.index("\nbegin_stack_transaction\n"))
+
+    def test_current_fallback_checksum_is_also_refused(self):
+        current = "967a1958e7fc67b495d279c0963bcd1a0482097151817ce6506fabc822689af7"
+        for invoke in (self.provision, self.update):
+            self.assert_refused(invoke('aarch64', KILIX_PREBUILT_SHA256=current,
+                KILIX_PREBUILT_VERSION='0.48.2', INSTALL_WAYDROID='0',
+                INSTALL_VOICE_MODEL='0', PLEBIAN_OS_INSTALL_VOICE_MODEL='0'), 'amd64 kitty')
+
+    def test_required_converter_cannot_be_omitted_to_accept_arm64_release(self):
+        for invoke in (self.provision, self.update):
+            self.assert_refused(invoke('aarch64', PLEBIAN_OS_RELEASE='0.2.2',
+                KILIX_PREBUILT_SHA256=ARM64_BUNDLE_SHA256, INSTALL_WAYDROID='0',
+                INSTALL_VOICE_MODEL='0', PLEBIAN_OS_INSTALL_VOICE_MODEL='0'),
+                'no source-qualified ARM64 closure', 'required EnCodec converter')
 
     def test_provision_refuses_before_it_needs_root(self):
         text = PROVISION.read_text()

@@ -9,6 +9,25 @@ artifacts, and adjacent-version acceptance evidence are published together.
 Never point the installed updater at a development branch or use 0.2.2 source
 work to modify a 0.2.1 release worktree.
 
+## Architecture qualification
+
+The selected 0.2.2 closure is AMD64-only. ARM64 package handling in the Qt and
+player helpers does not qualify an ARM64 release: the required EnCodec
+converter, native runtime, patched Qt bundle and player must all have reviewed
+ARM64 artifacts selected together. The selector refuses this closure on ARM64
+before changing installed release configuration, including during a dry run.
+Provisioning and updates also refuse it before their stack transactions.
+Disabling dictation or Waydroid does not bypass required runtime qualification.
+The current Waydroid first-use closure remains AMD64-only. The optional
+diarization converter, Kilix Ollama runtime and Vulkan TTS installer also
+currently require AMD64; their ARM64 availability must be qualified separately.
+
+An ARM64 machine starting at 0.2.0 has no qualified direct 0.2.2 upgrade path.
+A future ARM64 release must explicitly qualify that exact hop, including
+interrupted-update recovery and package/configuration rollback, or qualify
+every intermediate release on ARM64. Source and package fixtures alone do not
+establish either path.
+
 ## Baseline and supported paths
 
 - Install 0.1.7 fresh when the machine runs anything older. In particular,

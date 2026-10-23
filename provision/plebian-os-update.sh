@@ -4427,11 +4427,25 @@ refuse_amd64_only_stack_inputs() {
     case "$machine" in
         x86_64|amd64) return 0 ;;
     esac
+    # The required converter is embedded in this OS source, not an optional
+    # session feature. Do not let feature overrides certify a partial release.
+    if [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.2 ]; then
+        die "0.2.2 has no source-qualified ARM64 closure: required EnCodec converter, native runtime and patched Qt/player artifacts must be selected together; installed stack unchanged"
+    fi
+    [ "${PLEBIAN_OS_INSTALL_WAYDROID:-0}" != 1 ] \
+        || die "selected Waydroid closure is amd64-only on $machine"
     if [ "$PLEBIAN_OS_INSTALL_VOICE_MODEL" = 1 ] && [[ "$KILIX_VOICE_LIB_URL" == *_x86_64.whl ]]; then
         die "KILIX_VOICE_LIB_URL is the x86_64 Vosk wheel, but this machine is $machine; set KILIX_VOICE_LIB_URL and KILIX_VOICE_LIB_SHA256 to the wheel for $machine"
     fi
     [ "$KILIX_PREBUILT_SHA256" != bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693 ] \
+        && [ "$KILIX_PREBUILT_SHA256" != 967a1958e7fc67b495d279c0963bcd1a0482097151817ce6506fabc822689af7 ] \
         || die "KILIX_PREBUILT_SHA256 is the amd64 kitty $KILIX_PREBUILT_VERSION bundle checksum, but this machine is $machine; set KILIX_PREBUILT_VERSION and KILIX_PREBUILT_SHA256 for the $machine bundle"
+    case "${PLEBIAN_OS_MPV_URL:-} ${PLEBIAN_OS_NATIVE_DEB_URL:-}" in
+        *_amd64.deb*) die "selected native/player package is amd64-only on $machine" ;;
+    esac
+    [ "${PLEBIAN_OS_QT_RUNTIME_SHA256:-}" != 623b5f2669fbf42679694ca5c8d3f841536a1f2bc449d66166f057650c8f4ad1 ] \
+        || die "selected patched Qt bundle is amd64-only on $machine"
+
 }
 
 stack_env=(

@@ -135,6 +135,9 @@ rollback_qt_runtime_transaction
 
 
 class QtPackageTests(unittest.TestCase):
+    architecture = "amd64"
+    triplet = "x86_64-linux-gnu"
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='qt-runtime-')
         self.addCleanup(self.temp.cleanup)
@@ -152,7 +155,7 @@ class QtPackageTests(unittest.TestCase):
         exec(compile(source.read_bytes(), str(source), 'exec'), self.module.__dict__)
         def fixture_path(*parts):
             path = Path(*parts)
-            if str(path).startswith('/usr/lib/x86_64-linux-gnu/'):
+            if str(path).startswith(f'/usr/lib/{self.triplet}/'):
                 path = fixture_root / str(path).lstrip('/')
             return FixturePath(path)
         self.module.Path = fixture_path
@@ -194,11 +197,11 @@ class QtPackageTests(unittest.TestCase):
             source = lane / name
             (source / 'DEBIAN').mkdir(parents=True)
             (source / 'DEBIAN/control').write_text(
-                f'Package: {name}\nVersion: {version}\nArchitecture: amd64\n'
+                f'Package: {name}\nVersion: {version}\nArchitecture: {self.architecture}\n'
                 'Maintainer: fixture <fixture@localhost>\nDescription: private test\n')
-            paths = [f'usr/lib/x86_64-linux-gnu/libQt{major}Gui.so.{qt}',
-                     f'usr/lib/x86_64-linux-gnu/libQt{major}XcbQpa.so.{qt}',
-                     f'usr/lib/x86_64-linux-gnu/qt{major}/plugins/platforms/libqxcb.so']
+            paths = [f'usr/lib/{self.triplet}/libQt{major}Gui.so.{qt}',
+                     f'usr/lib/{self.triplet}/libQt{major}XcbQpa.so.{qt}',
+                     f'usr/lib/{self.triplet}/qt{major}/plugins/platforms/libqxcb.so']
             files = []
             for relative in paths:
                 target = source / relative
@@ -207,11 +210,11 @@ class QtPackageTests(unittest.TestCase):
                 target.write_bytes(data)
                 files.append({'path': '/' + relative, 'bytes': len(data),
                               'sha256': hashlib.sha256(data).hexdigest()})
-            archive = lane / f'{name}_{version}_amd64.deb'
+            archive = lane / f'{name}_{version}_{self.architecture}.deb'
             self.real_run(['dpkg-deb', '--build', '--root-owner-group', str(source), str(archive)],
                           check=True, capture_output=True)
             self.archives[(name, version)] = archive
-            result.append({'Package': name, 'Version': version, 'Architecture': 'amd64',
+            result.append({'Package': name, 'Version': version, 'Architecture': self.architecture,
                            'qt': qt, 'path': archive.name, 'bytes': archive.stat().st_size,
                            'sha256': self.module.digest(archive), 'files': files})
         (lane / 'RUNTIME.json').write_text(json.dumps(result))
@@ -220,7 +223,7 @@ class QtPackageTests(unittest.TestCase):
     def output(self, argv, **kwargs):
         argv = [Path(argv[0]).name, *argv[1:]]
         if argv[:2] == ['dpkg', '--print-architecture']:
-            return 'amd64\n'
+            return self.architecture + '\n'
         if argv[0] == 'dpkg-query':
             return 'installed\n' + self.versions[argv[-1]]
         return self.real_output(argv, **kwargs)
@@ -324,6 +327,21 @@ class QtPackageTests(unittest.TestCase):
             self.module.install_bundle(link, self.module.digest(bundle), bundle.stat().st_size)
         with self.assertRaises(ValueError):
             self.module.install_bundle(bundle, '0' * 64, bundle.stat().st_size)
+
+
+class Arm64QtPackageTests(QtPackageTests):
+    architecture = "arm64"
+    triplet = "aarch64-linux-gnu"
+
+    def test_foreign_manifest_refused_before_package_mutation(self):
+        lane, records = self.package_set('foreign', '+plebianrc6.1')
+        for record in records:
+            record['Architecture'] = 'amd64'
+        (lane / 'RUNTIME.json').write_text(json.dumps(records))
+        with self.assertRaisesRegex(ValueError, 'architecture'):
+            self.install(lane)
+        self.assertEqual(self.events, [])
+        self.assertFalse(self.module.PREFERENCE.exists())
 
 
 if __name__ == '__main__':

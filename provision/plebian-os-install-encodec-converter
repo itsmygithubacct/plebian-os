@@ -136,6 +136,8 @@ def main():
     args = parser.parse_args()
     if ARCHIVE_SIZE <= 0 or len(ARCHIVE_SHA256) != 64:
         raise ValueError("converter release archive has not been selected")
+    if platform.machine() not in ("x86_64", "amd64"):
+        raise ValueError("no source-qualified EnCodec converter bundle selected for this architecture")
     if args.dry_run:
         print(f"Required conversion software; no model weights or licence receipts.\n{ARCHIVE_URL}\n"
               f"bytes={ARCHIVE_SIZE} sha256={ARCHIVE_SHA256}\nInstall at {DESTINATION}")
