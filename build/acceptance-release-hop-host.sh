@@ -310,7 +310,15 @@ run_lane() {
                 post_version="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' \
                     "$lane_dir/show-after-reboot.txt" | head -n 1)"
             fi
-            if [ "$post_version" = "$target" ]; then reboot_rc=0; fi
+            if [ "$post_version" = "$target" ] && [ -s "$lane_dir/verify-after-reboot.sh" ]; then
+                set +e
+                remote_exec "$destination" "$port" 'bash -s' \
+                    <"$lane_dir/verify-after-reboot.sh" \
+                    >"$lane_dir/exact-state-after-reboot.stdout" \
+                    2>"$lane_dir/exact-state-after-reboot.stderr"
+                reboot_rc=$?
+                set -e
+            fi
         fi
     fi
     printf '%s\n' "$reboot_rc" >"$lane_dir/reboot.exit"
