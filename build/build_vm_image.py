@@ -2172,7 +2172,7 @@ if default is not None:
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]
     if os.environ.get("PLEBIAN_OS_MPV_URL"):
-        checks.append(("selected terminal player", "/usr/local/sbin/plebian-os-mpv-runtime --verify"))
+        checks.append(("selected terminal player", "sudo -n /usr/local/sbin/plebian-os-mpv-runtime --verify"))
     if os.environ.get("PLEBIAN_OS_QT_RUNTIME_URL"):
         checks.append(("selected Qt runtime", "/usr/local/sbin/plebian-os-qt-runtime --verify"))
     if cfg.desktop:
