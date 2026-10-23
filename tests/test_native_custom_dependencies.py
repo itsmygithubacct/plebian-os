@@ -52,6 +52,7 @@ class ArchiveAuthorityTests(unittest.TestCase):
 
 
 class SyntheticBackend:
+    architecture = "amd64"
     def __init__(self):
         self.guard = lambda: None
         self.events = []

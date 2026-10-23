@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 import test_native_closure as closure
 import test_provision_transaction as transaction
@@ -149,6 +150,49 @@ class MpvArchiveTests(unittest.TestCase):
     def test_system_player_replacement_refused(self):
         (self.tree / 'usr/bin/mpv').write_text('unexpected\n')
         with self.assertRaisesRegex(ValueError, 'unexpected'):
+            self.module.archive_info(self.build())
+
+
+class Arm64MpvPackageTests(MpvArchiveTests):
+    def setUp(self):
+        super().setUp()
+        patch = mock.patch.object(self.module, 'native_architecture', return_value='arm64')
+        patch.start()
+        self.addCleanup(patch.stop)
+        control = self.tree / 'DEBIAN/control'
+        control.write_text(control.read_text().replace('Architecture: amd64', 'Architecture: arm64'))
+
+    def test_arm64_snapshot_and_restore_use_native_cache(self):
+        self.module.STATE = self.root / 'state'
+        cache = self.module.STATE / 'packages'
+        cache.mkdir(parents=True)
+        import shutil
+        archive = cache / 'kilix-mpv_0.40.0+kilix.4_arm64.deb'
+        shutil.copyfile(self.build(), archive)
+        snapshot = self.root / 'snapshot'
+        real_run = subprocess.run
+        calls = []
+
+        def run(argv, **kwargs):
+            if argv[0] == '/usr/bin/apt-get':
+                calls.append(argv)
+                return subprocess.CompletedProcess(argv, 0)
+            return real_run(argv, **kwargs)
+
+        with mock.patch.object(self.module, 'private_directory'), \
+                mock.patch.object(self.module, 'installed_version', return_value='0.40.0+kilix.4'), \
+                mock.patch.object(self.module, 'verify'), \
+                mock.patch.object(self.module.subprocess, 'run', side_effect=run):
+            self.module.snapshot(snapshot)
+            self.module.restore(snapshot)
+        self.assertEqual(len(calls), 1)
+        self.assertIn('--allow-downgrades', calls[0])
+        self.assertEqual((snapshot / 'previous.deb').read_bytes(), archive.read_bytes())
+
+    def test_foreign_archive_refused(self):
+        control = self.tree / 'DEBIAN/control'
+        control.write_text(control.read_text().replace('Architecture: arm64', 'Architecture: amd64'))
+        with self.assertRaisesRegex(ValueError, 'native-architecture'):
             self.module.archive_info(self.build())
 
 

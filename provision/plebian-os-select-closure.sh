@@ -532,6 +532,31 @@ validate_native_release_closure() {
     done
 }
 
+validate_release_architecture() {
+    local machine
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64) return 0 ;;
+        aarch64|arm64) ;;
+        *) closure_reject "unsupported release architecture: $machine" ;;
+    esac
+    # The selected 0.2.2 converter is required and source-embedded. A different
+    # wheel or disabled optional feature cannot qualify the complete closure.
+    [ "$TARGET" != 0.2.2 ] \
+        || closure_reject "0.2.2 has no source-qualified ARM64 closure; required converter, native runtime and patched Qt/player artifacts are not selected for ARM64"
+    [ "${MANIFEST[PLEBIAN_OS_INSTALL_WAYDROID]:-0}" != 1 ] \
+        || closure_reject "selected Waydroid closure is amd64-only"
+    if [ "${MANIFEST[PLEBIAN_OS_INSTALL_VOICE_MODEL]:-0}" = 1 ]; then
+        case "${MANIFEST[KILIX_VOICE_LIB_URL]:-}" in
+            *_x86_64.whl) closure_reject "selected Vosk wheel is x86_64" ;;
+        esac
+    fi
+    case "${MANIFEST[KILIX_PREBUILT_SHA256]:-}" in
+        bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693|967a1958e7fc67b495d279c0963bcd1a0482097151817ce6506fabc822689af7)
+            closure_reject "selected kitty checksum is amd64-only" ;;
+    esac
+}
+
 validate_release_closure() {
     local PLEBIAN_OS_NATIVE_DEB_URL="${MANIFEST[PLEBIAN_OS_NATIVE_DEB_URL]:-}"
     local PLEBIAN_OS_NATIVE_DEB_SHA256="${MANIFEST[PLEBIAN_OS_NATIVE_DEB_SHA256]:-}"
@@ -2345,6 +2370,7 @@ select_closure() {
     resolve_closure_source
     parse_release_manifest "$STAGE/manifest.env"
     parse_release_requirements "$STAGE/requirements"
+    validate_release_architecture
     validate_release_closure
     build_selected_closure
     prepare_component_ancestry_checks

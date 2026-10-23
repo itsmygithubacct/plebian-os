@@ -21,6 +21,14 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.destination = Path(self.temp.name)
 
+    def test_arm64_dry_run_refuses_before_any_install_action(self):
+        with mock.patch('platform.machine', return_value='aarch64'), \
+                mock.patch('sys.argv', [str(HELPER), '--dry-run']), \
+                mock.patch('subprocess.run') as command:
+            with self.assertRaisesRegex(ValueError, 'no source-qualified'):
+                self.ns['main']()
+        command.assert_not_called()
+
     def archive(self, extra=()):
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w") as archive:

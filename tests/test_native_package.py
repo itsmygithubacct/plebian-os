@@ -66,14 +66,15 @@ OWNERS = {'ld-linux-x86-64.so.2': 'libc6', 'libc.so.6': 'libc6', 'libcrypto.so.3
 
 
 def fixture(*, mutate_control=None, mutate_data=None, mutate_source=None, mutate_record=None,
-            source_commit=SOURCE, version_base='0.0.1', schema=1, relation=None, extra=None):
+            source_commit=SOURCE, version_base='0.0.1', schema=1, relation=None, extra=None, architecture='amd64'):
     """Tiny inert, explicitly synthetic selection; never production authority."""
-    lock = {'schema': 'kilix.encodec.debian-dependencies/v1', 'architecture': 'amd64',
+    lock = {'schema': 'kilix.encodec.debian-dependencies/v1', 'architecture': architecture,
             'packages': {name: {'version': '1.0'} for name in ('libonnxruntime1.21', 'libssl3t64', 'libc6')}}
     source = {name: regular(name, b'inert fixture\n') for name in (
         'LICENSE', 'README.md', 'FILE-FORMAT.md', 'THIRD-PARTY-NOTICES.md', 'tools/build_native_package.py')}
     source['VERSION'] = regular('VERSION', (version_base + '\n').encode())
-    source['tools/debian-dependencies.json'] = regular('tools/debian-dependencies.json', canonical(lock))
+    lock_name = 'tools/debian-dependencies.json' if architecture == 'amd64' else 'tools/debian-dependencies-arm64.json'
+    source[lock_name] = regular(lock_name, canonical(lock))
     if mutate_source:
         mutate_source(source)
     files = {name: regular(name, b'inert\n', 0o755 if name in (
@@ -93,12 +94,15 @@ def fixture(*, mutate_control=None, mutate_data=None, mutate_source=None, mutate
               'packages': {name: {'version': row['version'], 'source': 'installed-dpkg'}
                            for name, row in lock['packages'].items()},
               }
+    owners = dict(OWNERS)
+    if architecture == 'arm64':
+        owners['ld-linux-aarch64.so.1'] = owners.pop('ld-linux-x86-64.so.2')
     built = {'bytes': 6, 'sha256': hashlib.sha256(b'inert\n').hexdigest()}
     if schema == 1:
-        record['runtime_files'] = {name: dict(built) for name in OWNERS}
+        record['runtime_files'] = {name: dict(built) for name in owners}
     else:
         record['runtime_libraries'] = {name: {'package': owner, 'version': '1.0', 'built': dict(built)}
-                                       for name, owner in OWNERS.items()}
+                                       for name, owner in owners.items()}
         for name, (owner, version) in (extra or {}).items():
             record['runtime_libraries'][name] = {'package': owner, 'version': version, 'built': dict(built)}
     for name, (entry, data) in files.items():
@@ -110,7 +114,7 @@ def fixture(*, mutate_control=None, mutate_data=None, mutate_source=None, mutate
     if mutate_data:
         mutate_data(files)
     version = version_base + '+git' + source_commit[:12] + '.' + CONTENT[:12]
-    control_text = (f'Package: libkilix-encodec\nVersion: {version}\nArchitecture: amd64\n'
+    control_text = (f'Package: libkilix-encodec\nVersion: {version}\nArchitecture: {architecture}\n'
         'Maintainer: itsmygithubacct <itsmygithubacct@users.noreply.github.com>\n'
         'Depends: libonnxruntime1.21 ({0} 1.0), libssl3t64 ({0} 1.0), libc6 ({0} 1.0){1}\n'.format(
             relation or ('=' if schema == 1 else '>='),
@@ -158,6 +162,19 @@ class ArtifactTests(unittest.TestCase):
                 inspect(self.example, **args)
         with self.assertRaises(native.InvalidPackage):
             inspect(bytearray(self.example))
+
+    def test_arm64_selection_requires_matching_lock_control_and_loader(self):
+        for schema in (1, 2):
+            data = fixture(architecture='arm64', schema=schema)
+            result = inspect(data, architecture='arm64')
+            self.assertEqual(result['architecture'], 'arm64')
+            self.assertIn('ld-linux-aarch64.so.1', result['runtime_files' if schema == 1 else 'runtime_libraries'])
+            with self.assertRaises(native.InvalidPackage):
+                inspect(data)
+            with self.assertRaises(native.InvalidPackage):
+                inspect(fixture(schema=schema), architecture='arm64')
+        with self.assertRaises(native.InvalidPackage):
+            inspect(self.example, architecture='riscv64')
 
     def test_plain_and_gnu_short_ar_names(self):
         members = native.ar_members(self.example)

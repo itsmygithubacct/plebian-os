@@ -255,7 +255,9 @@ def source_tree(files):
     return tree(root).hex()
 
 
-def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
+def inspect_package(data, *, sha256, byte_count, source_commit, content_commit, architecture="amd64"):
+    require(architecture in ("amd64", "arm64"), "unsupported native architecture")
+    loader = "ld-linux-aarch64.so.1" if architecture == "arm64" else "ld-linux-x86-64.so.2"
     require(type(data) is bytes and type(byte_count) is int and 0 < byte_count <= MAX_ARCHIVE,
             'invalid selected archive size or byte population')
     require(type(sha256) is str and DIGEST.fullmatch(sha256)
@@ -305,16 +307,17 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
     require(all(PurePosixPath(name).suffix.lower() not in ('.onnx', '.pt', '.th', '.safetensors', '.deb')
                 for name in source), 'model or binary package in source offer')
     require(source_tree(source) == record.get('source_tree'), 'source tree differs from archive')
+    lock_name = 'tools/debian-dependencies.json' if architecture == 'amd64' else 'tools/debian-dependencies-arm64.json'
     required = {'VERSION', 'LICENSE', 'README.md', 'FILE-FORMAT.md', 'THIRD-PARTY-NOTICES.md',
-                'tools/debian-dependencies.json', 'tools/build_native_package.py'}
+                lock_name, 'tools/build_native_package.py'}
     require(required <= set(source), 'source offer incomplete')
     for name in ('LICENSE', 'README.md', 'FILE-FORMAT.md', 'THIRD-PARTY-NOTICES.md'):
         require(installed[DOC + name][1] == source[name][1], 'source notice differs')
-    lock_raw = source['tools/debian-dependencies.json'][1]
+    lock_raw = source[lock_name][1]
     require(installed[DOC + 'debian-dependencies.json'][1] == lock_raw, 'dependency offer differs')
     lock = json_object(lock_raw)
     require(lock.get('schema') == 'kilix.encodec.debian-dependencies/v1'
-            and lock.get('architecture') == 'amd64' and type(lock.get('packages')) is dict,
+            and lock.get('architecture') == architecture and type(lock.get('packages')) is dict,
             'unsupported dependency closure')
     package_names = ('libonnxruntime1.21', 'libssl3t64', 'libc6')
     dependencies = {}
@@ -343,7 +346,7 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
     runtime_files = record.get(runtime_key)
     require(type(runtime_files) is dict and 1 <= len(runtime_files) <= 128,
             'invalid runtime dependency population')
-    require({'ld-linux-x86-64.so.2', 'libc.so.6', 'libcrypto.so.3', 'libonnxruntime.so.1.21.0'} <= set(runtime_files),
+    require({loader, 'libc.so.6', 'libcrypto.so.3', 'libonnxruntime.so.1.21.0'} <= set(runtime_files),
             'required runtime dependency identity missing')
 
     def fingerprint(row):
@@ -367,7 +370,7 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
         # The libraries a direct dependency ships are named by that dependency,
         # at the version it is declared at; the rest of the closure is free to
         # come from whichever Debian package ships it.
-        for library, owner in (('libc.so.6', 'libc6'), ('ld-linux-x86-64.so.2', 'libc6'),
+        for library, owner in (('libc.so.6', 'libc6'), (loader, 'libc6'),
                                ('libcrypto.so.3', 'libssl3t64'),
                                ('libonnxruntime.so.1.21.0', 'libonnxruntime1.21')):
             row = runtime_files[library]
@@ -387,7 +390,7 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
                     'one package is recorded at two versions: ' + row['package'])
         order = list(package_names) + sorted(set(floors) - set(package_names))
         depends = ', '.join(name + ' (>= ' + floors[name] + ')' for name in order)
-    expected_control = (f'Package: libkilix-encodec\nVersion: {version}\nArchitecture: amd64\n'
+    expected_control = (f'Package: libkilix-encodec\nVersion: {version}\nArchitecture: {architecture}\n'
         'Maintainer: itsmygithubacct <itsmygithubacct@users.noreply.github.com>\n'
         f'Depends: {depends}\nSection: libs\nPriority: optional\n'
         'Description: Shared Kilix codec and installed-content admission\n'
@@ -401,7 +404,7 @@ def inspect_package(data, *, sha256, byte_count, source_commit, content_commit):
             and type(receipt.get('bundle_sha256')) is str and DIGEST.fullmatch(receipt['bundle_sha256']),
             'embedded Content receipt differs')
     return {'schema': 'plebian-os.native-artifact/v1', 'package': 'libkilix-encodec',
-            'version': version, 'architecture': 'amd64', 'sha256': sha256, 'bytes': byte_count,
+            'version': version, 'architecture': architecture, 'sha256': sha256, 'bytes': byte_count,
             'source_commit': source_commit, 'content_commit': content_commit,
             'source_tree': record['source_tree'], 'source_files': len(source),
             'record_sha256': digest(installed[RECORD][1]), 'files': file_records | {
@@ -420,10 +423,11 @@ def custom_dependency_records(data, **selection):
     installed = tar_members(expand_xz(ar_members(data)['data.tar.xz'], MAX_DATA),
                             dotted=True, maximum_members=64)
     packages = json_object(installed[DOC + 'debian-dependencies.json'][1])['packages']
-    return validate_custom_dependencies(packages)
+    return validate_custom_dependencies(packages, architecture=selection.get('architecture', 'amd64'))
 
 
-def validate_custom_dependencies(packages):
+def validate_custom_dependencies(packages, *, architecture="amd64"):
+    require(architecture in ("amd64", "arm64"), "unsupported native architecture")
     selected = {name: row for name, row in packages.items() if row.get('archive') == 'kilix'}
     if not selected:
         return {}
@@ -435,7 +439,7 @@ def validate_custom_dependencies(packages):
                 and re.fullmatch(r'[A-Za-z0-9.+:~_-]{1,100}', row['version'])
                 and '+kilix' in row['version'], 'invalid custom ORT version')
         versions.add(row['version'])
-        filename = name + '_' + row['version'] + '_amd64.deb'
+        filename = name + '_' + row['version'] + '_' + architecture + '.deb'
         require(row.get('filename') == filename and row.get('provision') == 'ort'
                 and type(row.get('bytes')) is int and 0 < row['bytes'] <= MAX_ARCHIVE
                 and type(row.get('sha256')) is str and DIGEST.fullmatch(row['sha256'])
@@ -448,6 +452,7 @@ def validate_custom_dependencies(packages):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--architecture', choices=('amd64', 'arm64'), default='amd64')
     parser.add_argument('--artifact', type=Path, required=True)
     parser.add_argument('--sha256', required=True)
     parser.add_argument('--bytes', dest='byte_count', type=int, required=True)
@@ -457,7 +462,7 @@ def main():
     try:
         data = read_archive(args.artifact)
         result = inspect_package(data, sha256=args.sha256, byte_count=args.byte_count,
-                                 source_commit=args.source_commit, content_commit=args.content_commit)
+                                 source_commit=args.source_commit, content_commit=args.content_commit, architecture=args.architecture)
     except (OSError, InvalidPackage, UnicodeError) as error:
         parser.exit(1, 'native artifact refused: ' + str(error) + '\n')
     print(json.dumps(result, sort_keys=True, separators=(',', ':')))

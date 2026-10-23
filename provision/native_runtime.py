@@ -61,7 +61,10 @@ def describe_active_owner(active):
 
 
 class Dpkg:
-    def __init__(self, tree, runner):
+    def __init__(self, tree, runner, *, architecture="amd64"):
+        need(architecture in ("amd64", "arm64"), "unsupported native architecture")
+        self.architecture = architecture
+        self.multiarch = "aarch64-linux-gnu" if architecture == "arm64" else "x86_64-linux-gnu"
         self.tree = tree
         self.runner = runner
         self.guard = lambda: None
@@ -130,9 +133,9 @@ class Dpkg:
     def current_at_least(self, name, floor):
         # Qualified, so an i386 co-installation of the same library (Wine,
         # Steam) cannot turn one status record into two.
-        status = self.status(name + ':amd64')
+        status = self.status(name + ':' + self.architecture)
         need(status is not None and status['status'] == 'install ok installed'
-             and status['architecture'] == 'amd64'
+             and status['architecture'] == self.architecture
              and self.version_at_least(status['version'], floor),
              'native dependency is not installed at or above the version built against: ' + name)
 
@@ -145,18 +148,18 @@ class Dpkg:
         entry, which a Debian security update rewrites together with the file.
         """
         self.current_at_least(row['package'], row['version'])
-        relative = 'usr/lib/x86_64-linux-gnu/' + name
+        relative = 'usr/lib/' + self.multiarch + '/' + name
         owners = set()
-        for path in ('/' + relative, '/lib/x86_64-linux-gnu/' + name):
+        for path in ('/' + relative, '/lib/' + self.multiarch + '/' + name):
             code, out, err = self.run(['/usr/bin/dpkg-query', '--admindir=/var/lib/dpkg', '--search', path],
                                       accepted=(0, 1))
             for line in out.decode('utf-8').splitlines():
                 owner, separator, found = line.rpartition(': ')
                 if separator and found == path and not line.startswith('diversion '):
                     owners.update(item.strip() for item in owner.split(','))
-        # The amd64 instance (or an architecture-independent package) and no
+        # The selected native instance (or an architecture-independent package) and no
         # other: an i386 co-installation owning a file here is not the owner.
-        need(len(owners) == 1 and owners <= {row['package'] + ':amd64', row['package']},
+        need(len(owners) == 1 and owners <= {row['package'] + ':' + self.architecture, row['package']},
              'native runtime library is not owned by its recorded package: ' + name)
         actual = self.tree.fingerprint(relative, maximum=96 * 1024**2)
         need(actual is not None and 'link' not in actual
@@ -166,17 +169,18 @@ class Dpkg:
         need(hashlib.sha256(data).hexdigest() == actual['sha256'], 'native runtime library changed during inspection')
         digest = hashlib.md5(data).hexdigest()
         sums = None
-        for info in (row['package'] + ':amd64.md5sums', row['package'] + '.md5sums'):
+        for info in (row['package'] + ':' + self.architecture + '.md5sums', row['package'] + '.md5sums'):
             sums = self.tree.read('var/lib/dpkg/info/' + info, maximum=4 * 1024**2, missing=True)
             if sums is not None:
                 break
         need(sums is not None, 'owning package has no dpkg checksums: ' + row['package'])
         recorded = {line.split(None, 1)[1].strip(): line.split(None, 1)[0]
                     for line in sums.decode('utf-8', 'replace').splitlines() if len(line.split(None, 1)) == 2}
-        need(digest in (recorded.get(relative), recorded.get('lib/x86_64-linux-gnu/' + name)),
+        need(digest in (recorded.get(relative), recorded.get('lib/' + self.multiarch + '/' + name)),
              'native runtime library differs from its package: ' + name)
 
     def dependencies(self, metadata):
+        need(metadata.get('architecture') == self.architecture, 'native artifact architecture differs')
         if 'runtime_libraries' in metadata:
             for name, version in metadata['dependencies'].items():
                 self.current_at_least(name, version)
@@ -189,12 +193,12 @@ class Dpkg:
             return
         for name, version in metadata['dependencies'].items():
             need(self.status(name) == {'status': 'install ok installed', 'version': version,
-                                      'architecture': 'amd64'},
+                                      'architecture': self.architecture},
                  'native dependency is not the exact installed selection: ' + name)
         for name, expected in metadata['runtime_files'].items():
             self.runner.check()
             self.guard()
-            actual = self.tree.fingerprint('usr/lib/x86_64-linux-gnu/' + name, maximum=96 * 1024**2)
+            actual = self.tree.fingerprint('usr/lib/' + self.multiarch + '/' + name, maximum=96 * 1024**2)
             need(actual is not None and actual.get('mode') in (0o644, 0o755)
                  and actual.get('uid') == actual.get('gid') == 0
                  and {key: actual.get(key) for key in ('bytes', 'sha256')} == expected,
@@ -212,7 +216,7 @@ class Dpkg:
             match = re.fullmatch(r'\s*(?:[A-Za-z0-9_+.-]+ => )?(/[^\s]+) \(0x[0-9a-f]+\)\s*', line)
             need(match is not None, 'native loader reports a missing or unrecognized dependency')
             resolved = Path(match.group(1)).resolve(strict=True)
-            need(resolved.parent == Path('/usr/lib/x86_64-linux-gnu') and resolved.name not in actual,
+            need(resolved.parent == Path('/usr/lib') / self.multiarch and resolved.name not in actual,
                  'native loader selected an unexpected dependency origin')
             actual.add(resolved.name)
         closure = metadata['runtime_libraries' if 'runtime_libraries' in metadata else 'runtime_files']
@@ -255,6 +259,8 @@ class Dpkg:
                     need(len(values) == 4 and values[3] not in targets, 'native path has a stat override')
 
     def verify(self, metadata):
+        need(metadata is None or metadata.get('architecture') == self.architecture,
+             'native artifact architecture differs')
         self.audit()
         observed = self.snapshot()
         if metadata is None:
@@ -264,7 +270,7 @@ class Dpkg:
             self.conflicts()
             return observed
         need(observed['status'] == {'status': 'install ok installed', 'version': metadata['version'],
-                                   'architecture': 'amd64'}, 'installed native package identity differs')
+                                   'architecture': self.architecture}, 'installed native package identity differs')
         expected_files = {name: row | {'uid': 0, 'gid': 0} for name, row in metadata['files'].items()}
         need(observed['files'] == expected_files | {name: None for name in SCRATCH},
              'installed native files differ from the selected archive')
@@ -393,7 +399,7 @@ class Manager:
             return None
         raw = self.tree.read(self.cache_name(value), maximum=artifact.MAX_ARCHIVE, mode=0o600)
         inspected = artifact.inspect_package(raw, sha256=value.get('sha256'), byte_count=value.get('bytes'),
-            source_commit=value.get('source_commit'), content_commit=value.get('content_commit'))
+            source_commit=value.get('source_commit'), content_commit=value.get('content_commit'), architecture=value.get('architecture'))
         need(inspected == value, 'cached package metadata differs from independently selected bytes')
         return inspected
 
@@ -401,6 +407,8 @@ class Manager:
         # This preparation is separate from the one-package rollback journal.
         # Only v2's owner/checksum compatibility policy can survive a dependency
         # replacement. Reject legacy v1 before even downloading either archive.
+        need(selection.get("architecture", "amd64") == self.backend.architecture,
+             "native artifact architecture differs")
         records = artifact.custom_dependency_records(data, **selection)
         if not records:
             return
@@ -412,9 +420,9 @@ class Manager:
                  'legacy byte-pinned runtime requires explicit migration before dependency replacement')
             self.backend.verify(current)
             for name, row in records.items():
-                old = self.backend.status(name + ':amd64')
+                old = self.backend.status(name + ':' + self.backend.architecture)
                 need(old is None or (old['status'] == 'install ok installed'
-                     and old['architecture'] == 'amd64'
+                     and old['architecture'] == self.backend.architecture
                      and self.backend.version_at_least(row['version'], old['version'])),
                      'custom dependency would downgrade or replace an unhealthy package: ' + name)
             self.backend.audit()
@@ -435,15 +443,15 @@ class Manager:
                          'downloaded custom dependency differs from selected archive: ' + name)
                     _, out, err = self.backend.run(['/usr/bin/dpkg-deb', '--show',
                         '--showformat=${Package}\n${Version}\n${Architecture}\n', str(path)])
-                    need(not err and out == f'{name}\n{row["version"]}\namd64\n'.encode(),
+                    need(not err and out == f'{name}\n{row["version"]}\n{self.backend.architecture}\n'.encode(),
                          'custom dependency package identity differs: ' + name)
                     paths.append(path)
                 # Both archives pass before any mutation. Reinstall even when
                 # versions match: earlier development archives used this version.
                 self.backend.install_dependencies(paths)
                 for name, row in records.items():
-                    need(self.backend.status(name + ':amd64') == {
-                        'status': 'install ok installed', 'version': row['version'], 'architecture': 'amd64'},
+                    need(self.backend.status(name + ':' + self.backend.architecture) == {
+                        'status': 'install ok installed', 'version': row['version'], 'architecture': self.backend.architecture},
                         'custom dependency did not become fully installed: ' + name)
                 self.backend.verify(current)
 
@@ -487,6 +495,8 @@ class Manager:
         token = secrets.token_hex(16) if transaction is None else transaction
         self.journal_name(token)
         new = artifact.inspect_package(data, **selection)
+        need(new["architecture"] == self.backend.architecture,
+             "native artifact architecture differs")
         with self.locked():
             active = self.read_json(ACTIVE, missing=True)
             need(active is None, 'native transaction already active; '
@@ -659,17 +669,20 @@ def main():
         signal.signal(number, runner.cancel)
     signal.signal(signal.SIGPIPE, signal.SIG_IGN)
     try:
+        _, output, error = runner.run(["/usr/bin/dpkg", "--print-architecture"])
+        need(not error and output in (b"amd64\n", b"arm64\n"), "unsupported native architecture")
+        architecture = output.decode("ascii").strip()
         with state.Tree() as tree:
-            manager = Manager(tree, Dpkg(tree, runner))
+            manager = Manager(tree, Dpkg(tree, runner, architecture=architecture))
             if args.command == 'install-dependencies':
                 manager.install_dependencies(artifact.read_archive(args.artifact),
                     sha256=args.sha256, byte_count=args.byte_count,
-                    source_commit=args.source_commit, content_commit=args.content_commit)
+                    source_commit=args.source_commit, content_commit=args.content_commit, architecture=architecture)
             elif args.command == 'prepare':
                 data = artifact.read_archive(args.artifact)
                 token = manager.prepare(data, transaction=args.transaction,
                     sha256=args.sha256, byte_count=args.byte_count,
-                    source_commit=args.source_commit, content_commit=args.content_commit)
+                    source_commit=args.source_commit, content_commit=args.content_commit, architecture=architecture)
                 print(token, flush=True)
             elif args.command == 'status':
                 with manager.locked():

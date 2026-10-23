@@ -26,6 +26,14 @@ FILES = {
 }
 
 
+def native_architecture():
+    architecture = subprocess.check_output(
+        ['/usr/bin/dpkg', '--print-architecture'], text=True).strip()
+    if architecture not in ('amd64', 'arm64'):
+        raise ValueError('runtime packages support only amd64 and arm64')
+    return architecture
+
+
 def digest(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
@@ -65,9 +73,9 @@ def archive_info(path):
     result = subprocess.check_output([
         '/usr/bin/dpkg-deb', '-f', str(path), 'Package', 'Version', 'Architecture'], text=True)
     metadata = dict(line.split(': ', 1) for line in result.splitlines())
-    if (metadata.get('Package') != 'kilix-mpv' or metadata.get('Architecture') != 'amd64'
+    if (metadata.get('Package') != 'kilix-mpv' or metadata.get('Architecture') != native_architecture()
             or not re.fullmatch(r'[0-9][A-Za-z0-9.+~:-]{0,99}', metadata.get('Version', ''))):
-        raise ValueError('archive must be an amd64 kilix-mpv package')
+        raise ValueError('archive must be a native-architecture kilix-mpv package')
     control = subprocess.check_output(['/usr/bin/dpkg-deb', '--ctrl-tarfile', str(path)])
     with tarfile.open(fileobj=io.BytesIO(control)) as tar:
         for member in tar:
@@ -131,7 +139,7 @@ def snapshot(directory):
     if receipt.exists():
         prior['runtime'] = json.loads(receipt.read_text())
     if version is not None:
-        archive = STATE / 'packages' / ('kilix-mpv_' + version + '_amd64.deb')
+        archive = STATE / 'packages' / ('kilix-mpv_' + version + '_' + native_architecture() + '.deb')
         if not archive.is_file() or archive.is_symlink():
             raise ValueError('previous player archive is unavailable; retain its exact .deb before updating')
         record = archive_info(archive)
@@ -184,13 +192,11 @@ def install(path, expected_sha, expected_bytes, version, source, launcher):
         record = archive_info(held)
         if record['version'] != version or record['launcher'] != launcher:
             raise ValueError('package version or launcher pin differs')
-        if subprocess.check_output(['/usr/bin/dpkg', '--print-architecture'], text=True).strip() != 'amd64':
-            raise ValueError('selected player requires amd64')
         record.update(sha256=expected_sha, bytes=expected_bytes, source=source)
         cache = STATE / 'packages'
         cache.mkdir(mode=0o700, exist_ok=True)
         private_directory(cache)
-        target = cache / ('kilix-mpv_' + version + '_amd64.deb')
+        target = cache / ('kilix-mpv_' + version + '_' + native_architecture() + '.deb')
         if target.exists() and digest(target) != expected_sha:
             raise ValueError('refusing different player bytes under an existing version')
         if not target.exists():
