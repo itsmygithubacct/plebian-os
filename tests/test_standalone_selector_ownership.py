@@ -1,6 +1,7 @@
 """Exercise the elevated transaction with distinct root and user identities."""
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -26,7 +27,7 @@ with tempfile.TemporaryDirectory(prefix='selector-owner-private-',dir='/tmp') as
     if request['mode']=='standalone': os.chown(config.parent,1000,1000)
     session=config/'session.env';closure=config/'closure.env';base=root/'recovery';base.mkdir()
     os.chown(base,original_owner,original_owner)
-    session.write_text('old profile\n');session.chmod(0o600)
+    session.write_text('PLEBIAN_OS_VERSION=0.2.1\nPLEBIAN_OS_RELEASE_MODE=1\n');session.chmod(0o600)
     os.chown(session,original_owner,original_owner)
     original=(session.read_bytes(),session.stat().st_uid,session.stat().st_gid,session.stat().st_mode & 0o777)
     for name,text,key in [('session.env.new','selected profile\n','session'),
@@ -71,7 +72,12 @@ class ElevatedOwnershipTests(unittest.TestCase):
 
     def transaction(self, mode="standalone", **extra):
         source = SELECT.read_text()
-        body = source.split("<<'ROOT_SPLIT_APPLY' || rc=$?\n", 1)[1].split("\nROOT_SPLIT_APPLY\n", 1)[0]
+        body = source.split("<<'ROOT_SPLIT_APPLY'\n", 1)[1].split("\nROOT_SPLIT_APPLY\n", 1)[0]
+        # The elevated transaction receives this exact metadata reader from
+        # the parent through declare -f, before the here-document body.
+        reader = re.search(r"(?ms)^record_release_value\(\) \{.*?^\}", source)
+        self.assertIsNotNone(reader)
+        body = reader.group(0) + "\n" + body
         done = subprocess.run(self.command + [PRIVATE_CASE],
                               input=json.dumps({"body": body, "mode": mode, **extra}),
                               capture_output=True, text=True, timeout=15)
