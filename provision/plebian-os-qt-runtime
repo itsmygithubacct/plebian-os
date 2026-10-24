@@ -85,22 +85,29 @@ def snapshot(directory):
     if (directory.parent.is_symlink() or directory.parent.stat().st_uid != 0
             or directory.parent.stat().st_mode & 0o077):
         raise ValueError("Qt snapshot requires a private root-owned transaction directory")
+    tracked = (*PACKAGES, *((ARM_DEV_PACKAGE,) if native_architecture() == "arm64" else ()))
+    versions = {}
+    for name in tracked:
+        query = subprocess.run(["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Version}", name],
+                               capture_output=True, text=True)
+        if query.returncode == 1 or query.stdout.startswith("not-installed\n"):
+            versions[name] = None
+            continue
+        query.check_returncode()
+        lines = query.stdout.splitlines()
+        if len(lines) != 2 or lines[0] != "installed" or not re.fullmatch(r"[A-Za-z0-9.+~:-]+", lines[1]):
+            raise ValueError(f"cannot snapshot incomplete Qt package: {name}")
+        versions[name] = lines[1]
     directory.mkdir(mode=0o700)
     prior = {"packages": [], "files": {}, "installed": sorted(installed_packages()),
              "present": sorted(present_packages())}
     for path in (PREFERENCE, HOOK, STATE / "RUNTIME.json"):
         prior["files"][str(path)] = base64.b64encode(path.read_bytes()).decode() if path.exists() else None
-    tracked = (*PACKAGES, *((ARM_DEV_PACKAGE,) if native_architecture() == "arm64" else ()))
     for name in tracked:
-        query = subprocess.run(["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Version}", name],
-                               capture_output=True, text=True)
-        if query.returncode == 1 or query.stdout.startswith(("not-installed\n", "config-files\n")):
+        version = versions[name]
+        if version is None:
             prior["packages"].append({"Package": name, "Version": None})
             continue
-        query.check_returncode()
-        status, version = query.stdout.splitlines()
-        if status != "installed" or not re.fullmatch(r"[A-Za-z0-9.+~:-]+", version):
-            raise ValueError(f"cannot snapshot incomplete Qt package: {name}")
         cached = STATE / "packages" / f"{name}_{version}_{native_architecture()}.deb"
         if cached.exists():
             archive = directory / cached.name

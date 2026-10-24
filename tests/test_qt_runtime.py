@@ -371,6 +371,19 @@ class Arm64QtPackageTests(QtPackageTests):
     architecture = "arm64"
     triplet = "aarch64-linux-gnu"
 
+    def test_selected_residual_config_refused_before_snapshot_work(self):
+        for name in (*self.module.PACKAGES, self.module.ARM_DEV_PACKAGE):
+            with self.subTest(name=name):
+                self.versions[name] = '6.8.2+dfsg-1'
+                self.package_statuses[name] = 'config-files'
+                target = self.outer / ('snapshot-' + name)
+                with self.assertRaisesRegex(ValueError, 'incomplete Qt package'):
+                    self.module.snapshot(target)
+                self.assertFalse(target.exists())
+                self.assertEqual(self.events, [])
+                del self.versions[name]
+                del self.package_statuses[name]
+
     def test_partial_new_packages_are_purged_after_failed_install(self):
         snapshot = self.outer / 'qt-runtime'
         self.module.snapshot(snapshot)
@@ -409,6 +422,8 @@ class Arm64QtPackageTests(QtPackageTests):
         for record in prior:
             self.real_run(['dpkg-deb', '-x', str(baseline / record['path']), str(self.root)], check=True)
             self.versions[record['Package']] = record['Version']
+        self.versions['unrelated-residual-config'] = '1.0'
+        self.package_statuses['unrelated-residual-config'] = 'config-files'
         self.module.snapshot(self.outer / 'qt-runtime')
         selected, records = self.package_set('selected', '+plebianrc6.1')
         name = self.module.ARM_DEV_PACKAGE
@@ -443,7 +458,9 @@ class Arm64QtPackageTests(QtPackageTests):
         self.module.restore(self.outer / 'qt-runtime')
         self.assertEqual(self.versions,
                          {**{r['Package']: r['Version'] for r in prior},
+                          'unrelated-residual-config': '1.0',
                           'unrelated-later-package': '1.0'})
+        self.assertEqual(self.package_statuses['unrelated-residual-config'], 'config-files')
         self.assertFalse(self.module.HOOK.exists())
         self.assertFalse(self.module.PREFERENCE.exists())
 
