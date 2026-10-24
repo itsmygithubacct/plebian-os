@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from unittest import mock
 import subprocess
+import contextlib
+import hashlib
 
 ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "provision/plebian-os-install-encodec-converter"
@@ -21,13 +23,50 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.destination = Path(self.temp.name)
 
-    def test_arm64_dry_run_refuses_before_any_install_action(self):
-        with mock.patch('platform.machine', return_value='aarch64'), \
+    def test_supported_dry_run_selects_exact_architecture_without_install_action(self):
+        for machine, filename in (
+                ('x86_64', 'kilix-encodec-converters_5e813b1d894e_amd64.tar.zst'),
+                ('amd64', 'kilix-encodec-converters_5e813b1d894e_amd64.tar.zst'),
+                ('aarch64', 'kilix-encodec-converters_eaf11af26271_arm64.tar.zst'),
+                ('arm64', 'kilix-encodec-converters_eaf11af26271_arm64.tar.zst')):
+            output = io.StringIO()
+            with self.subTest(machine=machine), \
+                    mock.patch('platform.machine', return_value=machine), \
+                    mock.patch('sys.argv', [str(HELPER), '--dry-run']), \
+                    mock.patch('subprocess.run') as command, \
+                    mock.patch('os.geteuid') as privilege, \
+                    contextlib.redirect_stdout(output):
+                self.ns['main']()
+            self.assertIn(filename, output.getvalue())
+            command.assert_not_called()
+            privilege.assert_not_called()
+
+    def test_unsupported_architecture_refuses_before_any_install_action(self):
+        with mock.patch('platform.machine', return_value='riscv64'), \
                 mock.patch('sys.argv', [str(HELPER), '--dry-run']), \
                 mock.patch('subprocess.run') as command:
             with self.assertRaisesRegex(ValueError, 'no source-qualified'):
                 self.ns['main']()
         command.assert_not_called()
+
+    def test_copy_verify_and_inventory_use_the_selected_archive(self):
+        selections = []
+        for architecture, content in [('amd64', b'amd'), ('arm64', b'arm')]:
+            selected = dict(size=len(content), sha256=hashlib.sha256(content).hexdigest(),
+                            files={'BUILD.json': hashlib.sha256(content).hexdigest()})
+            selections.append(selected)
+            source = self.destination / (architecture + '-source')
+            copied = self.destination / (architecture + '-copied')
+            source.write_bytes(content)
+            self.ns['copy_archive'](source, copied, selected)
+            self.ns['verify_archive'](copied, selected)
+            self.assertEqual(copied.read_bytes(), content)
+            self.assertEqual(self.ns['expected_inventory'](selected)['BUILD.json'],
+                             (0o644, selected['sha256']))
+        with self.assertRaisesRegex(ValueError, 'SHA-256'):
+            self.ns['verify_archive'](self.destination / 'arm64-copied', selections[0])
+        with self.assertRaisesRegex(ValueError, 'SHA-256'):
+            self.ns['verify_archive'](self.destination / 'amd64-copied', selections[1])
 
     def archive(self, extra=()):
         stream = io.BytesIO()
