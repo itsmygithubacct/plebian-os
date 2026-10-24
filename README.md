@@ -45,6 +45,9 @@ and [upgrade policy](UPGRADING.md) for the exact scope.
 The selected binary artifacts target **AMD64**. ARM64 support is under
 development; architecture checks in the Qt, media, converter and other runtime
 paths must pass with matching artifacts before an ARM64 upgrade is supported.
+Native ARM64 Qt, MPV and inference runtime candidates are now published for
+review and isolated testing. They do not select an ARM64 release or enable an
+ARM64 upgrade; the [release notes](releases/0.2.2-notes.md) record their scope.
 The Waydroid application is provisioned from its exact selected revision into
 root-owned managed paths, with source and provenance records and transactional
 upgrade/rollback coverage. The shared Content catalog exposes its single-instance
