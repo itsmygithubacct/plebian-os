@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import signal
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -88,6 +90,59 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         account.write_text("[User]\nXSession=existing\n")
         account.chmod(0o600)
         return parent, users, account
+
+    def test_repeated_stop_signal_does_not_interrupt_owned_rollback(self):
+        # A stop can arrive both from the service and its timeout process.
+        # Hold the native rollback boundary, then send another stop while the
+        # actual EXIT cleanup and filesystem transaction are still running.
+        for second in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            with self.subTest(second=second), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                setup, paths = self._layout(root)
+                q = self._quoted
+                running, restoring, release = (root/name for name in
+                                                ('running', 'restoring', 'release'))
+                body = (
+                    'set -euo pipefail\nexport PLEBIAN_OS_PROVISION_LIB_ONLY=1\n'
+                    f'source {q(PROVISION)}\n' + setup
+                    + 'rollback_native_runtime_transaction() {\n'
+                    + f'    touch {q(restoring)}\n'
+                    + f'    while [ ! -e {q(release)} ]; do sleep 0.02; done\n'
+                    + '}\n'
+                    + 'begin_provision_root_transaction\n'
+                    + f"printf 'changed\\n' > {q(paths['existing'])}\n"
+                    + f"printf 'temporary grant\\n' > {q(paths['sudoers'])}\n"
+                    + f'touch {q(running)}\nwhile :; do sleep 0.02; done\n'
+                )
+                with (root/'process.log').open('w+') as log:
+                    process = subprocess.Popen(['bash', '-c', body], stdout=log,
+                                               stderr=subprocess.STDOUT,
+                                               start_new_session=True)
+                    def wait_for(path):
+                        deadline = time.monotonic() + 5
+                        while not path.exists() and time.monotonic() < deadline:
+                            if process.poll() is not None:
+                                break
+                            time.sleep(0.01)
+                        log.flush()
+                        self.assertTrue(path.exists(), (root/'process.log').read_text())
+                    try:
+                        wait_for(running)
+                        process.send_signal(signal.SIGTERM)
+                        wait_for(restoring)
+                        process.send_signal(second)
+                        # Observe the signal before allowing restoration to end.
+                        time.sleep(0.08)
+                        release.touch()
+                        code = process.wait(timeout=5)
+                    finally:
+                        if process.poll() is None:
+                            os.killpg(process.pid, signal.SIGKILL)
+                            process.wait(timeout=5)
+                self.assertEqual(code, 143, (root/'process.log').read_text())
+                self.assertEqual(paths['existing'].read_text(), 'before\n')
+                self.assertFalse(paths['sudoers'].exists())
+                self.assertEqual(list(paths['state'].iterdir()), [])
 
     def test_package_directory_normalization_allows_snapshot_and_rollback(self):
         with tempfile.TemporaryDirectory() as td:

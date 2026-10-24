@@ -2053,7 +2053,12 @@ cleanup() {
 
 provision_exit_cleanup() {
     local rc=$? cleanup_rc=0
-    trap - EXIT INT TERM HUP
+    trap - EXIT
+    # The service and the attempt timeout can both deliver a stop. Preserve
+    # the first exit status and finish the owned rollback on later signals.
+    # A caught no-op (rather than SIG_IGN) leaves child helpers interruptible;
+    # the enclosing service/timeout still enforces its final SIGKILL bound.
+    trap ':' INT TERM HUP
     set +e
     if { [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
             && [ "$PROVISION_ROOT_TRANSACTION_COMMITTED" != 1 ]; } \
