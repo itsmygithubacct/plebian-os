@@ -21,7 +21,8 @@
 #   plebian-os-select-closure --rollback
 #
 #   <x.y.z>       the target release. Its closure is read from
-#                 releases/<x.y.z>.env inside the published v<x.y.z> tag, never
+#                 releases/<x.y.z>.env (or the explicit ARM64 companion
+#                 releases/<x.y.z>-arm64.env) inside the published tag, never
 #                 from a working tree, so the pins are the immutable ones the
 #                 release was accepted with.
 #   --development-commit SHA
@@ -542,7 +543,7 @@ validate_release_architecture() {
     esac
     # The selected 0.2.2 converter is required and source-embedded. A different
     # wheel or disabled optional feature cannot qualify the complete closure.
-    [ "$TARGET" != 0.2.2 ] \
+    [ "$TARGET" != 0.2.2 ] || [ "$RELEASE_MANIFEST_STEM" = "$TARGET-arm64" ] \
         || closure_reject "0.2.2 has no source-qualified ARM64 closure; required converter, native runtime and patched Qt/player artifacts are not selected for ARM64"
     [ "${MANIFEST[PLEBIAN_OS_INSTALL_WAYDROID]:-0}" != 1 ] \
         || closure_reject "selected Waydroid closure is amd64-only"
@@ -555,6 +556,11 @@ validate_release_architecture() {
         bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693|967a1958e7fc67b495d279c0963bcd1a0482097151817ce6506fabc822689af7)
             closure_reject "selected kitty checksum is amd64-only" ;;
     esac
+    case "${MANIFEST[PLEBIAN_OS_MPV_URL]:-} ${MANIFEST[PLEBIAN_OS_NATIVE_DEB_URL]:-}" in
+        *_amd64.deb*) closure_reject "selected native/player package is amd64-only" ;;
+    esac
+    [ "${MANIFEST[PLEBIAN_OS_QT_RUNTIME_SHA256]:-}" != 623b5f2669fbf42679694ca5c8d3f841536a1f2bc449d66166f057650c8f4ad1 ] \
+        || closure_reject "selected patched Qt bundle is amd64-only"
 }
 
 validate_release_closure() {
@@ -863,12 +869,22 @@ resolve_closure_source() {
     SOURCE_VERSION="$(git -C "$SOURCE_DIR" show "$OS_COMMIT:VERSION" 2>/dev/null)" \
         || closure_reject "the release commit $OS_COMMIT has no VERSION file"
     SOURCE_VERSION="${SOURCE_VERSION%$'\n'}"
-    git -C "$SOURCE_DIR" show "$OS_COMMIT:releases/$TARGET.env" >"$STAGE/manifest.env" 2>/dev/null \
-        || closure_reject "the release commit $OS_COMMIT has no releases/$TARGET.env"
+    RELEASE_MANIFEST_STEM="$TARGET"
+    case "$(uname -m)" in
+        aarch64|arm64)
+            [ "$TARGET" != 0.2.2 ] || RELEASE_MANIFEST_STEM="$TARGET-arm64" ;;
+    esac
+    if ! git -C "$SOURCE_DIR" show "$OS_COMMIT:releases/$RELEASE_MANIFEST_STEM.env" >"$STAGE/manifest.env" 2>/dev/null; then
+        [ "$RELEASE_MANIFEST_STEM" = "$TARGET" ] \
+            || closure_reject "0.2.2 has no source-qualified ARM64 closure at releases/$RELEASE_MANIFEST_STEM.env; installed stack unchanged"
+        closure_reject "the release commit $OS_COMMIT has no releases/$TARGET.env"
+    fi
     if git -C "$SOURCE_DIR" cat-file -e \
-            "$OS_COMMIT:releases/$TARGET.requirements" 2>/dev/null; then
+            "$OS_COMMIT:releases/$RELEASE_MANIFEST_STEM.requirements" 2>/dev/null; then
         git -C "$SOURCE_DIR" show \
-            "$OS_COMMIT:releases/$TARGET.requirements" >"$STAGE/requirements"
+            "$OS_COMMIT:releases/$RELEASE_MANIFEST_STEM.requirements" >"$STAGE/requirements"
+    elif [ "$RELEASE_MANIFEST_STEM" != "$TARGET" ]; then
+        closure_reject "ARM64 release has no architecture-specific requirements"
     elif [ "$TARGET" = 0.1.9 ]; then
         closure_reject "the release commit $OS_COMMIT has no releases/$TARGET.requirements"
     fi
@@ -1353,7 +1369,7 @@ announce_component_moves() {
         target="${COMPONENT_TARGET[$ref_key]:-}"
         direction="${COMPONENT_DIRECTION[$ref_key]:-unchecked}"
         [ "$direction" != unchecked ] || continue
-        pinned_by="$ref_key in releases/$TARGET.env@${OS_COMMIT:0:12}"
+        pinned_by="$ref_key in releases/$RELEASE_MANIFEST_STEM.env@${OS_COMMIT:0:12}"
         case "$direction" in
             unchanged)
                 log "component $label: ${installed:0:12} -> ${target:0:12} (unchanged; $pinned_by)"
@@ -1376,7 +1392,7 @@ announce_component_moves() {
 
 announce_closure_move() {
     local installed="${BEFORE[PLEBIAN_OS_VERSION]:-}" pinned_by key moved=0 unchanged=0
-    pinned_by="releases/$TARGET.env@${OS_COMMIT:0:12}"
+    pinned_by="releases/$RELEASE_MANIFEST_STEM.env@${OS_COMMIT:0:12}"
     if [ -z "$installed" ]; then
         warn "closure: this machine records no PLEBIAN_OS_VERSION; treating $TARGET as a first selection"
     elif [ "$installed" = "$TARGET" ]; then
@@ -2377,7 +2393,7 @@ select_closure() {
     stage_target_tools
     stage_standalone_pleb_bootstrap
     preflight_image_source_checkouts
-    log "release $TARGET closure validated from ${SOURCE_DIR}: releases/$TARGET.env @ $OS_COMMIT"
+    log "release $TARGET closure validated from ${SOURCE_DIR}: releases/$RELEASE_MANIFEST_STEM.env @ $OS_COMMIT"
     announce_closure_move
     if split_layout_active; then
         scan_for_ambiguous_split_release_keys "$SESSION_ENV"

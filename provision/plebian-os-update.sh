@@ -2160,7 +2160,8 @@ apply_selected_qt_runtime() {
     (umask 077; set -C; printf '1\n' >"$outer/qt-runtime-transaction") || return 1
     QT_RUNTIME_TRANSACTION_STARTED=1
     qt_runtime_command --install-bundle "$stage" \
-        --sha256 "$PLEBIAN_OS_QT_RUNTIME_SHA256" --bytes "$PLEBIAN_OS_QT_RUNTIME_BYTES"
+        --sha256 "$PLEBIAN_OS_QT_RUNTIME_SHA256" --bytes "$PLEBIAN_OS_QT_RUNTIME_BYTES" \
+        --snapshot-path "$_STACK_ROOT_TXN_DIR/qt-runtime"
 }
 
 rollback_qt_runtime_transaction() {

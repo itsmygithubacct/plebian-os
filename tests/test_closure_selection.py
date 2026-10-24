@@ -159,7 +159,8 @@ class ClosureSelectionTests(unittest.TestCase):
     def _source(self, base: Path, manifest_text=None, version="0.1.8",
                 release="0.1.8", tag="v0.1.8",
                 requirements_text=None, selector_bytes=None,
-                updater_bytes=None) -> str:
+                updater_bytes=None, arm64_manifest_text=None,
+                arm64_requirements_text=None) -> str:
         """A Plebian-OS checkout, optionally carrying a release tag."""
         src = base / "src"
         (src / "releases").mkdir(parents=True)
@@ -174,6 +175,11 @@ class ClosureSelectionTests(unittest.TestCase):
         if requirements_text is not None:
             (src / "releases" / f"{release}.requirements").write_text(
                 requirements_text)
+        if arm64_manifest_text is not None:
+            (src / "releases" / f"{release}-arm64.env").write_text(arm64_manifest_text)
+        if arm64_requirements_text is not None:
+            (src / "releases" / f"{release}-arm64.requirements").write_text(
+                arm64_requirements_text)
         git = ["git", "-C", str(src)]
         subprocess.run(git + ["init", "-q"], check=True)
         subprocess.run(git + ["config", "user.email", "t@example.invalid"], check=True)
@@ -1948,6 +1954,28 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertEqual(env_file.read_bytes(), before)
                 self.assertEqual(list((base / 'root/usr/local/bin').iterdir()), [])
                 self.assertFalse((base / 'root/etc/pleb/closure.env').exists())
+
+    def test_arm64_sidecar_is_read_but_amd64_waydroid_still_refuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            env_file = self._machine(base)
+            before = env_file.read_bytes()
+            manifest = (ROOT / 'releases/0.2.2.env').read_text()
+            requirements = (ROOT / 'releases/0.2.2.requirements').read_text()
+            self._source(base, manifest_text=manifest, version='0.2.2',
+                         release='0.2.2', tag='v0.2.2',
+                         arm64_manifest_text=manifest,
+                         arm64_requirements_text=requirements)
+            bindir = base / 'bin'
+            bindir.mkdir()
+            uname = bindir / 'uname'
+            uname.write_text('#!/bin/sh\necho aarch64\n')
+            uname.chmod(0o755)
+            result = self._run(base, '0.2.2', '--source', str(base / 'src'),
+                               '--offline', env_extra={'PATH': str(bindir) + ':' + os.environ['PATH']})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Waydroid closure is amd64-only', result.stderr)
+            self.assertEqual(env_file.read_bytes(), before)
 
 
 class ClosureSelectionContractTests(unittest.TestCase):

@@ -155,7 +155,8 @@ class QtPackageTests(unittest.TestCase):
         exec(compile(source.read_bytes(), str(source), 'exec'), self.module.__dict__)
         def fixture_path(*parts):
             path = Path(*parts)
-            if str(path).startswith(f'/usr/lib/{self.triplet}/'):
+            if (str(path).startswith(f'/usr/lib/{self.triplet}/')
+                    or str(path).startswith(f'/usr/include/{self.triplet}/')):
                 path = fixture_root / str(path).lstrip('/')
             return FixturePath(path)
         self.module.Path = fixture_path
@@ -171,6 +172,7 @@ class QtPackageTests(unittest.TestCase):
         self.archives = {}
         self.events = []
         self.fail_install = False
+        self.inject_dependency_on_install = False
         self.real_run = subprocess.run
         self.real_output = subprocess.check_output
         self.addCleanup(mock.patch.stopall)
@@ -225,6 +227,9 @@ class QtPackageTests(unittest.TestCase):
         if argv[:2] == ['dpkg', '--print-architecture']:
             return self.architecture + '\n'
         if argv[0] == 'dpkg-query':
+            if argv[-1] == '-f=${Package}\t${Architecture}\t${db:Status-Status}\n':
+                return ''.join(f'{name}\t{self.architecture}\tinstalled\n'
+                               for name in sorted(self.versions))
             return 'installed\n' + self.versions[argv[-1]]
         return self.real_output(argv, **kwargs)
 
@@ -238,6 +243,20 @@ class QtPackageTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0, value, '')
         if argv[0] == 'apt-get':
             self.events.append(argv)
+            if '--simulate' in argv and 'install' in argv:
+                planned = ''
+                if self.inject_dependency_on_install:
+                    planned = ('Inst qt6-base-dev (fixture [arm64])\n'
+                               'Inst libxcb-res0 (fixture [arm64])\n')
+                return subprocess.CompletedProcess(argv, 0, planned, '')
+            if 'purge' in argv:
+                packages = argv[argv.index('purge') + 1:]
+                if '--simulate' in argv:
+                    return subprocess.CompletedProcess(argv, 0,
+                        ''.join('Purg ' + name.split(':')[0] + ' (fixture)\n' for name in packages), '')
+                for name in packages:
+                    self.versions.pop(name.split(':')[0], None)
+                return subprocess.CompletedProcess(argv, 0)
             if 'download' in argv:
                 name, version = argv[-1].split('=', 1)
                 shutil.copy2(self.archives[(name, version)], kwargs['cwd'])
@@ -251,6 +270,8 @@ class QtPackageTests(unittest.TestCase):
                     if self.fail_install:
                         self.fail_install = False
                         raise subprocess.CalledProcessError(71, argv)
+                if self.inject_dependency_on_install:
+                    self.versions['libxcb-res0'] = '1.17.0-2+b1'
             return subprocess.CompletedProcess(argv, 0)
         if argv[:2] == ['dpkg', '--remove']:
             for name in argv[2:]:
@@ -258,8 +279,11 @@ class QtPackageTests(unittest.TestCase):
             return subprocess.CompletedProcess(argv, 0)
         return self.real_run(argv, **kwargs)
 
-    def install(self, lane):
-        self.module.main(['--install', str(lane / 'RUNTIME.json'), '--package-root', str(lane)])
+    def install(self, lane, snapshot=None):
+        command = ['--install', str(lane / 'RUNTIME.json'), '--package-root', str(lane)]
+        if snapshot is not None:
+            command += ['--snapshot-path', str(snapshot)]
+        self.module.main(command)
 
     def test_selected_packages_verify_bytes_and_only_two_exact_pins(self):
         lane, records = self.package_set('selected', '+plebianrc6.1')
@@ -332,6 +356,49 @@ class QtPackageTests(unittest.TestCase):
 class Arm64QtPackageTests(QtPackageTests):
     architecture = "arm64"
     triplet = "aarch64-linux-gnu"
+
+    def test_matching_dev_companion_and_new_dependency_restore(self):
+        baseline, prior = self.package_set('baseline', '')
+        for record in prior:
+            self.real_run(['dpkg-deb', '-x', str(baseline / record['path']), str(self.root)], check=True)
+            self.versions[record['Package']] = record['Version']
+        self.module.snapshot(self.outer / 'qt-runtime')
+        selected, records = self.package_set('selected', '+plebianrc6.1')
+        name = self.module.ARM_DEV_PACKAGE
+        version = '6.8.2+dfsg-1+plebianrc6.1'
+        source = selected / name
+        (source / 'DEBIAN').mkdir(parents=True)
+        (source / 'DEBIAN/control').write_text(
+            f'Package: {name}\nVersion: {version}\nArchitecture: arm64\n'
+            f'Depends: libqt6gui6 (= {version})\n'
+            'Maintainer: fixture <fixture@localhost>\nDescription: private test\n')
+        files = []
+        for absolute in sorted(self.module.runtime_files(name)):
+            path = source / absolute.lstrip('/')
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = absolute.encode()
+            path.write_bytes(data)
+            files.append({'path': absolute, 'bytes': len(data),
+                          'sha256': hashlib.sha256(data).hexdigest()})
+        archive = selected / f'{name}_{version}_arm64.deb'
+        self.real_run(['dpkg-deb', '--build', '--root-owner-group', str(source), str(archive)],
+                      check=True, capture_output=True)
+        records.append({'Package': name, 'Version': version, 'Architecture': 'arm64',
+                        'qt': '6.8.2', 'path': archive.name, 'bytes': archive.stat().st_size,
+                        'sha256': self.module.digest(archive), 'files': files})
+        (selected / 'RUNTIME.json').write_text(json.dumps(records))
+        self.inject_dependency_on_install = True
+        self.install(selected, snapshot=self.outer / 'qt-runtime')
+        self.assertIn(name, self.versions)
+        self.assertIn('libxcb-res0', self.versions)
+        self.versions['unrelated-later-package'] = '1.0'
+        self.inject_dependency_on_install = False
+        self.module.restore(self.outer / 'qt-runtime')
+        self.assertEqual(self.versions,
+                         {**{r['Package']: r['Version'] for r in prior},
+                          'unrelated-later-package': '1.0'})
+        self.assertFalse(self.module.HOOK.exists())
+        self.assertFalse(self.module.PREFERENCE.exists())
 
     def test_foreign_manifest_refused_before_package_mutation(self):
         lane, records = self.package_set('foreign', '+plebianrc6.1')

@@ -20,6 +20,7 @@ STATE = Path("/var/lib/plebian-os/qt-runtime")
 PREFERENCE = Path("/etc/apt/preferences.d/plebian-os-qt-runtime")
 HOOK = Path("/etc/apt/apt.conf.d/93plebian-os-qt-runtime")
 PACKAGES = {"libqt5gui5t64": "5.15.15", "libqt6gui6": "6.8.2"}
+ARM_DEV_PACKAGE = "qt6-base-dev"
 
 
 def native_architecture():
@@ -32,6 +33,13 @@ def native_architecture():
 
 def runtime_files(name):
     triplet = {'amd64': 'x86_64-linux-gnu', 'arm64': 'aarch64-linux-gnu'}[native_architecture()]
+    if name == ARM_DEV_PACKAGE:
+        return {
+            f"/usr/include/{triplet}/qt6/QtGui/qguiapplication.h",
+            f"/usr/include/{triplet}/qt6/QtGui/qwindow.h",
+            f"/usr/lib/{triplet}/cmake/Qt6Gui/Qt6GuiConfig.cmake",
+            f"/usr/lib/{triplet}/cmake/Qt6Gui/Qt6GuiTargets.cmake",
+        }
     qt = PACKAGES[name]
     major = qt.split(".")[0]
     return {
@@ -39,6 +47,21 @@ def runtime_files(name):
         f"/usr/lib/{triplet}/libQt{major}XcbQpa.so.{qt}",
         f"/usr/lib/{triplet}/qt{major}/plugins/platforms/libqxcb.so",
     }
+
+
+def installed_packages():
+    """Return configured package identities before/after the outer transaction."""
+    output = subprocess.check_output(
+        ["/usr/bin/dpkg-query", "-W", "-f=${Package}\t${Architecture}\t${db:Status-Status}\n"],
+        text=True)
+    result = set()
+    for line in output.splitlines():
+        name, architecture, status = line.split("\t")
+        if status == "installed":
+            if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name) or not re.fullmatch(r"[a-z0-9]+", architecture):
+                raise ValueError("invalid installed package identity")
+            result.add(f"{name}:{architecture}")
+    return result
 
 
 def state_directories():
@@ -55,10 +78,11 @@ def snapshot(directory):
             or directory.parent.stat().st_mode & 0o077):
         raise ValueError("Qt snapshot requires a private root-owned transaction directory")
     directory.mkdir(mode=0o700)
-    prior = {"packages": [], "files": {}}
+    prior = {"packages": [], "files": {}, "installed": sorted(installed_packages())}
     for path in (PREFERENCE, HOOK, STATE / "RUNTIME.json"):
         prior["files"][str(path)] = base64.b64encode(path.read_bytes()).decode() if path.exists() else None
-    for name in PACKAGES:
+    tracked = (*PACKAGES, *((ARM_DEV_PACKAGE,) if native_architecture() == "arm64" else ()))
+    for name in tracked:
         query = subprocess.run(["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Version}", name],
                                capture_output=True, text=True)
         if query.returncode == 1 or query.stdout.startswith(("not-installed\n", "config-files\n")):
@@ -103,7 +127,8 @@ def restore(directory):
         raise ValueError("Qt restore requires a private root-owned snapshot")
     prior = json.loads((directory / "SNAPSHOT.json").read_text())
     records = prior["packages"]
-    if len(records) != 2 or {r["Package"] for r in records} != PACKAGES.keys():
+    names = {r["Package"] for r in records}
+    if len(records) not in (2, 3) or not set(PACKAGES).issubset(names) or names - set(PACKAGES) - {ARM_DEV_PACKAGE}:
         raise ValueError("invalid Qt package snapshot")
     expected = {str(PREFERENCE), str(HOOK), str(STATE / "RUNTIME.json")}
     if set(prior["files"]) != expected:
@@ -130,9 +155,6 @@ def restore(directory):
         PREFERENCE.unlink(missing_ok=True)
     else:
         atomic_write(PREFERENCE, base64.b64decode(preference, validate=True).decode())
-    if archives:
-        subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
-                        "--allow-downgrades", "install", *archives], check=True)
     if absent:
         # dpkg refuses dependent applications; never remove unrelated packages.
         installed = [name for name in absent if subprocess.run(
@@ -140,6 +162,27 @@ def restore(directory):
             capture_output=True, text=True).stdout == "installed"]
         if installed:
             subprocess.run(["/usr/bin/dpkg", "--remove", *installed], check=True)
+    if archives:
+        subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
+                        "--allow-downgrades", "install", *archives], check=True)
+    if "installed" in prior and "qt_planned_new" in prior:
+        before = set(prior["installed"])
+        current = installed_packages()
+        planned = set(prior["qt_planned_new"])
+        added = sorted(item for item in current - before
+                       if item.split(":")[0] in planned)
+        if added:
+            # Simulate first and permit removal only of packages absent from the
+            # original rootfs. A dependent baseline package is never removed.
+            command = ["/usr/bin/apt-get", "--simulate", "purge", *added]
+            plan = subprocess.run(command, check=True, capture_output=True, text=True).stdout
+            removed = {line.split()[1].split(":")[0] for line in plan.splitlines()
+                       if line.startswith(("Remv ", "Purg "))}
+            if not removed or removed - {item.split(":")[0] for item in added}:
+                raise ValueError("Qt dependency rollback would remove a preexisting package")
+            subprocess.run(["/usr/bin/apt-get", "--yes", "purge", *added], check=True)
+        if any(item.split(":")[0] in planned for item in installed_packages() - before):
+            raise ValueError("Qt dependency rollback left a new Qt package installed")
     for path in (PREFERENCE, STATE / "RUNTIME.json", HOOK):
         value = prior["files"][str(path)]
         if value is None:
@@ -160,7 +203,7 @@ def restore(directory):
         verify(read_manifest(STATE / "RUNTIME.json"))
 
 
-def install_bundle(path, expected_sha, expected_bytes):
+def install_bundle(path, expected_sha, expected_bytes, snapshot_path=None):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     with os.fdopen(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
@@ -177,8 +220,8 @@ def install_bundle(path, expected_sha, expected_bytes):
             for member in archive:
                 count += 1
                 total += member.size
-                if count > 3 or not member.isfile() or total > 134217728:
-                    raise ValueError("Qt runtime bundle must contain its manifest and two GUI packages")
+                if count > 4 or not member.isfile() or total > 134217728:
+                    raise ValueError("Qt runtime bundle has too many members or exceeds its size limit")
                 target = root / member.name
                 if (member.name.startswith("/") or ".." in Path(member.name).parts
                         or member.size > 134217728):
@@ -186,9 +229,15 @@ def install_bundle(path, expected_sha, expected_bytes):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.extractfile(member) as source, target.open("xb") as output:
                     shutil.copyfileobj(source, output)
-            if count != 3:
+            if count not in (3, 4):
                 raise ValueError("Qt runtime bundle is incomplete")
-        main(["--install", str(root / "RUNTIME.json"), "--package-root", str(root)])
+        records = read_manifest(root / "RUNTIME.json")
+        if {item.name for item in root.iterdir()} != {"RUNTIME.json", *(r["path"] for r in records)}:
+            raise ValueError("Qt runtime bundle members differ from the selected manifest")
+        command = ["--install", str(root / "RUNTIME.json"), "--package-root", str(root)]
+        if snapshot_path is not None:
+            command.extend(["--snapshot-path", str(snapshot_path)])
+        main(command)
 
 
 def digest(path):
@@ -198,18 +247,22 @@ def digest(path):
 
 def read_manifest(path):
     records = json.loads(path.read_text())
-    if len(records) != 2 or {r["Package"] for r in records} != PACKAGES.keys():
-        raise ValueError("the RC6 Qt manifest must contain exactly the two GUI packages")
+    names = {r["Package"] for r in records}
+    expected = set(PACKAGES)
+    if len(records) == 3 and native_architecture() == "arm64":
+        expected.add(ARM_DEV_PACKAGE)
+    if len(records) not in (2, 3) or names != expected:
+        raise ValueError("the RC6 Qt manifest has an unsupported package set")
     for record in records:
-        qt = PACKAGES[record["Package"]]
+        qt = PACKAGES.get(record["Package"], "6.8.2")
         if (record["qt"] != qt or record["Architecture"] != native_architecture()
                 or not record["Version"].startswith(qt + "+dfsg-")
                 or not re.fullmatch(r"[A-Za-z0-9.+~:-]+", record["Version"])
                 or "+plebianrc6." not in record["Version"]):
             raise ValueError("incorrect RC6 Qt package version or architecture")
         files = runtime_files(record["Package"])
-        if {f["path"] for f in record["files"]} != files or len(record["files"]) != 3:
-            raise ValueError("incomplete Qt GUI/QPA/plugin digest set")
+        if {f["path"] for f in record["files"]} != files or len(record["files"]) != len(files):
+            raise ValueError("incomplete Qt package digest set")
         for item in [record, *record["files"]]:
             if (not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
                     or type(item["bytes"]) is not int or not 0 < item["bytes"] <= 134217728):
@@ -269,6 +322,7 @@ def main(argv=None):
     parser.add_argument("--package-root", type=Path)
     parser.add_argument("--sha256")
     parser.add_argument("--bytes", type=int)
+    parser.add_argument("--snapshot-path", type=Path)
     args = parser.parse_args(argv)
     if args.snapshot or args.restore or args.install_bundle:
         if os.geteuid() != 0:
@@ -281,7 +335,7 @@ def main(argv=None):
             if (not args.sha256 or not re.fullmatch(r"[0-9a-f]{64}", args.sha256)
                     or args.bytes is None or not 0 < args.bytes <= 134217728):
                 parser.error("--install-bundle requires an exact SHA-256 and byte count")
-            install_bundle(args.install_bundle, args.sha256, args.bytes)
+            install_bundle(args.install_bundle, args.sha256, args.bytes, args.snapshot_path)
         return
     if args.verify:
         verify(read_manifest(STATE / "RUNTIME.json"))
@@ -310,6 +364,15 @@ def main(argv=None):
         return
     if os.geteuid() != 0:
         raise PermissionError("Qt package installation requires root")
+    snapshot_record = None
+    if args.snapshot_path is not None:
+        snapshot_dir = args.snapshot_path
+        if (snapshot_dir.is_symlink() or snapshot_dir.stat().st_uid != 0
+                or snapshot_dir.stat().st_mode & 0o077):
+            raise ValueError("Qt install requires a private root-owned snapshot")
+        snapshot_record = json.loads((snapshot_dir / "SNAPSHOT.json").read_text())
+        if "installed" not in snapshot_record or "qt_planned_new" in snapshot_record:
+            raise ValueError("Qt install requires a fresh package-set snapshot")
     state_directories()
     before = PREFERENCE.read_text() if PREFERENCE.exists() else None
     old_state = (STATE / "RUNTIME.json").read_text() if (STATE / "RUNTIME.json").exists() else None
@@ -336,8 +399,29 @@ def main(argv=None):
     HOOK.unlink(missing_ok=True)
     try:
         atomic_write(PREFERENCE, preferences(records))
+        if snapshot_record is not None:
+            simulation = subprocess.run(
+                ["/usr/bin/apt-get", "--simulate", "--no-install-recommends", "--no-remove",
+                 "install", *archives], check=True, capture_output=True, text=True).stdout
+            baseline = set(snapshot_record["installed"])
+            planned = set()
+            for line in simulation.splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and parts[0] == "Inst" and not parts[2].startswith("["):
+                    name = parts[1].split(":")[0]
+                    if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name):
+                        raise ValueError("invalid APT package plan")
+                    planned.add(name)
+            snapshot_record["qt_planned_new"] = sorted(planned)
+            atomic_write(snapshot_dir / "SNAPSHOT.json", json.dumps(snapshot_record, indent=2) + "\n")
         subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
                         "install", *archives], check=True)
+        if snapshot_record is not None:
+            actual = installed_packages() - baseline
+            if {item.split(":")[0] for item in actual} - planned:
+                raise ValueError("APT installed a package outside the checked Qt plan")
+            snapshot_record["qt_added"] = sorted(actual)
+            atomic_write(snapshot_dir / "SNAPSHOT.json", json.dumps(snapshot_record, indent=2) + "\n")
         atomic_write(STATE / "RUNTIME.json", json.dumps(records, indent=2) + "\n")
         verify(records)
     except BaseException:
