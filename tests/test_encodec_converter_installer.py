@@ -115,10 +115,8 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         archive = self.destination / "archive"
         archive.write_bytes(b"bad")
         verify = self.ns["verify_archive"]
-        verify.__globals__["ARCHIVE_SIZE"] = 3
-        verify.__globals__["ARCHIVE_SHA256"] = "0" * 64
         with self.assertRaisesRegex(ValueError, "SHA-256"):
-            verify(archive)
+            verify(archive, dict(size=3, sha256="0" * 64))
 
     def test_missing_runtime_dependency_fails_before_filesystem_changes(self):
         main = self.ns["main"]
