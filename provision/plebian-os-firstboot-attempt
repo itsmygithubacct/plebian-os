@@ -63,6 +63,24 @@ case "${1:-}" in
             echo "firstboot retry runner requires timeout" >&2
             exit 2
         }
+        command_pid=""
+        stop_status=0
+        stop_attempt() {
+            # Keep the unit's main process alive until the provisioner finishes
+            # rollback. Otherwise systemd can reap its remaining control group
+            # while package removal is still updating the dpkg database.
+            [ "$stop_status" -eq 0 ] || return 0
+            stop_status="$1"
+            if [ -n "$command_pid" ]; then
+                kill -s "$2" "$command_pid" 2>/dev/null || true
+            else
+                rm -f "$temporary_sudoers"
+                exit "$stop_status"
+            fi
+        }
+        trap 'stop_attempt 143 TERM' TERM
+        trap 'stop_attempt 130 INT' INT
+        trap 'stop_attempt 129 HUP' HUP
         while :; do
             read_attempts || exit 1
             if [ "$n" -ge "$max" ]; then
@@ -73,13 +91,26 @@ case "${1:-}" in
             "$0" begin
             rm -f "$temporary_sudoers"
             echo "firstboot provisioning command has ${attempt_timeout}s to complete" >&2
-            if timeout --signal=TERM --kill-after=30s \
-                    "${attempt_timeout}s" "$@"; then
-                exit 0
-            else
-                status=$?
-            fi
+            timeout --signal=TERM --kill-after=30s \
+                "${attempt_timeout}s" "$@" &
+            command_pid=$!
+            while :; do
+                if wait "$command_pid"; then
+                    status=0
+                    break
+                else
+                    status=$?
+                fi
+                # A caught signal interrupts wait before the child finishes.
+                # Reap it before leaving; timeout retains the 30s KILL bound.
+                if [ "$stop_status" -eq 0 ] || ! kill -0 "$command_pid" 2>/dev/null; then
+                    break
+                fi
+            done
+            command_pid=""
             rm -f "$temporary_sudoers"
+            [ "$stop_status" -eq 0 ] || exit "$stop_status"
+            [ "$status" -ne 0 ] || exit 0
 
             read_attempts || exit 1
             if [ "$n" -ge "$max" ]; then
