@@ -6312,6 +6312,27 @@ else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
 normalize_accounts_service_package_directory
+
+# The first-run wizard requires this software before any model is selected.
+# Like APT dependencies, prepare it before the root configuration snapshot.
+# Its independently installed payload remains available if later configuration
+# fails; the root rollback must not try to remove its populated parent.
+# Installation carries no model weights and creates no licence receipts.
+ENCODEC_CONVERTER_INSTALLER_SRC=""
+for cand in "$SELF_DIR/plebian-os-install-encodec-converter" \
+    /usr/local/sbin/plebian-os-install-encodec-converter; do
+    [ -r "$cand" ] && ENCODEC_CONVERTER_INSTALLER_SRC="$cand" && break
+done
+[ -n "$ENCODEC_CONVERTER_INSTALLER_SRC" ] || die "required EnCodec converter installer is missing"
+if [ "$DRY_RUN" = 1 ]; then
+    log "installing required EnCodec conversion software (no models)"
+else
+    if [ "$ENCODEC_CONVERTER_INSTALLER_SRC" != /usr/local/sbin/plebian-os-install-encodec-converter ]; then
+        install -m 0755 "$ENCODEC_CONVERTER_INSTALLER_SRC" /usr/local/sbin/plebian-os-install-encodec-converter
+    fi
+    /usr/local/sbin/plebian-os-install-encodec-converter || die "required EnCodec converter installation failed"
+fi
+
 begin_provision_root_transaction
 install_no_beep_defaults
 # Runs after the dependency install above, because that is what brings the
@@ -6330,23 +6351,6 @@ apply_selected_mpv_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
     || die "selected mpv runtime could not be installed/verified"
 apply_selected_native_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
     || die "selected native runtime could not be prepared/applied"
-
-# The first-run wizard requires this software before any model is selected.
-# Installation carries no model weights and creates no licence receipts.
-ENCODEC_CONVERTER_INSTALLER_SRC=""
-for cand in "$SELF_DIR/plebian-os-install-encodec-converter" \
-    /usr/local/sbin/plebian-os-install-encodec-converter; do
-    [ -r "$cand" ] && ENCODEC_CONVERTER_INSTALLER_SRC="$cand" && break
-done
-[ -n "$ENCODEC_CONVERTER_INSTALLER_SRC" ] || die "required EnCodec converter installer is missing"
-if [ "$DRY_RUN" = 1 ]; then
-    log "installing required EnCodec conversion software (no models)"
-else
-    if [ "$ENCODEC_CONVERTER_INSTALLER_SRC" != /usr/local/sbin/plebian-os-install-encodec-converter ]; then
-        install -m 0755 "$ENCODEC_CONVERTER_INSTALLER_SRC" /usr/local/sbin/plebian-os-install-encodec-converter
-    fi
-    /usr/local/sbin/plebian-os-install-encodec-converter || die "required EnCodec converter installation failed"
-fi
 
 # Ship only the small source-closure installer. It is never invoked during
 # provisioning: the large Python converter dependencies and all model bytes

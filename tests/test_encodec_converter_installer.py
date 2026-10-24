@@ -98,7 +98,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
     def test_fresh_provision_installs_and_runs_required_software(self):
         source = (ROOT / "provision/plebian-os-provision.sh").read_text()
         start = source.index('ENCODEC_CONVERTER_INSTALLER_SRC=""')
-        end = source.index("# Ship only the small source-closure installer", start)
+        end = source.index("\nfi\n", start) + len("\nfi\n")
         block = source[start:end]
         helper = self.destination / HELPER.name
         installed = self.destination / "installed-helper"
@@ -120,6 +120,36 @@ class EncodecConverterInstallerTests(unittest.TestCase):
                                 text=True, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("required EnCodec converter installation failed", result.stderr)
+
+    def test_configuration_rollback_preserves_prepared_converter_dependency(self):
+        from test_provision_transaction import ProvisionRootTransactionTests
+        fixture = ProvisionRootTransactionTests()
+        root = self.destination
+        setup, paths = fixture._layout(root)
+        helper = root / HELPER.name
+        payload = paths['created'] / 'kilix-encodec' / 'runtime'
+        helper.write_text('#!/bin/sh\nmkdir -p ' + shlex.quote(str(payload.parent))
+                          + "\nprintf 'software only\\n' > " + shlex.quote(str(payload)) + '\n')
+        helper.chmod(0o755)
+        source = (ROOT / 'provision/plebian-os-provision.sh').read_text()
+        start = source.rindex('\nnormalize_accounts_service_package_directory\n')
+        end = source.index('# Ship only the small source-closure installer', start)
+        sequence = source[start:end].replace('/usr/local/sbin/' + HELPER.name,
+                                              str(root / 'installed-helper'))
+        stubs = ''.join(name + '() { :; }\n' for name in (
+            'normalize_accounts_service_package_directory', 'install_no_beep_defaults',
+            'disable_audio_holding_user_units', 'install_quiet_console_defaults',
+            'install_lid_defaults', 'install_desktop_wallpaper', 'install_version_marker',
+            'install_lightdm_greeter_branding', 'install_artwork_notices',
+            'install_native_runtime_helpers', 'apply_selected_qt_runtime',
+            'apply_selected_mpv_runtime', 'apply_selected_native_runtime'))
+        result = fixture._run(setup + stubs + 'SELF_DIR=' + shlex.quote(str(root))
+                              + '\n' + sequence + "\nprintf 'changed\\n' > "
+                              + shlex.quote(str(paths['existing'])) + '\nexit 19\n')
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertEqual(paths['existing'].read_text(), 'before\n')
+        self.assertEqual(payload.read_text(), 'software only\n')
+        self.assertEqual(list(paths['state'].iterdir()), [])
 
     def test_update_installer_elevates_and_propagates_failure(self):
         source = (ROOT / "provision/plebian-os-update.sh").read_text()
