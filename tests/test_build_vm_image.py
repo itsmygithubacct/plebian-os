@@ -607,14 +607,40 @@ class VmBuilderEnvTests(unittest.TestCase):
                                   stderr="system journal permission denied\n")
         for privileged_result in (denied, None):
             with self.subTest(privileged_result=privileged_result), \
-                    mock.patch.object(vm, "ssh", side_effect=(failed, privileged_result, journal)) as remote, \
+                    mock.patch.object(vm, "ssh", side_effect=(failed, privileged_result, privileged_result, journal)) as remote, \
                     mock.patch.object(vm, "info"), \
                     mock.patch.object(vm, "die", side_effect=SystemExit(1)) as fatal, \
                     self.assertRaises(SystemExit):
                 vm.wait_for_provisioning(cfg(nopasswd_sudo=True), 30, ("askpass", "credential"))
-            self.assertEqual(remote.call_count, 3)
+            self.assertEqual(remote.call_count, 4)
             self.assertTrue(remote.call_args_list[-1].args[1].startswith("/usr/bin/journalctl "))
             self.assertIn("system journal permission denied", fatal.call_args.args[0])
+
+    def test_firstboot_failure_reads_journal_before_nopasswd_is_installed(self):
+        failed = SimpleNamespace(returncode=0, stdout="FAILED\n", stderr="")
+        denied = SimpleNamespace(returncode=1, stdout="", stderr="a password is required\n")
+        journal = SimpleNamespace(returncode=0, stdout="Qt bundle refused\n", stderr="")
+        with mock.patch.object(vm, "ssh", side_effect=(failed, denied, journal)) as remote, \
+                mock.patch.object(vm, "info"), \
+                mock.patch.object(vm, "die", side_effect=SystemExit(1)) as fatal, \
+                self.assertRaises(SystemExit):
+            vm.wait_for_provisioning(cfg(nopasswd_sudo=True), 30, ("askpass", "credential"))
+        call = remote.call_args_list[-1]
+        self.assertEqual(call.args[1], "sudo -S -p '' -- /usr/bin/journalctl -u "
+                         "plebian-os-firstboot.service --no-pager -n 30")
+        self.assertEqual(call.kwargs["stdin"], "strong-secret\n")
+        self.assertNotIn("strong-secret", call.args[1])
+        self.assertIn("Qt bundle refused", fatal.call_args.args[0])
+        self.assertNotIn("strong-secret", fatal.call_args.args[0])
+
+    def test_ssh_sends_diagnostic_credential_only_on_standard_input(self):
+        result = SimpleNamespace(returncode=0, stdout="journal\n", stderr="")
+        with mock.patch.object(vm.subprocess, "run", return_value=result) as run:
+            vm.ssh(cfg(), "sudo -S -p '' -- /usr/bin/journalctl -n 30",
+                   ("askpass", "credential"), stdin="strong-secret\n")
+        self.assertEqual(run.call_args.kwargs["input"], "strong-secret\n")
+        self.assertNotIn("strong-secret", " ".join(run.call_args.args[0]))
+        self.assertNotIn("strong-secret", run.call_args.kwargs["env"].values())
 
     def test_firstboot_failure_uses_unprivileged_journal_without_sudo_grant(self):
         failed = SimpleNamespace(returncode=0, stdout="FAILED\n", stderr="")

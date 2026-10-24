@@ -1127,7 +1127,8 @@ def _askpass_for(pw: str):
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
-def ssh(cfg: Config, command: str, askpass: tuple[str, str], timeout: int = 15):
+def ssh(cfg: Config, command: str, askpass: tuple[str, str], timeout: int = 15,
+        *, stdin: str | None = None):
     script, secret = askpass
     env = {**os.environ, "SSH_ASKPASS": script, "SSH_ASKPASS_REQUIRE": "force",
            "DISPLAY": os.environ.get("DISPLAY", ":0"),
@@ -1139,7 +1140,7 @@ def ssh(cfg: Config, command: str, askpass: tuple[str, str], timeout: int = 15):
             f"{cfg.username}@127.0.0.1", command]
     try:
         return subprocess.run(argv, env=env, capture_output=True, text=True,
-                            timeout=timeout, start_new_session=True)
+                            input=stdin, timeout=timeout, start_new_session=True)
     except subprocess.TimeoutExpired:
         return None
 
@@ -1172,9 +1173,14 @@ def wait_for_provisioning(cfg: Config, timeout_s: int,
                 print()
                 journal_cmd = "/usr/bin/journalctl -u plebian-os-firstboot.service --no-pager -n 30"
                 # The ordinary test account cannot read the system journal.
-                # Use its existing optional sudo grant without prompting or
-                # passing the SSH credential into the diagnostic command.
+                # Try the requested passwordless policy first. An early failure
+                # may precede its installation: authenticate that bounded read
+                # with the existing fixture credential on stdin, never argv/env.
                 logs = ssh(cfg, "sudo -n " + journal_cmd, askpass) if cfg.nopasswd_sudo else None
+                if ((logs is None or logs.returncode != 0)
+                        and cfg.nopasswd_sudo and cfg.password):
+                    logs = ssh(cfg, "sudo -S -p '' -- " + journal_cmd, askpass,
+                               stdin=cfg.password + "\n")
                 if logs is None or logs.returncode != 0:
                     logs = ssh(cfg, journal_cmd, askpass)
                 detail = (logs.stdout + logs.stderr) if logs is not None else ""
