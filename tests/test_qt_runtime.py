@@ -169,10 +169,13 @@ class QtPackageTests(unittest.TestCase):
         self.outer = FixturePath(self.root / 'outer')
         self.outer.mkdir(mode=0o700)
         self.versions = {}
+        self.package_statuses = {}
         self.archives = {}
         self.events = []
         self.fail_install = False
+        self.partial_on_failure = False
         self.inject_dependency_on_install = False
+        self.simulated_existing_change = ''
         self.real_run = subprocess.run
         self.real_output = subprocess.check_output
         self.addCleanup(mock.patch.stopall)
@@ -228,9 +231,11 @@ class QtPackageTests(unittest.TestCase):
             return self.architecture + '\n'
         if argv[0] == 'dpkg-query':
             if argv[-1] == '-f=${Package}\t${Architecture}\t${db:Status-Status}\n':
-                return ''.join(f'{name}\t{self.architecture}\tinstalled\n'
-                               for name in sorted(self.versions))
-            return 'installed\n' + self.versions[argv[-1]]
+                return ''.join(f'{name}\t{self.architecture}\t'
+                               f'{self.package_statuses.get(name, "installed")}\n'
+                               for name in sorted(set(self.versions) | set(self.package_statuses)))
+            name = argv[-1]
+            return self.package_statuses.get(name, 'installed') + '\n' + self.versions[name]
         return self.real_output(argv, **kwargs)
 
     def run_command(self, argv, **kwargs):
@@ -239,15 +244,19 @@ class QtPackageTests(unittest.TestCase):
             name = argv[-1]
             if name not in self.versions:
                 return subprocess.CompletedProcess(argv, 1, '', '')
-            value = 'installed' if argv[3] == '-f=${db:Status-Status}' else 'installed\n' + self.versions[name]
+            status = self.package_statuses.get(name, 'installed')
+            value = status if argv[3] == '-f=${db:Status-Status}' else status + '\n' + self.versions[name]
             return subprocess.CompletedProcess(argv, 0, value, '')
         if argv[0] == 'apt-get':
             self.events.append(argv)
             if '--simulate' in argv and 'install' in argv:
                 planned = ''
                 if self.inject_dependency_on_install:
-                    planned = ('Inst qt6-base-dev (fixture [arm64])\n'
+                    planned = ('Inst libqt5gui5t64 (fixture [arm64])\n'
+                               'Inst libqt6gui6 (fixture [arm64])\n'
+                               'Inst qt6-base-dev (fixture [arm64])\n'
                                'Inst libxcb-res0 (fixture [arm64])\n')
+                planned += self.simulated_existing_change
                 return subprocess.CompletedProcess(argv, 0, planned, '')
             if 'purge' in argv:
                 packages = argv[argv.index('purge') + 1:]
@@ -256,6 +265,7 @@ class QtPackageTests(unittest.TestCase):
                         ''.join('Purg ' + name.split(':')[0] + ' (fixture)\n' for name in packages), '')
                 for name in packages:
                     self.versions.pop(name.split(':')[0], None)
+                    self.package_statuses.pop(name.split(':')[0], None)
                 return subprocess.CompletedProcess(argv, 0)
             if 'download' in argv:
                 name, version = argv[-1].split('=', 1)
@@ -269,6 +279,10 @@ class QtPackageTests(unittest.TestCase):
                     self.versions[meta['Package']] = meta['Version']
                     if self.fail_install:
                         self.fail_install = False
+                        if self.partial_on_failure:
+                            self.package_statuses[meta['Package']] = 'unpacked'
+                            self.versions['libxcb-res0'] = '1.17.0-2+b1'
+                            self.package_statuses['libxcb-res0'] = 'half-configured'
                         raise subprocess.CalledProcessError(71, argv)
                 if self.inject_dependency_on_install:
                     self.versions['libxcb-res0'] = '1.17.0-2+b1'
@@ -356,6 +370,39 @@ class QtPackageTests(unittest.TestCase):
 class Arm64QtPackageTests(QtPackageTests):
     architecture = "arm64"
     triplet = "aarch64-linux-gnu"
+
+    def test_partial_new_packages_are_purged_after_failed_install(self):
+        snapshot = self.outer / 'qt-runtime'
+        self.module.snapshot(snapshot)
+        selected, _ = self.package_set('selected', '+plebianrc6.1')
+        self.inject_dependency_on_install = True
+        self.partial_on_failure = True
+        self.fail_install = True
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.install(selected, snapshot=snapshot)
+        self.assertEqual(self.package_statuses['libqt5gui5t64'], 'unpacked')
+        self.assertEqual(self.package_statuses['libxcb-res0'], 'half-configured')
+        self.module.restore(snapshot)
+        self.assertEqual(self.versions, {})
+        self.assertEqual(self.package_statuses, {})
+
+    def test_existing_dependency_change_refused_before_apt_mutation(self):
+        self.versions['libxcb-res0'] = '1.17.0-2'
+        snapshot = self.outer / 'qt-runtime'
+        self.module.snapshot(snapshot)
+        selected, _ = self.package_set('selected', '+plebianrc6.1')
+        self.inject_dependency_on_install = True
+        for change in ('Inst libxcb-res0 [1.17.0-2] (1.17.0-2+b1 Debian:13 [arm64])\n',
+                       'Inst libxcb-res0 (1.17.0-2+b1 Debian:13 [arm64])\n'):
+            self.simulated_existing_change = change
+            before = len([event for event in self.events if 'install' in event and '--simulate' not in event])
+            with self.assertRaisesRegex(ValueError, 'preexisting non-Qt package'):
+                self.install(selected, snapshot=snapshot)
+            after = len([event for event in self.events if 'install' in event and '--simulate' not in event])
+            self.assertEqual(before, after)
+            self.assertEqual(self.versions['libxcb-res0'], '1.17.0-2')
+            self.assertFalse(self.module.PREFERENCE.exists())
+
 
     def test_matching_dev_companion_and_new_dependency_restore(self):
         baseline, prior = self.package_set('baseline', '')

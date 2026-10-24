@@ -49,19 +49,27 @@ def runtime_files(name):
     }
 
 
-def installed_packages():
-    """Return configured package identities before/after the outer transaction."""
+def package_states():
+    """Return dpkg states, including partly installed packages for rollback."""
     output = subprocess.check_output(
         ["/usr/bin/dpkg-query", "-W", "-f=${Package}\t${Architecture}\t${db:Status-Status}\n"],
         text=True)
-    result = set()
+    result = {}
     for line in output.splitlines():
         name, architecture, status = line.split("\t")
-        if status == "installed":
-            if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name) or not re.fullmatch(r"[a-z0-9]+", architecture):
-                raise ValueError("invalid installed package identity")
-            result.add(f"{name}:{architecture}")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name) or not re.fullmatch(r"[a-z0-9]+", architecture):
+            raise ValueError("invalid package identity")
+        result[f"{name}:{architecture}"] = status
     return result
+
+
+def installed_packages():
+    return {name for name, status in package_states().items() if status == "installed"}
+
+
+def present_packages():
+    return {name for name, status in package_states().items()
+            if status != "not-installed"}
 
 
 def state_directories():
@@ -78,7 +86,8 @@ def snapshot(directory):
             or directory.parent.stat().st_mode & 0o077):
         raise ValueError("Qt snapshot requires a private root-owned transaction directory")
     directory.mkdir(mode=0o700)
-    prior = {"packages": [], "files": {}, "installed": sorted(installed_packages())}
+    prior = {"packages": [], "files": {}, "installed": sorted(installed_packages()),
+             "present": sorted(present_packages())}
     for path in (PREFERENCE, HOOK, STATE / "RUNTIME.json"):
         prior["files"][str(path)] = base64.b64encode(path.read_bytes()).decode() if path.exists() else None
     tracked = (*PACKAGES, *((ARM_DEV_PACKAGE,) if native_architecture() == "arm64" else ()))
@@ -155,7 +164,7 @@ def restore(directory):
         PREFERENCE.unlink(missing_ok=True)
     else:
         atomic_write(PREFERENCE, base64.b64decode(preference, validate=True).decode())
-    if absent:
+    if absent and "qt_planned_new" not in prior:
         # dpkg refuses dependent applications; never remove unrelated packages.
         installed = [name for name in absent if subprocess.run(
             ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}", name],
@@ -166,8 +175,8 @@ def restore(directory):
         subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
                         "--allow-downgrades", "install", *archives], check=True)
     if "installed" in prior and "qt_planned_new" in prior:
-        before = set(prior["installed"])
-        current = installed_packages()
+        before = set(prior.get("present", prior["installed"]))
+        current = present_packages()
         planned = set(prior["qt_planned_new"])
         added = sorted(item for item in current - before
                        if item.split(":")[0] in planned)
@@ -175,13 +184,14 @@ def restore(directory):
             # Simulate first and permit removal only of packages absent from the
             # original rootfs. A dependent baseline package is never removed.
             command = ["/usr/bin/apt-get", "--simulate", "purge", *added]
-            plan = subprocess.run(command, check=True, capture_output=True, text=True).stdout
+            plan = subprocess.run(command, check=True, capture_output=True, text=True,
+                                  env={**os.environ, "LC_ALL": "C"}).stdout
             removed = {line.split()[1].split(":")[0] for line in plan.splitlines()
                        if line.startswith(("Remv ", "Purg "))}
             if not removed or removed - {item.split(":")[0] for item in added}:
                 raise ValueError("Qt dependency rollback would remove a preexisting package")
             subprocess.run(["/usr/bin/apt-get", "--yes", "purge", *added], check=True)
-        if any(item.split(":")[0] in planned for item in installed_packages() - before):
+        if any(item.split(":")[0] in planned for item in present_packages() - before):
             raise ValueError("Qt dependency rollback left a new Qt package installed")
     for path in (PREFERENCE, STATE / "RUNTIME.json", HOOK):
         value = prior["files"][str(path)]
@@ -193,8 +203,8 @@ def restore(directory):
         query = subprocess.run(["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}\n${Version}", record["Package"]],
                                capture_output=True, text=True)
         if record["Version"] is None:
-            if query.returncode == 0 and query.stdout.startswith("installed\n"):
-                raise ValueError("Qt package absent before the transaction remains installed")
+            if any(item.split(":")[0] == record["Package"] for item in present_packages()):
+                raise ValueError("Qt package absent before the transaction remains present")
         elif query.stdout != "installed\n" + record["Version"]:
             raise ValueError("previous Qt package version was not restored")
         else:
@@ -402,15 +412,23 @@ def main(argv=None):
         if snapshot_record is not None:
             simulation = subprocess.run(
                 ["/usr/bin/apt-get", "--simulate", "--no-install-recommends", "--no-remove",
-                 "install", *archives], check=True, capture_output=True, text=True).stdout
-            baseline = set(snapshot_record["installed"])
+                 "install", *archives], check=True, capture_output=True, text=True,
+                 env={**os.environ, "LC_ALL": "C"}).stdout
+            baseline = set(snapshot_record.get("present", snapshot_record["installed"]))
             planned = set()
+            selected = {record["Package"] for record in records}
             for line in simulation.splitlines():
                 parts = line.split()
-                if len(parts) >= 3 and parts[0] == "Inst" and not parts[2].startswith("["):
+                if len(parts) >= 3 and parts[0] == "Inst":
                     name = parts[1].split(":")[0]
                     if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name):
                         raise ValueError("invalid APT package plan")
+                    if name in selected:
+                        if not any(item.split(":")[0] == name for item in baseline):
+                            planned.add(name)
+                        continue
+                    if parts[2].startswith("[") or any(item.split(":")[0] == name for item in baseline):
+                        raise ValueError(f"APT would change a preexisting non-Qt package: {name}")
                     planned.add(name)
             snapshot_record["qt_planned_new"] = sorted(planned)
             atomic_write(snapshot_dir / "SNAPSHOT.json", json.dumps(snapshot_record, indent=2) + "\n")
@@ -418,7 +436,7 @@ def main(argv=None):
                         "install", *archives], check=True)
         if snapshot_record is not None:
             actual = installed_packages() - baseline
-            if {item.split(":")[0] for item in actual} - planned:
+            if {item.split(":")[0] for item in actual} - planned - selected:
                 raise ValueError("APT installed a package outside the checked Qt plan")
             snapshot_record["qt_added"] = sorted(actual)
             atomic_write(snapshot_dir / "SNAPSHOT.json", json.dumps(snapshot_record, indent=2) + "\n")
