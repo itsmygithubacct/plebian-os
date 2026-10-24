@@ -249,7 +249,10 @@ def install_bundle(path, expected_sha, expected_bytes, snapshot_path=None):
             if count not in (3, 4):
                 raise ValueError("Qt runtime bundle is incomplete")
         records = read_manifest(root / "RUNTIME.json")
-        if {item.name for item in root.iterdir()} != {"RUNTIME.json", *(r["path"] for r in records)}:
+        # Published packages may live in source subdirectories. Compare complete
+        # relative file paths; implicit parent directories are not payload files.
+        actual = {item.relative_to(root).as_posix() for item in root.rglob("*") if item.is_file()}
+        if actual != {"RUNTIME.json", *(r["path"] for r in records)}:
             raise ValueError("Qt runtime bundle members differ from the selected manifest")
         command = ["--install", str(root / "RUNTIME.json"), "--package-root", str(root)]
         if snapshot_path is not None:

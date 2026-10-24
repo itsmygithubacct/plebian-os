@@ -366,6 +366,35 @@ class QtPackageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.module.install_bundle(bundle, '0' * 64, bundle.stat().st_size)
 
+    def test_checksum_bound_bundle_accepts_nested_package_paths(self):
+        lane, records = self.package_set('selected', '+plebianrc6.1')
+        for record in records:
+            old = lane / record['path']
+            prefix = 'qtbase-opensource-src' if record['qt'].startswith('5.') else 'qt6-base'
+            record['path'] = prefix + '/' + old.name
+            selected = lane / record['path']
+            selected.parent.mkdir(exist_ok=True)
+            old.rename(selected)
+            self.archives[(record['Package'], record['Version'])] = selected
+        (lane / 'RUNTIME.json').write_text(json.dumps(records))
+        bundle = self.root / 'qt-nested.tar.xz'
+        with tarfile.open(bundle, 'w:xz') as archive:
+            for name in ('RUNTIME.json', *(r['path'] for r in records)):
+                archive.add(lane / name, arcname=name)
+        self.module.install_bundle(bundle, self.module.digest(bundle), bundle.stat().st_size)
+        self.module.verify(records)
+
+    def test_checksum_bound_bundle_rejects_an_unlisted_file_before_install(self):
+        lane, records = self.package_set('selected', '+plebianrc6.1')
+        (lane / 'unlisted').write_text('must not install')
+        bundle = self.root / 'qt-extra.tar.xz'
+        with tarfile.open(bundle, 'w:xz') as archive:
+            for name in ('RUNTIME.json', *(r['path'] for r in records), 'unlisted'):
+                archive.add(lane / name, arcname=name)
+        with self.assertRaises(ValueError):
+            self.module.install_bundle(bundle, self.module.digest(bundle), bundle.stat().st_size)
+        self.assertEqual(self.events, [])
+
 
 class Arm64QtPackageTests(QtPackageTests):
     architecture = "arm64"
