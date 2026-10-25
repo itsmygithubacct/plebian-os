@@ -29,7 +29,7 @@ PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
 # Preserve the accepted privileged first-use helper without putting Android,
 # Weston, or their large image closure in the base package set.
 PLEBIAN_OS_INSTALL_WAYDROID=1
-PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4f2fef049ab669fc43d7873c2e1c55ad180fec13d730cad681645e60a8410a33
 
 # The RC6 model compliance carrier and the licence interface it binds. Two
 # independent RC6 review seats are bound by the acceptance receipt; runtime,

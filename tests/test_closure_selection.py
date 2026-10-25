@@ -213,7 +213,7 @@ class ClosureSelectionTests(unittest.TestCase):
             "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "71225",
             "PLEBIAN_OS_INSTALL_WAYDROID": "1",
             "PLEBIAN_OS_WAYDROID_CLOSURE_SHA256":
-                "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175",
+                "4f2fef049ab669fc43d7873c2e1c55ad180fec13d730cad681645e60a8410a33",
             **F120_ROOT_VALUES,
             **changes,
         }
@@ -635,7 +635,7 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(after["PLEBIAN_OS_INSTALL_WAYDROID"], "1")
             self.assertEqual(
                 after["PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"],
-                "4ad7a4d44eef6ce4e90173491d0c6c8da02b3764d0d20d1df67ca7eeaa7e4175",
+                "4f2fef049ab669fc43d7873c2e1c55ad180fec13d730cad681645e60a8410a33",
             )
             self.assertNotIn("PLEBIAN_OS_NETINST_MAX_BYTES", after)
             self.assertIn(
