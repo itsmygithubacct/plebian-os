@@ -563,6 +563,20 @@ validate_release_architecture() {
         || closure_reject "selected patched Qt bundle is amd64-only"
 }
 
+# A complete ARM64 companion is not an admitted release. The 0.2.2 provisioner
+# and updater refuse ARM64 outright, so selecting a closure here would leave the
+# machine pointing at a stack its own tools refuse to install. Run after every
+# closure check, so a companion is still diagnosed in full, and before anything
+# is staged or written.
+refuse_unadmitted_release_architecture() {
+    case "$(uname -m)" in
+        aarch64|arm64) ;;
+        *) return 0 ;;
+    esac
+    [ "$TARGET" != 0.2.2 ] \
+        || closure_reject "0.2.2 ARM64 release admission is closed: releases/$RELEASE_MANIFEST_STEM.env passed closure checks, but ARM64 installer media, voice carrier, Waydroid and installed acceptance are not qualified; installed stack unchanged"
+}
+
 validate_release_closure() {
     local PLEBIAN_OS_NATIVE_DEB_URL="${MANIFEST[PLEBIAN_OS_NATIVE_DEB_URL]:-}"
     local PLEBIAN_OS_NATIVE_DEB_SHA256="${MANIFEST[PLEBIAN_OS_NATIVE_DEB_SHA256]:-}"
@@ -2388,6 +2402,7 @@ select_closure() {
     parse_release_requirements "$STAGE/requirements"
     validate_release_architecture
     validate_release_closure
+    refuse_unadmitted_release_architecture
     build_selected_closure
     prepare_component_ancestry_checks
     stage_target_tools
