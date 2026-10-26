@@ -26,8 +26,8 @@
     "role": "upstream-fallback-only; not the selected patched engine"
   },
   "unchanged_authority": {
-    "model_catalog_ref": "1aaf083f7d252ed10e3fcc8fed77234d5774b748",
-    "license_ref": "43b6ca117a0d48719a3776bd5b1ee4f123cc5ade",
+    "model_catalog_ref": "c3217886337ac66a6f751ca2f2cb1a6a1198b800",
+    "license_ref": "daa518a05dfc0337e10a9ebc514e6c5e4d261943",
     "voice_ref": "401b3efcc3801730b4b6d24cad81c9408c32df65",
     "model_download": "first-use-only-with-existing-consent-and-receipt-gates"
   },
