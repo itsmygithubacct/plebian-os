@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Share Amp and Music playback through one session using kilix-mpv for general
+  media and MIDI. Preserve native EnCodec file/live playback, protect indexed
+  queue changes, and verify the packaged spectrum filter during installation.
+
 - Recognize fresh-session requests, explicit exact-message payloads and desired
   application openings in the shared Ask grammar. Preserve literal arguments
   and complete-request validation for all three backend choices.
