@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Recognize fresh-session requests, explicit exact-message payloads and desired
+  application openings in the shared Ask grammar. Preserve literal arguments
+  and complete-request validation for all three backend choices.
+
 - Include live pane/tab inventory routing, receipt-bound completion of staged
   agent messages, and exact reasoning-effort settings for Codex launches.
 - Reuse unchanged interactive model licence acceptances on retry, and resolve
