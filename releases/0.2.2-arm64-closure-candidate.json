@@ -14,7 +14,7 @@
   },
   "preserved_amd64": {
     "releases/0.2.2.env": "4c426d19499927a28917233fb29fbc4085c1560ff6ca93ea5dd0b4b7a9bc14ce",
-    "releases/0.2.2.requirements": "86a9e9e8ef82341fea6d1c364bfa76480a86c25029dbb73ccf83f69a648e5e17",
+    "releases/0.2.2.requirements": "033f73a30905788fcfc7e73b801ea521401601b60f49a69dc6a7f71e14d69d9f",
     "provision/waydroid-closure.env": "4f2fef049ab669fc43d7873c2e1c55ad180fec13d730cad681645e60a8410a33",
     "provision/waydroid-closure.sha256": "775e3ccba764345ced4ee256f6632d42dc8e11ca4fbd7c5ffa8412e15aa7e0c3",
     "releases/0.2.2-model-compliance/CARRIER.env": "795d8aeef0a8773b547bd2bfc9f9c2a70a325da6d24ddbaa0db7a81444815433",
