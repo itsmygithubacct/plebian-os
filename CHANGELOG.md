@@ -6,6 +6,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Offer missing diarization and Pocket TTS conversion software during Model
+  Setup after licence consent and before model downloads. Keep choices pending
+  when optional software setup is declined or fails, so setup can be retried.
+
+- Expose an installed claudex client through `kilix claudex route` and
+  `kilix claudex usage`, preserving arguments and exit status. Include matching
+  workflow guidance and help for the optional client.
+
 - Share Amp and Music playback through one session using kilix-mpv for general
   media and MIDI. Preserve native EnCodec file/live playback, protect indexed
   queue changes, and verify the packaged spectrum filter during installation.
