@@ -6,6 +6,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Offer the optional firekitten paperclip desktop from startup setup while
+  retaining the regular Plebian-OS wallpaper by default. Load scenes and the
+  distant optimizer pause when unfocused and can be configured or disabled.
+- Add status-widget context settings, saved-ZIP weather and a lone-Super Start
+  gesture on the supported Linux desktop, with matching Settings/SDK controls.
+- Limit system announcements and startup/shutdown songs to 20% output, with
+  a separate quieter announcement setting and unchanged master volume.
+
 - Offer missing diarization and Pocket TTS conversion software during Model
   Setup after licence consent and before model downloads. Keep choices pending
   when optional software setup is declined or fails, so setup can be retried.
