@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Offer public, pinned Claudex through `kilix install kilix-claudex`, with
+  verified catalog dispatch and team-plan/launch help in the host.
+- Select rollout-log lookup consistently in the host, catalog and desktop SDK,
+  and answer named-city weather requests through Ask Kilix.
+
 - Offer the optional firekitten paperclip desktop from startup setup while
   retaining the regular Plebian-OS wallpaper by default. Load scenes and the
   distant optimizer pause when unfocused and can be configured or disabled.
