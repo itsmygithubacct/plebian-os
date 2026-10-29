@@ -1535,6 +1535,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
     /usr/local/share/pleb/openbox/rc.xml
+    /usr/local/share/themes/Smoke/xfce-notify-4.0/gtk.css
     /etc/lightdm/lightdm.conf.d/50-plebian-os.conf
     /etc/lightdm/lightdm.conf.d/50-pleb-autologin.conf
     /etc/xdg-desktop-portal/pleb-portals.conf
@@ -1609,6 +1610,9 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /usr/local/share/doc/pleb
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
+    /usr/local/share/themes
+    /usr/local/share/themes/Smoke
+    /usr/local/share/themes/Smoke/xfce-notify-4.0
     /usr/lib/plebian-os
     /usr/lib/plebian-os/waydroid
     /var/lib/AccountsService

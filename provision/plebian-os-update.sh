@@ -600,7 +600,7 @@ KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"
 PLEBIAN_OS_STORAGE_HOME="${PLEBIAN_OS_STORAGE_HOME:-$GPU_TERMINAL_HOME/plebian-os}"
 PLEBIAN_OS_SESSION_HOME="${PLEBIAN_OS_SESSION_HOME:-$PLEBIAN_OS_STORAGE_HOME/session}"
 
-# `pleb install` normally owns these twelve system paths. The stack updater
+# `pleb install` normally owns these system paths. The stack updater
 # snapshots the fixed, distribution-managed destinations before invoking it so
 # a later failure can restore the complete previous install. Custom install
 # destinations remain supported by `pleb install` directly, but are rejected by
@@ -620,6 +620,7 @@ KILIX_VOICE_STT_LINK="${KILIX_VOICE_STT_LINK:-/usr/local/bin/kilix-stt}"
 PLEB_LINK="${PLEB_LINK:-/usr/local/bin/pleb}"
 PLEB_RECOVERY_DOC_DST="${PLEB_RECOVERY_DOC_DST:-/usr/local/share/doc/pleb/RECOVERY.md}"
 OPENBOX_CONFIG_DST="${OPENBOX_CONFIG_DST:-/usr/local/share/pleb/openbox/rc.xml}"
+NOTIFICATION_THEME_DST="${NOTIFICATION_THEME_DST:-/usr/local/share/themes/Smoke/xfce-notify-4.0/gtk.css}"
 TMUX_TUI_BIN="$HOME/.local/bin/tmux-tui"
 TMUX_CLI_BIN="$HOME/.local/bin/tb"
 TMUX_TUI_STAMP="$KILIX_STATE_DIRECTORY/tmux-tui-install.refs"
@@ -818,7 +819,8 @@ require_standard_install_destinations() {
         || [ "$KILIX_VOICE_STT_LINK" != /usr/local/bin/kilix-stt ] \
         || [ "$PLEB_LINK" != /usr/local/bin/pleb ] \
         || [ "$PLEB_RECOVERY_DOC_DST" != /usr/local/share/doc/pleb/RECOVERY.md ] \
-        || [ "$OPENBOX_CONFIG_DST" != /usr/local/share/pleb/openbox/rc.xml ]; then
+        || [ "$OPENBOX_CONFIG_DST" != /usr/local/share/pleb/openbox/rc.xml ] \
+        || [ "$NOTIFICATION_THEME_DST" != /usr/local/share/themes/Smoke/xfce-notify-4.0/gtk.css ]; then
         die "plebian-os-update cannot transactionally protect custom Pleb install destinations; run 'pleb install' directly"
     fi
 }
@@ -1149,6 +1151,7 @@ paths=(
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
     /usr/local/share/pleb/openbox/rc.xml
+    /usr/local/share/themes/Smoke/xfce-notify-4.0/gtk.css
     /etc/pleb/session.env
     /usr/local/bin/uv
     /usr/local/bin/uvx
@@ -1192,6 +1195,9 @@ managed_dirs=(
     /etc/systemd/logind.conf.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
+    /usr/local/share/themes
+    /usr/local/share/themes/Smoke
+    /usr/local/share/themes/Smoke/xfce-notify-4.0
     /etc/pleb
     /usr/local/lib/pleb/session-bin
 )
@@ -1339,6 +1345,7 @@ paths=(
     /usr/local/bin/pleb
     /usr/local/share/doc/pleb/RECOVERY.md
     /usr/local/share/pleb/openbox/rc.xml
+    /usr/local/share/themes/Smoke/xfce-notify-4.0/gtk.css
     /etc/pleb/session.env
     /usr/local/bin/uv
     /usr/local/bin/uvx
@@ -1382,6 +1389,9 @@ managed_dirs=(
     /etc/systemd/logind.conf.d
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
+    /usr/local/share/themes
+    /usr/local/share/themes/Smoke
+    /usr/local/share/themes/Smoke/xfce-notify-4.0
     /etc/pleb
     /usr/local/lib/pleb/session-bin
 )

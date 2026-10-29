@@ -13,7 +13,7 @@
     "requirements": "releases/0.2.2-arm64.requirements"
   },
   "preserved_amd64": {
-    "releases/0.2.2.env": "f941a5c083770e5fa11e4bf8d626fbe65ee1ccae71394cdb3415ad2fc7821698",
+    "releases/0.2.2.env": "c4c4cb5236b6cc1b65ee6dcaa3b83089c6e775d091db3ecedcddbcd2d4283a1d",
     "releases/0.2.2.requirements": "033f73a30905788fcfc7e73b801ea521401601b60f49a69dc6a7f71e14d69d9f",
     "provision/waydroid-closure.env": "4f2fef049ab669fc43d7873c2e1c55ad180fec13d730cad681645e60a8410a33",
     "provision/waydroid-closure.sha256": "775e3ccba764345ced4ee256f6632d42dc8e11ca4fbd7c5ffa8412e15aa7e0c3",
