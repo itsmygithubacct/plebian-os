@@ -459,7 +459,9 @@ release upgrade, physical or human acceptance gate. Retain the report and
      `kilix-tts --version`, `kilix-stt --version`, and
      `kilix-voiced --version`, then require `kilix-stt --print` to produce a
      dictation report. Require `kilix-stt --models --json` to pass the
-     `kilix.speech.models/v1` schema gate with all three 0.1.9 models, exactly
+     `kilix.speech.models/v1` schema gate with all five 0.2.2 models
+     (`small-en-us`, `lgraph-en-us`, `vibevoice-asr-bitnet`,
+     `whisper-small-en`, and `whistle`), exactly
      one selected default, truthful runtime-support flags, positive exact byte
      sizes, and the shared explicit install-and-default argv. This listing must
      not open the network or change installed/default state. Require the
@@ -481,9 +483,11 @@ release upgrade, physical or human acceptance gate. Retain the report and
      real weights. Grant VirtualBox host microphone permission and confirm the
      microphone stays closed with no explicit action;
    - on the pristine guest, exercise all five model-management surfaces against
-     the same catalog. `kilix stt --models` and the Models tab must show the two
-     runnable Vosk models plus the installable-but-not-yet-runnable VibeVoice
-     weights. `kilix settings --section voice`, built-in WM Settings, and Kilix
+     the same catalog. `kilix stt --models` and the Models tab must show both
+     Vosk models, VibeVoice through the selected VibeASR provider, Whisper
+     small.en, and Whistle. Check runtime-support flags against the pinned
+     catalog contract; support does not imply that model weights are installed.
+     `kilix settings --section voice`, built-in WM Settings, and Kilix
      95 Settings must each offer **Install + use** for the selected model. Before
      installing `lgraph-en-us`, make it the pending default, click the terminal
      microphone, require the 124.5 MiB lazy-install confirmation, cancel it, and
@@ -492,7 +496,7 @@ release upgrade, physical or human acceptance gate. Retain the report and
      and use the other surfaces to verify the same installed/default state.
      Restore the release default before recording acceptance. Do not download
      the 1.6 GiB VibeVoice weights solely for this check; require the truthful
-     unsupported-runtime label and its explicit install/default action instead;
+     runtime-support label and its explicit install/default action instead;
    - verify the Kilix engine is one physically contained
      `generations/build.*` directory selected by a relative `current`
      symlink, with regular executable `kitty` and `kitten` launchers,
