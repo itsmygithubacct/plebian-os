@@ -6,6 +6,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Honor explicit desktop provider selections when another provider is running.
 - Keep long built-in Settings panels scrollable above Apply and Cancel, with
   every Voice control reachable and a default dialog that fits 640x480.
 - Lay session panes in rows of at most four columns. One to four panes are
