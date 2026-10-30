@@ -9,6 +9,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Lay session panes in rows of at most four columns. One to four panes are
   one row. The fifth pane starts a second row and the ninth a third, so
   twelve panes stay four by three.
+- Match the Qwen content authority to the host catalog pin
+  `a7a91a350c03ae0e523f62322d94894a6413b8f2`.
 - Select kilix-female-02 checkpoint 80 as the system voice. Piper uses it
   when no explicit voice is saved. An explicit Kristin model stays Kristin.
 - Give Avatar a saved 0–100% conversation volume. Owned speech applies that
