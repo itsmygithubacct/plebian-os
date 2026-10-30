@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Normalize installer and ISO file metadata so the builder's permission mask
+  and user identity do not change the resulting image.
 - Open pane logs faster with direct viewer startup and cached transcript replay.
 - Honor explicit desktop provider selections when another provider is running.
 - Keep long built-in Settings panels scrollable above Apply and Cancel, with

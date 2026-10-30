@@ -822,7 +822,7 @@ class RemasterContractTests(unittest.TestCase):
             'xorriso -as mkisofs -V "$PLEBIAN_OS_ISO_VOLUME_ID" '
             '\\\n    --modification-date="$ISO_SOURCE_DATE_XORRISO" '
             '\\\n    --set_all_file_dates "$ISO_SOURCE_DATE_XORRISO" '
-            '\\\n    "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"'
+            '\\\n    "${mkisofs_argv[@]}" -r -o "$OUT_TMP" "$EXTRACT"'
         )
         self.assertEqual(self.source.count(refresh), 1)
         self.assertEqual(self.source.count(repack), 1)

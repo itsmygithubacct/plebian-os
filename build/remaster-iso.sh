@@ -1627,6 +1627,7 @@ brand_graphical_installer() {
         || { echo "graphical installer main-menu template is empty" >&2; exit 1; }
     python3 "$INSTALLER_BRANDER" patch-main-menu \
         "$overlay/var/lib/dpkg/info/main-menu.templates" "$PLEBIAN_OS_VERSION"
+    chmod 0644 "$overlay/var/lib/dpkg/info/main-menu.templates"
     install -m 0644 "$INSTALLER_ASSETS/banner.png" \
         "$overlay/usr/share/graphics/logo_debian.png"
     install -m 0644 "$INSTALLER_ASSETS/banner-dark.png" \
@@ -1937,10 +1938,12 @@ PY
     echo "source ISO boot layout parsed to an empty argument list" >&2
     exit 1
 }
+# Normalize public image ownership and modes without widening permissions on
+# the build machine. Keep executable files executable, regardless of its umask.
 xorriso -as mkisofs -V "$PLEBIAN_OS_ISO_VOLUME_ID" \
     --modification-date="$ISO_SOURCE_DATE_XORRISO" \
     --set_all_file_dates "$ISO_SOURCE_DATE_XORRISO" \
-    "${mkisofs_argv[@]}" -o "$OUT_TMP" "$EXTRACT"
+    "${mkisofs_argv[@]}" -r -o "$OUT_TMP" "$EXTRACT"
 
 # Refuse to replace a known-good output with a nominally successful but
 # non-bootable image. Debian amd64 netinst media should retain both an MBR boot
