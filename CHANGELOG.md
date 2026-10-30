@@ -9,8 +9,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Lay session panes in rows of at most four columns. One to four panes are
   one row. The fifth pane starts a second row and the ninth a third, so
   twelve panes stay four by three.
-- Match the Qwen content authority to the host catalog pin
-  `a7a91a350c03ae0e523f62322d94894a6413b8f2`.
+- Install Kilix Female-02 epoch 80 by default from the model wizard. The
+  weights are the kilix-voice release `kilix-female-02-epoch80`. Kristin
+  stays available when Female-02 is not chosen.
+- The selected host includes the fingerprint reader and the focus-order
+  kitty-input pins. The Qwen content authority matches catalog
+  `2e20fce2a6fa7be5fc2468231e2cc7808e23303d`, and the carrier follows that
+  gitlink. Advertised speech records stay unchanged.
 - Select kilix-female-02 checkpoint 80 as the system voice. Piper uses it
   when no explicit voice is saved. An explicit Kristin model stays Kristin.
 - Give Avatar a saved 0–100% conversation volume. Owned speech applies that

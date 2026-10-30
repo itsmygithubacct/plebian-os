@@ -13,13 +13,13 @@
     "requirements": "releases/0.2.2-arm64.requirements"
   },
   "preserved_amd64": {
-    "releases/0.2.2.env": "8e03d01841e5d54cc0df90eee0da8d07045dc3ad4ad174afb2ab2c81cf44192d",
-    "releases/0.2.2.requirements": "ff827d008a7cb8689541b0b1f1d693a495ebd4bab15164bb7ddaf63ed4661fa1",
+    "releases/0.2.2.env": "e3bd5f0b3c86db02d13b84a7e35875ed16c10a89f7e159d30c3e47711e60dd3c",
+    "releases/0.2.2.requirements": "4b2fe90c6b9632825e2cc1b24ad8f3f55fe4ed5384e8a771bb1046e7e6be6cf1",
     "provision/waydroid-closure.env": "4f2fef049ab669fc43d7873c2e1c55ad180fec13d730cad681645e60a8410a33",
     "provision/waydroid-closure.sha256": "775e3ccba764345ced4ee256f6632d42dc8e11ca4fbd7c5ffa8412e15aa7e0c3",
-    "releases/0.2.2-model-compliance/CARRIER.env": "af62595ef032d0ce36e449b7d19b9cd13c962086d39f7337edd7c670149609da",
-    "releases/0.2.2-model-compliance/ACCEPTANCE.json": "3ac7cd997a17c0830917e286f799b175ffe7f903d193f542a91e88043c7d940e",
-    "releases/0.2.2-model-compliance/SHA256SUMS": "19c7a20d90d7766c19b789c44e96fefcd81b0ed30402b7e2c10ae59889583312"
+    "releases/0.2.2-model-compliance/CARRIER.env": "4895b32b382b93ebb6168f506fa04202d3ebdf52e815c07ab9ab8ac208c2b267",
+    "releases/0.2.2-model-compliance/ACCEPTANCE.json": "ea50af984c8af21a5a01cb3f981977eec97709c43eb5bba7c55e5f561b153083",
+    "releases/0.2.2-model-compliance/SHA256SUMS": "9b27fab49f4b79f1272f4fa3eeeeeaa05089cdb26aef25db15577c162ea22131"
   },
   "runtime_candidate": {
     "path": "releases/0.2.2-arm64-runtime-candidate.json",
