@@ -6,6 +6,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Lay session panes in rows of at most four columns. One to four panes are
+  one row. The fifth pane starts a second row and the ninth a third, so
+  twelve panes stay four by three.
 - Select kilix-female-02 checkpoint 80 as the system voice. Piper uses it
   when no explicit voice is saved. An explicit Kristin model stays Kristin.
 - Give Avatar a saved 0–100% conversation volume. Owned speech applies that
