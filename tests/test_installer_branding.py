@@ -378,6 +378,50 @@ class PngContractTests(unittest.TestCase):
 
 
 class TextBrandingTests(unittest.TestCase):
+    def _write_137_fixture(self, root):
+        menu, themes = write_text_fixture(root)
+        for path in root.rglob("*"):
+            if path.is_file() and path.suffix != ".png":
+                path.write_bytes(
+                    path.read_bytes().replace(b"13.5.0", b"13.7.0").replace(
+                        b"20260516-10:08; d-i 20250803+deb13u5",
+                        b"20260912-09:35; d-i 20250803+deb13u7",
+                    )
+                )
+        return menu, themes
+
+    def test_debian_137_branding_keeps_the_actual_installer_build(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            menu, themes = self._write_137_fixture(root)
+            brand_installer.brand_boot_text(root, "0.2.2")
+            self.assertIn(b"Plebian-OS 0.2.2", menu.read_bytes())
+            for name in brand_installer.THEME_NAMES:
+                self.assertIn(b'title-text: "Plebian-OS 0.2.2"', (themes / name).read_bytes())
+            help_text = (root / "isolinux/f1.txt").read_bytes()
+            self.assertIn(b"Debian Installer base: build 20260912-09:35; d-i 20250803+deb13u7.", help_text)
+            self.assertNotIn(b"deb13u5", help_text)
+            self.assertNotIn(b"Official amd64 NETINST", (root / "README.txt").read_bytes())
+            self.assertNotIn(b"Official amd64 NETINST", (root / "README.html").read_bytes())
+
+    def test_unknown_or_mixed_base_identifiers_refuse_before_writing(self):
+        for relative, old, new in (
+            ("README.txt", b"13.7.0", b"13.8.0"),
+            ("README.html", b"13.7.0", b"13.5.0"),
+            ("boot/grub/theme/1", b"13.7.0", b"13.5.0"),
+            ("isolinux/f1.txt", b"20260912-09:35", b"20260912-10:35"),
+            ("isolinux/f1.txt", b"deb13u7", b"deb13u5"),
+        ):
+            with self.subTest(path=relative, new=new), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                self._write_137_fixture(root)
+                path = root / relative
+                path.write_bytes(path.read_bytes().replace(old, new))
+                before = tree_bytes(root)
+                with self.assertRaises(brand_installer.BrandingError):
+                    brand_installer.brand_boot_text(root, "0.2.2")
+                self.assertEqual(tree_bytes(root), before)
+
     def test_literal_bel_and_all_ten_themes_receive_dynamic_version(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Fail-closed helpers for branding the pinned Debian installer tree.
 
-The text mutation deliberately matches Debian 13.5's exact bytes.  A future
-base-image change must update these constants and their fixtures together.
+The text mutation deliberately matches the reviewed Debian 13.5 and 13.7
+inputs. Future base-image changes require an explicit profile and audit.
 """
 
 from __future__ import annotations
@@ -62,6 +62,10 @@ README_HTML_REQUIRED = (
 F1_WELCOME = b"Welcome to Debian GNU/Linux!"
 F1_MEDIA = b"This is a Debian 13 (trixie) installation CD-ROM."
 F1_BUILD = b"It was built 20260516-10:08; d-i 20250803+deb13u5."
+BOOT_TEXT_PROFILES = {
+    b"13.5.0": b"20260516-10:08; d-i 20250803+deb13u5",
+    b"13.7.0": b"20260912-09:35; d-i 20250803+deb13u7",
+}
 F1_PREREQUISITES = b"Prerequisites for installing Debian."
 F2_HEADING = b"PREREQUISITES FOR INSTALLING DEBIAN"
 F2_DEBIAN_REQUIREMENTS = (
@@ -256,8 +260,23 @@ def _write_mutations(mutations: Sequence[_Mutation]) -> None:
         raise BrandingError(f"could not write installer branding: {exc}") from exc
 
 
+def _boot_text_profile(root: Path) -> tuple[bytes, bytes]:
+    """Select one reviewed base; every other input must match that same base."""
+    path = root / "README.txt"
+    source = _prepare_replacements(path, ()).original
+    label, count = README_TEXT_REQUIRED[0]
+    matches = [
+        (base, build)
+        for base, build in BOOT_TEXT_PROFILES.items()
+        if source.count(label.replace(b"13.5.0", base)) == count
+    ]
+    if len(matches) != 1:
+        raise _fail(path, "expected exactly one reviewed Debian installer profile")
+    return matches[0]
+
+
 def brand_boot_text(root: Path | str, version: str) -> None:
-    """Patch product-facing text in an extracted Debian 13.5 ISO.
+    """Patch product-facing text in a reviewed Debian installer ISO.
 
     Every input and replacement count is checked before any file is modified.
     The literal BIOS BEL byte and each file's access/modify timestamps are
@@ -266,6 +285,15 @@ def brand_boot_text(root: Path | str, version: str) -> None:
 
     root = Path(root)
     version_b = _version_bytes(version)
+    base_version, base_build = _boot_text_profile(root)
+    readme_text_required = tuple(
+        (marker.replace(b"13.5.0", base_version), count)
+        for marker, count in README_TEXT_REQUIRED
+    )
+    readme_html_required = tuple(
+        (marker.replace(b"13.5.0", base_version), count)
+        for marker, count in README_HTML_REQUIRED
+    )
     theme_root = root / "boot/grub/theme"
     bios_advanced_title = b"Plebian-OS " + version_b + b" advanced options"
     bios_dark_title = b"Plebian-OS " + version_b + b" accessible-dark"
@@ -320,12 +348,12 @@ def brand_boot_text(root: Path | str, version: str) -> None:
         ),
         _prepare_document_replacement(
             root / "README.txt",
-            README_TEXT_REQUIRED,
+            readme_text_required,
             _media_readme_text(version),
         ),
         _prepare_document_replacement(
             root / "README.html",
-            README_HTML_REQUIRED,
+            readme_html_required,
             _media_readme_html(version),
         ),
         _prepare_replacements(
@@ -338,8 +366,8 @@ def brand_boot_text(root: Path | str, version: str) -> None:
                     1,
                 ),
                 (
-                    F1_BUILD,
-                    b"Debian Installer base: build 20260516-10:08; d-i 20250803+deb13u5.",
+                    b"It was built " + base_build + b".",
+                    b"Debian Installer base: build " + base_build + b".",
                     1,
                 ),
                 (
@@ -392,7 +420,7 @@ def brand_boot_text(root: Path | str, version: str) -> None:
                 theme_root / name,
                 [
                     (
-                        UEFI_TITLE,
+                        UEFI_TITLE.replace(b"13.5.0", base_version),
                         b'title-text: "Plebian-OS ' + version_b + b'"',
                         1,
                     ),
