@@ -9,16 +9,17 @@
 #   https://astral.sh/uv/0.12.5/install.sh
 #   https://releases.astral.sh/github/uv/releases/download/0.12.5/uv-installer.sh
 
-# The 2026-08-25 latest-stable recheck retained Debian 13.5.0 as the newest
-# immutable archived amd64 netinst. Debian 13.6.0 is current, but has no
-# archive URL yet. RC6 uses this verified bootstrap media with signed live
+# The 2026-10-30 latest-stable recheck selects Debian 13.7.0 amd64 netinst
+# from its versioned Debian download directory. SHA256SUMS was verified
+# with Debian CD key DF9B9C49EAA9298432589D76DA87E80D6294BE9B.
+# This verified bootstrap media uses signed live
 # trixie, trixie-updates and trixie-security packages. snapshot.debian.org is
 # unsuitable for the normal network installer: an outage prevents installation.
 # Empty PLEBIAN_OS_APT_SNAPSHOT explicitly selects live Debian sources through
 # both installation and first boot; installed package versions are recorded.
-PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/cdimage/archive/13.5.0/amd64/iso-cd/debian-13.5.0-amd64-netinst.iso
-PLEBIAN_OS_NETINST_SHA256=95838884f5ea6c82421dfe6baaa5a639dbbe6756c1e380f9fe7a7cb0c1949d2a
-PLEBIAN_OS_NETINST_MAX_BYTES=791674880
+PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso
+PLEBIAN_OS_NETINST_SHA256=a7ef94ac2fb9a7fec454552abd629b7cc9d5155c886165a45649f5ce6167e355
+PLEBIAN_OS_NETINST_MAX_BYTES=792723456
 PLEBIAN_OS_APT_SNAPSHOT=
 
 PLEBIAN_OS_INSTALL_UV=1
