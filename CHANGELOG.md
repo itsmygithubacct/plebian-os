@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Keep long built-in Settings panels scrollable above Apply and Cancel, with
+  every Voice control reachable and a default dialog that fits 640x480.
 - Lay session panes in rows of at most four columns. One to four panes are
   one row. The fifth pane starts a second row and the ninth a third, so
   twelve panes stay four by three.
