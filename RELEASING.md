@@ -3,8 +3,8 @@
 Plebian-OS, [pleb](https://github.com/itsmygithubacct/pleb),
 [kilix](https://github.com/itsmygithubacct/kilix), and
 [kilix-95](https://github.com/itsmygithubacct/kilix-95) are one coordinated
-stack. A release uses one version across all four repositories and pins every
-network-fetched build input.
+stack. A release uses one version across all four repositories and records its
+pinned source, toolchain, and media inputs and its Debian package-source policy.
 
 ## Release media is not unattended VM media
 
@@ -25,6 +25,12 @@ netinst URL from `releases/<x.y.z>.env`; a local netinst path may be supplied
 instead, but it must match that manifest checksum. For 0.2.1 the controlling
 requirements retain archived Debian 13.5.0 media independently of the newer
 package snapshot.
+
+The 0.2.2 manifest selects Debian 13.7.0 netinst media and signed live Debian
+package repositories. Its empty `PLEBIAN_OS_APT_SNAPSHOT` is an explicit policy,
+not a missing pin. Live package versions can change between installations;
+`/var/lib/plebian-os/packages.list` and `apt-sources.list` record the versions
+and indexes actually used.
 
 Do not substitute an ISO from `artifacts/acceptance/`. Those images are
 non-publishable test derivatives: they boot unattended, erase the target disk,
@@ -196,9 +202,11 @@ actually cutting.
   remain facts of the selected Git trees rather than duplicate env pins;
 - a stable Debian archive URL, SHA-256, and positive byte ceiling for the
   source netinst;
-- a `snapshot.debian.org` timestamp covering installer and firstboot packages
-  (the install closure; installed machines track live Debian security and
-  point-release suites afterwards);
+- an explicit `PLEBIAN_OS_APT_SNAPSHOT` declaration: empty selects signed live
+  Debian `trixie`, `trixie-updates`, and `trixie-security` repositories, as in
+  0.2.2; a `snapshot.debian.org` timestamp selects a historical install closure.
+  Omitting the key is invalid. Installed machines track live Debian security
+  and point-release suites after successful provisioning or migration;
 - the fallback kitty bundle version and SHA-256;
 - the exact Go version and SHA-256 for every supported build architecture;
 - pinned installer versions/checksums and a positive download byte bound for
@@ -217,8 +225,9 @@ actually cutting.
   `kilix-stt --models --json`; a consumer-specific copied catalog is not a
   release substitute.
 
-Release mode fails closed when a required value is empty, still a placeholder,
-malformed, dirty, or does not resolve to the checked-out Plebian-OS commit. The
+Release mode fails closed when a required key is missing, a value violates its
+manifest policy or remains a placeholder, the checkout is dirty, or the
+manifest's OS ref does not resolve to the checked-out Plebian-OS commit. The
 image records the transformed preseed, source ISO, refs, runtime configuration,
 and tool pins in `/etc/plebian-os/build-info.env`; final package and resolved
 source/tool manifests are written under `/var/lib/plebian-os/`.
@@ -252,10 +261,11 @@ which validates it.
 
 `releases/<x.y.z>.env` is the closure; the selector is what makes it selectable.
 So a release is only shippable when the selector accepts its manifest —
-completeness, exact 40-character component commits, empty branch keys, a Debian
-snapshot timestamp, engine and Go pins, an all-or-nothing optional closure such
-as Kilix Voice, and a `PLEBIAN_OS_VERSION` that agrees with both the release
-identifier and the release commit's `VERSION`. Selecting is the same discipline
+completeness, exact 40-character component commits, empty branch keys, an
+explicit live or timestamped Debian package-source policy, engine and Go pins,
+an all-or-nothing optional closure such as Kilix Voice, and a
+`PLEBIAN_OS_VERSION` that agrees with both the release identifier and the release
+commit's `VERSION`. Selecting is the same discipline
 `load_release_manifest` applies at build time, one step earlier in the operator's
 hands. If a release introduces a new release-controlled key, add it to
 `RELEASE_CONTROLLED_KEYS` in the selector (and to the required lists if the
@@ -378,11 +388,12 @@ release upgrade, physical or human acceptance gate. Retain the report and
    The wrapper refuses unless `HEAD`, `VERSION`, the manifest's OS ref, and the
    local candidate tag all identify the same clean commit. Only after proving
    that identity does it create a clearly non-publishable SSH/autoboot
-   derivative while retaining the exact release-manifest media, snapshot,
-   toolchain, component, voice, and provider pins. Clearing release mode for
-   that derivative does not clear the release apt policy:
-   `PLEBIAN_OS_LIVE_SECURITY_UPDATES=1` makes the guest move from the install
-   snapshot to live Debian security sources exactly as a release install does,
+   derivative while retaining the exact release-manifest media, Debian
+   package-source policy, toolchain, component, voice, and provider pins.
+   Clearing release mode for that derivative does not clear the release apt policy:
+   `PLEBIAN_OS_LIVE_SECURITY_UPDATES=1` keeps live Debian security sources
+   enabled after provisioning, moving historical snapshot installations to
+   live sources when needed. Fresh 0.2.2 installs use live sources throughout,
    so the checks below test the policy users receive. VM, ISO, and report names
    include the release and candidate commit; an older candidate or unrelated
    `plebian-acceptance` VM is never deleted implicitly. Do not use `--replace`

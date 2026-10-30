@@ -282,10 +282,10 @@ target dependency policy, including any required uv pin, and rewrites
 stack validates. A failure after the OS/dependency refresh, Pleb refresh,
 install, component update, or provenance write restores that previous coherent
 stack. Apt package additions may remain installed but inactive. Debian package
-upgrades are never rolled back, and the update moves a release machine from the
-install snapshot to live Debian sources only after the stack has committed. The
-OS-layer stage is also bound
-to pre-sudo SHA-256 values and revalidated as root before any destination is
+upgrades are never rolled back. When a machine still uses its install snapshot,
+the update moves it to live Debian sources only after the stack has committed.
+Fresh 0.2.2 installations already use live sources. The OS-layer stage is also
+bound to pre-sudo SHA-256 values and revalidated as root before any destination is
 replaced; success is reported only after the entire outer transaction commits.
 Pass `--restart` to restart the graphical session after a successful update.
 Firstboot and manual reprovisioning hold the same target-user Pleb state lock,
@@ -485,10 +485,10 @@ repo/ref/provider knobs used for that image; the firstboot env is what
 After provisioning finishes, `/var/lib/plebian-os/packages.list`,
 `versions.env`, and `apt-sources.list` record the final installed packages,
 resolved source commits, tool/engine versions, and apt indexes actually used.
-On a release machine `apt-sources.list` lists only snapshot indexes at the
-install timestamp until the machine leaves the snapshot; updates and
-re-provisioning after that record the live Debian indexes they resolved
-against.
+For 0.2.2, `apt-sources.list` records the live Debian indexes used during
+installation and subsequent updates or re-provisioning. Historical images
+with a timestamped install policy record snapshot indexes until the machine
+migrates to live sources, then record the live indexes they resolved against.
 
 ## Optional NVIDIA driver
 
@@ -614,8 +614,8 @@ release upgrade. The current manifest leaves `PLEBIAN_OS_APT_SNAPSHOT` empty:
 apt tracks the signed live Debian `trixie`, `trixie-updates`, and
 `trixie-security` suites with replay protection enabled, and
 `unattended-upgrades` applies Debian security updates daily without rebooting.
-The installer's snapshot `sources.list` is retired to
-`/etc/apt/sources.list.plebian-os-installer-snapshot` (a file you want kept
+On historical snapshot-based installs, the installer's `sources.list` is
+retired to `/etc/apt/sources.list.plebian-os-installer-snapshot` (a file you want kept
 as your own can carry the line `# plebian-os: keep`; see
 [UPGRADING.md](UPGRADING.md#debian-security-updates)); sources Plebian-OS
 disabled for the install are restored, and operator sources that already
