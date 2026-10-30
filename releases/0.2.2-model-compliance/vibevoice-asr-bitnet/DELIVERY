@@ -5,4 +5,4 @@ huggingface.co and verified against the pinned digests before installation.
 No install route downloads it until a kilix-license receipt covers it:
 The model catalog shows the licence and records the receipt, and
 The speech install command, voice installer and Bonsai pull command first ask
-`kilix-stt --check-licence` (kilix-voice f0884f1d83cc4778b48b36f0b1a13f4ccb41a511).
+`kilix-stt --check-licence` (kilix-voice 1faf9fb07ec04af3c7b6c130c4bd1fd315c25dc4).
