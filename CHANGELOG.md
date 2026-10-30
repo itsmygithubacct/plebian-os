@@ -6,6 +6,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Give Avatar a saved 0–100% conversation volume. Owned speech applies that
+  gain to the active turn. System announcements and intro/outro songs stay
+  capped at 20%, and the master mixer is unchanged.
+- Select the host commit that accepts Codex max reasoning effort and the Amp
+  catalog pin for the nonblocking control probe. Speech-model records stay
+  the same, and the carrier follows that host's content gitlink.
+
 - Offer public, pinned Claudex through `kilix install kilix-claudex`, with
   verified catalog dispatch and team-plan/launch help in the host.
 - Select rollout-log lookup consistently in the host, catalog and desktop SDK,

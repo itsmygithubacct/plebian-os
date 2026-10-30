@@ -5,4 +5,4 @@ huggingface.co and verified against the pinned digests before installation.
 No install route downloads it until a kilix-license receipt covers it:
 The model catalog shows the licence and records the receipt, and
 The speech install command hands the download to that model catalog
-and fetches no weights itself (kilix-voice d7207f7caff2950135b6fe9e8393cd9b76d399b9).
+and fetches no weights itself (kilix-voice f0884f1d83cc4778b48b36f0b1a13f4ccb41a511).
