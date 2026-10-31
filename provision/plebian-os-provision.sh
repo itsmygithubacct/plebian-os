@@ -575,6 +575,41 @@ scan_ollama_carrier_arguments() {
 
 # The 0.2.2 Ollama runtime is mandatory and offline. Resolve and verify its
 # release inputs before the log file, apt, users, services, or checkouts change.
+ollama_verify_carrier_pins() {
+    local manifest="$1" carrier="$2" label="$3"
+    local bytes_count digest_count expected_bytes expected_digest
+    local actual_bytes actual_digest_output actual_digest
+
+    bytes_count="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { n++ } END { print n + 0 }' "$manifest")"
+    [ "$bytes_count" = 1 ] \
+        || die "0.2.2 release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES entry"
+    expected_bytes="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { value=substr($0, index($0, "=") + 1) } END { print value }' "$manifest")"
+    [[ "$expected_bytes" =~ ^[0-9]+$ ]] \
+        || die "0.2.2 release manifest carrier byte count must be decimal"
+
+    digest_count="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { n++ } END { print n + 0 }' "$manifest")"
+    [ "$digest_count" = 1 ] \
+        || die "0.2.2 release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 entry"
+    expected_digest="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { value=substr($0, index($0, "=") + 1) } END { print value }' "$manifest")"
+    [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] \
+        || die "0.2.2 release manifest carrier SHA-256 must be 64 lowercase hexadecimal characters"
+
+    [ -f "$carrier" ] && [ ! -L "$carrier" ] \
+        || die "$label is not a regular non-symlink file: $carrier"
+    actual_bytes="$(stat -c '%s' -- "$carrier" 2>/dev/null)" \
+        || die "could not inspect $label size: $carrier"
+    [[ "$actual_bytes" =~ ^[0-9]+$ ]] \
+        || die "could not read $label size: $carrier"
+    [ "$actual_bytes" = "$expected_bytes" ] \
+        || die "$label size does not match the 0.2.2 release manifest: $carrier"
+
+    actual_digest_output="$(sha256sum -- "$carrier" 2>/dev/null)" \
+        || die "could not calculate $label SHA-256: $carrier"
+    actual_digest="${actual_digest_output%% *}"
+    [ "$actual_digest" = "$expected_digest" ] \
+        || die "$label SHA-256 does not match the 0.2.2 release manifest: $carrier"
+}
+
 preflight_ollama_carrier() {
     local staging_root=/usr/local/share/plebian-os
     local manifest_target="$staging_root/0.2.2.env"
@@ -583,11 +618,16 @@ preflight_ollama_carrier() {
     local cli_carrier="${PLEBIAN_OS_OLLAMA_CARRIER_ARG:-}"
     local env_carrier="${PLEBIAN_OS_OLLAMA_CARRIER:-}"
     local manifest_source="" carrier_source=""
-    local helper="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
     local staged_manifest_present=0 checkout_manifest_present=0
     local manifest_needs_stage=0 carrier_needs_stage=0
     local manifest_count manifest_version metadata cli_real env_real
     local temporary_manifest temporary_carrier
+
+    local required_tool
+    for required_tool in awk stat sha256sum; do
+        command -v "$required_tool" >/dev/null 2>&1 \
+            || die "required preflight tool missing: $required_tool"
+    done
 
     if [ -e "$staging_root" ] || [ -L "$staging_root" ]; then
         [ -d "$staging_root" ] && [ ! -L "$staging_root" ] \
@@ -614,6 +654,8 @@ preflight_ollama_carrier() {
         checkout_manifest_present=1
     fi
     if [ "$staged_manifest_present" = 1 ] && [ "$checkout_manifest_present" = 1 ]; then
+        command -v cmp >/dev/null 2>&1 \
+            || die "required preflight tool missing: cmp"
         cmp -s -- "$manifest_target" "$checkout_manifest" \
             || die "staged and checkout 0.2.2 release manifests differ"
     fi
@@ -632,6 +674,8 @@ preflight_ollama_carrier() {
         || die "Ollama release manifest version does not match PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
 
     if [ -n "$cli_carrier" ] && [ -n "$env_carrier" ]; then
+        command -v readlink >/dev/null 2>&1 \
+            || die "required preflight tool missing: readlink"
         [ -f "$cli_carrier" ] && [ ! -L "$cli_carrier" ] \
             || die "--ollama-carrier is not a regular non-symlink file: $cli_carrier"
         [ -f "$env_carrier" ] && [ ! -L "$env_carrier" ] \
@@ -652,8 +696,7 @@ preflight_ollama_carrier() {
     else
         die "0.2.2 Ollama carrier is missing; supply the offline 0.2.2 release asset ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz with --ollama-carrier PATH or PLEBIAN_OS_OLLAMA_CARRIER=PATH"
     fi
-    [ -f "$carrier_source" ] && [ ! -L "$carrier_source" ] \
-        || die "Ollama carrier is not a regular non-symlink file: $carrier_source"
+    ollama_verify_carrier_pins "$manifest_source" "$carrier_source" "Ollama carrier"
 
     if [ -e "$carrier_target" ] || [ -L "$carrier_target" ]; then
         [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
@@ -662,18 +705,9 @@ preflight_ollama_carrier() {
             || die "could not inspect staged Ollama carrier: $carrier_target"
         [ "$metadata" = 0:644:1 ] \
             || die "staged Ollama carrier must be root-owned mode 0644: $carrier_target"
+        ollama_verify_carrier_pins "$manifest_source" "$carrier_target" "staged Ollama carrier"
     else
         carrier_needs_stage=1
-    fi
-
-    [ -f "$helper" ] && [ ! -L "$helper" ] \
-        || die "Ollama carrier verifier is missing from the source checkout or ISO payload: $helper"
-    python3 "$helper" --manifest "$manifest_source" --verify-carrier "$carrier_source" >/dev/null \
-        || die "offline Ollama carrier failed its 0.2.2 manifest size/SHA-256 check"
-    if [ "$carrier_needs_stage" = 0 ] \
-        && [ "$(readlink -e -- "$carrier_target")" != "$(readlink -e -- "$carrier_source")" ]; then
-        python3 "$helper" --manifest "$manifest_source" --verify-carrier "$carrier_target" >/dev/null \
-            || die "staged Ollama carrier failed its 0.2.2 manifest size/SHA-256 check"
     fi
 
     if [ "$DRY_RUN" = 1 ]; then
@@ -686,6 +720,11 @@ preflight_ollama_carrier() {
             && echo "    + stage carrier as root:root mode 0644 at $carrier_target"
         return 0
     fi
+
+    for required_tool in install mktemp mv rm; do
+        command -v "$required_tool" >/dev/null 2>&1 \
+            || die "required preflight tool missing: $required_tool"
+    done
 
     if [ "$manifest_needs_stage" = 1 ] || [ "$carrier_needs_stage" = 1 ]; then
         install -d -o root -g root -m 0755 "$staging_root" \
@@ -716,8 +755,7 @@ preflight_ollama_carrier() {
     [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
         && [ "$(stat -c '%u:%a:%h' -- "$carrier_target")" = 0:644:1 ] \
         || die "staged 0.2.2 Ollama carrier is not a root-owned regular mode-0644 file"
-    python3 "$helper" --manifest "$manifest_target" --verify-carrier "$carrier_target" >/dev/null \
-        || die "staged Ollama carrier failed its 0.2.2 manifest size/SHA-256 check"
+    ollama_verify_carrier_pins "$manifest_target" "$carrier_target" "staged Ollama carrier"
     log "offline Ollama carrier and release manifest are ready before provisioning changes"
 }
 

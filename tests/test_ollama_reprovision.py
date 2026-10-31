@@ -219,9 +219,12 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         scanner_start = source.index("scan_ollama_carrier_arguments() {")
         scanner_end = source.index("\n}\n\n# The 0.2.2 Ollama runtime", scanner_start) + 2
         cls.argument_scanner = source[scanner_start:scanner_end]
+        pin_start = source.index("ollama_verify_carrier_pins() {")
         start = source.index("preflight_ollama_carrier() {")
         end = source.index('\n}\n\nscan_ollama_carrier_arguments "$@"', start) + 2
-        cls.preflight_function = source[start:end]
+        cls.preflight_function = source[pin_start:end]
+        prefix_end = source.index("\n# Keep a copy of this script's own output")
+        cls.entry_prefix = source[:prefix_end]
 
     def make_fixture(self, root: Path, *, carrier_payload: bytes):
         checkout = root / "checkout"
@@ -321,9 +324,71 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         if environment:
             env["PLEBIAN_OS_OLLAMA_CARRIER"] = environment
         return subprocess.run(
-            ["bash", "-c", script], env=env, text=True,
+            ["/bin/bash", "-c", script], env=env, text=True,
             capture_output=True, check=False,
         )
+
+    def run_real_entry_prefix(self, fixture, *, option="", path=None):
+        source = self.entry_prefix.replace(
+            'SELF_DIR="$(cd "$(dirname "$0")" && pwd)"',
+            f"SELF_DIR={shlex.quote(str(fixture['checkout'] / 'provision'))}",
+        ).replace("/usr/local/share/plebian-os", str(fixture["stage_root"]))
+        script = source + '\nprintf \'entry-prefix-complete\\n\'\n'
+        env = fixture["env"].copy()
+        env["PLEBIAN_OS_VERSION"] = "0.2.2"
+        env.pop("PLEBIAN_OS_PROVISION_LIB_ONLY", None)
+        env.pop("PLEBIAN_OS_OLLAMA_CARRIER", None)
+        if path is not None:
+            env["PATH"] = str(path)
+        return subprocess.run(
+            ["/bin/bash", "-c", script, "plebian-os-provision", *(
+                ["--ollama-carrier", option] if option else []
+            )],
+            cwd=fixture["checkout"], env=env, text=True,
+            capture_output=True, check=False,
+        )
+
+    def make_no_python_path(self, fixture):
+        path = fixture["root"] / "no-python-path"
+        path.mkdir()
+        for tool in ("awk", "cmp", "dirname", "install", "mktemp", "mv", "readlink", "rm", "sha256sum"):
+            source = Path("/usr/bin") / tool
+            if not source.exists():
+                source = Path("/bin") / tool
+            (path / tool).symlink_to(source)
+        install_shim = path / "install"
+        install_shim.unlink()
+        install_shim.write_text(
+            "#!/bin/bash\n"
+            "args=()\n"
+            "while (($#)); do\n"
+            "  case \"$1\" in\n"
+            "    -o|-g) shift 2 ;;\n"
+            "    *) args+=(\"$1\"); shift ;;\n"
+            "  esac\n"
+            "done\n"
+            "exec /usr/bin/install \"${args[@]}\"\n",
+            encoding="utf-8",
+        )
+        install_shim.chmod(0o755)
+        stat_shim = path / ".stat-shim"
+        stat_shim.write_text(
+            "#!/bin/bash\n"
+            "format=\"$2\"; shift 2; [[ \"${1:-}\" == -- ]] && shift; path=\"$1\"\n"
+            "case \"$path\" in\n"
+            "  \"$FIXTURE_STAGE_ROOT\"|\"$FIXTURE_STAGE_ROOT\"/*)\n"
+            "    case \"$format\" in\n"
+            "      %u:%a) printf '0:'; /usr/bin/stat -c '%a' -- \"$path\" ;;\n"
+            "      %u:%a:%h) printf '0:'; /usr/bin/stat -c '%a:%h' -- \"$path\" ;;\n"
+            "      *) exec /usr/bin/stat -c \"$format\" -- \"$path\" ;;\n"
+            "    esac ;;\n"
+            "  *) exec /usr/bin/stat -c \"$format\" -- \"$path\" ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        stat_shim.chmod(0o755)
+        (path / "stat").symlink_to(stat_shim)
+        return path
 
     def test_cli_option_is_captured_for_preflight_and_consumed_later(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -384,6 +449,81 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
                 self.assertEqual(os.stat(path).st_nlink, 1)
             self.assertTrue(fixture["marker"].exists())
 
+    def test_real_entry_preflight_works_without_python3_and_stages_both_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            no_python_path = self.make_no_python_path(fixture)
+            result = self.run_real_entry_prefix(
+                fixture, option=str(fixture["carrier"]), path=no_python_path
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("entry-prefix-complete", result.stdout)
+            self.assertFalse((no_python_path / "python3").exists())
+            staged_manifest = fixture["stage_root"] / "0.2.2.env"
+            staged_carrier = fixture["stage_root"] / "ollama-runtime-carrier.tar.xz"
+            self.assertEqual(staged_manifest.read_bytes(), fixture["manifest"].read_bytes())
+            self.assertEqual(staged_carrier.read_bytes(), fixture["payload"])
+
+    def test_real_entry_preflight_without_python_reports_wrong_size_and_hash(self):
+        cases = (
+            (b"pinned carrier\nextra", "Ollama carrier size does not match"),
+            (b"wrong carrier!\n", "Ollama carrier SHA-256 does not match"),
+        )
+        for payload, message in cases:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as directory:
+                fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+                fixture["carrier"].write_bytes(payload)
+                no_python_path = self.make_no_python_path(fixture)
+                result = self.run_real_entry_prefix(
+                    fixture, option=str(fixture["carrier"]), path=no_python_path
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn("entry-prefix-complete", result.stdout)
+                self.assertFalse(fixture["stage_root"].exists())
+
+    def test_real_entry_preflight_without_python_rejects_malformed_and_duplicate_pin_keys(self):
+        cases = (
+            ("malformed", "not-decimal", "carrier byte count must be decimal"),
+            ("duplicate", "duplicate", "exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES"),
+        )
+        for case, _mutation, message in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+                if case == "malformed":
+                    manifest_text = fixture["manifest"].read_text(encoding="utf-8")
+                    manifest_text = manifest_text.replace(
+                        f"PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES={len(fixture['payload'])}\n",
+                        "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES=not-decimal\n",
+                    )
+                    fixture["manifest"].write_text(manifest_text, encoding="utf-8")
+                else:
+                    with fixture["manifest"].open("a", encoding="utf-8") as manifest:
+                        manifest.write(
+                            f"PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES={len(fixture['payload'])}\n"
+                        )
+                no_python_path = self.make_no_python_path(fixture)
+                result = self.run_real_entry_prefix(
+                    fixture, option=str(fixture["carrier"]), path=no_python_path
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertNotIn("entry-prefix-complete", result.stdout)
+                self.assertFalse(fixture["stage_root"].exists())
+
+    def test_real_entry_reports_missing_preflight_tool_without_calling_it_a_hash_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            no_python_path = self.make_no_python_path(fixture)
+            (no_python_path / "sha256sum").unlink()
+            result = self.run_real_entry_prefix(
+                fixture, option=str(fixture["carrier"]), path=no_python_path
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("required preflight tool missing: sha256sum", result.stderr)
+            self.assertNotIn("SHA-256", result.stderr)
+            self.assertFalse(fixture["stage_root"].exists())
+
     def test_environment_carrier_is_honored_and_dry_run_only_reports_plan(self):
         with tempfile.TemporaryDirectory() as directory:
             fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
@@ -401,7 +541,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             fixture["carrier"].write_bytes(b"x" * len(fixture["payload"]))
             result = self.run_preflight(fixture, option=str(fixture["carrier"]))
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("size/SHA-256 check", result.stderr)
+            self.assertIn("SHA-256 does not match", result.stderr)
             self.assertFalse(fixture["marker"].exists())
             self.assertFalse(fixture["stage_root"].exists())
 
