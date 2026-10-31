@@ -26,7 +26,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   stays available when Female-02 is not chosen.
 - The selected host includes the fingerprint reader and the focus-order
   kitty-input pins. The Qwen content authority matches catalog
-  `2e20fce2a6fa7be5fc2468231e2cc7808e23303d`, and the carrier follows that
+  `8085aed526aa9b129cf0c032658797b21d7fe6c7`, and the carrier follows that
   gitlink. Advertised speech records stay unchanged.
 - Select kilix-female-02 checkpoint 80 as the system voice. Piper uses it
   when no explicit voice is saved. An explicit Kristin model stays Kristin.
@@ -48,6 +48,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Advance the selected Kilix host to include native Windows CPU/RAM counters
   and an isolated packaged-counter check. Linux discards a CPU interval when
   logical CPU count changes; physical Windows GUI rendering remains under review.
+- Run a Kilix Ask request that names a job label as that job. "Not the job:
+  label" no longer appears.
+- Revise the agent guide `docs/AGENTS.md` from the 0.2.2 route-discovery
+  benchmark.
 
 - Offer public, pinned Claudex through `kilix install kilix-claudex`, with
   verified catalog dispatch and team-plan/launch help in the host.
