@@ -48,8 +48,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Advance the selected Kilix host to include native Windows CPU/RAM counters
   and an isolated packaged-counter check. Linux discards a CPU interval when
   logical CPU count changes; physical Windows GUI rendering remains under review.
-- Run a Kilix Ask request that names a job label as that job. "Not the job:
-  label" no longer appears.
+- Run a Kilix Ask request that starts with a `panes:`, `apps:`, `agents:`,
+  `files:` or `system:` label as that job. "Not the job: label" no longer
+  appears. A `tmux:`, `logs:`, `pty:` or `desktop:` label is not taken.
 - Revise the agent guide `docs/AGENTS.md` from the 0.2.2 route-discovery
   benchmark.
 
