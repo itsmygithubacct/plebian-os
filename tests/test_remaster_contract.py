@@ -217,12 +217,27 @@ class RemasterContractTests(unittest.TestCase):
             if line.strip() and not line.lstrip().startswith("#")
         )
         for question in (
-            "netcfg/get_hostname", "passwd/user-fullname", "passwd/username",
+            "netcfg/get_hostname", "netcfg/hostname", "passwd/user-fullname", "passwd/username",
             "passwd/user-password", "passwd/user-password-again",
             "passwd/user-password-crypted", "user-setup/allow-password-weak",
         ):
             self.assertNotIn(question, active)
         self.assertIn("d-i passwd/root-login boolean false", active)
+
+    def test_normal_profile_refuses_a_forced_hostname_answer(self):
+        resolver = self.source_section("resolve_target_layout() {", "\nresolve_target_layout\n")
+        with tempfile.TemporaryDirectory() as td:
+            seed = Path(td) / "preseed.cfg"
+            for key in ("netcfg/get_hostname", "netcfg/hostname"):
+                with self.subTest(key=key):
+                    seed.write_text(f"d-i {key} string forced-host\n")
+                    result = subprocess.run([
+                        "bash", "-c", "set -euo pipefail\n"
+                        + "PRESEED_IS_CUSTOM=0\nPLEBIAN_OS_USER=\nPRESEED=$1\n"
+                        + resolver + "\nresolve_target_layout\n", "identity-test", str(seed),
+                    ], capture_output=True, text=True, env={"PATH": os.defpath})
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"normal preseed must leave {key} unanswered", result.stderr)
 
     def test_remaster_retires_ambient_password_contract(self):
         self.assertNotIn("apply_image_password_policy", self.source)

@@ -980,7 +980,7 @@ resolve_target_layout() {
 
     if [ "$PRESEED_IS_CUSTOM" = 0 ]; then
         PLEBIAN_OS_IDENTITY_PROFILE=interactive-v1
-        for key in netcfg/get_hostname passwd/user-fullname passwd/username \
+        for key in netcfg/get_hostname netcfg/hostname passwd/user-fullname passwd/username \
             passwd/user-password passwd/user-password-again \
             passwd/user-password-crypted user-setup/allow-password-weak; do
             ! grep -Eq "^[[:space:]]*d-i[[:space:]]+${key}[[:space:]]" "$PRESEED" || {

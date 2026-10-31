@@ -356,10 +356,62 @@ class VmBuilderEnvTests(unittest.TestCase):
             text = vm.generate_preseed(cfg()).read_text()
         self.assertIn("d-i passwd/username string pleb", text)
         self.assertIn("d-i netcfg/get_hostname string plebian", text)
+        self.assertIn("d-i netcfg/hostname string plebian\n", text)
         self.assertIn("d-i passwd/user-password-crypted password $6$hash", text)
         self.assertNotIn("d-i passwd/user-password password", text)
         self.assertNotIn("PLEB_REF=%s", text)
         self.assertNotIn("env_fmt", text)
+
+    def test_selected_hostname_requires_persistent_and_runtime_match(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            persistent = root / "hostname file"
+            runtime = root / "hostname"
+            command = vm.guest_hostname_command("selected-host", str(persistent))
+            for saved, active, exit_code, expected_ok in (
+                ("selected-host", "selected-host", 0, True),
+                ("dns-host", "selected-host", 0, False),
+                ("selected-host", "dns-host", 0, False),
+                ("dns-host", "dns-host", 0, False),
+                ("", "selected-host", 0, False),
+                ("selected-host", "", 1, False),
+                ("selected-host", "selected-host", 1, False),
+            ):
+                with self.subTest(saved=saved, active=active, exit_code=exit_code):
+                    persistent.write_text(saved + "\n")
+                    runtime.write_text(
+                        "#!/bin/sh\n" + f"printf '%s\\n' {shlex.quote(active)}\n"
+                        + f"exit {exit_code}\n")
+                    runtime.chmod(0o700)
+                    result = subprocess.run(
+                        ["/bin/sh", "-c", command], capture_output=True, text=True,
+                        env={"PATH": str(root) + os.pathsep + os.defpath})
+                    self.assertEqual(result.returncode == 0, expected_ok, result.stderr)
+            persistent.unlink()
+            self.assertNotEqual(subprocess.run(
+                ["/bin/sh", "-c", command], capture_output=True,
+                env={"PATH": str(root) + os.pathsep + os.defpath}).returncode, 0)
+
+    def test_hostname_mismatch_fails_acceptance_before_update_or_catalog(self):
+        command = vm.guest_hostname_command("selected-host")
+        def remote(_cfg, actual, _askpass, **kwargs):
+            return SimpleNamespace(returncode=int(actual == command), stdout="", stderr="")
+        with mock.patch.dict(os.environ, {
+                "PLEBIAN_OS_VERIFY_UPDATE_ROLLBACK": "1",
+                "PLEBIAN_OS_VERIFY_SUCCESSFUL_UPDATE": "1",
+                "PLEBIAN_OS_VERIFY_CATALOG_BUILDS": "1",
+        }, clear=True), mock.patch.object(vm, "ssh", side_effect=remote), \
+                mock.patch.object(vm, "info"), \
+                mock.patch.object(vm, "verify_update_rollback") as rollback, \
+                mock.patch.object(vm, "verify_successful_update") as update, \
+                mock.patch.object(vm, "verify_catalog_builds") as catalog, \
+                mock.patch.object(vm, "die", side_effect=SystemExit(1)) as fatal, \
+                self.assertRaises(SystemExit):
+            vm.verify_provisioning(cfg(hostname="selected-host"), "askpass")
+        self.assertIn("selected hostname", fatal.call_args.args[0])
+        rollback.assert_not_called()
+        update.assert_not_called()
+        catalog.assert_not_called()
 
     def test_build_iso_forwards_authoritative_runtime_config(self):
         seen = {}

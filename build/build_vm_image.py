@@ -875,6 +875,9 @@ def generate_preseed(cfg: Config, enable_ssh: bool = False) -> Path:
     identity = (
         "\n### Automated identity profile (generated; not publishable release media)\n"
         f"d-i netcfg/get_hostname string {cfg.hostname}\n"
+        # get_hostname is only a default: DHCP or reverse DNS can replace it.
+        # Automated builders promise the explicitly selected hostname.
+        f"d-i netcfg/hostname string {cfg.hostname}\n"
         f"d-i passwd/user-fullname string {cfg.fullname}\n"
         f"d-i passwd/username string {cfg.username}\n"
         f"d-i passwd/user-password-crypted password {secret}\n"
@@ -1803,6 +1806,13 @@ def live_debian_security_source_command(
     return "bash -c " + shlex.quote(script)
 
 
+def guest_hostname_command(hostname: str, hostname_path: str = "/etc/hostname") -> str:
+    """Check both the persistent and currently active automated hostname."""
+    expected = shlex.quote(hostname)
+    return (f'stored=$(cat -- {shlex.quote(hostname_path)}) && active=$(hostname) && '
+            f'test "$stored" = {expected} && test "$active" = {expected}')
+
+
 def verify_provisioning(cfg: Config, askpass: str) -> None:
     """Prove the real installer→firstboot→session boundary: check the markers a
     correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
@@ -2097,6 +2107,7 @@ if default is not None:
     )
     checks = [
         ("provisioned marker",   "test -f /var/lib/plebian-os/provisioned"),
+        ("selected hostname", guest_hostname_command(cfg.hostname)),
         ("exact build provenance", exact_build_provenance),
         ("provision version",    provision_version),
         ("component versions",   component_versions),
