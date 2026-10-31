@@ -19,6 +19,9 @@ class OllamaReprovisionTests(unittest.TestCase):
         helper_start = source.index("ollama_carrier_receipt_matches_manifest() {")
         call_start = source.index("\ninstall_ollama_runtime_from_carrier\n\n# The first-run wizard", helper_start)
         cls.ollama_functions = source[helper_start:call_start]
+        preflight_start = source.index("preflight_ollama_carrier() {")
+        preflight_end = source.index('\n}\n\nscan_ollama_carrier_arguments "$@"', preflight_start) + 2
+        cls.preflight_function = source[preflight_start:preflight_end]
         cls.provision_source = source
         cls.update_source = UPDATE.read_text()
 
@@ -207,6 +210,214 @@ class OllamaReprovisionTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse(marker.exists())
+
+
+class OllamaCarrierPreflightTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = PROVISION.read_text()
+        scanner_start = source.index("scan_ollama_carrier_arguments() {")
+        scanner_end = source.index("\n}\n\n# The 0.2.2 Ollama runtime", scanner_start) + 2
+        cls.argument_scanner = source[scanner_start:scanner_end]
+        start = source.index("preflight_ollama_carrier() {")
+        end = source.index('\n}\n\nscan_ollama_carrier_arguments "$@"', start) + 2
+        cls.preflight_function = source[start:end]
+
+    def make_fixture(self, root: Path, *, carrier_payload: bytes):
+        checkout = root / "checkout"
+        provision_dir = checkout / "provision"
+        release_dir = checkout / "releases"
+        stage_root = root / "usr-local-share-plebian-os"
+        shim_dir = root / "shim-bin"
+        for directory in (provision_dir, release_dir, shim_dir):
+            directory.mkdir(parents=True)
+
+        digest = hashlib.sha256(carrier_payload).hexdigest()
+        manifest = release_dir / "0.2.2.env"
+        manifest.write_text(
+            "PLEBIAN_OS_VERSION=0.2.2\n"
+            "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES="
+            f"{len(carrier_payload)}\n"
+            "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256="
+            f"{digest}\n",
+            encoding="utf-8",
+        )
+        installer = provision_dir / "plebian-os-install-kilix-ollama-runtime"
+        installer.write_bytes((ROOT / "provision" / installer.name).read_bytes())
+        installer.chmod(0o755)
+        carrier = root / "ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz"
+        carrier.write_bytes(carrier_payload)
+
+        install_shim = shim_dir / "install"
+        install_shim.write_text(
+            "#!/bin/bash\n"
+            "args=()\n"
+            "while (($#)); do\n"
+            "  case \"$1\" in\n"
+            "    -o|-g) shift 2 ;;\n"
+            "    *) args+=(\"$1\"); shift ;;\n"
+            "  esac\n"
+            "done\n"
+            "exec /usr/bin/install \"${args[@]}\"\n",
+            encoding="utf-8",
+        )
+        install_shim.chmod(0o755)
+        stat_shim = shim_dir / "stat"
+        stat_shim.write_text(
+            "#!/bin/bash\n"
+            "format=\"$2\"\n"
+            "shift 2\n"
+            "[[ \"${1:-}\" == -- ]] && shift\n"
+            "path=\"$1\"\n"
+            "case \"$path\" in\n"
+            "  \"$FIXTURE_STAGE_ROOT\"|\"$FIXTURE_STAGE_ROOT\"/*)\n"
+            "    case \"$format\" in\n"
+            "      %u:%a) printf '0:'; /usr/bin/stat -c '%a' -- \"$path\" ;;\n"
+            "      %u:%a:%h) printf '0:'; /usr/bin/stat -c '%a:%h' -- \"$path\" ;;\n"
+            "      *) exec /usr/bin/stat -c \"$format\" -- \"$path\" ;;\n"
+            "    esac ;;\n"
+            "  *) exec /usr/bin/stat -c \"$format\" -- \"$path\" ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        stat_shim.chmod(0o755)
+
+        source = self.preflight_function
+        source = source.replace("/usr/local/share/plebian-os", str(stage_root))
+        marker = root / "package-mutation-marker"
+        env = os.environ.copy()
+        env.pop("PLEBIAN_OS_OLLAMA_CARRIER", None)
+        env.update({
+            "PATH": f"{shim_dir}:/usr/bin:/bin",
+            "FIXTURE_STAGE_ROOT": str(stage_root),
+            "FIXTURE_MUTATION_MARKER": str(marker),
+        })
+        return {
+            "root": root,
+            "stage_root": stage_root,
+            "checkout": checkout,
+            "manifest": manifest,
+            "carrier": carrier,
+            "payload": carrier_payload,
+            "source": source,
+            "marker": marker,
+            "env": env,
+        }
+
+    def run_preflight(self, fixture, *, option="", environment="", dry_run=False):
+        script = "\n".join((
+            "set -euo pipefail",
+            "log() { printf '[fixture] %s\\n' \"$*\"; }",
+            'die() { printf "%s\\n" "$*" >&2; exit 1; }',
+            "PLEBIAN_OS_VERSION=0.2.2",
+            f"DRY_RUN={1 if dry_run else 0}",
+            f"PLEBIAN_OS_OLLAMA_CARRIER_ARG={shlex.quote(option)}",
+            f"SELF_DIR={shlex.quote(str(fixture['checkout'] / 'provision'))}",
+            fixture["source"],
+            "preflight_ollama_carrier",
+            'if [ "$DRY_RUN" != 1 ]; then touch "$FIXTURE_MUTATION_MARKER"; fi',
+        ))
+        env = fixture["env"].copy()
+        if environment:
+            env["PLEBIAN_OS_OLLAMA_CARRIER"] = environment
+        return subprocess.run(
+            ["bash", "-c", script], env=env, text=True,
+            capture_output=True, check=False,
+        )
+
+    def test_cli_option_is_captured_for_preflight_and_consumed_later(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = str(Path(directory) / "carrier.tar.xz")
+            script = "\n".join((
+                "set -euo pipefail",
+                'die() { printf "%s\\n" "$*" >&2; exit 1; }',
+                "DRY_RUN=0",
+                'PLEBIAN_OS_OLLAMA_CARRIER_ARG=""',
+                "OLLAMA_PREFLIGHT_SKIP=0",
+                self.argument_scanner,
+                'scan_ollama_carrier_arguments "$@"',
+                'test "$PLEBIAN_OS_OLLAMA_CARRIER_ARG" = "$EXPECTED_CARRIER"',
+                'test "$DRY_RUN" = 1',
+            ))
+            result = subprocess.run(
+                ["bash", "-c", script, "bash", "--ollama-carrier", archive, "--dry-run"],
+                env={**os.environ, "EXPECTED_CARRIER": archive},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_preflight_runs_before_logging_or_dependency_mutation(self):
+        source = PROVISION.read_text()
+        call = source.index("    preflight_ollama_carrier\n")
+        logger = source.index('PROVISION_LOG="${PLEBIAN_OS_PROVISION_LOG:-')
+        dependencies = source.index('bash "$DEPS_SCRIPT" || die "dependency install failed')
+        self.assertLess(call, logger)
+        self.assertLess(logger, dependencies)
+        self.assertIn("PLEBIAN_OS_OLLAMA_CARRIER", self.preflight_function)
+        self.assertNotIn("curl", self.preflight_function)
+        self.assertNotIn("wget", self.preflight_function)
+
+    def test_missing_carrier_fails_before_staging_or_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            fixture["carrier"].unlink()
+            result = self.run_preflight(fixture)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("offline 0.2.2 release asset", result.stderr)
+            self.assertIn("--ollama-carrier PATH", result.stderr)
+            self.assertFalse(fixture["marker"].exists())
+            self.assertFalse(fixture["stage_root"].exists())
+
+    def test_plain_debian_carrier_stages_manifest_and_archive_with_safe_modes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            result = self.run_preflight(fixture, option=str(fixture["carrier"]))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            staged_manifest = fixture["stage_root"] / "0.2.2.env"
+            staged_carrier = fixture["stage_root"] / "ollama-runtime-carrier.tar.xz"
+            self.assertEqual(staged_manifest.read_bytes(), fixture["manifest"].read_bytes())
+            self.assertEqual(staged_carrier.read_bytes(), fixture["payload"])
+            for path in (staged_manifest, staged_carrier):
+                self.assertTrue(path.is_file())
+                self.assertFalse(path.is_symlink())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+                self.assertEqual(os.stat(path).st_nlink, 1)
+            self.assertTrue(fixture["marker"].exists())
+
+    def test_environment_carrier_is_honored_and_dry_run_only_reports_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            result = self.run_preflight(
+                fixture, environment=str(fixture["carrier"]), dry_run=True
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("stage carrier as root:root mode 0644", result.stdout)
+            self.assertFalse(fixture["stage_root"].exists())
+            self.assertFalse(fixture["marker"].exists())
+
+    def test_wrong_hash_carrier_fails_before_staging_or_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            fixture["carrier"].write_bytes(b"x" * len(fixture["payload"]))
+            result = self.run_preflight(fixture, option=str(fixture["carrier"]))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("size/SHA-256 check", result.stderr)
+            self.assertFalse(fixture["marker"].exists())
+            self.assertFalse(fixture["stage_root"].exists())
+
+    def test_different_iso_and_checkout_manifests_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            fixture["stage_root"].mkdir()
+            fixture["stage_root"].chmod(0o755)
+            staged_manifest = fixture["stage_root"] / "0.2.2.env"
+            staged_manifest.write_bytes(fixture["manifest"].read_bytes() + b"# staged\n")
+            staged_manifest.chmod(0o644)
+            result = self.run_preflight(fixture, option=str(fixture["carrier"]))
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("staged and checkout 0.2.2 release manifests differ", result.stderr)
+            self.assertFalse(fixture["marker"].exists())
+            self.assertFalse((fixture["stage_root"] / "ollama-runtime-carrier.tar.xz").exists())
 
 
 def updater_provision_reconcile_harness(source: str, marker: Path) -> str:

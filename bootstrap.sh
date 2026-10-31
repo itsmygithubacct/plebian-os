@@ -4,7 +4,7 @@
 # pleb off GitHub to run" path — handy for converting an existing VM/box or for
 # testing the provisioner without building an ISO.
 #
-#   sudo ./bootstrap.sh [--user NAME] [--kiosk] [--dry-run]
+#   sudo ./bootstrap.sh [--user NAME] [--kiosk] [--ollama-carrier PATH] [--dry-run]
 #
 # It just runs the same provisioner the ISO's first-boot service runs. On a
 # fresh graphical Debian this installs the Pleb session alongside your current

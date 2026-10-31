@@ -330,14 +330,25 @@ installed system tracks upstream.
 
 **Convert a running Debian (fastest to try):**
 
+For 0.2.2, first obtain the offline release asset
+`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` and keep it on a local disk. The
+bootstrap does not download the carrier. Pass its path explicitly; preflight
+checks the release manifest and archive before changing packages.
+
 ```sh
 mkdir -p ~/.local/gpu_terminal/sources
 git clone https://github.com/itsmygithubacct/plebian-os ~/.local/gpu_terminal/sources/plebian-os
-sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh            # add Pleb alongside your current desktop
-sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --kiosk    # …and boot straight into it
+carrier="$HOME/Downloads/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz"
+sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$carrier"         # add Pleb alongside your current desktop
+sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$carrier" --kiosk # …and boot straight into it
 # preview without touching anything:
-~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --dry-run
+~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$carrier" --dry-run
 ```
+
+The provisioner also accepts `PLEBIAN_OS_OLLAMA_CARRIER=/path/to/<asset>`.
+When running from a source checkout, it stages that checkout's
+`releases/0.2.2.env`; if an ISO-staged manifest is also present, both copies
+must match byte for byte.
 
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 
@@ -392,7 +403,12 @@ terminate one after confirmation; `kilix pty` opens it directly from a shell.
 verified for you; needs `xorriso`, GNU `cpio`, `gzip`, `gpgv`, and
 `debian-archive-keyring`):
 
+For 0.2.2, set `PLEBIAN_OS_OLLAMA_CARRIER` to the local release asset before
+running an ISO-building command. The netinst may be fetched by the builder; the
+Ollama carrier is always supplied locally and is never downloaded.
+
 ```sh
+export PLEBIAN_OS_OLLAMA_CARRIER=/path/to/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz
 build/remaster-iso.sh                          # auto-download the netinst, build the ISO
 build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netinst
 ```
@@ -438,7 +454,11 @@ into the artwork.
 **Build a bootable USB install stick** — one command downloads the netinst,
 builds the (isohybrid) ISO, and flashes it to the stick:
 
+For 0.2.2, set the same local carrier before invoking a command that builds the
+ISO:
+
 ```sh
+export PLEBIAN_OS_OLLAMA_CARRIER=/path/to/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz
 build/make-usb.sh --list                       # find your USB device
 build/build_usb_image.py --device /dev/sdX     # safest physical USB flow
 build/make-usb.sh --device /dev/sdX            # shell flow; installer asks for identity

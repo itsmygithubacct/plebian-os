@@ -60,6 +60,13 @@ PLEBIAN_OS_OLLAMA_CARRIER=/path/to/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz \
     build/make-usb.sh
 ```
 
+Standalone Debian conversion uses the same offline release asset. Run
+`bootstrap.sh --ollama-carrier /path/to/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz`
+or set `PLEBIAN_OS_OLLAMA_CARRIER` before invoking the provisioner. Its
+preflight verifies the manifest and carrier before package changes, stages the
+selected manifest and carrier with root ownership and mode 0644, and performs
+no carrier download. `--dry-run` prints the verification and staging plan.
+
 The `build/acceptance-release-iso.sh` lane consumes an already-built ISO and
 reports the embedded carrier size and digest; it does not remaster the ISO.
 

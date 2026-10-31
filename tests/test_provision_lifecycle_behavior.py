@@ -2135,7 +2135,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
     def test_explicit_root_target_is_rejected(self):
         result = subprocess.run(
             ["bash", str(PROVISION), "--dry-run", "--user", "root"],
-            env={**os.environ, "PLEBIAN_OS_RELEASE_MODE": "0"},
+            env={**os.environ, "PLEBIAN_OS_RELEASE_MODE": "0", "PLEBIAN_OS_VERSION": "0.2.1"},
             text=True,
             capture_output=True,
             check=False,
