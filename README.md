@@ -101,7 +101,8 @@ Plebian-OS 0.2.2 carries the approved Ollama 0.32.14 CPU + Vulkan runtime in
 the ISO as a deterministic 20,689,764-byte offline archive. Provisioning checks
 its release-manifest size and SHA-256, extracts its confined 107-file/10-link
 closure, installs the notices under `/usr/share/doc/ollama-runtime/notices`,
-and enables `plebian-os-ollama.service` on `127.0.0.1:11434`. The service runs
+publishes the OS-owned `RELEASE-DISPOSITION` beside the carrier's
+`BUILD-CLOSURE` (source: `provision/ollama/RELEASE-DISPOSITION`), and enables `plebian-os-ollama.service` on `127.0.0.1:11434`. The service runs
 as the `ollama` system account with model state under `/var/lib/ollama`; the
 `ollama` client is available on `PATH` for the first-use model wizard.
 

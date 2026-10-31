@@ -120,6 +120,7 @@ class InstalledOllamaDocumentationTests(unittest.TestCase):
             public_doc = root / "public" / "ollama-runtime"
             public_notices = public_doc / "notices"
             public_closure = public_doc / "BUILD-CLOSURE"
+            public_disposition = public_doc / "RELEASE-DISPOSITION"
             real_digest_file = installer["digest_file"]
 
             def fixture_digest_file(path, **kwargs):
@@ -143,6 +144,7 @@ class InstalledOllamaDocumentationTests(unittest.TestCase):
                 "PUBLIC_DOC_ROOT": public_doc,
                 "PUBLIC_NOTICE_ROOT": public_notices,
                 "PUBLIC_BUILD_CLOSURE": public_closure,
+                "PUBLIC_RELEASE_DISPOSITION": public_disposition,
                 "NOTICE_RECORDS": 1,
                 "NOTICE_MANIFEST_SIZE": len(manifest_payload),
                 "NOTICE_MANIFEST_SHA256": hashlib.sha256(manifest_payload).hexdigest(),
@@ -196,6 +198,237 @@ class InstalledOllamaDocumentationTests(unittest.TestCase):
                     installer["sync_public_notices"](repair=False)
                 with self.assertRaises(installer["InstallFailure"]):
                     installer["sync_public_notices"](repair=True)
+
+
+class OllamaReleaseDispositionTests(unittest.TestCase):
+    """RELEASE-DISPOSITION is published and checked exactly as BUILD-CLOSURE is."""
+
+    INSTALLER = ROOT / "provision" / "plebian-os-install-kilix-ollama-runtime"
+    SOURCE = ROOT / "provision" / "ollama" / "RELEASE-DISPOSITION"
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        namespace = runpy.run_path(str(self.INSTALLER))
+        self.installer = namespace["sync_public_notices"].__globals__
+        generation = root / "generation"
+        source_doc = generation / "usr/share/doc/ollama-runtime"
+        source_notices = source_doc / "notices"
+        source_notices.mkdir(parents=True)
+        closure_payload = b"fixture build closure\n"
+        (source_doc / "BUILD-CLOSURE").write_bytes(closure_payload)
+        notice_payload = b"fixture notice\n"
+        (source_notices / "license.txt").write_bytes(notice_payload)
+        manifest_payload = (
+            f"{hashlib.sha256(notice_payload).hexdigest()}  ./license.txt\n"
+        ).encode("ascii")
+        (source_notices / "SHA256SUMS").write_bytes(manifest_payload)
+        self.public_doc = root / "public" / "ollama-runtime"
+        self.disposition = self.public_doc / "RELEASE-DISPOSITION"
+        self.digest_calls = []
+        real_digest_file = self.installer["digest_file"]
+
+        def fixture_digest_file(path, **kwargs):
+            self.digest_calls.append((Path(path), dict(kwargs)))
+            if kwargs.get("expected_owner") == 0:
+                kwargs["expected_owner"] = os.geteuid()
+            return real_digest_file(path, **kwargs)
+
+        def fixture_ensure_root_path(path, *, final_mode):
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(final_mode)
+
+        def fixture_require_root_directory(path, *, private=False):
+            if path.is_symlink() or not path.is_dir():
+                self.installer["fail"](f"not a real directory: {path}")
+
+        patcher = mock.patch.dict(self.installer, {
+            "GENERATION": generation,
+            "PUBLIC_DOC_ROOT": self.public_doc,
+            "PUBLIC_NOTICE_ROOT": self.public_doc / "notices",
+            "PUBLIC_BUILD_CLOSURE": self.public_doc / "BUILD-CLOSURE",
+            "PUBLIC_RELEASE_DISPOSITION": self.disposition,
+            "NOTICE_RECORDS": 1,
+            "NOTICE_MANIFEST_SIZE": len(manifest_payload),
+            "NOTICE_MANIFEST_SHA256": hashlib.sha256(manifest_payload).hexdigest(),
+            "BUILD_CLOSURE_SIZE": len(closure_payload),
+            "BUILD_CLOSURE_SHA256": hashlib.sha256(closure_payload).hexdigest(),
+            "digest_file": fixture_digest_file,
+            "ensure_root_path": fixture_ensure_root_path,
+            "require_root_directory": fixture_require_root_directory,
+        })
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.expected = self.SOURCE.read_bytes()
+
+    def sync(self, *, repair):
+        return self.installer["sync_public_notices"](repair=repair)
+
+    def test_exact_bytes_mode_and_root_owner_are_published(self):
+        self.assertTrue(self.sync(repair=True))
+        self.assertEqual(self.disposition.read_bytes(), self.expected)
+        self.assertEqual(self.disposition.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(self.disposition.stat().st_uid, os.geteuid())
+        # The fixture only maps root to the test user; the installer itself
+        # must demand root ownership, mode 0644 and the pinned size and hash.
+        requests = [
+            kwargs for path, kwargs in self.digest_calls if path == self.disposition
+        ]
+        self.assertTrue(requests)
+        for kwargs in requests:
+            self.assertEqual(kwargs["expected_size"], len(self.expected))
+            self.assertEqual(
+                kwargs["expected_hash"], hashlib.sha256(self.expected).hexdigest()
+            )
+            self.assertEqual(kwargs["expected_mode"], 0o644)
+        self.assertIn(
+            0, [kwargs["expected_owner"] for path, kwargs in self.digest_calls
+                if path == self.disposition and "expected_owner" in kwargs]
+        )
+        before = self.disposition.stat()
+        self.assertFalse(self.sync(repair=True))
+        after = self.disposition.stat()
+        self.assertEqual((after.st_ino, after.st_mtime_ns),
+                         (before.st_ino, before.st_mtime_ns))
+        self.assertFalse(self.sync(repair=False))
+
+    def test_missing_file_is_refused_when_verifying_and_repaired_otherwise(self):
+        self.assertTrue(self.sync(repair=True))
+        self.disposition.unlink()
+        with self.assertRaises(self.installer["InstallFailure"]):
+            self.sync(repair=False)
+        self.assertFalse(self.disposition.exists())
+        self.assertTrue(self.sync(repair=True))
+        self.assertEqual(self.disposition.read_bytes(), self.expected)
+
+    def test_planted_size_hash_or_mode_mismatch_is_refused_not_replaced(self):
+        self.assertTrue(self.sync(repair=True))
+        flipped = bytes([self.expected[0] ^ 1]) + self.expected[1:]
+        plants = {
+            "size": (self.expected + b"extra\n", 0o644),
+            "truncated": (self.expected[:-1], 0o644),
+            "hash": (flipped, 0o644),
+            "mode 0600": (self.expected, 0o600),
+            "mode 0664": (self.expected, 0o664),
+            "mode 0755": (self.expected, 0o755),
+        }
+        for label, (payload, mode) in plants.items():
+            for repair in (False, True):
+                with self.subTest(plant=label, repair=repair):
+                    self.disposition.write_bytes(payload)
+                    self.disposition.chmod(mode)
+                    with self.assertRaises(self.installer["InstallFailure"]):
+                        self.sync(repair=repair)
+                    self.assertEqual(self.disposition.read_bytes(), payload)
+                    self.assertEqual(self.disposition.stat().st_mode & 0o777, mode)
+
+    def test_preexisting_different_file_is_refused_like_build_closure(self):
+        self.assertTrue(self.sync(repair=True))
+        closure = self.public_doc / "BUILD-CLOSURE"
+        for target in (closure, self.disposition):
+            with self.subTest(target=target.name):
+                good = target.read_bytes()
+                target.write_bytes(b"operator wrote this\n")
+                target.chmod(0o644)
+                for repair in (False, True):
+                    with self.assertRaises(self.installer["InstallFailure"]):
+                        self.sync(repair=repair)
+                    self.assertEqual(target.read_bytes(), b"operator wrote this\n")
+                target.write_bytes(good)
+
+    def test_symlink_in_place_of_the_file_is_refused(self):
+        self.assertTrue(self.sync(repair=True))
+        good = self.disposition.read_bytes()
+        elsewhere = self.public_doc.parent / "elsewhere"
+        elsewhere.write_bytes(good)
+        elsewhere.chmod(0o644)
+        self.disposition.unlink()
+        self.disposition.symlink_to(elsewhere)
+        for repair in (False, True):
+            with self.assertRaises(self.installer["InstallFailure"]):
+                self.sync(repair=repair)
+        self.assertTrue(self.disposition.is_symlink())
+
+    def test_embedded_bytes_pin_and_source_file_agree(self):
+        source = self.SOURCE.read_bytes()
+        self.assertEqual(
+            self.installer["RELEASE_DISPOSITION_SOURCE"].encode("ascii"), source
+        )
+        self.assertEqual(self.installer["RELEASE_DISPOSITION_SIZE"], len(source))
+        self.assertEqual(
+            self.installer["RELEASE_DISPOSITION_SHA256"],
+            hashlib.sha256(source).hexdigest(),
+        )
+        self.assertEqual(vm.pinned_release_disposition(),
+                         (len(source), hashlib.sha256(source).hexdigest()))
+        pristine = runpy.run_path(str(self.INSTALLER))
+        self.assertEqual(
+            pristine["PUBLIC_RELEASE_DISPOSITION"],
+            Path("/usr/share/doc/ollama-runtime/RELEASE-DISPOSITION"),
+        )
+
+    def acceptance_command(self):
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                mock.patch.object(vm, "info"):
+            vm.verify_provisioning(cfg(), "askpass")
+            commands = [call.args[1] for call in remote.call_args_list]
+        return next(
+            command for command in commands
+            if "sha256sum --check --status SHA256SUMS" in command
+        )
+
+    def run_acceptance(self, doc):
+        predicate = self.acceptance_command().replace(
+            "/usr/share/doc/ollama-runtime", str(doc)
+        )
+        return subprocess.run(
+            ["/bin/bash", "-c", predicate],
+            text=True, capture_output=True, check=False,
+        )
+
+    def acceptance_tree(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        doc = Path(temporary.name) / "ollama-runtime"
+        (doc / "notices").mkdir(parents=True)
+        (doc / "BUILD-CLOSURE").write_bytes(b"fixture build closure\n")
+        notice = b"fixture notice\n"
+        (doc / "notices" / "license.txt").write_bytes(notice)
+        (doc / "notices" / "SHA256SUMS").write_text(
+            f"{hashlib.sha256(notice).hexdigest()}  ./license.txt\n"
+        )
+        return doc
+
+    def test_acceptance_check_requires_the_pinned_release_disposition(self):
+        doc = self.acceptance_tree()
+        target = doc / "RELEASE-DISPOSITION"
+        self.assertNotEqual(self.run_acceptance(doc).returncode, 0, "missing file")
+        target.write_bytes(self.expected)
+        accepted = self.run_acceptance(doc)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        flipped = bytes([self.expected[0] ^ 1]) + self.expected[1:]
+        for label, payload in {
+            "altered same size": flipped,
+            "extended": self.expected + b"\n",
+            "truncated": self.expected[:-1],
+            "empty": b"",
+        }.items():
+            with self.subTest(altered=label):
+                target.write_bytes(payload)
+                self.assertNotEqual(self.run_acceptance(doc).returncode, 0)
+        target.unlink()
+        elsewhere = doc.parent / "elsewhere"
+        elsewhere.write_bytes(self.expected)
+        target.symlink_to(elsewhere)
+        self.assertNotEqual(self.run_acceptance(doc).returncode, 0, "symlink")
+        target.unlink()
+        target.write_bytes(self.expected)
+        self.assertEqual(self.run_acceptance(doc).returncode, 0)
+        (doc / "BUILD-CLOSURE").unlink()
+        self.assertNotEqual(self.run_acceptance(doc).returncode, 0, "no closure")
 
 
 class OllamaApiVersionPredicateTests(unittest.TestCase):

@@ -40,6 +40,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   carrier. Provisioning safely extracts its closure and notices, then enables
   a hardened system service at `127.0.0.1:11434` and an `ollama` client on
   `PATH`; no model weights are carried or fetched during provisioning.
+- Publish an OS-owned, pinned `RELEASE-DISPOSITION` beside the Ollama carrier's
+  `BUILD-CLOSURE`, recording owner-approved shipping and partial reproducibility.
 - Put `libvulkan1` and `mesa-vulkan-drivers` in the base package set for Ollama.
   Nouveau firmware remains opt-in, and ggml's default Vulkan device selection
   skips CPU Vulkan devices so machines without a GPU use Ollama's CPU backend.

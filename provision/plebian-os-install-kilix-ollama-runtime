@@ -60,6 +60,35 @@ NOTICE_MANIFEST_SHA256 = (
 NOTICE_RECORDS = 80
 MAX_NOTICE_BYTES = 1024 * 1024
 
+# OS-owned release disposition for 0.2.2. Its source of record is
+# provision/ollama/RELEASE-DISPOSITION; the same bytes are embedded here so the
+# single staged installer carries them, and both are pinned by size and hash.
+# It supersedes the carrier's build-time BUILD-CLOSURE disposition without
+# changing the carrier or that file.
+PUBLIC_RELEASE_DISPOSITION = PUBLIC_DOC_ROOT / "RELEASE-DISPOSITION"
+RELEASE_DISPOSITION_SIZE = 1_127
+RELEASE_DISPOSITION_SHA256 = (
+    "58b730d16531856b362869629f8b4d36"
+    "b4de8ec1b2cd86dd2a52a7b68abfa9f7"
+)
+RELEASE_DISPOSITION_SOURCE = """schema=plebian.ollama-runtime-release-disposition/v1
+release=plebian-os 0.2.2
+disposition=SHIPPED_IN_PLEBIAN_OS_0.2.2_WITH_OWNER_APPROVAL
+supersedes=BUILD-CLOSURE disposition CANDIDATE_NOT_FROZEN_NOT_RELEASE_APPROVED
+supersedes_build_closure_sha256=82f1a560d1f9545a30ea907cd8d6cf629dfe3f249c2cb8930b17ad68b1c16ddd
+carrier_bytes=unchanged
+carrier_file=ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz
+carrier_size=20689764
+carrier_sha256=47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914
+notices_manifest_sha256=708d4db8b86a2c824226bb1125da07565a46974aed31d17ec574a093cb4a71e0
+owner_decision_ship_utc=2026-10-31T12:43Z
+owner_decision_close_build_closure_utc=2026-10-31T20:55Z
+reproducibility=partial
+reproducibility_summary=An offline rebuild attempt was partial: native artifacts were not byte-identical, the Go binary could not build from the incomplete offline module cache, source trees differed from the recorded tree IDs, and the original source archives were not retained, so it neither reproduces nor disproves the earlier build record.
+models=none shipped (first-use download)
+service_listener=127.0.0.1:11434
+"""
+
 # The build closure was qualified against these Debian ABI floors. Accept
 # security revisions above them; vendor firmware is not a userspace dependency.
 PACKAGE_VERSIONS = {
@@ -1306,6 +1335,27 @@ def sync_public_notices(*, repair: bool) -> bool:
         changed |= _publish_fixed_file(PUBLIC_BUILD_CLOSURE, build_closure_payload, 0o644)
     else:
         fail(f"installed build closure is missing: {PUBLIC_BUILD_CLOSURE}")
+    release_disposition_payload = RELEASE_DISPOSITION_SOURCE.encode("ascii")
+    if (
+        len(release_disposition_payload) != RELEASE_DISPOSITION_SIZE
+        or hashlib.sha256(release_disposition_payload).hexdigest()
+        != RELEASE_DISPOSITION_SHA256
+    ):
+        fail("embedded release disposition does not match the installer pin")
+    if os.path.lexists(PUBLIC_RELEASE_DISPOSITION):
+        digest_file(
+            PUBLIC_RELEASE_DISPOSITION,
+            expected_size=RELEASE_DISPOSITION_SIZE,
+            expected_hash=RELEASE_DISPOSITION_SHA256,
+            expected_owner=0,
+            expected_mode=0o644,
+        )
+    elif repair:
+        changed |= _publish_fixed_file(
+            PUBLIC_RELEASE_DISPOSITION, release_disposition_payload, 0o644
+        )
+    else:
+        fail(f"installed release disposition is missing: {PUBLIC_RELEASE_DISPOSITION}")
     directories = parent_directories(set(records))
     for relative in sorted(directories, key=lambda item: (len(item.parts), item.parts)):
         directory = PUBLIC_NOTICE_ROOT.joinpath(*relative.parts)
@@ -1392,6 +1442,7 @@ def print_plan() -> None:
     print(f"  PATH client: {PUBLIC_COMMAND}")
     print(f"  model storage: {STATE_ROOT}/models")
     print(f"  third-party notices: {PUBLIC_NOTICE_ROOT}")
+    print(f"  release disposition: {PUBLIC_RELEASE_DISPOSITION}")
     print("  Debian minimum versions:")
     for package, version in PACKAGE_VERSIONS.items():
         print(f"    {package}>={version}")

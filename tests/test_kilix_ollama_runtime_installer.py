@@ -10,6 +10,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "provision" / "plebian-os-install-kilix-ollama-runtime"
+RELEASE_DISPOSITION = ROOT / "provision" / "ollama" / "RELEASE-DISPOSITION"
 LISTENER_PATCH = (
     ROOT
     / "provision"
@@ -155,6 +156,60 @@ class KilixOllamaRuntimeInstallerTests(unittest.TestCase):
         )
         self.assertIn("sync_public_notices(repair=True)", self.source)
         self.assertIn("sync_public_notices(repair=False)", self.source)
+
+    def test_release_disposition_states_the_closed_0_2_2_disposition(self):
+        source = RELEASE_DISPOSITION.read_bytes()
+        source.decode("ascii")
+        self.assertTrue(source.endswith(b"\n"))
+        self.assertNotIn(b"\r", source)
+        lines = source.decode("ascii").splitlines()
+        records = dict(line.split("=", 1) for line in lines)
+        self.assertEqual(len(records), len(lines), "duplicate or malformed key")
+        size, digest = self.namespace["read_carrier_pin"](ROOT / "releases" / "0.2.2.env")
+        self.assertEqual(records["schema"], "plebian.ollama-runtime-release-disposition/v1")
+        self.assertEqual(records["release"], "plebian-os 0.2.2")
+        self.assertEqual(records["disposition"], "SHIPPED_IN_PLEBIAN_OS_0.2.2_WITH_OWNER_APPROVAL")
+        self.assertIn("BUILD-CLOSURE", records["supersedes"])
+        self.assertIn("CANDIDATE_NOT_FROZEN_NOT_RELEASE_APPROVED", records["supersedes"])
+        self.assertEqual(
+            records["supersedes_build_closure_sha256"],
+            self.namespace["BUILD_CLOSURE_SHA256"],
+        )
+        self.assertEqual(records["carrier_bytes"], "unchanged")
+        self.assertEqual(records["carrier_file"], "ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz")
+        self.assertEqual(records["carrier_size"], str(size))
+        self.assertEqual(records["carrier_sha256"], digest)
+        self.assertEqual(
+            records["notices_manifest_sha256"],
+            self.namespace["NOTICE_MANIFEST_SHA256"],
+        )
+        self.assertEqual(records["owner_decision_ship_utc"], "2026-10-31T12:43Z")
+        self.assertEqual(records["owner_decision_close_build_closure_utc"], "2026-10-31T20:55Z")
+        self.assertEqual(records["reproducibility"], "partial")
+        summary = records["reproducibility_summary"]
+        for fragment in ("not byte-identical", "Go binary", "tree IDs",
+                         "not retained", "neither reproduces nor disproves"):
+            self.assertIn(fragment, summary)
+        self.assertEqual(records["models"], "none shipped (first-use download)")
+        self.assertEqual(records["service_listener"], "127.0.0.1:11434")
+        text = source.decode("ascii")
+        self.assertNotRegex(text, r"/home/|@")
+
+    def test_release_disposition_is_pinned_published_and_checked(self):
+        source = RELEASE_DISPOSITION.read_bytes()
+        self.assertEqual(self.namespace["RELEASE_DISPOSITION_SOURCE"].encode("ascii"), source)
+        self.assertEqual(self.namespace["RELEASE_DISPOSITION_SIZE"], len(source))
+        self.assertEqual(self.namespace["RELEASE_DISPOSITION_SHA256"],
+                         hashlib.sha256(source).hexdigest())
+        self.assertEqual(
+            self.namespace["PUBLIC_RELEASE_DISPOSITION"],
+            Path("/usr/share/doc/ollama-runtime/RELEASE-DISPOSITION"),
+        )
+        dry_run = subprocess.run(
+            ["python3", str(INSTALLER), "--dry-run"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        self.assertIn("release disposition: /usr/share/doc/ollama-runtime/RELEASE-DISPOSITION", dry_run)
 
     def test_carrier_is_verified_staged_and_installed_after_base_packages(self):
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()

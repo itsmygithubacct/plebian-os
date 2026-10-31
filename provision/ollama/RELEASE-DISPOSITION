@@ -1,0 +1,16 @@
+schema=plebian.ollama-runtime-release-disposition/v1
+release=plebian-os 0.2.2
+disposition=SHIPPED_IN_PLEBIAN_OS_0.2.2_WITH_OWNER_APPROVAL
+supersedes=BUILD-CLOSURE disposition CANDIDATE_NOT_FROZEN_NOT_RELEASE_APPROVED
+supersedes_build_closure_sha256=82f1a560d1f9545a30ea907cd8d6cf629dfe3f249c2cb8930b17ad68b1c16ddd
+carrier_bytes=unchanged
+carrier_file=ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz
+carrier_size=20689764
+carrier_sha256=47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914
+notices_manifest_sha256=708d4db8b86a2c824226bb1125da07565a46974aed31d17ec574a093cb4a71e0
+owner_decision_ship_utc=2026-10-31T12:43Z
+owner_decision_close_build_closure_utc=2026-10-31T20:55Z
+reproducibility=partial
+reproducibility_summary=An offline rebuild attempt was partial: native artifacts were not byte-identical, the Go binary could not build from the incomplete offline module cache, source trees differed from the recorded tree IDs, and the original source archives were not retained, so it neither reproduces nor disproves the earlier build record.
+models=none shipped (first-use download)
+service_listener=127.0.0.1:11434

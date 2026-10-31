@@ -79,6 +79,17 @@ asset, and include both files in `SHA256SUMS`. Anyone with the tagged source
 checkout and this carrier asset can rebuild the ISO without rebuilding or
 downloading the runtime binary.
 
+The installer also publishes `/usr/share/doc/ollama-runtime/RELEASE-DISPOSITION`
+(root:root, 0644) beside the carrier's `BUILD-CLOSURE` and the `notices/` tree.
+It is OS-owned, not part of the carrier: its source is
+`provision/ollama/RELEASE-DISPOSITION`, the same bytes are embedded in
+`provision/plebian-os-install-kilix-ollama-runtime`, and the installer pins its
+size and SHA-256. It records that 0.2.2 shipped the runtime with owner approval,
+supersedes the `BUILD-CLOSURE` candidate disposition, and states that
+reproducibility is only partial. Changing it means updating the embedded copy,
+both pins and `tests/`; the `Ollama notices` acceptance check in
+`build/build_vm_image.py` requires the installed bytes to match the pin.
+
 Do not substitute an ISO from `artifacts/acceptance/`. Those images are
 non-publishable test derivatives: they boot unattended, erase the target disk,
 carry volume label `PLEBIAN-TEST-ERASES-DISK`, and have sibling warning files.

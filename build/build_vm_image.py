@@ -89,6 +89,31 @@ def pinned_ollama_version() -> str:
     return versions[0]
 
 
+def pinned_release_disposition() -> tuple[int, str]:
+    """Read the pinned RELEASE-DISPOSITION size and SHA-256 from the installer."""
+    installer = REPO / "provision" / "plebian-os-install-kilix-ollama-runtime"
+    source = installer.read_text(encoding="utf-8")
+    size = re.findall(r"(?m)^RELEASE_DISPOSITION_SIZE = ([0-9_]+)$", source)
+    digest = re.findall(
+        r'(?m)^RELEASE_DISPOSITION_SHA256 = \(\n    "([0-9a-f]{32})"\n    "([0-9a-f]{32})"\n\)$',
+        source,
+    )
+    if len(size) != 1 or len(digest) != 1:
+        raise RuntimeError("Ollama installer must pin one release disposition")
+    return int(size[0].replace("_", "")), "".join(digest[0])
+
+
+def ollama_release_disposition_predicate() -> str:
+    """Guest command: RELEASE-DISPOSITION is a regular file with the pinned bytes."""
+    size, digest = pinned_release_disposition()
+    path = "/usr/share/doc/ollama-runtime/RELEASE-DISPOSITION"
+    return (
+        f"test -f {path} && test ! -L {path} && "
+        f"test \"$(stat -c %s {path})\" = {size} && "
+        f"printf '%s  %s\\n' {digest} {path} | sha256sum --check --status"
+    )
+
+
 def ollama_api_version_predicate() -> str:
     expected_version = json.dumps(pinned_ollama_version())
     return (
@@ -2277,6 +2302,7 @@ if default is not None:
         (
             "Ollama notices",
             "test -r /usr/share/doc/ollama-runtime/BUILD-CLOSURE && "
+            + ollama_release_disposition_predicate() + " && "
             "(cd /usr/share/doc/ollama-runtime/notices && "
             "test -r SHA256SUMS && "
             "find . -type f -print0 | xargs -0 -r -n1 test -r && "
