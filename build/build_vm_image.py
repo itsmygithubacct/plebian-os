@@ -2030,6 +2030,9 @@ assert len(pages['vision']['models']) >= 2
 assert len(pages['audio']['models']) >= 2
 assert len(pages['image']['models']) >= 2
 assert len(pages['system-local-llm']['models']) >= 2
+llm_models = pages['system-local-llm']['models']
+assert all(model.get('runtime_ready') is True for model in llm_models)
+assert 'Uses the running local Ollama backend.' in pages['system-local-llm']['recommendation']
 for page in pages.values():
     models = {model['id']: model for model in page['models']}
     assert len(models) == len(page['models']) and models
@@ -2186,6 +2189,13 @@ if default is not None:
             "e8c7ecd2d2458962666fdc560b40f5ed754e3e7c126400dd1f914a4bb50dc964'",
         ),
         (
+            "Ollama runtime installer dry-run",
+            "test -x /usr/local/sbin/plebian-os-install-kilix-ollama-runtime && "
+            "plan=\"$(timeout 30 /usr/local/sbin/plebian-os-install-kilix-ollama-runtime "
+            "--dry-run)\" && printf '%s\\n' \"$plan\" | grep -Fqx "
+            "'Plebian OS Ollama CPU + Vulkan runtime (offline carrier; no model weights)'",
+        ),
+        (
             "Ollama runtime service",
             "test -x /usr/local/sbin/plebian-os-install-kilix-ollama-runtime && "
             "timeout 30 /usr/local/sbin/plebian-os-install-kilix-ollama-runtime "
@@ -2193,6 +2203,58 @@ if default is not None:
             "grep -Fqx 'model_weights_carried=false' "
             "/var/lib/plebian-os/ollama-runtime-carrier.receipt && "
             "timeout 15 /usr/local/bin/ollama list >/dev/null",
+        ),
+        (
+            "Ollama system service",
+            "systemctl is-enabled plebian-os-ollama.service >/dev/null && "
+            "systemctl is-active --quiet plebian-os-ollama.service",
+        ),
+        (
+            "Ollama loopback listener",
+            "ss -Htln | awk '$4 ~ /:11434$/ { seen=1; "
+            "if ($4 != \"127.0.0.1:11434\") bad=1 } "
+            "END { exit !(seen && !bad) }'",
+        ),
+        (
+            "Ollama API version",
+            "python3 -c " + shlex.quote(
+                "import json,urllib.request; "
+                "opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
+                "response=opener.open('http://127.0.0.1:11434/api/version', timeout=5); "
+                "version=json.load(response).get('version'); "
+                "assert version == '0.32.14', version"
+            ),
+        ),
+        (
+            "Ollama PATH client",
+            'test "$(command -v ollama)" = /usr/local/bin/ollama && '
+            "grep -Fqx 'exec /usr/lib/plebian-os/ollama/"
+            'ollama-0.32.14-kilix-unix-vulkan-r1/usr/bin/ollama "$@"\' '
+            "/usr/local/bin/ollama && "
+            "OLLAMA_HOST=http://127.0.0.1:11434 timeout 15 ollama list >/dev/null",
+        ),
+        (
+            "Ollama Vulkan packages",
+            "test \"$(dpkg-query -W -f='${db:Status-Status}\\n' libvulkan1 "
+            "mesa-vulkan-drivers 2>/dev/null | grep -cx installed)\" = 2 && "
+            "! dpkg-query -W -f='${db:Status-Status}\\n' firmware-nvidia-graphics "
+            "2>/dev/null | grep -Fxq installed",
+        ),
+        (
+            "Ollama model weights",
+            "! test -r /var/lib/ollama/models && "
+            "output=\"$(OLLAMA_HOST=http://127.0.0.1:11434 timeout 15 ollama list)\" && "
+            "printf '%s\\n' \"$output\" | awk 'NR == 1 { "
+            "if ($1 != \"NAME\" || $2 != \"ID\") exit 1; header=1; next } "
+            "NF { rows=1 } END { exit !(header && !rows) }'",
+        ),
+        (
+            "Ollama notices",
+            "test -r /usr/share/doc/ollama-runtime/BUILD-CLOSURE && "
+            "(cd /usr/share/doc/ollama-runtime/notices && "
+            "test -r SHA256SUMS && "
+            "find . -type f -print0 | xargs -0 -r -n1 test -r && "
+            "sha256sum --check --status SHA256SUMS)",
         ),
         ("no login audio daemon", audio_holdoff),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
@@ -2248,6 +2310,11 @@ if default is not None:
     failed = []
     check_timeouts = {"Kilix-95 GUI routing tests": 60,
                       "wizard CLI inventory": 90,
+                      "Ollama runtime installer dry-run": 30,
+                      "Ollama runtime service": 45,
+                      "Ollama PATH client": 30,
+                      "Ollama model weights": 30,
+                      "Ollama notices": 30,
                       "Kilix-95 wizard and licence terminal tests": 90}
     for name, cmd in checks:
         r = ssh(cfg, cmd, askpass,
