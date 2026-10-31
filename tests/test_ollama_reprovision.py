@@ -12,13 +12,23 @@ PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 
 
+def extract_shell_function(source: str, name: str) -> str:
+    start = source.index(f"{name}() {{")
+    end = source.index("\n}\n", start) + 2
+    return source[start:end]
+
+
 class OllamaReprovisionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         source = PROVISION.read_text()
-        helper_start = source.index("ollama_carrier_receipt_matches_manifest() {")
-        call_start = source.index("\ninstall_ollama_runtime_from_carrier\n\n# The first-run wizard", helper_start)
-        cls.ollama_functions = source[helper_start:call_start]
+        receipt_function = extract_shell_function(
+            source, "ollama_carrier_receipt_matches_manifest"
+        )
+        install_function = extract_shell_function(
+            source, "install_ollama_runtime_from_carrier"
+        )
+        cls.ollama_functions = receipt_function + "\n" + install_function
         preflight_start = source.index("preflight_ollama_carrier() {")
         preflight_end = source.index('\n}\n\nscan_ollama_carrier_arguments "$@"', preflight_start) + 2
         cls.preflight_function = source[preflight_start:preflight_end]
@@ -219,10 +229,16 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         scanner_start = source.index("scan_ollama_carrier_arguments() {")
         scanner_end = source.index("\n}\n\n# The 0.2.2 Ollama runtime", scanner_start) + 2
         cls.argument_scanner = source[scanner_start:scanner_end]
+        receipt_function = extract_shell_function(
+            source, "ollama_carrier_receipt_matches_manifest"
+        )
         pin_start = source.index("ollama_verify_carrier_pins() {")
         start = source.index("preflight_ollama_carrier() {")
         end = source.index('\n}\n\nscan_ollama_carrier_arguments "$@"', start) + 2
-        cls.preflight_function = source[pin_start:end]
+        cls.preflight_function = receipt_function + "\n" + source[pin_start:end]
+        cls.install_function = extract_shell_function(
+            source, "install_ollama_runtime_from_carrier"
+        )
         prefix_end = source.index("\n# Keep a copy of this script's own output")
         cls.entry_prefix = source[:prefix_end]
 
@@ -231,8 +247,10 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         provision_dir = checkout / "provision"
         release_dir = checkout / "releases"
         stage_root = root / "usr-local-share-plebian-os"
+        installed_sbin = root / "installed-sbin"
+        state_root = root / "var" / "lib" / "plebian-os"
         shim_dir = root / "shim-bin"
-        for directory in (provision_dir, release_dir, shim_dir):
+        for directory in (provision_dir, release_dir, installed_sbin, state_root, shim_dir):
             directory.mkdir(parents=True)
 
         digest = hashlib.sha256(carrier_payload).hexdigest()
@@ -273,7 +291,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             "[[ \"${1:-}\" == -- ]] && shift\n"
             "path=\"$1\"\n"
             "case \"$path\" in\n"
-            "  \"$FIXTURE_STAGE_ROOT\"|\"$FIXTURE_STAGE_ROOT\"/*)\n"
+            "  \"$FIXTURE_STAGE_ROOT\"|\"$FIXTURE_STAGE_ROOT\"/*|\"$FIXTURE_STATE_ROOT\"|\"$FIXTURE_STATE_ROOT\"/*|\"$FIXTURE_INSTALLED_SBIN\"|\"$FIXTURE_INSTALLED_SBIN\"/*)\n"
             "    case \"$format\" in\n"
             "      %u:%a) printf '0:'; /usr/bin/stat -c '%a' -- \"$path\" ;;\n"
             "      %u:%a:%h) printf '0:'; /usr/bin/stat -c '%a:%h' -- \"$path\" ;;\n"
@@ -285,23 +303,56 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         )
         stat_shim.chmod(0o755)
 
+        python_shim = shim_dir / "python3"
+        python_shim.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            "  *\" --verify \"*) printf 'verify\\n' >>\"$FIXTURE_CALLS\"; [ -f \"$FIXTURE_VERIFY_OK\" ] ;;\n"
+            "  *) echo \"unexpected python3 fixture command: $*\" >&2; exit 99 ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        python_shim.chmod(0o755)
+        systemctl_shim = shim_dir / "systemctl"
+        systemctl_shim.write_text(
+            "#!/bin/sh\nprintf 'systemctl %s\\n' \"$*\" >>\"$FIXTURE_CALLS\"\nexit 0\n",
+            encoding="utf-8",
+        )
+        systemctl_shim.chmod(0o755)
+
         source = self.preflight_function
         source = source.replace("/usr/local/share/plebian-os", str(stage_root))
+        source = source.replace(
+            "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
+            str(installed_sbin / "plebian-os-install-kilix-ollama-runtime"),
+        )
+        source = source.replace(
+            "/var/lib/plebian-os/ollama-runtime-carrier.receipt",
+            str(state_root / "ollama-runtime-carrier.receipt"),
+        )
         marker = root / "package-mutation-marker"
         env = os.environ.copy()
         env.pop("PLEBIAN_OS_OLLAMA_CARRIER", None)
         env.update({
             "PATH": f"{shim_dir}:/usr/bin:/bin",
             "FIXTURE_STAGE_ROOT": str(stage_root),
+            "FIXTURE_STATE_ROOT": str(state_root),
+            "FIXTURE_INSTALLED_SBIN": str(installed_sbin),
             "FIXTURE_MUTATION_MARKER": str(marker),
+            "FIXTURE_CALLS": str(root / "calls"),
+            "FIXTURE_VERIFY_OK": str(root / "verify-ok"),
         })
         return {
             "root": root,
             "stage_root": stage_root,
+            "installed_sbin": installed_sbin,
+            "installed_helper": installed_sbin / "plebian-os-install-kilix-ollama-runtime",
+            "state_root": state_root,
             "checkout": checkout,
             "manifest": manifest,
             "carrier": carrier,
             "payload": carrier_payload,
+            "source_installer": installer,
             "source": source,
             "marker": marker,
             "env": env,
@@ -328,12 +379,27 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             capture_output=True, check=False,
         )
 
-    def run_real_entry_prefix(self, fixture, *, option="", path=None):
+    def run_real_entry_prefix(self, fixture, *, option="", path=None, follow_install=False):
         source = self.entry_prefix.replace(
             'SELF_DIR="$(cd "$(dirname "$0")" && pwd)"',
             f"SELF_DIR={shlex.quote(str(fixture['checkout'] / 'provision'))}",
         ).replace("/usr/local/share/plebian-os", str(fixture["stage_root"]))
+        source = source.replace(
+            "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
+            str(fixture["installed_helper"]),
+        ).replace(
+            "/var/lib/plebian-os/ollama-runtime-carrier.receipt",
+            str(fixture["state_root"] / "ollama-runtime-carrier.receipt"),
+        )
         script = source + '\nprintf \'entry-prefix-complete\\n\'\n'
+        if follow_install:
+            install_function = self.install_function.replace(
+                "/usr/local/share/plebian-os", str(fixture["stage_root"])
+            ).replace(
+                "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
+                str(fixture["installed_helper"]),
+            ).replace("/var/lib/plebian-os", str(fixture["state_root"]))
+            script += install_function + "\ninstall_ollama_runtime_from_carrier\n"
         env = fixture["env"].copy()
         env["PLEBIAN_OS_VERSION"] = "0.2.2"
         env.pop("PLEBIAN_OS_PROVISION_LIB_ONLY", None)
@@ -347,6 +413,25 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             cwd=fixture["checkout"], env=env, text=True,
             capture_output=True, check=False,
         )
+
+    def prepare_carrier_free_installation(self, fixture, *, verified):
+        fixture["installed_helper"].write_bytes(fixture["source_installer"].read_bytes())
+        fixture["installed_helper"].chmod(0o755)
+        receipt = fixture["state_root"] / "ollama-runtime-carrier.receipt"
+        receipt.write_text(
+            "schema=plebian.ollama-runtime-carrier-install/v1\n"
+            f"carrier_bytes={len(fixture['payload'])}\n"
+            f"carrier_sha256={hashlib.sha256(fixture['payload']).hexdigest()}\n"
+            "runtime=ollama-0.32.14-kilix-unix-vulkan-r1\n"
+            "service=plebian-os-ollama.service\n"
+            "service_active=yes\n"
+            "model_weights_carried=false\n",
+            encoding="utf-8",
+        )
+        receipt.chmod(0o644)
+        fixture["carrier"].unlink()
+        if verified:
+            Path(fixture["env"]["FIXTURE_VERIFY_OK"]).touch()
 
     def make_no_python_path(self, fixture):
         path = fixture["root"] / "no-python-path"
@@ -376,7 +461,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             "#!/bin/bash\n"
             "format=\"$2\"; shift 2; [[ \"${1:-}\" == -- ]] && shift; path=\"$1\"\n"
             "case \"$path\" in\n"
-            "  \"$FIXTURE_STAGE_ROOT\"|\"$FIXTURE_STAGE_ROOT\"/*)\n"
+            "  \"$FIXTURE_STAGE_ROOT\"|\"$FIXTURE_STAGE_ROOT\"/*|\"$FIXTURE_STATE_ROOT\"|\"$FIXTURE_STATE_ROOT\"/*|\"$FIXTURE_INSTALLED_SBIN\"|\"$FIXTURE_INSTALLED_SBIN\"/*)\n"
             "    case \"$format\" in\n"
             "      %u:%a) printf '0:'; /usr/bin/stat -c '%a' -- \"$path\" ;;\n"
             "      %u:%a:%h) printf '0:'; /usr/bin/stat -c '%a:%h' -- \"$path\" ;;\n"
@@ -431,6 +516,48 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             self.assertIn("offline 0.2.2 release asset", result.stderr)
             self.assertIn("--ollama-carrier PATH", result.stderr)
             self.assertFalse(fixture["marker"].exists())
+            self.assertFalse(fixture["stage_root"].exists())
+
+    def test_real_entry_accepts_verified_carrier_free_retry_and_enables_service(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            self.prepare_carrier_free_installation(fixture, verified=True)
+            result = self.run_real_entry_prefix(fixture, follow_install=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("entry-prefix-complete", result.stdout)
+            self.assertTrue((fixture["stage_root"] / "0.2.2.env").is_file())
+            self.assertFalse((fixture["stage_root"] / "ollama-runtime-carrier.tar.xz").exists())
+            calls = Path(fixture["env"]["FIXTURE_CALLS"]).read_text().splitlines()
+            self.assertEqual(calls.count("verify"), 2)
+            self.assertIn("systemctl enable --now plebian-os-ollama.service", calls)
+            self.assertIn(
+                "systemctl is-active --quiet plebian-os-ollama.service", calls
+            )
+
+    def test_real_entry_rejects_unverified_carrier_free_retry_before_staging_or_service_change(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            self.prepare_carrier_free_installation(fixture, verified=False)
+            result = self.run_real_entry_prefix(fixture, follow_install=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("0.2.2 Ollama carrier is missing", result.stderr)
+            self.assertIn("installed Ollama runtime verification failed", result.stderr)
+            self.assertNotIn("entry-prefix-complete", result.stdout)
+            self.assertFalse(fixture["stage_root"].exists())
+            calls = Path(fixture["env"]["FIXTURE_CALLS"]).read_text().splitlines()
+            self.assertEqual(calls, ["verify"])
+
+    def test_carrier_free_retry_without_python_is_reported_as_unverified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
+            self.prepare_carrier_free_installation(fixture, verified=True)
+            no_python_path = self.make_no_python_path(fixture)
+            result = self.run_real_entry_prefix(
+                fixture, path=no_python_path, follow_install=True
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("0.2.2 Ollama carrier is missing", result.stderr)
+            self.assertIn("python3 is unavailable to verify the installed runtime", result.stderr)
             self.assertFalse(fixture["stage_root"].exists())
 
     def test_plain_debian_carrier_stages_manifest_and_archive_with_safe_modes(self):

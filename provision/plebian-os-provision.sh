@@ -575,6 +575,35 @@ scan_ollama_carrier_arguments() {
 
 # The 0.2.2 Ollama runtime is mandatory and offline. Resolve and verify its
 # release inputs before the log file, apt, users, services, or checkouts change.
+ollama_carrier_receipt_matches_manifest() {
+    local receipt="$1" manifest="$2" metadata
+    local expected_bytes expected_digest receipt_bytes receipt_digest
+    local schema runtime service active weights
+    [ -f "$receipt" ] && [ ! -L "$receipt" ] || return 1
+    metadata="$(stat -c '%u:%a:%h' -- "$receipt" 2>/dev/null)" || return 1
+    [ "$metadata" = 0:644:1 ] || return 1
+
+    expected_bytes="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$manifest")"
+    expected_digest="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$manifest")"
+    receipt_bytes="$(awk -F= '$1 == "carrier_bytes" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    receipt_digest="$(awk -F= '$1 == "carrier_sha256" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    schema="$(awk -F= '$1 == "schema" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    runtime="$(awk -F= '$1 == "runtime" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    service="$(awk -F= '$1 == "service" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    active="$(awk -F= '$1 == "service_active" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    weights="$(awk -F= '$1 == "model_weights_carried" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+
+    [[ "$expected_bytes" =~ ^[1-9][0-9]*$ ]] \
+        && [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] \
+        && [ "$receipt_bytes" = "$expected_bytes" ] \
+        && [ "$receipt_digest" = "$expected_digest" ] \
+        && [ "$schema" = plebian.ollama-runtime-carrier-install/v1 ] \
+        && [ "$runtime" = ollama-0.32.14-kilix-unix-vulkan-r1 ] \
+        && [ "$service" = plebian-os-ollama.service ] \
+        && [ "$active" = yes ] \
+        && [ "$weights" = false ]
+}
+
 ollama_verify_carrier_pins() {
     local manifest="$1" carrier="$2" label="$3"
     local bytes_count digest_count expected_bytes expected_digest
@@ -608,6 +637,45 @@ ollama_verify_carrier_pins() {
     actual_digest="${actual_digest_output%% *}"
     [ "$actual_digest" = "$expected_digest" ] \
         || die "$label SHA-256 does not match the 0.2.2 release manifest: $carrier"
+}
+
+# Return success only when a carrier-free retry can take the install step's
+# installed-runtime fast path. A missing Python interpreter or any mismatch
+# leaves the caller to report the ordinary missing-carrier error.
+ollama_installed_runtime_matches_manifest() {
+    local manifest="$1"
+    local installed_helper=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    local source_helper="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
+    local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
+    local helper_metadata
+
+    OLLAMA_PREFLIGHT_RETRY_REASON="installed runtime helper is missing or unsafe"
+    [ -f "$source_helper" ] && [ ! -L "$source_helper" ] && [ -x "$source_helper" ] \
+        || return 1
+    [ -f "$installed_helper" ] && [ ! -L "$installed_helper" ] && [ -x "$installed_helper" ] \
+        || return 1
+    helper_metadata="$(stat -c '%u:%a:%h' -- "$installed_helper" 2>/dev/null)" \
+        || return 1
+    [ "$helper_metadata" = 0:755:1 ] || return 1
+    command -v cmp >/dev/null 2>&1 \
+        || die "required preflight tool missing: cmp"
+    cmp -s -- "$installed_helper" "$source_helper" \
+        || { OLLAMA_PREFLIGHT_RETRY_REASON="installed runtime helper differs from the release payload"; return 1; }
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        OLLAMA_PREFLIGHT_RETRY_REASON="python3 is unavailable to verify the installed runtime"
+        return 1
+    fi
+    if ! python3 "$installed_helper" --verify >/dev/null 2>&1; then
+        OLLAMA_PREFLIGHT_RETRY_REASON="installed Ollama runtime verification failed"
+        return 1
+    fi
+    if ! ollama_carrier_receipt_matches_manifest "$receipt" "$manifest"; then
+        OLLAMA_PREFLIGHT_RETRY_REASON="installed Ollama carrier receipt does not match the selected manifest"
+        return 1
+    fi
+    OLLAMA_PREFLIGHT_RETRY_REASON=""
+    return 0
 }
 
 preflight_ollama_carrier() {
@@ -694,26 +762,40 @@ preflight_ollama_carrier() {
     elif [ -e "$carrier_target" ] || [ -L "$carrier_target" ]; then
         carrier_source="$carrier_target"
     else
-        die "0.2.2 Ollama carrier is missing; supply the offline 0.2.2 release asset ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz with --ollama-carrier PATH or PLEBIAN_OS_OLLAMA_CARRIER=PATH"
+        if ! ollama_installed_runtime_matches_manifest "$manifest_source"; then
+            die "0.2.2 Ollama carrier is missing; supply the offline 0.2.2 release asset ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz with --ollama-carrier PATH or PLEBIAN_OS_OLLAMA_CARRIER=PATH${OLLAMA_PREFLIGHT_RETRY_REASON:+; carrier-free retry rejected: $OLLAMA_PREFLIGHT_RETRY_REASON}"
+        fi
     fi
-    ollama_verify_carrier_pins "$manifest_source" "$carrier_source" "Ollama carrier"
+    if [ -n "$carrier_source" ]; then
+        ollama_verify_carrier_pins "$manifest_source" "$carrier_source" "Ollama carrier"
+    fi
 
-    if [ -e "$carrier_target" ] || [ -L "$carrier_target" ]; then
-        [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
-            || die "staged Ollama carrier is not a regular file: $carrier_target"
-        metadata="$(stat -c '%u:%a:%h' -- "$carrier_target" 2>/dev/null)" \
-            || die "could not inspect staged Ollama carrier: $carrier_target"
-        [ "$metadata" = 0:644:1 ] \
-            || die "staged Ollama carrier must be root-owned mode 0644: $carrier_target"
-        ollama_verify_carrier_pins "$manifest_source" "$carrier_target" "staged Ollama carrier"
-    else
-        carrier_needs_stage=1
+    if [ -n "$carrier_source" ]; then
+        if [ -e "$carrier_target" ] || [ -L "$carrier_target" ]; then
+            [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
+                || die "staged Ollama carrier is not a regular file: $carrier_target"
+            metadata="$(stat -c '%u:%a:%h' -- "$carrier_target" 2>/dev/null)" \
+                || die "could not inspect staged Ollama carrier: $carrier_target"
+            [ "$metadata" = 0:644:1 ] \
+                || die "staged Ollama carrier must be root-owned mode 0644: $carrier_target"
+            ollama_verify_carrier_pins "$manifest_source" "$carrier_target" "staged Ollama carrier"
+        else
+            carrier_needs_stage=1
+        fi
     fi
 
     if [ "$DRY_RUN" = 1 ]; then
-        log "offline Ollama carrier preflight passed for release $PLEBIAN_OS_VERSION"
+        if [ -n "$carrier_source" ]; then
+            log "offline Ollama carrier preflight passed for release $PLEBIAN_OS_VERSION"
+        else
+            log "verified installed Ollama runtime and receipt permit a carrier-free retry for release $PLEBIAN_OS_VERSION"
+        fi
         echo "    + verify release manifest: $manifest_source"
-        echo "    + verify carrier: $carrier_source"
+        if [ -n "$carrier_source" ]; then
+            echo "    + verify carrier: $carrier_source"
+        else
+            echo "    + verify the installed runtime and carrier receipt; no archive is required"
+        fi
         [ "$manifest_needs_stage" = 1 ] \
             && echo "    + stage release manifest as root:root mode 0644 at $manifest_target"
         [ "$carrier_needs_stage" = 1 ] \
@@ -752,11 +834,15 @@ preflight_ollama_carrier() {
     [ -f "$manifest_target" ] && [ ! -L "$manifest_target" ] \
         && [ "$(stat -c '%u:%a:%h' -- "$manifest_target")" = 0:644:1 ] \
         || die "staged 0.2.2 release manifest is not a root-owned regular mode-0644 file"
-    [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
-        && [ "$(stat -c '%u:%a:%h' -- "$carrier_target")" = 0:644:1 ] \
-        || die "staged 0.2.2 Ollama carrier is not a root-owned regular mode-0644 file"
-    ollama_verify_carrier_pins "$manifest_target" "$carrier_target" "staged Ollama carrier"
-    log "offline Ollama carrier and release manifest are ready before provisioning changes"
+    if [ -n "$carrier_source" ]; then
+        [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
+            && [ "$(stat -c '%u:%a:%h' -- "$carrier_target")" = 0:644:1 ] \
+            || die "staged 0.2.2 Ollama carrier is not a root-owned regular mode-0644 file"
+        ollama_verify_carrier_pins "$manifest_target" "$carrier_target" "staged Ollama carrier"
+        log "offline Ollama carrier and release manifest are ready before provisioning changes"
+    else
+        log "verified installed Ollama runtime and receipt permit a carrier-free retry before provisioning changes"
+    fi
 }
 
 scan_ollama_carrier_arguments "$@"
@@ -6537,35 +6623,6 @@ else
     bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
 fi
 normalize_accounts_service_package_directory
-
-ollama_carrier_receipt_matches_manifest() {
-    local receipt="$1" manifest="$2" metadata
-    local expected_bytes expected_digest receipt_bytes receipt_digest
-    local schema runtime service active weights
-    [ -f "$receipt" ] && [ ! -L "$receipt" ] || return 1
-    metadata="$(stat -c '%u:%a:%h' -- "$receipt" 2>/dev/null)" || return 1
-    [ "$metadata" = 0:644:1 ] || return 1
-
-    expected_bytes="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$manifest")"
-    expected_digest="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$manifest")"
-    receipt_bytes="$(awk -F= '$1 == "carrier_bytes" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
-    receipt_digest="$(awk -F= '$1 == "carrier_sha256" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
-    schema="$(awk -F= '$1 == "schema" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
-    runtime="$(awk -F= '$1 == "runtime" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
-    service="$(awk -F= '$1 == "service" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
-    active="$(awk -F= '$1 == "service_active" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
-    weights="$(awk -F= '$1 == "model_weights_carried" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
-
-    [[ "$expected_bytes" =~ ^[1-9][0-9]*$ ]] \
-        && [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] \
-        && [ "$receipt_bytes" = "$expected_bytes" ] \
-        && [ "$receipt_digest" = "$expected_digest" ] \
-        && [ "$schema" = plebian.ollama-runtime-carrier-install/v1 ] \
-        && [ "$runtime" = ollama-0.32.14-kilix-unix-vulkan-r1 ] \
-        && [ "$service" = plebian-os-ollama.service ] \
-        && [ "$active" = yes ] \
-        && [ "$weights" = false ]
-}
 
 install_ollama_runtime_from_carrier() {
     [ "$PLEBIAN_OS_VERSION" = "0.2.2" ] || return 0
