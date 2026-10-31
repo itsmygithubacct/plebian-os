@@ -1,15 +1,16 @@
 #!/usr/bin/python3
-"""Install the exact local Kilix Ollama/Vulkan runtime candidate.
+"""Install the exact owner-approved offline Kilix Ollama/Vulkan runtime.
 
-No runtime bundle, model, weight, or public carrier location is shipped here.
-Until an owner-approved carrier exists, installation requires an explicitly
-supplied directory whose complete contents match the qualified local closure.
+The 0.2.2 carrier is pinned in its release manifest and unpacked offline.
+Model and weight artifacts remain outside the carrier.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import io
+import lzma
 import os
 from pathlib import Path, PurePosixPath
 import platform
@@ -19,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 
 
 INSTALL_ROOT = Path("/usr/lib/plebian-os/ollama")
@@ -27,7 +29,15 @@ GENERATION_NAME = "ollama-0.32.14-kilix-unix-vulkan-r1"
 GENERATION = INSTALL_ROOT / GENERATION_NAME
 LAUNCHER = INSTALL_ROOT / "ollama-current"
 MINIMUM_FREE_BYTES = 256 * 1024 * 1024
-CARRIER_STATUS = "owner-reserved-unaccepted"
+CARRIER_STATUS = "installed-offline-0.2.2"
+SYSTEMD_UNIT = Path("/etc/systemd/system/plebian-os-ollama.service")
+PUBLIC_COMMAND = Path("/usr/local/bin/ollama")
+SERVICE_NAME = "plebian-os-ollama.service"
+STATE_ROOT = Path("/var/lib/ollama")
+PUBLIC_NOTICE_ROOT = Path("/usr/share/doc/ollama-runtime/notices")
+MAX_UNPACK_MEMBERS = 512
+MAX_UNPACK_BYTES = 160_000_000
+MAX_CARRIER_BYTES = 64 * 1024 * 1024
 UNIX_LISTENER_PATCH_SHA256 = (
     "ad1ba7475946a22e371156c06cbb8dba"
     "58d8fd23f916a3bcffa8d937bf35ccde"
@@ -48,14 +58,60 @@ NOTICE_MANIFEST_SHA256 = (
 NOTICE_RECORDS = 80
 MAX_NOTICE_BYTES = 1024 * 1024
 
+# The build closure was qualified against these Debian ABI floors. Accept
+# security revisions above them; vendor firmware is not a userspace dependency.
 PACKAGE_VERSIONS = {
-    "firmware-nvidia-graphics": "20250410-2",
     "libc6": "2.41-12+deb13u3",
     "libgcc-s1": "14.2.0-19",
     "libstdc++6": "14.2.0-19",
     "libvulkan1": "1.4.309.0-1",
     "mesa-vulkan-drivers": "25.0.7-2+deb13u1",
 }
+
+SYSTEMD_UNIT_SOURCE = """[Unit]
+Description=Ollama local model service (Plebian OS)
+After=network.target
+
+[Service]
+Type=simple
+User=ollama
+Group=ollama
+SupplementaryGroups=render video
+WorkingDirectory=/var/lib/ollama
+Environment=HOME=/var/lib/ollama
+Environment=OLLAMA_HOST=127.0.0.1:11434
+Environment=OLLAMA_MODELS=/var/lib/ollama/models
+Environment=OLLAMA_NO_CLOUD=1
+Environment=OLLAMA_VULKAN=1
+Environment=OLLAMA_NUM_PARALLEL=1
+Environment=OLLAMA_MAX_LOADED_MODELS=1
+StateDirectory=ollama
+StateDirectoryMode=0750
+ExecStart=/usr/lib/plebian-os/ollama/ollama-current serve
+Restart=on-failure
+RestartSec=5s
+UMask=0027
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/ollama
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+PUBLIC_COMMAND_SOURCE = f"""#!/bin/sh
+set -eu
+exec {GENERATION}/usr/bin/ollama "$@"
+"""
 
 # Exact regular runtime files: relative path -> (bytes, SHA-256).
 RUNTIME_FILES = {
@@ -174,9 +230,15 @@ RUNTIME_LINKS = {
     PurePosixPath("usr/lib/ollama/libmtmd.so.0"): "libmtmd.so.0.1.0",
 }
 
+CARRIER_EXECUTABLES = {
+    PurePosixPath("usr/bin/ollama"),
+    PurePosixPath("usr/lib/ollama/llama-quantize"),
+    PurePosixPath("usr/lib/ollama/llama-server"),
+}
+
 KILIX_MODIFICATIONS = f"""# Kilix runtime delta
 
-This development candidate adds a private Unix-listener option and suppresses
+This runtime adds a private Unix-listener option and suppresses
 registry identity creation when Ollama's no-cloud mode is active. The exact
 downstream patch is carried in Plebian OS as
 `provision/ollama/patches/0001-kilix-private-unix-listener.patch`, SHA-256
@@ -184,13 +246,13 @@ downstream patch is carried in Plebian OS as
 
 The bundled R3 modification notice describes the dependency and llama.cpp
 compatibility deltas that precede this listener change. This record extends,
-and does not replace, that notice. The candidate is unfrozen and not release
-admitted.
+and does not replace, that notice. Plebian OS 0.2.2 ships this verified
+runtime offline and keeps model weights out of the image.
 """
 
-METADATA = f"""schema=plebian.kilix-ollama-runtime/v0-unfrozen
-schema_status=development-unfrozen
-release_admission=false
+METADATA = f"""schema=plebian.kilix-ollama-runtime/v1
+schema_status=owner-approved-offline-release
+release_admission=true
 carrier_status={CARRIER_STATUS}
 ollama_version=0.32.14+plebian.security-license-r3
 ollama_upstream_commit=d67ad83426633195089509347ffd4fe795120198
@@ -217,7 +279,7 @@ _MANIFEST_LINE = re.compile(r"([0-9a-f]{64})  \./([^\r\n]+)\Z")
 
 
 class InstallFailure(RuntimeError):
-    """A safe refusal from the optional local-closure installer."""
+    """A safe refusal from the pinned offline runtime installer."""
 
 
 def fail(message: str) -> None:
@@ -264,7 +326,7 @@ def ensure_root_path(path: Path, *, final_mode: int) -> None:
 
 def verify_platform() -> None:
     if platform.system() != "Linux" or platform.machine() != "x86_64":
-        fail("this candidate is limited to Linux x86_64")
+        fail("this runtime is limited to Linux x86_64")
     result = subprocess.run(
         ["/usr/bin/dpkg", "--print-architecture"],
         stdin=subprocess.DEVNULL,
@@ -281,7 +343,7 @@ def verify_platform() -> None:
 def verify_packages() -> None:
     for package, expected in PACKAGE_VERSIONS.items():
         result = subprocess.run(
-            ["/usr/bin/dpkg-query", "-W", "-f=${Version}", package],
+            ["/usr/bin/dpkg-query", "-W", "-f=${Status}\t${Version}", package],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -289,10 +351,24 @@ def verify_packages() -> None:
             env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
             check=False,
         )
-        if result.returncode != 0 or result.stdout != expected:
+        status, separator, installed = result.stdout.partition("\t")
+        if result.returncode != 0 or not separator or status != "install ok installed":
             fail(
-                f"{package} must be exactly {expected}; first run "
-                "plebian-os-install-deps --vulkan-nouveau"
+                f"{package} must be installed at version {expected} or newer; "
+                "first run plebian-os-install-deps"
+            )
+        comparison = subprocess.run(
+            ["/usr/bin/dpkg", "--compare-versions", installed, "ge", expected],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            check=False,
+        )
+        if comparison.returncode != 0:
+            fail(
+                f"{package} is {installed}; version {expected} or newer is required. "
+                "First run plebian-os-install-deps."
             )
 
 
@@ -361,6 +437,337 @@ def parse_notice_manifest(payload: bytes) -> dict[PurePosixPath, str]:
             fail("notice manifest contains an unsafe or duplicate path")
         records[relative] = match.group(1)
     return records
+
+
+def read_carrier_pin(manifest: Path) -> tuple[int, str]:
+    try:
+        descriptor = os.open(manifest, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as error:
+        raise InstallFailure(f"cannot open release manifest: {error}") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            fail("release manifest is not a regular file")
+        if before.st_size > 64 * 1024:
+            fail("release manifest exceeds its size bound")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            raw = stream.read(64 * 1024 + 1)
+        after = os.fstat(descriptor)
+        before_identity = (before.st_dev, before.st_ino, before.st_size,
+                           before.st_mtime_ns, before.st_ctime_ns)
+        after_identity = (after.st_dev, after.st_ino, after.st_size,
+                          after.st_mtime_ns, after.st_ctime_ns)
+        if len(raw) > 64 * 1024 or before_identity != after_identity:
+            fail("release manifest changed or exceeded its size bound")
+        payload = raw.decode("utf-8")
+    except (OSError, UnicodeError) as error:
+        raise InstallFailure(f"cannot read release manifest: {error}") from error
+    finally:
+        os.close(descriptor)
+
+    required = {
+        "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES",
+        "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256",
+    }
+    values: dict[str, str] = {}
+    for line in payload.splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key in required:
+            if key in values:
+                fail(f"release manifest repeats {key}")
+            values[key] = value
+    size = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES", "")
+    digest = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256", "")
+    if not re.fullmatch(r"[1-9][0-9]{0,8}", size):
+        fail("release manifest has no valid Ollama carrier byte pin")
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        fail("release manifest has no valid Ollama carrier SHA-256 pin")
+    parsed_size = int(size)
+    if parsed_size > MAX_CARRIER_BYTES:
+        fail("release carrier pin exceeds the supported archive size")
+    return parsed_size, digest
+
+
+def read_pinned_carrier(path: Path, expected_size: int, expected_hash: str) -> bytes:
+    if expected_size <= 0 or expected_size > MAX_CARRIER_BYTES:
+        fail("carrier size pin is outside the supported bound")
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+        fail("carrier SHA-256 pin is malformed")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as error:
+        raise InstallFailure(f"cannot open carrier archive: {error}") from error
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != expected_size:
+            fail("carrier archive size or file type does not match its release pin")
+        blocks: list[bytes] = []
+        digest = hashlib.sha256()
+        count = 0
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                count += len(block)
+                if count > expected_size:
+                    fail("carrier archive grew beyond its release pin")
+                blocks.append(block)
+                digest.update(block)
+        after = os.fstat(descriptor)
+        before_identity = (
+            before.st_dev, before.st_ino, before.st_size,
+            before.st_mtime_ns, before.st_ctime_ns,
+        )
+        after_identity = (
+            after.st_dev, after.st_ino, after.st_size,
+            after.st_mtime_ns, after.st_ctime_ns,
+        )
+        if count != expected_size or before_identity != after_identity:
+            fail("carrier archive changed while it was being verified")
+        if digest.hexdigest() != expected_hash:
+            fail("carrier archive SHA-256 does not match its release pin")
+        return b"".join(blocks)
+    finally:
+        os.close(descriptor)
+
+
+def verify_carrier_archive(path: Path, manifest: Path) -> tuple[int, str]:
+    expected_size, expected_hash = read_carrier_pin(manifest)
+    read_pinned_carrier(path, expected_size, expected_hash)
+    return expected_size, expected_hash
+
+
+def archive_path(member: tarfile.TarInfo) -> PurePosixPath:
+    name = member.name
+    if name in (".", "./") and member.isdir():
+        return PurePosixPath(".")
+    if not name.startswith("./") or "\\" in name:
+        fail("carrier contains a non-canonical archive path")
+    if name.endswith("/"):
+        if not member.isdir():
+            fail("carrier file path has a trailing slash")
+        name = name[:-1]
+    relative = name[2:]
+    parts = relative.split("/")
+    if not relative or any(part in ("", ".", "..") for part in parts):
+        fail("carrier contains an absolute, empty, or traversing path")
+    path = PurePosixPath(*parts)
+    if path.is_absolute() or path.as_posix() != relative:
+        fail("carrier contains a non-canonical archive path")
+    return path
+
+
+def check_archive_member(member: tarfile.TarInfo) -> tuple[PurePosixPath, str]:
+    relative = archive_path(member)
+    if member.pax_headers:
+        fail("carrier contains extended tar metadata")
+    if member.uid != 0 or member.gid != 0 or member.mtime != 0:
+        fail("carrier member has non-canonical owner or timestamp metadata")
+    if member.isdir():
+        # The approved notice source holds its nested directories private;
+        # installation creates the user-readable documentation tree at 0755.
+        if member.size != 0 or member.mode not in (0o700, 0o755):
+            fail("carrier directory metadata is not canonical")
+        return relative, "directory"
+    if member.isfile():
+        if member.mode not in (0o400, 0o600, 0o644, 0o755):
+            fail("carrier regular-file mode is not canonical")
+        if member.size < 0 or member.size > MAX_UNPACK_BYTES:
+            fail("carrier regular-file size exceeds its bound")
+        return relative, "file"
+    if member.issym():
+        target = PurePosixPath(member.linkname)
+        if (
+            member.size != 0
+            or member.mode != 0o777
+            or target.is_absolute()
+            or "\\" in member.linkname
+            or ".." in target.parts
+        ):
+            fail("carrier symbolic link is unsafe")
+        return relative, "symlink"
+    fail("carrier contains a hardlink, device, fifo, or unsupported tar entry")
+
+
+def inspect_carrier_archive(payload: bytes) -> tuple[dict[PurePosixPath, str], set[PurePosixPath]]:
+    manifest_payload: bytes | None = None
+    files: set[PurePosixPath] = set()
+    links: dict[PurePosixPath, str] = {}
+    directories: set[PurePosixPath] = set()
+    total_size = 0
+    count = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r|xz") as archive:
+            for member in archive:
+                count += 1
+                if count > MAX_UNPACK_MEMBERS:
+                    fail("carrier has too many archive members")
+                if count == 1 and getattr(archive, "pax_headers", {}):
+                    fail("carrier contains global extended tar metadata")
+                relative, kind = check_archive_member(member)
+                if relative in files or relative in links or relative in directories:
+                    fail("carrier contains a duplicate archive path")
+                if kind == "directory":
+                    directories.add(relative)
+                elif kind == "symlink":
+                    links[relative] = member.linkname
+                else:
+                    total_size += member.size
+                    if total_size > MAX_UNPACK_BYTES:
+                        fail("carrier expands beyond its total byte bound")
+                    files.add(relative)
+                    if relative == NOTICE_MANIFEST:
+                        if member.size != NOTICE_MANIFEST_SIZE:
+                            fail("carrier notice manifest has an unexpected size")
+                        stream = archive.extractfile(member)
+                        if stream is None:
+                            fail("carrier notice manifest cannot be read")
+                        manifest_payload = stream.read(NOTICE_MANIFEST_SIZE + 1)
+    except (OSError, EOFError, lzma.LZMAError, tarfile.TarError) as error:
+        raise InstallFailure(f"carrier archive is malformed: {error}") from error
+
+    if manifest_payload is None or len(manifest_payload) != NOTICE_MANIFEST_SIZE:
+        fail("carrier notice manifest is missing or truncated")
+    if hashlib.sha256(manifest_payload).hexdigest() != NOTICE_MANIFEST_SHA256:
+        fail("carrier notice manifest SHA-256 does not match the installer pin")
+    notices = parse_notice_manifest(manifest_payload)
+    expected_files = set(RUNTIME_FILES) | {BUILD_CLOSURE, NOTICE_MANIFEST}
+    expected_files.update(NOTICE_ROOT / relative for relative in notices)
+    expected_links = RUNTIME_LINKS
+    expected_directories = parent_directories(expected_files | set(expected_links))
+    expected_directories.add(PurePosixPath("."))
+    if files != expected_files:
+        fail("carrier has missing or unexpected regular files")
+    if links != expected_links:
+        fail("carrier has missing, unexpected, or changed symbolic links")
+    if directories != expected_directories:
+        fail("carrier has missing or unexpected directories")
+    return notices, directories
+
+
+def extract_carrier_archive(path: Path, manifest: Path, destination: Path) -> None:
+    expected_size, expected_hash = read_carrier_pin(manifest)
+    payload = read_pinned_carrier(path, expected_size, expected_hash)
+    notices, directories = inspect_carrier_archive(payload)
+    parent = destination.parent
+    try:
+        parent_info = parent.lstat()
+    except OSError as error:
+        raise InstallFailure(f"cannot inspect private extraction parent: {error}") from error
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_info.st_mode) != 0o700
+    ):
+        fail("carrier extraction parent must be an owner-only real directory")
+    if os.path.lexists(destination):
+        fail("carrier extraction destination already exists")
+
+    created = False
+    try:
+        destination.mkdir(mode=0o700)
+        os.chmod(destination, 0o700)
+        created = True
+        create_directories(
+            destination,
+            directories - {PurePosixPath(".")},
+        )
+        notice_hashes = {
+            NOTICE_ROOT / relative: digest for relative, digest in notices.items()
+        }
+        expected_files = set(RUNTIME_FILES) | {BUILD_CLOSURE, NOTICE_MANIFEST}
+        expected_files.update(notice_hashes)
+        expected_hashes = {
+            relative: digest for relative, (_size, digest) in RUNTIME_FILES.items()
+        }
+        expected_hashes[BUILD_CLOSURE] = BUILD_CLOSURE_SHA256
+        expected_hashes[NOTICE_MANIFEST] = NOTICE_MANIFEST_SHA256
+        expected_hashes.update(notice_hashes)
+        expected_sizes = {
+            relative: size for relative, (size, _digest) in RUNTIME_FILES.items()
+        }
+        expected_sizes[BUILD_CLOSURE] = BUILD_CLOSURE_SIZE
+        expected_sizes[NOTICE_MANIFEST] = NOTICE_MANIFEST_SIZE
+        expected_modes = {relative: 0o755 for relative in RUNTIME_FILES}
+        expected_modes[BUILD_CLOSURE] = 0o644
+        expected_modes[NOTICE_MANIFEST] = 0o644
+        expected_modes.update({relative: 0o644 for relative in notice_hashes})
+        seen_files: set[PurePosixPath] = set()
+        seen_links: dict[PurePosixPath, str] = {}
+        seen_directories: set[PurePosixPath] = set()
+        total_size = 0
+        count = 0
+        try:
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r|xz") as archive:
+                for member in archive:
+                    count += 1
+                    if count > MAX_UNPACK_MEMBERS:
+                        fail("carrier has too many archive members")
+                    relative, kind = check_archive_member(member)
+                    if kind == "directory":
+                        seen_directories.add(relative)
+                        continue
+                    if kind == "symlink":
+                        if relative not in RUNTIME_LINKS or member.linkname != RUNTIME_LINKS[relative]:
+                            fail("carrier symbolic link differs from recorded runtime links")
+                        seen_links[relative] = member.linkname
+                        continue
+                    if relative not in expected_files or relative in seen_files:
+                        fail("carrier contains an unexpected or duplicate regular file")
+                    source_mode = None
+                    if relative in RUNTIME_FILES:
+                        source_mode = 0o755 if relative in CARRIER_EXECUTABLES else 0o644
+                    elif relative == BUILD_CLOSURE:
+                        source_mode = 0o644
+                    if source_mode is not None and member.mode != source_mode:
+                        fail(f"carrier file mode is not canonical: {relative}")
+                    expected_size = expected_sizes.get(relative)
+                    if expected_size is not None and member.size != expected_size:
+                        fail(f"carrier file size differs from its runtime inventory: {relative}")
+                    if expected_size is None and member.size > MAX_NOTICE_BYTES:
+                        fail(f"carrier notice exceeds its per-file size bound: {relative}")
+                    total_size += member.size
+                    if total_size > MAX_UNPACK_BYTES:
+                        fail("carrier expands beyond its total byte bound")
+                    source = archive.extractfile(member)
+                    if source is None:
+                        fail(f"carrier file cannot be read: {relative}")
+                    output = destination.joinpath(*relative.parts)
+                    descriptor = os.open(
+                        output,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                        expected_modes[relative],
+                    )
+                    digest = hashlib.sha256()
+                    copied = 0
+                    with source, os.fdopen(descriptor, "wb") as stream:
+                        for block in iter(lambda: source.read(1024 * 1024), b""):
+                            copied += len(block)
+                            digest.update(block)
+                            stream.write(block)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    if copied != member.size or digest.hexdigest() != expected_hashes[relative]:
+                        fail(f"carrier file failed SHA-256 verification: {relative}")
+                    os.chmod(output, expected_modes[relative])
+                    seen_files.add(relative)
+        except (OSError, EOFError, lzma.LZMAError, tarfile.TarError) as error:
+            raise InstallFailure(f"could not safely extract carrier archive: {error}") from error
+
+        for relative, target in seen_links.items():
+            os.symlink(target, destination.joinpath(*relative.parts))
+        if seen_files != expected_files:
+            fail("carrier extraction is missing regular files")
+        if seen_directories != directories or seen_links != RUNTIME_LINKS:
+            fail("carrier extraction inventory differs from the pinned runtime")
+        verify_source_closure(destination)
+    except (InstallFailure, OSError) as error:
+        if created and os.path.lexists(destination):
+            shutil.rmtree(destination)
+        if isinstance(error, InstallFailure):
+            raise
+        raise InstallFailure(f"could not safely extract carrier archive: {error}") from error
 
 
 def closure_inventory(root: Path) -> tuple[set[PurePosixPath], dict[PurePosixPath, str], set[PurePosixPath]]:
@@ -672,6 +1079,243 @@ def publish_launcher() -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _command(argv: list[str], label: str) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"},
+        check=False,
+    )
+    if result.returncode != 0:
+        fail(f"{label} failed: {result.stderr.strip() or result.stdout.strip()}")
+    return result
+
+
+def _group_record(name: str) -> list[str] | None:
+    result = subprocess.run(
+        ["/usr/bin/getent", "group", name],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        check=False,
+    )
+    if result.returncode == 2 and not result.stdout:
+        return None
+    if result.returncode != 0:
+        fail(f"could not inspect system group {name}")
+    fields = result.stdout.rstrip("\n").split(":")
+    if len(fields) != 4 or fields[0] != name or not fields[2].isdigit():
+        fail(f"system group record is malformed: {name}")
+    return fields
+
+
+def _ensure_system_group(name: str) -> list[str]:
+    record = _group_record(name)
+    if record is None:
+        _command(["/usr/sbin/groupadd", "--system", name], f"creating system group {name}")
+        record = _group_record(name)
+    if record is None:
+        fail(f"system group {name} was not created")
+    return record
+
+
+def ensure_ollama_account(*, repair: bool = True) -> None:
+    if repair:
+        ollama_group = _ensure_system_group("ollama")
+        render_group = _ensure_system_group("render")
+        video_group = _ensure_system_group("video")
+    else:
+        ollama_group = _group_record("ollama")
+        render_group = _group_record("render")
+        video_group = _group_record("video")
+        if ollama_group is None or render_group is None or video_group is None:
+            fail("Ollama system user or required GPU groups are missing")
+    result = subprocess.run(
+        ["/usr/bin/getent", "passwd", "ollama"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+        check=False,
+    )
+    if result.returncode == 2 and not result.stdout:
+        if not repair:
+            fail("Ollama system user is missing")
+        _command(
+            [
+                "/usr/sbin/useradd", "--system", "--create-home",
+                "--home-dir", str(STATE_ROOT), "--shell", "/usr/sbin/nologin",
+                "--gid", "ollama", "--groups", "render,video", "ollama",
+            ],
+            "creating the Ollama system user",
+        )
+        result = subprocess.run(
+            ["/usr/bin/getent", "passwd", "ollama"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            check=False,
+        )
+    if result.returncode != 0:
+        fail("Ollama system user is unavailable")
+    fields = result.stdout.rstrip("\n").split(":")
+    if len(fields) != 7 or fields[0] != "ollama":
+        fail("Ollama system user record is malformed")
+    if fields[5] != str(STATE_ROOT) or fields[6] != "/usr/sbin/nologin":
+        fail("Ollama system user must have its private state home and no login shell")
+    try:
+        if int(fields[2]) >= 1000 or fields[3] != ollama_group[2]:
+            fail("Ollama account is not a dedicated system user and group")
+    except ValueError as error:
+        raise InstallFailure("Ollama system user numeric identity is malformed") from error
+
+    memberships = _command(["/usr/bin/id", "-nG", "ollama"], "checking Ollama GPU groups")
+    names = set(memberships.stdout.split())
+    if not {"render", "video"}.issubset(names):
+        if not repair:
+            fail("Ollama system user is not a member of render and video")
+        _command(
+            ["/usr/sbin/usermod", "--append", "--groups", "render,video", "ollama"],
+            "adding Ollama to GPU device groups",
+        )
+        memberships = _command(["/usr/bin/id", "-nG", "ollama"], "checking Ollama GPU groups")
+        if not {"render", "video"}.issubset(set(memberships.stdout.split())):
+            fail("Ollama system user is not a member of render and video")
+
+    if os.path.lexists(STATE_ROOT):
+        info = STATE_ROOT.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            fail("Ollama state root is not a real directory")
+        if info.st_uid != int(fields[2]) or info.st_gid != int(ollama_group[2]):
+            fail("Ollama state root has an unexpected owner")
+        if stat.S_IMODE(info.st_mode) != 0o750:
+            if not repair:
+                fail("Ollama state root mode is not 0750")
+            os.chmod(STATE_ROOT, 0o750)
+    else:
+        if not repair:
+            fail("Ollama state root is missing")
+        _command(
+            ["/usr/bin/install", "-d", "-o", "ollama", "-g", "ollama", "-m", "0750", str(STATE_ROOT)],
+            "creating Ollama state storage",
+        )
+
+    if render_group[0] != "render" or video_group[0] != "video":
+        fail("GPU device groups are malformed")
+
+
+def _verify_fixed_file(path: Path, payload: bytes, mode: int) -> None:
+    digest_file(
+        path,
+        expected_size=len(payload),
+        expected_hash=hashlib.sha256(payload).hexdigest(),
+        expected_owner=0,
+        expected_mode=mode,
+    )
+
+
+def _publish_fixed_file(path: Path, payload: bytes, mode: int) -> bool:
+    if os.path.lexists(path):
+        _verify_fixed_file(path, payload, mode)
+        return False
+    parent = path.parent
+    require_root_directory(parent)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        os.rename(temporary, path)
+        fsync_directory(parent)
+        _verify_fixed_file(path, payload, mode)
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def ensure_service_assets() -> bool:
+    changed = _publish_fixed_file(SYSTEMD_UNIT, SYSTEMD_UNIT_SOURCE.encode("utf-8"), 0o644)
+    changed |= _publish_fixed_file(PUBLIC_COMMAND, PUBLIC_COMMAND_SOURCE.encode("utf-8"), 0o755)
+    return changed
+
+
+def verify_service_assets() -> None:
+    _verify_fixed_file(SYSTEMD_UNIT, SYSTEMD_UNIT_SOURCE.encode("utf-8"), 0o644)
+    _verify_fixed_file(PUBLIC_COMMAND, PUBLIC_COMMAND_SOURCE.encode("utf-8"), 0o755)
+    ensure_ollama_account(repair=False)
+    sync_public_notices(repair=False)
+    for action in ("is-enabled", "is-active"):
+        result = subprocess.run(
+            ["/usr/bin/systemctl", action, "--quiet", SERVICE_NAME],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env={"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"},
+            check=False,
+            timeout=15,
+        )
+        if result.returncode != 0:
+            fail(f"Ollama system service is not {action}")
+
+
+def sync_public_notices(*, repair: bool) -> bool:
+    source_root = GENERATION.joinpath(*NOTICE_ROOT.parts)
+    manifest_path = source_root / "SHA256SUMS"
+    records = parse_notice_manifest(read_exact_file(
+        manifest_path, size=NOTICE_MANIFEST_SIZE, digest=NOTICE_MANIFEST_SHA256
+    ))
+    if repair:
+        ensure_root_path(PUBLIC_NOTICE_ROOT, final_mode=0o755)
+    else:
+        require_root_directory(PUBLIC_NOTICE_ROOT)
+        if stat.S_IMODE(PUBLIC_NOTICE_ROOT.lstat().st_mode) != 0o755:
+            fail("installed notice root mode is not 0755")
+    directories = parent_directories(set(records))
+    for relative in sorted(directories, key=lambda item: (len(item.parts), item.parts)):
+        directory = PUBLIC_NOTICE_ROOT.joinpath(*relative.parts)
+        if not os.path.lexists(directory):
+            if not repair:
+                fail(f"installed notice directory is missing: {directory}")
+            os.mkdir(directory, 0o755)
+            os.chmod(directory, 0o755)
+        require_root_directory(directory)
+        if stat.S_IMODE(directory.lstat().st_mode) != 0o755:
+            if not repair:
+                fail(f"installed notice directory mode is not 0755: {directory}")
+            os.chmod(directory, 0o755)
+    items = [(PurePosixPath("SHA256SUMS"), NOTICE_MANIFEST_SIZE, NOTICE_MANIFEST_SHA256)]
+    items.extend((relative, source_root.joinpath(*relative.parts).stat().st_size, digest)
+                 for relative, digest in records.items())
+    changed = False
+    for relative, size, digest in items:
+        source = source_root.joinpath(*relative.parts)
+        destination = PUBLIC_NOTICE_ROOT.joinpath(*relative.parts)
+        payload = read_exact_file(source, size=size, digest=digest)
+        if os.path.lexists(destination):
+            digest_file(destination, expected_size=size, expected_hash=digest,
+                        expected_owner=0, expected_mode=0o644)
+        elif repair:
+            changed |= _publish_fixed_file(destination, payload, 0o644)
+        else:
+            fail(f"installed notice is missing: {destination}")
+    files, links, actual_directories = closure_inventory(PUBLIC_NOTICE_ROOT)
+    expected_files = set(records) | {PurePosixPath("SHA256SUMS")}
+    if files != expected_files or links or actual_directories != parent_directories(expected_files):
+        fail("installed notice tree has an unexpected path inventory")
+    return changed
+
+
 def install(source: Path) -> bool:
     verify_platform()
     verify_packages()
@@ -686,28 +1330,33 @@ def install(source: Path) -> bool:
         verify_generation()
     if launcher_exists:
         verify_launcher()
-    if generation_exists and launcher_exists:
-        return False
     if launcher_exists and not generation_exists:
         fail("runtime launcher exists without its generation; refusing to replace it")
 
-    work = Path(tempfile.mkdtemp(prefix="kilix-ollama-runtime.", dir=SESSION_ROOT))
-    os.chmod(work, 0o700)
-    try:
-        if not generation_exists:
+    changed = False
+    if not generation_exists:
+        work = Path(tempfile.mkdtemp(prefix="kilix-ollama-runtime.", dir=SESSION_ROOT))
+        os.chmod(work, 0o700)
+        try:
             staged = stage_generation(source, work)
             publish_generation(staged)
             verify_generation()
+            changed = True
+        finally:
+            shutil.rmtree(work)
+    if not launcher_exists:
         publish_launcher()
         verify_launcher()
-        return True
-    finally:
-        shutil.rmtree(work)
+        changed = True
+    ensure_ollama_account()
+    changed |= ensure_service_assets()
+    changed |= sync_public_notices(repair=True)
+    return changed
 
 
 def print_plan() -> None:
-    print("Kilix Ollama private-Unix Vulkan runtime (optional; no models or weights)")
-    print(f"  carrier: {CARRIER_STATUS}; an exact local closure is required")
+    print("Plebian OS Ollama CPU + Vulkan runtime (offline carrier; no model weights)")
+    print(f"  carrier status: {CARRIER_STATUS}")
     print("  upstream Ollama: 0.32.14 @ d67ad83426633195089509347ffd4fe795120198")
     print("  upstream llama.cpp: 7e4c0a96880dae4fc4268ad441f8a6446bd5460a")
     print(f"  Unix listener patch sha256: {UNIX_LISTENER_PATCH_SHA256}")
@@ -715,9 +1364,14 @@ def print_plan() -> None:
     print(f"  runtime bytes: {sum(size for size, _digest in RUNTIME_FILES.values())}")
     print(f"  generation: {GENERATION}")
     print(f"  launcher: {LAUNCHER}")
-    print("  Debian direct pins:")
+    print(f"  system service: {SYSTEMD_UNIT} ({SERVICE_NAME})")
+    print(f"  PATH client: {PUBLIC_COMMAND}")
+    print(f"  model storage: {STATE_ROOT}/models")
+    print(f"  third-party notices: {PUBLIC_NOTICE_ROOT}")
+    print("  Debian minimum versions:")
     for package, version in PACKAGE_VERSIONS.items():
-        print(f"    {package}={version}")
+        print(f"    {package}>={version}")
+    print("  firmware-nvidia-graphics: not required (Nouveau firmware stays opt-in)")
 
 
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
@@ -727,7 +1381,7 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--closure",
         type=Path,
-        help="exact locally supplied runtime directory (no carrier is accepted yet)",
+        help="exact verified runtime closure directory",
     )
     parser.add_argument(
         "--dry-run",
@@ -737,29 +1391,64 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--verify",
         action="store_true",
-        help="verify the installed runtime and exact Debian runtime pins",
+        help="verify the installed runtime, service, and Debian package floors",
     )
+    parser.add_argument("--manifest", type=Path, help="selected release manifest for carrier operations")
+    parser.add_argument("--verify-carrier", type=Path, help="verify a release-pinned carrier archive")
+    parser.add_argument("--extract-carrier", type=Path, help="safely extract a release-pinned carrier archive")
+    parser.add_argument("--destination", type=Path, help="private empty directory for --extract-carrier")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_arguments(sys.argv[1:] if argv is None else argv)
-    if sum((args.closure is not None, args.dry_run, args.verify)) != 1:
+    if sum((
+        args.closure is not None,
+        args.dry_run,
+        args.verify,
+        args.verify_carrier is not None,
+        args.extract_carrier is not None,
+    )) != 1:
         print(
             "plebian-os-install-kilix-ollama-runtime: choose exactly one of "
-            "--closure PATH, --dry-run, or --verify",
+            "--closure PATH, --dry-run, --verify, --verify-carrier PATH, "
+            "or --extract-carrier PATH",
             file=sys.stderr,
         )
+        return 2
+    if args.verify_carrier is not None or args.extract_carrier is not None:
+        if args.manifest is None:
+            print("plebian-os-install-kilix-ollama-runtime: carrier mode requires --manifest", file=sys.stderr)
+            return 2
+        if args.verify_carrier is not None and args.destination is not None:
+            print("plebian-os-install-kilix-ollama-runtime: --destination requires --extract-carrier", file=sys.stderr)
+            return 2
+        if args.extract_carrier is not None and args.destination is None:
+            print("plebian-os-install-kilix-ollama-runtime: --extract-carrier requires --destination", file=sys.stderr)
+            return 2
+    elif args.manifest is not None or args.destination is not None:
+        print("plebian-os-install-kilix-ollama-runtime: --manifest and --destination are carrier-only options", file=sys.stderr)
         return 2
     if args.dry_run:
         print_plan()
         return 0
     try:
+        if args.verify_carrier is not None:
+            size, digest = verify_carrier_archive(args.verify_carrier, args.manifest)
+            print(f"verified Ollama carrier: {size} bytes, SHA-256 {digest}")
+            return 0
+        if args.extract_carrier is not None:
+            if os.geteuid() != 0:
+                fail("carrier extraction must run as root")
+            extract_carrier_archive(args.extract_carrier, args.manifest, args.destination)
+            print(f"extracted verified Ollama runtime closure to {args.destination}")
+            return 0
         if args.verify:
             verify_platform()
             verify_packages()
             verify_generation()
             verify_launcher()
+            verify_service_assets()
             print(f"verified {LAUNCHER}")
             return 0
         if os.geteuid() != 0:

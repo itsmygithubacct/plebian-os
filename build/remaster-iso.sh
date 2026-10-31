@@ -5,13 +5,14 @@
 # installer and repos, with unsigned artwork/config/initrd payloads branded for
 # Plebian-OS. Secure Boot's signed shim/GRUB/kernel binaries stay untouched.
 #
-#   build/remaster-iso.sh [debian-13.x-amd64-netinst.iso] [out.iso]
+#   build/remaster-iso.sh [debian-13.x-amd64-netinst.iso] [out.iso] [ollama-carrier.tar.xz]
 #
 # The source netinst is optional: with no argument it is downloaded (and
 # signature/hash-verified) from the Debian mirror automatically and cached.
 # Refuses to run without xorriso. The result installs like a regular Debian
 # system and, on first boot, pulls pleb + kilix from GitHub and comes up as the
-# Pleb session (see preseed.cfg).
+# Pleb session (see preseed.cfg). Plebian-OS 0.2.2 also requires its explicitly
+# supplied offline Ollama carrier.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -899,6 +900,7 @@ validate_release_refs_resolve_on_their_remotes
 validate_release_submodule_gitlinks_resolve
 
 SRC_ISO="${1:-}"
+OLLAMA_CARRIER="${3:-}"
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
@@ -909,6 +911,15 @@ OUT_ISO="${2:-$PLEBIAN_OS_ARTIFACTS/$default_iso_name}"
 OUT_REAL="$(readlink -m "$OUT_ISO")"
 [ ! -b "$OUT_REAL" ] || { echo "refusing to use a block device as ISO output: $OUT_REAL" >&2; exit 1; }
 [ ! -d "$OUT_REAL" ] || { echo "ISO output is a directory: $OUT_REAL" >&2; exit 1; }
+if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
+    [ -n "$OLLAMA_CARRIER" ] \
+        || { echo "Plebian-OS 0.2.2 requires an explicit Ollama carrier path as argument 3" >&2; exit 1; }
+    [ -f "$OLLAMA_CARRIER" ] && [ ! -L "$OLLAMA_CARRIER" ] \
+        || { echo "Ollama carrier is missing or is not a regular file" >&2; exit 1; }
+    python3 "$HERE/provision/plebian-os-install-kilix-ollama-runtime" \
+        --manifest "$HERE/releases/0.2.2.env" \
+        --verify-carrier "$OLLAMA_CARRIER"
+fi
 if [ -z "$SRC_ISO" ]; then
     SRC_ISO="$(fetch_netinst)"           # auto-pull the Debian netinst
 else
@@ -1228,6 +1239,8 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_MPV_VERSION "${PLEBIAN_OS_MPV_VERSION:-}"
         manifest_kv PLEBIAN_OS_MPV_SOURCE_REF "${PLEBIAN_OS_MPV_SOURCE_REF:-}"
         manifest_kv PLEBIAN_OS_MPV_LAUNCHER_REF "${PLEBIAN_OS_MPV_LAUNCHER_REF:-}"
+        manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES:-}"
+        manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256:-}"
         manifest_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         manifest_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
         manifest_kv PLEBIAN_OS_KIOSK "${PLEBIAN_OS_KIOSK:-0}"
@@ -1841,6 +1854,12 @@ cp "$HERE/provision/plebian-os-install-diarization-converter" "$EXTRACT/plebian-
 cp "$HERE/provision/plebian-os-install-encodec-converter" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-vulkan-tts" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-ollama-runtime" "$EXTRACT/plebian-os/"
+if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
+    install -m 0644 "$HERE/releases/0.2.2.env" \
+        "$EXTRACT/plebian-os/0.2.2.env"
+    install -m 0644 "$OLLAMA_CARRIER" \
+        "$EXTRACT/plebian-os/ollama-runtime-carrier.tar.xz"
+fi
 cp "$HERE/provision/plebian-os-native-runtime" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-qt-runtime" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-mpv-runtime" "$EXTRACT/plebian-os/"

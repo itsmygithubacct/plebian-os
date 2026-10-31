@@ -930,7 +930,8 @@ def runtime_build_env(cfg: Config) -> dict[str, str]:
 
 
 def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool,
-              *, replace_warnings: bool = False) -> Path:
+              *, ollama_carrier: Path | None = None,
+              replace_warnings: bool = False) -> Path:
     info(f"building installer ISO via {REMASTER.name} (custom preseed baked in)")
     # AUTOBOOT makes the ISO's boot menu auto-select the install entry — a VM
     # build has no one to press a key at the menu.
@@ -938,8 +939,12 @@ def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool,
     # Debian netinst (honours PLEBIAN_OS_NETINST too).
     if dry_run:
         seed = preseed if preseed is not None else "<generated preseed>"
+        carrier_arg = (
+            str(ollama_carrier) if ollama_carrier is not None
+            else "<required Ollama carrier for 0.2.2>"
+        )
         info(f"+ PLEBIAN_OS_AUTOBOOT=1 PLEBIAN_OS_UNATTENDED_DISK=1 "
-             f"PLEBIAN_OS_PRESEED={seed} {REMASTER} '' {out_iso}")
+             f"PLEBIAN_OS_PRESEED={seed} {REMASTER} '' {out_iso} {carrier_arg}")
         return out_iso
     env = {**os.environ, **runtime_build_env(cfg),
            "PLEBIAN_OS_PRESEED": str(preseed),
@@ -947,7 +952,10 @@ def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool,
            "PLEBIAN_OS_SSH_ENABLED": "1"}
     env.pop("IMAGE_PASSWORD", None)
     env.pop("RANDOM_PASSWORD", None)
-    run([REMASTER, "", str(out_iso)], env=env)
+    remaster_args = [REMASTER, "", str(out_iso)]
+    if ollama_carrier is not None:
+        remaster_args.append(str(ollama_carrier.resolve()))
+    run(remaster_args, env=env)
     if not out_iso.exists():
         die(f"ISO build did not produce {out_iso}")
     write_unattended_media_warnings(out_iso, replace=replace_warnings)
@@ -2178,11 +2186,13 @@ if default is not None:
             "e8c7ecd2d2458962666fdc560b40f5ed754e3e7c126400dd1f914a4bb50dc964'",
         ),
         (
-            "optional Kilix Ollama runtime installer",
+            "Ollama runtime service",
             "test -x /usr/local/sbin/plebian-os-install-kilix-ollama-runtime && "
             "timeout 30 /usr/local/sbin/plebian-os-install-kilix-ollama-runtime "
-            "--dry-run | grep -Fqx '  Unix listener patch sha256: "
-            "ad1ba7475946a22e371156c06cbb8dba58d8fd23f916a3bcffa8d937bf35ccde'",
+            "--verify && test -r /var/lib/plebian-os/ollama-runtime-carrier.receipt && "
+            "grep -Fqx 'model_weights_carried=false' "
+            "/var/lib/plebian-os/ollama-runtime-carrier.receipt && "
+            "timeout 15 /usr/local/bin/ollama list >/dev/null",
         ),
         ("no login audio daemon", audio_holdoff),
         ("firstboot disabled",   "! systemctl is-enabled plebian-os-firstboot.service >/dev/null 2>&1"),
@@ -2428,6 +2438,10 @@ def main() -> None:
     ap.add_argument("--port", type=int, help="SSH host port -> guest 22")
     ap.add_argument("--iso", type=Path, help="use this prebuilt ISO (skip building)")
     ap.add_argument(
+        "--ollama-carrier", type=Path,
+        help="pinned offline 0.2.2 Ollama runtime carrier used while building an ISO",
+    )
+    ap.add_argument(
         "--interactive-installer", action="store_true",
         help=("prebuilt ISO collects guest identity itself; requires --iso, "
               "--no-wait, and --no-verify"))
@@ -2524,7 +2538,7 @@ def main() -> None:
 
     if args.dry_run:
         if not args.iso:
-            build_iso(cfg, None, iso, True)
+            build_iso(cfg, None, iso, True, ollama_carrier=args.ollama_carrier)
         info("dry run: would now create + boot the VM and wait for provisioning.")
         return
 
@@ -2554,7 +2568,8 @@ def main() -> None:
     if out is not None:
         preseed = generate_preseed(cfg, enable_ssh=True)
         iso = build_iso(
-            cfg, preseed, out, False, replace_warnings=args.replace
+            cfg, preseed, out, False, ollama_carrier=args.ollama_carrier,
+            replace_warnings=args.replace
         )
         if _RECORDER is not None:
             _RECORDER.stage("instrumented ISO built")

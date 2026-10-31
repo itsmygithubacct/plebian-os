@@ -6317,6 +6317,94 @@ else
 fi
 normalize_accounts_service_package_directory
 
+install_ollama_runtime_from_carrier() {
+    [ "$PLEBIAN_OS_VERSION" = "0.2.2" ] || return 0
+    local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
+    local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    # The release manifest and helper arrive from the same remastered ISO.
+    # PLEBIAN_OS_DIR is cloned later in firstboot, after this runtime is needed.
+    local source_installer="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
+    local manifest=/usr/local/share/plebian-os/0.2.2.env
+    local staging_root=/var/lib/plebian-os/session
+    local work receipt_tmp bytes digest
+
+    log "installing the pinned 0.2.2 Ollama runtime from its offline carrier"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + verify carrier size and SHA-256 against $manifest"
+        echo "    + safely extract into a private temporary directory"
+        echo "    + $installer --closure <verified temporary closure>"
+        echo "    + systemctl enable --now plebian-os-ollama.service"
+        echo "    + write /var/lib/plebian-os/ollama-runtime-carrier.receipt"
+        return 0
+    fi
+
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+        || die "the selected 0.2.2 release carrier manifest is missing or unsafe"
+    [ -f "$archive" ] && [ ! -L "$archive" ] \
+        || die "the offline Ollama carrier is missing or unsafe: $archive"
+    if [ ! -e "$installer" ] && [ ! -L "$installer" ] \
+        && [ -f "$source_installer" ] && [ ! -L "$source_installer" ]; then
+        install -m 0755 "$source_installer" "$installer" \
+            || die "could not stage the Ollama runtime installer"
+    fi
+    [ -x "$installer" ] && [ ! -L "$installer" ] \
+        || die "the installed Ollama runtime installer is missing or unsafe"
+    [ -f "$source_installer" ] && [ ! -L "$source_installer" ] \
+        && cmp -s -- "$installer" "$source_installer" \
+        || die "the installed Ollama installer does not match the release ISO payload"
+
+    install -d -o root -g root -m 0700 "$staging_root"
+    [ -d "$staging_root" ] && [ ! -L "$staging_root" ] \
+        && [ "$(stat -c '%u:%a' "$staging_root")" = 0:700 ] \
+        || die "Ollama carrier staging directory is not private root storage"
+    work="$(mktemp -d "$staging_root/ollama-carrier.XXXXXX")" \
+        || die "could not create private Ollama carrier staging directory"
+    chmod 0700 "$work"
+
+    if ! python3 "$installer" --manifest "$manifest" \
+        --extract-carrier "$archive" --destination "$work/closure"; then
+        rm -rf -- "$work"
+        die "Ollama carrier verification or safe extraction failed"
+    fi
+    if ! python3 "$installer" --closure "$work/closure"; then
+        rm -rf -- "$work"
+        die "offline Ollama runtime installation failed"
+    fi
+    if ! systemctl daemon-reload \
+        || ! systemctl enable --now plebian-os-ollama.service \
+        || ! systemctl is-active --quiet plebian-os-ollama.service; then
+        rm -rf -- "$work"
+        die "Ollama system service could not be enabled and started"
+    fi
+
+    install -d -o root -g root -m 0755 /var/lib/plebian-os
+    [ -d /var/lib/plebian-os ] && [ ! -L /var/lib/plebian-os ] \
+        && [ "$(stat -c '%u' /var/lib/plebian-os)" = 0 ] \
+        || die "Ollama carrier receipt directory is not root-controlled"
+    bytes="$(stat -c '%s' -- "$archive")" \
+        || die "could not record the verified Ollama carrier size"
+    digest="$(sha256sum -- "$archive" | cut -d' ' -f1)" \
+        || die "could not record the verified Ollama carrier digest"
+    receipt_tmp="$(mktemp /var/lib/plebian-os/.ollama-carrier-receipt.XXXXXX)" \
+        || die "could not stage the Ollama carrier receipt"
+    {
+        printf '%s\n' 'schema=plebian.ollama-runtime-carrier-install/v1'
+        printf 'carrier_bytes=%s\n' "$bytes"
+        printf 'carrier_sha256=%s\n' "$digest"
+        printf '%s\n' 'runtime=ollama-0.32.14-kilix-unix-vulkan-r1'
+        printf '%s\n' 'service=plebian-os-ollama.service'
+        printf '%s\n' 'service_active=yes' 'model_weights_carried=false'
+    } > "$receipt_tmp"
+    chown root:root "$receipt_tmp"
+    chmod 0644 "$receipt_tmp"
+    mv -fT "$receipt_tmp" /var/lib/plebian-os/ollama-runtime-carrier.receipt
+    rm -rf -- "$work"
+    rm -f -- "$archive"
+    log "Ollama runtime installed offline; receipt: /var/lib/plebian-os/ollama-runtime-carrier.receipt"
+}
+
+install_ollama_runtime_from_carrier
+
 # The first-run wizard requires this software before any model is selected.
 # Like APT dependencies, prepare it before the root configuration snapshot.
 # Its independently installed payload remains available if later configuration
@@ -6428,8 +6516,8 @@ else
     warn "optional Kilix Vulkan TTS installer not found; continuing without it"
 fi
 
-# The verified Ollama runtime carrier is owner-reserved and not yet accepted.
-# Ship its exact local-closure installer, but never invoke it during provision.
+# Keep the carrier verifier available for later administration. In 0.2.2 the
+# offline runtime was already verified, installed and enabled above.
 OLLAMA_RUNTIME_INSTALLER_SRC=""
 for cand in \
     "$SELF_DIR/plebian-os-install-kilix-ollama-runtime" \
@@ -6439,17 +6527,20 @@ done
 if [ -n "$OLLAMA_RUNTIME_INSTALLER_SRC" ]; then
     if [ "$OLLAMA_RUNTIME_INSTALLER_SRC" = \
         /usr/local/sbin/plebian-os-install-kilix-ollama-runtime ]; then
-        log "optional Kilix Ollama runtime installer already present at /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        log "Ollama runtime installer already present at /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
     elif [ "$DRY_RUN" = 1 ]; then
-        log "installing optional Kilix Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        log "installing Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
         echo "    + install -m 0755 $OLLAMA_RUNTIME_INSTALLER_SRC /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
     else
-        log "installing optional Kilix Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        log "installing Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
         install -m 0755 "$OLLAMA_RUNTIME_INSTALLER_SRC" \
             /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     fi
 else
-    warn "optional Kilix Ollama runtime installer not found; continuing without it"
+    if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
+        die "required 0.2.2 Ollama runtime installer is missing"
+    fi
+    warn "Ollama runtime installer not found; continuing without it"
 fi
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap

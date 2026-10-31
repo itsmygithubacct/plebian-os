@@ -158,6 +158,10 @@ DEP_GROUPS=(
     # command. Debian owns the symlink and follows its default Python 3.
     "Python command compatibility|python-is-python3"
     "kilix GL + keyboard|libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libxcb-xkb1"
+    # Ollama's Vulkan backend is carried in the base image on 0.2.2. Mesa's
+    # CPU Vulkan device is ignored by ggml's default device enumeration, so a
+    # machine without a hardware GPU retains Ollama's optimized CPU backend.
+    "Vulkan loader + Mesa ICDs|libvulkan1 mesa-vulkan-drivers"
     # The session runs with TERM=xterm-kitty. Kilix installs the engine's own
     # entry into the user's ~/.terminfo, but root, sudo and any other account
     # resolve through the system database, so a strict ncurses program run
@@ -293,14 +297,9 @@ QUAL_GROUPS=(
     "qualification nested X :: xserver-xephyr"
 )
 
-# F105's Vulkan acceleration closure is selected only when its codepath is
-# enabled. It must not enter DEP_GROUPS or preseed.cfg: CPU-only machines retain
-# the base image, and a future model/application selector invokes this installed
-# helper explicitly. Name both packages even though mesa-vulkan-drivers depends
-# on libvulkan1; the loader and ICD are separate runtime responsibilities.
-VULKAN_GROUPS=(
-    "Vulkan loader + Mesa ICDs :: libvulkan1 mesa-vulkan-drivers"
-)
+# The 0.2.2 base group already provides the loader and Mesa ICDs. Keep the
+# accepted --vulkan switch as an idempotent compatibility spelling.
+VULKAN_GROUPS=()
 
 # Nouveau needs redistributable GPU firmware from non-free-firmware. Keep this
 # provider-specific so Intel, AMD and software Vulkan selections do not acquire
