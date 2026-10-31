@@ -43,6 +43,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Put `libvulkan1` and `mesa-vulkan-drivers` in the base package set for Ollama.
   Nouveau firmware remains opt-in, and ggml's default Vulkan device selection
   skips CPU Vulkan devices so machines without a GPU use Ollama's CPU backend.
+- Advance the selected Kilix host to include native Windows CPU/RAM counters
+  and an isolated packaged-counter check. Linux discards a CPU interval when
+  logical CPU count changes; physical Windows GUI rendering remains under review.
 
 - Offer public, pinned Claudex through `kilix install kilix-claudex`, with
   verified catalog dispatch and team-plan/launch help in the host.
