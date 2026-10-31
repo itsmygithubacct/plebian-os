@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Keep successful model setup categories complete when another model fails,
+  and explain unavailable local LLM backends before preselecting a model.
 - Start managed Qwen with all three selected models regardless of JSON key order.
 - Carry completed speech fixes in 0.2.2; defer remaining F104 qualification to 0.2.3.
 - Normalize installer and ISO file metadata so the builder's permission mask
