@@ -266,14 +266,12 @@ class DependencyManifestTests(unittest.TestCase):
                       result.stdout)
         self.assertIn("xserver-xephyr", result.stdout)
 
-    def test_vulkan_runtime_is_conditional_and_provider_specific(self):
-        common = additive_packages("VULKAN_GROUPS")
+    def test_vulkan_runtime_is_in_base_and_nouveau_firmware_is_opt_in(self):
         nouveau = additive_packages("VULKAN_NOUVEAU_GROUPS")
-        self.assertEqual(common, VULKAN_RUNTIME_PACKAGES)
         self.assertEqual(nouveau, VULKAN_NOUVEAU_PACKAGES)
-        for group in (common, nouveau):
-            self.assertTrue(group.isdisjoint(install_deps_packages()))
-            self.assertTrue(group.isdisjoint(preseed_packages()))
+        for base in (install_deps_packages(), preseed_packages()):
+            self.assertLessEqual(VULKAN_RUNTIME_PACKAGES, base)
+            self.assertTrue(nouveau.isdisjoint(base))
 
     def test_vulkan_tools_are_qualification_only(self):
         tools = additive_packages("QUAL_VULKAN_GROUPS")
@@ -295,10 +293,11 @@ class DependencyManifestTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             return result.stdout
 
-        cpu_only = output()
-        for package in (VULKAN_RUNTIME_PACKAGES | VULKAN_NOUVEAU_PACKAGES
-                        | VULKAN_QUALIFICATION_PACKAGES):
-            self.assertNotIn(package, cpu_only)
+        base = output()
+        for package in VULKAN_RUNTIME_PACKAGES:
+            self.assertIn(package, base)
+        for package in VULKAN_NOUVEAU_PACKAGES | VULKAN_QUALIFICATION_PACKAGES:
+            self.assertNotIn(package, base)
 
         generic = output("--vulkan")
         for package in VULKAN_RUNTIME_PACKAGES:

@@ -2,6 +2,7 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import runpy
+import tarfile
 import subprocess
 import tempfile
 import unittest
@@ -33,8 +34,9 @@ class KilixOllamaRuntimeInstallerTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("no models or weights", result.stdout)
-        self.assertIn("owner-reserved-unaccepted", result.stdout)
+        self.assertIn("no model weights", result.stdout)
+        self.assertIn("installed-offline-0.2.2", result.stdout)
+        self.assertIn("firmware-nvidia-graphics: not required", result.stdout)
         self.assertIn(self.namespace["UNIX_LISTENER_PATCH_SHA256"], result.stdout)
         self.assertIn("119645888", result.stdout)
         self.assertIn(
@@ -90,6 +92,94 @@ class KilixOllamaRuntimeInstallerTests(unittest.TestCase):
         lines[7] = f"{'0' * 64}  ./../../etc/shadow"
         with self.assertRaises(self.namespace["InstallFailure"]):
             parse(("\n".join(lines) + "\n").encode("ascii"))
+
+    def test_carrier_pin_verification_checks_size_and_digest(self):
+        self.assertEqual(
+            self.namespace["read_carrier_pin"](ROOT / "releases" / "0.2.2.env"),
+            (
+                20_689_764,
+                "47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914",
+            ),
+        )
+        payload = b"pinned offline carrier"
+        digest = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "carrier.tar.xz"
+            manifest = root / "0.2.2.env"
+            archive.write_bytes(payload)
+            manifest.write_text(
+                "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES="
+                f"{len(payload)}\n"
+                "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256="
+                f"{digest}\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                self.namespace["verify_carrier_archive"](archive, manifest),
+                (len(payload), digest),
+            )
+            archive.write_bytes(b"x" * len(payload))
+            with self.assertRaises(self.namespace["InstallFailure"]):
+                self.namespace["verify_carrier_archive"](archive, manifest)
+
+    def test_carrier_paths_reject_absolute_and_traversing_names(self):
+        archive_path = self.namespace["archive_path"]
+        directory = tarfile.TarInfo("./usr/")
+        directory.type = tarfile.DIRTYPE
+        self.assertEqual(archive_path(directory).as_posix(), "usr")
+        for name in ("/etc/passwd", "./usr/../etc/passwd", "./usr//passwd"):
+            with self.subTest(name=name), self.assertRaises(
+                self.namespace["InstallFailure"]
+            ):
+                archive_path(tarfile.TarInfo(name))
+
+    def test_service_unit_and_path_client_are_pinned(self):
+        unit = self.namespace["SYSTEMD_UNIT_SOURCE"]
+        for expected in (
+            "User=ollama", "Group=ollama", "SupplementaryGroups=render video",
+            "OLLAMA_HOST=127.0.0.1:11434",
+            "OLLAMA_MODELS=/var/lib/ollama/models", "OLLAMA_NO_CLOUD=1",
+            "OLLAMA_VULKAN=1", "NoNewPrivileges=true", "ProtectSystem=strict",
+            "ProtectHome=true", "PrivateTmp=true", "ReadWritePaths=/var/lib/ollama",
+            "Restart=on-failure",
+        ):
+            self.assertIn(expected, unit)
+        self.assertIn(
+            f"exec {self.namespace['GENERATION']}/usr/bin/ollama \"$@\"",
+            self.namespace["PUBLIC_COMMAND_SOURCE"],
+        )
+        self.assertEqual(
+            self.namespace["PUBLIC_NOTICE_ROOT"],
+            Path("/usr/share/doc/ollama-runtime/notices"),
+        )
+        self.assertIn("sync_public_notices(repair=True)", self.source)
+        self.assertIn("sync_public_notices(repair=False)", self.source)
+
+    def test_carrier_is_verified_staged_and_installed_after_base_packages(self):
+        remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
+        preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        vm_builder = (ROOT / "build" / "build_vm_image.py").read_text()
+        self.assertIn('OLLAMA_CARRIER="${3:-}"', remaster)
+        self.assertIn("--verify-carrier \"$OLLAMA_CARRIER\"", remaster)
+        self.assertIn("/plebian-os/ollama-runtime-carrier.tar.xz", remaster)
+        self.assertIn('install -m 0644 "$HERE/releases/0.2.2.env"', remaster)
+        self.assertIn("/cdrom/plebian-os/0.2.2.env", preseed)
+        self.assertIn("local manifest=/usr/local/share/plebian-os/0.2.2.env", provision)
+        self.assertIn(
+            "cp /cdrom/plebian-os/ollama-runtime-carrier.tar.xz "
+            "/target/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz",
+            preseed,
+        )
+        self.assertIn("--extract-carrier \"$archive\"", provision)
+        self.assertIn("--closure \"$work/closure\"", provision)
+        self.assertIn("systemctl enable --now plebian-os-ollama.service", provision)
+        self.assertLess(
+            provision.index('bash "$DEPS_SCRIPT" ||'),
+            provision.index("install_ollama_runtime_from_carrier\n\n"),
+        )
+        self.assertIn('"--ollama-carrier", type=Path', vm_builder)
 
     def test_install_requires_one_explicit_mode(self):
         result = subprocess.run(

@@ -434,6 +434,26 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertEqual(seen["PLEBIAN_OS_AUTOBOOT"], "1")
         self.assertEqual(seen["PLEBIAN_OS_UNATTENDED_DISK"], "1")
 
+    def test_build_iso_passes_the_ollama_carrier_as_remaster_input(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "out.iso"
+            seed = root / "preseed.cfg"
+            carrier = root / "ollama-carrier.tar.xz"
+            seed.write_text("seed\n")
+            carrier.write_bytes(b"carrier")
+
+            def fake_run(_argv, **_kwargs):
+                out.write_bytes(b"iso")
+
+            with mock.patch.object(vm, "run", side_effect=fake_run) as run:
+                vm.build_iso(cfg(), seed, out, False, ollama_carrier=carrier)
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [vm.REMASTER, "", str(out), str(carrier.resolve())],
+        )
+
     def test_acceptance_checks_coordinated_source_allocation(self):
         source = (ROOT / "build" / "build_vm_image.py").read_text()
         self.assertIn('"coordinated checkouts"', source)
