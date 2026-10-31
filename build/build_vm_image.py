@@ -72,6 +72,35 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def pinned_ollama_version() -> str:
+    """Read the downstream runtime version from the installer's metadata."""
+    installer = REPO / "provision" / "plebian-os-install-kilix-ollama-runtime"
+    source = installer.read_text(encoding="utf-8")
+    metadata_start = source.find('METADATA = f"""')
+    if metadata_start < 0:
+        raise RuntimeError("Ollama installer metadata block is missing")
+    metadata_end = source.find('"""', metadata_start + len('METADATA = f"""'))
+    if metadata_end < 0:
+        raise RuntimeError("Ollama installer metadata block is unterminated")
+    metadata = source[metadata_start:metadata_end]
+    versions = re.findall(r"(?m)^ollama_version=([A-Za-z0-9.+-]+)$", metadata)
+    if len(versions) != 1:
+        raise RuntimeError("Ollama installer metadata must pin one version")
+    return versions[0]
+
+
+def ollama_api_version_predicate() -> str:
+    expected_version = json.dumps(pinned_ollama_version())
+    return (
+        "import json,urllib.request; "
+        "opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
+        "response=opener.open('http://127.0.0.1:11434/api/version', timeout=5); "
+        "version=json.load(response).get('version'); "
+        f"expected={expected_version}; "
+        "assert version == expected, (version, expected)"
+    )
+
+
 class AcceptanceRecorder:
     """Persist a password-free, checksummed account of one VM acceptance run."""
 
@@ -2220,13 +2249,7 @@ if default is not None:
         ),
         (
             "Ollama API version",
-            "python3 -c " + shlex.quote(
-                "import json,urllib.request; "
-                "opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); "
-                "response=opener.open('http://127.0.0.1:11434/api/version', timeout=5); "
-                "version=json.load(response).get('version'); "
-                "assert version == '0.32.14', version"
-            ),
+            "python3 -c " + shlex.quote(ollama_api_version_predicate()),
         ),
         (
             "Ollama PATH client",

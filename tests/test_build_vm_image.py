@@ -1,5 +1,6 @@
 import ast
 import hashlib
+import io
 import json
 import os
 import re
@@ -195,6 +196,35 @@ class InstalledOllamaDocumentationTests(unittest.TestCase):
                     installer["sync_public_notices"](repair=False)
                 with self.assertRaises(installer["InstallFailure"]):
                     installer["sync_public_notices"](repair=True)
+
+
+class OllamaApiVersionPredicateTests(unittest.TestCase):
+    def test_generated_predicate_accepts_only_installer_metadata_version(self):
+        predicate = vm.ollama_api_version_predicate()
+        expected_version = vm.pinned_ollama_version()
+        self.assertIn(json.dumps(expected_version), predicate)
+        self.assertIn("assert version == expected, (version, expected)", predicate)
+
+        for fake_version, should_pass in (
+            (expected_version, True),
+            ("0.32.14", False),
+            ("0.32.15", False),
+        ):
+            with self.subTest(version=fake_version):
+                def open_fake(url, *, timeout):
+                    self.assertEqual(url, "http://127.0.0.1:11434/api/version")
+                    self.assertEqual(timeout, 5)
+                    return io.BytesIO(json.dumps({"version": fake_version}).encode())
+
+                fake_opener = SimpleNamespace(open=open_fake)
+                with mock.patch(
+                    "urllib.request.build_opener", return_value=fake_opener
+                ):
+                    if should_pass:
+                        exec(predicate, {})
+                    else:
+                        with self.assertRaises(AssertionError):
+                            exec(predicate, {})
 
 
 @unittest.skipUnless(shutil.which("apt-get"), "apt source parsing is required")
@@ -701,9 +731,6 @@ class VmBuilderEnvTests(unittest.TestCase):
             "systemctl is-active --quiet plebian-os-ollama.service",
             "ss -Htln",
             "127.0.0.1:11434",
-            "http://127.0.0.1:11434/api/version",
-            "urllib.request.ProxyHandler({})",
-            "version == '0.32.14'",
             'command -v ollama',
             "/usr/local/bin/ollama",
             "ollama-0.32.14-kilix-unix-vulkan-r1/usr/bin/ollama",
@@ -722,6 +749,14 @@ class VmBuilderEnvTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertIn(command, verify)
+        api_predicate = vm.ollama_api_version_predicate()
+        for fragment in (
+            "http://127.0.0.1:11434/api/version",
+            "urllib.request.ProxyHandler({})",
+            "assert version == expected, (version, expected)",
+            json.dumps(vm.pinned_ollama_version()),
+        ):
+            self.assertIn(fragment, api_predicate)
 
         for name, seconds in (
             ("Ollama runtime installer dry-run", 30),
