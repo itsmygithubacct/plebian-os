@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.2] — 2026-09-23
 
+- Start managed Qwen with all three selected models regardless of JSON key order.
+- Carry completed speech fixes in 0.2.2; defer remaining F104 qualification to 0.2.3.
 - Normalize installer and ISO file metadata so the builder's permission mask
   and user identity do not change the resulting image.
 - Open pane logs faster with direct viewer startup and cached transcript replay.
@@ -205,9 +207,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Charging batteries remain visible below full charge, and clock widgets refresh
   the local timezone. Kilix `5acc512`, engine `8b3711ec6`, Kilix 95 `82f81f5`.
 
-0.2.2 is a source integration candidate. Required F101/F104 qualification,
-artifact acceptance and final human review remain open; no release is tagged
-or published. This section must not be used to revise 0.2.1 artifacts.
+0.2.2 is a source integration candidate. Required F101 qualification, artifact
+acceptance and final human review remain open; no release is tagged or
+published. Remaining F104 qualification targets 0.2.3. This section must not be
+used to revise 0.2.1 artifacts.
 
 ### Changed
 
