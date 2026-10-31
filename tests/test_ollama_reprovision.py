@@ -1,0 +1,240 @@
+import hashlib
+import os
+import shlex
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
+UPDATE = ROOT / "provision" / "plebian-os-update.sh"
+
+
+class OllamaReprovisionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = PROVISION.read_text()
+        helper_start = source.index("ollama_carrier_receipt_matches_manifest() {")
+        call_start = source.index("\ninstall_ollama_runtime_from_carrier\n\n# The first-run wizard", helper_start)
+        cls.ollama_functions = source[helper_start:call_start]
+        cls.provision_source = source
+        cls.update_source = UPDATE.read_text()
+
+    def make_fixture(self, root: Path, *, with_carrier: bool):
+        media = root / "media"
+        installed_sbin = root / "installed-sbin"
+        provision_dir = root / "provision"
+        state_root = root / "var" / "lib" / "plebian-os"
+        shim_dir = root / "shim-bin"
+        for directory in (media, installed_sbin, provision_dir, shim_dir):
+            directory.mkdir(parents=True)
+
+        payload = b"fixture Ollama carrier bytes\n"
+        digest = hashlib.sha256(payload).hexdigest()
+        archive = media / "ollama-runtime-carrier.tar.xz"
+        if with_carrier:
+            archive.write_bytes(payload)
+        manifest = media / "0.2.2.env"
+        manifest.write_text(
+            "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES="
+            f"{len(payload)}\n"
+            "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256="
+            f"{digest}\n"
+        )
+        source_installer = provision_dir / "plebian-os-install-kilix-ollama-runtime"
+        source_installer.write_text("#!/bin/sh\nexit 0\n")
+        source_installer.chmod(0o755)
+
+        calls = root / "calls"
+        verify_ok = root / "verify-ok"
+        install_shim = shim_dir / "install"
+        install_shim.write_text(
+            "#!/bin/bash\n"
+            "args=()\n"
+            "while (($#)); do\n"
+            "  case \"$1\" in\n"
+            "    -o|-g) shift 2 ;;\n"
+            "    *) args+=(\"$1\"); shift ;;\n"
+            "  esac\n"
+            "done\n"
+            "exec /usr/bin/install \"${args[@]}\"\n"
+        )
+        install_shim.chmod(0o755)
+
+        stat_shim = shim_dir / "stat"
+        stat_shim.write_text(
+            "#!/bin/bash\n"
+            "format=\"$2\"\n"
+            "shift 2\n"
+            "[[ \"${1:-}\" == -- ]] && shift\n"
+            "path=\"$1\"\n"
+            "case \"$path\" in\n"
+            "  \"$FIXTURE_STATE_ROOT\"|\"$FIXTURE_STATE_ROOT\"/*)\n"
+            "    case \"$format\" in\n"
+            "      %u) echo 0 ;;\n"
+            "      %u:%a) printf '0:'; /usr/bin/stat -c '%a' -- \"$path\" ;;\n"
+            "      %u:%a:%h) printf '0:'; /usr/bin/stat -c '%a:%h' -- \"$path\" ;;\n"
+            "      *) exec /usr/bin/stat -c \"$format\" -- \"$path\" ;;\n"
+            "    esac\n"
+            "    ;;\n"
+            "  *) exec /usr/bin/stat -c \"$format\" -- \"$path\" ;;\n"
+            "esac\n"
+        )
+        stat_shim.chmod(0o755)
+
+        python_shim = shim_dir / "python3"
+        python_shim.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            "  *\" --verify \"*) printf 'verify\\n' >>\"$FIXTURE_CALLS\"; "
+            "    [ -f \"$FIXTURE_VERIFY_OK\" ] ;;\n"
+            "  *\" --extract-carrier \"*) printf 'extract\\n' >>\"$FIXTURE_CALLS\"; exit 0 ;;\n"
+            "  *\" --closure \"*) printf 'closure\\n' >>\"$FIXTURE_CALLS\"; exit 0 ;;\n"
+            "  *) echo \"unexpected python3 fixture command: $*\" >&2; exit 99 ;;\n"
+            "esac\n"
+        )
+        python_shim.chmod(0o755)
+
+        chown_shim = shim_dir / "chown"
+        chown_shim.write_text("#!/bin/sh\nexit 0\n")
+        chown_shim.chmod(0o755)
+        systemctl_shim = shim_dir / "systemctl"
+        systemctl_shim.write_text(
+            "#!/bin/sh\nprintf 'systemctl %s\\n' \"$*\" >>\"$FIXTURE_CALLS\"\nexit 0\n"
+        )
+        systemctl_shim.chmod(0o755)
+
+        functions = self.ollama_functions
+        functions = functions.replace("/usr/local/share/plebian-os", str(media))
+        functions = functions.replace(
+            "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
+            str(installed_sbin / "plebian-os-install-kilix-ollama-runtime"),
+        )
+        functions = functions.replace("/var/lib/plebian-os", str(state_root))
+        prelude = "\n".join((
+            "set -euo pipefail",
+            "log() { :; }",
+            'die() { printf "%s\\n" "$*" >&2; exit 1; }',
+            "PLEBIAN_OS_VERSION=0.2.2",
+            "DRY_RUN=0",
+            f"SELF_DIR={shlex.quote(str(provision_dir))}",
+            functions,
+        ))
+        env = os.environ.copy()
+        env.update({
+            "PATH": f"{shim_dir}:/usr/bin:/bin",
+            "FIXTURE_CALLS": str(calls),
+            "FIXTURE_VERIFY_OK": str(verify_ok),
+            "FIXTURE_STATE_ROOT": str(state_root),
+        })
+        return {
+            "prelude": prelude,
+            "env": env,
+            "archive": archive,
+            "calls": calls,
+            "verify_ok": verify_ok,
+            "receipt": state_root / "ollama-runtime-carrier.receipt",
+            "digest": digest,
+            "payload_size": len(payload),
+        }
+
+    def run_fixture(self, fixture, body: str):
+        return subprocess.run(
+            ["bash", "-c", fixture["prelude"] + "\n" + body],
+            env=fixture["env"], text=True, capture_output=True, check=False,
+        )
+
+    def test_second_provision_reuses_verified_runtime_and_keeps_carrier(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture = self.make_fixture(Path(td), with_carrier=True)
+            result = self.run_fixture(
+                fixture,
+                "install_ollama_runtime_from_carrier\n"
+                'touch "$FIXTURE_VERIFY_OK"\n'
+                "install_ollama_runtime_from_carrier\n",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(fixture["archive"].is_file())
+            self.assertTrue(fixture["receipt"].is_file())
+            receipt = fixture["receipt"].read_text()
+            self.assertIn(f"carrier_bytes={fixture['payload_size']}\n", receipt)
+            self.assertIn(f"carrier_sha256={fixture['digest']}\n", receipt)
+            calls = fixture["calls"].read_text().splitlines()
+            self.assertEqual(calls.count("verify"), 2)
+            self.assertEqual(calls.count("extract"), 1)
+            self.assertEqual(calls.count("closure"), 1)
+            self.assertEqual(
+                calls.count("systemctl is-active --quiet plebian-os-ollama.service"),
+                2,
+            )
+
+    def test_unverified_runtime_without_carrier_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            fixture = self.make_fixture(Path(td), with_carrier=False)
+            result = self.run_fixture(fixture, "install_ollama_runtime_from_carrier\n")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("offline Ollama carrier is missing or unsafe", result.stderr)
+            self.assertEqual(fixture["calls"].read_text().splitlines(), ["verify"])
+
+    def test_updater_library_and_apt_reconcile_paths_exit_before_ollama_install(self):
+        updater = self.update_source
+        self.assertNotIn("install_ollama_runtime_from_carrier", updater)
+        self.assertIn('"$helper" --reconcile-apt-sources', updater)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            marker = root / "installer-reached"
+            script = "\n".join((
+                "set -euo pipefail",
+                f"install_ollama_runtime_from_carrier() {{ : > {shlex.quote(str(marker))}; }}",
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1",
+                f"PLEB_STATE_HOME={shlex.quote(str(root / 'state'))}",
+                f"source {shlex.quote(str(UPDATE))}",
+                f"test ! -e {shlex.quote(str(marker))}",
+            ))
+            result = subprocess.run(
+                ["bash", "-c", script], text=True, capture_output=True,
+                env={**os.environ, "HOME": td}, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            reconcile = updater_provision_reconcile_harness(
+                self.provision_source, marker)
+            result = subprocess.run(
+                ["bash", "-c", reconcile], text=True, capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(marker.exists())
+
+
+def updater_provision_reconcile_harness(source: str, marker: Path) -> str:
+    function_start = source.index("reconcile_apt_sources_and_exit() {")
+    function_end = source.index("\n}", function_start) + 2
+    reconcile_function = source[function_start:function_end]
+    handler = (
+        'if [ "$RECONCILE_APT_ONLY" = 1 ]; then\n'
+        "    reconcile_apt_sources_and_exit\n"
+        "fi\n"
+    )
+    handler_start = source.index(handler)
+    installer_call = source.index("\ninstall_ollama_runtime_from_carrier\n\n# The first-run wizard")
+    if handler_start >= installer_call:
+        raise AssertionError("apt reconciliation moved after Ollama installation")
+    return "\n".join((
+        "set -euo pipefail",
+        "log() { :; }",
+        "release_apt_lifecycle() { return 1; }",
+        f"{reconcile_function}",
+        f"RECONCILE_APT_ONLY=1",
+        "install_ollama_runtime_from_carrier() { : > "
+        + shlex.quote(str(marker))
+        + "; }",
+        handler,
+        "install_ollama_runtime_from_carrier",
+    ))
+
+
+if __name__ == "__main__":
+    unittest.main()

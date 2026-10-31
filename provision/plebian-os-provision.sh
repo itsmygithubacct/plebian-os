@@ -6317,6 +6317,35 @@ else
 fi
 normalize_accounts_service_package_directory
 
+ollama_carrier_receipt_matches_manifest() {
+    local receipt="$1" manifest="$2" metadata
+    local expected_bytes expected_digest receipt_bytes receipt_digest
+    local schema runtime service active weights
+    [ -f "$receipt" ] && [ ! -L "$receipt" ] || return 1
+    metadata="$(stat -c '%u:%a:%h' -- "$receipt" 2>/dev/null)" || return 1
+    [ "$metadata" = 0:644:1 ] || return 1
+
+    expected_bytes="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$manifest")"
+    expected_digest="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$manifest")"
+    receipt_bytes="$(awk -F= '$1 == "carrier_bytes" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    receipt_digest="$(awk -F= '$1 == "carrier_sha256" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    schema="$(awk -F= '$1 == "schema" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    runtime="$(awk -F= '$1 == "runtime" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    service="$(awk -F= '$1 == "service" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    active="$(awk -F= '$1 == "service_active" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+    weights="$(awk -F= '$1 == "model_weights_carried" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$receipt")"
+
+    [[ "$expected_bytes" =~ ^[1-9][0-9]*$ ]] \
+        && [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] \
+        && [ "$receipt_bytes" = "$expected_bytes" ] \
+        && [ "$receipt_digest" = "$expected_digest" ] \
+        && [ "$schema" = plebian.ollama-runtime-carrier-install/v1 ] \
+        && [ "$runtime" = ollama-0.32.14-kilix-unix-vulkan-r1 ] \
+        && [ "$service" = plebian-os-ollama.service ] \
+        && [ "$active" = yes ] \
+        && [ "$weights" = false ]
+}
+
 install_ollama_runtime_from_carrier() {
     [ "$PLEBIAN_OS_VERSION" = "0.2.2" ] || return 0
     local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
@@ -6326,22 +6355,22 @@ install_ollama_runtime_from_carrier() {
     local source_installer="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
     local manifest=/usr/local/share/plebian-os/0.2.2.env
     local staging_root=/var/lib/plebian-os/session
+    local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
     local work receipt_tmp bytes digest
 
     log "installing the pinned 0.2.2 Ollama runtime from its offline carrier"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + verify carrier size and SHA-256 against $manifest"
+        echo "    + verify the installed runtime and receipt against $manifest; enable the service and return when they match"
+        echo "    + otherwise verify the retained carrier size and SHA-256 against $manifest"
         echo "    + safely extract into a private temporary directory"
         echo "    + $installer --closure <verified temporary closure>"
         echo "    + systemctl enable --now plebian-os-ollama.service"
-        echo "    + write /var/lib/plebian-os/ollama-runtime-carrier.receipt"
+        echo "    + retain $archive for offline repair and write $receipt"
         return 0
     fi
 
     [ -f "$manifest" ] && [ ! -L "$manifest" ] \
         || die "the selected 0.2.2 release carrier manifest is missing or unsafe"
-    [ -f "$archive" ] && [ ! -L "$archive" ] \
-        || die "the offline Ollama carrier is missing or unsafe: $archive"
     if [ ! -e "$installer" ] && [ ! -L "$installer" ] \
         && [ -f "$source_installer" ] && [ ! -L "$source_installer" ]; then
         install -m 0755 "$source_installer" "$installer" \
@@ -6352,6 +6381,20 @@ install_ollama_runtime_from_carrier() {
     [ -f "$source_installer" ] && [ ! -L "$source_installer" ] \
         && cmp -s -- "$installer" "$source_installer" \
         || die "the installed Ollama installer does not match the release ISO payload"
+
+    if python3 "$installer" --verify >/dev/null 2>&1 \
+        && ollama_carrier_receipt_matches_manifest "$receipt" "$manifest"; then
+        log "the installed Ollama runtime and carrier receipt match the 0.2.2 release pins"
+        if ! systemctl daemon-reload \
+            || ! systemctl enable --now plebian-os-ollama.service \
+            || ! systemctl is-active --quiet plebian-os-ollama.service; then
+            die "Ollama system service could not be enabled and started"
+        fi
+        return 0
+    fi
+
+    [ -f "$archive" ] && [ ! -L "$archive" ] \
+        || die "the offline Ollama carrier is missing or unsafe: $archive"
 
     install -d -o root -g root -m 0700 "$staging_root"
     [ -d "$staging_root" ] && [ ! -L "$staging_root" ] \
@@ -6397,10 +6440,9 @@ install_ollama_runtime_from_carrier() {
     } > "$receipt_tmp"
     chown root:root "$receipt_tmp"
     chmod 0644 "$receipt_tmp"
-    mv -fT "$receipt_tmp" /var/lib/plebian-os/ollama-runtime-carrier.receipt
+    mv -fT "$receipt_tmp" "$receipt"
     rm -rf -- "$work"
-    rm -f -- "$archive"
-    log "Ollama runtime installed offline; receipt: /var/lib/plebian-os/ollama-runtime-carrier.receipt"
+    log "Ollama runtime installed offline; carrier retained at $archive; receipt: $receipt"
 }
 
 install_ollama_runtime_from_carrier
