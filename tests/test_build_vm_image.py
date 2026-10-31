@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -93,6 +94,107 @@ class SourceProvenanceTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 self.path.write_text(payload)
                 self.assertNotEqual(self.verify({"EMPTY": ""}).returncode, 0)
+
+
+class InstalledOllamaDocumentationTests(unittest.TestCase):
+    def test_public_build_closure_is_published_and_acceptance_checks_it(self):
+        installer_path = ROOT / "provision" / "plebian-os-install-kilix-ollama-runtime"
+        namespace = runpy.run_path(str(installer_path))
+        installer = namespace["sync_public_notices"].__globals__
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            generation = root / "generation"
+            source_doc = generation / "usr/share/doc/ollama-runtime"
+            source_notices = source_doc / "notices"
+            source_notices.mkdir(parents=True)
+            closure_payload = b"fixture build closure\n"
+            (source_doc / "BUILD-CLOSURE").write_bytes(closure_payload)
+            notice_payload = b"fixture notice\n"
+            (source_notices / "license.txt").write_bytes(notice_payload)
+            manifest_payload = (
+                f"{hashlib.sha256(notice_payload).hexdigest()}  ./license.txt\n"
+            ).encode("ascii")
+            (source_notices / "SHA256SUMS").write_bytes(manifest_payload)
+
+            public_doc = root / "public" / "ollama-runtime"
+            public_notices = public_doc / "notices"
+            public_closure = public_doc / "BUILD-CLOSURE"
+            real_digest_file = installer["digest_file"]
+
+            def fixture_digest_file(path, **kwargs):
+                if kwargs.get("expected_owner") == 0:
+                    kwargs["expected_owner"] = os.geteuid()
+                return real_digest_file(path, **kwargs)
+
+            def fixture_ensure_root_path(path, *, final_mode):
+                path.mkdir(parents=True, exist_ok=True)
+                path.chmod(final_mode)
+
+            def fixture_require_root_directory(path, *, private=False):
+                info = path.lstat()
+                if path.is_symlink() or not path.is_dir():
+                    installer["fail"](f"not a real directory: {path}")
+                if private and info.st_mode & 0o077:
+                    installer["fail"](f"directory is not private: {path}")
+
+            test_values = {
+                "GENERATION": generation,
+                "PUBLIC_DOC_ROOT": public_doc,
+                "PUBLIC_NOTICE_ROOT": public_notices,
+                "PUBLIC_BUILD_CLOSURE": public_closure,
+                "NOTICE_RECORDS": 1,
+                "NOTICE_MANIFEST_SIZE": len(manifest_payload),
+                "NOTICE_MANIFEST_SHA256": hashlib.sha256(manifest_payload).hexdigest(),
+                "BUILD_CLOSURE_SIZE": len(closure_payload),
+                "BUILD_CLOSURE_SHA256": hashlib.sha256(closure_payload).hexdigest(),
+            }
+            with mock.patch.dict(installer, test_values), \
+                    mock.patch.dict(installer, {
+                        "digest_file": fixture_digest_file,
+                        "ensure_root_path": fixture_ensure_root_path,
+                        "require_root_directory": fixture_require_root_directory,
+                    }):
+                self.assertTrue(installer["sync_public_notices"](repair=True))
+                self.assertEqual(public_closure.read_bytes(), closure_payload)
+                self.assertEqual(public_closure.stat().st_mode & 0o777, 0o644)
+
+                result = SimpleNamespace(returncode=0, stdout="", stderr="")
+                with mock.patch.dict(os.environ, {}, clear=True), \
+                        mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                        mock.patch.object(vm, "info"):
+                    vm.verify_provisioning(cfg(), "askpass")
+                    commands = [call.args[1] for call in remote.call_args_list]
+                predicate = next(
+                    command for command in commands
+                    if "sha256sum --check --status SHA256SUMS" in command
+                )
+                predicate = predicate.replace(
+                    "/usr/share/doc/ollama-runtime", str(public_doc)
+                )
+                accepted = subprocess.run(
+                    ["/bin/bash", "-c", predicate],
+                    text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+                before = public_closure.stat()
+                self.assertFalse(installer["sync_public_notices"](repair=True))
+                after = public_closure.stat()
+                self.assertEqual((after.st_ino, after.st_mtime_ns),
+                                 (before.st_ino, before.st_mtime_ns))
+
+                public_closure.unlink()
+                with self.assertRaises(installer["InstallFailure"]):
+                    installer["sync_public_notices"](repair=False)
+                self.assertTrue(installer["sync_public_notices"](repair=True))
+                self.assertEqual(public_closure.read_bytes(), closure_payload)
+
+                public_closure.write_bytes(b"wrong closure\n")
+                public_closure.chmod(0o644)
+                with self.assertRaises(installer["InstallFailure"]):
+                    installer["sync_public_notices"](repair=False)
+                with self.assertRaises(installer["InstallFailure"]):
+                    installer["sync_public_notices"](repair=True)
 
 
 @unittest.skipUnless(shutil.which("apt-get"), "apt source parsing is required")

@@ -34,7 +34,9 @@ SYSTEMD_UNIT = Path("/etc/systemd/system/plebian-os-ollama.service")
 PUBLIC_COMMAND = Path("/usr/local/bin/ollama")
 SERVICE_NAME = "plebian-os-ollama.service"
 STATE_ROOT = Path("/var/lib/ollama")
-PUBLIC_NOTICE_ROOT = Path("/usr/share/doc/ollama-runtime/notices")
+PUBLIC_DOC_ROOT = Path("/usr/share/doc/ollama-runtime")
+PUBLIC_NOTICE_ROOT = PUBLIC_DOC_ROOT / "notices"
+PUBLIC_BUILD_CLOSURE = PUBLIC_DOC_ROOT / "BUILD-CLOSURE"
 MAX_UNPACK_MEMBERS = 512
 MAX_UNPACK_BYTES = 160_000_000
 MAX_CARRIER_BYTES = 64 * 1024 * 1024
@@ -1276,11 +1278,34 @@ def sync_public_notices(*, repair: bool) -> bool:
         manifest_path, size=NOTICE_MANIFEST_SIZE, digest=NOTICE_MANIFEST_SHA256
     ))
     if repair:
+        ensure_root_path(PUBLIC_DOC_ROOT, final_mode=0o755)
         ensure_root_path(PUBLIC_NOTICE_ROOT, final_mode=0o755)
     else:
+        require_root_directory(PUBLIC_DOC_ROOT)
+        if stat.S_IMODE(PUBLIC_DOC_ROOT.lstat().st_mode) != 0o755:
+            fail("installed runtime documentation root mode is not 0755")
         require_root_directory(PUBLIC_NOTICE_ROOT)
         if stat.S_IMODE(PUBLIC_NOTICE_ROOT.lstat().st_mode) != 0o755:
             fail("installed notice root mode is not 0755")
+    build_closure_source = GENERATION.joinpath(*BUILD_CLOSURE.parts)
+    build_closure_payload = read_exact_file(
+        build_closure_source,
+        size=BUILD_CLOSURE_SIZE,
+        digest=BUILD_CLOSURE_SHA256,
+    )
+    changed = False
+    if os.path.lexists(PUBLIC_BUILD_CLOSURE):
+        digest_file(
+            PUBLIC_BUILD_CLOSURE,
+            expected_size=BUILD_CLOSURE_SIZE,
+            expected_hash=BUILD_CLOSURE_SHA256,
+            expected_owner=0,
+            expected_mode=0o644,
+        )
+    elif repair:
+        changed |= _publish_fixed_file(PUBLIC_BUILD_CLOSURE, build_closure_payload, 0o644)
+    else:
+        fail(f"installed build closure is missing: {PUBLIC_BUILD_CLOSURE}")
     directories = parent_directories(set(records))
     for relative in sorted(directories, key=lambda item: (len(item.parts), item.parts)):
         directory = PUBLIC_NOTICE_ROOT.joinpath(*relative.parts)
@@ -1297,7 +1322,6 @@ def sync_public_notices(*, repair: bool) -> bool:
     items = [(PurePosixPath("SHA256SUMS"), NOTICE_MANIFEST_SIZE, NOTICE_MANIFEST_SHA256)]
     items.extend((relative, source_root.joinpath(*relative.parts).stat().st_size, digest)
                  for relative, digest in records.items())
-    changed = False
     for relative, size, digest in items:
         source = source_root.joinpath(*relative.parts)
         destination = PUBLIC_NOTICE_ROOT.joinpath(*relative.parts)
