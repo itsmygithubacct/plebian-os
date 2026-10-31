@@ -24,8 +24,8 @@ the installed helper obtains that selection from dpkg. ARM64 offers must carry
 architecture, loader identity, library owners and rollback archives must match
 the native selection. This support does not supply missing ARM64 dependency
 packages or converter artifacts.
-The current Waydroid first-use closure remains AMD64-only. The optional
-diarization converter, Kilix Ollama runtime and Vulkan TTS installer also
+The current Waydroid first-use closure remains AMD64-only. The bundled Kilix
+Ollama runtime, optional diarization converter and Vulkan TTS installer also
 currently require AMD64; their ARM64 availability must be qualified separately.
 
 An ARM64 machine starting at 0.2.0 has no qualified direct 0.2.2 upgrade path.
@@ -131,6 +131,17 @@ effective SSH policy, or reload failure as an update failure. Its outer
 transaction restores both the prior drop-in state and the running SSH policy.
 
 ### The 0.2.1 to 0.2.2 transition
+
+Fresh 0.2.2 installation media carries the pinned Ollama runtime archive and
+installs the local service during provisioning. The archive is not a Git object,
+so the current `plebian-os-update` path cannot acquire it: a 0.2.1 machine
+updated with the current updater will not receive the Ollama runtime. The
+release notes must state this gap until an update delivery path is implemented.
+The updater would need a bounded fetch for a separately published carrier,
+checked against the release manifest size and SHA-256 before extraction, plus
+transactional install and rollback handling. A manifest-authenticated release
+asset is the recommended delivery path; placing a 20 MB runtime archive in Git
+would enlarge every source checkout.
 
 Nothing migrates. These things change under an upgrader, all preserved or
 release-controlled by the rules above:

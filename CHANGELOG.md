@@ -36,6 +36,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Select the host commit that accepts Codex max reasoning effort and the Amp
   catalog pin for the nonblocking control probe. Speech-model records stay
   the same, and the carrier follows that host's content gitlink.
+- Ship the approved Ollama 0.32.14 CPU + Vulkan runtime as a pinned offline ISO
+  carrier. Provisioning safely extracts its closure and notices, then enables
+  a hardened system service at `127.0.0.1:11434` and an `ollama` client on
+  `PATH`; no model weights are carried or fetched during provisioning.
+- Put `libvulkan1` and `mesa-vulkan-drivers` in the base package set for Ollama.
+  Nouveau firmware remains opt-in, and ggml's default Vulkan device selection
+  skips CPU Vulkan devices so machines without a GPU use Ollama's CPU backend.
 
 - Offer public, pinned Claudex through `kilix install kilix-claudex`, with
   verified catalog dispatch and team-plan/launch help in the host.
@@ -446,25 +453,19 @@ used to revise 0.2.1 artifacts.
   leaves through its menus and restores the terminal on any fatal signal.
 - `build/remaster-iso.sh` refuses media whose closure submodule gitlinks do not
   resolve on their remotes, not merely whose refs do.
-- Opt-in Vulkan runtime closures for Mesa and Nouveau that leave the base image
-  unchanged: `plebian-os-install-deps --vulkan` installs the loader and Mesa
-  ICDs, `--vulkan-nouveau` adds the Nouveau firmware, and `vulkaninfo` arrives
-  only when a Vulkan lane is combined with `--qualification`. The CPU-only,
-  generic, Nouveau and qualified selections are each tested independently, and
-  each additive array is read by name so no lane can silently merge into
-  another.
+- `--vulkan` remains compatible with the base Mesa runtime;
+  `--vulkan-nouveau` adds only Nouveau firmware, and `vulkaninfo` remains
+  qualification-only.
 - A source-only Pocket TTS converter installer with immutable source and output
   pins. No model or converted weight bytes are carried.
 - A local-build installer for the persistent Kilix Vulkan TTS worker. It
   verifies the immutable llama.cpp archive, the worker source, the Debian build
   inputs and a byte-reproducible 66,532,472-byte runtime closure before atomic
   publication, then discards its temporary source and build tree.
-- The exact private-Unix Ollama listener patch and a fail-closed local closure
-  installer. It installs no model bytes and exposes no download URL; the
-  119,645,888-byte runtime carrier remains owner-reserved and unaccepted.
-- Both optional installers are carried through fresh ISO, standalone
-  provisioning, transactional update and rollback, and VM acceptance without
-  being invoked by any of them.
+- A separate `kilix-ollama` app remains disabled by default. Its TCP mode keeps
+  network-namespace isolation to avoid the system service's loopback port.
+- A 0.2.1 in-place update does not yet acquire the offline Ollama carrier; the
+  updater needs a bounded, integrity-checked release-asset delivery path.
 - Enable `unattended-upgrades` for Debian security updates only, with no
   automatic reboot, and hold daily apt jobs until first boot finishes.
 - Check release apt provenance in two phases shared by the provisioner and the

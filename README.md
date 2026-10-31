@@ -59,16 +59,17 @@ selected first-use runtime closure supports AMD64 only.
 The dependency manifest supplies
 the same compression providers, read-only hardware-discovery tools, and
 `linux-perf` qualification package to the preseed and standalone provisioning
-paths. Their manifest parity is covered by repository tests. Vulkan inference
-remains opt-in: `plebian-os-install-deps --vulkan` installs the loader and Mesa
-ICDs, while `--vulkan-nouveau` adds the Nouveau firmware closure. Combining a
-Vulkan mode with `--qualification` adds `vulkaninfo`; none of these packages is
-added to the base-image manifest by this codepath.
+paths. Their manifest parity is covered by repository tests. The image includes
+the Vulkan loader and Mesa ICDs for the installed Ollama runtime;
+`--vulkan-nouveau` remains the opt-in that adds Nouveau firmware. The pinned
+ggml Vulkan backend ignores CPU Vulkan devices during default device selection,
+so a machine without a hardware GPU uses Ollama's CPU backend. Combining a
+Vulkan mode with `--qualification` adds `vulkaninfo`.
 
 Pocket TTS conversion and its persistent Vulkan runtime are separate explicit
-opt-ins. The image ships neither model weights, generated GGUF files, nor
-native runtime binaries. Prepare their exact Debian prerequisites and install
-the two source closures with:
+opt-ins. The image ships neither model weights nor generated GGUF files.
+Prepare their exact Debian prerequisites and install the two source closures
+with:
 
 ```sh
 sudo plebian-os-install-deps --vulkan-tts
@@ -96,24 +97,29 @@ Vulkan shader cache. None of these commands runs during provisioning,
 qualification, preseed, or a plain Vulkan install. These closures remain 0.2.2
 candidates, not accepted release schemas or model-publication authorization.
 
-The patched Ollama/Vulkan service runtime follows the same small-image policy.
-Plebian OS carries only
-`plebian-os-install-kilix-ollama-runtime` and the auditable Unix-listener patch,
-not the 119,645,888-byte native closure. Its public carrier remains
-owner-reserved and unaccepted, so this development installer deliberately has
-no download URL and fails closed unless an operator supplies the exact local
-closure:
+Plebian-OS 0.2.2 carries the approved Ollama 0.32.14 CPU + Vulkan runtime in
+the ISO as a deterministic 20,689,764-byte offline archive. Provisioning checks
+its release-manifest size and SHA-256, extracts its confined 107-file/10-link
+closure, installs the notices under `/usr/share/doc/ollama-runtime/notices`,
+and enables `plebian-os-ollama.service` on `127.0.0.1:11434`. The service runs
+as the `ollama` system account with model state under `/var/lib/ollama`; the
+`ollama` client is available on `PATH` for the first-use model wizard.
 
-```sh
-sudo plebian-os-install-deps --vulkan-nouveau
-sudo plebian-os-install-kilix-ollama-runtime --closure /path/to/exact/closure
-```
+The image carries no model weights and provisioning downloads none. The wizard
+downloads a selected model only after its per-model licence step. The service
+sets `OLLAMA_NO_CLOUD=1` to disable Ollama cloud features and prevent registry
+identity creation; ordinary local model pulls remain available. Debian's
+Vulkan loader and Mesa driver copyright notices come from their Debian packages.
 
-It verifies all 25 executable/library files, ten relative library links, the
-complete bounded third-party notice set, the exact Debian/NVK runtime tuple,
-and the tracked listener delta before atomic installation. This local-closure
-path supports development without publishing the binary candidate or implying
-that a release carrier has been approved.
+The separate `kilix-ollama` app is not installed or launched by default. Its
+TCP mode can claim the same loopback port if manually enabled, so its TCP
+candidate must retain network-namespace isolation when the system service owns
+port 11434.
+
+The installer still accepts an exact local closure through
+`plebian-os-install-kilix-ollama-runtime --closure PATH`; the ISO provisioning
+path instead uses the pinned offline carrier. `--vulkan-nouveau` adds optional
+firmware, while firmware is not required for the base runtime.
 
 Release reproduction starts from that release's immutable tag, checksummed
 manifest and published notes. Development source is not a supported installed
