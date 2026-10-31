@@ -217,6 +217,9 @@ volume_id="$(xorriso -indev "$ISO" -pvd_info 2>&1 \
     || { echo "acceptance-release-iso: unexpected volume ID: $volume_id" >&2; exit 1; }
 [ "$(build_value PLEBIAN_OS_ISO_VOLUME_ID)" = "$expected_volume_id" ] \
     || { echo "acceptance-release-iso: build-info volume ID does not match the ISO" >&2; exit 1; }
+if [ -n "${release_manifest[PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256]-}" ]; then
+    echo "acceptance-release-iso: embedded Ollama carrier ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz ${release_manifest[PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES]} bytes sha256 ${release_manifest[PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256]}"
+fi
 
 iso_sha256="$(sha256sum "$ISO" | awk '{print $1}')"
 manifest_sha256="$(sha256sum "$manifest" | awk '{print $1}')"

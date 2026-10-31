@@ -24,6 +24,14 @@ CPUS="${PLEBIAN_OS_VM_CPUS:-4}"
 VRAM="${PLEBIAN_OS_VM_VRAM_MB:-256}"
 DISK="${PLEBIAN_OS_VM_DISK_GB:-20}"
 TIMEOUT="${PLEBIAN_OS_VM_TIMEOUT_MIN:-90}"
+DRY_RUN=0
+VM_ARGS=()
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --dry-run) DRY_RUN=1; shift ;;
+        *) VM_ARGS+=("$1"); shift ;;
+    esac
+done
 
 [ -z "${PLEBIAN_OS_VM_PASSWORD+x}" ] || {
     echo "install-vm-from-usb-iso: PLEBIAN_OS_VM_PASSWORD is retired; use a mode-0600 PLEBIAN_OS_VM_PASSWORD_FILE" >&2
@@ -35,6 +43,20 @@ cleanup() {
     [ -z "$generated_password_file" ] || rm -f -- "$generated_password_file"
 }
 trap cleanup EXIT HUP INT TERM
+
+if [ "$DRY_RUN" = 1 ]; then
+    echo "==> (dry-run) would build USB-style installer ISO: $ISO"
+    if [ -n "${PLEBIAN_OS_OLLAMA_CARRIER:-}" ]; then
+        printf '    Ollama carrier: %s\n' "$PLEBIAN_OS_OLLAMA_CARRIER"
+        printf '    + PLEBIAN_OS_OLLAMA_CARRIER=%q %s/build_usb_image.py ... --dry-run\n' \
+            "$PLEBIAN_OS_OLLAMA_CARRIER" "$HERE"
+    else
+        echo "    Ollama carrier: <unset; required for 0.2.2>"
+        echo "    + $HERE/build_usb_image.py ... --dry-run"
+    fi
+    echo "==> (dry-run) would install $ISO in VirtualBox VM: $NAME (VM not started)"
+    exit 0
+fi
 
 if [ -z "$PASSWORD_FILE" ]; then
     command -v openssl >/dev/null 2>&1 || {
@@ -84,4 +106,4 @@ echo "==> installing ISO in VirtualBox VM: $NAME"
     --sudo-nopasswd \
     --replace \
     --timeout "$TIMEOUT" \
-    "$@"
+    "${VM_ARGS[@]}"

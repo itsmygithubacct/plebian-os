@@ -28,6 +28,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -175,9 +176,17 @@ def build_iso(cfg: Config | None, preseed: Path | None, out_iso: Path, autoboot:
         auto = "PLEBIAN_OS_AUTOBOOT=1 " if autoboot else ""
         disk = "PLEBIAN_OS_UNATTENDED_DISK=1 " if unattended_disk else ""
         seed = f"PLEBIAN_OS_PRESEED={preseed} " if preseed is not None else ""
-        info(f"+ {auto}{disk}{seed}{REMASTER} '' {out_iso}")
+        carrier = os.environ.get("PLEBIAN_OS_OLLAMA_CARRIER", "")
+        carrier_arg = (f" {shlex.quote(carrier)}" if carrier
+                       else " <required Ollama carrier for 0.2.2>")
+        info(f"Ollama carrier: {carrier or '<unset; required for 0.2.2>'}")
+        info(f"+ {auto}{disk}{seed}{REMASTER} '' {out_iso}{carrier_arg}")
         return out_iso
-    vm.run([REMASTER, "", str(out_iso)], env=env)
+    remaster_args = [REMASTER, "", str(out_iso)]
+    carrier = env.get("PLEBIAN_OS_OLLAMA_CARRIER", "")
+    if carrier:
+        remaster_args.append(carrier)
+    vm.run(remaster_args, env=env)
     if not out_iso.exists():
         die(f"ISO build did not produce {out_iso}")
     return out_iso

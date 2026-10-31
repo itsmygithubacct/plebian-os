@@ -208,6 +208,7 @@ elif [ "$REUSE_ISO" = 1 ]; then
 fi
 
 if [ "$need_build" = 1 ]; then
+    log "Ollama carrier: ${PLEBIAN_OS_OLLAMA_CARRIER:-<unset; required for 0.2.2>}"
     # refuse to run without xorriso (a dry-run only warns, so it can still preview)
     if [ "$DRY_RUN" = 1 ]; then
         command -v xorriso >/dev/null 2>&1 \
@@ -229,12 +230,18 @@ if [ "$need_build" = 1 ]; then
     if [ "$DRY_RUN" = 1 ]; then
         prefix=""
         [ "$UNATTENDED_DISK" = 1 ] && prefix="PLEBIAN_OS_UNATTENDED_DISK=1 "
-        echo "    + ${prefix}$HERE/remaster-iso.sh \"$NETINST\" \"$ISO\""
+        carrier_arg=" <required Ollama carrier for 0.2.2>"
+        if [ -n "${PLEBIAN_OS_OLLAMA_CARRIER:-}" ]; then
+            printf -v carrier_arg ' %q' "$PLEBIAN_OS_OLLAMA_CARRIER"
+        fi
+        echo "    + ${prefix}$HERE/remaster-iso.sh \"$NETINST\" \"$ISO\"$carrier_arg"
     else
         if [ "$UNATTENDED_DISK" = 1 ]; then
-            PLEBIAN_OS_UNATTENDED_DISK=1 "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
+            PLEBIAN_OS_UNATTENDED_DISK=1 "$HERE/remaster-iso.sh" \
+                "$NETINST" "$ISO" "${PLEBIAN_OS_OLLAMA_CARRIER:-}"
         else
-            "$HERE/remaster-iso.sh" "$NETINST" "$ISO"
+            "$HERE/remaster-iso.sh" "$NETINST" "$ISO" \
+                "${PLEBIAN_OS_OLLAMA_CARRIER:-}"
         fi
     fi
 else

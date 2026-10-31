@@ -246,6 +246,30 @@ class UsbBuilderTests(unittest.TestCase):
             self.assertEqual(seen[key], value)
         self.assertEqual(seen["PLEBIAN_OS_SSH_ENABLED"], "1")
 
+    def test_remaster_receives_shared_ollama_carrier_as_argument_three(self):
+        seen = {}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "out.iso"
+            seed = root / "preseed.cfg"
+            carrier = root / "ollama carrier.tar.xz"
+            seed.write_text("seed\n")
+
+            def fake_run(argv, **kwargs):
+                seen["argv"] = argv
+                seen["env"] = kwargs["env"]
+                out.write_bytes(b"iso")
+
+            with mock.patch.dict(usb.os.environ, {
+                    "PLEBIAN_OS_OLLAMA_CARRIER": str(carrier)}), \
+                    mock.patch.object(usb.vm, "run", side_effect=fake_run):
+                usb.build_iso(cfg(), seed, out, False, False, False)
+
+        self.assertEqual(
+            seen["argv"], [usb.REMASTER, "", str(out), str(carrier)])
+        self.assertEqual(
+            seen["env"]["PLEBIAN_OS_OLLAMA_CARRIER"], str(carrier))
+
     def test_flash_revalidates_after_unmount_immediately_before_dd(self):
         events = []
         expected = (8, 16)

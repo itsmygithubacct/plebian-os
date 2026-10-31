@@ -900,7 +900,27 @@ validate_release_refs_resolve_on_their_remotes
 validate_release_submodule_gitlinks_resolve
 
 SRC_ISO="${1:-}"
-OLLAMA_CARRIER="${3:-}"
+resolve_ollama_carrier() {
+    local argument="${1:-}" configured="${PLEBIAN_OS_OLLAMA_CARRIER:-}"
+    local argument_real="" configured_real=""
+    if [ -n "$argument" ]; then
+        argument_real="$(readlink -f -- "$argument" 2>/dev/null || true)"
+        [ -n "$argument_real" ] && [ -f "$argument_real" ] \
+            || { echo "Ollama carrier argument 3 is missing or is not a regular file" >&2; exit 1; }
+    fi
+    if [ -n "$configured" ]; then
+        configured_real="$(readlink -f -- "$configured" 2>/dev/null || true)"
+        [ -n "$configured_real" ] && [ -f "$configured_real" ] \
+            || { echo "PLEBIAN_OS_OLLAMA_CARRIER is missing or is not a regular file" >&2; exit 1; }
+    fi
+    if [ -n "$argument_real" ] && [ -n "$configured_real" ] \
+            && [ "$argument_real" != "$configured_real" ]; then
+        echo "Ollama carrier argument 3 and PLEBIAN_OS_OLLAMA_CARRIER resolve to different files" >&2
+        exit 1
+    fi
+    OLLAMA_CARRIER="${argument_real:-$configured_real}"
+}
+resolve_ollama_carrier "${3:-}"
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
@@ -913,7 +933,7 @@ OUT_REAL="$(readlink -m "$OUT_ISO")"
 [ ! -d "$OUT_REAL" ] || { echo "ISO output is a directory: $OUT_REAL" >&2; exit 1; }
 if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
     [ -n "$OLLAMA_CARRIER" ] \
-        || { echo "Plebian-OS 0.2.2 requires an explicit Ollama carrier path as argument 3" >&2; exit 1; }
+        || { echo "Plebian-OS 0.2.2 requires argument 3 or PLEBIAN_OS_OLLAMA_CARRIER" >&2; exit 1; }
     [ -f "$OLLAMA_CARRIER" ] && [ ! -L "$OLLAMA_CARRIER" ] \
         || { echo "Ollama carrier is missing or is not a regular file" >&2; exit 1; }
     python3 "$HERE/provision/plebian-os-install-kilix-ollama-runtime" \

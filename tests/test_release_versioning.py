@@ -587,6 +587,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn('plebian-os-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}-acceptance.json', source)
         self.assertIn('--report "$REPORT"', source)
         self.assertNotIn('--replace', source)
+        self.assertIn('PLEBIAN_OS_OLLAMA_CARRIER:-<unset; required for 0.2.2>', source)
 
     def test_exact_release_iso_lane_validates_and_covers_bios_and_efi(self):
         path = ROOT / "build" / "acceptance-release-iso.sh"
@@ -618,6 +619,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn('--report "$report"', source)
         self.assertNotIn("--password plebian", source)
         self.assertIn("manifest must omit retired key", source)
+        self.assertIn('embedded Ollama carrier ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz', source)
 
 
 if __name__ == "__main__":

@@ -454,6 +454,29 @@ class VmBuilderEnvTests(unittest.TestCase):
             [vm.REMASTER, "", str(out), str(carrier.resolve())],
         )
 
+    def test_build_iso_defaults_the_carrier_from_the_shared_environment(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            out = root / "out.iso"
+            seed = root / "preseed.cfg"
+            carrier = root / "ollama carrier.tar.xz"
+            seed.write_text("seed\n")
+
+            def fake_run(_argv, **kwargs):
+                out.write_bytes(b"iso")
+                self.assertEqual(
+                    kwargs["env"]["PLEBIAN_OS_OLLAMA_CARRIER"], str(carrier))
+
+            with mock.patch.dict(os.environ, {
+                    "PLEBIAN_OS_OLLAMA_CARRIER": str(carrier)}), \
+                    mock.patch.object(vm, "run", side_effect=fake_run) as run:
+                vm.build_iso(cfg(), seed, out, False)
+
+        self.assertEqual(
+            run.call_args.args[0],
+            [vm.REMASTER, "", str(out), str(carrier)],
+        )
+
     def test_acceptance_checks_coordinated_source_allocation(self):
         source = (ROOT / "build" / "build_vm_image.py").read_text()
         self.assertIn('"coordinated checkouts"', source)

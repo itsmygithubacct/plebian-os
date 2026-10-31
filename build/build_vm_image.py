@@ -932,6 +932,8 @@ def runtime_build_env(cfg: Config) -> dict[str, str]:
 def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool,
               *, ollama_carrier: Path | None = None,
               replace_warnings: bool = False) -> Path:
+    if ollama_carrier is None and os.environ.get("PLEBIAN_OS_OLLAMA_CARRIER"):
+        ollama_carrier = Path(os.environ["PLEBIAN_OS_OLLAMA_CARRIER"])
     info(f"building installer ISO via {REMASTER.name} (custom preseed baked in)")
     # AUTOBOOT makes the ISO's boot menu auto-select the install entry — a VM
     # build has no one to press a key at the menu.
@@ -940,9 +942,10 @@ def build_iso(cfg: Config, preseed: Path | None, out_iso: Path, dry_run: bool,
     if dry_run:
         seed = preseed if preseed is not None else "<generated preseed>"
         carrier_arg = (
-            str(ollama_carrier) if ollama_carrier is not None
+            shlex.quote(str(ollama_carrier)) if ollama_carrier is not None
             else "<required Ollama carrier for 0.2.2>"
         )
+        info(f"Ollama carrier: {ollama_carrier or '<unset; required for 0.2.2>'}")
         info(f"+ PLEBIAN_OS_AUTOBOOT=1 PLEBIAN_OS_UNATTENDED_DISK=1 "
              f"PLEBIAN_OS_PRESEED={seed} {REMASTER} '' {out_iso} {carrier_arg}")
         return out_iso
@@ -2506,7 +2509,10 @@ def main() -> None:
     ap.add_argument("--iso", type=Path, help="use this prebuilt ISO (skip building)")
     ap.add_argument(
         "--ollama-carrier", type=Path,
-        help="pinned offline 0.2.2 Ollama runtime carrier used while building an ISO",
+        default=(Path(os.environ["PLEBIAN_OS_OLLAMA_CARRIER"])
+                 if os.environ.get("PLEBIAN_OS_OLLAMA_CARRIER") else None),
+        help=("pinned offline 0.2.2 Ollama runtime carrier used while building "
+              "an ISO (defaults to PLEBIAN_OS_OLLAMA_CARRIER)"),
     )
     ap.add_argument(
         "--interactive-installer", action="store_true",

@@ -133,6 +133,7 @@ export PLEBIAN_OS_REF PLEBIAN_OS_RELEASE PLEBIAN_OS_RELEASE_MODE
 export PLEBIAN_OS_LIVE_SECURITY_UPDATES
 echo "acceptance-vm: candidate $PLEBIAN_OS_ACCEPTANCE_RELEASE @ $candidate_commit"
 echo "acceptance-vm: manifest sha256 $manifest_sha256"
+echo "acceptance-vm: Ollama carrier ${PLEBIAN_OS_OLLAMA_CARRIER:-<unset; required for 0.2.2>}"
 
 exec "$HERE/build_vm_image.py" \
     --yes \

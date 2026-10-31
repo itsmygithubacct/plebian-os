@@ -32,6 +32,46 @@ not a missing pin. Live package versions can change between installations;
 `/var/lib/plebian-os/packages.list` and `apt-sources.list` record the versions
 and indexes actually used.
 
+Plebian-OS 0.2.2 also requires the offline Ollama runtime carrier. Keep the
+archive outside the source checkout and name it through the shared
+`PLEBIAN_OS_OLLAMA_CARRIER` environment variable; every ISO-building wrapper
+passes that value through. The remaster command also accepts the carrier as
+argument 3. If both forms are set, they must resolve to the same file. The
+existing size and SHA-256 pins in `releases/0.2.2.env` are the byte acceptance
+check; no carrier download is performed.
+
+For example, from the clean `v0.2.2` checkout, with the release asset available
+locally:
+
+```sh
+version=0.2.2
+export PLEBIAN_OS_OLLAMA_CARRIER=/path/to/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz
+PLEBIAN_OS_RELEASE="$version" build/remaster-iso.sh '' \
+    "plebian-os-${version}-amd64.iso"
+sha256sum "plebian-os-${version}-amd64.iso"
+```
+
+The same variable is honored by `build/acceptance-vm.sh`, `build/make-usb.sh`,
+`build/install-vm-from-usb-iso.sh`, and `build/build_usb_image.py`. This command
+builds the USB-style ISO without flashing a device:
+
+```sh
+PLEBIAN_OS_OLLAMA_CARRIER=/path/to/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz \
+    build/make-usb.sh
+```
+
+The `build/acceptance-release-iso.sh` lane consumes an already-built ISO and
+reports the embedded carrier size and digest; it does not remaster the ISO.
+
+The carrier is a deterministic archive of the verified Kilix Ollama source
+closure and includes that closure's notices. Its 0.2.2 pin is **20,689,764
+bytes**, SHA-256
+`47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914`. Publish
+`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` alongside the ISO as a release
+asset, and include both files in `SHA256SUMS`. Anyone with the tagged source
+checkout and this carrier asset can rebuild the ISO without rebuilding or
+downloading the runtime binary.
+
 Do not substitute an ISO from `artifacts/acceptance/`. Those images are
 non-publishable test derivatives: they boot unattended, erase the target disk,
 carry volume label `PLEBIAN-TEST-ERASES-DISK`, and have sibling warning files.
@@ -365,6 +405,23 @@ together.
    sha256sum "plebian-os-<x.y.z>-amd64.iso"
    ```
 
+   For 0.2.2, set `PLEBIAN_OS_OLLAMA_CARRIER` to the local
+   `ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` release asset before building.
+   The manifest requires exactly 20,689,764 bytes with SHA-256
+   `47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914`.
+   The carrier is built from the verified Kilix Ollama source closure and
+   carries its notices. Keep it next to the ISO for publication; it is an
+   input asset and is never committed to the source repository. Generate the
+   release checksum list from the directory containing both assets:
+
+   ```sh
+   sha256sum "plebian-os-0.2.2-amd64.iso" \
+       "ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz" > SHA256SUMS
+   ```
+
+   `SHA256SUMS` covers both the ISO and carrier. The tagged source checkout plus
+   the published carrier asset is sufficient to reproduce the ISO.
+
 Before the VM lanes, the bounded source controls can be recorded separately:
 
 ```sh
@@ -611,12 +668,19 @@ release upgrade, physical or human acceptance gate. Retain the report and
    lane at 0/1.
 7. Re-check that every local tag resolves to the reviewed commit and that all
    worktrees remain clean. Only then push the four tags and publish the strict
-   release artifact, its checksum, and a checksummed release source archive
-   containing the exact tracked artwork, editable source, attribution, license
-   text, and provenance records used for the image. Publish that source archive
-   and provenance alongside the ISO as release assets, rather than relying only
-   on a mutable branch checkout. These records support review and redistribution;
-   they are evidence of the release inputs, not a legal opinion or guarantee.
+   release artifacts and their checksum list. For 0.2.2, attach the ISO and
+   `ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` together; the carrier is exactly
+   20,689,764 bytes with SHA-256
+   `47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914`, and
+   `SHA256SUMS` must cover both. The carrier is built from the Kilix Ollama
+   source closure and contains its notices, so a user can rebuild the ISO from
+   the tagged source plus that asset. Also publish a checksummed release source
+   archive containing the exact tracked artwork, editable source, attribution,
+   license text, and provenance records used for the image. Publish that source
+   archive and provenance alongside the ISO as release assets, rather than
+   relying only on a mutable branch checkout. These records support review and
+   redistribution; they are evidence of the release inputs, not a legal
+   opinion or guarantee.
 
 If validation fails before publication, fix the problem in new commits and
 delete/recreate only the **unpublished local candidate tags**. Once any tag is
