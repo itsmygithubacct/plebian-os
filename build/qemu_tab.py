@@ -1,0 +1,81 @@
+"""Launch the builder's foreground QEMU in one owned Kilix tab.
+
+The caller supplies a fresh private VM directory. The tab owns QEMU through
+kilix run; the builder never signals a PID from a file or adopts an existing VM.
+"""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import secrets
+import shutil
+import socket
+import subprocess
+import time
+
+
+def require_host() -> tuple[list[str], str]:
+    kitten = shutil.which(os.environ.get("KILIX_KITTEN") or "kitten")
+    kilix = shutil.which("kilix")
+    address = os.environ.get("KITTY_LISTEN_ON")
+    if not kitten or not kilix or not address:
+        raise RuntimeError("QEMU tabs require kilix, kitten and KITTY_LISTEN_ON; "
+                           "run inside Kilix or choose --gui --external-window")
+    remote = [kitten, "@", "--to", address]
+    password = os.environ.get("KILIX_RC_PASSWORD_FILE")
+    if password:
+        remote += ["--password-file", password]
+    # Refuse before disk creation when remote control is unavailable.
+    subprocess.run([*remote, "ls"], check=True, capture_output=True,
+                   timeout=10)
+    return remote, kilix
+
+
+def _ready(directory: Path) -> bool:
+    # Only read the greeting, never send a VM lifecycle command. A live QMP
+    # listener is stronger evidence than a pidfile written during early init.
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.2)
+            connection.connect(str(directory / "qmp.sock"))
+            with connection.makefile("rb") as stream:
+                greeting = json.loads(stream.readline(65536))
+        return isinstance(greeting, dict) and isinstance(greeting.get("QMP"), dict)
+    except (OSError, ValueError):
+        return False
+
+
+def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20) -> None:
+    remote, kilix = require_host()
+    if any((directory / name).exists() or (directory / name).is_symlink()
+           for name in ("qemu.pid", "qmp.sock")):
+        raise RuntimeError("QEMU tab requires a fresh VM launch directory")
+    if "-daemonize" in argv:
+        raise ValueError("QEMU in a tab must remain in the foreground")
+    marker = "KILIX_VM_LAUNCH=" + secrets.token_hex(16)
+    command = [*remote, "launch", "--type=tab", "--keep-focus",
+               "--tab-title", title, "--cwd", str(Path.cwd()),
+               "--env", marker, "--env", "KILIX_IN_OVERLAY=1",
+               "--", kilix, "run", *argv]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True,
+                                text=True, timeout=10)
+        if not result.stdout.strip().isascii() or not result.stdout.strip().isdigit():
+            raise RuntimeError("Kilix did not return a pane ID for the QEMU tab")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if _ready(directory):
+                return
+            time.sleep(0.1)
+        raise RuntimeError("QEMU tab did not become ready; check Kilix embedding dependencies")
+    except BaseException as error:
+        # Match our unguessable launch environment even when launch timed out
+        # or returned a malformed ID. Never close by title or signal a PID.
+        try:
+            subprocess.run([*remote, "close-window", "--match", "env:" + marker],
+                           check=True, capture_output=True, timeout=10)
+        except Exception as cleanup_error:
+            raise RuntimeError(f"QEMU launch failed ({error}); tab cleanup failed "
+                               f"({cleanup_error}); inspect {marker}") from error
+        raise

@@ -642,6 +642,34 @@ class SelectedClosureGateTests(unittest.TestCase):
 
 
 class VmBuilderEnvTests(unittest.TestCase):
+    def test_external_window_requires_graphical_qemu(self):
+        for arguments in (["--target", "qemu"], ["--target", "virtualbox", "--gui"]):
+            with self.subTest(arguments=arguments), \
+                    mock.patch.object(sys, "argv", ["build_vm_image.py", "--dry-run",
+                                                   "--external-window", *arguments]), \
+                    mock.patch.object(vm, "qemu_create") as create:
+                with self.assertRaises(SystemExit):
+                    vm.main()
+                create.assert_not_called()
+
+    def test_qemu_gui_defaults_to_foreground_tab_but_external_is_explicit(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(vm.qemu_tab, "launch") as tab, \
+                mock.patch.object(vm, "run") as invoke:
+            directory = Path(td) / "VM with spaces"
+            iso = Path(td) / "installer with spaces.iso"
+            vm.qemu_start(cfg(gui=True), iso, directory)
+            argv, title, selected = tab.call_args.args
+            self.assertEqual(selected, directory)
+            self.assertIn(f"file={iso},media=cdrom,readonly=on", argv)
+            self.assertEqual(argv[argv.index("-display") + 1], "gtk")
+            self.assertNotIn("-daemonize", argv)
+            invoke.assert_not_called()
+            tab.reset_mock()
+            vm.qemu_start(cfg(gui=True, external_window=True), iso, directory)
+            tab.assert_not_called()
+            self.assertEqual(invoke.call_args.args[0], [*argv, "-daemonize"])
+
     def test_qemu_creates_private_sparse_disk_and_boots_installer_once(self):
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.object(vm, "storage_dir", return_value=Path(td)), \

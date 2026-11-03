@@ -341,6 +341,23 @@ rm -f plebian-os-<name>.iso
 - [`../provision/plebian-os-provision.sh`](../provision/plebian-os-provision.sh)
   — the first-boot provisioner
 
+### QEMU graphical display
+
+`--target qemu --gui` opens one Kilix tab and keeps focus on the builder.
+Run from a Kilix session with `kilix` and `kitten` on PATH and working remote
+control (`KITTY_LISTEN_ON`, plus `KILIX_RC_PASSWORD_FILE` when required).
+The tab runs QEMU in the foreground through `kilix run`, using the same
+private-display dependencies as other graphical apps. The builder waits for
+the new guest's QMP greeting before reporting it started. A refused or failed
+launch closes only its marked tab; no external window is used as a fallback.
+A cleanup refusal is reported so the remaining tab can be inspected.
+
+Closing the tab stops the VM. Shut down the guest normally before closing it
+to protect its filesystem. `--target qemu --gui --external-window` retains the
+native GTK window and detached VM behavior. Without `--gui`, QEMU remains
+headless and detached. `--external-window` is rejected for other targets or
+without `--gui`. The builder never adopts an existing VM directory.
+
 ### QEMU EFI
 
 `--target qemu --firmware efi` uses OVMF with a private copy of the variable
