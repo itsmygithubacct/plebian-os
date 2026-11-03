@@ -95,6 +95,66 @@ class IntegrationTest(unittest.TestCase):
         self.manifest['sources'].append(entry)
         with self.assertRaisesRegex(module.Invalid, 'duplicate source directory'): self.verify()
 
+    def test_raw_bytes_are_checked_when_stat_cache_matches(self):
+        import os
+        path = self.repo / "code"
+        info = path.stat()
+        os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns - 10_000_000_000))
+        self.git("update-index", "--refresh")
+        info = path.stat()
+        self.git("config", "core.trustctime", "false")
+        path.write_bytes(b"changed\n")
+        os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
+        with self.assertRaisesRegex(module.Invalid, "raw blob identity"):
+            self.verify()
+
+    def test_filters_cannot_hide_bytes_or_execute(self):
+        import shlex
+        import sys
+        attributes = self.root / "attributes"
+        attributes.write_text("code filter=conceal\n")
+        marker = self.root / "filter-ran"
+        script = self.root / "filter.py"
+        script.write_text("import pathlib,sys\nsys.stdin.read()\npathlib.Path(" +
+                          repr(str(marker)) + ").touch()\nsys.stdout.write('fixture\\n')\n")
+        self.git("config", "core.attributesFile", str(attributes))
+        self.git("config", "filter.conceal.clean",
+                 shlex.quote(sys.executable) + " " + shlex.quote(str(script)))
+        (self.repo / "code").write_bytes(b"changed\n")
+        with self.assertRaisesRegex(module.Invalid, "raw blob identity"):
+            self.verify()
+        self.assertFalse(marker.exists())
+
+    def test_executable_mode_is_checked_despite_git_configuration(self):
+        self.git("config", "core.filemode", "false")
+        (self.repo / "code").chmod(0o755)
+        with self.assertRaisesRegex(module.Invalid, "executable mode"):
+            self.verify()
+
+    def test_raw_identity_supports_symlinks_and_unusual_names(self):
+        (self.repo / "spaced name\nwith newline").write_bytes(b"raw bytes\x00end")
+        (self.repo / "link").symlink_to("../not-followed")
+        self.git("add", ".")
+        self.git("commit", "-qm", "Symlink and unusual filename fixture")
+        self.manifest["sources"][0].update(head=self.git("rev-parse", "HEAD"),
+                                           tree=self.git("rev-parse", "HEAD^{tree}"))
+        self.assertEqual(self.verify()["identity"], "verified")
+        (self.repo / "link").unlink()
+        (self.repo / "link").symlink_to("../different-target")
+        with self.assertRaisesRegex(module.Invalid, "raw blob identity"):
+            self.verify()
+
+    def test_fsmonitor_helper_is_not_executed(self):
+        import shlex
+        import sys
+        marker = self.root / "monitor-ran"
+        script = self.root / "monitor.py"
+        script.write_text("import pathlib\npathlib.Path(" + repr(str(marker)) + ").touch()\n")
+        self.git("config", "core.fsmonitor",
+                 shlex.quote(sys.executable) + " " + shlex.quote(str(script)))
+        self.assertEqual(self.verify()["identity"], "verified")
+        self.assertFalse(marker.exists())
+
     def test_index_flags_cannot_hide_modified_source(self):
         for flag in ("--assume-unchanged", "--skip-worktree"):
             with self.subTest(flag=flag):

@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import subprocess
 
 
@@ -53,11 +54,49 @@ def local(root, value):
 
 def git(path, *args):
     # Status must not refresh/write the caller's index during a read-only audit.
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
-    result = subprocess.run(["git", "-C", str(path), *args], check=False,
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_NO_REPLACE_OBJECTS="1")
+    result = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(path), *args], check=False,
                             capture_output=True, text=True, timeout=60, env=env)
     require(result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
+
+
+def worktree_entries(path, key):
+    """Compare raw worktree bytes/modes with HEAD, independent of Git stat caches.
+
+    Never invoke clean filters or filesystem-monitor helpers. Canonicalized or
+    transformed checkouts are not exact source-byte identities for this audit.
+    """
+    links = {}
+    for record in git(path, "ls-tree", "-r", "-z", "HEAD").split("\0"):
+        if not record:
+            continue
+        metadata, name = record.split("\t", 1)
+        mode, kind, expected = metadata.split()
+        if mode == "160000":
+            links[name] = expected
+            continue
+        item = path / name
+        require(item.parent.resolve().is_relative_to(path.resolve()),
+                f"{key}: tracked parent escapes source")
+        info = item.lstat()
+        digest = hashlib.sha1()
+        if mode == "120000":
+            require(stat.S_ISLNK(info.st_mode), f"{key}: dirty source (symlink type)")
+            target = os.fsencode(os.readlink(item))
+            digest.update(f"blob {len(target)}\0".encode())
+            digest.update(target)
+        else:
+            require(mode in ("100644", "100755") and stat.S_ISREG(info.st_mode),
+                    f"{key}: dirty source (file type)")
+            require(bool(info.st_mode & stat.S_IXUSR) == (mode == "100755"),
+                    f"{key}: dirty source (executable mode)")
+            digest.update(f"blob {info.st_size}\0".encode())
+            with item.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+        require(digest.hexdigest() == expected, f"{key}: dirty source (raw blob identity)")
+    return links
 
 
 def indexed(rows, label):
@@ -114,14 +153,12 @@ def verify(manifest, root):
         flags = git(path, "ls-files", "-v", "-z").split("\0")
         require(all(not row or (row[0] != "S" and not row[0].islower()) for row in flags),
                 f"{key}: assume-unchanged or skip-worktree index entries")
-        require(not git(path, "status", "--porcelain", "--untracked-files=all",
-                        "--ignore-submodules=none"), f"{key}: dirty source")
-        links = {}
-        for line in git(path, "ls-tree", "-r", "HEAD").splitlines():
-            metadata, name = line.split("\t", 1)
-            mode, kind, sha = metadata.split()
-            if mode == "160000":
-                links[name] = sha
+        links = worktree_entries(path, key)
+        require(not git(path, "diff-index", "--cached", "--no-ext-diff", "--no-textconv",
+                        "--ignore-submodules=none", "--name-only", "HEAD", "--"),
+                f"{key}: dirty source (index)")
+        require(not git(path, "ls-files", "--others", "--exclude-standard", "-z"),
+                f"{key}: dirty source (untracked files)")
         declared = entry["gitlinks"]
         require(isinstance(declared, dict) and declared == links, f"{key}: gitlink inventory mismatch")
         for name, sha in links.items():

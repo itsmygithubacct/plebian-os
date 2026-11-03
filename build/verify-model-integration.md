@@ -26,7 +26,12 @@ The JSON schema identifier is `plebian-os.model-integration/v1`. Required fields
   to its exact commit. Each source must be clean, have connected full history,
   own its Git directory and have no alternates. The declared path must be the
   actual Git worktree; assume-unchanged and skip-worktree entries are refused
-  because they can hide changed tracked files. Git index refresh is disabled. Every unverified child checkout
+  because they can hide changed tracked files. Raw tracked file bytes, symlink
+  targets and executable bits must match Git blobs and modes, independent of
+  timestamp caches, clean filters or `core.filemode`. Transformed checkouts are
+  refused. Git index refresh, replacement objects and filesystem-monitor helpers
+  are disabled; source verification does not run clean filters. Staged and
+  untracked changes are also refused. Every unverified child checkout
   produces a gap; listing a parent commit does not establish recursive closure.
 - `profiles`: nonempty records with unique `id`, nonempty `sources` and `files`
   lists referencing those inventories, and descriptive `abi`, `cpu`, `install`,
