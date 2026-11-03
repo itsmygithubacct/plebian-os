@@ -32,6 +32,8 @@ if 'close-window' in sys.argv:
 if 'launch' in sys.argv:
     print(os.environ.get('PANE_ID', '42'))
     sys.exit(int(os.environ.get('LAUNCH_RC', '0')))
+if 'ls' in sys.argv:
+    print(os.environ.get('LS_REPLY', ''))
 sys.exit(int(os.environ.get('LS_RC', '0')))
 ''')
         kitten.chmod(0o755)
@@ -93,6 +95,25 @@ sys.exit(int(os.environ.get('LS_RC', '0')))
         with patch.dict(os.environ, {'CLOSE_RC': '1'}):
             with self.assertRaisesRegex(RuntimeError, 'tab cleanup failed'):
                 qemu_tab.launch(['qemu-system-x86_64'], 'VM', self.vm, timeout=0)
+
+    def test_already_exited_tab_requires_authenticated_empty_match(self):
+        for reply, accepted in (("[]", True), ('[{"tabs": []}]', True),
+                                ('[{"tabs": [{"windows": [{}]}]}]', False),
+                                (json.dumps([{'tabs':[{'windows':[{'env':{'KILIX_VM_LAUNCH':'a'*32}}]}]}]), False),
+                                (json.dumps([{'tabs':[{'windows':[{'env':{'KILIX_VM_LAUNCH':'b'*32}}]}]}]), True),
+                                ('{"error": "denied"}', False), ("invalid", False)):
+            with self.subTest(reply=reply), patch.dict(os.environ, {"CLOSE_RC": "1", "LS_REPLY": reply}):
+                if accepted:
+                    qemu_tab._close_owned([str(self.root / "kitten")], "KILIX_VM_LAUNCH=" + "a" * 32)
+                else:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        qemu_tab._close_owned([str(self.root / "kitten")], "KILIX_VM_LAUNCH=" + "a" * 32)
+                close, inspect = self.calls()[-2:]
+                self.assertEqual(inspect, ["ls", "--all-env-vars"])
+                self.assertEqual(inspect[0], "ls")
+        with patch.dict(os.environ, {"CLOSE_RC": "1", "LS_REPLY": "[]", "LS_RC": "1"}):
+            with self.assertRaises(subprocess.CalledProcessError):
+                qemu_tab._close_owned([str(self.root / "kitten")], "KILIX_VM_LAUNCH=" + "a" * 32)
 
     def test_existing_vm_state_and_detach_are_refused(self):
         (self.vm / 'qemu.pid').write_text('123')

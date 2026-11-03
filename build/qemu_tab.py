@@ -55,6 +55,47 @@ def _ready(directory: Path) -> bool:
         return False
 
 
+def _marker_absent(payload, marker: str) -> bool:
+    """Require a complete window/environment listing before proving absence."""
+    name, value = marker.split("=", 1)
+    if not isinstance(payload, list):
+        return False
+    for os_window in payload:
+        if not isinstance(os_window, dict) or not isinstance(os_window.get("tabs"), list):
+            return False
+        for tab in os_window["tabs"]:
+            if not isinstance(tab, dict) or not isinstance(tab.get("windows"), list):
+                return False
+            for window in tab["windows"]:
+                if not isinstance(window, dict) or not isinstance(window.get("env"), dict):
+                    return False
+                environment = window["env"]
+                if not all(isinstance(v, str) for v in environment.values()):
+                    return False
+                if environment.get(name) == value:
+                    return False
+    return True
+
+
+def _close_owned(remote: list[str], marker: str) -> None:
+    match = "env:" + marker
+    try:
+        subprocess.run([*remote, "close-window", "--match", match],
+                       check=True, capture_output=True, timeout=10)
+    except Exception:
+        # A short-lived app may already have closed its tab. Prove absence
+        # through an authenticated complete listing; never suppress a refusal
+        # while a matching tab remains or its state cannot be inspected.
+        try:
+            result = subprocess.run([*remote, "ls", "--all-env-vars"],
+                                    check=True, capture_output=True, text=True, timeout=10)
+            if _marker_absent(json.loads(result.stdout), marker):
+                return
+        except Exception:
+            pass
+        raise
+
+
 def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20) -> None:
     remote, kilix = require_host()
     if any((directory / name).exists() or (directory / name).is_symlink()
@@ -89,8 +130,7 @@ def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20)
         # Match our unguessable launch environment even when launch timed out
         # or returned a malformed ID. Never close by title or signal a PID.
         try:
-            subprocess.run([*remote, "close-window", "--match", "env:" + marker],
-                           check=True, capture_output=True, timeout=10)
+            _close_owned(remote, marker)
         except Exception as cleanup_error:
             raise RuntimeError(f"QEMU launch failed ({error}); tab cleanup failed "
                                f"({cleanup_error}); inspect {marker}") from error
