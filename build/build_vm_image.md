@@ -348,7 +348,9 @@ Run from a Kilix session with `kilix` and `kitten` on PATH and working remote
 control (`KITTY_LISTEN_ON`, plus `KILIX_RC_PASSWORD_FILE` when required).
 The tab runs QEMU in the foreground through `kilix run`, using the same
 private-display dependencies as other graphical apps. The builder waits for
-the new guest's QMP greeting before reporting it started. A refused or failed
+both the new guest's QMP greeting and Kilix's first rendered-content receipt
+before reporting it started. This requires a Kilix host supporting
+`KILIX_RUN_READY_FILE`; an older host times out and the launch is cleaned up. A refused or failed
 launch closes only its marked tab; no external window is used as a fallback.
 A cleanup refusal is reported so the remaining tab can be inspected.
 

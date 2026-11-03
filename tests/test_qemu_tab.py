@@ -14,7 +14,9 @@ import qemu_tab
 
 class QemuTabTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # UNIX socket paths are bounded; a caller's long TMPDIR must not
+        # turn this transport fixture into an unrelated AF_UNIX failure.
+        self.tmp = tempfile.TemporaryDirectory(prefix="qemu-tab-", dir="/tmp")
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.log = self.root / 'calls'
@@ -60,6 +62,7 @@ sys.exit(int(os.environ.get('LS_RC', '0')))
         self.assertIn('--keep-focus', launch)
         self.assertIn('--type=tab', launch)
         self.assertIn('KILIX_IN_OVERLAY=1', launch)
+        self.assertIn(f'KILIX_RUN_READY_FILE={self.vm / "tab.ready"}', launch)
         self.assertNotIn('-daemonize', launch)
         self.assertEqual(launch[launch.index('--password-file') + 1],
                          str(self.root / 'password with space'))
@@ -102,9 +105,17 @@ sys.exit(int(os.environ.get('LS_RC', '0')))
                 qemu_tab.launch(['qemu-system-x86_64'], 'VM', self.vm)
         self.assertIn('close-window', self.calls()[-1])
 
+    def test_content_readiness_is_required_even_with_qmp_available(self):
+        with patch.object(qemu_tab.socket, 'socket') as connection:
+            self.assertFalse(qemu_tab._ready(self.vm))
+            (self.vm / 'tab.ready').write_bytes(b'partial')
+            self.assertFalse(qemu_tab._ready(self.vm))
+            connection.assert_not_called()
+
     def test_qmp_greeting_is_required(self):
         import socket
         import threading
+        (self.vm / 'tab.ready').write_bytes(b'content-ready\n')
         for greeting, expected in ((b'{"QMP": {}}\r\n', True),
                                    (b'{"error": {}}\n', False), (b'garbage\n', False)):
             with self.subTest(greeting=greeting):

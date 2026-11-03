@@ -33,6 +33,13 @@ def require_host() -> tuple[list[str], str]:
 
 
 def _ready(directory: Path) -> bool:
+    # QMP can listen before display capture fails. Require the host's first
+    # rendered-content receipt as well as the guest's live greeting.
+    try:
+        if (directory / "tab.ready").read_bytes() != b"content-ready\n":
+            return False
+    except OSError:
+        return False
     # Only read the greeting, never send a VM lifecycle command. A live QMP
     # listener is stronger evidence than a pidfile written during early init.
     try:
@@ -49,7 +56,7 @@ def _ready(directory: Path) -> bool:
 def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20) -> None:
     remote, kilix = require_host()
     if any((directory / name).exists() or (directory / name).is_symlink()
-           for name in ("qemu.pid", "qmp.sock")):
+           for name in ("qemu.pid", "qmp.sock", "tab.ready")):
         raise RuntimeError("QEMU tab requires a fresh VM launch directory")
     if "-daemonize" in argv:
         raise ValueError("QEMU in a tab must remain in the foreground")
@@ -57,6 +64,7 @@ def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20)
     command = [*remote, "launch", "--type=tab", "--keep-focus",
                "--tab-title", title, "--cwd", str(Path.cwd()),
                "--env", marker, "--env", "KILIX_IN_OVERLAY=1",
+               "--env", f"KILIX_RUN_READY_FILE={directory / 'tab.ready'}",
                "--", kilix, "run", *argv]
     try:
         result = subprocess.run(command, check=True, capture_output=True,
