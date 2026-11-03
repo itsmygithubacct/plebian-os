@@ -372,6 +372,7 @@ readonly PROVISION_VOICE_WEIGHTS=0
 PROVISION_COMPLETED_MARKER=/var/lib/plebian-os/provisioned
 PROVISION_VOICE_ASSETS_BEFORE=()
 PROVISION_VOICE_CENSUS_TAKEN=0
+PROVISION_DEFAULT_MODELS_VERIFIED=0
 # Android is an explicit release feature because its verified images are large.
 # The 0.2.0 release requirements enable it; uncoordinated provisioning stays
 # opt-in instead of silently downloading roughly a gigabyte.
@@ -520,7 +521,7 @@ if [ -z "$PLEBIAN_OS_VERSION" ] && [ -r /etc/plebian-os/build-info.env ]; then
     _build_info_version="$(
         sed -n 's/^PLEBIAN_OS_VERSION=//p' /etc/plebian-os/build-info.env 2>/dev/null
     )"
-    if [[ "$_build_info_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ "$_build_info_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]]; then
         PLEBIAN_OS_VERSION="$_build_info_version"
     fi
 fi
@@ -846,7 +847,7 @@ preflight_ollama_carrier() {
 }
 
 scan_ollama_carrier_arguments "$@"
-if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ] \
+if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] \
     && [ "$OLLAMA_PREFLIGHT_SKIP" = 0 ] \
     && [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ]; then
     preflight_ollama_carrier
@@ -1313,7 +1314,7 @@ validate_qt_release_closure() {
     for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
@@ -1341,7 +1342,7 @@ validate_native_release_closure() {
         PLEBIAN_OS_NATIVE_CONTENT_REF; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 5 ] || {
@@ -1476,7 +1477,7 @@ refuse_amd64_only_inputs() {
     esac
     # The required converter is embedded in this OS source, not an optional
     # session feature. Do not let feature overrides certify a partial release.
-    if [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.2 ]; then
+    if [[ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
         die "0.2.2 has no source-qualified ARM64 closure: required EnCodec converter, native runtime and patched Qt/player artifacts must be selected together; installed stack unchanged"
     fi
     [ "$INSTALL_WAYDROID" != 1 ] \
@@ -3687,7 +3688,7 @@ install_desktop_wallpaper() {
 install_version_marker() {
     local dest_dir tmp path owner mode
 
-    if ! [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if ! [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]]; then
         [ "$PLEBIAN_OS_RELEASE_MODE" != 1 ] \
             || die "release provisioning requires a semantic Plebian-OS version marker"
         warn "not installing a VERSION marker for non-semantic version '$PLEBIAN_OS_VERSION'"
@@ -5628,6 +5629,33 @@ checkout_pinned_ref() {
 }
 
 
+install_model_setup_software() {
+    local helper
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    for helper in /usr/local/sbin/plebian-os-install-ollama-converter \
+                  /usr/local/sbin/plebian-os-install-diarization-converter; do
+        if [ "${DRY_RUN:-0}" = 1 ]; then
+            log "would install model conversion software with $helper (no model weights)"
+            continue
+        fi
+        [ -x "$helper" ] && [ ! -L "$helper" ] \
+            || die "required model software installer is missing or unsafe: $helper"
+        "${elevate[@]}" "$helper" \
+            || die "required model conversion software installation failed: $helper"
+    done
+}
+
+install_kilix_needle() {
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install the catalog-pinned Needle application as $TARGET_USER"
+        return 0
+    fi
+    as_user env "${install_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-needle \
+        || die "required Needle application installation failed"
+}
+
 install_waydroid_application() {
     [ "$INSTALL_WAYDROID" = 1 ] || return 0
     [[ "$KILIX_WAYDROID_REF" =~ ^[0-9a-f]{40}$ ]] \
@@ -6160,6 +6188,15 @@ verify_kilix_voice_install() {
     # ran, because presence alone cannot say who put it there.
     while IFS= read -r asset; do
         [ -n "$asset" ] || continue
+        # 0.2.2.1 supplies these two assets from the checksummed default
+        # bundle. Admission requires successful Content verification below;
+        # optional models and promoted voice generations retain their checks.
+        if [ "$PROVISION_DEFAULT_MODELS_VERIFIED" = 1 ]; then
+            case "$asset" in
+                "$KILIX_DATA_HOME/desktop-apps/assets/vosk-model-small-en-us-0.15"|\
+                "$KILIX_DATA_HOME/desktop-apps/assets/whistle") continue ;;
+            esac
+        fi
         if voice_asset_predates_this_run "$asset"; then
             carried_paths+=("$asset")
         else
@@ -6266,13 +6303,13 @@ verify_kilix_voice_install() {
         return 0
     fi
     if [ "$carried_is_the_users" = 1 ]; then
-        log "voice: read-aloud is ready; this run installed no model weights and left the dictation assets already on this machine alone (${carried_paths[*]})"
+        log "voice: read-aloud is ready; verified the release default bundle and left other existing dictation assets alone (${carried_paths[*]})"
     elif [ "$INSTALL_VOICE_MODEL" = 1 ]; then
         # Deliberately no command to run. At KILIX_REF the pinned Kilix
         # closure carries no first-use flow, so naming one here would send the
         # user at something this image cannot execute. See releases/0.2.2-notes.md,
         # "Known limitation: the first-use route is not in the pinned closure".
-        log "voice: read-aloud is ready and no model weights were installed; this release advertises the dictation model as a first-use pull, which becomes reachable when the pinned Kilix closure carries kilix-content's first-use flow"
+        log "voice: read-aloud is ready; release default assets are installed in Content and optional dictation assets retain first-use setup"
     else
         log "voice: all read-aloud tools execute; dictation assets were explicitly skipped"
     fi
@@ -6625,7 +6662,7 @@ fi
 normalize_accounts_service_package_directory
 
 install_ollama_runtime_from_carrier() {
-    [ "$PLEBIAN_OS_VERSION" = "0.2.2" ] || return 0
+    [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || return 0
     local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
     local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     # The release manifest and helper arrive from the same remastered ISO.
@@ -6812,6 +6849,8 @@ else
     warn "optional diarization converter installer not found; continuing without it"
 fi
 
+install_model_setup_software
+
 # Likewise, ship the exact source-build helper without invoking it. The native
 # runtime and every model remain a deliberate, later opt-in.
 VULKAN_TTS_INSTALLER_SRC=""
@@ -6857,7 +6896,7 @@ if [ -n "$OLLAMA_RUNTIME_INSTALLER_SRC" ]; then
             /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     fi
 else
-    if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
+    if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
         die "required 0.2.2 Ollama runtime installer is missing"
     fi
     warn "Ollama runtime installer not found; continuing without it"
@@ -7143,6 +7182,13 @@ install_env=(
 record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
+install_kilix_needle
+as_user env "${install_env[@]}" /usr/bin/python3 \
+    "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
+    || die "required offline default model installation failed"
+as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX_DIR/config/default_models.py" verify \
+    || die "default model verification failed"
+PROVISION_DEFAULT_MODELS_VERIFIED=1
 # `pleb install` is the last step that installs packages, and it installs some
 # this repository does not name: its own runtime set, and whatever the pinned
 # Kilix's scripts/install-build-deps.sh pulls in. Either can re-enable a user

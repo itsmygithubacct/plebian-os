@@ -467,7 +467,7 @@ validate_qt_release_closure() {
     for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
@@ -495,7 +495,7 @@ validate_native_release_closure() {
         PLEBIAN_OS_NATIVE_CONTENT_REF; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 5 ] || {
@@ -543,7 +543,7 @@ validate_release_architecture() {
     esac
     # The selected 0.2.2 converter is required and source-embedded. A different
     # wheel or disabled optional feature cannot qualify the complete closure.
-    [ "$TARGET" != 0.2.2 ] || [ "$RELEASE_MANIFEST_STEM" = "$TARGET-arm64" ] \
+    [[ ! "$TARGET" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$RELEASE_MANIFEST_STEM" = "$TARGET-arm64" ] \
         || closure_reject "0.2.2 has no source-qualified ARM64 closure; required converter, native runtime and patched Qt/player artifacts are not selected for ARM64"
     [ "${MANIFEST[PLEBIAN_OS_INSTALL_WAYDROID]:-0}" != 1 ] \
         || closure_reject "selected Waydroid closure is amd64-only"
@@ -573,7 +573,7 @@ refuse_unadmitted_release_architecture() {
         aarch64|arm64) ;;
         *) return 0 ;;
     esac
-    [ "$TARGET" != 0.2.2 ] \
+    [[ ! "$TARGET" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] \
         || closure_reject "0.2.2 ARM64 release admission is closed: releases/$RELEASE_MANIFEST_STEM.env passed closure checks, but ARM64 installer media, voice carrier, Waydroid and installed acceptance are not qualified; installed stack unchanged"
 }
 
@@ -886,7 +886,7 @@ resolve_closure_source() {
     RELEASE_MANIFEST_STEM="$TARGET"
     case "$(uname -m)" in
         aarch64|arm64)
-            [ "$TARGET" != 0.2.2 ] || RELEASE_MANIFEST_STEM="$TARGET-arm64" ;;
+            [[ ! "$TARGET" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || RELEASE_MANIFEST_STEM="$TARGET-arm64" ;;
     esac
     if ! git -C "$SOURCE_DIR" show "$OS_COMMIT:releases/$RELEASE_MANIFEST_STEM.env" >"$STAGE/manifest.env" 2>/dev/null; then
         [ "$RELEASE_MANIFEST_STEM" = "$TARGET" ] \
@@ -1519,7 +1519,7 @@ record_release_value() {
     done
     case "$key" in
         PLEBIAN_OS_RELEASE_MODE) [[ "$value" =~ ^[01]$ ]] || return 2 ;;
-        PLEBIAN_OS_VERSION) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 2 ;;
+        PLEBIAN_OS_VERSION) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 2 ;;
         *) return 2 ;;
     esac
     printf '%s\n' "$value"
@@ -1987,7 +1987,7 @@ record_version="$(record_release_value PLEBIAN_OS_VERSION)" || exit 6
 record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
 if [ "$migrated" = 1 ] \
     && [ "$record_mode" = 1 ] \
-    && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
     && [ "$record_version" != 0.2.2 ] \
     && [ "$(printf '%s\n%s\n' "$record_version" 0.2.2 | sort -V | head -n 1)" = "$record_version" ]; then
     printf '%s\n' "$record_version"
@@ -2207,7 +2207,7 @@ if [ "$mode" = image ]; then
     record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
     if [ "$migrated" = 1 ] \
         && [ "$record_mode" = 1 ] \
-        && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         && [ "$record_version" != 0.2.2 ] \
         && [ "$(printf '%s\n%s\n' "$record_version" 0.2.2 | sort -V | head -n 1)" = "$record_version" ]; then
         printf '%s\n' "$record_version"
@@ -2603,7 +2603,7 @@ case "$MODE" in
     select)
         [ -n "$TARGET" ] \
             || die "name the target release, e.g. plebian-os-select-closure 0.1.8 (try --help)"
-        [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
             || die "invalid release identifier: $TARGET"
         select_closure
         ;;

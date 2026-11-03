@@ -346,7 +346,7 @@ def default_iso_filename(name: str) -> str:
     """Use a publishable, versioned filename for strict release artifacts."""
     if os.environ.get("PLEBIAN_OS_RELEASE_MODE") == "1":
         version = repo_version()
-        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        if not re.fullmatch(r"\d+\.\d+\.\d+(?:\.[1-9][0-9]*)?", version):
             die("release ISO filename requires a semantic PLEBIAN_OS_VERSION")
         return f"plebian-os-{version}-amd64.iso"
     return f"plebian-os-{name}.iso"
@@ -383,7 +383,7 @@ QT_RELEASE_KEYS = (
 
 def validate_qt_release_closure(values: dict[str, str], release: str, mode: str) -> None:
     selected = [values.get(key, "") for key in QT_RELEASE_KEYS]
-    if not any(selected) and (release != "0.2.2" or mode != "1"):
+    if not any(selected) and (not re.fullmatch(r"0\.2\.2(?:\.[1-9][0-9]*)?", release) or mode != "1"):
         return
     if not all(selected):
         die("Qt runtime closure requires all three exact fields")
@@ -412,7 +412,7 @@ def validate_native_release_closure(values: dict[str, str], release: str,
                                     mode: str) -> None:
     """Validate the selected inert package; no archive/model/network operation."""
     selected = [values.get(key, "") for key in NATIVE_RELEASE_KEYS]
-    if not any(selected) and (release != "0.2.2" or mode != "1"):
+    if not any(selected) and (not re.fullmatch(r"0\.2\.2(?:\.[1-9][0-9]*)?", release) or mode != "1"):
         return
     if not all(selected):
         die("native runtime closure requires all five exact PLEBIAN_OS_NATIVE_* fields")
@@ -441,7 +441,7 @@ def apply_release_manifest(release: str | None = None) -> None:
     release = release or os.environ.get("PLEBIAN_OS_RELEASE")
     if not release:
         return
-    if not re.fullmatch(r"\d+\.\d+\.\d+", release):
+    if not re.fullmatch(r"\d+\.\d+\.\d+(?:\.[1-9][0-9]*)?", release):
         die(f"invalid release identifier: {release}")
     manifest = REPO / "releases" / f"{release}.env"
     if not manifest.exists():
@@ -1698,15 +1698,19 @@ SPEECH_WEIGHT_PATHS = (
 )
 
 
-def _no_speech_weights_check() -> str:
+def _no_speech_weights_check(include_default_models: bool = False) -> str:
     """OD-S, as a guest check: a provisioned image carries no speech-model
     weights -- under the promoted small-en-us name ($m), any immutable Vosk
     generation, any other carrier model's directory or its content-store
     asset -- and no dictation library ($l), because at the pinned Kilix Voice
     ref the installer fetches that library only on the same leg that fetches
     the model. $d is KILIX_DATA_HOME and $r the voice install record."""
+    supplied = {'desktop-apps/assets/vosk-model-small-en-us-0.15',
+                'desktop-apps/assets/whistle'} if include_default_models else set()
     others = "".join(f'test ! -e "$d/{path}" && test ! -L "$d/{path}" && '
-                     for path in SPEECH_WEIGHT_PATHS)
+                     for path in SPEECH_WEIGHT_PATHS if path not in supplied)
+    if include_default_models:
+        others += 'timeout 180 python3 "$KILIX_DIR/config/default_models.py" verify >/dev/null && '
     return (
         'test ! -e "$m" && test ! -L "$m" && '
         'test -z "$(find "$d/voice/models" -maxdepth 1 -name \'vosk-model-*\' '
@@ -1718,7 +1722,7 @@ def _no_speech_weights_check() -> str:
     )
 
 
-def _voice_acceptance_command(expected_policy: str) -> str:
+def _voice_acceptance_command(expected_policy: str, include_default_models: bool = False) -> str:
     """Return a guest check for the declared read-aloud/dictation closure."""
     if expected_policy not in ("0", "1"):
         raise ValueError("voice policy must be 0 or 1")
@@ -1727,7 +1731,7 @@ def _voice_acceptance_command(expected_policy: str) -> str:
         'PYTHONPATH="$d/voice/runtime/current/lib/kilix-voice" '
         f'timeout 180 python3 -c {shlex.quote(_voice_read_aloud_smoke_script())}'
     )
-    no_weights = _no_speech_weights_check()
+    no_weights = _no_speech_weights_check(include_default_models)
     catalog_validation = shlex.quote(
         _voice_model_catalog_validation_script())
     command = (
@@ -1997,7 +2001,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
                 ' && printf \'%s\\n\' "$selected" | grep -Fqx '
                 + shlex.quote("  " + key + "=" + os.environ.get(key, ""))
             )
-    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", expected_version):
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?", expected_version):
         provision_version = (
             'test "$(/usr/local/sbin/plebian-os-provision --version)" = '
             + shlex.quote("plebian-os-provision " + expected_version)
@@ -2209,7 +2213,9 @@ if default is not None:
         ("Kilix-95 GUI routing tests", kilix95_routing_contract),
         ("wizard CLI inventory", wizard_inventory_contract),
         ("Kilix-95 wizard and licence terminal tests", kilix95_wizard_contract),
-        ("voice closure policy", _voice_acceptance_command(expected_voice_policy)),
+        ("voice closure policy", _voice_acceptance_command(expected_voice_policy,
+            include_default_models=bool(re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?', expected_version))
+            and tuple(map(int, expected_version.split('.'))) >= (0, 2, 2, 1))),
         ("transcript disk budget", _transcript_acceptance_command()),
         ("visible kilix chrome", visible_kilix_chrome),
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),

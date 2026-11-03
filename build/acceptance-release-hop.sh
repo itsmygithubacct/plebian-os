@@ -73,8 +73,8 @@ done
 
 [ "$disposable" = 1 ] || die "refusing to run without --disposable-vm"
 case "$shape" in image|standalone) ;; *) die "--shape must be image or standalone" ;; esac
-[[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--from must be X.Y.Z"
-[[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--target must be X.Y.Z"
+[[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--from must be X.Y.Z"
+[[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--target must be X.Y.Z"
 [ "$from" != "$target" ] || die "--from and --target must differ"
 for named_ref in "$from_pleb_ref" "$from_kilix_ref"; do
     [[ "$named_ref" =~ ^[0-9a-f]{40}$ ]] || die "starting Pleb and Kilix refs must be full lowercase commit SHAs"
@@ -459,7 +459,7 @@ must "installed-entrypoint-supports-named-hop" "pleb update --to" \
     grep -q -- '--to X.Y.Z' "$report/pleb-update-help.txt"
 "$pleb_bin" update --show >"$report/show-before.txt" 2>"$report/show-before.stderr"
 current="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-before.txt" | head -n 1)"
-[[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+[[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
     || die "could not resolve the installed release from pleb update --show"
 must "starting-release-is-exact" "$current/$from" test "$current" = "$from"
 must "target-differs-from-installed-release" "$current -> $target" test "$current" != "$target"

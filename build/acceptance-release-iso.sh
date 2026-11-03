@@ -63,7 +63,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+[[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
     || { echo "acceptance-release-iso: invalid release: $RELEASE" >&2; exit 1; }
 case "$FIRMWARE" in bios|efi|both) ;; *)
     echo "acceptance-release-iso: firmware must be bios, efi, or both" >&2

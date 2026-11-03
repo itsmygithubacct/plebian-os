@@ -2005,7 +2005,7 @@ validate_qt_release_closure() {
     for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
@@ -2033,7 +2033,7 @@ validate_native_release_closure() {
         PLEBIAN_OS_NATIVE_CONTENT_REF; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 5 ] || {
@@ -3312,20 +3312,20 @@ latest_published_release() {
     refs="$(git ls-remote --refs --tags "$PLEBIAN_OS_REPO" 'refs/tags/v*')" \
         || die "could not query published Plebian-OS releases from $PLEBIAN_OS_REPO"
     latest="$(printf '%s\n' "$refs" \
-        | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ {
+        | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$/ {
                    sub(/^refs\/tags\/v/, "", $2); print $2
                }' \
         | LC_ALL=C sort -V \
         | tail -n 1)"
     [ -n "$latest" ] \
-        || die "no published stable vX.Y.Z release tags were found at $PLEBIAN_OS_REPO"
+        || die "no published stable vX.Y.Z or vX.Y.Z.N release tags were found at $PLEBIAN_OS_REPO"
     printf '%s\n' "$latest"
 }
 
 release_is_newer() {
     local candidate="$1" installed="$2" highest
-    [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
-    [[ "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [[ "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
     [ "$candidate" != "$installed" ] || return 1
     highest="$(printf '%s\n%s\n' "$installed" "$candidate" \
         | LC_ALL=C sort -V | tail -n 1)"
@@ -3343,7 +3343,7 @@ local_candidate_matches_selected_closure() {
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
     _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
-        && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         && [ "${PLEBIAN_OS_RELEASE:-}" = "$version" ] || return 1
     [ "$(git -C "$PLEBIAN_OS_DIR" cat-file -t "refs/tags/$tag" 2>/dev/null)" = tag ] || return 1
     tag_object="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "refs/tags/$tag" 2>/dev/null)" \
@@ -3440,8 +3440,8 @@ select_latest_release_if_needed() {
         log "explicitly revalidating selected release $PLEBIAN_OS_VERSION"
         return 0
     }
-    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-        || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not semantic; use --revalidate-current only for recovery"
+    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
+        || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not a release version; use --revalidate-current only for recovery"
     latest="$(latest_published_release)"
     if [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
         log "Plebian-OS $PLEBIAN_OS_VERSION is the latest published release"
@@ -3630,8 +3630,8 @@ PY
         systemd-analyze verify "$stage/plebian-os-firstboot.service" >/dev/null 2>&1 \
             || die "staged firstboot unit failed systemd-analyze verification"
     fi
-    grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' "$stage/VERSION" \
-        || die "staged VERSION is not semantic MAJOR.MINOR.PATCH"
+    grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "$stage/VERSION" \
+        || die "staged VERSION is not MAJOR.MINOR.PATCH[.MAINTENANCE]"
     python3 - "$stage/desktop-wallpaper.png" <<'PY' \
         || die "staged desktop wallpaper is not a 1920x1080 RGB PNG"
 import pathlib
@@ -4010,7 +4010,7 @@ grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^\[Service\]$' "${new_paths[4]}" \
     && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
     && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
-grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' "${new_paths[6]}"
+grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "${new_paths[6]}"
 python3 - "${new_paths[7]}" <<'PY'
 import pathlib
 import struct
@@ -4234,6 +4234,29 @@ reconcile_legacy_remote_login() {
 # included in the root snapshot because they are directly selected on PATH.
 # Debian package upgrades pulled in by live sources are residue as well; apt
 # source changes happen only after commit.
+install_model_setup_software() {
+    local helper
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    for helper in /usr/local/sbin/plebian-os-install-ollama-converter \
+                  /usr/local/sbin/plebian-os-install-diarization-converter; do
+        if [ "${DRY_RUN:-0}" = 1 ]; then
+            log "would install model conversion software with $helper (no model weights)"
+            continue
+        fi
+        [ -x "$helper" ] && [ ! -L "$helper" ] \
+            || die "required model software installer is missing or unsafe: $helper"
+        "${elevate[@]}" "$helper" \
+            || die "required model conversion software installation failed: $helper"
+    done
+}
+
+install_kilix_needle() {
+    env "${stack_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-needle \
+        || die "required Needle application installation failed"
+}
+
 run_encodec_converter_installer() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
@@ -4476,7 +4499,7 @@ refuse_amd64_only_stack_inputs() {
     esac
     # The required converter is embedded in this OS source, not an optional
     # session feature. Do not let feature overrides certify a partial release.
-    if [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.2 ]; then
+    if [[ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
         die "0.2.2 has no source-qualified ARM64 closure: required EnCodec converter, native runtime and patched Qt/player artifacts must be selected together; installed stack unchanged"
     fi
     [ "${PLEBIAN_OS_INSTALL_WAYDROID:-0}" != 1 ] \
@@ -5181,6 +5204,8 @@ test_fail_after_boundary dependencies
 # later stack rollback; it carries no models, receipts or active selection.
 run_encodec_converter_installer \
     || die "required EnCodec converter installation failed"
+install_model_setup_software
+test_fail_after_boundary model-setup-software
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected native runtime could not be prepared/applied"
 test_fail_after_boundary native-runtime
@@ -5200,6 +5225,12 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     log "updating kilix, submodules, fork engine, and optional desktop provider"
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart
     test_fail_after_boundary component-update
+    install_kilix_needle
+    test_fail_after_boundary needle
+    env "${stack_env[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" \
+        || die "required default model installation failed"
+    test_fail_after_boundary default-models
     # Last, after every step above that can install a package. See the
     # function's own header for why an update needs this at all.
     reapply_audio_holdoff

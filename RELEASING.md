@@ -153,12 +153,21 @@ never logged and is expired after verification.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The last published coordinated release is **0.2.1**, tagged at
-`83837599bf4a1f4eeb3338fbc448d908c909d1c9` and accepted 2026-09-01: fresh-install
-on both BIOS and UEFI, and the adjacent upgrade from 0.2.0. See
-[`releases/0.2.1-provenance.md`](releases/0.2.1-provenance.md) for the artifact
-hash and the coordinated commits it records. The next planned release is
-**0.2.2**.
+The last published coordinated release is **0.2.2**. Its published tags and
+artifacts remain immutable. The next planned release is
+**0.2.2.1**.
+
+A maintenance release may append one positive decimal component without leading
+zeroes: `MAJOR.MINOR.PATCH.MAINTENANCE`. Thus `0.2.2 < 0.2.2.1 < 0.2.3`.
+This is the stack's release format, not Semantic Versioning. Three-part releases
+remain valid. Release ordering, selectors and qualification tools accept both;
+third-party Go and uv versions retain their existing validation.
+
+Installed 0.2.2 tools cannot discover or select four-part releases. Bootstrap
+with the selector extracted from the immutable target tag as described in
+`releases/0.2.2.1-notes.md`. It deploys the target selector and updater within
+the existing closure transaction. Do not replace installed source files by hand.
+
 
 Two things 0.2.1 established that this procedure did not previously state, and
 which bind every release after it:

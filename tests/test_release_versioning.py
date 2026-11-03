@@ -29,8 +29,8 @@ class ReleaseVersioningTests(unittest.TestCase):
             )
         return path.read_text()
 
-    def test_version_file_is_semver(self):
-        self.assertRegex((ROOT / "VERSION").read_text().strip(), r"^\d+\.\d+\.\d+$")
+    def test_version_file_is_release_version(self):
+        self.assertRegex((ROOT / "VERSION").read_text().strip(), r"^\d+\.\d+\.\d+(?:\.[1-9][0-9]*)?$")
         self.assertIn(f"## [{self.version}]", _read("CHANGELOG.md"))
 
     def test_0_1_9_release_notes_document_the_upgrade_path(self):

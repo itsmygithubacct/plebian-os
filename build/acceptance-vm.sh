@@ -28,7 +28,7 @@ export PLEBIAN_OS_VERIFY_SUCCESSFUL_UPDATE=1
 if [ -z "${PLEBIAN_OS_ACCEPTANCE_RELEASE+x}" ]; then
     PLEBIAN_OS_ACCEPTANCE_RELEASE="$(cat "$ROOT/VERSION")"
 fi
-[[ "$PLEBIAN_OS_ACCEPTANCE_RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+[[ "$PLEBIAN_OS_ACCEPTANCE_RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || {
     echo "acceptance-vm: PLEBIAN_OS_ACCEPTANCE_RELEASE must name a release" >&2
     exit 1
 }

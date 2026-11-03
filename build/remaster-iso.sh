@@ -126,7 +126,7 @@ load_release_manifest() {
     local rel="$1"
     local manifest="$HERE/releases/$rel.env"
     local requirements="$HERE/releases/$rel.requirements"
-    [[ "$rel" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    [[ "$rel" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         || { echo "invalid release identifier: $rel" >&2; exit 1; }
     [ -f "$manifest" ] || { echo "no release manifest: releases/$rel.env" >&2; exit 1; }
     echo "==> release $rel: applying pins from releases/$rel.env"
@@ -538,7 +538,7 @@ validate_qt_release_closure() {
     for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
@@ -566,7 +566,7 @@ validate_native_release_closure() {
         PLEBIAN_OS_NATIVE_CONTENT_REF; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 5 ] || {
@@ -921,9 +921,15 @@ resolve_ollama_carrier() {
     OLLAMA_CARRIER="${argument_real:-$configured_real}"
 }
 resolve_ollama_carrier "${3:-}"
+DEFAULT_MODELS_BUNDLE="${PLEBIAN_OS_DEFAULT_MODELS_BUNDLE:-}"
+[ -n "$DEFAULT_MODELS_BUNDLE" ] || {
+    echo "PLEBIAN_OS_DEFAULT_MODELS_BUNDLE must name the release's default model archive" >&2
+    exit 1
+}
+python3 "$HERE/provision/install-default-models.py" --verify-only --archive "$DEFAULT_MODELS_BUNDLE"
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
-    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         || { echo "release ISO filename requires a semantic PLEBIAN_OS_VERSION" >&2; exit 1; }
     default_iso_name="plebian-os-$PLEBIAN_OS_VERSION-amd64.iso"
 fi
@@ -931,7 +937,7 @@ OUT_ISO="${2:-$PLEBIAN_OS_ARTIFACTS/$default_iso_name}"
 OUT_REAL="$(readlink -m "$OUT_ISO")"
 [ ! -b "$OUT_REAL" ] || { echo "refusing to use a block device as ISO output: $OUT_REAL" >&2; exit 1; }
 [ ! -d "$OUT_REAL" ] || { echo "ISO output is a directory: $OUT_REAL" >&2; exit 1; }
-if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
+if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
     [ -n "$OLLAMA_CARRIER" ] \
         || { echo "Plebian-OS 0.2.2 requires argument 3 or PLEBIAN_OS_OLLAMA_CARRIER" >&2; exit 1; }
     [ -f "$OLLAMA_CARRIER" ] && [ ! -L "$OLLAMA_CARRIER" ] \
@@ -1865,6 +1871,7 @@ echo "    preseed: $PRESEED"
 cp "$PRESEED" "$EXTRACT/preseed.cfg"
 # The files late_command copies into the target, staged under /cdrom/plebian-os.
 mkdir -p "$EXTRACT/plebian-os"
+install -m 0644 "$DEFAULT_MODELS_BUNDLE" "$EXTRACT/plebian-os/default-models.tar.xz"
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"
@@ -1874,7 +1881,7 @@ cp "$HERE/provision/plebian-os-install-diarization-converter" "$EXTRACT/plebian-
 cp "$HERE/provision/plebian-os-install-encodec-converter" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-vulkan-tts" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-ollama-runtime" "$EXTRACT/plebian-os/"
-if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
+if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
     install -m 0644 "$HERE/releases/0.2.2.env" \
         "$EXTRACT/plebian-os/0.2.2.env"
     install -m 0644 "$OLLAMA_CARRIER" \

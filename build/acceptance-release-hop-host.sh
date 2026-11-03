@@ -64,8 +64,8 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--from must be X.Y.Z"
-[[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--target must be X.Y.Z"
+[[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--from must be X.Y.Z"
+[[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--target must be X.Y.Z"
 [ "$from" != "$target" ] || die "--from and --target must differ"
 for destination in "$image_guest" "$standalone_guest"; do
     [[ "$destination" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$ ]] \

@@ -4,6 +4,19 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.2.2.1] — 2026-11-03
+
+- Remove submitted Model Setup passwords from displayed and saved terminal output.
+- Accept positive fourth-part maintenance versions in release selection, ordering, provisioning and media tooling.
+- Preserve the 0.2.2 runtime closure and platform limitations.
+- Install Needle and conversion software during OS installation and upgrades,
+  without administrator password prompts inside Model Setup.
+- Supply nine verified default model assets in the ISO and reuse the same
+  checksummed bundle on upgrades, preserving model selections.
+- Handle standard licences by local distribution policy, retain compatibility
+  with existing receipt readers, and expose installed licence documents.
+- Keep Whisper Tiny out of the defaults until a compatible GGML runtime ships.
+
 ## [0.2.2] — 2026-09-23
 
 - Keep successful model setup categories complete when another model fails,
