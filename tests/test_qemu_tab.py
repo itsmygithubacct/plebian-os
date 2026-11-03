@@ -95,8 +95,9 @@ sys.exit(int(os.environ.get('LS_RC', '0')))
         with self.assertRaisesRegex(RuntimeError, 'fresh'):
             qemu_tab.launch(['qemu-system-x86_64'], 'VM', self.vm)
         (self.vm / 'qemu.pid').unlink()
-        with self.assertRaisesRegex(ValueError, 'foreground'):
-            qemu_tab.launch(['qemu-system-x86_64', '-daemonize'], 'VM', self.vm)
+        for flag in ('-daemonize', '--daemonize'):
+            with self.subTest(flag=flag), self.assertRaisesRegex(ValueError, 'foreground'):
+                qemu_tab.launch(['qemu-system-x86_64', flag], 'VM', self.vm)
         self.assertFalse(any('launch' in c for c in self.calls()))
 
     def test_interrupt_closes_owned_tab(self):

@@ -58,7 +58,7 @@ def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20)
     if any((directory / name).exists() or (directory / name).is_symlink()
            for name in ("qemu.pid", "qmp.sock", "tab.ready")):
         raise RuntimeError("QEMU tab requires a fresh VM launch directory")
-    if "-daemonize" in argv:
+    if any(flag in argv for flag in ("-daemonize", "--daemonize")):
         raise ValueError("QEMU in a tab must remain in the foreground")
     marker = "KILIX_VM_LAUNCH=" + secrets.token_hex(16)
     command = [*remote, "launch", "--type=tab", "--keep-focus",
