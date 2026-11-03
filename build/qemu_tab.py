@@ -14,6 +14,8 @@ import socket
 import subprocess
 import time
 
+from launch_transport import literal_launch
+
 
 def require_host() -> tuple[list[str], str]:
     kitten = shutil.which(os.environ.get("KILIX_KITTEN") or "kitten")
@@ -61,11 +63,17 @@ def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20)
     if any(flag in argv for flag in ("-daemonize", "--daemonize")):
         raise ValueError("QEMU in a tab must remain in the foreground")
     marker = "KILIX_VM_LAUNCH=" + secrets.token_hex(16)
-    command = [*remote, "launch", "--type=tab", "--keep-focus",
-               "--tab-title", title, "--cwd", str(Path.cwd()),
-               "--env", marker, "--env", "KILIX_IN_OVERLAY=1",
-               "--env", f"KILIX_RUN_READY_FILE={directory / 'tab.ready'}",
-               "--", kilix, "run", *argv]
+    target, environment, cwd = literal_launch(
+        [kilix, "run", *argv],
+        {"KILIX_VM_LAUNCH": marker.split("=", 1)[1], "KILIX_IN_OVERLAY": "1",
+         "KILIX_RUN_READY_FILE": str(directory / "tab.ready")}, str(Path.cwd()))
+    title = title.encode("utf-8", "replace").decode("utf-8")
+    command = [*remote, "launch", "--type=tab", "--keep-focus", "--tab-title", title]
+    if cwd is not None:
+        command += ["--cwd", cwd]
+    for key, value in environment.items():
+        command += ["--env", f"{key}={value}"]
+    command += ["--", *target]
     try:
         result = subprocess.run(command, check=True, capture_output=True,
                                 text=True, timeout=10)

@@ -57,8 +57,12 @@ sys.exit(int(os.environ.get('LS_RC', '0')))
         calls = self.calls()
         self.assertEqual(len(calls), 2)
         launch = calls[1]
-        self.assertEqual(launch[launch.index('--') + 1:],
-                         [str(self.root / 'kilix'), 'run', *arguments])
+        target = launch[launch.index('--') + 1:]
+        self.assertEqual(target[:2], ['python3', '-c'])
+        decoded, environment, cwd = json.loads(target[3])
+        self.assertEqual(decoded, [str(self.root / 'kilix'), 'run', *arguments])
+        self.assertEqual(environment['KILIX_RUN_READY_FILE'], str(self.vm / 'tab.ready'))
+        self.assertEqual(cwd, str(Path.cwd()))
         self.assertIn('--keep-focus', launch)
         self.assertIn('--type=tab', launch)
         self.assertIn('KILIX_IN_OVERLAY=1', launch)
