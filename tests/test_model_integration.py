@@ -95,6 +95,46 @@ class IntegrationTest(unittest.TestCase):
         self.manifest['sources'].append(entry)
         with self.assertRaisesRegex(module.Invalid, 'duplicate source directory'): self.verify()
 
+    def test_index_flags_cannot_hide_modified_source(self):
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag=flag):
+                self.git("update-index", flag, "code")
+                (self.repo / "code").write_text("changed source")
+                with self.assertRaisesRegex(module.Invalid, "index entries"):
+                    self.verify()
+                self.git("update-index", "--no-assume-unchanged", "code")
+                self.git("update-index", "--no-skip-worktree", "code")
+                (self.repo / "code").write_text("fixture\n")
+
+    def test_redirected_worktree_is_not_the_declared_source(self):
+        other = self.root / "redirected"
+        other.mkdir()
+        (other / "code").write_text("fixture\n")
+        self.git("config", "core.worktree", str(other))
+        (self.repo / "code").write_text("changed source")
+        with self.assertRaisesRegex(module.Invalid, "not the Git worktree"):
+            self.verify()
+
+    def test_readonly_validation_does_not_refresh_index(self):
+        import os
+        path = self.repo / "code"
+        info = path.stat()
+        os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns + 2_000_000_000))
+        index = self.repo / ".git/index"
+        before = index.read_bytes()
+        self.verify()
+        self.assertEqual(index.read_bytes(), before)
+
+    def test_nonobject_manifest_is_clean_cli_refusal(self):
+        import sys
+        path = self.root / "bad.json"
+        path.write_text("[]")
+        result = subprocess.run([sys.executable, str(TOOL), "--root", str(self.root),
+                                 "--manifest", str(path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("model integration refused:", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
     def test_incomplete_gitlink_inventory(self):
         self.manifest['sources'][0]['gitlinks'] = {'child':'1'*40}
         with self.assertRaisesRegex(module.Invalid, 'gitlink inventory'): self.verify()

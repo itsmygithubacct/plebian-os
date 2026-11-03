@@ -24,7 +24,9 @@ The JSON schema identifier is `plebian-os.model-integration/v1`. Required fields
 - `sources`: nonempty records with unique `id`, relative repository `path`,
   exact `head` and `tree`, and `gitlinks` mapping every tracked submodule path
   to its exact commit. Each source must be clean, have connected full history,
-  own its Git directory and have no alternates. Every unverified child checkout
+  own its Git directory and have no alternates. The declared path must be the
+  actual Git worktree; assume-unchanged and skip-worktree entries are refused
+  because they can hide changed tracked files. Git index refresh is disabled. Every unverified child checkout
   produces a gap; listing a parent commit does not establish recursive closure.
 - `profiles`: nonempty records with unique `id`, nonempty `sources` and `files`
   lists referencing those inventories, and descriptive `abi`, `cpu`, `install`,

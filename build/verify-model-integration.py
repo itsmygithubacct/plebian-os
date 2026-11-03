@@ -7,6 +7,7 @@ an integrity contract, not a signature, license receipt issuer, or release vote.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -51,8 +52,10 @@ def local(root, value):
 
 
 def git(path, *args):
+    # Status must not refresh/write the caller's index during a read-only audit.
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0")
     result = subprocess.run(["git", "-C", str(path), *args], check=False,
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True, timeout=60, env=env)
     require(result.returncode == 0, f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout.strip()
 
@@ -71,6 +74,7 @@ def indexed(rows, label):
 
 
 def verify(manifest, root):
+    require(isinstance(manifest, dict), "manifest must be an object")
     require(manifest.get("schema") == "plebian-os.model-integration/v1", "unknown schema")
     require(manifest.get("selection") == "unselected", "proposal must remain unselected")
     require(manifest.get("release_accepted") is False, "identity cannot claim release acceptance")
@@ -94,6 +98,8 @@ def verify(manifest, root):
         path = local(root, entry["path"])
         require(path.resolve() not in source_directories, f"{key}: duplicate source directory")
         source_directories.add(path.resolve())
+        require(Path(git(path, "rev-parse", "--show-toplevel")).resolve() == path.resolve(),
+                f"{key}: declared source is not the Git worktree")
         require(git(path, "rev-parse", "HEAD") == entry["head"], f"{key}: HEAD mismatch")
         require(git(path, "rev-parse", "HEAD^{tree}") == entry["tree"], f"{key}: tree mismatch")
         common = Path(git(path, "rev-parse", "--path-format=absolute", "--git-common-dir"))
@@ -103,6 +109,11 @@ def verify(manifest, root):
         require(not (common / "objects/info/alternates").exists(), f"{key}: object alternates")
         require(git(path, "rev-parse", "--is-shallow-repository") == "false", f"{key}: shallow history")
         git(path, "fsck", "--connectivity-only", "--no-dangling")
+        # Git status intentionally trusts these index flags and may hide changed
+        # tracked bytes. A complete source audit cannot use that shortcut.
+        flags = git(path, "ls-files", "-v", "-z").split("\0")
+        require(all(not row or (row[0] != "S" and not row[0].islower()) for row in flags),
+                f"{key}: assume-unchanged or skip-worktree index entries")
         require(not git(path, "status", "--porcelain", "--untracked-files=all",
                         "--ignore-submodules=none"), f"{key}: dirty source")
         links = {}
