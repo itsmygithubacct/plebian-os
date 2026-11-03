@@ -30,17 +30,33 @@ portal. Capture uses PipeWire with WirePlumber's `video-only` profile; PulseAudi
 continues to handle audio. The locally built capture transport supplies
 descriptor-backed video buffers. Pleb documents bounded Firefox ESR and Chromium
 capture evidence, including user consent and Stop sharing. These component
-checks still require complete installed-release and physical desktop acceptance.
+checks do not establish physical desktop acceptance; the published release
+notes below define the installed-release qualification scope.
 
-## 0.2.2 development status
+## Release 0.2.2 — Linux
 
-The reviewed source integration for 0.2.2 includes managed coding sessions,
-persistent PTY controls, durable agent mailboxes, refreshed desktop providers,
-inline media repairs, and installer/update recovery fixes. Source publication
-does not establish release readiness: final ISO, installation, upgrade,
-rollback, physical desktop and provider acceptance remain open. See the
-[release notes](releases/0.2.2-notes.md), [selected revisions](releases/0.2.2.env)
-and [upgrade policy](UPGRADING.md) for the exact scope.
+Published November 3, 2026 for Debian 13 (trixie), AMD64. The release includes
+managed coding sessions, persistent PTY controls, durable agent mailboxes,
+refreshed desktop providers, inline media repairs, and installer/update
+recovery fixes. It includes `xorriso` and fixes administrator password entry
+in the Kilix-95 optional-software wizard. Fresh installation media carries the
+Ollama 0.32.14 CPU/Vulkan runtime; no model weights are bundled or downloaded
+during provisioning. Updating from 0.2.1 does not install that runtime carrier.
+
+- [Download the 964 MiB installer ISO](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/plebian-os-0.2.2-amd64.iso).
+- [Published checksums](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/SHA256SUMS).
+- [Release notes and known issues](https://github.com/itsmygithubacct/plebian-os/releases/tag/v0.2.2).
+- [Exact release manifest](https://github.com/itsmygithubacct/plebian-os/blob/v0.2.2/releases/0.2.2.env) and [upgrade policy](https://github.com/itsmygithubacct/plebian-os/blob/v0.2.2/UPGRADING.md).
+
+Linux installation and lifecycle qualification covers QEMU/KVM BIOS and EFI
+virtual machines. Bare-metal USB installation and physical GPU operation were
+not qualified. Windows remains at `windows-v0.2.2-preview.4`; ARM64 is not a
+supported OS release target. See the [published release notes](https://github.com/itsmygithubacct/plebian-os/releases/tag/v0.2.2)
+for known issues and deferred feature qualification.
+
+Use the immutable `v0.2.2` tag to install or reproduce this release. This
+branch can contain later development; publication of a component or model
+candidate does not extend the release's qualification.
 
 The selected binary artifacts target **AMD64**. ARM64 support is under
 development; architecture checks in the Qt, media, converter and other runtime
@@ -332,13 +348,14 @@ installed system tracks upstream.
 **Convert a running Debian (fastest to try):**
 
 For 0.2.2, first obtain the offline release asset
-`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` and keep it on a local disk. The
+[`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz`](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz)
+and verify it against the [published checksums](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/SHA256SUMS). Keep it on a local disk. The
 bootstrap does not download the carrier. Pass its path explicitly; preflight
 checks the release manifest and archive before changing packages.
 
 ```sh
 mkdir -p ~/.local/gpu_terminal/sources
-git clone https://github.com/itsmygithubacct/plebian-os ~/.local/gpu_terminal/sources/plebian-os
+git clone --branch v0.2.2 https://github.com/itsmygithubacct/plebian-os ~/.local/gpu_terminal/sources/plebian-os
 carrier="$HOME/Downloads/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz"
 sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$carrier"         # add Pleb alongside your current desktop
 sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$carrier" --kiosk # …and boot straight into it
@@ -634,10 +651,12 @@ images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,
 `PLEBIAN_OS_NETINST_SHA256`, `PLEBIAN_OS_APT_SNAPSHOT`, `PLEB_REF`, `KILIX_REF`,
 `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`, and the exact
 Go version/architecture checksums before building. Simpler: set
-`PLEBIAN_OS_RELEASE=0.2.2` to load the current development pin manifest from
-[`releases/0.2.2.env`](releases/0.2.2.env) (see
-[RELEASING.md](RELEASING.md)). This selects development inputs, not a supported
-release upgrade. The current manifest leaves `PLEBIAN_OS_APT_SNAPSHOT` empty:
+`PLEBIAN_OS_RELEASE=0.2.2` from a checkout of the `v0.2.2` tag to load its
+[`releases/0.2.2.env`](https://github.com/itsmygithubacct/plebian-os/blob/v0.2.2/releases/0.2.2.env)
+(see [RELEASING.md](RELEASING.md)). This selects build inputs; on an installed
+system use the coordinated updater or `plebian-os-select-closure 0.2.2`
+followed by `plebian-os-update`. The release manifest leaves
+`PLEBIAN_OS_APT_SNAPSHOT` empty:
 apt tracks the signed live Debian `trixie`, `trixie-updates`, and
 `trixie-security` suites with replay protection enabled, and
 `unattended-upgrades` applies Debian security updates daily without rebooting.
