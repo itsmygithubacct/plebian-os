@@ -153,6 +153,7 @@ DEP_GROUPS=(
     "system call tracer|strace"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
+    "ISO authoring + inspection|xorriso"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
     # Provide /usr/bin/python for scripts and tools that use the unversioned
     # command. Debian owns the symlink and follows its default Python 3.
