@@ -9,7 +9,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Target Debian/GNU timeout process-group semantics used by the runtime.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install test tools
@@ -48,6 +49,8 @@ jobs:
           bonsai_ref="$(git -C ../kilix show "$kilix_ref:scripts/install-kilix-bonsai.sh" \
             | sed -n 's/^KILIX_BONSAI_REF="\${KILIX_BONSAI_REF:-\([0-9a-f]\{40\}\)}"$/\1/p')"
           fetch ../kilix-bonsai https://github.com/itsmygithubacct/kilix-bonsai.git "$bonsai_ref"
+      - name: Report timeout provider
+        run: command -v timeout && timeout --version
       - name: Python tests
         run: python3 -m unittest discover -s tests -v
       - name: F120 authority profile tests
