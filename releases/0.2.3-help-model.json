@@ -1,0 +1,64 @@
+{
+  "schema": "plebian-os.help-model-selection/v1",
+  "release_target": "0.2.3-rc1",
+  "default_model": "kilix-qwen-sft1-2b",
+  "model_release": "https://github.com/itsmygithubacct/kilix-help-llm/releases/tag/kilix-qwen-sft1-2b",
+  "source_pins": {
+    "kilix-help-llm": "e5832c08099eaa3fe53d2f10bbbb61d08cd272cb",
+    "kilix-llm": "8c7263faac8ce399edffb9a589aeab31e17fd88e",
+    "kilix-content": "765c7c278032c861c49a3ea8fd63f130d06075a1",
+    "kilix": "2042af16ba09a9d4ade323af4b40ec0926ba8fc3"
+  },
+  "manifest": {
+    "repository": "https://github.com/itsmygithubacct/kilix-help-llm",
+    "revision": "e5832c08099eaa3fe53d2f10bbbb61d08cd272cb",
+    "path": "help_llm/published-model.json",
+    "sha256": "fc3c36894e5cd0003790b7bbe28ae260eab193db6ff278478f1ca198c0dd731e"
+  },
+  "parent": {
+    "model_id": "Qwen/Qwen3.5-2B",
+    "revision": "15852e8c16360a2fea060d615a32b45270f8a8fc"
+  },
+  "adapter": {
+    "sha256": "0fc4bf8ea79364f9b3ad555ca3711fb0c650f666dccd7eb471c045c0cc4eb4a4",
+    "bytes": 67332688,
+    "url": "https://github.com/itsmygithubacct/kilix-help-llm/releases/download/kilix-qwen-sft1-2b/adapter_model.safetensors"
+  },
+  "inference": {
+    "backend": "cpu",
+    "dtype": "float32",
+    "attention": "eager",
+    "context": 384,
+    "max_new_tokens": 96,
+    "thinking": false,
+    "do_sample": false,
+    "adapter_name": "sft"
+  },
+  "delivery": {
+    "setup_command": "kilix help-setup",
+    "answer_command": "kilix help-answer \"How do I list panes?\"",
+    "search_command": "kilix help-search \"How do I list panes?\"",
+    "mode": "explicit-first-use-download",
+    "bundled_in_existing_default_model_archive": false,
+    "model_commands_execute_suggestions": false
+  },
+  "quality": {
+    "scope": "assistant-reviewed exposed development",
+    "independent_qualification": false,
+    "practical": {
+      "supported": 30,
+      "total": 32,
+      "command_tasks": 17,
+      "command_total": 19,
+      "unknown": 8,
+      "unknown_total": 8
+    },
+    "historical": {
+      "supported": 41,
+      "total": 72,
+      "unknown": 6,
+      "unknown_total": 6
+    }
+  },
+  "acceptance_scope": "Default model selection and component source integration for RC1. Final OS image/update acceptance remains separate."
+}
