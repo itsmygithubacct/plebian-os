@@ -6,8 +6,9 @@
   "source_pins": {
     "kilix-help-llm": "e5832c08099eaa3fe53d2f10bbbb61d08cd272cb",
     "kilix-llm": "8c7263faac8ce399edffb9a589aeab31e17fd88e",
-    "kilix-content": "765c7c278032c861c49a3ea8fd63f130d06075a1",
-    "kilix": "f04a425bddf37927e2340c3c21794dc05597c9ec"
+    "kilix-content": "15e252b22c7e2b6ddb871fe07730354d7f6e085e",
+    "kilix": "52e8b79a40fb526a0ded1ca365b72dc945fb37b1",
+    "kilix-license": "9241e1accd4d3ea729f9211d1137ed896b7fe3b9"
   },
   "manifest": {
     "repository": "https://github.com/itsmygithubacct/kilix-help-llm",
