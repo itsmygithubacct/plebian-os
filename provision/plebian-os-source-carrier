@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Bootstrap a digest-bound source carrier around provision/update Git operations."""
+import ctypes
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 DEFAULT = Path('/usr/share/plebian-os/source-carrier/manifest.json')
 
@@ -33,6 +37,146 @@ def read(root, relative, limit):
         raise ValueError('source carrier input exceeds bound')
     finally:
         for fd in reversed(fds): os.close(fd)
+
+
+class _StopRequested(BaseException):
+    pass
+
+
+def _children():
+    # This standalone supervisor has no unrelated child processes. A subreaper
+    # also owns descendants orphaned when the delegated process exits.
+    path = Path('/proc/self/task') / str(os.getpid()) / 'children'
+    return [int(pid) for pid in path.read_text().split()]
+
+
+def _reap_adopted():
+    # Called only after Popen.wait has reaped the delegated direct child.
+    # Setup Git subprocesses can also leave terminated adopted grandchildren.
+    while True:
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
+def _signal_group(group, number):
+    try:
+        os.killpg(group, number)
+    except ProcessLookupError:
+        pass
+
+
+def _group_alive(group):
+    try:
+        os.killpg(group, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def _finish_group(group):
+    """Bounded cleanup and reaping of only this invocation's process group."""
+    for number, seconds in ((signal.SIGTERM, 2.0), (signal.SIGKILL, 2.0)):
+        _signal_group(group, number)
+        deadline = time.monotonic() + seconds
+        while True:
+            while True:
+                try:
+                    pid, _status = os.waitpid(-group, os.WNOHANG)
+                except ChildProcessError:
+                    break
+                if pid == 0:
+                    break
+            if not _group_alive(group):
+                return True
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.02)
+    return False
+
+
+def run_owned(carrier, manifest, digest, command):
+    # Linux subreaper ownership lets us reap orphaned grandchildren, including
+    # those that ignore TERM, rather than mistaking a zombie for clean teardown.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), 'cannot own source session descendants')
+    child = None
+    received = None
+    spawning = False
+    def interrupted(number, _frame):
+        nonlocal received
+        if received is None:
+            received = number
+        if child is None:
+            if not spawning:
+                raise _StopRequested()
+        else:
+            _signal_group(child.pid, number)
+    old = {number: signal.signal(number, interrupted) for number in (signal.SIGTERM, signal.SIGINT)}
+    tmp = tempfile.mkdtemp(prefix='plebian-source-git-')
+    clean = False
+    try:
+        config = carrier.prepare_git(Path(tmp) / 'pool')
+        if os.geteuid() == 0:
+            os.chmod(tmp, 0o755)
+            for folder, _dirs, files in os.walk(Path(tmp) / 'pool'):
+                os.chmod(folder, 0o755)
+                for name in files:
+                    os.chmod(Path(folder) / name, 0o644)
+        env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
+        env.update(GIT_CONFIG_GLOBAL=config, GIT_CONFIG_NOSYSTEM='1', GIT_ALLOW_PROTOCOL='file',
+                   GIT_TERMINAL_PROMPT='0', KILIX_SOURCE_CARRIER_SESSION='1',
+                   KILIX_SOURCE_CARRIER_MANIFEST=str(manifest), KILIX_SOURCE_CARRIER_SHA256=digest)
+        # Record a signal during fork/assignment, then forward it immediately.
+        # Do not block signals across exec: the child must run its rollback traps.
+        spawning = True
+        try:
+            child = subprocess.Popen(command, env=env, start_new_session=True)
+        finally:
+            spawning = False
+        if received is not None:
+            _signal_group(child.pid, received)
+        deadline = None
+        while child.poll() is None:
+            if received is not None and deadline is None:
+                deadline = time.monotonic() + 3.0
+            if deadline is not None and time.monotonic() >= deadline:
+                _signal_group(child.pid, signal.SIGKILL)
+                child.wait(timeout=3.0)
+                break
+            time.sleep(0.02)
+        status = child.wait()
+        group_clean = _finish_group(child.pid)
+        _reap_adopted()
+        clean = group_clean and not _children()
+        if not clean:
+            raise RuntimeError('owned descendants ' + str(_children()) + ' remain; source pool retained at ' + tmp)
+        if received is not None:
+            return 128 + received
+        return status if status >= 0 else 128 - status
+    except _StopRequested:
+        _reap_adopted()
+        clean = not _children()
+        if not clean:
+            raise RuntimeError('interrupted setup has owned children; source pool retained at ' + tmp)
+        return 128 + received
+    finally:
+        # No successful cleanup claim, or automatic TemporaryDirectory deletion,
+        # until the delegated child/group and adopted descendants are gone.
+        if child is None:
+            _reap_adopted()
+        if child is None and not _children():
+            clean = True
+        if clean:
+            shutil.rmtree(tmp)
+        else:
+            print('source session cleanup unproved; retain pool: ' + tmp, file=sys.stderr)
+        for number, handler in old.items():
+            signal.signal(number, handler)
 
 
 def main():
@@ -76,20 +220,7 @@ def main():
             raise
         return 0
     if action != 'run' or len(sys.argv) < 3: raise ValueError('expected verify or run COMMAND')
-    with tempfile.TemporaryDirectory(prefix='plebian-source-git-') as tmp:
-        config = carrier.prepare_git(Path(tmp) / 'pool')
-        # The provisioner drops privileges before Git. Its source pool is read-only
-        # to that target user; Git clones/fetches never use object alternates.
-        if os.geteuid() == 0:
-            os.chmod(tmp, 0o755)
-            for folder, dirs, files in os.walk(Path(tmp) / 'pool'):
-                os.chmod(folder, 0o755)
-                for name in files: os.chmod(Path(folder) / name, 0o644)
-        env = {k:v for k,v in os.environ.items() if not k.startswith('GIT_')}
-        env.update(GIT_CONFIG_GLOBAL=config, GIT_CONFIG_NOSYSTEM='1', GIT_ALLOW_PROTOCOL='file',
-                   GIT_TERMINAL_PROMPT='0', KILIX_SOURCE_CARRIER_SESSION='1',
-                   KILIX_SOURCE_CARRIER_MANIFEST=str(manifest), KILIX_SOURCE_CARRIER_SHA256=digest)
-        return subprocess.call(sys.argv[2:], env=env)
+    return run_owned(carrier, manifest, digest, sys.argv[2:])
 
 
 if __name__ == '__main__':

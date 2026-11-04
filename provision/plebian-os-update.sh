@@ -3648,7 +3648,7 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-native-runtime"; do
         bash -n "$file" || die "staged OS-layer shell validation failed: $file"
     done
-    python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
+    python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-source-carrier" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-diarization-converter" \
         "$stage/plebian-os-install-encodec-converter" \
@@ -3867,8 +3867,8 @@ dests=(
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -4046,14 +4046,14 @@ for i in "${!new_paths[@]}"; do
 done
 # Recheck executable syntax before any installed file is backed up or replaced.
 for file in "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[24]}" \
-    "${new_paths[25]}"; do
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[25]}" \
+    "${new_paths[26]}"; do
     bash -n "$file"
 done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
     "${new_paths[15]}" "${new_paths[16]}" "${new_paths[18]}" \
     "${new_paths[19]}" "${new_paths[20]}" "${new_paths[21]}" \
-    "${new_paths[22]}" "${new_paths[23]}" <<'PY'
+    "${new_paths[22]}" "${new_paths[23]}" "${new_paths[24]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:

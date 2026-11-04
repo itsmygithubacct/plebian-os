@@ -202,6 +202,7 @@ class OsLayerSyntaxValidationTests(unittest.TestCase):
             ("plebian-os-install-kilix-ollama-runtime", "def broken(\n"),
             ("plebian-os-qt-runtime", "def broken(\n"),
             ("plebian-os-mpv-runtime", "def broken(\n"),
+            ("plebian-os-source-carrier", "def broken(\n"),
         ):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as td:
                 stage = Path(td)
@@ -294,3 +295,37 @@ class ReleaseHopSplitStateTests(unittest.TestCase):
         armed = body.index("trap 'warn_release_hop_split_state")
         self.assertLess(commit, armed)
         self.assertLess(armed, body.index('exec "${relaunch_env[@]}"'))
+
+
+class RootTransportMetadataControls(unittest.TestCase):
+    def test_real_root_guards_accept_exact_current_set_and_refuse_missing_hash(self):
+        text=UPDATE.read_text(); block=root_block(text)
+        start=block.index('names=(\n')
+        end=block.index('for hash in "${expected_hashes[@]}"',start)
+        guards=block[start:end]
+        count=len(array('names',block))
+        for supplied, expected in ((count,0),(count-1,2)):
+            command='set -euo pipefail\nexpected_hashes=("$@")\n'+guards+'\nprintf PASSED\n'
+            result=subprocess.run(['bash','-c',command,'metadata',*(['a'*64]*supplied)],capture_output=True,text=True)
+            self.assertEqual(result.returncode,expected,result.stderr)
+            self.assertEqual('PASSED' in result.stdout,expected==0)
+
+    def test_real_root_rename_failure_rolls_back_existing_and_new_files(self):
+        block=root_block(UPDATE.read_text())
+        start=block.index('cleanup_transaction_files() {')
+        end=block.index('# Distribution assets live below',start)
+        transaction_functions=block[start:end]
+        start=block.index('# Back up the complete old set')
+        end=block.index('systemctl daemon-reload',start)
+        install=block[start:end]
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); (root/'existing').write_text('old')
+            (root/'first').write_text('new-existing');(root/'second').write_text('new-created')
+            # Actual backup/rename loop, fail third rename after replacing one
+            # existing and creating one new destination. Original rollback runs.
+            script='set -euo pipefail\nnew_paths=("$1/first" "$1/second" "$1/missing")\ndests=("$1/existing" "$1/created" "$1/fail")\nbackup_paths=() existed=() changed=() created_dirs=()\nsystemctl() { return 0; }\n'+transaction_functions+install
+            result=subprocess.run(['bash','-c',script,'rollback',tmp],capture_output=True,text=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertEqual((root/'existing').read_text(),'old')
+            self.assertFalse((root/'created').exists())
+            self.assertFalse(list(root.glob('.*.plebian-os-*')))
