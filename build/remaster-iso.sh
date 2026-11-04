@@ -927,6 +927,14 @@ DEFAULT_MODELS_BUNDLE="${PLEBIAN_OS_DEFAULT_MODELS_BUNDLE:-}"
     exit 1
 }
 python3 "$HERE/provision/install-default-models.py" --verify-only --archive "$DEFAULT_MODELS_BUNDLE"
+COMMAND_MODEL_BUNDLE="${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}"
+[ -n "$COMMAND_MODEL_BUNDLE" ] || {
+    echo "PLEBIAN_OS_COMMAND_MODEL_BUNDLE must name the release's command model archive" >&2
+    exit 1
+}
+python3 "$HERE/provision/stage-command-model.py" --verify-only --archive "$COMMAND_MODEL_BUNDLE"
+COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
+    "$HERE/provision/command-model.json")"
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
@@ -1236,6 +1244,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_SOURCE_ISO "$(basename "$SRC_ISO")"
         manifest_kv PLEBIAN_OS_SOURCE_ISO_SHA256 "$iso_sha"
         manifest_kv PLEBIAN_OS_PRESEED_SHA256 "$preseed_sha"
+        manifest_kv PLEBIAN_OS_COMMAND_MODEL_ARCHIVE_SHA256 "${COMMAND_MODEL_SHA256:-}"
         manifest_kv PLEBIAN_OS_INSTALLER_SPLASH_SHA256 "$splash_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_SHA256 "$banner_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_DARK_SHA256 "$banner_dark_sha"
@@ -1872,6 +1881,8 @@ cp "$PRESEED" "$EXTRACT/preseed.cfg"
 # The files late_command copies into the target, staged under /cdrom/plebian-os.
 mkdir -p "$EXTRACT/plebian-os"
 install -m 0644 "$DEFAULT_MODELS_BUNDLE" "$EXTRACT/plebian-os/default-models.tar.xz"
+mkdir -p "$EXTRACT/plebian-os/model-archives"
+install -m 0644 "$COMMAND_MODEL_BUNDLE" "$EXTRACT/plebian-os/model-archives/$COMMAND_MODEL_SHA256"
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"

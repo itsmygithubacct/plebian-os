@@ -10,9 +10,9 @@
   "weights_modified": false,
   "delivery": "optional, after model licence agreement",
   "source_refs": {
-    "kilix": "8f8e2544a6b22b7b61406b5d3d283561f8a3f05e",
-    "kilix-needle": "a5dccedd8e54fd60c6250ce547049f493fc7c362",
-    "kilix-content": "3eab67a2542db81f4f38851da5ce255068da555d",
+    "kilix": "c0ff4292a959da54047d5240fa7afa5ae0a624d8",
+    "kilix-needle": "529254079d8ec3332f8f4536d04e86b7b58e2aa2",
+    "kilix-content": "4cb94aaeb47e616cf26d3458ad4e46fbd01567aa",
     "kilix-license": "1179ce24c60885d913afbdf4c85908d0b2941a1a"
   },
   "archive": {
@@ -63,6 +63,14 @@
       "notices/LICENSE-runtime.txt",
       "notices/LICENSE-kilix-needle.txt",
       "notices/NOTICE.txt"
-    ]
+    ],
+    "delivery": {
+      "iso": "required offline archive",
+      "upgrade": "fetch exact archive when absent",
+      "cache": "/usr/local/share/kilix/model-archives",
+      "documents": "/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261103-v21/notices",
+      "agreement": "required before user model selection",
+      "pin": "provision/command-model.json"
+    }
   }
 }

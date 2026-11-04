@@ -8,6 +8,34 @@ pinned source, toolchain, and media inputs and its Debian package-source policy.
 
 ## Release media is not unattended VM media
 
+Starting with the 0.2.3 rc1 source candidate, the ISO includes the default
+LFM2 `.21` command model and its CPU runtime. Supply the immutable release
+archive alongside the existing standard-model archive:
+
+```sh
+export PLEBIAN_OS_DEFAULT_MODELS_BUNDLE=/path/to/default-models-0221.tar.xz
+export PLEBIAN_OS_COMMAND_MODEL_BUNDLE=/path/to/lfm2-kilix-commands-20261103-v21.tar.gz
+```
+
+`provision/command-model.json` pins its 1,356,906,382 bytes, SHA-256, version
+and four licence documents. The remaster preflight verifies the archive and
+documents before copying it into `plebian-os/model-archives/<sha256>` on the
+ISO. Preseed copies those bytes to `/usr/local/share/kilix/model-archives`;
+firstboot verifies them offline. Upgrades download and verify this exact
+archive only when it is absent. Both paths use the OS installer's existing
+administrator context; the model wizard needs no administrator credentials.
+
+The full documents are installed under
+`/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261103-v21/notices/`:
+`LICENSE-LFM.txt`, `LICENSE-runtime.txt`, `LICENSE-kilix-needle.txt`, and
+`NOTICE.txt`. Staging does not record agreement. LFM2 retains its model licence
+step, after which Kilix installs from the verified local cache. The automatic
+standard-licence bundle remains separately pinned. Previous cached archives
+and installed model versions remain available for catalog rollback.
+
+The model candidate records do not substitute for the coordinated OS release
+manifest or ISO installation/upgrade qualification described below.
+
 Build publishable installation media only from the clean annotated release tag
 and its authoritative manifest:
 
