@@ -36,6 +36,17 @@
 # desktop providers as a clickable stack update action.
 set -euo pipefail
 
+# Keep the installed selector/updater self-contained. Only a stable tag or a
+# numbered RC of the same numeric VERSION is a supported release identity.
+valid_release_tag() {
+    local version="$1" tag="$2" suffix
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]]
+}
+
+
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 # `exit` does not trigger the ERR trap, so a die() -- the convention at 152 call
@@ -656,6 +667,7 @@ select_latest_release=1
 recover_interrupted=0
 # Set only after the complete local-candidate gate succeeds. These are reset
 # unconditionally so caller-provided environment cannot opt into the bypass.
+_PLEBIAN_OS_LOCAL_CANDIDATE_TAG=""
 _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
 _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
 while [ "$#" -gt 0 ]; do
@@ -3199,10 +3211,11 @@ require_clean_pinned_checkout() {
 
 checkout_pinned_ref() {
     local dir="$1" ref="$2" label="$3" resolved actual
+    local candidate_tag="${_PLEBIAN_OS_LOCAL_CANDIDATE_TAG:-v$PLEBIAN_OS_VERSION}"
     require_clean_pinned_checkout "$dir" "$label"
     if [ "$label" = plebian-os ] \
         && [ "$dir" = "$PLEBIAN_OS_DIR" ] \
-        && { [ "$ref" = "v$PLEBIAN_OS_VERSION" ] \
+        && { [ "$ref" = "$candidate_tag" ] \
             || [ "$ref" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ]; } \
         && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT:-}" ] \
         && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT:-}" ]; then
@@ -3210,11 +3223,11 @@ checkout_pinned_ref() {
         # qualification. The earlier candidate gate bound its annotated tag,
         # manifest and deployed handoff bytes. Recheck both immutable object
         # identities here so a changed local tag cannot cross that boundary.
-        [ "$(git -C "$dir" rev-parse --verify "refs/tags/v$PLEBIAN_OS_VERSION" 2>/dev/null)" \
+        [ "$(git -C "$dir" rev-parse --verify "refs/tags/$candidate_tag" 2>/dev/null)" \
             = "$_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT" ] \
-            || die "validated local Plebian-OS candidate tag v$PLEBIAN_OS_VERSION changed before checkout"
-        resolved="$(git -C "$dir" rev-parse --verify "v$PLEBIAN_OS_VERSION^{commit}" 2>/dev/null)" \
-            || die "validated local Plebian-OS candidate v$PLEBIAN_OS_VERSION no longer resolves to a commit"
+            || die "validated local Plebian-OS candidate tag $candidate_tag changed before checkout"
+        resolved="$(git -C "$dir" rev-parse --verify "${candidate_tag}^{commit}" 2>/dev/null)" \
+            || die "validated local Plebian-OS candidate $candidate_tag no longer resolves to a commit"
         [ "$resolved" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ] \
             || die "validated local Plebian-OS candidate commit changed before checkout"
         log "using already-validated unpublished Plebian-OS candidate $ref at $resolved"
@@ -3336,15 +3349,24 @@ release_is_newer() {
 # while publication is pending. The tag must describe the exact installed
 # closure and the deployed handoff tools must still be its bytes.
 local_candidate_matches_selected_closure() {
-    local version="$1" tag="v$1" manifest key line value
+    local version="$1" tag manifest key line value
     local selector="${PLEBIAN_OS_INSTALLED_SELECTOR:-/usr/local/bin/plebian-os-select-closure}"
     local updater="${PLEBIAN_OS_INSTALLED_UPDATER:-/usr/local/bin/plebian-os-update}"
     local temp tag_object tag_commit
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG=""
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
     _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
         && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         && [ "${PLEBIAN_OS_RELEASE:-}" = "$version" ] || return 1
+    tag="${PLEBIAN_OS_REF:-v$version}"
+    if [[ "$tag" =~ ^[0-9a-f]{40}$ ]]; then
+        # The installed closure persists a peeled commit. Recover its one exact
+        # manifest tag, rather than guessing stable or scanning mutable tags.
+        tag="$(git -C "$PLEBIAN_OS_DIR" show "$tag:releases/$version.env" 2>/dev/null \
+            | awk -F= '$1 == "PLEBIAN_OS_REF" { value=$2; count++ } END { if (count != 1) exit 1; print value }')" || return 1
+    fi
+    valid_release_tag "$version" "$tag" || return 1
     [ "$(git -C "$PLEBIAN_OS_DIR" cat-file -t "refs/tags/$tag" 2>/dev/null)" = tag ] || return 1
     tag_object="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "refs/tags/$tag" 2>/dev/null)" \
         || return 1
@@ -3392,6 +3414,7 @@ local_candidate_matches_selected_closure() {
         '; then rm -rf -- "$temp"; return 1; fi
     done <<<"$keys"
     rm -rf -- "$temp"
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG="$tag"
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT="$tag_object"
     _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT="$tag_commit"
     return 0

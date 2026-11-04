@@ -607,7 +607,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("El Torito boot img.*BIOS", source)
         self.assertIn("El Torito boot img.*UEFI", source)
         self.assertIn('PLEBIAN-OS $RELEASE AMD64', source)
-        self.assertIn('cat-file -t "refs/tags/v$RELEASE"', source)
+        self.assertIn('cat-file -t "refs/tags/$manifest_os_ref"', source)
         self.assertIn('read_kv_file "$stage/build-info.env"', source)
         self.assertIn('read_kv_file "$manifest"', source)
         self.assertIn('for key in "${!release_manifest[@]}"', source)

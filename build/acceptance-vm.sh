@@ -9,6 +9,17 @@
 # only for diagnosis; it does not produce a passing acceptance result.
 set -euo pipefail
 
+# Keep the installed selector/updater self-contained. Only a stable tag or a
+# numbered RC of the same numeric VERSION is a supported release identity.
+valid_release_tag() {
+    local version="$1" tag="$2" suffix
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]]
+}
+
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/lib.sh"
@@ -83,8 +94,8 @@ candidate_commit="$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}' 2>/dev/nul
     exit 1
 }
 manifest_os_ref="${PLEBIAN_OS_REF:-}"
-[ "$manifest_os_ref" = "v$PLEBIAN_OS_ACCEPTANCE_RELEASE" ] || {
-    echo "acceptance-vm: manifest OS ref must be v$PLEBIAN_OS_ACCEPTANCE_RELEASE" >&2
+valid_release_tag "$PLEBIAN_OS_ACCEPTANCE_RELEASE" "$manifest_os_ref" || {
+    echo "acceptance-vm: manifest OS ref must be v$PLEBIAN_OS_ACCEPTANCE_RELEASE or its numbered RC tag" >&2
     exit 1
 }
 [ "$(git -C "$ROOT" cat-file -t "refs/tags/$manifest_os_ref" 2>/dev/null || true)" = tag ] || {

@@ -25,6 +25,10 @@
 #                 releases/<x.y.z>-arm64.env) inside the published tag, never
 #                 from a working tree, so the pins are the immutable ones the
 #                 release was accepted with.
+#   --release-tag TAG
+#                 explicitly select v<x.y.z>-rcN (positive N), keeping the numeric
+#                 VERSION and manifest filename. Stable v<x.y.z> is the default.
+#                 The exact tag object trust and manifest/source checks apply.
 #   --development-commit SHA
 #                 explicitly select an untagged development source commit for
 #                 diagnostics. SHA must be a full lowercase 40-character commit.
@@ -59,6 +63,17 @@
 # Run as the Pleb user; the bounded writes under /etc, /var/lib, and
 # /usr/local/bin elevate through sudo.
 set -euo pipefail
+
+# Keep the installed selector/updater self-contained. Only a stable tag or a
+# numbered RC of the same numeric VERSION is a supported release identity.
+valid_release_tag() {
+    local version="$1" tag="$2" suffix
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]]
+}
+
 
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
@@ -285,6 +300,7 @@ declare -A COMPONENT_TARGET=()
 declare -A COMPONENT_DIRECTION=()
 
 TARGET=""
+RELEASE_TAG=""
 DEVELOPMENT_COMMIT=""
 SOURCE_DIR=""
 OFFLINE=0
@@ -774,9 +790,9 @@ validate_release_closure() {
     # movable name.
     value="${MANIFEST[PLEBIAN_OS_REF]}"
     case "$value" in
-        "v$TARGET") ;;
+        "${RELEASE_TAG:-v$TARGET}") ;;
         "$OS_COMMIT") ;;
-        *) closure_reject "PLEBIAN_OS_REF must be v$TARGET or its exact commit $OS_COMMIT (got '$value')" ;;
+        *) closure_reject "PLEBIAN_OS_REF must be ${RELEASE_TAG:-v$TARGET} or its exact commit $OS_COMMIT (got '$value')" ;;
     esac
 }
 
@@ -812,7 +828,7 @@ build_selected_closure() {
 
 # ── resolving the immutable closure source ──────────────────────────────────
 resolve_closure_source() {
-    local remote expected tag_ref tag_object trusted
+    local remote expected tag_ref tag_object trusted release_tag="${RELEASE_TAG:-v$TARGET}"
     # A bare repository is a source too, and is in fact what Pleb hands us:
     # `_pleb_release_cache_prepare` builds the hop cache with `git init --bare`
     # and then *validates* that it is bare. Requiring a `.git` directory here
@@ -854,29 +870,33 @@ resolve_closure_source() {
         # F107-A's release-tag lane: fetch into a private ref namespace and
         # anchor the tag OBJECT, not the tag name.
         if [ "$OFFLINE" = 1 ]; then
-            tag_ref="refs/tags/v$TARGET"
+            tag_ref="refs/tags/$release_tag"
             tag_object="$(git -C "$SOURCE_DIR" rev-parse --verify --quiet "$tag_ref")" \
-                || die "release tag v$TARGET is not in $SOURCE_DIR and --offline forbids fetching it"
+                || die "release tag $release_tag is not in $SOURCE_DIR and --offline forbids fetching it"
         else
-            log "fetching the published release tag v$TARGET into $SOURCE_DIR"
-            tag_ref="refs/plebian-os-select/tags/v$TARGET"
+            log "fetching the published release tag $release_tag into $SOURCE_DIR"
+            tag_ref="refs/plebian-os-select/tags/$release_tag"
             git -C "$SOURCE_DIR" fetch --force --no-tags origin \
-                "refs/tags/v$TARGET:$tag_ref" \
-                || die "could not fetch release tag v$TARGET from origin — is $TARGET published?"
+                "refs/tags/$release_tag:$tag_ref" \
+                || die "could not fetch release tag $release_tag from origin — is $TARGET published?"
             tag_object="$(git -C "$SOURCE_DIR" rev-parse --verify "$tag_ref" 2>/dev/null)" \
-                || die "release tag v$TARGET did not resolve to an object"
+                || die "release tag $release_tag did not resolve to an object"
+        fi
+        if [ "$release_tag" != "v$TARGET" ]; then
+            [ "$(git -C "$SOURCE_DIR" cat-file -t "$tag_ref")" = tag ] \
+                || die "RC release tag $release_tag must be annotated"
         fi
         trusted="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}"
         if [ -n "$trusted" ]; then
             [[ "$trusted" =~ ^[0-9a-f]{40}$ ]] \
                 || die "PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA must be a full lowercase object SHA"
             [ "$tag_object" = "$trusted" ] \
-                || die "release tag v$TARGET object is $tag_object, not trusted object $trusted"
+                || die "release tag $release_tag object is $tag_object, not trusted object $trusted"
         elif [ "$OFFLINE" = 1 ]; then
             die "--offline requires PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA; a local tag name is not a trust anchor"
         fi
         OS_COMMIT="$(git -C "$SOURCE_DIR" rev-parse --verify "$tag_ref^{commit}" 2>/dev/null)" \
-            || die "release tag v$TARGET did not resolve to a commit"
+            || die "release tag $release_tag did not resolve to a commit"
     fi
     # Only the object store is read. HEAD and the working tree stay put, so the
     # updater still finds the clean pinned checkout it insists on.
@@ -2556,6 +2576,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die "--source needs a directory"
             SOURCE_DIR="$2"; shift ;;
         --source=*) SOURCE_DIR="${1#--source=}" ;;
+        --release-tag)
+            [ "$#" -ge 2 ] || die "--release-tag needs a tag"
+            [ -z "$RELEASE_TAG" ] || die "select one release tag at a time"
+            RELEASE_TAG="$2"; shift ;;
         --development-commit)
             [ "$#" -ge 2 ] || die "--development-commit needs a full commit"
             [ -z "$DEVELOPMENT_COMMIT" ] || die "select one development commit at a time"
@@ -2572,6 +2596,10 @@ done
 
 [ -z "$DEVELOPMENT_COMMIT" ] || [ "$MODE" = select ] \
     || die "--development-commit requires a target selection, not --show or --rollback"
+[ -z "$RELEASE_TAG" ] || { [ "$MODE" = select ] && [ -z "$DEVELOPMENT_COMMIT" ]; } \
+    || die "--release-tag requires a tagged target selection, not development/show/rollback"
+[ -z "$RELEASE_TAG" ] || valid_release_tag "$TARGET" "$RELEASE_TAG" \
+    || die "--release-tag must be v$TARGET or v$TARGET-rcN (N >= 1)"
 # Only a selection has a dry run; --rollback and --show would ignore the flag.
 [ "$DRY_RUN" = 0 ] || [ "$MODE" = select ] \
     || die "--dry-run applies to a selection only, not --show or --rollback"
