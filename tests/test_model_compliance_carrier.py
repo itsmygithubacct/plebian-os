@@ -93,7 +93,7 @@ def repo_holding(env_var: str, name: str, commit: str) -> Path | None:
 
 def release_env(carrier: Path = CARRIER, **overrides: str) -> dict[str, str]:
     pins = manifest(f"{VERSION}.env")
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HERE": str(ROOT)}
     for key in ("PLEBIAN_OS_VERSION", "PLEBIAN_OS_RELEASE_MODE",
                 "PLEBIAN_OS_INSTALL_VOICE_MODEL", "KILIX_VOICE_REF",
                 "KILIX_VOICE_LIB_VERSION", "KILIX_VOICE_LIB_URL",
@@ -181,8 +181,23 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         gaps.append("provisioning may install model weights")
     carrier = json.loads((root / "CARRIER.json").read_bytes())
     voice_ref = carrier["voice_ref"]
+    bundle = json.loads((ROOT / "provision/default-models.json").read_bytes())
+    if json.loads((root / "DEFAULT-MODELS.json").read_bytes()) != bundle:
+        gaps.append("carried default inventory differs from provisioning")
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
+        bundled = entry["artifact_id"] in bundle["assets"]
+        mode = "bundled-default-model" if bundled else "first-use-upstream-download"
+        if entry["delivery"] != mode:
+            gaps.append(f"{model}: delivery differs from the pinned bundle")
+        if bundled:
+            if bundle["assets"][entry["artifact_id"]] != entry["manifest_digest"]:
+                gaps.append(f"{model}: bundled manifest differs")
+            for claim in ("mode: bundled-default-model", "installs the supplied bytes offline",
+                          "local standard-policy receipts", "build-time receipts are never distributed"):
+                if claim not in delivery:
+                    gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            continue
         # Whisper and Whistle installation hands off to the model catalog (the licence screen)
         # rather than asking the receipt check itself; say so, and nothing more.
         route = (f"hands the download to that model catalog\nand fetches no weights "
@@ -194,8 +209,7 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                 gaps.append("diarization DELIVERY names the unrelated dictation install route")
         if model in {"whisper-small-en", "whistle"} and "--check-licence" in delivery:
             gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
-        for claim in ("No model weights are present in this image, and "
-                      "provisioning downloads none.",
+        for claim in ("This model's weights are not present in the image or downloaded by provisioning.",
                       "No install route downloads it until a kilix-license receipt covers it:",
                       route,
                       "mode: first-use-upstream-download"):
@@ -537,6 +551,9 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             text = path.read_text()
             self.assertRegex(text, r"(?i)did not author")
             self.assertRegex(text, r"(?m)^VERDICT: ship( with known issues)?\s*$")
+            self.assertIn(receipt["carrier_sha256"], text)
+            bundle = json.loads((CARRIER / "DEFAULT-MODELS.json").read_bytes())
+            self.assertIn(bundle["sha256"], text)
 
     # AC-8
     def test_delivery_statement_is_true_of_this_image(self):
@@ -637,7 +654,7 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             ("other content interface", lambda r: edit_env(r, "interface_content_ref", "f" * 40), {},
              "producing interfaces"),
             ("false delivery mode", lambda r: edit_env(r, f"{dictation}_delivery", "provisioned"), {},
-             "delivery is not first-use-upstream-download"),
+             "delivery differs from the default inventory"),
             ("undecided licence", lambda r: edit_env(r, f"{dictation}_decision", "pending"), {},
              "decision is not affirmative"),
             ("foreign upstream host", lambda r: edit_env(r, f"{dictation}_upstream_host", "example.invalid"), {},

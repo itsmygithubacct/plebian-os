@@ -155,7 +155,10 @@ The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
 The last published coordinated release is **0.2.2**. Its published tags and
 artifacts remain immutable. The next planned release is
-**0.2.2.1**.
+**0.2.3**, starting with **v0.2.3-rc1** based on the patched 0.2.2.1 sources.
+The 0.2.2.1 work was a local source candidate; it did not produce a published
+release. RC1 requires its own component pins, mixed model-delivery carrier,
+independent review records and installation/update acceptance.
 
 A maintenance release may append one positive decimal component without leading
 zeroes: `MAJOR.MINOR.PATCH.MAINTENANCE`. Thus `0.2.2 < 0.2.2.1 < 0.2.3`.

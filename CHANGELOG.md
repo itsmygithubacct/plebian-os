@@ -4,6 +4,17 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.2.3] — release candidate
+
+- Build RC1 from the patched 0.2.2.1 baseline and the selected 0.2.3
+  desktop, terminal, camera, model integration and transport changes.
+- Keep Waydroid optional. Installation and upgrades stage its first-use
+  helper; launching Android installs the application on demand.
+- Verify the default model archive against its exact catalog inventory and
+  distinguish bundled speech models from downloads requested on first use.
+- Retain the 0.2.2.1 password transcript protection, offline defaults,
+  standard licence policy, conversion tools and updater fixes.
+
 ## [0.2.2.1] — 2026-11-03
 
 - Remove submitted Model Setup passwords from displayed and saved terminal output.

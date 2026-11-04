@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import urllib.request
 
@@ -13,6 +14,17 @@ def verify(path, pin):
     with path.open('rb') as stream:
         if path.stat().st_size != pin['bytes'] or hashlib.file_digest(stream, 'sha256').hexdigest() != pin['sha256']:
             raise ValueError('default model bundle size or checksum mismatch')
+        stream.seek(0)
+        with tarfile.open(fileobj=stream, mode='r:xz') as archive:
+            manifests = [member for member in archive
+                         if member.name.removeprefix('./') == 'manifest.json']
+            if (len(manifests) != 1 or not manifests[0].isfile()
+                    or manifests[0].size > 16384):
+                raise ValueError('default model bundle has no unique regular manifest')
+            with archive.extractfile(manifests[0]) as manifest:
+                inventory = json.load(manifest)
+            if inventory != {'schema': 'plebian-os.default-models/v1', 'assets': pin['assets']}:
+                raise ValueError('default model bundle inventory differs from the release')
 
 
 def main(argv=None):

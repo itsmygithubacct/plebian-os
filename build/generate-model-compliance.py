@@ -77,9 +77,10 @@ def env_key(model: str) -> str:
     return "m_" + re.sub(r"[^a-z0-9]", "_", model)
 
 
-def read_manifest(version: str) -> dict[str, str]:
+def read_manifest(version: str, path: Path | None = None) -> dict[str, str]:
     values = {}
-    for line in (ROOT / "releases" / f"{version}.env").read_text().splitlines():
+    path = path or ROOT / "releases" / f"{version}.env"
+    for line in path.read_text().splitlines():
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
             values[key] = value
@@ -138,18 +139,28 @@ def load_module(src: Path, name: str):
     return module
 
 
-def delivery_text(model: str, host: str, runnable: bool, voice_ref: str) -> str:
+def delivery_text(model: str, host: str, runnable: bool, voice_ref: str,
+                  *, bundled: bool = False) -> str:
     # Every sentence here is a claim tests/test_model_compliance_carrier.py
-    # checks (AC-8): no weights in the image or fetched by provisioning, the
-    # download is digest-verified, and kilix-voice refuses the weights without
-    # a covering licence receipt.
+    # checks (AC-8): delivery matches the exact default bundle inventory and
+    # deferred downloads remain digest-verified and licence-receipt gated.
+    if bundled:
+        return "\n".join([
+            "mode: bundled-default-model",
+            "This model is included in the checksummed default model bundle on installation media.",
+            "Provisioning installs the supplied bytes offline; upgrades may acquire the same pinned bundle.",
+            "Original licence documents accompany the model, and installation verifies every catalogued file.",
+            "Installation creates local standard-policy receipts; build-time receipts are never distributed.",
+            "Existing model selections are preserved. Bundling does not prove runtime quality or activation.",
+            f"Upstream artifact provenance: {host}.",
+        ]) + "\n"
     lines = [
         f"mode: {DELIVERY_MODE}",
-        "No model weights are present in this image, and provisioning downloads none.",
+        "This model's weights are not present in the image or downloaded by provisioning.",
         f"{model} reaches a machine only when a user installs it; it is downloaded from",
         f"{host} and verified against the pinned digests before installation.",
         "No install route downloads it until a kilix-license receipt covers it:",
-        "The model catalog shows the licence and records the receipt, and",
+        "The model catalog validates the determined licence and records the receipt, and",
     ]
     if model == "kilix-diarization-cpu":
         lines += [
@@ -177,7 +188,9 @@ def notice_text(model: str, entry: dict, determination: str) -> str:
     lines = [
         f"Plebian-OS {entry['release_id']} conveyance notice for {model}.",
         "This file is written by Plebian-OS. It is not an upstream NOTICE file.",
-        "Plebian-OS does not distribute these model bytes.",
+        ("Plebian-OS distributes these model bytes in its verified default model bundle."
+         if entry["delivery"] == "bundled-default-model"
+         else "Plebian-OS does not distribute these model bytes."),
         "",
         f"Artifact: {entry['artifact_id']} (provider {entry['provider']}, version {entry['version']})",
         f"Source: {entry['source_url']}",
@@ -198,7 +211,9 @@ def notice_text(model: str, entry: dict, determination: str) -> str:
 
 def build(args) -> dict[str, bytes]:
     version = (ROOT / "VERSION").read_text().strip()
-    pins = read_manifest(version)
+    pins = read_manifest(version, getattr(args, "manifest", None))
+    if pins.get("PLEBIAN_OS_VERSION") != version:
+        raise SystemExit("manifest version differs from VERSION")
     content_ref = pins["PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF"]
     license_ref = pins["KILIX_LICENSE_REF"]
     models = advertised_models()
@@ -207,17 +222,36 @@ def build(args) -> dict[str, bytes]:
         model, _, path = item.partition("=")
         determinations.setdefault(model, []).append(Path(path))
     files: dict[str, bytes] = {}
+    bundle_path = ROOT / "provision" / "default-models.json"
+    bundle = json.loads(bundle_path.read_bytes()) if bundle_path.exists() else None
+    if bundle is not None:
+        if (bundle.get("schema") != "plebian-os.default-models-archive/v1"
+                or not isinstance(bundle.get("assets"), dict) or not bundle["assets"]
+                or not re.fullmatch(r"[0-9a-f]{64}", bundle.get("sha256", ""))
+                or type(bundle.get("bytes")) is not int or bundle["bytes"] <= 0
+                or not bundle.get("url", "").startswith("https://")):
+            raise SystemExit("default bundle has no exact archive and asset inventory")
+        files["DEFAULT-MODELS.json"] = canonical(bundle) + b"\n"
 
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)
         extract(args.content_repo, content_ref, scratch / "content")
         extract(args.license_repo, license_ref, scratch / "license")
         license_catalog = load_module(scratch / "license" / "src", "kilix_license.catalog")
+        policy = importlib.import_module("kilix_license.standard_policy")
         content_model = load_module(scratch / "content" / "src", "kilix_content.model")
         catalog = json.loads((scratch / "content" / "src" / "kilix_content" / "catalog"
                               / "plebian.json").read_text())
         assets = [content_model.AssetSpec.from_mapping(raw) for raw in catalog["assets"]]
         records = license_catalog.load_determined_records(scratch / "license")
+        if bundle is not None:
+            by_id = {asset.asset_id: asset for asset in assets}
+            for asset_id, digest in bundle["assets"].items():
+                if asset_id not in by_id or by_id[asset_id].manifest_digest != digest:
+                    raise SystemExit(f"default bundle differs from the selected asset: {asset_id}")
+                for licence in by_id[asset_id].licenses:
+                    if not policy.standard_policy_eligible(records.by_digest(licence.record_digest)):
+                        raise SystemExit(f"{asset_id}: default delivery requires a standard-policy eligible record")
         texts = scratch / "license" / "src" / "kilix_license" / "data" / "texts"
         schema_bytes = (scratch / "content" / "contracts" / "kilix.content.asset-v3.schema.json").read_bytes()
 
@@ -230,6 +264,10 @@ def build(args) -> dict[str, bytes]:
                 raise SystemExit(f"{model}: expected one asset record bound to licence "
                                  f"record {record.digest}, found {len(matches)}")
             asset = matches[0]
+            bundled = bundle is not None and asset.asset_id in bundle["assets"]
+            if bundled:
+                if not policy.standard_policy_eligible(record):
+                    raise SystemExit(f"{model}: default delivery requires a standard-policy eligible record")
             mapping = asset.to_mapping()
             source = mapping["source"]
             record_file = license_catalog.record_path(licence_record_id(model), scratch / "license")
@@ -252,7 +290,7 @@ def build(args) -> dict[str, bytes]:
                 "artifact_id": asset.asset_id,
                 "artifact_record_sha256": asset.digest,
                 "decision": record.decision_class,
-                "delivery": DELIVERY_MODE,
+                "delivery": "bundled-default-model" if bundled else DELIVERY_MODE,
                 "download_bytes": asset.download_bytes,
                 "licence_ids": licence_ids,
                 "licence_record_digest": record.digest,
@@ -290,7 +328,8 @@ def build(args) -> dict[str, bytes]:
                 names.append(name)
             files[base + "NOTICE"] = notice_text(model, entry, ", ".join(names)).encode()
             files[base + "DELIVERY"] = delivery_text(
-                model, entry["upstream_host"], runnable, pins["KILIX_VOICE_REF"]).encode()
+                model, entry["upstream_host"], runnable, pins["KILIX_VOICE_REF"],
+                bundled=bundled).encode()
 
         # The advertised dictation model is the one the release pins.
         dictation = [m for m, e in entries.items()
@@ -348,7 +387,7 @@ def build(args) -> dict[str, bytes]:
             "release_id": carrier["release_id"],
             "schema": ACCEPTANCE_SCHEMA,
             "seats": seats,
-            "seat_scope": "Historical reviews of the exact source tuples named in each record; not reviews of subsequent carrier additions.",
+            "seat_scope": "Reviews cover only the exact source and delivery scope stated in each attached record.",
         }
         files["ACCEPTANCE.json"] = canonical(acceptance) + b"\n"
     listing = "".join(f"{sha256(files[name])}  {name}\n" for name in sorted(files))
@@ -396,6 +435,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--content-repo", type=Path, required=True)
     parser.add_argument("--license-repo", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path,
+                        help="explicit candidate pins for review before the release manifest is finalized")
     parser.add_argument("--determination", action="append", default=[],
                         metavar="MODEL=FILE")
     parser.add_argument("--seat", action="append", default=[], type=Path)
