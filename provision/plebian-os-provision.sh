@@ -26,6 +26,18 @@
 # plan without touching anything.
 set -euo pipefail
 
+# Keep all existing source/rollback operations inside one bounded offline Git
+# environment when a digest-bound carrier is installed or explicitly selected.
+# The helper owns its temporary source pool for this invocation and cleans it.
+if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
+    && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
+         || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
+    _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
+    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=/usr/local/sbin/plebian-os-source-carrier
+    [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
+    exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 # ── what a release closure controls ──────────────────────────────────────────
 # This list is plebian-os-select-closure.sh's RELEASE_CONTROLLED_KEYS, which
 # UPGRADING.md defines: "the coordinated version/release mode, the four source
@@ -1501,7 +1513,14 @@ as_user() {
     command -v setpriv >/dev/null 2>&1 \
         || die "setpriv is required to run provisioning commands as $TARGET_USER"
     setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
-        --reset-env -- "$@"
+        --reset-env -- env \
+        ${GIT_CONFIG_GLOBAL:+"GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL"} \
+        ${GIT_ALLOW_PROTOCOL:+"GIT_ALLOW_PROTOCOL=$GIT_ALLOW_PROTOCOL"} \
+        ${GIT_CONFIG_NOSYSTEM:+"GIT_CONFIG_NOSYSTEM=$GIT_CONFIG_NOSYSTEM"} \
+        ${GIT_TERMINAL_PROMPT:+"GIT_TERMINAL_PROMPT=$GIT_TERMINAL_PROMPT"} \
+        ${KILIX_SOURCE_CARRIER_MANIFEST:+"KILIX_SOURCE_CARRIER_MANIFEST=$KILIX_SOURCE_CARRIER_MANIFEST"} \
+        ${KILIX_SOURCE_CARRIER_SHA256:+"KILIX_SOURCE_CARRIER_SHA256=$KILIX_SOURCE_CARRIER_SHA256"} \
+        "$@"
 }
 
 validate_target_user() {
@@ -1794,6 +1813,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -3427,7 +3447,14 @@ as_target_readonly() {
     command -v setpriv >/dev/null 2>&1 \
         || die "setpriv is required to validate the target user's Plebian-OS checkout"
     setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
-        --reset-env -- "$@"
+        --reset-env -- env \
+        ${GIT_CONFIG_GLOBAL:+"GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL"} \
+        ${GIT_ALLOW_PROTOCOL:+"GIT_ALLOW_PROTOCOL=$GIT_ALLOW_PROTOCOL"} \
+        ${GIT_CONFIG_NOSYSTEM:+"GIT_CONFIG_NOSYSTEM=$GIT_CONFIG_NOSYSTEM"} \
+        ${GIT_TERMINAL_PROMPT:+"GIT_TERMINAL_PROMPT=$GIT_TERMINAL_PROMPT"} \
+        ${KILIX_SOURCE_CARRIER_MANIFEST:+"KILIX_SOURCE_CARRIER_MANIFEST=$KILIX_SOURCE_CARRIER_MANIFEST"} \
+        ${KILIX_SOURCE_CARRIER_SHA256:+"KILIX_SOURCE_CARRIER_SHA256=$KILIX_SOURCE_CARRIER_SHA256"} \
+        "$@"
 }
 
 validated_checkout_wallpaper() {
@@ -6918,6 +6945,10 @@ fi
 # path runs this provisioner directly from the checkout, so install the same
 # helper here when the source file is available.
 UPDATE_SRC=""
+if [ -f "$SELF_DIR/plebian-os-source-carrier" ]; then
+    run install -m 0755 "$SELF_DIR/plebian-os-source-carrier" /usr/local/sbin/plebian-os-source-carrier
+fi
+
 for cand in \
     "$SELF_DIR/plebian-os-update.sh" \
     "$SELF_DIR/plebian-os-update"; do

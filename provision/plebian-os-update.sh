@@ -36,6 +36,7 @@
 # desktop providers as a clickable stack update action.
 set -euo pipefail
 
+
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 # `exit` does not trigger the ERR trap, so a die() -- the convention at 152 call
@@ -52,6 +53,18 @@ require_unprivileged_updater() {
 # invocation rejects root before config loading, allocation, locking, or writes.
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     require_unprivileged_updater "$EUID"
+fi
+
+# Keep all existing source/rollback operations inside one bounded offline Git
+# environment when a digest-bound carrier is installed or explicitly selected.
+# The helper owns its temporary source pool for this invocation and cleans it.
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
+    && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
+         || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
+    _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
+    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=/usr/local/sbin/plebian-os-source-carrier
+    [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
+    exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
 fi
 
 # The deployed provisioner, which reconciles apt sources after a committed update.
@@ -1085,6 +1098,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -1279,6 +1293,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -3533,6 +3548,7 @@ stage_and_validate_os_layer() {
         "$prov/plebian-os-install-kilix-vulkan-tts"
         "$prov/plebian-os-install-kilix-ollama-runtime"
         "$prov/plebian-os-native-runtime"
+        "$prov/plebian-os-source-carrier"
         "$prov/plebian-os-qt-runtime"
         "$prov/plebian-os-mpv-runtime"
         "$prov/native_package.py"
@@ -3577,6 +3593,8 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-install-kilix-ollama-runtime"
     [ ! -L "$prov/plebian-os-native-runtime" ] || die "unsafe native helper entry-point symlink"
     install -m 0755 "$prov/plebian-os-native-runtime" "$stage/plebian-os-native-runtime"
+    [ ! -L "$prov/plebian-os-source-carrier" ] || die "unsafe source carrier helper symlink"
+    install -m 0755 "$prov/plebian-os-source-carrier" "$stage/plebian-os-source-carrier"
     [ ! -L "$prov/plebian-os-qt-runtime" ] || die "unsafe Qt runtime helper symlink"
     install -m 0755 "$prov/plebian-os-qt-runtime" "$stage/plebian-os-qt-runtime"
     [ ! -L "$prov/plebian-os-mpv-runtime" ] || die "unsafe mpv runtime helper symlink"
@@ -3806,6 +3824,7 @@ names=(
     plebian-os-install-kilix-vulkan-tts
     plebian-os-install-kilix-ollama-runtime
     plebian-os-native-runtime
+    plebian-os-source-carrier
     native_package.py
     native_state.py
     native_process.py
@@ -3836,6 +3855,7 @@ dests=(
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/libexec/plebian-os/native_package.py
     /usr/local/libexec/plebian-os/native_state.py
     /usr/local/libexec/plebian-os/native_process.py
@@ -4152,6 +4172,7 @@ self_update_os_layer() {
         plebian-os-install-kilix-vulkan-tts
         plebian-os-install-kilix-ollama-runtime
         plebian-os-native-runtime
+        plebian-os-source-carrier
         native_package.py
         native_state.py
         native_process.py
