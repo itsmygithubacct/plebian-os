@@ -473,14 +473,11 @@ release_requires_voice_carrier() {
     ((major > 0 || minor > 2 || (minor == 2 && patch >= 1)))
 }
 
-# PLEBIAN_OS_INSTALL_VOICE_MODEL=1 does not put a model in the image, and has
-# not since OD-BB (OQ-C1): it declares that this release advertises the
-# dictation model as a first-use pull, acquired by the user through
-# kilix-content's licence-and-acceptance flow. These pins are that
-# advertisement — the source, version and digests a later user-initiated
-# install verifies its download against — and they are baked into
-# build-info.env and the firstboot environment for exactly that purpose. The
-# ISO carries no model bytes and firstboot fetches none.
+# The voice flag controls the advertised voice interface and its pinned
+# runtime/download metadata. Mixed delivery also includes the mandatory
+# default-model archive; its release acceptance is checked independently
+# below, even when this optional advertisement is disabled. Deferred models
+# retain their first-use licence and acquisition flow.
 validate_voice_release_closure() {
     case "${PLEBIAN_OS_INSTALL_VOICE_MODEL:-0}" in
         0) return 0 ;;
@@ -491,11 +488,9 @@ validate_voice_release_closure() {
             ;;
     esac
 
-    # F118-L04: 0.2.1 has no accepted F100 compliance-carrier interface yet.
-    # Legacy voice pins prove where bytes came from, but do not carry the
-    # content-policy artifact required to admit a model into a release image.
-    # Keep the model-free leg available and refuse the advertised model path
-    # until this guard can be replaced by validation of the accepted carrier.
+    # Legacy voice pins alone do not carry the content-policy artifact
+    # required for release admission. Keep this voice-interface validation;
+    # mandatory default-model delivery is also checked independently below.
     if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
             && release_requires_voice_carrier \
             && ! validate_voice_compliance_carrier; then
@@ -632,6 +627,16 @@ validate_native_release_closure() {
             return 1
         }
     done
+}
+
+# Every image built here carries the default-model archive. Optional voice
+# advertisement must not provide a way around its release acceptance.
+validate_default_model_release_closure() {
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
+    validate_voice_compliance_carrier || {
+        echo "release mode refuses the mandatory default-model bundle without an accepted compliance carrier and receipt" >&2
+        return 1
+    }
 }
 
 validate_waydroid_release_closure() {
@@ -956,6 +961,7 @@ DEFAULT_MODELS_BUNDLE="${PLEBIAN_OS_DEFAULT_MODELS_BUNDLE:-}"
     echo "PLEBIAN_OS_DEFAULT_MODELS_BUNDLE must name the release's default model archive" >&2
     exit 1
 }
+validate_default_model_release_closure
 python3 "$HERE/provision/install-default-models.py" --verify-only --archive "$DEFAULT_MODELS_BUNDLE"
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then

@@ -79,5 +79,54 @@ class MixedModelDeliveryTests(unittest.TestCase):
         self.assertNotEqual(self.guard().returncode, 0)
 
 
+class MandatoryDefaultModelAdmissionTests(unittest.TestCase):
+    def admission(self, flag, release_mode='1', carrier_result=None):
+        source = (ROOT / 'build/remaster-iso.sh').read_text()
+        functions = source[source.index('is_hex_len() {'):
+                           source.index('validate_waydroid_release_closure() {')]
+        environment = {'PATH': '/usr/bin:/bin', 'HERE': str(ROOT),
+                       'PLEBIAN_OS_VERSION': '0.2.3',
+                       'PLEBIAN_OS_RELEASE_MODE': release_mode}
+        if flag is not None:
+            environment['PLEBIAN_OS_INSTALL_VOICE_MODEL'] = flag
+        # Only delegation controls substitute a verdict. They do not create
+        # or claim a real review receipt; refusal cases use the actual guard.
+        if carrier_result is not None:
+            functions += ('\nvalidate_voice_compliance_carrier() { '
+                          'echo carrier-checked >&2; return '
+                          + str(carrier_result) + '; }\n')
+        return subprocess.run(['bash', '-c', 'set -eu\n' + functions +
+                               '\nvalidate_default_model_release_closure'],
+                              env=environment, capture_output=True, text=True)
+
+    def test_missing_acceptance_refuses_every_voice_flag(self):
+        for flag in ('0', '1', None):
+            with self.subTest(flag=flag):
+                result = self.admission(flag)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('mandatory default-model bundle', result.stderr)
+
+    def test_every_voice_flag_delegates_to_the_carrier_verdict(self):
+        for flag in ('0', '1', None):
+            for verdict in (0, 1):
+                with self.subTest(flag=flag, verdict=verdict):
+                    result = self.admission(flag, carrier_result=verdict)
+                    self.assertEqual(result.returncode, verdict, result.stderr)
+                    self.assertEqual(result.stderr.count('carrier-checked'), 1)
+
+    def test_nonrelease_development_does_not_claim_release_acceptance(self):
+        result = self.admission('0', release_mode='0', carrier_result=1)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('carrier-checked', result.stderr)
+
+    def test_admission_precedes_actual_archive_verification_and_copy(self):
+        source = (ROOT / 'build/remaster-iso.sh').read_text()
+        admission = source.index('\nvalidate_default_model_release_closure\n')
+        verify = source.index('python3 "$HERE/provision/install-default-models.py" --verify-only')
+        copy = source.index('install -m 0644 "$DEFAULT_MODELS_BUNDLE"')
+        self.assertLess(admission, verify)
+        self.assertLess(verify, copy)
+
+
 if __name__ == '__main__':
     unittest.main()
