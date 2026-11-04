@@ -550,7 +550,7 @@ Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--desktop|--no-desktop] [--
   --desktop      load the configured desktop provider in Kilix page 1 (default)
   --no-desktop   load a shell in the first screen-filling Kilix page
   --branch REF   pleb branch/tag to clone (default: repo default)
-  --ollama-carrier PATH  use the local 0.2.2 Ollama release asset (no download)
+  --ollama-carrier PATH  use the selected release's local Ollama asset (no download)
   --dry-run      print what would happen; change nothing
   --reconcile-apt-sources internal: called by plebian-os-update after a committed update
   --version      print the Plebian-OS version and exit
@@ -584,6 +584,20 @@ scan_ollama_carrier_arguments() {
             *) shift ;;
         esac
     done
+}
+
+# Numeric OS versions select manifests; source tags (including RC tags) do not.
+# Keep this policy identical in remaster and provision (covered by tests).
+ollama_carrier_required() {
+    local version="$1"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
+        || { echo "invalid Ollama release version: $version" >&2; exit 1; }
+    command -v awk >/dev/null 2>&1 \
+        || { echo "required preflight tool missing: awk" >&2; exit 1; }
+    awk -v version="$version" 'BEGIN {
+        split(version, v, ".")
+        exit !(v[1] + 0 > 0 || v[2] + 0 > 2 || (v[2] + 0 == 2 && v[3] + 0 >= 2))
+    }'
 }
 
 # The 0.2.2 Ollama runtime is mandatory and offline. Resolve and verify its
@@ -624,17 +638,17 @@ ollama_verify_carrier_pins() {
 
     bytes_count="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { n++ } END { print n + 0 }' "$manifest")"
     [ "$bytes_count" = 1 ] \
-        || die "0.2.2 release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES entry"
+        || die "$PLEBIAN_OS_VERSION release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES entry"
     expected_bytes="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { value=substr($0, index($0, "=") + 1) } END { print value }' "$manifest")"
     [[ "$expected_bytes" =~ ^[0-9]+$ ]] \
-        || die "0.2.2 release manifest carrier byte count must be decimal"
+        || die "$PLEBIAN_OS_VERSION release manifest carrier byte count must be decimal"
 
     digest_count="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { n++ } END { print n + 0 }' "$manifest")"
     [ "$digest_count" = 1 ] \
-        || die "0.2.2 release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 entry"
+        || die "$PLEBIAN_OS_VERSION release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 entry"
     expected_digest="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { value=substr($0, index($0, "=") + 1) } END { print value }' "$manifest")"
     [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] \
-        || die "0.2.2 release manifest carrier SHA-256 must be 64 lowercase hexadecimal characters"
+        || die "$PLEBIAN_OS_VERSION release manifest carrier SHA-256 must be 64 lowercase hexadecimal characters"
 
     [ -f "$carrier" ] && [ ! -L "$carrier" ] \
         || die "$label is not a regular non-symlink file: $carrier"
@@ -643,13 +657,13 @@ ollama_verify_carrier_pins() {
     [[ "$actual_bytes" =~ ^[0-9]+$ ]] \
         || die "could not read $label size: $carrier"
     [ "$actual_bytes" = "$expected_bytes" ] \
-        || die "$label size does not match the 0.2.2 release manifest: $carrier"
+        || die "$label size does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 
     actual_digest_output="$(sha256sum -- "$carrier" 2>/dev/null)" \
         || die "could not calculate $label SHA-256: $carrier"
     actual_digest="${actual_digest_output%% *}"
     [ "$actual_digest" = "$expected_digest" ] \
-        || die "$label SHA-256 does not match the 0.2.2 release manifest: $carrier"
+        || die "$label SHA-256 does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 }
 
 # Return success only when a carrier-free retry can take the install step's
@@ -692,10 +706,17 @@ ollama_installed_runtime_matches_manifest() {
 }
 
 preflight_ollama_carrier() {
+    ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
     local staging_root=/usr/local/share/plebian-os
-    local manifest_target="$staging_root/0.2.2.env"
+    local manifest_target="$staging_root/ollama-release.env"
+    # Older 0.2.2 installations carried this exact name. Never use it for a
+    # maintenance or newer release, or to bypass a present selected manifest.
+    if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest_target" ] \
+        && [ ! -L "$manifest_target" ] && [ -e "$staging_root/0.2.2.env" ]; then
+        manifest_target="$staging_root/0.2.2.env"
+    fi
     local carrier_target="$staging_root/ollama-runtime-carrier.tar.xz"
-    local checkout_manifest="$SELF_DIR/../releases/0.2.2.env"
+    local checkout_manifest="$SELF_DIR/../releases/$PLEBIAN_OS_VERSION.env"
     local cli_carrier="${PLEBIAN_OS_OLLAMA_CARRIER_ARG:-}"
     local env_carrier="${PLEBIAN_OS_OLLAMA_CARRIER:-}"
     local manifest_source="" carrier_source=""
@@ -738,7 +759,7 @@ preflight_ollama_carrier() {
         command -v cmp >/dev/null 2>&1 \
             || die "required preflight tool missing: cmp"
         cmp -s -- "$manifest_target" "$checkout_manifest" \
-            || die "staged and checkout 0.2.2 release manifests differ"
+            || die "staged and checkout $PLEBIAN_OS_VERSION release manifests differ"
     fi
     if [ "$staged_manifest_present" = 1 ]; then
         manifest_source="$manifest_target"
@@ -746,7 +767,7 @@ preflight_ollama_carrier() {
         manifest_source="$checkout_manifest"
         manifest_needs_stage=1
     else
-        die "0.2.2 Ollama release manifest is missing; provide the source checkout's releases/0.2.2.env"
+        die "$PLEBIAN_OS_VERSION Ollama release manifest is missing; provide the source checkout's releases/$PLEBIAN_OS_VERSION.env"
     fi
 
     manifest_count="$(awk -F= '$1 == "PLEBIAN_OS_VERSION" { count++ } END { print count + 0 }' "$manifest_source")"
@@ -776,7 +797,7 @@ preflight_ollama_carrier() {
         carrier_source="$carrier_target"
     else
         if ! ollama_installed_runtime_matches_manifest "$manifest_source"; then
-            die "0.2.2 Ollama carrier is missing; supply the offline 0.2.2 release asset ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz with --ollama-carrier PATH or PLEBIAN_OS_OLLAMA_CARRIER=PATH${OLLAMA_PREFLIGHT_RETRY_REASON:+; carrier-free retry rejected: $OLLAMA_PREFLIGHT_RETRY_REASON}"
+            die "$PLEBIAN_OS_VERSION Ollama carrier is missing; supply the offline $PLEBIAN_OS_VERSION release asset ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz with --ollama-carrier PATH or PLEBIAN_OS_OLLAMA_CARRIER=PATH${OLLAMA_PREFLIGHT_RETRY_REASON:+; carrier-free retry rejected: $OLLAMA_PREFLIGHT_RETRY_REASON}"
         fi
     fi
     if [ -n "$carrier_source" ]; then
@@ -825,32 +846,32 @@ preflight_ollama_carrier() {
         install -d -o root -g root -m 0755 "$staging_root" \
             || die "could not create Ollama carrier staging directory"
         if [ "$manifest_needs_stage" = 1 ]; then
-            temporary_manifest="$(mktemp "$staging_root/.0.2.2.env.XXXXXX")" \
-                || die "could not stage the 0.2.2 release manifest"
+            temporary_manifest="$(mktemp "$staging_root/.ollama-release.env.XXXXXX")" \
+                || die "could not stage the $PLEBIAN_OS_VERSION release manifest"
             if ! install -o root -g root -m 0644 -- "$manifest_source" "$temporary_manifest" \
                 || ! mv -fT -- "$temporary_manifest" "$manifest_target"; then
                 rm -f -- "$temporary_manifest"
-                die "could not install the 0.2.2 release manifest"
+                die "could not install the $PLEBIAN_OS_VERSION release manifest"
             fi
         fi
         if [ "$carrier_needs_stage" = 1 ]; then
             temporary_carrier="$(mktemp "$staging_root/.ollama-runtime-carrier.XXXXXX")" \
-                || die "could not stage the 0.2.2 Ollama carrier"
+                || die "could not stage the $PLEBIAN_OS_VERSION Ollama carrier"
             if ! install -o root -g root -m 0644 -- "$carrier_source" "$temporary_carrier" \
                 || ! mv -fT -- "$temporary_carrier" "$carrier_target"; then
                 rm -f -- "$temporary_carrier"
-                die "could not install the 0.2.2 Ollama carrier"
+                die "could not install the $PLEBIAN_OS_VERSION Ollama carrier"
             fi
         fi
     fi
 
     [ -f "$manifest_target" ] && [ ! -L "$manifest_target" ] \
         && [ "$(stat -c '%u:%a:%h' -- "$manifest_target")" = 0:644:1 ] \
-        || die "staged 0.2.2 release manifest is not a root-owned regular mode-0644 file"
+        || die "staged $PLEBIAN_OS_VERSION release manifest is not a root-owned regular mode-0644 file"
     if [ -n "$carrier_source" ]; then
         [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
             && [ "$(stat -c '%u:%a:%h' -- "$carrier_target")" = 0:644:1 ] \
-            || die "staged 0.2.2 Ollama carrier is not a root-owned regular mode-0644 file"
+            || die "staged $PLEBIAN_OS_VERSION Ollama carrier is not a root-owned regular mode-0644 file"
         ollama_verify_carrier_pins "$manifest_target" "$carrier_target" "staged Ollama carrier"
         log "offline Ollama carrier and release manifest are ready before provisioning changes"
     else
@@ -859,9 +880,9 @@ preflight_ollama_carrier() {
 }
 
 scan_ollama_carrier_arguments "$@"
-if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] \
-    && [ "$OLLAMA_PREFLIGHT_SKIP" = 0 ] \
-    && [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ]; then
+if [ "$OLLAMA_PREFLIGHT_SKIP" = 0 ] \
+    && [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] \
+    && ollama_carrier_required "$PLEBIAN_OS_VERSION"; then
     preflight_ollama_carrier
 fi
 
@@ -6694,25 +6715,33 @@ export PLEBIAN_OS_UV_VERSION="$UV_VERSION_PIN"
 export PLEBIAN_OS_UV_INSTALLER_SHA256="$UV_INSTALLER_SHA256"
 export PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="$UV_INSTALLER_MAX_BYTES"
 if [ "$DRY_RUN" = 1 ]; then
-    bash "$DEPS_SCRIPT" --dry-run
+    bash "$DEPS_SCRIPT" --dry-run --model-converters
 else
-    bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
+    bash "$DEPS_SCRIPT" --model-converters || die "dependency install failed (see the group summary above)"
 fi
 normalize_accounts_service_package_directory
 
 install_ollama_runtime_from_carrier() {
-    [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || return 0
+    ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
     local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
     local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     # The release manifest and helper arrive from the same remastered ISO.
     # PLEBIAN_OS_DIR is cloned later in firstboot, after this runtime is needed.
     local source_installer="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
-    local manifest=/usr/local/share/plebian-os/0.2.2.env
+    local manifest=/usr/local/share/plebian-os/ollama-release.env
+    if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest" ] && [ ! -L "$manifest" ]; then
+        manifest=/usr/local/share/plebian-os/0.2.2.env
+    fi
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+        && awk -F= -v version="$PLEBIAN_OS_VERSION" '
+            $1 == "PLEBIAN_OS_VERSION" { n++; actual=substr($0, index($0, "=") + 1) }
+            END { exit !(n == 1 && actual == version) }
+        ' "$manifest" || die "Ollama release manifest version does not match PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
     local staging_root=/var/lib/plebian-os/session
     local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
     local work receipt_tmp bytes digest
 
-    log "installing the pinned 0.2.2 Ollama runtime from its offline carrier"
+    log "installing the pinned $PLEBIAN_OS_VERSION Ollama runtime from its offline carrier"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + verify the installed runtime and receipt against $manifest; enable the service and return when they match"
         echo "    + otherwise verify the retained carrier size and SHA-256 against $manifest"
@@ -6724,7 +6753,7 @@ install_ollama_runtime_from_carrier() {
     fi
 
     [ -f "$manifest" ] && [ ! -L "$manifest" ] \
-        || die "the selected 0.2.2 release carrier manifest is missing or unsafe"
+        || die "the selected $PLEBIAN_OS_VERSION release carrier manifest is missing or unsafe"
     if [ ! -e "$installer" ] && [ ! -L "$installer" ] \
         && [ -f "$source_installer" ] && [ ! -L "$source_installer" ]; then
         install -m 0755 "$source_installer" "$installer" \
@@ -6738,7 +6767,7 @@ install_ollama_runtime_from_carrier() {
 
     if python3 "$installer" --verify >/dev/null 2>&1 \
         && ollama_carrier_receipt_matches_manifest "$receipt" "$manifest"; then
-        log "the installed Ollama runtime and carrier receipt match the 0.2.2 release pins"
+        log "the installed Ollama runtime and carrier receipt match the $PLEBIAN_OS_VERSION release pins"
         if ! systemctl daemon-reload \
             || ! systemctl enable --now plebian-os-ollama.service \
             || ! systemctl is-active --quiet plebian-os-ollama.service; then
@@ -6758,7 +6787,7 @@ install_ollama_runtime_from_carrier() {
         || die "could not create private Ollama carrier staging directory"
     chmod 0700 "$work"
 
-    if ! python3 "$installer" --manifest "$manifest" \
+    if ! python3 "$installer" --manifest "$manifest" --expected-version "$PLEBIAN_OS_VERSION" \
         --extract-carrier "$archive" --destination "$work/closure"; then
         rm -rf -- "$work"
         die "Ollama carrier verification or safe extraction failed"

@@ -15,6 +15,7 @@ import subprocess
 import time
 
 from launch_transport import literal_launch
+from qemu_runtime import qmp_socket_path
 
 
 def require_host() -> tuple[list[str], str]:
@@ -34,7 +35,12 @@ def require_host() -> tuple[list[str], str]:
     return remote, kilix
 
 
-def _ready(directory: Path) -> bool:
+def _ready(directory: Path, *, deadline: float | None = None) -> bool:
+    # A socket timeout per recv would let a slow peer extend this probe forever.
+    # Bound the whole greeting, including the remaining launch readiness budget.
+    probe_deadline = time.monotonic() + 0.2
+    if deadline is not None:
+        probe_deadline = min(probe_deadline, deadline)
     # QMP can listen before display capture fails. Require the host's first
     # rendered-content receipt as well as the guest's live greeting.
     try:
@@ -46,11 +52,31 @@ def _ready(directory: Path) -> bool:
     # listener is stronger evidence than a pidfile written during early init.
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(0.2)
-            connection.connect(str(directory / "qmp.sock"))
-            with connection.makefile("rb") as stream:
-                greeting = json.loads(stream.readline(65536))
-        return isinstance(greeting, dict) and isinstance(greeting.get("QMP"), dict)
+            endpoint = str(qmp_socket_path(directory))
+            remaining = probe_deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            connection.settimeout(remaining)
+            connection.connect(endpoint)
+            line = bytearray()
+            # The 64 KiB limit includes the terminating LF (CRLF is accepted).
+            # EOF or reaching the limit without LF is never a complete greeting.
+            while len(line) < 65536:
+                remaining = probe_deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                connection.settimeout(remaining)
+                chunk = connection.recv(min(4096, 65536 - len(line)))
+                if not chunk:
+                    return False
+                line.extend(chunk)
+                newline = line.find(b"\n")
+                if newline >= 0:
+                    greeting = json.loads(line[:newline + 1])
+                    return (time.monotonic() < probe_deadline
+                            and isinstance(greeting, dict)
+                            and isinstance(greeting.get("QMP"), dict))
+        return False
     except (OSError, ValueError):
         return False
 
@@ -99,8 +125,11 @@ def _close_owned(remote: list[str], marker: str) -> None:
 def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20) -> None:
     remote, kilix = require_host()
     if any((directory / name).exists() or (directory / name).is_symlink()
-           for name in ("qemu.pid", "qmp.sock", "tab.ready")):
+           for name in ("qemu.pid", "tab.ready")):
         raise RuntimeError("QEMU tab requires a fresh VM launch directory")
+    endpoint = qmp_socket_path(directory)
+    if endpoint.exists() or endpoint.is_symlink():
+        raise RuntimeError("QEMU tab requires a fresh QMP endpoint")
     if any(flag in argv for flag in ("-daemonize", "--daemonize")):
         raise ValueError("QEMU in a tab must remain in the foreground")
     marker = "KILIX_VM_LAUNCH=" + secrets.token_hex(16)
@@ -122,9 +151,11 @@ def launch(argv: list[str], title: str, directory: Path, *, timeout: float = 20)
             raise RuntimeError("Kilix did not return a pane ID for the QEMU tab")
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if _ready(directory):
+            if _ready(directory, deadline=deadline) and time.monotonic() < deadline:
                 return
-            time.sleep(0.1)
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(0.1, remaining))
         raise RuntimeError("QEMU tab did not become ready; check Kilix embedding dependencies")
     except BaseException as error:
         # Match our unguessable launch environment even when launch timed out

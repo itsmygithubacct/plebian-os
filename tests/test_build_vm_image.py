@@ -657,6 +657,7 @@ class VmBuilderEnvTests(unittest.TestCase):
                 mock.patch.object(vm.qemu_tab, "launch") as tab, \
                 mock.patch.object(vm, "run") as invoke:
             directory = Path(td) / "VM with spaces"
+            directory.mkdir(mode=0o700)
             iso = Path(td) / "installer with spaces.iso"
             vm.qemu_start(cfg(gui=True), iso, directory)
             argv, title, selected = tab.call_args.args
@@ -666,9 +667,14 @@ class VmBuilderEnvTests(unittest.TestCase):
             self.assertNotIn("-daemonize", argv)
             invoke.assert_not_called()
             tab.reset_mock()
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
             vm.qemu_start(cfg(gui=True, external_window=True), iso, directory)
             tab.assert_not_called()
-            self.assertEqual(invoke.call_args.args[0], [*argv, "-daemonize"])
+            external = invoke.call_args.args[0]
+            qmp_index = argv.index("-qmp") + 1
+            argv[qmp_index] = external[qmp_index]
+            self.assertEqual(external, [*argv, "-daemonize"])
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
 
     def test_qemu_creates_private_sparse_disk_and_boots_installer_once(self):
         with tempfile.TemporaryDirectory() as td, \
@@ -686,8 +692,18 @@ class VmBuilderEnvTests(unittest.TestCase):
             self.assertIn("user,id=net0,hostfwd=tcp:127.0.0.1:32222-:22", argv)
             self.assertIn("none", argv)
             self.assertIn("-daemonize", argv)
+            self.assertTrue(vm.cleanup_empty_runtime(vm_dir))
             with self.assertRaises(SystemExit):
                 vm.qemu_create(selected)
+
+    def test_uncertain_tab_failure_retains_runtime_for_reconnect(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(vm.qemu_tab, "launch", side_effect=RuntimeError("uncertain")):
+            directory = Path(td)
+            with self.assertRaisesRegex(RuntimeError, "uncertain"):
+                vm.qemu_start(cfg(gui=True), directory / "image.iso", directory)
+            self.assertTrue((directory / "qmp.sock").is_symlink())
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
 
     def test_qemu_efi_uses_private_variables_and_readonly_code(self):
         with tempfile.TemporaryDirectory() as td, \
@@ -710,6 +726,7 @@ class VmBuilderEnvTests(unittest.TestCase):
             record = json.loads((directory / "firmware.json").read_text())
             self.assertEqual(record["OVMF_VARS.fd"]["sha256"],
                              hashlib.sha256(b"initial variables").hexdigest())
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
 
     def test_missing_efi_inputs_refuse_before_creating_vm_state(self):
         with tempfile.TemporaryDirectory() as td, \

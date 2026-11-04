@@ -470,7 +470,7 @@ def parse_notice_manifest(payload: bytes) -> dict[PurePosixPath, str]:
     return records
 
 
-def read_carrier_pin(manifest: Path) -> tuple[int, str]:
+def read_carrier_pin(manifest: Path, expected_version: str | None = None) -> tuple[int, str]:
     try:
         descriptor = os.open(manifest, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     except OSError as error:
@@ -500,6 +500,10 @@ def read_carrier_pin(manifest: Path) -> tuple[int, str]:
         "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES",
         "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256",
     }
+    if expected_version is not None:
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?", expected_version):
+            fail("expected release version must be numeric MAJOR.MINOR.PATCH[.MAINTENANCE]")
+        required.add("PLEBIAN_OS_VERSION")
     values: dict[str, str] = {}
     for line in payload.splitlines():
         if not line or line.startswith("#") or "=" not in line:
@@ -509,6 +513,8 @@ def read_carrier_pin(manifest: Path) -> tuple[int, str]:
             if key in values:
                 fail(f"release manifest repeats {key}")
             values[key] = value
+    if expected_version is not None and values.get("PLEBIAN_OS_VERSION") != expected_version:
+        fail(f"Ollama release manifest version does not match {expected_version}")
     size = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES", "")
     digest = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256", "")
     if not re.fullmatch(r"[1-9][0-9]{0,8}", size):
@@ -562,8 +568,8 @@ def read_pinned_carrier(path: Path, expected_size: int, expected_hash: str) -> b
         os.close(descriptor)
 
 
-def verify_carrier_archive(path: Path, manifest: Path) -> tuple[int, str]:
-    expected_size, expected_hash = read_carrier_pin(manifest)
+def verify_carrier_archive(path: Path, manifest: Path, expected_version: str | None = None) -> tuple[int, str]:
+    expected_size, expected_hash = read_carrier_pin(manifest, expected_version)
     read_pinned_carrier(path, expected_size, expected_hash)
     return expected_size, expected_hash
 
@@ -676,8 +682,9 @@ def inspect_carrier_archive(payload: bytes) -> tuple[dict[PurePosixPath, str], s
     return notices, directories
 
 
-def extract_carrier_archive(path: Path, manifest: Path, destination: Path) -> None:
-    expected_size, expected_hash = read_carrier_pin(manifest)
+def extract_carrier_archive(path: Path, manifest: Path, destination: Path,
+                            expected_version: str | None = None) -> None:
+    expected_size, expected_hash = read_carrier_pin(manifest, expected_version)
     payload = read_pinned_carrier(path, expected_size, expected_hash)
     notices, directories = inspect_carrier_archive(payload)
     parent = destination.parent
@@ -1469,6 +1476,9 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         help="verify the installed runtime, service, and Debian package floors",
     )
     parser.add_argument("--manifest", type=Path, help="selected release manifest for carrier operations")
+    parser.add_argument("--expected-version", help="require the manifest's exact numeric OS version")
+    parser.add_argument("--check-manifest", action="store_true",
+                        help="validate manifest version and carrier pins without reading an archive")
     parser.add_argument("--verify-carrier", type=Path, help="verify a release-pinned carrier archive")
     parser.add_argument("--extract-carrier", type=Path, help="safely extract a release-pinned carrier archive")
     parser.add_argument("--destination", type=Path, help="private empty directory for --extract-carrier")
@@ -1481,41 +1491,49 @@ def main(argv: list[str] | None = None) -> int:
         args.closure is not None,
         args.dry_run,
         args.verify,
+        args.check_manifest,
         args.verify_carrier is not None,
         args.extract_carrier is not None,
     )) != 1:
         print(
             "plebian-os-install-kilix-ollama-runtime: choose exactly one of "
             "--closure PATH, --dry-run, --verify, --verify-carrier PATH, "
-            "or --extract-carrier PATH",
+            "--extract-carrier PATH, or --check-manifest",
             file=sys.stderr,
         )
         return 2
-    if args.verify_carrier is not None or args.extract_carrier is not None:
+    if args.check_manifest or args.verify_carrier is not None or args.extract_carrier is not None:
         if args.manifest is None:
             print("plebian-os-install-kilix-ollama-runtime: carrier mode requires --manifest", file=sys.stderr)
             return 2
-        if args.verify_carrier is not None and args.destination is not None:
+        if args.extract_carrier is None and args.destination is not None:
             print("plebian-os-install-kilix-ollama-runtime: --destination requires --extract-carrier", file=sys.stderr)
             return 2
         if args.extract_carrier is not None and args.destination is None:
             print("plebian-os-install-kilix-ollama-runtime: --extract-carrier requires --destination", file=sys.stderr)
             return 2
-    elif args.manifest is not None or args.destination is not None:
+        if args.check_manifest and args.expected_version is None:
+            print("--check-manifest requires --expected-version", file=sys.stderr)
+            return 2
+    elif args.manifest is not None or args.destination is not None or args.expected_version is not None:
         print("plebian-os-install-kilix-ollama-runtime: --manifest and --destination are carrier-only options", file=sys.stderr)
         return 2
     if args.dry_run:
         print_plan()
         return 0
     try:
+        if args.check_manifest:
+            read_carrier_pin(args.manifest, args.expected_version)
+            print(f"verified Ollama manifest for {args.expected_version}")
+            return 0
         if args.verify_carrier is not None:
-            size, digest = verify_carrier_archive(args.verify_carrier, args.manifest)
+            size, digest = verify_carrier_archive(args.verify_carrier, args.manifest, args.expected_version)
             print(f"verified Ollama carrier: {size} bytes, SHA-256 {digest}")
             return 0
         if args.extract_carrier is not None:
             if os.geteuid() != 0:
                 fail("carrier extraction must run as root")
-            extract_carrier_archive(args.extract_carrier, args.manifest, args.destination)
+            extract_carrier_archive(args.extract_carrier, args.manifest, args.destination, args.expected_version)
             print(f"extracted verified Ollama runtime closure to {args.destination}")
             return 0
         if args.verify:

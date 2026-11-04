@@ -28,7 +28,7 @@ class OllamaReprovisionTests(unittest.TestCase):
         install_function = extract_shell_function(
             source, "install_ollama_runtime_from_carrier"
         )
-        cls.ollama_functions = receipt_function + "\n" + install_function
+        cls.ollama_functions = extract_shell_function(source, "ollama_carrier_required") + "\n" + receipt_function + "\n" + install_function
         preflight_start = source.index("preflight_ollama_carrier() {")
         preflight_end = source.index('\n}\n\nscan_ollama_carrier_arguments "$@"', preflight_start) + 2
         cls.preflight_function = source[preflight_start:preflight_end]
@@ -51,6 +51,7 @@ class OllamaReprovisionTests(unittest.TestCase):
             archive.write_bytes(payload)
         manifest = media / "0.2.2.env"
         manifest.write_text(
+            "PLEBIAN_OS_VERSION=0.2.2\n"
             "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES="
             f"{len(payload)}\n"
             "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256="
@@ -235,14 +236,14 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         pin_start = source.index("ollama_verify_carrier_pins() {")
         start = source.index("preflight_ollama_carrier() {")
         end = source.index('\n}\n\nscan_ollama_carrier_arguments "$@"', start) + 2
-        cls.preflight_function = receipt_function + "\n" + source[pin_start:end]
+        cls.preflight_function = extract_shell_function(source, "ollama_carrier_required") + "\n" + receipt_function + "\n" + source[pin_start:end]
         cls.install_function = extract_shell_function(
             source, "install_ollama_runtime_from_carrier"
         )
         prefix_end = source.index("\n# Keep a copy of this script's own output")
         cls.entry_prefix = source[:prefix_end]
 
-    def make_fixture(self, root: Path, *, carrier_payload: bytes):
+    def make_fixture(self, root: Path, *, carrier_payload: bytes, version="0.2.2"):
         checkout = root / "checkout"
         provision_dir = checkout / "provision"
         release_dir = checkout / "releases"
@@ -254,9 +255,9 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             directory.mkdir(parents=True)
 
         digest = hashlib.sha256(carrier_payload).hexdigest()
-        manifest = release_dir / "0.2.2.env"
+        manifest = release_dir / f"{version}.env"
         manifest.write_text(
-            "PLEBIAN_OS_VERSION=0.2.2\n"
+            f"PLEBIAN_OS_VERSION={version}\n"
             "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES="
             f"{len(carrier_payload)}\n"
             "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256="
@@ -344,6 +345,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         })
         return {
             "root": root,
+            "version": version,
             "stage_root": stage_root,
             "installed_sbin": installed_sbin,
             "installed_helper": installed_sbin / "plebian-os-install-kilix-ollama-runtime",
@@ -363,7 +365,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             "set -euo pipefail",
             "log() { printf '[fixture] %s\\n' \"$*\"; }",
             'die() { printf "%s\\n" "$*" >&2; exit 1; }',
-            "PLEBIAN_OS_VERSION=0.2.2",
+            f"PLEBIAN_OS_VERSION={shlex.quote(fixture['version'])}",
             f"DRY_RUN={1 if dry_run else 0}",
             f"PLEBIAN_OS_OLLAMA_CARRIER_ARG={shlex.quote(option)}",
             f"SELF_DIR={shlex.quote(str(fixture['checkout'] / 'provision'))}",
@@ -401,7 +403,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             ).replace("/var/lib/plebian-os", str(fixture["state_root"]))
             script += install_function + "\ninstall_ollama_runtime_from_carrier\n"
         env = fixture["env"].copy()
-        env["PLEBIAN_OS_VERSION"] = "0.2.2"
+        env["PLEBIAN_OS_VERSION"] = fixture["version"]
         env.pop("PLEBIAN_OS_PROVISION_LIB_ONLY", None)
         env.pop("PLEBIAN_OS_OLLAMA_CARRIER", None)
         if path is not None:
@@ -500,7 +502,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         source = PROVISION.read_text()
         call = source.index("    preflight_ollama_carrier\n")
         logger = source.index('PROVISION_LOG="${PLEBIAN_OS_PROVISION_LOG:-')
-        dependencies = source.index('bash "$DEPS_SCRIPT" || die "dependency install failed')
+        dependencies = source.index('bash "$DEPS_SCRIPT" --model-converters || die "dependency install failed')
         self.assertLess(call, logger)
         self.assertLess(logger, dependencies)
         self.assertIn("PLEBIAN_OS_OLLAMA_CARRIER", self.preflight_function)
@@ -525,7 +527,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             result = self.run_real_entry_prefix(fixture, follow_install=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("entry-prefix-complete", result.stdout)
-            self.assertTrue((fixture["stage_root"] / "0.2.2.env").is_file())
+            self.assertTrue((fixture["stage_root"] / "ollama-release.env").is_file())
             self.assertFalse((fixture["stage_root"] / "ollama-runtime-carrier.tar.xz").exists())
             calls = Path(fixture["env"]["FIXTURE_CALLS"]).read_text().splitlines()
             self.assertEqual(calls.count("verify"), 2)
@@ -565,7 +567,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
             result = self.run_preflight(fixture, option=str(fixture["carrier"]))
             self.assertEqual(result.returncode, 0, result.stderr)
-            staged_manifest = fixture["stage_root"] / "0.2.2.env"
+            staged_manifest = fixture["stage_root"] / "ollama-release.env"
             staged_carrier = fixture["stage_root"] / "ollama-runtime-carrier.tar.xz"
             self.assertEqual(staged_manifest.read_bytes(), fixture["manifest"].read_bytes())
             self.assertEqual(staged_carrier.read_bytes(), fixture["payload"])
@@ -586,7 +588,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("entry-prefix-complete", result.stdout)
             self.assertFalse((no_python_path / "python3").exists())
-            staged_manifest = fixture["stage_root"] / "0.2.2.env"
+            staged_manifest = fixture["stage_root"] / "ollama-release.env"
             staged_carrier = fixture["stage_root"] / "ollama-runtime-carrier.tar.xz"
             self.assertEqual(staged_manifest.read_bytes(), fixture["manifest"].read_bytes())
             self.assertEqual(staged_carrier.read_bytes(), fixture["payload"])
@@ -677,7 +679,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             fixture = self.make_fixture(Path(directory), carrier_payload=b"pinned carrier\n")
             fixture["stage_root"].mkdir()
             fixture["stage_root"].chmod(0o755)
-            staged_manifest = fixture["stage_root"] / "0.2.2.env"
+            staged_manifest = fixture["stage_root"] / "ollama-release.env"
             staged_manifest.write_bytes(fixture["manifest"].read_bytes() + b"# staged\n")
             staged_manifest.chmod(0o644)
             result = self.run_preflight(fixture, option=str(fixture["carrier"]))

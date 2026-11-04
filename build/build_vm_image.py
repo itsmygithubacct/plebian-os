@@ -33,6 +33,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+# Preview drivers also load this script by filename from another directory.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from qemu_runtime import cleanup_empty_runtime, prepare_qmp
+
 import qemu_tab
 
 REPO = Path(__file__).resolve().parent.parent
@@ -1147,6 +1151,8 @@ def qemu_create(cfg: Config) -> Path:
 
 
 def qemu_start(cfg: Config, iso: Path, vm_dir: Path) -> None:
+    qmp = prepare_qmp(vm_dir)
+    info(f"QMP socket: {qmp} (discovery link: {vm_dir / 'qmp.sock'})")
     # Boot the installer only once. On its reboot the guest boots the disk,
     # even if the unattended installer did not eject the virtual CD drive.
     argv = [
@@ -1158,7 +1164,7 @@ def qemu_start(cfg: Config, iso: Path, vm_dir: Path) -> None:
         "-boot", "once=d,order=c", "-vga", "std",
         "-netdev", f"user,id=net0,hostfwd=tcp:127.0.0.1:{cfg.ssh_port}-:22",
         "-device", "virtio-net-pci,netdev=net0",
-        "-qmp", f"unix:{vm_dir / 'qmp.sock'},server=on,wait=off",
+        "-qmp", f"unix:{str(qmp).replace(',', ',,')},server=on,wait=off",
         "-pidfile", str(vm_dir / "qemu.pid"),
         "-display", "gtk" if cfg.gui else "none",
     ]
@@ -1166,9 +1172,15 @@ def qemu_start(cfg: Config, iso: Path, vm_dir: Path) -> None:
         argv += ["-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={vm_dir / 'OVMF_CODE.fd'}",
                  "-drive", f"if=pflash,format=raw,unit=1,file={vm_dir / 'OVMF_VARS.fd'}"]
     if cfg.gui and not cfg.external_window:
+        # Remote launch/close failures may leave a foreground process starting.
+        # Retain its runtime even when tab readiness could not be confirmed.
         qemu_tab.launch(argv, cfg.name, vm_dir)
     else:
-        run([*argv, "-daemonize"])
+        try:
+            run([*argv, "-daemonize"])
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            cleanup_empty_runtime(vm_dir)
+            raise
 
 # ── SSH into the guest (password auth via SSH_ASKPASS; no sshpass needed) ─────
 @contextlib.contextmanager

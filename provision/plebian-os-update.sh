@@ -1131,6 +1131,7 @@ paths=(
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
+    /usr/local/share/plebian-os/ollama-release.env
     /usr/local/share/plebian-os/wallpapers/plebian-os.png
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
@@ -1326,6 +1327,7 @@ paths=(
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
+    /usr/local/share/plebian-os/ollama-release.env
     /usr/local/share/plebian-os/wallpapers/plebian-os.png
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
@@ -3630,6 +3632,17 @@ stage_and_validate_os_layer() {
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
     install -m 0755 "$prov/plebian-os-firstboot-attempt" "$stage/plebian-os-firstboot-attempt"
     install -m 0644 "$PLEBIAN_OS_DIR/VERSION" "$stage/VERSION"
+    local manifest_version manifest_source
+    manifest_version="$(cat "$stage/VERSION")"
+    [[ "$manifest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
+        || die "invalid selected Ollama manifest version: $manifest_version"
+    [ "$manifest_version" = "$PLEBIAN_OS_VERSION" ] \
+        || die "checkout VERSION differs from the selected update version"
+    manifest_source="$PLEBIAN_OS_DIR/releases/$manifest_version.env"
+    python3 "$stage/plebian-os-install-kilix-ollama-runtime" \
+        --check-manifest --manifest "$manifest_source" --expected-version "$manifest_version" \
+        || die "selected update Ollama manifest is missing, unsafe or mismatched"
+    install -m 0644 "$manifest_source" "$stage/ollama-release.env"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/desktop/plebian-os.png" "$stage/desktop-wallpaper.png"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md" "$stage/ATTRIBUTION.md"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" "$stage/COPYING.GPL-2"
@@ -3857,6 +3870,7 @@ names=(
     plebian-os-waydroid-setup
     waydroid-closure.env
     waydroid-closure.sha256
+    ollama-release.env
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -3888,9 +3902,10 @@ dests=(
     /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
+    /usr/local/share/plebian-os/ollama-release.env
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65 65536)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -4087,6 +4102,35 @@ grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
     && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "${new_paths[6]}"
+# The manifest is the final member of the fixed deployment set. Validate its
+# inert data here; never execute a caller-supplied helper with root privileges.
+manifest_index=$((${#new_paths[@]} - 1))
+python3 "-" "${new_paths[$manifest_index]}" "${new_paths[6]}" <<'PY_MANIFEST'
+import pathlib
+import re
+import sys
+
+version = pathlib.Path(sys.argv[2]).read_text().strip()
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?", version):
+    raise SystemExit("invalid selected Ollama manifest version")
+values = {}
+required = {"PLEBIAN_OS_VERSION", "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES",
+            "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256"}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    key, separator, value = line.partition("=")
+    if separator and key in required:
+        if key in values:
+            raise SystemExit("duplicate selected Ollama manifest field")
+        values[key] = value
+if values.get("PLEBIAN_OS_VERSION") != version:
+    raise SystemExit("selected Ollama manifest version mismatch")
+size = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES", "")
+digest = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256", "")
+if not re.fullmatch(r"[1-9][0-9]{0,8}", size) or int(size) > 64 * 1024 * 1024:
+    raise SystemExit("invalid selected Ollama carrier byte pin")
+if not re.fullmatch(r"[0-9a-f]{64}", digest):
+    raise SystemExit("invalid selected Ollama carrier SHA-256 pin")
+PY_MANIFEST
 python3 - "${new_paths[7]}" <<'PY'
 import pathlib
 import struct
@@ -4205,6 +4249,7 @@ self_update_os_layer() {
         plebian-os-waydroid-setup
         waydroid-closure.env
         waydroid-closure.sha256
+        ollama-release.env
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"

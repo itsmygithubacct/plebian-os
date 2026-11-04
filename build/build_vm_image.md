@@ -303,7 +303,39 @@ Re-running with the same `--name`, generated `--out`, or `--report` path refuses
 to touch existing state. VirtualBox replacement requires `--replace` and,
 interactively, typing the exact VM name; automation requires `--replace --yes`.
 QEMU refuses replacement and keeps its files under the session home in
-`qemu-vms/<name>`. The release wrappers use version-and-commit-specific names
+`qemu-vms/<name>`. Its QMP socket uses a separate, randomly named mode-0700
+runtime directory under a private owned `XDG_RUNTIME_DIR`, `/run/user/<uid>`,
+or root-owned sticky `/tmp`, whichever is safe and short enough. `TMPDIR` and
+the disk storage path do not determine the socket path. The resolved endpoint
+must fit Linux's 107-byte pathname budget, including multibyte filenames.
+
+The builder prints the actual endpoint and leaves `qmp.sock` in the VM directory
+as a discovery symlink. Clients must connect to the **target** of that symlink;
+connecting through a long symlink pathname still exceeds the socket limit.
+To discover it (also supports older VMs with a local socket):
+
+```sh
+python3 build/qemu_runtime.py /path/to/session/qemu-vms/name
+```
+
+The runtime survives builder exit, `--no-wait`, acceptance failure and client
+disconnects. Do not delete it while the VM is running. After separately stopping
+the VM, QEMU normally unlinks its socket; remove the empty runtime and discovery
+link with:
+
+```sh
+python3 build/qemu_runtime.py /path/to/session/qemu-vms/name --cleanup-empty
+```
+
+This cleanup never signals a PID, deletes a socket or recursively removes files.
+It refuses an occupied runtime, including a stale socket after a crash. Inspect
+and stop the owning VM before manually removing a stale socket at the printed
+target. An interrupted or uncertain launch retains its endpoint for inspection;
+a synchronous QEMU refusal cleans up only if the runtime is already empty.
+Runtime directories may disappear at logout or reboot; they are not persistent
+VM storage or a mechanism for adopting/restarting an existing VM.
+
+The release wrappers use version-and-commit-specific names
 by default so separate candidates do not erase one another. To remove a
 VirtualBox VM by hand:
 
@@ -372,6 +404,6 @@ This lane does not qualify Secure Boot. Existing VM directories are refused.
 
 The strict ISO wrapper also accepts `--target qemu` for its interactive BIOS
 and EFI lanes. The two guests use separate loopback forwarding ports 2222 and
-2223. Set `PLEBIAN_OS_SESSION_HOME` to a private directory with a short path
-(the QMP Unix socket must fit the host path-length limit). No VM start report
+2223. `PLEBIAN_OS_SESSION_HOME` selects disk storage independently of the short
+private QMP runtime. No VM start report
 satisfies installed acceptance without completing the installer and checklist.

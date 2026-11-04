@@ -40,6 +40,15 @@ argument 3. If both forms are set, they must resolve to the same file. The
 existing size and SHA-256 pins in `releases/0.2.2.env` are the byte acceptance
 check; no carrier download is performed.
 
+For 0.2.2 and later releases, remastering selects the carrier pins from
+`releases/<VERSION>.env` and checks its declared version before accepting the
+archive. The media carries that exact manifest as `ollama-release.env` for
+preseed and firstboot. Maintenance versions use their own manifest, such as
+`releases/0.2.2.1.env`. An explicit RC source tag does not change the numeric
+OS version: `v0.2.3-rc1` with `VERSION=0.2.3` requires `releases/0.2.3.env`.
+Prepare the matching manifest before building or updating; no older or
+latest-release manifest is used as a fallback.
+
 For example, from the clean `v0.2.2` checkout, with the release asset available
 locally:
 

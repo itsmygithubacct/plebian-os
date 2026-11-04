@@ -27,6 +27,7 @@ QUALIFICATION=0
 VULKAN=0
 VULKAN_NOUVEAU=0
 VULKAN_TTS=0
+MODEL_CONVERTERS=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
@@ -34,8 +35,9 @@ for arg in "$@"; do
         --vulkan) VULKAN=1 ;;
         --vulkan-nouveau) VULKAN=1; VULKAN_NOUVEAU=1 ;;
         --vulkan-tts) VULKAN=1; VULKAN_TTS=1 ;;
+        --model-converters) MODEL_CONVERTERS=1 ;;
         *)
-            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau] [--vulkan-tts]\n' \
+            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau] [--vulkan-tts] [--model-converters]\n' \
                 "$0" >&2
             exit 2
             ;;
@@ -315,10 +317,11 @@ QUAL_VULKAN_GROUPS=(
     "qualification Vulkan probe :: vulkan-tools"
 )
 
-# Pocket TTS conversion is a one-time, opt-in operation. These exact direct
+# Model Setup requires conversion software from 0.2.2.1 onward. These direct
 # pins reproduced the catalog's Q8_0 model and projector hashes against the
 # release Debian snapshot. python3-torch brings a large transitive closure, so
-# this group must never enter DEP_GROUPS, preseed.cfg, or qualification images.
+# this group stays separate from DEP_GROUPS and preseed.cfg. Provisioning
+# selects --model-converters before installing the converter helpers.
 # The runtime Vulkan path does not need these Python conversion packages after
 # the user's local GGUF derivation has completed.
 VULKAN_TTS_CONVERTER_GROUPS=(
@@ -451,11 +454,14 @@ if [ "$VULKAN_NOUVEAU" -eq 1 ]; then
     done
 fi
 
-if [ "$VULKAN_TTS" -eq 1 ]; then
+if [ "$VULKAN_TTS" -eq 1 ] || [ "$MODEL_CONVERTERS" -eq 1 ]; then
     for entry in "${VULKAN_TTS_CONVERTER_GROUPS[@]}"; do
         name=${entry%% :: *}; pkgs=${entry#* :: }
         install_package_group "optional converter group" "$name" "$pkgs"
     done
+fi
+
+if [ "$VULKAN_TTS" -eq 1 ]; then
     for entry in "${VULKAN_TTS_BUILD_GROUPS[@]}"; do
         name=${entry%% :: *}; pkgs=${entry#* :: }
         install_package_group "optional build group" "$name" "$pkgs"

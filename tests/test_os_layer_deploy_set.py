@@ -172,6 +172,12 @@ class OsLayerSyntaxValidationTests(unittest.TestCase):
             "COPYING.GPL-2": "assets/COPYING.GPL-2",
         }
         for name in self.names:
+            if name == "ollama-release.env":
+                version = (ROOT / "VERSION").read_text().strip()
+                payload = (ROOT / "releases/0.2.2.env").read_text()
+                (stage / name).write_text(payload.replace("PLEBIAN_OS_VERSION=0.2.2\n",
+                                                        f"PLEBIAN_OS_VERSION={version}\n"))
+                continue
             shutil.copyfile(ROOT / aliases.get(name, "provision/" + name), stage / name)
 
     def _run(self, stage, *, root=True):

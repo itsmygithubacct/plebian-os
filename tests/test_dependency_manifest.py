@@ -360,6 +360,37 @@ class DependencyManifestTests(unittest.TestCase):
             self.assertNotIn(package, output())
             self.assertNotIn(package, output("--vulkan"))
 
+    def test_model_converter_mode_selects_exact_packages_without_gpu_build_tools(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "provision/install-deps.sh"),
+             "--dry-run", "--model-converters"],
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for package in VULKAN_TTS_CONVERTER_PACKAGES:
+            self.assertIn(package, result.stdout)
+        for package in VULKAN_TTS_BUILD_PACKAGES | VULKAN_NOUVEAU_PACKAGES:
+            self.assertNotIn(package, result.stdout)
+
+    def test_provision_selects_converter_dependencies_before_helper_installation(self):
+        source = (ROOT / "provision/plebian-os-provision.sh").read_text()
+        start = source.index('log "installing runtime dependencies via $DEPS_SCRIPT"')
+        end = source.index('\nnormalize_accounts_service_package_directory', start)
+        self.assertLess(end, source.index('\ninstall_model_setup_software\n'))
+        with tempfile.TemporaryDirectory() as td:
+            helper = Path(td) / 'deps'
+            helper.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+            for dry in ('0', '1'):
+                env = {"PATH": "/usr/bin:/bin", "DEPS_SCRIPT": str(helper),
+                       "DRY_RUN": dry, "UV_VERSION_PIN": "", "UV_INSTALLER_SHA256": "",
+                       "UV_INSTALLER_MAX_BYTES": ""}
+                result = subprocess.run(
+                    ['bash', '-c', 'set -eu\nlog() { :; }\ndie() { exit 1; }\n' + source[start:end]],
+                    env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('--model-converters', result.stdout.splitlines())
+                self.assertEqual('--dry-run' in result.stdout.splitlines(), dry == '1')
+
     def test_dependency_cli_refuses_unknown_options(self):
         result = subprocess.run(
             ["bash", str(ROOT / "provision" / "install-deps.sh"),

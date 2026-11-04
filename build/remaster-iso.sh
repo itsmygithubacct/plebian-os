@@ -973,13 +973,28 @@ OUT_ISO="${2:-$PLEBIAN_OS_ARTIFACTS/$default_iso_name}"
 OUT_REAL="$(readlink -m "$OUT_ISO")"
 [ ! -b "$OUT_REAL" ] || { echo "refusing to use a block device as ISO output: $OUT_REAL" >&2; exit 1; }
 [ ! -d "$OUT_REAL" ] || { echo "ISO output is a directory: $OUT_REAL" >&2; exit 1; }
-if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
+# Numeric OS versions select manifests; source tags (including RC tags) do not.
+# Keep this policy identical in remaster and provision (covered by tests).
+ollama_carrier_required() {
+    local version="$1"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
+        || { echo "invalid Ollama release version: $version" >&2; exit 1; }
+    command -v awk >/dev/null 2>&1 \
+        || { echo "required preflight tool missing: awk" >&2; exit 1; }
+    awk -v version="$version" 'BEGIN {
+        split(version, v, ".")
+        exit !(v[1] + 0 > 0 || v[2] + 0 > 2 || (v[2] + 0 == 2 && v[3] + 0 >= 2))
+    }'
+}
+
+OLLAMA_MANIFEST="$HERE/releases/$PLEBIAN_OS_VERSION.env"
+if ollama_carrier_required "$PLEBIAN_OS_VERSION"; then
     [ -n "$OLLAMA_CARRIER" ] \
-        || { echo "Plebian-OS 0.2.2 requires argument 3 or PLEBIAN_OS_OLLAMA_CARRIER" >&2; exit 1; }
+        || { echo "Plebian-OS $PLEBIAN_OS_VERSION requires argument 3 or PLEBIAN_OS_OLLAMA_CARRIER" >&2; exit 1; }
     [ -f "$OLLAMA_CARRIER" ] && [ ! -L "$OLLAMA_CARRIER" ] \
         || { echo "Ollama carrier is missing or is not a regular file" >&2; exit 1; }
     python3 "$HERE/provision/plebian-os-install-kilix-ollama-runtime" \
-        --manifest "$HERE/releases/0.2.2.env" \
+        --manifest "$OLLAMA_MANIFEST" --expected-version "$PLEBIAN_OS_VERSION" \
         --verify-carrier "$OLLAMA_CARRIER"
 fi
 if [ -z "$SRC_ISO" ]; then
@@ -1924,9 +1939,9 @@ cp "$HERE/provision/plebian-os-install-diarization-converter" "$EXTRACT/plebian-
 cp "$HERE/provision/plebian-os-install-encodec-converter" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-vulkan-tts" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-kilix-ollama-runtime" "$EXTRACT/plebian-os/"
-if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
-    install -m 0644 "$HERE/releases/0.2.2.env" \
-        "$EXTRACT/plebian-os/0.2.2.env"
+if ollama_carrier_required "$PLEBIAN_OS_VERSION"; then
+    install -m 0644 "$OLLAMA_MANIFEST" \
+        "$EXTRACT/plebian-os/ollama-release.env"
     install -m 0644 "$OLLAMA_CARRIER" \
         "$EXTRACT/plebian-os/ollama-runtime-carrier.tar.xz"
 fi

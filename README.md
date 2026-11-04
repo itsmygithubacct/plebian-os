@@ -373,8 +373,14 @@ sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$ca
 
 The provisioner also accepts `PLEBIAN_OS_OLLAMA_CARRIER=/path/to/<asset>`.
 When running from a source checkout, it stages that checkout's
-`releases/0.2.2.env`; if an ISO-staged manifest is also present, both copies
-must match byte for byte.
+`releases/<VERSION>.env` as `ollama-release.env`; if an ISO-staged manifest is
+also present, both copies must match byte for byte. The manifest must declare
+the exact numeric OS version. For example, a `v0.2.3-rc1` source checkout with
+`VERSION=0.2.3` requires `releases/0.2.3.env`. A missing or mismatched manifest
+stops provisioning before package changes; another release's pins are never
+substituted. OS updates deploy this manifest with `VERSION` and restore both
+on rollback. Existing 0.2.2 installations may still use their legacy
+`0.2.2.env` file when `ollama-release.env` is absent.
 
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 
