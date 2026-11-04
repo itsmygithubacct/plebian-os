@@ -1908,6 +1908,13 @@ cp "$PRESEED" "$EXTRACT/preseed.cfg"
 # The files late_command copies into the target, staged under /cdrom/plebian-os.
 mkdir -p "$EXTRACT/plebian-os"
 install -m 0644 "$DEFAULT_MODELS_BUNDLE" "$EXTRACT/plebian-os/default-models.tar.xz"
+# Optional explicit source carrier is staged only after complete digest/graph checks.
+# Its immutable manifest and helper bytes are reviewed with the final source tuple.
+if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; then
+    python3 "$HERE/provision/plebian-os-source-carrier" stage "$EXTRACT/plebian-os/source-carrier"
+fi
+cp "$HERE/provision/plebian-os-source-carrier" "$EXTRACT/plebian-os/"
+
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"

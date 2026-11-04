@@ -65,6 +65,18 @@ if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     require_unprivileged_updater "$EUID"
 fi
 
+# Keep all existing source/rollback operations inside one bounded offline Git
+# environment when a digest-bound carrier is installed or explicitly selected.
+# The helper owns its temporary source pool for this invocation and cleans it.
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
+    && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
+         || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
+    _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
+    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=/usr/local/sbin/plebian-os-source-carrier
+    [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
+    exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 # The deployed provisioner, which reconciles apt sources after a committed update.
 PROVISION_HELPER_DST=/usr/local/sbin/plebian-os-provision
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
@@ -1097,6 +1109,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -1291,6 +1304,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -3556,6 +3570,7 @@ stage_and_validate_os_layer() {
         "$prov/plebian-os-install-kilix-vulkan-tts"
         "$prov/plebian-os-install-kilix-ollama-runtime"
         "$prov/plebian-os-native-runtime"
+        "$prov/plebian-os-source-carrier"
         "$prov/plebian-os-qt-runtime"
         "$prov/plebian-os-mpv-runtime"
         "$prov/native_package.py"
@@ -3600,6 +3615,8 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-install-kilix-ollama-runtime"
     [ ! -L "$prov/plebian-os-native-runtime" ] || die "unsafe native helper entry-point symlink"
     install -m 0755 "$prov/plebian-os-native-runtime" "$stage/plebian-os-native-runtime"
+    [ ! -L "$prov/plebian-os-source-carrier" ] || die "unsafe source carrier helper symlink"
+    install -m 0755 "$prov/plebian-os-source-carrier" "$stage/plebian-os-source-carrier"
     [ ! -L "$prov/plebian-os-qt-runtime" ] || die "unsafe Qt runtime helper symlink"
     install -m 0755 "$prov/plebian-os-qt-runtime" "$stage/plebian-os-qt-runtime"
     [ ! -L "$prov/plebian-os-mpv-runtime" ] || die "unsafe mpv runtime helper symlink"
@@ -3653,7 +3670,7 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-native-runtime"; do
         bash -n "$file" || die "staged OS-layer shell validation failed: $file"
     done
-    python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
+    python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-source-carrier" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-diarization-converter" \
         "$stage/plebian-os-install-encodec-converter" \
@@ -3829,6 +3846,7 @@ names=(
     plebian-os-install-kilix-vulkan-tts
     plebian-os-install-kilix-ollama-runtime
     plebian-os-native-runtime
+    plebian-os-source-carrier
     native_package.py
     native_state.py
     native_process.py
@@ -3859,6 +3877,7 @@ dests=(
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/libexec/plebian-os/native_package.py
     /usr/local/libexec/plebian-os/native_state.py
     /usr/local/libexec/plebian-os/native_process.py
@@ -3870,8 +3889,8 @@ dests=(
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -4049,14 +4068,14 @@ for i in "${!new_paths[@]}"; do
 done
 # Recheck executable syntax before any installed file is backed up or replaced.
 for file in "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[24]}" \
-    "${new_paths[25]}"; do
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[25]}" \
+    "${new_paths[26]}"; do
     bash -n "$file"
 done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
     "${new_paths[15]}" "${new_paths[16]}" "${new_paths[18]}" \
     "${new_paths[19]}" "${new_paths[20]}" "${new_paths[21]}" \
-    "${new_paths[22]}" "${new_paths[23]}" <<'PY'
+    "${new_paths[22]}" "${new_paths[23]}" "${new_paths[24]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
@@ -4175,6 +4194,7 @@ self_update_os_layer() {
         plebian-os-install-kilix-vulkan-tts
         plebian-os-install-kilix-ollama-runtime
         plebian-os-native-runtime
+        plebian-os-source-carrier
         native_package.py
         native_state.py
         native_process.py
