@@ -45,6 +45,7 @@ SOURCES = {
     'plebian-os-waydroid-setup': 'provision/plebian-os-waydroid-setup',
     'waydroid-closure.env': 'provision/waydroid-closure.env',
     'waydroid-closure.sha256': 'provision/waydroid-closure.sha256',
+    'ollama-release.env': 'releases/' + (ROOT / 'VERSION').read_text().strip() + '.env',
 }
 
 
@@ -79,6 +80,7 @@ set -euo pipefail
 export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
 source "$NATIVE_UPDATE"
 PLEBIAN_OS_DIR="$NATIVE_CHECKOUT"
+PLEBIAN_OS_VERSION="$(cat "$NATIVE_CHECKOUT/VERSION")"
 systemd-analyze() {
     [ "$#" = 2 ] && [ "$1" = verify ] && [ "$2" = "$NATIVE_STAGE/plebian-os-firstboot.service" ]
 }

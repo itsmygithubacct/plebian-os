@@ -425,7 +425,7 @@ class ProvisionRootTransactionTests(unittest.TestCase):
     def test_main_transaction_window_starts_before_files_and_commits_last(self):
         source = PROVISION.read_text()
         dependencies = source.rindex(
-            'bash "$DEPS_SCRIPT" || die "dependency install failed'
+            'bash "$DEPS_SCRIPT" --model-converters || die "dependency install failed'
         )
         normalized = source.rindex("\nnormalize_accounts_service_package_directory\n")
         begun = source.rindex("\nbegin_provision_root_transaction\n")
