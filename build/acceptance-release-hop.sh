@@ -20,6 +20,8 @@ usage: acceptance-release-hop.sh --shape image|standalone --from X.Y.Z \
        [--from-os-ref SHA --from-kilix95-ref SHA \
         --expected-build-info-sha256 SHA256]
 
+Optional --bootstrap-driver PATH --bootstrap-driver-ref SHA uses an explicit
+legacy migration driver without replacing the installed CLI before the hop.
 The guest must start on the accepted previous release. DIR must be outside
 $HOME. Image guests require all three final options. The command refuses
 non-VM hosts, a dirty source checkout, or a starting closure mismatch.
@@ -34,6 +36,9 @@ die() {
 shape=""
 from=""
 target=""
+release_tag=""
+bootstrap_driver=""
+bootstrap_driver_ref=""
 report=""
 from_pleb_ref=""
 from_kilix_ref=""
@@ -54,6 +59,9 @@ while [ "$#" -gt 0 ]; do
         --shape) [ "$#" -ge 2 ] || die "--shape needs a value"; shape="$2"; shift 2 ;;
         --from) [ "$#" -ge 2 ] || die "--from needs a value"; from="$2"; shift 2 ;;
         --target) [ "$#" -ge 2 ] || die "--target needs a value"; target="$2"; shift 2 ;;
+        --bootstrap-driver) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver" ] || die "--bootstrap-driver needs one path"; bootstrap_driver="$2"; shift 2 ;;
+        --bootstrap-driver-ref) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver_ref" ] || die "--bootstrap-driver-ref needs one SHA"; bootstrap_driver_ref="$2"; shift 2 ;;
+        --release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$release_tag" ] || die "--release-tag needs one nonempty tag"; release_tag="$2"; shift 2 ;;
         --from-pleb-ref) [ "$#" -ge 2 ] || die "--from-pleb-ref needs a value"; from_pleb_ref="$2"; shift 2 ;;
         --from-kilix-ref) [ "$#" -ge 2 ] || die "--from-kilix-ref needs a value"; from_kilix_ref="$2"; shift 2 ;;
         --from-os-ref) [ "$#" -ge 2 ] || die "--from-os-ref needs a value"; from_os_ref="$2"; shift 2 ;;
@@ -75,7 +83,18 @@ done
 case "$shape" in image|standalone) ;; *) die "--shape must be image or standalone" ;; esac
 [[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--from must be X.Y.Z"
 [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--target must be X.Y.Z"
+if [ -n "$release_tag" ] && [ "$release_tag" != "v$target" ]; then
+    rc_number="${release_tag#"v$target-rc"}"
+    [ "$rc_number" != "$release_tag" ] && [[ "$rc_number" =~ ^[1-9][0-9]*$ ]] \
+        || die "--release-tag must be the exact target stable or numbered RC tag"
+fi
 [ "$from" != "$target" ] || die "--from and --target must differ"
+if [ -n "$bootstrap_driver$bootstrap_driver_ref" ]; then
+    [[ "$bootstrap_driver" =~ ^/[A-Za-z0-9_./-]+$ ]] \
+        && [[ "$bootstrap_driver_ref" =~ ^[0-9a-f]{40}$ ]] \
+        && [ -n "$release_tag" ] \
+        || die "bootstrap requires an absolute literal driver path, full source SHA and explicit release tag"
+fi
 for named_ref in "$from_pleb_ref" "$from_kilix_ref"; do
     [[ "$named_ref" =~ ^[0-9a-f]{40}$ ]] || die "starting Pleb and Kilix refs must be full lowercase commit SHAs"
 done
@@ -213,6 +232,7 @@ select_installed_paths() {
     engine_build="${values[0]}"; engine_state="${values[1]}"
     settings_file="${values[2]}"; source_home="${values[3]}"
     preserve_root="${values[4]}/update-preserve"
+    release_state="${values[4]}/release-hop/active"
     installed_system_session="${values[5]}"; installed_user_session="${values[6]}"
     installed_system_closure="${values[7]}"; installed_user_closure="${values[8]}"
     installed_kilix_dir="${values[9]}"; installed_pleb_dir="${values[10]}"
@@ -257,6 +277,11 @@ write_reboot_verifier() {
             "$pleb_dir" "$installed_paths" "$engine_build" "$engine_state" "$engine_prebuilt"
         printf 'test "$(cat /etc/machine-id)" = %q\n' "$(cat /etc/machine-id)"
         printf 'test "$(%q update --show)" = %q\n' "$pleb_bin" "$(cat "$report/show-after.txt")"
+        if [ -n "${release_tag:-}" ]; then
+            printf 'test "$(sed -n 5p %q)" = %q\n' "$release_state" "$release_tag"
+            printf 'test "$(sha256sum -- %q | cut -d " " -f 1)" = %q\n' \
+                "$release_state" "$(sha256sum -- "$release_state" | cut -d ' ' -f 1)"
+        fi
         for component in "${target_components[@]}"; do
             case "$component" in
                 pleb) ref_key=PLEB_REF; checkout_dir="$pleb_dir" ;;
@@ -454,8 +479,22 @@ else
         test "$kilix95_start_head" = "$from_kilix95_ref"
 fi
 
-"$pleb_bin" update --help >"$report/pleb-update-help.txt" 2>&1
-must "installed-entrypoint-supports-named-hop" "pleb update --to" \
+hop_command=("$pleb_bin")
+hop_entrypoint_mode=installed-cli
+if [ -n "$bootstrap_driver" ]; then
+    [ -x "$bootstrap_driver" ] || die "bootstrap driver is not executable"
+    hop_command=("$bootstrap_driver" --installed-pleb "$pleb_bin" --driver-ref "$bootstrap_driver_ref" --)
+    hop_entrypoint_mode=explicit-legacy-bootstrap
+    printf '%s\n' "$bootstrap_driver_ref" >"$report/bootstrap-driver.ref"
+fi
+release_args=()
+[ -z "$release_tag" ] || release_args=(--release-tag "$release_tag")
+"${hop_command[@]}" update --help >"$report/pleb-update-help.txt" 2>&1
+if [ -n "${release_tag:-}" ]; then
+    must "selected-entrypoint-supports-explicit-tag" "$hop_entrypoint_mode --release-tag" \
+        grep -q -- '--release-tag' "$report/pleb-update-help.txt"
+fi
+must "selected-entrypoint-supports-named-hop" "$hop_entrypoint_mode --to" \
     grep -q -- '--to X.Y.Z' "$report/pleb-update-help.txt"
 "$pleb_bin" update --show >"$report/show-before.txt" 2>"$report/show-before.stderr"
 current="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-before.txt" | head -n 1)"
@@ -476,7 +515,7 @@ printf '%s\n' "$engine_before" >"$report/engine.before"
 git_snapshot "$pleb_dir" pleb-before-dry-run
 git_snapshot "$kilix_dir" kilix-before-dry-run
 set +e
-"$pleb_bin" update --to "$target" --dry-run --yes --no-restart \
+"${hop_command[@]}" update --to "$target" "${release_args[@]}" --dry-run --yes --no-restart \
     >"$report/dry-run.stdout" 2>"$report/dry-run.stderr"
 dry_run_rc=$?
 set -e
@@ -559,7 +598,7 @@ if [ "$shape" = image ]; then
     git_snapshot "$os_dir" os-before-dirty-refusal
     git_snapshot "$kilix95_dir" kilix95-before-dirty-refusal
     set +e
-    "$pleb_bin" update --to "$target" --yes --no-restart \
+    "${hop_command[@]}" update --to "$target" "${release_args[@]}" --yes --no-restart \
         >"$report/dirty-refusal.stdout" 2>"$report/dirty-refusal.stderr"
     dirty_rc=$?
     set -e
@@ -615,7 +654,7 @@ home_manifest "$report/home-before-failure.tsv"
 failure_boundary=closure
 set +e
 PLEBIAN_OS_SELECT_TEST_FAIL_AFTER="$failure_boundary" \
-    "$pleb_bin" update --to "$target" --yes --no-restart \
+    "${hop_command[@]}" update --to "$target" "${release_args[@]}" --yes --no-restart \
     >"$report/induced-failure.stdout" 2>"$report/induced-failure.stderr"
 failure_rc=$?
 set -e
@@ -640,7 +679,7 @@ diff -u "$report/home-before-failure.tsv" "$report/home-after-failure.tsv" \
     >"$report/home-induced-failure.diff" || true
 
 set +e
-"$pleb_bin" update --to "$target" --yes --no-restart \
+"${hop_command[@]}" update --to "$target" "${release_args[@]}" --yes --no-restart \
     >"$report/success.stdout" 2>"$report/success.stderr"
 success_rc=$?
 set -e
@@ -649,6 +688,11 @@ must "single-command-hop-succeeds" "pleb update --to $target; exit=$success_rc" 
 "$pleb_bin" update --show >"$report/show-after.txt" 2>"$report/show-after.stderr"
 selected="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-after.txt" | head -n 1)"
 must "selected-release-is-target" "$selected/$target" test "$selected" = "$target"
+if [ -n "${release_tag:-}" ]; then
+    must "selected-release-tag-is-exact" "$release_tag" \
+        test "$(sed -n '5p' "$release_state")" = "$release_tag"
+    cp -- "$release_state" "$report/release-hop-active.after"
+fi
 target_components=(pleb kilix)
 if [ "$shape" = image ]; then target_components+=(os kilix95); fi
 for component in "${target_components[@]}"; do
@@ -723,6 +767,7 @@ git_snapshot "$kilix_dir" kilix-after-success
 record_check "evidence-artifacts-written" pass "home manifests 4/4; failure/success hop logs 2/2"
 
 export F109_REPORT_SHAPE="$shape" F109_REPORT_TARGET="$target"
+export F109_REPORT_TAG="$release_tag" F109_REPORT_DRIVER_REF="$bootstrap_driver_ref" F109_REPORT_ENTRYPOINT="$hop_entrypoint_mode"
 export F109_REPORT_CURRENT="$current" F109_REPORT_VIRT="$virt"
 export F109_REPORT_FROM_PLEB_REF="$from_pleb_ref"
 export F109_REPORT_FROM_KILIX_REF="$from_kilix_ref"
@@ -757,6 +802,9 @@ report = {
     "release_hop": {
         "from": os.environ["F109_REPORT_CURRENT"],
         "to": os.environ["F109_REPORT_TARGET"],
+        "release_tag": os.environ["F109_REPORT_TAG"] or None,
+        "entrypoint_mode": os.environ["F109_REPORT_ENTRYPOINT"],
+        "bootstrap_driver_ref": os.environ["F109_REPORT_DRIVER_REF"] or None,
         "dry_run_commands": 1,
         "dry_run_command_denominator": 1,
         "successful_hop_commands": 1,

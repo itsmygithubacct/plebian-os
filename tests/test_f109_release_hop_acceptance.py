@@ -64,8 +64,8 @@ PLEB_DIR="$PLEB_ROOT"
         for token in (
             "--shape image|standalone",
             'case "$shape" in image|standalone)',
-            '"$pleb_bin" update --to "$target" --yes --no-restart',
-            '"$pleb_bin" update --to "$target" --dry-run --yes --no-restart',
+            '"${hop_command[@]}" update --to "$target" "${release_args[@]}" --yes --no-restart',
+            '"${hop_command[@]}" update --to "$target" "${release_args[@]}" --dry-run --yes --no-restart',
             "PLEBIAN_OS_SELECT_TEST_FAIL_AFTER",
             "home-before.tsv",
             "home-after-failure.tsv",
@@ -92,6 +92,17 @@ PLEB_DIR="$PLEB_ROOT"
             '"successful_hop_command_denominator": 1',
         ):
             self.assertIn(token, source)
+
+    def test_explicit_rc_identity_is_validated_before_guest_or_host_work(self):
+        for runner in (RUNNER, HOST_RUNNER):
+            for tag in ("v0.2.3-rc0", "v0.2.3-rc01", "v0.2.2-rc1", "v0.2.3-beta1"):
+                with self.subTest(runner=runner.name, tag=tag):
+                    args = [str(runner), "--from", "0.2.2", "--target", "0.2.3", "--release-tag", tag]
+                    if runner == RUNNER:
+                        args += ["--shape", "image", "--disposable-vm"]
+                    result = subprocess.run(args, capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("--release-tag must be the exact target", result.stderr)
 
     def test_help_is_non_mutating_and_documents_the_guest_boundary(self):
         result = subprocess.run(
@@ -303,6 +314,9 @@ PLEB_DIR="$PLEB_ROOT"
 report="$1"; pleb_bin="$report/pleb"; pleb_dir="$report"; kilix_dir="$report"
 session_env="$report/session"; closure_env="$report/closure"; settings_file="$report/settings"
 select_installed_paths; sentinels="$report/sentinels.tsv"
+release_tag=v0.2.2-rc1
+mkdir -p "$(dirname "$release_state")"
+printf '%s\n' 0.2.2 commit object digest "$release_tag" >"$release_state"
 target_components=(pleb kilix os kilix95); declare -A image_resolved_paths=()
 os_dir="$report/os-source"; kilix95_dir="$report"
 write_reboot_verifier "$report/verify.sh"
@@ -316,6 +330,14 @@ write_reboot_verifier "$report/verify.sh"
                 return subprocess.run(["bash", str(root / "verify.sh")],
                                       env=env, capture_output=True).returncode
 
+            self.assertEqual(verify(), 0)
+            release_state = root / "pleb-state/release-hop/active"
+            exact_state = release_state.read_bytes()
+            release_state.write_bytes(exact_state.replace(b"v0.2.2-rc1", b"v0.2.2-rc2"))
+            self.assertNotEqual(verify(), 0, "same numeric version must not hide another RC tag")
+            release_state.write_bytes(exact_state.replace(b"object", b"changed-object"))
+            self.assertNotEqual(verify(), 0, "tag spelling must not hide another tag object")
+            release_state.write_bytes(exact_state)
             self.assertEqual(verify(), 0)
             prebuilt.write_text("changed engine\n")
             self.assertNotEqual(verify(), 0, "reboot must check the resolved prebuilt engine")

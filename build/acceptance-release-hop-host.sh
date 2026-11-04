@@ -16,7 +16,7 @@ GUEST_RUNNER="$HERE/acceptance-release-hop.sh"
 
 usage() {
     cat <<'EOF'
-usage: acceptance-release-hop-host.sh --from X.Y.Z --target X.Y.Z \
+usage: acceptance-release-hop-host.sh --from X.Y.Z --target X.Y.Z [--release-tag vX.Y.Z-rcN] \
        --source-iso FILE --source-sha256sums FILE \
        --image-guest USER@HOST [--image-port PORT] \
        --standalone-guest USER@HOST [--standalone-port PORT] \
@@ -25,6 +25,7 @@ usage: acceptance-release-hop-host.sh --from X.Y.Z --target X.Y.Z \
 Both guests must already be disposable VMs reachable with public-key SSH and
 non-interactive sudo. The image guest must have been installed from FILE; the
 standalone guest must contain the exact Pleb and Kilix refs embedded in FILE.
+Optional --bootstrap-driver PATH --bootstrap-driver-ref SHA selects an explicitly recorded legacy migration route.
 DIR must be new or empty. A passing run always executes and verifies 2/2 lanes.
 EOF
 }
@@ -36,6 +37,9 @@ die() {
 
 from=""
 target=""
+release_tag=""
+bootstrap_driver=""
+bootstrap_driver_ref=""
 source_iso=""
 source_sha256sums=""
 image_guest=""
@@ -50,6 +54,9 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --from) [ "$#" -ge 2 ] || die "--from needs a value"; from="$2"; shift 2 ;;
         --target) [ "$#" -ge 2 ] || die "--target needs a value"; target="$2"; shift 2 ;;
+        --bootstrap-driver) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver" ] || die "--bootstrap-driver needs one path"; bootstrap_driver="$2"; shift 2 ;;
+        --bootstrap-driver-ref) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver_ref" ] || die "--bootstrap-driver-ref needs one SHA"; bootstrap_driver_ref="$2"; shift 2 ;;
+        --release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$release_tag" ] || die "--release-tag needs one nonempty tag"; release_tag="$2"; shift 2 ;;
         --source-iso) [ "$#" -ge 2 ] || die "--source-iso needs a value"; source_iso="$2"; shift 2 ;;
         --source-sha256sums) [ "$#" -ge 2 ] || die "--source-sha256sums needs a value"; source_sha256sums="$2"; shift 2 ;;
         --image-guest) [ "$#" -ge 2 ] || die "--image-guest needs a value"; image_guest="$2"; shift 2 ;;
@@ -66,7 +73,18 @@ done
 
 [[ "$from" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--from must be X.Y.Z"
 [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || die "--target must be X.Y.Z"
+if [ -n "$release_tag" ] && [ "$release_tag" != "v$target" ]; then
+    rc_number="${release_tag#"v$target-rc"}"
+    [ "$rc_number" != "$release_tag" ] && [[ "$rc_number" =~ ^[1-9][0-9]*$ ]] \
+        || die "--release-tag must be the exact target stable or numbered RC tag"
+fi
 [ "$from" != "$target" ] || die "--from and --target must differ"
+if [ -n "$bootstrap_driver$bootstrap_driver_ref" ]; then
+    [[ "$bootstrap_driver" =~ ^/[A-Za-z0-9_./-]+$ ]] \
+        && [[ "$bootstrap_driver_ref" =~ ^[0-9a-f]{40}$ ]] \
+        && [ -n "$release_tag" ] \
+        || die "bootstrap requires an absolute literal driver path, full source SHA and explicit release tag"
+fi
 for destination in "$image_guest" "$standalone_guest"; do
     [[ "$destination" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9._:-]+$ ]] \
         || die "guest destinations must be literal USER@HOST values"
@@ -249,6 +267,8 @@ run_lane() {
         || die "$shape guest report path already exists: $remote_report"
 
     remote_command="bash -s -- --shape $shape --from $from --target $target --from-pleb-ref $from_pleb_ref --from-kilix-ref $from_kilix_ref --report $remote_report --disposable-vm"
+    [ -z "$release_tag" ] || remote_command+=" --release-tag $release_tag"
+    [ -z "$bootstrap_driver" ] || remote_command+=" --bootstrap-driver $bootstrap_driver --bootstrap-driver-ref $bootstrap_driver_ref"
     if [ "$shape" = image ]; then
         remote_command+=" --from-os-ref $from_os_ref --from-kilix95-ref $from_kilix95_ref --expected-build-info-sha256 $source_build_info_sha256"
     fi
@@ -347,6 +367,7 @@ overall_status=fail
 if [ "$lane_pass" -eq 2 ]; then overall_status=pass; fi
 
 export F109_HOST_FROM="$from" F109_HOST_TARGET="$target"
+export F109_HOST_TAG="$release_tag" F109_HOST_DRIVER_REF="$bootstrap_driver_ref"
 export F109_HOST_STATUS="$overall_status" F109_HOST_LANE_PASS="$lane_pass"
 export F109_HOST_ISO_SHA256="$actual_iso_sha256"
 export F109_HOST_BUILD_INFO_SHA256="$source_build_info_sha256"
@@ -388,6 +409,8 @@ report = {
     "release_hop": {
         "from": os.environ["F109_HOST_FROM"],
         "to": os.environ["F109_HOST_TARGET"],
+        "release_tag": os.environ["F109_HOST_TAG"] or None,
+        "bootstrap_driver_ref": os.environ["F109_HOST_DRIVER_REF"] or None,
     },
     "starting_fixture": {
         "published_iso_sha256": os.environ["F109_HOST_ISO_SHA256"],

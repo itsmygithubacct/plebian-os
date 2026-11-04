@@ -738,3 +738,22 @@ installed selector and updater are byte-for-byte those in that tag. This check
 does not require checkout HEAD to equal the candidate: selecting a closure reads
 the tag object and leaves the source checkout untouched. Development selections
 and any mismatch remain refused.
+
+### Explicit RC upgrade qualification
+
+The release-hop host and guest runners accept `--release-tag vX.Y.Z-rcN`
+alongside numeric `--target X.Y.Z`. This identity is forwarded to every dry-run,
+induced failure and successful hop, checked in the successful release state,
+and retained in the post-reboot checks. Stable `--latest` selection is unchanged.
+
+An immutable older CLI such as the one shipped in 0.2.2 cannot parse this new
+option. For that baseline, stage a separate verified Pleb checkout containing
+`bin/pleb-release-hop` in each disposable guest and supply its same literal
+absolute path with `--bootstrap-driver PATH --bootstrap-driver-ref COMMIT`.
+The driver must be outside the participating installed checkout. It reads the
+installed configuration and uses the installed checkout as the update target;
+no preparatory checkout replacement is allowed. Reports distinguish
+`explicit-legacy-bootstrap` from `installed-cli` and retain the exact driver
+commit. A successful bootstrap lane qualifies that migration route only, not
+an unavailable capability of the old installed CLI. Source fixture tests do
+not qualify either image or standalone guests, reboot, rollback or user data.
