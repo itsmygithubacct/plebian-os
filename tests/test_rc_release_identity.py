@@ -113,7 +113,7 @@ class RcReleaseIdentityTests(unittest.TestCase):
                 self.assertNotEqual(self._media_run(repo, vm).returncode, 0)
 
     def test_media_refuses_lightweight_wrong_suffix_and_manifest_drift(self):
-        for mode in ['lightweight', 'suffix', 'manifest', 'iso-commit', 'missing-tag']:
+        for mode in ['lightweight', 'suffix', 'manifest', 'hidden-trailing-newline', 'iso-commit', 'missing-tag']:
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
                 base = Path(td)
                 repo = self._media_fixture(base, ref='v0.2.3-beta1' if mode == 'suffix' else 'v0.2.3-rc1',
@@ -121,6 +121,10 @@ class RcReleaseIdentityTests(unittest.TestCase):
                 if mode == 'manifest':
                     with (repo / 'releases/0.2.3.env').open('a') as f:
                         f.write('EXTRA=changed\n')
+                elif mode == 'hidden-trailing-newline':
+                    manifest = repo / 'releases/0.2.3.env'
+                    manifest.write_bytes(manifest.read_bytes() + b'\n')
+                    git(repo, 'update-index', '--assume-unchanged', 'releases/0.2.3.env')
                 elif mode == 'iso-commit':
                     text = (base / 'build-info').read_text()
                     (base / 'build-info').write_text(re.sub(r'PLEBIAN_OS_COMMIT=.*', 'PLEBIAN_OS_COMMIT=' + 'a' * 40, text))

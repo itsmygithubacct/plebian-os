@@ -205,7 +205,9 @@ tag_commit="$(git -C "$ROOT" rev-parse --verify "${manifest_os_ref}^{commit}" 2>
     || { echo "acceptance-release-iso: refusing a dirty candidate checkout" >&2; exit 1; }
 [ "$(git -C "$ROOT" show "$tag_commit:VERSION")" = "$RELEASE" ] \
     || { echo "acceptance-release-iso: candidate VERSION differs from $RELEASE" >&2; exit 1; }
-[ "$(git -C "$ROOT" show "$tag_commit:releases/$RELEASE.env")" = "$(cat "$manifest")" ] \
+manifest_blob="$(git -C "$ROOT" rev-parse --verify "$tag_commit:releases/$RELEASE.env")" \
+    || { echo "acceptance-release-iso: candidate has no release manifest" >&2; exit 1; }
+[ "$(git -C "$ROOT" hash-object --no-filters "$manifest")" = "$manifest_blob" ] \
     || { echo "acceptance-release-iso: manifest differs from candidate tag" >&2; exit 1; }
 
 for retired in IMAGE_PASSWORD RANDOM_PASSWORD; do

@@ -117,6 +117,15 @@ manifest_commit="$(git -C "$ROOT" rev-parse --verify "${manifest_os_ref}^{commit
     exit 1
 }
 
+manifest_blob="$(git -C "$ROOT" rev-parse --verify "$manifest_commit:releases/$PLEBIAN_OS_ACCEPTANCE_RELEASE.env")" || {
+    echo "acceptance-vm: candidate has no release manifest" >&2
+    exit 1
+}
+[ "$(git -C "$ROOT" hash-object --no-filters "$manifest")" = "$manifest_blob" ] || {
+    echo "acceptance-vm: manifest differs from candidate tag" >&2
+    exit 1
+}
+
 manifest_sha256="$(sha256sum "$manifest" | awk '{print $1}')"
 candidate_short="${candidate_commit:0:12}"
 NAME="${PLEBIAN_OS_ACCEPTANCE_NAME:-plebian-acceptance-${PLEBIAN_OS_ACCEPTANCE_RELEASE}-${candidate_short}}"
