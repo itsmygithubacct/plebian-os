@@ -60,7 +60,8 @@ class WaydroidReleaseTests(unittest.TestCase):
                      "/usr/lib/plebian-os/waydroid/waydroid-closure.env",
                      "/usr/lib/plebian-os/waydroid/waydroid-closure.sha256"):
             self.assertIn("    " + path + "\n", provision)
-            self.assertEqual(update.count("    " + path + "\n"), 2, path)
+            expected = 3 if path.startswith("/usr/lib/plebian-os/waydroid/") else 2
+            self.assertEqual(update.count("    " + path + "\n"), expected, path)
         for name in ("__init__", "__main__", "cli", "first_use", "runtime", "sdk", "system"):
             path = "/usr/local/lib/kilix-waydroid/kilix_waydroid/" + name + ".py"
             self.assertIn("    " + path + "\n", provision)

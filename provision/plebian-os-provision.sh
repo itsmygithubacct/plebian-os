@@ -4232,7 +4232,10 @@ install_lid_defaults() {
         return 0
     fi
     dir="$(dirname "$conf")"
-    mkdir -p "$dir" || return 1
+    # Public configuration must stay traversable even under a private umask.
+    if [ ! -e "$dir" ]; then
+        install -d -m 0755 "$dir" || return 1
+    fi
     # A fixed name, so the transaction (provisioner and updater alike) lists
     # exactly this path: an interruption, even an uncatchable one, leaves nothing
     # the rollback does not remove, and nothing is swept by wildcard.
@@ -5341,9 +5344,18 @@ write_source_tool_manifest() {
         provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
         provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
         provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
-        if [ "$INSTALL_WAYDROID" = 1 ]; then
+        # Waydroid is an optional catalog application. Its legacy system
+        # archive exists only on machines that installed it before lazy delivery.
+        if [ -e /usr/local/share/kilix-waydroid/source.tar ] \
+                || [ -L /usr/local/share/kilix-waydroid/source.tar ]; then
+            [ -f /usr/local/share/kilix-waydroid/source.tar ] \
+                && [ ! -L /usr/local/share/kilix-waydroid/source.tar ] \
+                || die "unsafe installed Waydroid source archive"
+            local waydroid_source_sha
+            waydroid_source_sha="$(sha256sum /usr/local/share/kilix-waydroid/source.tar)" \
+                || die "could not hash installed Waydroid source archive"
             provenance_kv KILIX_WAYDROID_SOURCE_ARCHIVE /usr/local/share/kilix-waydroid/source.tar
-            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "$(sha256sum /usr/local/share/kilix-waydroid/source.tar | awk '{print $1}')"
+            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "${waydroid_source_sha%% *}"
         fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
@@ -6993,11 +7005,10 @@ else
         || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
 fi
 ensure_plebian_os_checkout
-install_waydroid_application
 
 # Stage the fixed, root-owned first-use helper from the exact Plebian-OS
-# checkout. INSTALL_WAYDROID means the feature is present in this release; the
-# large runtime and image closure is deliberately not downloaded here.
+# checkout. INSTALL_WAYDROID enables this optional feature; the app is fetched
+# by the catalog only on request, and Android setup requires first-use consent.
 if [ "$INSTALL_WAYDROID" = 1 ]; then
     WAYDROID_SETUP="$PLEBIAN_OS_DIR/provision/plebian-os-waydroid-setup"
     WAYDROID_CLOSURE="$PLEBIAN_OS_DIR/provision/waydroid-closure.env"

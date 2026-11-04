@@ -3598,6 +3598,31 @@ stage_and_validate_os_layer() {
     [ ! -L "$prov/plebian-os-nvidia-driver" ] || die "unsafe NVIDIA driver helper symlink"
     install -m 0755 "$prov/plebian-os-nvidia-driver" "$stage/plebian-os-nvidia-driver"
 
+    # Stage only the first-use boundary, never the optional app or Android.
+    # The root deployment binds these bytes and the outer snapshot rolls them
+    # back with the rest of the OS layer if a subsequent update step fails.
+    for file in plebian-os-waydroid-setup waydroid-closure.env waydroid-closure.sha256; do
+        [ -f "$prov/$file" ] && [ ! -L "$prov/$file" ] \
+            || die "missing or unsafe Waydroid first-use file: $file"
+        install -m 0644 "$prov/$file" "$stage/$file"
+    done
+    local waydroid_pin waydroid_actual
+    IFS= read -r waydroid_pin <"$stage/waydroid-closure.sha256" \
+        || die "could not read Waydroid closure pin"
+    printf '%s\n' "$waydroid_pin" | cmp -s - "$stage/waydroid-closure.sha256" \
+        || die "Waydroid closure pin has trailing data"
+    waydroid_actual="$(sha256sum "$stage/waydroid-closure.env")" \
+        || die "could not hash Waydroid closure"
+    [[ "$waydroid_pin" =~ ^[0-9a-f]{64}$ ]] \
+        && [ "${waydroid_actual%% *}" = "$waydroid_pin" ] \
+        || die "Waydroid closure checksum mismatch"
+    [ -z "$PLEBIAN_OS_WAYDROID_CLOSURE_SHA256" ] \
+        || [ "$waydroid_pin" = "$PLEBIAN_OS_WAYDROID_CLOSURE_SHA256" ] \
+        || die "Waydroid closure differs from the selected release"
+    chmod 0755 "$stage/plebian-os-waydroid-setup"
+    bash -n "$stage/plebian-os-waydroid-setup" \
+        || die "invalid Waydroid first-use helper"
+
     for file in "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
         "$stage/plebian-os-select-closure" \
@@ -3788,6 +3813,9 @@ names=(
     plebian-os-qt-runtime
     plebian-os-mpv-runtime
     plebian-os-nvidia-driver
+    plebian-os-waydroid-setup
+    waydroid-closure.env
+    waydroid-closure.sha256
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -3815,9 +3843,12 @@ dests=(
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/bin/plebian-os-nvidia-driver
+    /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
+    /usr/lib/plebian-os/waydroid/waydroid-closure.env
+    /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -3873,7 +3904,7 @@ trap rollback ERR INT TERM HUP PIPE
 
 # Distribution assets live below fixed root-owned directories. Reject any
 # symlink or user-writable fixed ancestor before root stages bytes beneath it.
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm; do
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /usr/lib; do
     if [ ! -d "$dir" ] || [ -L "$dir" ]; then
         printf 'plebian-os-update: unsafe distribution asset destination ancestor: %s\n' "$dir" >&2
         false
@@ -3889,6 +3920,8 @@ done
 # The managed children may be created here, but must remain root-controlled and
 # traversable by the desktop user.
 for dir in \
+    /usr/lib/plebian-os \
+    /usr/lib/plebian-os/waydroid \
     /usr/local/libexec \
     /usr/local/libexec/plebian-os \
     /usr/local/share/plebian-os \
@@ -3993,7 +4026,8 @@ for i in "${!new_paths[@]}"; do
 done
 # Recheck executable syntax before any installed file is backed up or replaced.
 for file in "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[24]}"; do
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[24]}" \
+    "${new_paths[25]}"; do
     bash -n "$file"
 done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
@@ -4125,6 +4159,9 @@ self_update_os_layer() {
         plebian-os-qt-runtime
         plebian-os-mpv-runtime
         plebian-os-nvidia-driver
+        plebian-os-waydroid-setup
+        waydroid-closure.env
+        waydroid-closure.sha256
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
@@ -4881,9 +4918,19 @@ stage_final_provenance() {
         provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
         provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
         provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
-        if [ "$PLEBIAN_OS_INSTALL_WAYDROID" = 1 ]; then
+        # Lazy catalog delivery has no system source archive until requested.
+        # Preserve provenance for legacy system installs, checking hash failure
+        # directly rather than hiding it inside provenance_kv's arguments.
+        if [ -e /usr/local/share/kilix-waydroid/source.tar ] \
+                || [ -L /usr/local/share/kilix-waydroid/source.tar ]; then
+            [ -f /usr/local/share/kilix-waydroid/source.tar ] \
+                && [ ! -L /usr/local/share/kilix-waydroid/source.tar ] \
+                || die "unsafe installed Waydroid source archive"
+            local waydroid_source_sha
+            waydroid_source_sha="$(sha256sum /usr/local/share/kilix-waydroid/source.tar)" \
+                || die "could not hash installed Waydroid source archive"
             provenance_kv KILIX_WAYDROID_SOURCE_ARCHIVE /usr/local/share/kilix-waydroid/source.tar
-            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "$(sha256sum /usr/local/share/kilix-waydroid/source.tar | awk '{print $1}')"
+            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "${waydroid_source_sha%% *}"
         fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$PLEBIAN_OS_KILIX_GO_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$PLEBIAN_OS_KILIX_GO_SHA256_AMD64"
@@ -4960,7 +5007,7 @@ dests=(
     /var/lib/plebian-os/versions.env
     /var/lib/plebian-os/apt-sources.list
 )
-max_sizes=(67108864 2097152 8388608)
+max_sizes=(67108864 2097152 8388608 1048576 65536 65)
 new_paths=() backup_paths=() existed=() changed=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 for hash in "${expected_hashes[@]}"; do
