@@ -14,6 +14,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   distinguish bundled speech models from downloads requested on first use.
 - Retain the 0.2.2.1 password transcript protection, offline defaults,
   standard licence policy, conversion tools and updater fixes.
+- Select the trained `kilix-qwen-sft1-2b` Help model. Explicit
+  `kilix help-setup` prepares local answers with commands, short explanations
+  and documentation links; `kilix help-search` works without model weights.
 
 ## [0.2.2.1] — 2026-11-03
 

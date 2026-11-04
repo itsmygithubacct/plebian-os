@@ -32,6 +32,31 @@ descriptor-backed video buffers. Pleb documents bounded Firefox ESR and Chromium
 capture evidence, including user consent and Stop sharing. These component
 checks still require complete installed-release and physical desktop acceptance.
 
+## 0.2.3 RC1 Help
+
+The RC1 source candidate includes **kilix-qwen-sft1-2b** as the default local
+Help model. Ask everyday questions about using Kilix and Plebian-OS and receive
+a command, a brief explanation and related documentation links:
+
+```sh
+kilix help-setup
+kilix help-answer "How do I launch a Kilix pane?"
+kilix help-answer "How do I list panes?"
+kilix help-answer "How do I launch agents?"
+kilix help-answer "How do I use the TUI?"
+```
+
+Setup explicitly downloads about 4.6 GB of model files plus the CPU runtime,
+after checking memory and storage. A GPU is not required. For documentation
+passages without model setup, use `kilix help-search "How do I list panes?"`.
+Help does not inspect live machine state or execute its suggested commands.
+
+See the [Help setup and troubleshooting guide](https://github.com/itsmygithubacct/kilix/blob/6b6dbda8d75fe787b6e3bdfaac597980251fd03c/docs/help/answers.md)
+and the [RC1 release notes](releases/0.2.3-notes.md). The Help source integration
+is adopted into the RC1 candidate; final OS image and update qualification
+remain pending. The sections below retain the 0.2.2 baseline and component
+status; the RC1 notes describe the newer selections and bundled models.
+
 ## 0.2.2 development status
 
 The reviewed source integration for 0.2.2 includes managed coding sessions,
