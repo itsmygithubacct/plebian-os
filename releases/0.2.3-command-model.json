@@ -1,0 +1,68 @@
+{
+  "schema": "plebian-os.command-model-selection/v1",
+  "release_target": "0.2.3-rc1",
+  "default_backend": "lfm2",
+  "weight_version": "lfm2-kilix-v5e1-wse-20261104.8",
+  "delivery_version": "lfm2-kilix-commands-20261104-v8",
+  "source_pins": {
+    "kilix": "38759d1c7e948da48abd91cacd46627956fe7915",
+    "kilix-content": "7d4711f64fb4bb4b609ca543aec50da5f0cd6742",
+    "kilix-license": "062266365abb76f6d8dc9db09f56f022f5ba4bc2",
+    "kilix-needle": "8408183f909a7052bb14cc974a869909234d8bca"
+  },
+  "model": {
+    "bytes": 1388859040,
+    "sha256": "7815032c4bdd44fbde002ec734ef3dd8eb14a8a44214b395738dae6e55ce897d"
+  },
+  "manifest": {
+    "repository": "https://github.com/itsmygithubacct/kilix-needle",
+    "revision": "8408183f909a7052bb14cc974a869909234d8bca",
+    "path": "commands-model.json",
+    "sha256": "30ace732f4eef6027b74f24d3342b4d0005708143ba45362461517ca2b49129f"
+  },
+  "delivery": {
+    "mode": "bundled-command-model-archive",
+    "archive_pin": "provision/command-model.json",
+    "bytes": 1362204301,
+    "sha256": "c0493cbe633d932da644b8e2acc58ed0ad0761ad952fa34eb8e797b4a2d2b453",
+    "iso_required": true,
+    "upgrade_stages_in_admin_context": true,
+    "agreement": "existing custom-model receipt policy; staging does not imply acceptance",
+    "documents_path": "/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261104-v8/notices/",
+    "explicit_user_choices_preserved": true
+  },
+  "rollback": {
+    "weight_version": "lfm2-kilix-v5e1-wse-20261103.21",
+    "delivery_version": "lfm2-kilix-commands-20261103-v21",
+    "model_sha256": "c6b065d617b95745bd207c4f9c9b605a8af922f5ebb5d7ff1d4c686d9d1c8f0e",
+    "release_url": "https://github.com/itsmygithubacct/kilix-needle/releases/tag/lfm2-kilix-commands-20261103-v21",
+    "mechanism": "previous catalog selects its retained manifest-specific directory and covering receipt"
+  },
+  "quality": {
+    "scope": "editor-authored fresh 160 command cases, plus development, probes and operational audit; no general ranking",
+    "independent_human_qualification": false,
+    "fresh160": {
+      "candidate_raw_correct": 139,
+      "candidate_validated_correct": 143,
+      "prior_raw_correct": 134,
+      "prior_validated_correct": 138,
+      "cpu_and_gpu_agree": true,
+      "candidate_losses_vs_prior": 0,
+      "candidate_false_abstentions": 3,
+      "incorrect_actions_admitted": 0
+    },
+    "operational32": {
+      "raw_correct": 27,
+      "validated_correct": 29,
+      "candidate_losses_vs_prior": 0,
+      "limitations": "one development overlap and one disclosed post-observation reference correction"
+    },
+    "application_replay": {
+      "cases": 6556,
+      "new_losses": 0,
+      "new_incorrect_admissions": 0,
+      "application_adjusted_after_inspection": true
+    }
+  },
+  "acceptance_scope": "Command-model promotion and component install/upgrade/rollback checks. Final OS media and release acceptance remain separate."
+}

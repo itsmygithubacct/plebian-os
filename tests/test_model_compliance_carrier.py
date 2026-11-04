@@ -33,10 +33,20 @@ ROOT = Path(__file__).resolve().parents[1]
 LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
 # Whistle's pinned authority is an application record; its release inclusion
 # is separately bound by this carrier's owner determination and review seats.
-LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records"}
+LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records",
+                       "lfm2-kilix-commands": "lfm2-records"}
 
 
 def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
+    if model == "lfm2-kilix-commands":
+        # Reuse the pinned project determination, without inventing user consent.
+        try:
+            determination = json.loads(text)
+        except ValueError:
+            return ["command-model determination is not the pinned JSON authority"]
+        expected = ROOT / 'provision/command-model-determination.json'
+        return [] if determination == json.loads(expected.read_bytes()) else [
+            "command-model determination differs from the recorded authority"]
     if model == "kilix-diarization-cpu":
         # Existing digest-specific determination; do not invent an owner signature.
         expected = "54b36539688fe450074a0105a2e43719837c321e4cf0eff8d7884a2d92ad21ad"
@@ -133,9 +143,13 @@ def regenerate(content: Path, license_: Path, out: Path,
 def advertised_models(provision: str) -> list[tuple[str, bool]]:
     block = provision[provision.index("validate_voice_model_catalog() {"):]
     block = block[:block.index("\n}\n")]
-    return [(name, flag == "True") for name, flag in re.findall(
+    models = [(name, flag == "True") for name, flag in re.findall(
         r'\(\s*"([a-z0-9.-]+)", "[a-z]+", (True|False),', block)] + [
             ("kilix-diarization-cpu", True)]
+    command_path = ROOT / 'provision/command-model.json'
+    if command_path.exists():
+        models.append((json.loads(command_path.read_bytes())['asset_id'], True))
+    return models
 
 
 def coverage_gaps(provision: str, root: Path = CARRIER) -> list[str]:
@@ -184,12 +198,30 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
     bundle = json.loads((ROOT / "provision/default-models.json").read_bytes())
     if json.loads((root / "DEFAULT-MODELS.json").read_bytes()) != bundle:
         gaps.append("carried default inventory differs from provisioning")
+    command_path = ROOT / 'provision/command-model.json'
+    command = json.loads(command_path.read_bytes()) if command_path.exists() else None
+    if command and (not (root / 'COMMAND-MODEL.json').is_file()
+                    or json.loads((root / 'COMMAND-MODEL.json').read_bytes()) != command):
+        gaps.append("carried command archive differs from provisioning")
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
         bundled = entry["artifact_id"] in bundle["assets"]
-        mode = "bundled-default-model" if bundled else "first-use-upstream-download"
+        is_command = command is not None and entry['artifact_id'] == command['asset_id']
+        mode = ("bundled-command-model-archive" if is_command else
+                "bundled-default-model" if bundled else "first-use-upstream-download")
         if entry["delivery"] != mode:
             gaps.append(f"{model}: delivery differs from the pinned bundle")
+        if is_command:
+            if any(entry[k] != command[v] for k, v in (
+                    ('archive_sha256', 'sha256'), ('archive_bytes', 'bytes'),
+                    ('version', 'version'), ('manifest_digest', 'manifest_digest'))):
+                gaps.append(f"{model}: command archive binding differs")
+            for claim in ('mode: bundled-command-model-archive', 'stages it offline',
+                          'does not create a licence receipt', 'custom terms',
+                          'verifies every member'):
+                if claim not in delivery:
+                    gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            continue
         if bundled:
             if bundle["assets"][entry["artifact_id"]] != entry["manifest_digest"]:
                 gaps.append(f"{model}: bundled manifest differs")

@@ -140,10 +140,21 @@ def load_module(src: Path, name: str):
 
 
 def delivery_text(model: str, host: str, runnable: bool, voice_ref: str,
-                  *, bundled: bool = False) -> str:
+                  *, bundled: bool = False, command_archive: bool = False) -> str:
     # Every sentence here is a claim tests/test_model_compliance_carrier.py
     # checks (AC-8): delivery matches the exact default bundle inventory and
     # deferred downloads remain digest-verified and licence-receipt gated.
+    if command_archive:
+        return "\n".join([
+            "mode: bundled-command-model-archive",
+            "Installation media includes this model in a separately checksummed command-model archive.",
+            "Provisioning stages it offline; upgrades acquire the pinned archive in their admin context.",
+            "Original licence documents are available under /usr/local/share/doc/plebian-os/models/.",
+            "Staging bytes does not create a licence receipt or waive the model's custom terms.",
+            "First selection requires coverage of the exact current licence record and member manifest.",
+            "Content verifies every member before use; explicit model choices and older versions are retained.",
+            f"Artifact provenance: {host}.",
+        ]) + "\n"
     if bundled:
         return "\n".join([
             "mode: bundled-default-model",
@@ -188,8 +199,8 @@ def notice_text(model: str, entry: dict, determination: str) -> str:
     lines = [
         f"Plebian-OS {entry['release_id']} conveyance notice for {model}.",
         "This file is written by Plebian-OS. It is not an upstream NOTICE file.",
-        ("Plebian-OS distributes these model bytes in its verified default model bundle."
-         if entry["delivery"] == "bundled-default-model"
+        ("Plebian-OS distributes these model bytes in a verified archive on installation media."
+         if entry["delivery"] in ("bundled-default-model", "bundled-command-model-archive")
          else "Plebian-OS does not distribute these model bytes."),
         "",
         f"Artifact: {entry['artifact_id']} (provider {entry['provider']}, version {entry['version']})",
@@ -224,6 +235,14 @@ def build(args) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     bundle_path = ROOT / "provision" / "default-models.json"
     bundle = json.loads(bundle_path.read_bytes()) if bundle_path.exists() else None
+    command_path = ROOT / "provision" / "command-model.json"
+    command = json.loads(command_path.read_bytes()) if command_path.exists() else None
+    if command is not None:
+        if (command.get("schema") != "plebian-os.command-model-archive/v1"
+                or command.get("asset_id") != "lfm2-kilix-commands"):
+            raise SystemExit("invalid command-model archive selection")
+        models.append((command["asset_id"], True))
+        files["COMMAND-MODEL.json"] = canonical(command) + b"\n"
     if bundle is not None:
         if (bundle.get("schema") != "plebian-os.default-models-archive/v1"
                 or not isinstance(bundle.get("assets"), dict) or not bundle["assets"]
@@ -244,6 +263,18 @@ def build(args) -> dict[str, bytes]:
                               / "plebian.json").read_text())
         assets = [content_model.AssetSpec.from_mapping(raw) for raw in catalog["assets"]]
         records = license_catalog.load_determined_records(scratch / "license")
+        if command is not None:
+            selected = next((a for a in assets if a.asset_id == command["asset_id"]), None)
+            if (selected is None or selected.archive_sha256 != command["sha256"]
+                    or selected.archive_bytes != command["bytes"]
+                    or selected.source_url != command["url"]
+                    or selected.version != command["version"] or selected.root != command["root"]
+                    or selected.manifest_digest != command["manifest_digest"]):
+                raise SystemExit("command archive differs from the selected catalog asset")
+            documents = {f.path: {"bytes": f.bytes, "sha256": f.sha256}
+                         for f in selected.files if f.path.startswith("notices/")}
+            if documents != command["documents"]:
+                raise SystemExit("command archive licence documents differ from the catalog")
         if bundle is not None:
             by_id = {asset.asset_id: asset for asset in assets}
             for asset_id, digest in bundle["assets"].items():
@@ -265,6 +296,7 @@ def build(args) -> dict[str, bytes]:
                                  f"record {record.digest}, found {len(matches)}")
             asset = matches[0]
             bundled = bundle is not None and asset.asset_id in bundle["assets"]
+            command_archive = command is not None and asset.asset_id == command["asset_id"]
             if bundled:
                 if not policy.standard_policy_eligible(record):
                     raise SystemExit(f"{model}: default delivery requires a standard-policy eligible record")
@@ -290,7 +322,8 @@ def build(args) -> dict[str, bytes]:
                 "artifact_id": asset.asset_id,
                 "artifact_record_sha256": asset.digest,
                 "decision": record.decision_class,
-                "delivery": "bundled-default-model" if bundled else DELIVERY_MODE,
+                "delivery": ("bundled-command-model-archive" if command_archive else
+                             "bundled-default-model" if bundled else DELIVERY_MODE),
                 "download_bytes": asset.download_bytes,
                 "licence_ids": licence_ids,
                 "licence_record_digest": record.digest,
@@ -329,7 +362,7 @@ def build(args) -> dict[str, bytes]:
             files[base + "NOTICE"] = notice_text(model, entry, ", ".join(names)).encode()
             files[base + "DELIVERY"] = delivery_text(
                 model, entry["upstream_host"], runnable, pins["KILIX_VOICE_REF"],
-                bundled=bundled).encode()
+                bundled=bundled, command_archive=command_archive).encode()
 
         # The advertised dictation model is the one the release pins.
         dictation = [m for m, e in entries.items()

@@ -7254,6 +7254,10 @@ record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 install_kilix_needle
+if [ "$DRY_RUN" != 1 ]; then
+    /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/stage-command-model.py" --offline \
+        || die "required offline command model staging failed"
+fi
 as_user env "${install_env[@]}" /usr/bin/python3 \
     "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
     || die "required offline default model installation failed"

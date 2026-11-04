@@ -32,6 +32,18 @@ descriptor-backed video buffers. Pleb documents bounded Firefox ESR and Chromium
 capture evidence, including user consent and Stop sharing. These component
 checks still require complete installed-release and physical desktop acceptance.
 
+## 0.2.3 RC1 command model
+
+Kilix Ask selects **LFM2 Kilix revision .8** (`lfm2-kilix-v5e1-wse-20261104.8`)
+by default. The installer includes its verified 1.36 GB archive; upgrades stage
+the same pinned archive using their existing admin context. Original licence
+documents are installed under
+`/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261104-v8/notices/`.
+First selection still follows the model's custom licence terms. Explicit model
+preferences remain in effect, and older version directories are retained for
+rollback. See the [command-model selection](releases/0.2.3-command-model.json)
+for exact hashes, source pins, results and limitations.
+
 ## 0.2.3 RC1 Help
 
 The RC1 source candidate includes **kilix-qwen-sft1-2b** as the default local

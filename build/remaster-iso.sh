@@ -262,13 +262,18 @@ is_hex_len() {
 }
 
 validate_model_delivery_inventory() {
-    python3 - "$1" "$2" <<'PY'
+    python3 - "$1" "$2" "${3:-}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-root, expected = map(Path, sys.argv[1:])
+root, expected = map(Path, sys.argv[1:3])
 try:
+    command = None
+    if sys.argv[3]:
+        command = json.loads(Path(sys.argv[3]).read_bytes())
+        if json.loads((root / 'COMMAND-MODEL.json').read_bytes()) != command:
+            raise ValueError('command archive differs from the release inventory')
     bundle = json.loads((root / 'DEFAULT-MODELS.json').read_bytes())
     if bundle != json.loads(expected.read_bytes()):
         raise ValueError('default bundle differs from the release inventory')
@@ -277,12 +282,21 @@ try:
     for model, entry in carrier['models'].items():
         asset = entry['artifact_id']
         bundled = asset in bundle['assets']
-        mode = 'bundled-default-model' if bundled else 'first-use-upstream-download'
+        is_command = command is not None and asset == command['asset_id']
+        mode = ('bundled-command-model-archive' if is_command else
+                'bundled-default-model' if bundled else 'first-use-upstream-download')
         prefix = 'm_' + ''.join(c if c.isascii() and c.isalnum() else '_' for c in model)
         if entry['delivery'] != mode or env[prefix + '_delivery'] != mode:
             raise ValueError(model + ': delivery differs from the default inventory')
         if bundled and entry['manifest_digest'] != bundle['assets'][asset]:
             raise ValueError(model + ': bundled manifest digest differs')
+        if is_command and any(entry[k] != command[v] for k, v in (
+                ('manifest_digest', 'manifest_digest'), ('archive_sha256', 'sha256'),
+                ('archive_bytes', 'bytes'), ('version', 'version'), ('source_url', 'url'))):
+            raise ValueError(model + ': command archive binding differs')
+    if command is not None and not any(e['artifact_id'] == command['asset_id']
+                                       for e in carrier['models'].values()):
+        raise ValueError('command model is missing from the carrier')
 except (OSError, ValueError, KeyError, TypeError) as error:
     sys.exit('carrier: ' + str(error))
 PY
@@ -395,7 +409,8 @@ validate_voice_compliance_carrier() {
         || { carrier_refuse "unknown carrier schema"; return 1; }
     [ "${cv[release_id]:-}" = "${PLEBIAN_OS_VERSION:-}" ] \
         || { carrier_refuse "carrier is for release ${cv[release_id]:-unknown}, not ${PLEBIAN_OS_VERSION:-unknown}"; return 1; }
-    validate_model_delivery_inventory "$dir" "${HERE:-}/provision/default-models.json" || return 1
+    validate_model_delivery_inventory "$dir" "${HERE:-}/provision/default-models.json" \
+        "${HERE:-}/provision/command-model.json" || return 1
     for model in $models; do
         prefix="m_${model//[^a-z0-9]/_}_"
         for field in artifact_id source_url upstream_host manifest_digest artifact_record_sha256 licence_record_digest licence_text_sha256s licensors decision delivery runnable; do
@@ -417,7 +432,7 @@ validate_voice_compliance_carrier() {
                 || { carrier_refuse "$model licence text $digest is missing or altered"; return 1; }
         done
         case "${cv[${prefix}delivery]}" in
-            first-use-upstream-download|bundled-default-model) ;;
+            first-use-upstream-download|bundled-default-model|bundled-command-model-archive) ;;
             *) carrier_refuse "$model delivery mode is unsupported"; return 1 ;;
         esac
         host="${cv[${prefix}source_url]#https://}"; host="${host%%/*}"
@@ -963,6 +978,14 @@ DEFAULT_MODELS_BUNDLE="${PLEBIAN_OS_DEFAULT_MODELS_BUNDLE:-}"
 }
 validate_default_model_release_closure
 python3 "$HERE/provision/install-default-models.py" --verify-only --archive "$DEFAULT_MODELS_BUNDLE"
+COMMAND_MODEL_BUNDLE="${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}"
+[ -n "$COMMAND_MODEL_BUNDLE" ] || {
+    echo "PLEBIAN_OS_COMMAND_MODEL_BUNDLE must name the release's command model archive" >&2
+    exit 1
+}
+python3 "$HERE/provision/stage-command-model.py" --verify-only --archive "$COMMAND_MODEL_BUNDLE"
+COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
+    "$HERE/provision/command-model.json")"
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
@@ -1287,6 +1310,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_SOURCE_ISO "$(basename "$SRC_ISO")"
         manifest_kv PLEBIAN_OS_SOURCE_ISO_SHA256 "$iso_sha"
         manifest_kv PLEBIAN_OS_PRESEED_SHA256 "$preseed_sha"
+        manifest_kv PLEBIAN_OS_COMMAND_MODEL_ARCHIVE_SHA256 "${COMMAND_MODEL_SHA256:-}"
         manifest_kv PLEBIAN_OS_INSTALLER_SPLASH_SHA256 "$splash_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_SHA256 "$banner_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_DARK_SHA256 "$banner_dark_sha"
@@ -1930,6 +1954,8 @@ if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; 
 fi
 cp "$HERE/provision/plebian-os-source-carrier" "$EXTRACT/plebian-os/"
 
+mkdir -p "$EXTRACT/plebian-os/model-archives"
+install -m 0644 "$COMMAND_MODEL_BUNDLE" "$EXTRACT/plebian-os/model-archives/$COMMAND_MODEL_SHA256"
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"

@@ -28,15 +28,15 @@ class MixedModelDeliveryTests(unittest.TestCase):
         self.env = {f'm_{name}_delivery': entry['delivery']
                     for name, entry in self.carrier['models'].items()}
 
-    def guard(self):
+    def guard(self, command=None):
         (self.root / 'CARRIER.json').write_text(json.dumps(self.carrier))
         (self.root / 'CARRIER.env').write_text(''.join(f'{k}={v}\n' for k, v in self.env.items()))
         source = (ROOT / 'build/remaster-iso.sh').read_text()
         start = source.index('validate_model_delivery_inventory() {')
         end = source.index('\n}\n', start) + 3
         return subprocess.run(['bash', '-c', source[start:end] +
-                               '\nvalidate_model_delivery_inventory "$1" "$2"',
-                               'guard', str(self.root), str(self.expected)],
+                               '\nvalidate_model_delivery_inventory "$1" "$2" "$3"',
+                               'guard', str(self.root), str(self.expected), str(command) if command else ''],
                               capture_output=True, text=True)
 
     def test_mixed_inventory_is_accepted(self):
@@ -77,6 +77,42 @@ class MixedModelDeliveryTests(unittest.TestCase):
     def test_missing_bundle_record_is_rejected(self):
         (self.root / 'DEFAULT-MODELS.json').unlink()
         self.assertNotEqual(self.guard().returncode, 0)
+
+    def command_fixture(self):
+        command = {'asset_id': 'lfm2-kilix-commands', 'manifest_digest': 'd'*64,
+                   'sha256': 'e'*64, 'bytes': 1000, 'version': 'v8',
+                   'url': 'https://example.invalid/command.tar.gz'}
+        expected = self.root / 'command-release.json'
+        expected.write_text(json.dumps(command))
+        (self.root / 'COMMAND-MODEL.json').write_text(json.dumps(command))
+        self.carrier['models']['lfm2-kilix-commands'] = {
+            'artifact_id': command['asset_id'], 'manifest_digest': command['manifest_digest'],
+            'archive_sha256': command['sha256'], 'archive_bytes': command['bytes'],
+            'version': command['version'], 'source_url': command['url'],
+            'delivery': 'bundled-command-model-archive'}
+        self.env['m_lfm2_kilix_commands_delivery'] = 'bundled-command-model-archive'
+        return expected
+
+    def test_command_archive_has_distinct_delivery_and_exact_bindings(self):
+        expected = self.command_fixture()
+        result = self.guard(expected)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        entry = self.carrier['models']['lfm2-kilix-commands']
+        for key in ('manifest_digest', 'archive_sha256', 'archive_bytes', 'version', 'source_url'):
+            with self.subTest(key=key):
+                value = entry[key]
+                entry[key] = 'wrong'
+                self.assertNotEqual(self.guard(expected).returncode, 0)
+                entry[key] = value
+
+    def test_command_archive_cannot_be_omitted_or_relabelled(self):
+        expected = self.command_fixture()
+        entry = self.carrier['models']['lfm2-kilix-commands']
+        for mode in ('first-use-upstream-download', 'bundled-default-model'):
+            entry['delivery'] = self.env['m_lfm2_kilix_commands_delivery'] = mode
+            self.assertNotEqual(self.guard(expected).returncode, 0)
+        del self.carrier['models']['lfm2-kilix-commands']
+        self.assertNotEqual(self.guard(expected).returncode, 0)
 
 
 class MandatoryDefaultModelAdmissionTests(unittest.TestCase):
