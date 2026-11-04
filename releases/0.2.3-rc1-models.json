@@ -1,0 +1,37 @@
+{
+  "schema": "plebian-os.model-candidate/v1",
+  "release": "0.2.3-rc1",
+  "status": "source-candidate",
+  "default_ask_backend": "lfm2",
+  "added_ask_backend": "lfm3",
+  "asset_id": "lfm3-kilix-commands",
+  "model": "LiquidAI/LFM3-1.7B",
+  "quantization": "Q8_0",
+  "weights_modified": false,
+  "delivery": "optional, after model licence agreement",
+  "source_refs": {
+    "kilix": "248cb434f7ae9fd4674a5274496658bc03c37795",
+    "kilix-needle": "8e816b6ff54d578f6edc3a773f0b681c7058b480",
+    "kilix-content": "d91e5b8ee4d54498cfc484151ccf107c1fa89a66",
+    "kilix-license": "def1807802b8b54eb65f723ded93384c89d89d49"
+  },
+  "archive": {
+    "archive_url": "https://github.com/itsmygithubacct/kilix-needle/releases/download/lfm3-kilix-commands-20261103-v1/lfm3-kilix-commands-20261103-v1.tar.gz",
+    "archive_sha256": "c65293b4245df1cfe35a9e71f831dd71ea996263b8efa313524b768e49cffac5",
+    "archive_bytes": 1790319145,
+    "root": "lfm3-kilix-commands-20261103-v1"
+  },
+  "runtime": {
+    "project": "ggml-org/llama.cpp",
+    "revision": "8642541b255bfb5dc39cd351a178be09013a55d6",
+    "platform": "linux-x86_64",
+    "backend": "cpu"
+  },
+  "licence_documents": [
+    "notices/LICENSE-LFM.txt",
+    "notices/LICENSE-runtime.txt",
+    "notices/LICENSE-kilix-needle.txt",
+    "notices/NOTICE.txt"
+  ],
+  "qualification": "This model candidate does not replace a coordinated release manifest or establish ISO, upgrade, or rollback qualification."
+}
