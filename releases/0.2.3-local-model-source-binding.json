@@ -1,0 +1,213 @@
+{
+  "schema": "plebian-os.local-model-source-binding/v1",
+  "selection": "unselected",
+  "release_accepted": false,
+  "content": {
+    "head": "9b3a7d0d985b0dc4d81994529ddd1484c39cc155",
+    "tree": "ad307c6cd02e1cb80aea58fdd9eb36ee79e243b1",
+    "gitlinks": {}
+  },
+  "catalog_sha256": "e75ec262d64272c578c03cc9eca8c92f2c3b24ef32687900dc89e6d2a33fa4c1",
+  "asset_records": [
+    {
+      "id": "needle3-kilix-commands",
+      "record_sha256": "4ee35541da56e528e78f79238fdab3db1d1dc0d3b9cf45f8736aca7432975b05",
+      "manifest_sha256": "01c2e3c2e1c43b4b1caab4efc9b4138257d010856490c474f3cfa3ab3ab1022e"
+    },
+    {
+      "id": "lfm2-kilix-commands",
+      "record_sha256": "b3b29a02e6c34adb2d4b330414bb7c3b2a93a85d7f0f7c3fcdac4a48e3f0659a",
+      "manifest_sha256": "f28fe999731759eb7e1f2aa6c562083fe7c1cee2fe7d6b0b52cf7e1dea963675"
+    },
+    {
+      "id": "kilix-diarization-cpu",
+      "record_sha256": "dd4c29cfd4ecd85be68cfd1228f479d0b5151a356b850fd6fb244e3897546318",
+      "manifest_sha256": "045752fe9a6a112794993a79dd4b95e6d41a58bcc88afb500bbbab6aa30696ac"
+    },
+    {
+      "id": "whistle",
+      "record_sha256": "80d30a65a79f68c4cc6dc9199801808fd47f996d92040cf13f9054e6a3400c6e",
+      "manifest_sha256": "407cec51d26bc0574b09619c271007a49ec3289d1cee8e5fb73271d1088669c1"
+    },
+    {
+      "id": "vosk-model-small-en-us-0.15",
+      "record_sha256": "deb2229003414d42a423bea8188a47bd2d1d8c0abfd3b4d83b4ba17429733755",
+      "manifest_sha256": "1523d976c7609d33dc4e908115e22126c9f06b0a670511cd0fd7090075900341"
+    },
+    {
+      "id": "vosk-model-en-us-0.22-lgraph",
+      "record_sha256": "23b8774a07c0c9cd0bbe0b02ba2e12238668a5e996f35e45a24756338fd4c3e6",
+      "manifest_sha256": "97cbc1923387b57d6f7910ac01f71bf08fcb912765a64218499e0c81bf408928"
+    },
+    {
+      "id": "qwen3-tts-0.6b-base",
+      "record_sha256": "679bf5e77a1603583a854d9c236b5386ce3315228b3303ae2fd3516d7b8b3a8d",
+      "manifest_sha256": "a4da50ba1113493bb6cfb034fea91ce46b7a0b65e98b36b1897f68877b979dc1"
+    },
+    {
+      "id": "qwen3-tts-0.6b-customvoice",
+      "record_sha256": "bf7c73691d3475850c8a6e9d1f76c072e95218cb08e6fe8ed12dd951ba533b7a",
+      "manifest_sha256": "33fb92da4f0dbd1356378c8d70719ccab5fc95084b854a4d4c9fe53c5c5013b6"
+    },
+    {
+      "id": "qwen3-tts-1.7b-voicedesign",
+      "record_sha256": "8287b9de8583de3a6070b9f0343c4311c13daead7a55c803f9bae0291e5dbfdf",
+      "manifest_sha256": "8f7b47135f521e4b44538e0a04014a3fd79ff39de18d53c114886eae9721773c"
+    },
+    {
+      "id": "whisper-tiny-ggml",
+      "record_sha256": "43723dfb83a088bf25082665658027f15d6d346142f8d0cb618f939fda785df3",
+      "manifest_sha256": "af5ae36f0968535d39c58774de3b69ab0fd3c808a1309fa8ee8f2f6a106287d1"
+    },
+    {
+      "id": "faster-whisper-small-en",
+      "record_sha256": "5a18902af21e6b451e9c3cecf33e7210b3f5944e026a0d5e2c2b66306ac7542c",
+      "manifest_sha256": "f2b132c87876730b807411fd2f3d46bf18a8b0a31b27bf7353ca8ef5ebc90059"
+    },
+    {
+      "id": "piper-en-us-kristin-medium",
+      "record_sha256": "cfb85c61e0c78eb73b67dcb3683dce6192527e26cb33fdea6cca4a21ded647d6",
+      "manifest_sha256": "8fab58aabd8d0a8324df590bc355a820e79fa939d882f6d3645dca669583580e"
+    },
+    {
+      "id": "kilix-female-02",
+      "record_sha256": "e838d1f6f28ec111203b6e78dc73bd4bf270391269df58f89283e82a727bd89c",
+      "manifest_sha256": "075550906d308f9b9acdc51e3212e835bbe7594e9677e9813180697be5140c2e"
+    },
+    {
+      "id": "vibevoice-asr-bitnet",
+      "record_sha256": "019407e57febbabf2e08d11888cf74ced9db3239c8bb5a9e084a70c7e02db6a2",
+      "manifest_sha256": "826e6ace027b98a4237ff73064e7bf855fe4a79c0e9bd334eb1b041c0920a3e7"
+    },
+    {
+      "id": "yolox_s",
+      "record_sha256": "f75799d83ac99cad26058146302164d133ba3e4e2a42df5b08138efd2a094efb",
+      "manifest_sha256": "5158ffb39202ff9c707790b4a079808a2b7064655801983890e8e937474672c8"
+    },
+    {
+      "id": "yolox_tiny",
+      "record_sha256": "fbfe7b42cca8ab75b5b34d54dddfed2e64548c4cda5d760559a0d053b80dcea5",
+      "manifest_sha256": "ca458f0395d0309f34aec6095414b16b4b023db8730d39561703a04cba2a660f"
+    },
+    {
+      "id": "yolox_nano",
+      "record_sha256": "4f50e4cd2644f2f4054a465929a409af38004f264560f13acbf79ab6a2e77853",
+      "manifest_sha256": "75acdeb64914ba7265965360ed859f2d1c2a94cd00ae5e2e8ef1b8812525bf73"
+    },
+    {
+      "id": "yamnet",
+      "record_sha256": "3f4886f98c0049e3c93a1724098b4a61e57d16a6d95e892db43380420def8a2f",
+      "manifest_sha256": "ca36bfec1375861b30229146c0c26027a818d31170dcbe5a3c7124150876051f"
+    },
+    {
+      "id": "bonsai-8b",
+      "record_sha256": "ce853ce0ccdee6705cba34f04b2ef685782ec36e0b88dfbf7ed65297ee7b099c",
+      "manifest_sha256": "ac012a7069b5a937db97b2e90286a26fda57651ac4d8947b5cd0c1ee158fc761"
+    },
+    {
+      "id": "bonsai-27b",
+      "record_sha256": "172b7eaaef0056ab85b007f7d968a3b02649169a571422169f216982833d205b",
+      "manifest_sha256": "75968ad954e8ab52ccf736f8fbd6731d2b63ee6fef1446f27f12fa25cf5cd959"
+    },
+    {
+      "id": "bitnet-b1.58-2b4t",
+      "record_sha256": "da75b20c2850d8b1829eabcfe3d0d3a2279520373b5b22dec1b8f42779a1a1e1",
+      "manifest_sha256": "c895114938c4c8111fb2f3d8606181c02fce11884e62cd64f74a7366c6013b19"
+    },
+    {
+      "id": "granite4.1-3b",
+      "record_sha256": "a7a0e619e1202730195a409366791352955f6363de488a68dd1eddb4fe4a9bee",
+      "manifest_sha256": "1d214295a5b1a19e8782791fb498719313ab1561321d503230c7746295c67db6"
+    },
+    {
+      "id": "nomic-embed-text-v1.5",
+      "record_sha256": "e3774354377bd5736c57b64c488b85ef9f84253b588b93cced6ca1c05a18b76e",
+      "manifest_sha256": "1dade9b62f4beb0a0933a3867c4c9ce0d48dfceeec85d3f58af5eb35c2a43f57"
+    },
+    {
+      "id": "granite3.2-vision-2b",
+      "record_sha256": "4df6cdb9243d3ee11bf408a9e43ac93a4e52d224f369304edfb7a713981dc8fd",
+      "manifest_sha256": "e8c3f6762381be998f908786838358431f26ba39c3a2e5a229b7c67955700474"
+    },
+    {
+      "id": "qwen3.5-4b",
+      "record_sha256": "86d887d7424fb06b8027dfd25020e2da2e7426150860b2f59a0c962ffc58be82",
+      "manifest_sha256": "b5c13b348111b7ff592fedf0a256d2952ad172557317af7b6fc054d927776465"
+    },
+    {
+      "id": "pocket-tts-english-q8_0",
+      "record_sha256": "a486fca073e0464aaa7b6c26a62b6eae0f5c6cf2d3ae8f68320d531fb67f662b",
+      "manifest_sha256": "89f792b9170b3a6c3ba982c7a55033b01ddb916bdb46e445f3168936b47e6d05"
+    },
+    {
+      "id": "pocket-tts-english-python-alba",
+      "record_sha256": "639af7a3f61c8dae1d275500c0f23585e402b4f0f4487a676def514b609ab5a8",
+      "manifest_sha256": "1062b66e754f26111d2b6099f8082964377d4a96283fed358d678246714c7127"
+    },
+    {
+      "id": "bonsai-image-4b-ternary-gemlite",
+      "record_sha256": "fbb2f6ce36160419edf02c094ac7a09e3191356c40aa5ae61a6bce207f1d8ada",
+      "manifest_sha256": "6426900bf975e56520dc2fa4a970ca9f07aa84208712a7ac636b75c7442c8526"
+    },
+    {
+      "id": "bonsai-image-4b-binary-gemlite",
+      "record_sha256": "2e1f539c106059aeef7c0f6403bc5c91c810b17bfa1f2d092842c8cc270bfdeb",
+      "manifest_sha256": "4381f37d91dcba6be1938c8eb289dc7f148ce924f913008c07e78e94fc913b90"
+    },
+    {
+      "id": "granite-docling-258m",
+      "record_sha256": "0182d1f0fa4611031ab09076eca21391fe367a2e30fd062a44c1d36e46007f2d",
+      "manifest_sha256": "632ec87367327097cf1b3472451f7b4b9396b71c7ff9af5b124515d43fcc8717"
+    },
+    {
+      "id": "documentfigureclassifier-v2.5",
+      "record_sha256": "a67dc72a271a9420f096f177eff9eb9e5f1079c4f6d2536eed6f49160c9cb238",
+      "manifest_sha256": "4efc9577a746d150f2c9d472390330307f2dcce8f9052b4c736f25c466d7ab62"
+    },
+    {
+      "id": "granite-vision-4.1-4b",
+      "record_sha256": "6a90bcb17542ad642bc94a2be4b84c74392f83b8a237a6554e7f783bdb14ee05",
+      "manifest_sha256": "9f404e00ad8f91c3fbcd2dbc164c28fc9b782b4cddfc07d2ad78806277f7636d"
+    },
+    {
+      "id": "encodec-24khz-stateful",
+      "record_sha256": "07b036f5c59ba4087303277eac9aadc6f01d975a8142f5880d2b648e9b515bd1",
+      "manifest_sha256": "6dafa4dc6ae0fe92580ab2e3ee21941c09fee8c39d07c54089ac32234c095b32"
+    },
+    {
+      "id": "encodec-48khz-frame",
+      "record_sha256": "9162014d875523d32d6b9d0beffddba882927a25d6faf3029e71a9a6bcb77ebd",
+      "manifest_sha256": "094aaa19f86e7959bf0adc403dfef275458a2a9a0c9a401d031dd62c0f9b5b59"
+    },
+    {
+      "id": "needle2",
+      "record_sha256": "2b7181fa79afcae8f28f71dafa2997947af8ef6c0471577040cc5bdcaa870336",
+      "manifest_sha256": "5042266fed65210dd1deaaa80951445c3e9d86f4f4d7f8a3879ee3dfd38743bf"
+    },
+    {
+      "id": "needle2-runtime",
+      "record_sha256": "29aa3915d319e2a271d2ee580450a05238678292e5440fb3121752b8f32e1c8d",
+      "manifest_sha256": "a02de7f0bb8a4086937e0dafabfd198cdf53a64897bb088825ade881a0f9bc9c"
+    },
+    {
+      "id": "needle2-train",
+      "record_sha256": "c387d916c1374dadb711bc7e757705a5e321932464f7efcc2657ccf2ac072c1d",
+      "manifest_sha256": "b68a4acb8e3c299a24101b40a4dc03d454697ca01ea5b916c56c0713ce46868e"
+    }
+  ],
+  "assets_identical_to_shipped_content": "8085aed526aa9b129cf0c032658797b21d7fe6c7",
+  "authorities": {
+    "host_vendored_license": "9239370a0e763c2d86bd4c112b8d06f4731a809d",
+    "advertised_os_license": "daa518a05dfc0337e10a9ebc514e6c5e4d261943",
+    "native_encodec_content": "d9a1335db520594c6796209b0f9342000a2b34e7",
+    "asset_receipt_release_id": "0.2.2"
+  },
+  "acceptance": "pending",
+  "scope": "Source binding only. Existing model carrier/acceptance receipts remain bound to their original shipped sources; they are not reissued or asserted to accept this changed catalog. No new model weights, license agreement or model-quality admission.",
+  "new_release_carrier_required": true,
+  "native_diarization": {
+    "quality": "no-go",
+    "admission": "no-go",
+    "evidence": "34 clusters against 16 identity slots; no threshold relaxation or experimental weight selection."
+  }
+}

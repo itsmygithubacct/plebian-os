@@ -1,0 +1,138 @@
+{
+  "schema": "plebian-os.local-source-candidate/v1",
+  "candidate_id": "0.2.3-local",
+  "selection": "unselected",
+  "release_accepted": false,
+  "os_functional_parent": "7f23e0f9b35efdaad0459b28bc8796b4e991260b",
+  "shipped_bases": {
+    "os": "bd8a8ac79ed3ef7e9e70a72a1691a54b9944d052",
+    "host": "9049a1a645e6a670a57ae9bc028ef0e6a0265ac6",
+    "content": "8085aed526aa9b129cf0c032658797b21d7fe6c7"
+  },
+  "sources": {
+    "host": {
+      "head": "cc7512507ca87108deb9563cb4b0014761f028c8",
+      "tree": "1a0ee73c9f487c617ec38e655d9e0e1761a27905",
+      "gitlinks": {
+        "src": "1351f57e4dbc108050e77bffd49a0b929cbab686",
+        "third_party/kilix-content": "9b3a7d0d985b0dc4d81994529ddd1484c39cc155",
+        "third_party/kilix-multiplexer": "d69896974bc7d7bc99782d009413e70acaf551eb",
+        "third_party/kilix-ralph": "2c42a16c4931e1780c12283655ee7aceec08f3ac",
+        "third_party/kilix-state": "1fe26a35b9ed661bfaeb8aa9f4d1e38faeb2faf9",
+        "third_party/kilix-telemetry": "11f51d941c043f4f3eaaa9048e46bed6bfc061b8",
+        "third_party/kilix-transcript-clean": "f46c55f059b799173966ad46cf30d89898057395",
+        "third_party/kitty-frame-presenter": "7e20193544e90ab0c0084ecbf61dea3e8bd4fe7c",
+        "third_party/kitty-pty-broker": "6e4957a459c2db1dff230cb5c62ad1bc70ee2d29"
+      }
+    },
+    "content": {
+      "head": "9b3a7d0d985b0dc4d81994529ddd1484c39cc155",
+      "tree": "ad307c6cd02e1cb80aea58fdd9eb36ee79e243b1",
+      "gitlinks": {}
+    },
+    "engine": {
+      "head": "1351f57e4dbc108050e77bffd49a0b929cbab686",
+      "tree": "fe4def6d4fd5efd41a70f99b54c31f03a7a7b2f7",
+      "gitlinks": {}
+    },
+    "needle": {
+      "head": "0e3c6fb7c78fdab6653cabc631ab9c5bbfa82222",
+      "tree": "1b02131106026e17cfd882bfa76d46d95f28fd7f",
+      "gitlinks": {
+        "third_party/kilix-content": "c3d6e6ffdecd9ba3c1893f6cb3c74384551d6a50",
+        "third_party/kilix-ml": "aa3489323ee74dc1661aa604e7145c5e14bcf500",
+        "third_party/kilix-transcript-clean": "638b7919d196bb8c5efce51355d42fca73bf24eb",
+        "third_party/kilix-tui-utils": "860c0db951e3da59173d292217f5a2908cdb785e"
+      }
+    },
+    "help": {
+      "head": "e7bb1fc81ba68900fe726562d8f83b2ad4c57869",
+      "tree": "6050db08786ca1081b537f1c222af5094d91be7c",
+      "gitlinks": {}
+    },
+    "manager": {
+      "head": "b6321de94371029b40955e606d371fca83657d6f",
+      "tree": "fb0236ad301f7ed5a2fae9c638f262a752fc8ed1",
+      "gitlinks": {}
+    },
+    "optional_model_sources": {
+      "kilix-nvr": {
+        "head": "0092d5cbec4a78bb2a31b5c66532d43063723cce",
+        "tree": "4206adf52e105f83f69666e62f2798ed69ede039",
+        "gitlinks": {
+          "third_party/kilix-mask": "20e2242abc58fb3a442d92a2242a5f3f71b1828e",
+          "third_party/kilix-motion-detect": "ea8be2efdc9e8e61dad3972e0eaa0cb889d38db7",
+          "third_party/kilix-object-detect": "af65eee3577a833e9c6f288bb14a7bf874a2e1ab",
+          "third_party/kilix-rtsp": "bf5128f2575f9b210956da479a7da2be5133fe8c",
+          "third_party/kilix-sound-detect": "29b25d1300949363cc031229923c7edea9daaccc"
+        }
+      },
+      "kilix-object-detect": {
+        "head": "af65eee3577a833e9c6f288bb14a7bf874a2e1ab",
+        "tree": "275a6229542e34d7fc261946ca703083bd705419",
+        "gitlinks": {
+          "third_party/kilix-motion-detect": "ea8be2efdc9e8e61dad3972e0eaa0cb889d38db7",
+          "third_party/kilix-rtsp": "bf5128f2575f9b210956da479a7da2be5133fe8c",
+          "third_party/kilix-sound-detect": "29b25d1300949363cc031229923c7edea9daaccc"
+        }
+      },
+      "kilix-pdf-conversion": {
+        "head": "31d879ded79e87dceaf0359f61b012e3be2597f3",
+        "tree": "53b4c925d01d10f4151a4ee379d697ec8bd46c36",
+        "gitlinks": {}
+      },
+      "kilix-playalong": {
+        "head": "61abc1c1c5e23e4295a17a23ed2461209bd6d44b",
+        "tree": "b0288c1eebcd37b0c76aad6fe4ee2161f4b74687",
+        "gitlinks": {
+          "third_party/kilix-state": "33b88c9ff7cd89c2f768d279eeeacecbcd33f73f",
+          "third_party/kitty-terminal-session": "0bd98cacef9ec12f021ecf9db1828579970b702a",
+          "third_party/soft-raster": "bd1e9be5c3e41a5673b48a673ad781cef564b0bb"
+        }
+      },
+      "kilix-sound-detect": {
+        "head": "29b25d1300949363cc031229923c7edea9daaccc",
+        "tree": "ca0dfced4032be22adbdd94795be2f13b0a80600",
+        "gitlinks": {
+          "third_party/kitty-terminal-session": "0bd98cacef9ec12f021ecf9db1828579970b702a",
+          "third_party/soft-raster": "bd1e9be5c3e41a5673b48a673ad781cef564b0bb"
+        }
+      },
+      "kilix-transcribe": {
+        "head": "d7aefdb382b60969f9f61253dab5deabaf4c500b",
+        "tree": "790c6626124b6c515ea3011906254e9fb6821f0c",
+        "gitlinks": {}
+      },
+      "kilix-yolox": {
+        "head": "fa085fae3d7c605deb217794886d0053e38e8e3d",
+        "tree": "598be768d85d2a8bb984392dfd075499d6603d77",
+        "gitlinks": {}
+      }
+    }
+  },
+  "model_source_binding": {
+    "path": "releases/0.2.3-local-model-source-binding.json",
+    "sha256": "23c3a636e83fa3bb6b01c5e55e758d658ef4208abd0bcbea0ce0529d7fbdc5c6"
+  },
+  "preserved_release_authorities": {
+    "VERSION": "998f6b887ed7a6ef44e84210d0237b715bed42ea7254f48dc418afec0a484103",
+    "releases/0.2.2.env": "b8f0ac582410feb464cdefcfa1e604acc0f8624372371148b1e69e366dff4e23",
+    "releases/0.2.2.requirements": "430a6f4d5c9a696858a26b84a0bd8ca247995c0f8d57029b58345c9c52ab701a",
+    "releases/0.2.2-model-compliance/CARRIER.env": "8cadcfbd1b14ec569750e145bbbaceb4422a29989165fa030d5f0735b1eebd0f",
+    "releases/0.2.2-model-compliance/ACCEPTANCE.json": "bb16f2fc5321302739a45149d17ecdc06b0095105acc9bd4405c95c1595cb1f6"
+  },
+  "rollback": {
+    "host": "9049a1a645e6a670a57ae9bc028ef0e6a0265ac6",
+    "content": "8085aed526aa9b129cf0c032658797b21d7fe6c7",
+    "needle": "de68eff0174fed8c349580e61bb4b14d1bdef3e2",
+    "help": "c4bf4367a23fffef6efa941550baf8603424fb2c",
+    "host_manager": "61a514f536a804d82f20bda7e65c7bf3145a229a"
+  },
+  "scope": "Reviewable local source composition. No authoritative release manifest/tag/latest pointer, publication, live installation or service change. Model and hardware/platform qualification remain independently scoped.",
+  "remaining_release_gates": [
+    "Final independent composition review and exact source-bound carrier acceptance",
+    "Model accuracy, optional runtime/ABI provisioning, license/acquisition and whole-OS transaction gates",
+    "Unavailable physical GPU RTD3 and biometric hardware qualification",
+    "Full guest/physical desktop and release-wide performance qualification"
+  ]
+}

@@ -33,6 +33,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import qemu_tab
+
 REPO = Path(__file__).resolve().parent.parent
 PRESEED_TEMPLATE = REPO / "preseed" / "preseed.cfg"
 REMASTER = REPO / "build" / "remaster-iso.sh"
@@ -630,11 +632,12 @@ class Config:
     kiosk: bool            # PLEBIAN_OS_KIOSK: autologin straight into Pleb
     nopasswd_sudo: bool    # PLEBIAN_OS_NOPASSWD_SUDO: passwordless sudo for the user
     ssh_port: int
-    gui: bool              # start with a window vs headless
+    gui: bool              # graphical display vs headless
     wait: bool             # block until provisioning finishes
     password_hash: str = ""       # protected hash-file mode; never plaintext
     credential_generated: bool = False  # expire after harness verification
     interactive_installer: bool = False  # prebuilt media collects guest identity
+    external_window: bool = False  # explicit native QEMU GTK window
 
 # ── prompting ────────────────────────────────────────────────────────────────
 class Prompter:
@@ -856,6 +859,7 @@ def gather_config(args) -> Config:
                   disk_gb=disk_gb,
                   desktop=desktop, kiosk=kiosk, nopasswd_sudo=nopasswd, ssh_port=ssh_port,
                   gui=args.gui, wait=not args.no_wait,
+                  external_window=getattr(args, "external_window", False),
                   password_hash=password_hash,
                   credential_generated=credential_generated,
                   interactive_installer=args.interactive_installer)
@@ -885,7 +889,7 @@ def confirm_summary(cfg: Config, assume_yes: bool) -> None:
             ("sudo", "passwordless" if cfg.nopasswd_sudo else "password required"),
             ("SSH", f"ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1"),
         ])
-    rows.append(("display", "GUI window" if cfg.gui else "headless"))
+    rows.append(("display", "graphical display" if cfg.gui else "headless"))
     for k, v in rows:
         print(f"  {k:<9}: {v}")
     print()
@@ -1156,12 +1160,15 @@ def qemu_start(cfg: Config, iso: Path, vm_dir: Path) -> None:
         "-device", "virtio-net-pci,netdev=net0",
         "-qmp", f"unix:{vm_dir / 'qmp.sock'},server=on,wait=off",
         "-pidfile", str(vm_dir / "qemu.pid"),
-        "-display", "gtk" if cfg.gui else "none", "-daemonize",
+        "-display", "gtk" if cfg.gui else "none",
     ]
     if cfg.firmware == "efi":
         argv += ["-drive", f"if=pflash,format=raw,unit=0,readonly=on,file={vm_dir / 'OVMF_CODE.fd'}",
                  "-drive", f"if=pflash,format=raw,unit=1,file={vm_dir / 'OVMF_VARS.fd'}"]
-    run(argv)
+    if cfg.gui and not cfg.external_window:
+        qemu_tab.launch(argv, cfg.name, vm_dir)
+    else:
+        run([*argv, "-daemonize"])
 
 # ── SSH into the guest (password auth via SSH_ASKPASS; no sshpass needed) ─────
 @contextlib.contextmanager
@@ -2424,7 +2431,9 @@ def final_summary(cfg: Config, iso: Path, target: str = "virtualbox") -> None:
         print(f"  start GUI : VBoxManage startvm {cfg.name} --type gui")
     else:
         print(f"  QEMU files: {qemu_vm_dir(cfg.name)}")
-        print("  display   : " + ("GTK window" if cfg.gui else "headless; QMP socket available"))
+        print("  display   : " + ("external GTK window" if cfg.external_window else
+                                "Kilix tab (closing it stops the VM)" if cfg.gui else
+                                "headless; QMP socket available"))
     if cfg.wait:
         print(f"  ssh in    : ssh -p {cfg.ssh_port} {cfg.username}@127.0.0.1")
     print(f"  ISO       : {iso}")
@@ -2578,7 +2587,9 @@ def main() -> None:
         help=("ISO output path when building (release default: "
               "plebian-os-<version>-amd64.iso; otherwise "
               "plebian-os-<name>.iso)"))
-    ap.add_argument("--gui", action="store_true", help="start the VM with a window")
+    ap.add_argument("--gui", action="store_true", help="show the VM (QEMU defaults to a Kilix tab)")
+    ap.add_argument("--external-window", action="store_true",
+                    help="with --target qemu --gui, use a native GTK window")
     ap.add_argument("--no-wait", action="store_true", help="don't block on provisioning")
     ap.add_argument("--no-verify", action="store_true",
                     help="skip the post-provision acceptance checks")
@@ -2602,8 +2613,13 @@ def main() -> None:
     if target == "qemu" and args.accelerate_3d:
         die("QEMU 3D acceleration is not configured")
 
+    if args.external_window and (target != "qemu" or not args.gui):
+        die("--external-window requires --target qemu --gui")
+
     # preflight
     if not args.dry_run:
+        if target == "qemu" and args.gui and not args.external_window:
+            qemu_tab.require_host()
         tools = ["VBoxManage"] if target == "virtualbox" else ["qemu-img", "qemu-system-x86_64"]
         if target == "qemu" and not Path("/dev/kvm").exists():
             die("QEMU/KVM requires /dev/kvm on this host")
