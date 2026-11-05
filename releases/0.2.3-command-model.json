@@ -5,8 +5,8 @@
   "weight_version": "lfm2-kilix-v5e1-wse-20261104.8",
   "delivery_version": "lfm2-kilix-commands-20261104-v8",
   "source_pins": {
-    "kilix": "c6942a8be6524328cefe248d68efb5b1f2411d03",
-    "kilix-content": "7d4711f64fb4bb4b609ca543aec50da5f0cd6742",
+    "kilix": "e6c946a16a8c17234e73a204358ec538b36831b1",
+    "kilix-content": "00fe843d0ed22d8c237d616696276042a01b3232",
     "kilix-license": "062266365abb76f6d8dc9db09f56f022f5ba4bc2",
     "kilix-needle": "8408183f909a7052bb14cc974a869909234d8bca"
   },
