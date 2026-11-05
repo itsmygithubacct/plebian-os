@@ -64,5 +64,5 @@
       "application_adjusted_after_inspection": true
     }
   },
-  "acceptance_scope": "Command-model promotion and component install/upgrade/rollback checks. Final OS media and release acceptance remain separate."
+  "acceptance_scope": "Default Ask command model included in the 0.2.3 RC4 candidate. Final OS media and release acceptance remain separate."
 }

@@ -61,5 +61,5 @@
       "unknown_total": 6
     }
   },
-  "acceptance_scope": "Default model selection and component source integration for RC1. Final OS image/update acceptance remains separate."
+  "acceptance_scope": "Default Help model included in the 0.2.3 RC4 candidate. Final OS image and update acceptance remain separate."
 }

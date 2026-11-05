@@ -32,10 +32,11 @@ descriptor-backed video buffers. Pleb documents bounded Firefox ESR and Chromium
 capture evidence, including user consent and Stop sharing. These component
 checks still require complete installed-release and physical desktop acceptance.
 
-## 0.2.3 RC1 command model
+## 0.2.3 RC4 Ask default
 
-Kilix Ask selects **LFM2 Kilix revision .8** (`lfm2-kilix-v5e1-wse-20261104.8`)
-by default. The installer includes its verified 1.36 GB archive; upgrades stage
+The 0.2.3 RC4 candidate includes **LFM2 Kilix revision .8**
+(`lfm2-kilix-v5e1-wse-20261104.8`) as the Kilix Ask default. The installer
+includes its verified 1.36 GB archive; upgrades stage
 the same pinned archive using their existing admin context. Original licence
 documents are installed under
 `/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261104-v8/notices/`.
@@ -44,9 +45,9 @@ preferences remain in effect, and older version directories are retained for
 rollback. See the [command-model selection](releases/0.2.3-command-model.json)
 for exact hashes, source pins, results and limitations.
 
-## 0.2.3 RC1 Help
+## 0.2.3 RC4 Help default
 
-The RC1 source candidate includes **kilix-qwen-sft1-2b** as the default local
+The 0.2.3 RC4 candidate includes **kilix-qwen-sft1-2b** as the default local
 Help model. Ask everyday questions about using Kilix and Plebian-OS and receive
 a command, a brief explanation and related documentation links:
 
@@ -64,10 +65,11 @@ passages without model setup, use `kilix help-search "How do I list panes?"`.
 Help does not inspect live machine state or execute its suggested commands.
 
 See the [Help setup and troubleshooting guide](https://github.com/itsmygithubacct/kilix/blob/6b6dbda8d75fe787b6e3bdfaac597980251fd03c/docs/help/answers.md)
-and the [RC1 release notes](releases/0.2.3-notes.md). The Help source integration
-is adopted into the RC1 candidate; final OS image and update qualification
+and the [0.2.3 release notes](releases/0.2.3-notes.md). The Help selection
+record pins source `41dd050560a6d0b8067b57fa76ab333e05e6bc72` and the published
+adapter release `kilix-qwen-sft1-2b`. Final OS image and update qualification
 remain pending. The sections below retain the 0.2.2 baseline and component
-status; the RC1 notes describe the newer selections and bundled models.
+status; the 0.2.3 notes describe the newer selections and bundled models.
 
 ## 0.2.2 development status
 
