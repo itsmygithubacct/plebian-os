@@ -19,6 +19,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   and documentation links; `kilix help-search` works without model weights.
 - Bind RC3 to the aligned diarization catalog. Kilix `e6c946a1` serves
   kilix-content `00fe843`, and the model-compliance receipt is `8e30956a`.
+- Pin Kilix to `d7cf37e8`, whose content catalog `c9901809` records kilix-find.
+  Model artifact records are unchanged. The carrier is `c578757b` and its
+  receipt is `c233c030`.
 
 ## [0.2.2.1] — 2026-11-03
 
