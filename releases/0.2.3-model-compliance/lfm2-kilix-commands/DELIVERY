@@ -1,0 +1,8 @@
+mode: bundled-command-model-archive
+Installation media includes this model in a separately checksummed command-model archive.
+Provisioning stages it offline; upgrades acquire the pinned archive in their admin context.
+Original licence documents are available under /usr/local/share/doc/plebian-os/models/.
+Staging bytes does not create a licence receipt or waive the model's custom terms.
+First selection requires coverage of the exact current licence record and member manifest.
+Content verifies every member before use; explicit model choices and older versions are retained.
+Artifact provenance: github.com.

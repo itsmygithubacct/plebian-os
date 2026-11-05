@@ -1,0 +1,37 @@
+# Plebian-OS 0.2.3 release requirements.
+#
+# These are not a partial release manifest. releases/0.2.3.env must
+# declare these exact values. The release-image loader rejects a mismatch.
+#
+# Waydroid stays optional and lazy. Installation is 0, so the closure
+# hash is omitted: release mode refuses that hash while installation is off.
+# The diarization notice mismatch remains a known issue in the carrier seats.
+#
+# uv 0.12.5 installer checksum is the value carried from 0.2.2.
+# Debian 13.7.0 amd64 netinst SHA256SUMS was verified for 0.2.2 with
+# Debian CD key DF9B9C49EAA9298432589D76DA87E80D6294BE9B and is unchanged.
+# Empty PLEBIAN_OS_APT_SNAPSHOT selects live Debian sources.
+
+PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso
+PLEBIAN_OS_NETINST_SHA256=a7ef94ac2fb9a7fec454552abd629b7cc9d5155c886165a45649f5ce6167e355
+PLEBIAN_OS_NETINST_MAX_BYTES=792723456
+PLEBIAN_OS_APT_SNAPSHOT=
+PLEBIAN_OS_INSTALL_UV=1
+PLEBIAN_OS_UV_VERSION=0.12.5
+PLEBIAN_OS_UV_INSTALLER_SHA256=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111
+PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
+PLEBIAN_OS_INSTALL_WAYDROID=0
+PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.3-model-compliance
+PLEBIAN_OS_VOICE_CARRIER_SHA256=842a91b2928655be47be477f331443f87cae5d6e5bbc39655e5b3d4317e2d52e
+PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=986e8312382f926b5b7211a9642f2372df1edb60eedd192ac700133d6193c867
+KILIX_LICENSE_REF=062266365abb76f6d8dc9db09f56f022f5ba4bc2
+PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=7d4711f64fb4bb4b609ca543aec50da5f0cd6742
+PLEBIAN_OS_QT_RUNTIME_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/qt-runtime-rc6/qt-runtime-rc6.tar.xz
+PLEBIAN_OS_QT_RUNTIME_SHA256=623b5f2669fbf42679694ca5c8d3f841536a1f2bc449d66166f057650c8f4ad1
+PLEBIAN_OS_QT_RUNTIME_BYTES=6708392
+PLEBIAN_OS_MPV_URL=https://github.com/itsmygithubacct/kilix-mpv/releases/download/v0.40.0-kilix.7-test.1/kilix-mpv_0.40.0%2Bkilix.7_amd64.deb
+PLEBIAN_OS_MPV_SHA256=4b62dc8deca92d5b7a3bea80bd2a48b3c7ad9fc8f17fa73846a2c814ee10cb5a
+PLEBIAN_OS_MPV_BYTES=878628
+PLEBIAN_OS_MPV_VERSION=0.40.0+kilix.7
+PLEBIAN_OS_MPV_SOURCE_REF=d743a367aec512deaa43783516981818f6d61d39
+PLEBIAN_OS_MPV_LAUNCHER_REF=fb0a7f036fbe599dcf060d2d389e309c6261ceaf

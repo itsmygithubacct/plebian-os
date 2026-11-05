@@ -1,0 +1,7 @@
+mode: bundled-default-model
+This model is included in the checksummed default model bundle on installation media.
+Provisioning installs the supplied bytes offline; upgrades may acquire the same pinned bundle.
+Original licence documents accompany the model, and installation verifies every catalogued file.
+Installation creates local standard-policy receipts; build-time receipts are never distributed.
+Existing model selections are preserved. Bundling does not prove runtime quality or activation.
+Upstream artifact provenance: huggingface.co.

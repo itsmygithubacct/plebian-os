@@ -1,0 +1,14 @@
+Plebian-OS 0.2.3 conveyance notice for lfm2-kilix-commands.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS distributes these model bytes in a verified archive on installation media.
+
+Artifact: lfm2-kilix-commands (provider kilix-needle, version lfm2-kilix-commands-20261104-v8)
+Source: https://github.com/itsmygithubacct/kilix-needle/releases/download/lfm2-kilix-commands-20261104-v8/lfm2-kilix-commands-20261104-v8.tar.gz
+Upstream host: github.com
+Download size: 1362204301 bytes
+Archive sha256: c0493cbe633d932da644b8e2acc58ed0ad0761ad952fa34eb8e797b4a2d2b453
+Installed member manifest digest: db2674e05b073e08e2ebbb25aea8a5f5d8ac3de2fcb0bba8d4c4a39512fdaa61
+Licence(s): lfm-open-license-1.0
+Licensor(s): Liquid AI, Inc.; ggml and bundled runtime contributors
+Licence, advisory and attribution texts: licence-texts/4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c.txt, licence-texts/571c0295ffbb60b79627a8956e2990826448eee7678b8d9a1e37c82bbf779f4c.txt, licence-texts/e03643ad3853ac201afb79ae9561b50936f82b02d77eb317daa82245cf0364a5.txt
+Owner determination: determinations/lfm2-kilix-commands/command-model-determination.json

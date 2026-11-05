@@ -1,0 +1,8 @@
+mode: first-use-upstream-download
+This model's weights are not present in the image or downloaded by provisioning.
+whisper-small-en reaches a machine only when a user installs it; it is downloaded from
+huggingface.co and verified against the pinned digests before installation.
+No install route downloads it until a kilix-license receipt covers it:
+The model catalog validates the determined licence and records the receipt, and
+The speech install command hands the download to that model catalog
+and fetches no weights itself (kilix-voice 1faf9fb07ec04af3c7b6c130c4bd1fd315c25dc4).

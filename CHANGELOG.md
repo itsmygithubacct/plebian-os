@@ -4,7 +4,7 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.2.3] — release candidate
+## [0.2.3] — 2026-11-05
 
 - Build RC1 from the patched 0.2.2.1 baseline and the selected 0.2.3
   desktop, terminal, camera, model integration and transport changes.
