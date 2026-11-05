@@ -6970,13 +6970,24 @@ else
     warn "Ollama runtime installer not found; continuing without it"
 fi
 
+# The ISO late_command already installs this helper beside the provisioner.
+# install(1) refuses to copy a path onto itself, and that refusal aborts first
+# boot after the selected Qt and native runtimes are in place. A checkout run
+# still copies the helper into place.
+if [ -f "$SELF_DIR/plebian-os-source-carrier" ]; then
+    if [ "$SELF_DIR/plebian-os-source-carrier" = /usr/local/sbin/plebian-os-source-carrier ]; then
+        log "source carrier helper already present at /usr/local/sbin/plebian-os-source-carrier"
+    elif [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -m 0755 $SELF_DIR/plebian-os-source-carrier /usr/local/sbin/plebian-os-source-carrier"
+    else
+        install -m 0755 "$SELF_DIR/plebian-os-source-carrier" /usr/local/sbin/plebian-os-source-carrier
+    fi
+fi
+
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same
 # helper here when the source file is available.
 UPDATE_SRC=""
-if [ -f "$SELF_DIR/plebian-os-source-carrier" ]; then
-    run install -m 0755 "$SELF_DIR/plebian-os-source-carrier" /usr/local/sbin/plebian-os-source-carrier
-fi
 
 for cand in \
     "$SELF_DIR/plebian-os-update.sh" \
