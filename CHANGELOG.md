@@ -25,6 +25,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Keep Ask `lfm2-kilix-v5e1-wse-20261104.8` and Help `kilix-qwen-sft1-2b`
   as the defaults included in the 0.2.3 RC4 candidate. The Help record pins
   source `41dd050560a6d0b8067b57fa76ab333e05e6bc72`.
+- Point Kilix at `e7296d14`. `kilix ask` is documented as the person-facing
+  route. The content catalog pin is unchanged.
 
 ## [0.2.2.1] — 2026-11-03
 
