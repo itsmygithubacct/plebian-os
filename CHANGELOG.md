@@ -27,6 +27,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   source `4abc52e9236899a05738807d32a3431270b6a3c2`.
 - Point Kilix at `e7296d14`. `kilix ask` is documented as the person-facing
   route. The content catalog pin is unchanged.
+- Point Kilix at `7844cf3e`. `kilix llm lab` lists edit options and does not
+  load a model. The content catalog pin is unchanged.
 
 ## [0.2.2.1] — 2026-11-03
 
