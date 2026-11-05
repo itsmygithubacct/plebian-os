@@ -66,7 +66,7 @@ Help does not inspect live machine state or execute its suggested commands.
 
 See the [Help setup and troubleshooting guide](https://github.com/itsmygithubacct/kilix/blob/6b6dbda8d75fe787b6e3bdfaac597980251fd03c/docs/help/answers.md)
 and the [0.2.3 release notes](releases/0.2.3-notes.md). The Help selection
-record pins source `41dd050560a6d0b8067b57fa76ab333e05e6bc72` and the published
+record pins source `4abc52e9236899a05738807d32a3431270b6a3c2` and the published
 adapter release `kilix-qwen-sft1-2b`. Final OS image and update qualification
 remain pending. The sections below retain the 0.2.2 baseline and component
 status; the 0.2.3 notes describe the newer selections and bundled models.

@@ -4,7 +4,7 @@
   "default_model": "kilix-qwen-sft1-2b",
   "model_release": "https://github.com/itsmygithubacct/kilix-help-llm/releases/tag/kilix-qwen-sft1-2b",
   "source_pins": {
-    "kilix-help-llm": "41dd050560a6d0b8067b57fa76ab333e05e6bc72",
+    "kilix-help-llm": "4abc52e9236899a05738807d32a3431270b6a3c2",
     "kilix-llm": "8c7263faac8ce399edffb9a589aeab31e17fd88e",
     "kilix-content": "00fe843d0ed22d8c237d616696276042a01b3232",
     "kilix": "e6c946a16a8c17234e73a204358ec538b36831b1",
@@ -12,7 +12,7 @@
   },
   "manifest": {
     "repository": "https://github.com/itsmygithubacct/kilix-help-llm",
-    "revision": "41dd050560a6d0b8067b57fa76ab333e05e6bc72",
+    "revision": "4abc52e9236899a05738807d32a3431270b6a3c2",
     "path": "help_llm/published-model.json",
     "sha256": "fc3c36894e5cd0003790b7bbe28ae260eab193db6ff278478f1ca198c0dd731e"
   },
