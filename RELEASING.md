@@ -291,16 +291,15 @@ actually cutting.
 - pinned installer versions/checksums and a positive download byte bound for
   any optional network installers that are enabled (currently `uv`);
 - when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
-  library version/URL/SHA-256, and acoustic-model URL/SHA-256. Since OD-BB the
-  flag declares that **the release advertises the dictation model as a
-  first-use pull**, not that the image installs it: these pins are the
-  advertised identity — the source and digests the user's later, licence-
-  accepted install verifies its download against — and the image ships no model
-  bytes and downloads none unattended. The advertised model URL and SHA-256
-  must be the ones kilix-content's `vosk-model-small-en-us-0.15` asset record
-  carries, because that record is what the first-use screen and the F100
-  carrier read. The pinned Voice source must expose the exact
-  `kilix.speech.models/v1` document through download-free
+  library version/URL/SHA-256, and acoustic-model URL/SHA-256. The flag records
+  those pins. Speech weights are included as needed: `small-en-us` and
+  `whistle` ship with the image and may be installed for the desktop user.
+  `lgraph-en-us`, `vibevoice-asr-bitnet`, and `whisper-small-en` stay
+  first-use pulls and are not downloaded unattended. The advertised
+  `small-en-us` URL and SHA-256 must be the ones kilix-content's
+  `vosk-model-small-en-us-0.15` asset record carries, because that record is
+  what the first-use screen and the F100 carrier read. The pinned Voice source
+  must expose the exact `kilix.speech.models/v1` document through download-free
   `kilix-stt --models --json`; a consumer-specific copied catalog is not a
   release substitute.
 
@@ -562,15 +561,19 @@ release upgrade, physical or human acceptance gate. Retain the report and
      sizes, and the shared explicit install-and-default argv. This listing must
      not open the network or change installed/default state. Require the
      device-free acceptance smoke to synthesize a phrase with real espeak.
-     **Require the guest to hold no speech-model weights**: no
-     `voice/models/small-en-us`, no `voice/models/vosk-model-*` generation, no
-     `voice/lib/current`, and an install stamp recording `libvosk=skipped` and
-     `model-small-en-us=skipped`. A model present on a fresh image is a release
-     failure, not a convenience. Exercise the pinned first-use path: require the screen to show model id,
+     **Include speech-model weights as needed.** `small-en-us` and `whistle`
+     are bundled, so a fresh guest may hold `voice/models/small-en-us`, the
+     matching `voice/models/vosk-model-*` generation, `voice/lib/current`, the
+     content-store copies of those two models, and an install stamp that
+     records the installed libvosk and `model-small-en-us` digests.
+     `lgraph-en-us`, `vibevoice-asr-bitnet`, and `whisper-small-en` stay
+     first-use pulls and must be absent as installed weights. Exercise that
+     first-use path on `lgraph-en-us`: require the screen to show model id,
      upstream source URL and host, bytes, licence and licensor before any fetch;
      decline once and prove no bytes or model directory appeared; then accept
-     and require a receipt, verified download and atomic install matching
-     `KILIX_VOICE_MODEL_SHA256`. Old 0.2.1 receipts are not read, so accept
+     and require a receipt, verified download and atomic install matching that
+     model's pinned catalog checksum. Do not download the 1.6 GiB VibeVoice
+     weights to satisfy this paragraph. Old 0.2.1 receipts are not read, so accept
      again through the licence screen. Amp's unavailable-model refusal is
      silent. The supplied `--from DIR` installation records acceptance, but
      not file provenance. This guest check remains outstanding until a VM or
