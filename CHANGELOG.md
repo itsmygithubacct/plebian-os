@@ -29,6 +29,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   route. The content catalog pin is unchanged.
 - Point Kilix at `7844cf3e`. `kilix llm lab` lists edit options and does not
   load a model. The content catalog pin is unchanged.
+- Point Kilix at `8f99917a`. The installed GParted program starts through
+  sudo, and Kilix asks for the password in a dialog. The content catalog
+  pin is unchanged.
 
 ## [0.2.2.1] — 2026-11-03
 
