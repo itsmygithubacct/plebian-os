@@ -1164,6 +1164,12 @@ def qemu_start(cfg: Config, iso: Path, vm_dir: Path) -> None:
         "-boot", "once=d,order=c", "-vga", "std",
         "-netdev", f"user,id=net0,hostfwd=tcp:127.0.0.1:{cfg.ssh_port}-:22",
         "-device", "virtio-net-pci,netdev=net0",
+        # Fresh VMs do not expose host audio automatically. Output serves
+        # read-aloud. Input is the click-to-talk microphone and stays closed
+        # until the guest opens it. ich9-intel-hda matches the q35 machine.
+        "-audiodev", "pa,id=vm_audio",
+        "-device", "ich9-intel-hda",
+        "-device", "hda-duplex,audiodev=vm_audio",
         "-qmp", f"unix:{str(qmp).replace(',', ',,')},server=on,wait=off",
         "-pidfile", str(vm_dir / "qemu.pid"),
         "-display", "gtk" if cfg.gui else "none",
