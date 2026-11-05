@@ -17,6 +17,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Select the trained `kilix-qwen-sft1-2b` Help model. Explicit
   `kilix help-setup` prepares local answers with commands, short explanations
   and documentation links; `kilix help-search` works without model weights.
+- Bind RC3 to the aligned diarization catalog. Kilix `e6c946a1` serves
+  kilix-content `00fe843`, and the model-compliance receipt is `8e30956a`.
 
 ## [0.2.2.1] — 2026-11-03
 

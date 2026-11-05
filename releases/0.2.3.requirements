@@ -5,7 +5,7 @@
 #
 # Waydroid stays optional and lazy. Installation is 0, so the closure
 # hash is omitted: release mode refuses that hash while installation is off.
-# The diarization notice mismatch remains a known issue in the carrier seats.
+# The diarization notice licensors match the receipt-bound licensor string.
 #
 # uv 0.12.5 installer checksum is the value carried from 0.2.2.
 # Debian 13.7.0 amd64 netinst SHA256SUMS was verified for 0.2.2 with
@@ -22,10 +22,10 @@ PLEBIAN_OS_UV_INSTALLER_SHA256=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b
 PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
 PLEBIAN_OS_INSTALL_WAYDROID=0
 PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.3-model-compliance
-PLEBIAN_OS_VOICE_CARRIER_SHA256=842a91b2928655be47be477f331443f87cae5d6e5bbc39655e5b3d4317e2d52e
-PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=986e8312382f926b5b7211a9642f2372df1edb60eedd192ac700133d6193c867
+PLEBIAN_OS_VOICE_CARRIER_SHA256=455dc464e4e32382512d33ecbdfc21fc950fff0fd5c10cd852c1764c4fefe368
+PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=8e30956a4b78dece4f636236b65ad77867a7b0a546075fc0060ee5e957b0cad1
 KILIX_LICENSE_REF=062266365abb76f6d8dc9db09f56f022f5ba4bc2
-PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=7d4711f64fb4bb4b609ca543aec50da5f0cd6742
+PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=00fe843d0ed22d8c237d616696276042a01b3232
 PLEBIAN_OS_QT_RUNTIME_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/qt-runtime-rc6/qt-runtime-rc6.tar.xz
 PLEBIAN_OS_QT_RUNTIME_SHA256=623b5f2669fbf42679694ca5c8d3f841536a1f2bc449d66166f057650c8f4ad1
 PLEBIAN_OS_QT_RUNTIME_BYTES=6708392
