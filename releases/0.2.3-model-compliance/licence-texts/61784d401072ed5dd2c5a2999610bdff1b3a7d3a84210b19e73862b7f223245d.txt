@@ -1,8 +1,8 @@
 Kilix LFM2 command model — modified model notice
 
-Delivery: lfm2-kilix-commands-20261106-v4
-Weight revision: lfm2-kilix-v5e1-wse-20261106.4
-Model SHA256: fbfdad0b592d7a0b5f59d3260e3b27867e2b4f367aebcc2981fd6348bb3b6897
+Delivery: lfm2-kilix-commands-20261106-v8
+Weight revision: lfm2-kilix-v5e1-wse-20261106.8
+Model SHA256: 7295787cfa801f233dbbf576fc5e71a78473d6de2c21aab3aa6948611b64b8dd
 
 This is a modified LiquidAI/LFM2-1.2B-Tool model, originally fine-tuned for
 Kilix's native command format as the V5 epoch-1 model. The upstream base
@@ -16,15 +16,20 @@ through lfm2-kilix-v5e1-wse-20261104.8, SHA256
 7815032c4bdd44fbde002ec734ef3dd8eb14a8a44214b395738dae6e55ce897d,
 lfm2-kilix-v5e1-wse-20261106.1, SHA256
 bbfdff6e4af85da1aa04d652b486c3a7883fb973598d5f46f146d0f32e95bbbb,
-and lfm2-kilix-v5e1-wse-20261106.2, SHA256
-29a6c8a200416aebe176bfd3153c20a9be68aada5cad2f5e058134c6d347b64d.
-Regularized squared-hinge optimization over frozen activations adjusts
-output.weight rows 523, 730, 3285, 8104, 517 and 6282 relative to .21.
-Optimization uses L-BFGS with analytic gradients; it does not backpropagate
-through the network. All internal tensors and other output rows are unchanged
-from .21. The model remains Q8_0. The repairs target exact literal copying
-while protecting correct commands and valid abstentions; they do not eliminate
-all generation errors.
+lfm2-kilix-v5e1-wse-20261106.2, SHA256
+29a6c8a200416aebe176bfd3153c20a9be68aada5cad2f5e058134c6d347b64d,
+and lfm2-kilix-v5e1-wse-20261106.4, SHA256
+fbfdad0b592d7a0b5f59d3260e3b27867e2b4f367aebcc2981fd6348bb3b6897.
+The file parent is lfm2-kilix-v5e1-wse-20261106.7, SHA256
+98c8926731b2e064670dea3477cff3d7ea0741446b7643d6fc1005fe201934be,
+which continues 20261106.4 through the unselected files 20261106.5 and
+20261106.6. Regularized squared-hinge optimization over frozen activations
+adjusts output.weight. Relative to 20261106.4, rows 10, 523, 568, 730, 1248
+and 8110 differ. Row 2873 matches 20261106.4. Optimization uses L-BFGS with
+analytic gradients; it does not backpropagate through the network. The model
+remains Q8_0. The repairs target exact literal copying while protecting
+correct commands and valid abstentions; they do not eliminate all generation
+errors.
 
 The CPU runtime is llama.cpp revision
 620d2225cc436ab0b001e3200e590e3b286ef9ab, unchanged from the prior delivery.

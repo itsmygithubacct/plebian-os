@@ -2,22 +2,22 @@
   "schema": "plebian-os.command-model-selection/v1",
   "release_target": "0.2.3-rc5",
   "default_backend": "lfm2",
-  "weight_version": "lfm2-kilix-v5e1-wse-20261106.4",
-  "delivery_version": "lfm2-kilix-commands-20261106-v4",
-  "model_sha256": "fbfdad0b592d7a0b5f59d3260e3b27867e2b4f367aebcc2981fd6348bb3b6897",
+  "weight_version": "lfm2-kilix-v5e1-wse-20261106.8",
+  "delivery_version": "lfm2-kilix-commands-20261106-v8",
+  "model_sha256": "7295787cfa801f233dbbf576fc5e71a78473d6de2c21aab3aa6948611b64b8dd",
   "source_pins": {
-    "kilix": "dda0072b91a44a33a94b51cdfd39f423e0058246",
-    "kilix-content": "9ddc492e2ed9f3f31867e8d0b39a497d6f32d5c9",
-    "kilix-license": "a516f3923c38fb1ecce783dae2fabffd9a12b87e",
+    "kilix": "5b2da2f8e3c7b4decc04054311667882d1551a22",
+    "kilix-content": "51e87e769df674e7255d455c605e526971d27766",
+    "kilix-license": "be1bf18d903b071d7a3eb73239ddb3a147197d6d",
     "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec"
   },
   "model": {
     "bytes": 1388859040,
-    "sha256": "fbfdad0b592d7a0b5f59d3260e3b27867e2b4f367aebcc2981fd6348bb3b6897"
+    "sha256": "7295787cfa801f233dbbf576fc5e71a78473d6de2c21aab3aa6948611b64b8dd"
   },
   "manifest": {
     "repository": "https://github.com/itsmygithubacct/kilix-content",
-    "revision": "9ddc492e2ed9f3f31867e8d0b39a497d6f32d5c9",
+    "revision": "51e87e769df674e7255d455c605e526971d27766",
     "path": "src/kilix_content/catalog/plebian.json",
     "asset_id": "lfm2-kilix-commands",
     "note": "kilix-needle commands-model.json at 8408183f909a7052bb14cc974a869909234d8bca still describes lfm2-kilix-v5e1-wse-20261104.8 and is not this delivery"
@@ -25,12 +25,12 @@
   "delivery": {
     "mode": "bundled-command-model-archive",
     "archive_pin": "provision/command-model.json",
-    "bytes": 1362205098,
-    "sha256": "06f8a92294670c2dc88f22d3bad88f638382f33885b1b5b4a33b98c20bc2647e",
+    "bytes": 1362206287,
+    "sha256": "b3d0ed499dfd064837bb024372a091fd8f4414df1bff2ebccdb87cadf26cb5bd",
     "iso_required": true,
     "upgrade_stages_in_admin_context": true,
     "agreement": "existing custom-model receipt policy; staging does not imply acceptance",
-    "documents_path": "/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v4/notices/",
+    "documents_path": "/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v8/notices/",
     "explicit_user_choices_preserved": true,
     "release_uploaded": false
   },
@@ -42,44 +42,61 @@
     "mechanism": "previous catalog selects its retained manifest-specific directory and covering receipt"
   },
   "quality": {
-    "scope": "Ask suites versus 20261106.2. That parent matched 20261104.8 on probes, fresh confirmation, and operational. No general ranking.",
+    "scope": "Ask suites versus 20261106.4, GPU only. CPU was not run for 20261106.8. No general ranking.",
     "independent_human_qualification": false,
     "development": {
       "cases": 1383,
-      "candidate_raw_correct": 1374,
-      "prior_raw_correct": 1373,
-      "candidate_admitted_correct_gpu": 1342,
-      "prior_admitted_correct_gpu": 1341,
-      "candidate_admitted_correct_cpu": 1343,
-      "prior_admitted_correct_cpu": 1342,
-      "only_change": "known-ask-0144",
+      "candidate_raw_correct": 1372,
+      "prior_raw_correct": 1374,
+      "candidate_admitted_correct_gpu": 1346,
+      "prior_admitted_correct_gpu": 1342,
+      "admitted_gains": [
+        "known-ask-0034",
+        "known-ask-0045",
+        "known-ask-0082",
+        "known-ask-0192"
+      ],
       "candidate_losses_vs_prior": 0,
       "false_abstentions": 0,
-      "incorrect_actions_admitted": 0,
-      "cpu_and_gpu_agree_on_the_gain": true
+      "incorrect_actions_admitted": 0
     },
     "fresh160": {
       "candidate_raw_correct": 139,
-      "candidate_validated_correct": 143,
+      "prior_raw_correct": 139,
+      "candidate_validated_correct": 145,
+      "prior_validated_correct": 143,
+      "admitted_gains": [
+        "copy-fresh-050",
+        "copy-fresh-052"
+      ],
       "candidate_losses_vs_prior": 0,
-      "candidate_false_abstentions": 3,
-      "cpu_and_gpu_agree": true
+      "candidate_false_abstentions": 2
     },
     "probes": {
-      "raw_correct": 57,
-      "admitted_correct": 57,
+      "raw_correct": 60,
+      "admitted_correct": 60,
       "cases": 64,
+      "prior_admitted_correct": 57,
+      "admitted_gains": [
+        "copy-probe-032",
+        "copy-probe-061",
+        "copy-probe-064"
+      ],
       "candidate_losses_vs_prior": 0,
-      "false_abstentions": 3,
-      "cpu_and_gpu_agree": true
+      "false_abstentions": 1
     },
     "operational32": {
       "raw_correct": 28,
       "admitted_correct": 28,
       "cases": 32,
       "candidate_losses_vs_prior": 0,
-      "false_abstentions": 0,
-      "cpu_and_gpu_agree": true
+      "false_abstentions": 0
+    },
+    "expand8": {
+      "admitted_correct": 7,
+      "cases": 8,
+      "prior_admitted_correct": 1,
+      "remaining_miss": "literal-expand-004"
     }
   },
   "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive URL is not uploaded yet. Seat review does not cover this weight. Final OS media and release acceptance remain separate."

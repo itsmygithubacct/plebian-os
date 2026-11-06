@@ -6,6 +6,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Select Ask weight `lfm2-kilix-v5e1-wse-20261106.8` as the default command
+  model. Delivery `lfm2-kilix-commands-20261106-v8` replaces
+  `lfm2-kilix-commands-20261106-v4`. Kilix is `5b2da2f8` and kilix-content is
+  `51e87e76`. kilix-license is `be1bf18d`. The modified-model notice is
+  `61784d40`. Seat review does not cover this weight. The archive URL is not
+  uploaded yet. GPU development admitted is 1346/1383, probes 60/64, fresh
+  confirmation 145/160, and operational 28/32. Admitted losses versus
+  `20261106.4` are zero on those suites. CPU was not run.
 - Select Ask weight `lfm2-kilix-v5e1-wse-20261106.4` as the default command
   model. Delivery `lfm2-kilix-commands-20261106-v4` replaces
   `lfm2-kilix-commands-20261104-v8`. Kilix is `dda0072b` and kilix-content is
