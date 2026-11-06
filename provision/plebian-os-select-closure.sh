@@ -178,6 +178,9 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_WAYDROID_REPO
     KILIX_WAYDROID_BRANCH
     KILIX_WAYDROID_REF
+    KILIX_SECRETS_REPO
+    KILIX_SECRETS_BRANCH
+    KILIX_SECRETS_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NATIVE_DEB_URL
     PLEBIAN_OS_NATIVE_DEB_SHA256
@@ -255,6 +258,8 @@ REQUIRED_VALUE_KEYS=(
     KILIX_MEDIA_SDK_REF
     KILIX_WAYDROID_REPO
     KILIX_WAYDROID_REF
+    KILIX_SECRETS_REPO
+    KILIX_SECRETS_REF
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
     PLEBIAN_OS_INSTALL_UV
@@ -279,6 +284,7 @@ REQUIRED_EMPTY_KEYS=(
     KILIX_ICEWM_BRANCH
     KILIX_MEDIA_SDK_BRANCH
     KILIX_WAYDROID_BRANCH
+    KILIX_SECRETS_BRANCH
 )
 
 VOICE_CLOSURE_KEYS=(
@@ -444,6 +450,17 @@ is_f120_root_key() {
     case "$1" in
         KILIX_SYSTEM_MONITOR_*|KILIX_DESKTOP_SDK_*|KILIX_ICEWM_*|\
         KILIX_MEDIA_SDK_*|KILIX_WAYDROID_*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+release_requires_secrets_root() {
+    [ "$TARGET" = 0.2.3 ]
+}
+
+is_secrets_root_key() {
+    case "$1" in
+        KILIX_SECRETS_*) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -628,6 +645,9 @@ validate_release_closure() {
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
             continue
         fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]:-}" ] || missing+=("$key")
     done
     [ "${#missing[@]}" -eq 0 ] \
@@ -640,12 +660,18 @@ validate_release_closure() {
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
             continue
         fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]+x}" ] || present+=("$key")
     done
     [ "${#present[@]}" -eq 0 ] \
         || closure_reject "incomplete closure — these must be declared, even empty: ${present[*]}"
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
             continue
         fi
         [ -z "${MANIFEST[$key]}" ] \
@@ -677,6 +703,13 @@ validate_release_closure() {
         [ "${MANIFEST[KILIX_WAYDROID_REPO]}" = \
             https://github.com/itsmygithubacct/kilix-waydroid.git ] \
             || closure_reject "KILIX_WAYDROID_REPO must name the canonical release repository"
+    fi
+    if release_requires_secrets_root; then
+        require_manifest_format KILIX_SECRETS_REF '^[0-9a-f]{40}$' \
+            "a full 40-character lowercase commit SHA"
+        [ "${MANIFEST[KILIX_SECRETS_REPO]}" = \
+            https://github.com/itsmygithubacct/kilix-secrets.git ] \
+            || closure_reject "KILIX_SECRETS_REPO must name the canonical release repository"
     fi
     for key in PLEBIAN_OS_REPO PLEB_REPO KILIX_REPO KILIX95_REPO; do
         require_manifest_format "$key" '^https://[A-Za-z0-9._~:/?#@!$&+,;=%-]+\.git$' \
@@ -809,6 +842,9 @@ build_selected_closure() {
     CLOSURE[PLEBIAN_OS_REF]="$OS_COMMIT"
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
             continue
         fi
         CLOSURE["$key"]=""
@@ -1174,6 +1210,11 @@ prepare_component_ancestry_checks() {
             "Kilix Waydroid" KILIX_WAYDROID_REF \
             KILIX_WAYDROID_REPO kilix-waydroid
     fi
+    if release_requires_secrets_root; then
+        prepare_component_target_only \
+            "Kilix Secrets" KILIX_SECRETS_REF \
+            KILIX_SECRETS_REPO kilix-secrets
+    fi
 }
 
 # ── rendering /etc/pleb/session.env ─────────────────────────────────────────
@@ -1387,7 +1428,7 @@ announce_component_moves() {
     local ref_key label installed target direction pinned_by
     for ref_key in PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF \
             KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF KILIX_ICEWM_REF \
-            KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF; do
+            KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF KILIX_SECRETS_REF; do
         case "$ref_key" in
             PLEBIAN_OS_REF) label="Plebian-OS" ;;
             PLEB_REF) label="Pleb" ;;
@@ -1398,6 +1439,7 @@ announce_component_moves() {
             KILIX_ICEWM_REF) label="Kilix IceWM" ;;
             KILIX_MEDIA_SDK_REF) label="Kilix Media SDK" ;;
             KILIX_WAYDROID_REF) label="Kilix Waydroid" ;;
+            KILIX_SECRETS_REF) label="Kilix Secrets" ;;
         esac
         installed="${COMPONENT_INSTALLED[$ref_key]:-}"
         target="${COMPONENT_TARGET[$ref_key]:-}"

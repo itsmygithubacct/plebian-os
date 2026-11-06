@@ -86,6 +86,9 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_WAYDROID_REPO
     KILIX_WAYDROID_BRANCH
     KILIX_WAYDROID_REF
+    KILIX_SECRETS_REPO
+    KILIX_SECRETS_BRANCH
+    KILIX_SECRETS_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NATIVE_DEB_URL
     PLEBIAN_OS_NATIVE_DEB_SHA256
@@ -439,6 +442,9 @@ KILIX_MEDIA_SDK_REF="${KILIX_MEDIA_SDK_REF:-}"
 KILIX_WAYDROID_REPO="${KILIX_WAYDROID_REPO:-https://github.com/itsmygithubacct/kilix-waydroid.git}"
 KILIX_WAYDROID_BRANCH="${KILIX_WAYDROID_BRANCH:-}"
 KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
+KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
+KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
+KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
 # Plebian-OS layer itself: where the provisioner/update-helper/deps script come
 # from, so `plebian-os-update` can refresh the OS layer (not just pleb/kilix).
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
@@ -1312,6 +1318,10 @@ release_requires_f120_roots() {
     [ "${PLEBIAN_OS_RELEASE:-}" = 0.2.1 ]
 }
 
+release_requires_secrets_root() {
+    [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.3 ]
+}
+
 # One externally selected inert .deb, never a checkpoint or a native build.
 # Older closures may omit it; a strict 0.2.2 closure may not. Any partial
 # selection is invalid in development too. Keep the three standalone callers
@@ -1444,6 +1454,14 @@ validate_release_inputs() {
             KILIX_ICEWM_BRANCH KILIX_MEDIA_SDK_BRANCH KILIX_WAYDROID_BRANCH; do
             [ -z "${!key}" ] || die "release mode requires $key to be empty"
         done
+    fi
+    if release_requires_secrets_root; then
+        [[ "$KILIX_SECRETS_REF" =~ ^[0-9a-f]{40}$ ]] \
+            || die "release mode requires KILIX_SECRETS_REF to be a full 40-character lowercase commit SHA"
+        [ "$KILIX_SECRETS_REPO" = https://github.com/itsmygithubacct/kilix-secrets.git ] \
+            || die "release mode requires the canonical KILIX_SECRETS_REPO"
+        [ -z "$KILIX_SECRETS_BRANCH" ] \
+            || die "release mode requires KILIX_SECRETS_BRANCH to be empty"
     fi
     for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
         [[ "${!key}" =~ ^[0-9a-fA-F]{64}$ ]] \
@@ -5392,6 +5410,9 @@ write_source_tool_manifest() {
         provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
         provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
         provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
+        provenance_kv KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
+        provenance_kv KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
+        provenance_kv KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
         # Waydroid is an optional catalog application. Its legacy system
         # archive exists only on machines that installed it before lazy delivery.
         if [ -e /usr/local/share/kilix-waydroid/source.tar ] \
@@ -5714,6 +5735,95 @@ install_kilix_needle() {
     as_user env "${install_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
         "$KILIX_DIR/kilix" app install kilix-needle \
         || die "required Needle application installation failed"
+}
+
+install_kilix_secrets() {
+    [ -n "$KILIX_SECRETS_REF" ] || return 0
+    [[ "$KILIX_SECRETS_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Kilix Secrets requires an exact KILIX_SECRETS_REF commit"
+    [ -z "$KILIX_SECRETS_BRANCH" ] \
+        || die "Kilix Secrets does not accept a mutable branch"
+    [ "$KILIX_SECRETS_REPO" = https://github.com/itsmygithubacct/kilix-secrets.git ] \
+        || die "Kilix Secrets requires the canonical KILIX_SECRETS_REPO"
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would build exact Kilix Secrets $KILIX_SECRETS_REF into /usr/local"
+        return 0
+    fi
+    validate_provision_root_transaction_dir "$PROVISION_ROOT_TRANSACTION_DIR" \
+        || die "Kilix Secrets installation requires an active root transaction"
+    local stage actual file mode source_sha link
+    local -a package_files=(
+        bin/kilix-secrets
+        bin/kilix-secretsd
+        include/kilix_secrets.h
+        lib/libkilix-secrets.a
+        lib/libkilix-secrets.so.0
+        lib/pkgconfig/kilix-secrets.pc
+        lib/systemd/user/kilix-secrets.service
+        lib/systemd/user/kilix-secrets.socket
+        share/doc/kilix-secrets/DEPENDENCIES.md
+        share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+        share/doc/kilix-secrets/LICENSE
+        share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+    )
+    stage="$(mktemp -d "$PROVISION_ROOT_TRANSACTION_DIR/kilix-secrets.XXXXXX")" \
+        || die "could not stage Kilix Secrets"
+    git init -q "$stage/repo" || die "could not initialize Kilix Secrets source staging"
+    git -C "$stage/repo" fetch --depth=1 "$KILIX_SECRETS_REPO" "$KILIX_SECRETS_REF" \
+        || die "could not fetch exact Kilix Secrets"
+    actual="$(git -C "$stage/repo" rev-parse 'FETCH_HEAD^{commit}')" \
+        || die "could not resolve Kilix Secrets commit"
+    [ "$actual" = "$KILIX_SECRETS_REF" ] || die "Kilix Secrets commit mismatch"
+    git -C "$stage/repo" archive --format=tar "$actual" >"$stage/source.tar" \
+        || die "could not archive exact Kilix Secrets source"
+    mkdir "$stage/source" || die "could not create Kilix Secrets build directory"
+    tar -xf "$stage/source.tar" -C "$stage/source" \
+        || die "could not extract Kilix Secrets source"
+    make -j2 -C "$stage/source" all PREFIX=/usr/local \
+        || die "could not build Kilix Secrets"
+    make -C "$stage/source" install DESTDIR="$stage/package" PREFIX=/usr/local \
+        || die "could not package Kilix Secrets"
+    printf '%s\n' "${package_files[@]}" | LC_ALL=C sort >"$stage/expected"
+    (cd "$stage/package/usr/local" && find . -type f -printf '%P\n' | LC_ALL=C sort) >"$stage/actual"
+    cmp -s "$stage/expected" "$stage/actual" || die "unexpected Kilix Secrets package layout"
+    link="$stage/package/usr/local/lib/libkilix-secrets.so"
+    [ -L "$link" ] && [ "$(readlink -- "$link")" = libkilix-secrets.so.0 ] \
+        || die "Kilix Secrets shared library link is not libkilix-secrets.so.0"
+    [ -z "$(find "$stage/package" ! -type f ! -type d ! -type l -print -quit)" ] \
+        || die "Kilix Secrets package contains an unexpected object"
+    for file in "${package_files[@]}" \
+            share/kilix-secrets/source.tar \
+            share/kilix-secrets/provenance.env; do
+        [ ! -L "/usr/local/$file" ] \
+            && { [ ! -e "/usr/local/$file" ] || [ -f "/usr/local/$file" ]; } \
+            || die "unsafe Kilix Secrets installed path: $file"
+    done
+    [ ! -d /usr/local/lib/libkilix-secrets.so ] \
+        || die "unsafe Kilix Secrets shared library path"
+    for file in "${package_files[@]}"; do
+        case "$file" in
+            bin/*|lib/libkilix-secrets.so.0) mode=0755 ;;
+            *) mode=0644 ;;
+        esac
+        install -D -o root -g root -m "$mode" "$stage/package/usr/local/$file" \
+            "/usr/local/$file" || die "could not install Kilix Secrets file $file"
+    done
+    ln -sfn libkilix-secrets.so.0 /usr/local/lib/libkilix-secrets.so \
+        || die "could not link Kilix Secrets shared library"
+    source_sha="$(sha256sum "$stage/source.tar" | awk '{print $1}')"
+    printf 'KILIX_SECRETS_REF=%s\nKILIX_SECRETS_SOURCE_SHA256=%s\n' \
+        "$actual" "$source_sha" >"$stage/provenance.env"
+    install -D -o root -g root -m 0644 "$stage/source.tar" \
+        /usr/local/share/kilix-secrets/source.tar \
+        || die "could not install Kilix Secrets source"
+    install -D -o root -g root -m 0644 "$stage/provenance.env" \
+        /usr/local/share/kilix-secrets/provenance.env \
+        || die "could not install Kilix Secrets provenance"
+    /sbin/ldconfig || die "could not refresh the linker cache for Kilix Secrets"
+    systemctl daemon-reload || die "could not reload systemd after installing Kilix Secrets"
+    systemctl --global enable kilix-secrets.socket \
+        || die "could not enable the Kilix Secrets user socket"
+    rm -rf -- "$stage" || die "could not clean Kilix Secrets staging"
 }
 
 install_waydroid_application() {
@@ -6851,6 +6961,7 @@ else
 fi
 
 begin_provision_root_transaction
+install_kilix_secrets
 install_no_beep_defaults
 # Runs after the dependency install above, because that is what brings the
 # packages whose user units this has to look at.
@@ -7249,6 +7360,9 @@ install_env=(
     "KILIX_WAYDROID_REPO=$KILIX_WAYDROID_REPO"
     "KILIX_WAYDROID_BRANCH=$KILIX_WAYDROID_BRANCH"
     "KILIX_WAYDROID_REF=$KILIX_WAYDROID_REF"
+    "KILIX_SECRETS_REPO=$KILIX_SECRETS_REPO"
+    "KILIX_SECRETS_BRANCH=$KILIX_SECRETS_BRANCH"
+    "KILIX_SECRETS_REF=$KILIX_SECRETS_REF"
 )
 [ -n "${PROVISION_LOCK_FD:-}" ] \
     && install_env+=("PLEB_UPDATE_LOCK_FD=$PROVISION_LOCK_FD")
@@ -7549,6 +7663,9 @@ EOF
     write_session_default KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
     write_session_default KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
     write_session_default KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
+    write_session_default KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
+    write_session_default KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
+    write_session_default KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
     write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
     write_session_default PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
     write_session_default PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"

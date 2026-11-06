@@ -77,6 +77,10 @@ INSTALLED_CLOSURE = {
         "https://github.com/itsmygithubacct/kilix-waydroid.git",
     "KILIX_WAYDROID_BRANCH": "",
     "KILIX_WAYDROID_REF": "a" * 40,
+    "KILIX_SECRETS_REPO":
+        "https://github.com/itsmygithubacct/kilix-secrets.git",
+    "KILIX_SECRETS_BRANCH": "",
+    "KILIX_SECRETS_REF": "9" * 40,
     "PLEBIAN_OS_APT_SNAPSHOT": "20260727T000000Z",
     # 0.2.1 had no managed native-package selection. Re-provision must retain
     # these empty values just as 0.2.2 must retain its five exact values.
@@ -248,6 +252,21 @@ class ReleaseControlledClassificationTests(unittest.TestCase):
                     self.assertIn(f"provenance_kv {key}", update)
                     self.assertIn(f"manifest_kv {key}", remaster)
                     self.assertIn(f"env_kv {key}", remaster)
+
+        for suffix in ("REPO", "REF"):
+            key = f"KILIX_SECRETS_{suffix}"
+            with self.subTest(key=key, surface="required"):
+                self.assertIn(key, required_values)
+        self.assertIn("KILIX_SECRETS_BRANCH", required_empty)
+        for suffix in ("REPO", "BRANCH", "REF"):
+            key = f"KILIX_SECRETS_{suffix}"
+            with self.subTest(key=key, surface="transport"):
+                self.assertIn(key, controlled)
+                self.assertIn(f'write_session_default {key} "${key}"', provision)
+                self.assertIn(f"provenance_kv {key}", provision)
+                self.assertIn(f"provenance_kv {key}", update)
+                self.assertIn(f"manifest_kv {key}", remaster)
+                self.assertIn(f"env_kv {key}", remaster)
 
         uv_bound = "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"
         self.assertIn(uv_bound, controlled)

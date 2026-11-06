@@ -698,6 +698,31 @@ release_requires_f120_roots() {
     [ "${PLEBIAN_OS_VERSION:-}" = 0.2.1 ]
 }
 
+release_requires_secrets_root() {
+    [ "${PLEBIAN_OS_VERSION:-}" = 0.2.3 ]
+}
+
+validate_kilix_secrets_release_root() {
+    release_requires_secrets_root || return 0
+    local key
+    for key in KILIX_SECRETS_REPO KILIX_SECRETS_REF; do
+        [ -n "${!key:-}" ] || {
+            echo "PLEBIAN_OS_RELEASE_MODE=1 requires a pinned $key" >&2
+            exit 1
+        }
+    done
+    is_hex_len "${KILIX_SECRETS_REF}" 40 || {
+        echo "release mode requires KILIX_SECRETS_REF to be a full 40-character lowercase commit SHA" >&2
+        exit 1
+    }
+    [ "$KILIX_SECRETS_REPO" = https://github.com/itsmygithubacct/kilix-secrets.git ] \
+        || { echo "release mode requires the canonical KILIX_SECRETS_REPO" >&2; exit 1; }
+    [ -n "${KILIX_SECRETS_BRANCH+x}" ] && [ -z "${KILIX_SECRETS_BRANCH}" ] || {
+        echo "release mode requires KILIX_SECRETS_BRANCH to be declared and empty" >&2
+        exit 1
+    }
+}
+
 validate_f120_release_roots() {
     release_requires_f120_roots || return 0
     local key missing=()
@@ -902,6 +927,7 @@ release_preflight() {
     }
     validate_uv_release_closure
     validate_f120_release_roots
+    validate_kilix_secrets_release_root
     validate_voice_release_closure
     validate_waydroid_release_closure
     # A publishable image always uses the interactive identity profile. Secrets
@@ -1258,6 +1284,7 @@ release_mode_check() {
     fi
     validate_uv_release_closure
     validate_f120_release_roots
+    validate_kilix_secrets_release_root
     validate_voice_release_closure
     case "${PLEBIAN_OS_APT_SNAPSHOT-unset}" in
         '') ;; # Explicit live Debian sources, including security updates.
@@ -1450,6 +1477,9 @@ write_build_info() {
         manifest_kv KILIX_WAYDROID_REPO "${KILIX_WAYDROID_REPO:-}"
         manifest_kv KILIX_WAYDROID_BRANCH "${KILIX_WAYDROID_BRANCH:-}"
         manifest_kv KILIX_WAYDROID_REF "${KILIX_WAYDROID_REF:-}"
+        manifest_kv KILIX_SECRETS_REPO "${KILIX_SECRETS_REPO:-}"
+        manifest_kv KILIX_SECRETS_BRANCH "${KILIX_SECRETS_BRANCH:-}"
+        manifest_kv KILIX_SECRETS_REF "${KILIX_SECRETS_REF:-}"
         manifest_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         manifest_kv KILIX_DIR "${KILIX_DIR:-}"
         manifest_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"
@@ -1590,6 +1620,9 @@ write_firstboot_env() {
         env_kv KILIX_WAYDROID_REPO "${KILIX_WAYDROID_REPO:-}"
         env_kv KILIX_WAYDROID_BRANCH "${KILIX_WAYDROID_BRANCH:-}"
         env_kv KILIX_WAYDROID_REF "${KILIX_WAYDROID_REF:-}"
+        env_kv KILIX_SECRETS_REPO "${KILIX_SECRETS_REPO:-}"
+        env_kv KILIX_SECRETS_BRANCH "${KILIX_SECRETS_BRANCH:-}"
+        env_kv KILIX_SECRETS_REF "${KILIX_SECRETS_REF:-}"
         env_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         env_kv KILIX_DIR "${KILIX_DIR:-}"
         env_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"
