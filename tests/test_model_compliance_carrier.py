@@ -467,6 +467,24 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                              upstream, model)
             self.assertEqual(entry["licence_record_file_sha256"], sha256(upstream))
 
+    def test_diarization_notice_licensors_match_the_bound_record(self):
+        # Coverage compares receipt.licensor to the licence record's licensor.
+        # The notice and the carrier list have to be that same string.
+        model = "kilix-diarization-cpu"
+        record = json.loads((CARRIER / model / "LICENCE-RECORD.json").read_bytes())
+        entry = json.loads((CARRIER / "CARRIER.json").read_bytes())["models"][model]
+        published = next(line.split(": ", 1)[1]
+                         for line in (CARRIER / model / "NOTICE").read_text().splitlines()
+                         if line.startswith("Licensor(s): "))
+        bound = record["licensor"]
+        self.assertEqual(published, bound)
+        self.assertEqual("; ".join(entry["licensors"]), bound)
+        record_sha = sha256((CARRIER / model / "LICENCE-RECORD.json").read_bytes())
+        self.assertEqual(entry["licence_record_file_sha256"], record_sha)
+        receipt = json.loads((CARRIER / "ACCEPTANCE.json").read_bytes())
+        self.assertEqual(receipt["interface"]["kilix-license"]["records"][model], record_sha)
+        self.assertEqual(receipt["carrier_sha256"], sha256((CARRIER / "CARRIER.json").read_bytes()))
+
     # AC-4
     def test_carrier_artifact_records_match_kilix_content(self):
         content, _ = self.pinned_checkouts()
