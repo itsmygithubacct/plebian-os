@@ -34,12 +34,12 @@ checks still require complete installed-release and physical desktop acceptance.
 
 ## 0.2.3 RC5 Ask default
 
-This RC5 image-models branch includes **LFM2 Kilix revision .8**
-(`lfm2-kilix-v5e1-wse-20261106.8`) as the Kilix Ask default. The installer
+This RC5 image-models branch includes **LFM2 Kilix revision .9**
+(`lfm2-kilix-v5e1-wse-20261106.9`) as the Kilix Ask default. The installer
 includes its verified 1.36 GB archive; upgrades stage
 the same pinned archive using their existing admin context. Original licence
 documents are installed under
-`/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v8/notices/`.
+`/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/notices/`.
 A new install or upgrade then installs that staged archive for the desktop
 user and records local coverage of its published custom terms, including the
 commercial-use limitation. The receipt is created on the machine. It is not
