@@ -4,7 +4,7 @@
 # declare these exact values. The release-image loader rejects a mismatch.
 #
 # Waydroid stays optional and lazy. Installation is 0, so the closure
-# hash is omitted: release mode refuses that hash while installation is off.
+# hash is explicitly empty: upgrades clear the old release hash while installation is off.
 # The diarization notice licensors match the receipt-bound licensor string.
 #
 # uv 0.12.5 installer checksum is the value carried from 0.2.2.
@@ -21,6 +21,7 @@ PLEBIAN_OS_UV_VERSION=0.12.5
 PLEBIAN_OS_UV_INSTALLER_SHA256=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111
 PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
 PLEBIAN_OS_INSTALL_WAYDROID=0
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=
 PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.3-model-compliance
 PLEBIAN_OS_VOICE_CARRIER_SHA256=8cda0b9ca5a1afb57d3f4cbc2405d9614a4437abd5c26ed392d01aef948ddf91
 PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=a706255ecdb5e852c3b2298881f5184bd0bb3b7d16cbbc6b4a2af09a39d990af
