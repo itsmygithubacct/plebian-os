@@ -63,22 +63,23 @@
       "candidate_validated_correct": 143,
       "candidate_losses_vs_prior": 0,
       "candidate_false_abstentions": 3,
-      "device": "gpu",
-      "cpu_pending": true
+      "cpu_and_gpu_agree": true
     },
     "probes": {
       "raw_correct": 57,
+      "admitted_correct": 57,
       "cases": 64,
       "candidate_losses_vs_prior": 0,
-      "device": "gpu",
-      "cpu_pending": true
+      "false_abstentions": 3,
+      "cpu_and_gpu_agree": true
     },
     "operational32": {
       "raw_correct": 28,
+      "admitted_correct": 28,
       "cases": 32,
       "candidate_losses_vs_prior": 0,
-      "device": "gpu",
-      "cpu_pending": true
+      "false_abstentions": 0,
+      "cpu_and_gpu_agree": true
     }
   },
   "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive URL is not uploaded yet. Seat review does not cover this weight. Final OS media and release acceptance remain separate."
