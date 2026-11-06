@@ -38,6 +38,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   pin is `bc7ab69d`. Model artifact records are unchanged. The carrier is
   `988b30d9` and its receipt is `27e7dbc6`. The attached seat records still
   describe the `c9901809` review.
+- Point Kilix at `273347ac`. Catalogued Paradee 1.2 stays optional and is
+  not an advertised model; its Apache-2.0 receipt names Sahil Mahendrakar.
+  The content catalog pin is `020a186a` and kilix-license is `7de1b709`.
+  Desktop first run installs Piper voice kilix-female-02, and the greeting
+  session uses that voice. Kilix 95 is `ede37270` and kilix-voice is
+  `1a4e63b1`. Advertised model artifact records are unchanged. The carrier
+  is `8cda0b9c` and its receipt is `a706255e`. The attached seat records
+  still describe the `c9901809` review.
 
 ## [0.2.2.1] — 2026-11-03
 
