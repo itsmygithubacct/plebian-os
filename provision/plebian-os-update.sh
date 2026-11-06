@@ -5362,8 +5362,10 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     test_fail_after_boundary component-update
     install_kilix_needle
     test_fail_after_boundary needle
-    # The OS update stages shared, verified bytes using its admin context.
-    # User agreement/selection remains in Kilix; old archives survive rollback.
+    # The OS update stages the shared command archive with its admin context.
+    # The following image-model install records local licence coverage for the
+    # desktop user. It does not rewrite an existing Ask selection, and old
+    # archives survive rollback.
     command_model_elevate=()
     [ "$(id -u)" = 0 ] || command_model_elevate=(sudo)
     "${command_model_elevate[@]}" /usr/bin/python3 \
@@ -5374,6 +5376,10 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
         "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" \
         || die "required default model installation failed"
     test_fail_after_boundary default-models
+    env "${stack_env[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" \
+        || die "required image model installation failed"
+    test_fail_after_boundary image-models
     # Last, after every step above that can install a package. See the
     # function's own header for why an update needs this at all.
     reapply_audio_holdoff

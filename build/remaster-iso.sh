@@ -984,6 +984,8 @@ COMMAND_MODEL_BUNDLE="${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}"
     exit 1
 }
 python3 "$HERE/provision/stage-command-model.py" --verify-only --archive "$COMMAND_MODEL_BUNDLE"
+python3 "$HERE/provision/install-image-models.py" --verify-only \
+    --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz"
 COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
     "$HERE/provision/command-model.json")"
 default_iso_name=plebian-os-netinst-amd64.iso
@@ -1947,6 +1949,8 @@ cp "$PRESEED" "$EXTRACT/preseed.cfg"
 # The files late_command copies into the target, staged under /cdrom/plebian-os.
 mkdir -p "$EXTRACT/plebian-os"
 install -m 0644 "$DEFAULT_MODELS_BUNDLE" "$EXTRACT/plebian-os/default-models.tar.xz"
+install -m 0644 "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+    "$EXTRACT/plebian-os/basic-pitch-icassp-2022-onnx.tar.xz"
 # Optional explicit source carrier is staged only after complete digest/graph checks.
 # Its immutable manifest and helper bytes are reviewed with the final source tuple.
 if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; then

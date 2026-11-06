@@ -40,10 +40,17 @@ includes its verified 1.36 GB archive; upgrades stage
 the same pinned archive using their existing admin context. Original licence
 documents are installed under
 `/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261104-v8/notices/`.
-First selection still follows the model's custom licence terms. Explicit model
+A new install or upgrade then installs that staged archive for the desktop
+user and records local coverage of its published custom terms, including the
+commercial-use limitation. The receipt is created on the machine. It is not
+shipped in the image, and the terms are not waived. Explicit model
 preferences remain in effect, and older version directories are retained for
 rollback. See the [command-model selection](releases/0.2.3-command-model.json)
 for exact hashes, source pins, results and limitations.
+
+The image also includes **Basic Pitch** (`basic-pitch-icassp-2022-onnx`).
+The same new install and upgrade install its archive under the standard
+licence policy. The nine-model default bundle is unchanged.
 
 ## 0.2.3 RC4 Help default
 

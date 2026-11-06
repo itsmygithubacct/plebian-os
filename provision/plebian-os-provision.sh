@@ -7272,6 +7272,9 @@ fi
 as_user env "${install_env[@]}" /usr/bin/python3 \
     "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
     || die "required offline default model installation failed"
+as_user env "${install_env[@]}" /usr/bin/python3 \
+    "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" --offline \
+    || die "required offline image model installation failed"
 as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX_DIR/config/default_models.py" verify \
     || die "default model verification failed"
 PROVISION_DEFAULT_MODELS_VERIFIED=1
