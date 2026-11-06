@@ -32,6 +32,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Point Kilix at `8f99917a`. The installed GParted program starts through
   sudo, and Kilix asks for the password in a dialog. The content catalog
   pin is unchanged.
+- Point Kilix at `55dd1651`. The catalog records playalong, Help source
+  `4abc52e9`, and Needle source `073f5e03`, and a fresh setup installs
+  Piper voice kilix-female-02 with no speech prompt. The content catalog
+  pin is `bc7ab69d`. Model artifact records are unchanged. The carrier is
+  `988b30d9` and its receipt is `27e7dbc6`. The attached seat records still
+  describe the `c9901809` review.
 
 ## [0.2.2.1] — 2026-11-03
 
