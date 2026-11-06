@@ -6,6 +6,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Install python3-torch and the pinned model-converter dependency group on
+  upgrades before running the required converter installers.
 - Build RC1 from the patched 0.2.2.1 baseline and the selected 0.2.3
   desktop, terminal, camera, model integration and transport changes.
 - Keep Waydroid optional. Installation and upgrades stage its first-use

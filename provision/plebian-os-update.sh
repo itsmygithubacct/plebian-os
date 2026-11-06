@@ -4403,7 +4403,7 @@ refresh_os_dependencies() {
         "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256" \
         "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=$PLEBIAN_OS_UV_INSTALLER_MAX_BYTES" \
         PLEBIAN_OS_ROOT_SESSION_HOME=/var/lib/plebian-os/session \
-        "$helper" \
+        "$helper" --model-converters \
         || die "selected OS dependency closure could not be installed"
 }
 

@@ -391,6 +391,35 @@ class DependencyManifestTests(unittest.TestCase):
                 self.assertIn('--model-converters', result.stdout.splitlines())
                 self.assertEqual('--dry-run' in result.stdout.splitlines(), dry == '1')
 
+    def test_update_selects_the_exact_model_converter_packages(self):
+        source = (ROOT / "provision/plebian-os-update.sh").read_text()
+        function = re.search(r"^refresh_os_dependencies\(\) \{.*?^\}",
+                             source, re.M | re.S).group()
+        with tempfile.TemporaryDirectory() as td:
+            helper = Path(td) / "deps"
+            helper.write_text("#!/bin/sh\nexec /bin/bash " +
+                              shlex.quote(str(ROOT / "provision/install-deps.sh")) +
+                              ' --dry-run "$@"\n')
+            helper.chmod(0o755)
+            sudo = Path(td) / "sudo"
+            sudo.write_text('#!/bin/sh\nexec "$@"\n')
+            sudo.chmod(0o755)
+            function = function.replace("/usr/local/sbin/plebian-os-install-deps",
+                                        str(helper))
+            env = {"PATH": td + ":/usr/bin:/bin", "LC_ALL": "C",
+                   "PLEBIAN_OS_RELEASE_MODE": "1", "PLEBIAN_OS_INSTALL_UV": "0",
+                   "PLEBIAN_OS_UV_VERSION": "", "PLEBIAN_OS_UV_INSTALLER_SHA256": "",
+                   "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": ""}
+            result = subprocess.run(
+                ["bash", "-euc", "log() { :; }\ndie() { exit 1; }\n" +
+                 function + "\nrefresh_os_dependencies"],
+                env=env, text=True, capture_output=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for package in VULKAN_TTS_CONVERTER_PACKAGES:
+                self.assertIn(package, result.stdout)
+            for package in VULKAN_TTS_BUILD_PACKAGES:
+                self.assertNotIn(package, result.stdout)
+
     def test_dependency_cli_refuses_unknown_options(self):
         result = subprocess.run(
             ["bash", str(ROOT / "provision" / "install-deps.sh"),
