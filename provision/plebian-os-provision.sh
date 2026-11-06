@@ -5646,6 +5646,64 @@ trap - EXIT
     log "tb alias installed -> $aliases (tb runs \$HOME/.local/bin/tb)"
 }
 
+# Seed the target user's ~/.bash_aliases with an `ask` alias for `kilix ask`.
+# Debian's stock ~/.bashrc sources ~/.bash_aliases into interactive shells, so
+# the alias is live from the first login after provisioning. This is the Ask
+# entrypoint from 0.2.3 rc5 onward: the name is `kilix` on PATH, not a
+# checkout path.
+#
+# No-clobber: when `ask` already resolves to anything in the target user's
+# interactive shell — a command on PATH, an alias, a function — note it and
+# change nothing. A ~/.bash_aliases the user turned into a symlink (a dotfiles
+# setup) is likewise left alone with a note rather than rewritten.
+install_ask_shell_alias() {
+    local aliases="$USER_HOME/.bash_aliases"
+    local resolved status=0
+    log "seeding the ask shell alias (kilix ask) for $TARGET_USER"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) skip if ask already resolves, else append alias ask='kilix ask' -> $aliases"
+        return 0
+    fi
+    if resolved="$(as_user bash -ic 'command -v ask' 2>/dev/null)" \
+            && [ -n "$resolved" ]; then
+        log "ask already resolves for $TARGET_USER ($resolved); leaving it in place"
+        return 0
+    fi
+    # $USER_HOME is controlled by the target user: same rules as the tb writer.
+    # Write as the user, carry any existing alias lines forward with their file
+    # mode, and atomically replace the entry with `mv -T` so nothing here ever
+    # follows a pre-created symlink.
+    as_user bash -c '
+set -euo pipefail
+aliases="$1"
+if [ -e "$aliases" ] || [ -L "$aliases" ]; then
+    if [ ! -f "$aliases" ] || [ -L "$aliases" ]; then
+        exit 3
+    fi
+fi
+mode=644
+tmp="$(mktemp "${aliases}.tmp.XXXXXX")"
+trap '\''rm -f "$tmp"'\'' EXIT
+if [ -f "$aliases" ]; then
+    mode="$(stat -c %a -- "$aliases")"
+    cat -- "$aliases" > "$tmp"
+fi
+printf '\''%s\n'\'' \
+    '\''# ask: kilix ask (added by plebian-os-provision)'\'' \
+    "alias ask='\''kilix ask'\''" >> "$tmp"
+chmod "$mode" -- "$tmp"
+mv -fT -- "$tmp" "$aliases"
+trap - EXIT
+' plebian-os-ask-alias-writer "$aliases" || status=$?
+    if [ "$status" = 3 ]; then
+        warn "$aliases is not a plain file; leaving it alone — add the ask alias there yourself if you want it"
+        return 0
+    fi
+    [ "$status" = 0 ] \
+        || die "could not write the ask alias to $aliases as $TARGET_USER"
+    log "ask alias installed -> $aliases (ask runs kilix ask)"
+}
+
 desktop_provider_needs_kilix95() {
     case "$KILIX_DESKTOP_PROVIDER" in
         external|xp|kilix-xp) return 0 ;;
@@ -7170,6 +7228,11 @@ install_passwd_nag
 # resolved through the per-user command directory Pleb publishes tmux-cli's
 # tb.py into. Skipped with a note when `tb` already resolves to anything.
 install_tb_shell_alias
+
+# Interactive-shell convenience: an `ask` alias for `kilix ask` in the owner's
+# ~/.bash_aliases, from 0.2.3 rc5 onward. Skipped with a note when `ask`
+# already resolves to anything.
+install_ask_shell_alias
 
 # ── 2. allocate all coordinated source checkouts under the shared root ───────
 case "$GPU_TERMINAL_SOURCE_HOME" in
