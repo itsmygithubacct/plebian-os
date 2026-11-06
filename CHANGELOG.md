@@ -6,6 +6,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Select Ask weight `lfm2-kilix-v5e1-wse-20261106.4` as the default command
+  model. Delivery `lfm2-kilix-commands-20261106-v4` replaces
+  `lfm2-kilix-commands-20261104-v8`. Kilix is `dda0072b` and kilix-content is
+  `9ddc492e`. kilix-license is `a516f392`. The modified-model notice is
+  `a71fadf0`. Seat review does not cover this weight. The archive URL is not
+  uploaded yet.
 - Install python3-torch and the pinned model-converter dependency group on
   upgrades before running the required converter installers.
 - Build RC1 from the patched 0.2.2.1 baseline and the selected 0.2.3

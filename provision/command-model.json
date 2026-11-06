@@ -2,12 +2,12 @@
   "schema": "plebian-os.command-model-archive/v1",
   "since_release": "0.2.3-rc1",
   "asset_id": "lfm2-kilix-commands",
-  "version": "lfm2-kilix-commands-20261104-v8",
-  "weight_version": "lfm2-kilix-v5e1-wse-20261104.8",
-  "bytes": 1362204301,
-  "sha256": "c0493cbe633d932da644b8e2acc58ed0ad0761ad952fa34eb8e797b4a2d2b453",
-  "url": "https://github.com/itsmygithubacct/kilix-needle/releases/download/lfm2-kilix-commands-20261104-v8/lfm2-kilix-commands-20261104-v8.tar.gz",
-  "root": "lfm2-kilix-commands-20261104-v8",
+  "version": "lfm2-kilix-commands-20261106-v4",
+  "weight_version": "lfm2-kilix-v5e1-wse-20261106.4",
+  "bytes": 1362205098,
+  "sha256": "06f8a92294670c2dc88f22d3bad88f638382f33885b1b5b4a33b98c20bc2647e",
+  "url": "https://github.com/itsmygithubacct/kilix-needle/releases/download/lfm2-kilix-commands-20261106-v4/lfm2-kilix-commands-20261106-v4.tar.gz",
+  "root": "lfm2-kilix-commands-20261106-v4",
   "documents": {
     "notices/LICENSE-LFM.txt": {
       "bytes": 10574,
@@ -22,9 +22,9 @@
       "sha256": "571c0295ffbb60b79627a8956e2990826448eee7678b8d9a1e37c82bbf779f4c"
     },
     "notices/NOTICE.txt": {
-      "bytes": 1638,
-      "sha256": "e03643ad3853ac201afb79ae9561b50936f82b02d77eb317daa82245cf0364a5"
+      "bytes": 1863,
+      "sha256": "a71fadf06cca9de84879114f8f72570a4eeabc482f6253960bc037be8e72e383"
     }
   },
-  "manifest_digest": "db2674e05b073e08e2ebbb25aea8a5f5d8ac3de2fcb0bba8d4c4a39512fdaa61"
+  "manifest_digest": "494c55fd95e88fb624977e241bbf2a0e4327f35c6bbd9939b95b28f574c38ce7"
 }
