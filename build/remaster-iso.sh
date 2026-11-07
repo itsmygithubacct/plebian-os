@@ -424,8 +424,12 @@ validate_voice_compliance_carrier() {
             || { carrier_refuse "$model/ARTIFACT.json does not match its record digest"; return 1; }
         is_hex_len "${cv[${prefix}licence_record_digest]}" 64 \
             || { carrier_refuse "$model licence record digest is not a sha256"; return 1; }
-        [ "${cv[${prefix}decision]}" = affirmative ] \
-            || { carrier_refuse "$model licence decision is not affirmative"; return 1; }
+        # kilix-license decides every record as affirmative or informational;
+        # LFM2 is informational by the owner's 2026-11-07 determination.
+        case "${cv[${prefix}decision]}" in
+            affirmative|informational) ;;
+            *) carrier_refuse "$model licence decision is not affirmative or informational"; return 1 ;;
+        esac
         for digest in ${cv[${prefix}licence_text_sha256s]}; do
             is_hex_len "$digest" 64 && [ -f "$dir/licence-texts/$digest.txt" ] \
                 && [ "$(sha256sum -- "$dir/licence-texts/$digest.txt" | cut -d' ' -f1)" = "$digest" ] \

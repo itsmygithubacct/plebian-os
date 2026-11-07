@@ -6,10 +6,11 @@
   "delivery_version": "lfm2-kilix-commands-20261106-v9",
   "model_sha256": "3fa22c105b1f80823088de21a45fd2f3dc30a4cfdc63d21037c9344585fae4dd",
   "source_pins": {
-    "kilix": "0ee27c659e1438d8dffb8a63ed0b88ac91451096",
-    "kilix-content": "5a4723807fc05f0265b9be85b863ad8a83028637",
-    "kilix-license": "65e5ae07d78039ac5a2fd1aabba3c83524f5893f",
-    "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec"
+    "kilix": "52ba3cd11d3603b8557252caabb7a5b5b63136a0",
+    "kilix-content": "81f2321b51649effc3275493a351931497c3ba0f",
+    "kilix-license": "0984dd222bcb7f97859222b0dc2303b9225191fe",
+    "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec",
+    "kilix-needle": "3a8e41c52f32f963c4bbeadfbec69b200f13eafe"
   },
   "model": {
     "bytes": 1388859040,
@@ -17,10 +18,10 @@
   },
   "manifest": {
     "repository": "https://github.com/itsmygithubacct/kilix-content",
-    "revision": "5a4723807fc05f0265b9be85b863ad8a83028637",
+    "revision": "81f2321b51649effc3275493a351931497c3ba0f",
     "path": "src/kilix_content/catalog/plebian.json",
     "asset_id": "lfm2-kilix-commands",
-    "note": "kilix-needle commands-model.json at 8408183f909a7052bb14cc974a869909234d8bca still describes lfm2-kilix-v5e1-wse-20261104.8 and is not this delivery"
+    "note": "kilix-needle commands-model.json, unchanged from 8408183f909a7052bb14cc974a869909234d8bca to 3a8e41c52f32f963c4bbeadfbec69b200f13eafe, still describes lfm2-kilix-v5e1-wse-20261104.8 and is not this delivery"
   },
   "delivery": {
     "mode": "bundled-command-model-archive",
@@ -29,7 +30,7 @@
     "sha256": "ea03c42ce0f36d12bca1844c558c0fcaeb442887e55e1e7b76ccb3ed632c3a85",
     "iso_required": true,
     "upgrade_stages_in_admin_context": true,
-    "agreement": "existing custom-model receipt policy; staging does not imply acceptance",
+    "agreement": "notice terms by the owner's 2026-11-07 determination: installation records a notice receipt that claims no agreement; the terms, including the commercial-use limitation, are shipped and not waived; terms that need a typed agreement are never answered by the image",
     "documents_path": "/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/notices/",
     "explicit_user_choices_preserved": true,
     "release_uploaded": true,
@@ -92,7 +93,8 @@
       "admitted_gains": [
         "literal-expand-004"
       ]
-    }
+    },
+    "grammar_note": "The figures above were measured with kilix-needle-runtime 4f3aeaff. The catalog selects kilix-needle 3a8e41c5, whose grammar alone reads 1352 of 1383 development cases correctly with no wrong action, against 1346 at 073f5e03; its grammar-only probes, fresh, operational and expand results equal those of 073f5e03. Admitted results with the model were not rerun at 3a8e41c5."
   },
-  "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive is published at the release URL. Seat review does not cover this weight. Final OS media and release acceptance remain separate."
+  "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive is published at the release URL. Seat review does not cover this weight. Final OS media and release acceptance remain separate. LFM2's terms are a notice by the owner's 2026-11-07 determination."
 }

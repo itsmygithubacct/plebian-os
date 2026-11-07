@@ -13,6 +13,7 @@ A missing checkout is a failure, never a skip: an unprovable binding is worth
 exactly as much as an absent one.
 """
 
+import ast
 import hashlib
 import json
 import os
@@ -217,8 +218,9 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                     ('version', 'version'), ('manifest_digest', 'manifest_digest'))):
                 gaps.append(f"{model}: command archive binding differs")
             for claim in ('mode: bundled-command-model-archive', 'stages it offline',
-                          'does not create a licence receipt', 'custom terms',
-                          'verifies every member'):
+                          'record a notice receipt', 'custom terms', 'are a notice',
+                          'not waived', 'no agreement is recorded',
+                          'never answered by the image', 'verifies every member'):
                 if claim not in delivery:
                     gaps.append(f"{model}: DELIVERY lacks {claim!r}")
             continue
@@ -249,6 +251,28 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                 gaps.append(f"{model}: DELIVERY lacks {claim!r}")
         if ("not runnable" in delivery) == entry["runnable"]:
             gaps.append(f"{model}: DELIVERY misstates runnability")
+    return gaps
+
+
+def command_installer_gaps(installer: str) -> list[str]:
+    """AC-8: the command model DELIVERY is true of provision/install-image-models.py.
+
+    The image records the notice terms and never types an agreement answer,
+    and it stops rather than answer terms that need one.
+    """
+    gaps = []
+    tree = ast.parse(installer)
+    captures = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr == "capture_agreement"]
+    if not captures:
+        gaps.append("the image installer records no command model receipt")
+    if any(len(node.args) != 1 or node.keywords for node in captures):
+        gaps.append("the image installer types an agreement answer")
+    if not any(isinstance(node, ast.If)
+               and ast.unparse(node.test) == "record.expected_decision != 'record'"
+               and any(isinstance(statement, ast.Raise) for statement in node.body)
+               for node in ast.walk(tree)):
+        gaps.append("the image installer does not refuse terms that need agreement")
     return gaps
 
 
@@ -596,6 +620,16 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         pins = manifest(f"{VERSION}.env")
         self.assertEqual(delivery_gaps(provision), [])
+        # The command model DELIVERY describes what the image installer does.
+        installer = (ROOT / "provision" / "install-image-models.py").read_text()
+        self.assertEqual(command_installer_gaps(installer), [])
+        for planted in (installer.replace("lic.capture_agreement(record)",
+                                          "lic.capture_agreement(record, 'yes')"),
+                        installer.replace("lic.capture_agreement(record)",
+                                          "lic.capture_agreement(record, typed='yes')"),
+                        installer.replace("if record.expected_decision != 'record':", "if False:")):
+            self.assertNotEqual(planted, installer)
+            self.assertTrue(command_installer_gaps(planted))
         # The download is digest-verified and receipt-gated at the pinned refs.
         self.assertIsNone(voice_contract.content_chain_gap(pins["KILIX_REF"]))
         self.assertIsNone(voice_contract.receipt_gate_gap(pins["KILIX_VOICE_REF"]))
@@ -692,7 +726,9 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             ("false delivery mode", lambda r: edit_env(r, f"{dictation}_delivery", "provisioned"), {},
              "delivery differs from the default inventory"),
             ("undecided licence", lambda r: edit_env(r, f"{dictation}_decision", "pending"), {},
-             "decision is not affirmative"),
+             "decision is not affirmative or informational"),
+            ("unknown licence decision", lambda r: edit_env(r, f"{dictation}_decision", "record"), {},
+             "decision is not affirmative or informational"),
             ("foreign upstream host", lambda r: edit_env(r, f"{dictation}_upstream_host", "example.invalid"), {},
              "upstream host does not match its source"),
             ("D4b wrong release inputs", lambda r: None,

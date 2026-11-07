@@ -6,6 +6,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Deliver LFM2's terms as a notice, by the owner's 2026-11-07 determination.
+  Image installs and upgrades record a notice receipt that claims no
+  agreement, and never answer terms that need a typed agreement. The terms,
+  including the commercial-use limitation, are shipped and not waived. Kilix
+  is `52ba3cd1` and kilix-content is `81f2321b`, which selects Needle
+  `3a8e41c5`. kilix-license is `0984dd22`. Needle reads an unquoted spaced
+  path only when that exact path exists and a bare right, left or down before
+  an explicit path as the placement; its grammar alone reads 1352/1383
+  development cases with no wrong action, against 1346/1383 before. Admitted
+  results with the model were not rerun.
 - Select Ask weight `lfm2-kilix-v5e1-wse-20261106.9` as the default command
   model. Delivery `lfm2-kilix-commands-20261106-v9` replaces
   `lfm2-kilix-commands-20261106-v8`. Kilix is `0ee27c65` and kilix-content is

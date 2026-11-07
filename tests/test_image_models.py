@@ -79,7 +79,8 @@ class InstallPolicyTests(unittest.TestCase):
         self.receipts = []
         self.eligible = False
         self.covered = False
-        record = SimpleNamespace(id='lfm2-kilix-commands', digest='e' * 64)
+        record = SimpleNamespace(id='lfm2-kilix-commands', digest='e' * 64,
+                                 expected_decision='record')
         self.record = record
         spec = SimpleNamespace(
             asset_id='lfm2-kilix-commands', archive_sha256='a' * 64, archive_bytes=4,
@@ -118,7 +119,7 @@ class InstallPolicyTests(unittest.TestCase):
                 if not self.covered:
                     raise inner.CoverageRefused()
 
-            def capture_agreement(inner, record, typed):
+            def capture_agreement(inner, record, typed=None):
                 self.calls.append(('capture', typed, record.id))
                 return 'agreement'
 
@@ -180,13 +181,22 @@ class InstallPolicyTests(unittest.TestCase):
 
         self.addCleanup(restore_cache)
 
-    def test_command_model_records_custom_terms_and_reads_the_cache(self):
+    def test_command_model_records_its_notice_terms_and_reads_the_cache(self):
         installer.install_command_model(Path('/kilix'), self.pin, self.cache)
-        self.assertEqual(self.calls[0], ('capture', 'yes', 'lfm2-kilix-commands'))
+        # A notice record: no typed answer is passed, so none is recorded.
+        self.assertEqual(self.calls[0], ('capture', None, 'lfm2-kilix-commands'))
         self.assertEqual(self.calls[1][0], 'upstream')
         self.assertNotIn('supplied', [kind for kind, *_rest in self.calls])
         self.assertEqual(self.receipts[0]['catalogue_digest'], 'c' * 64)
         self.assertEqual(os.environ['KILIX_CONTENT_ARCHIVE_CACHE'], str(self.cache))
+
+    def test_terms_that_need_agreement_are_never_answered_by_the_image(self):
+        self.record.expected_decision = 'accept'
+        with self.assertRaisesRegex(ValueError, 'never answers'):
+            installer.install_command_model(Path('/kilix'), self.pin, self.cache)
+        self.assertEqual(self.receipts, [])
+        self.assertNotIn('capture', [kind for kind, *_rest in self.calls])
+        self.assertNotIn('upstream', [kind for kind, *_rest in self.calls])
 
     def test_standard_policy_cannot_cover_the_command_model(self):
         self.eligible = True

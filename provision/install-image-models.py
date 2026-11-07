@@ -2,10 +2,13 @@
 """Install Basic Pitch and the staged LFM2 command model for the desktop user.
 
 Basic Pitch ships in the image and uses the standard distribution policy.
-LFM2 is the pinned command-model archive. Installation records coverage of
-that model's published custom terms on this machine. It does not waive those
-terms, does not use the standard-policy receipt, and does not put a receipt
-in the image. An existing model selection is left unchanged.
+LFM2 is the pinned command-model archive. By the owner's 2026-11-07
+determination its published custom terms, including the commercial-use
+limitation, are a notice. Installation records a notice receipt for them on
+this machine, which claims no agreement. It does not waive those terms, does
+not use the standard-policy receipt, does not put a receipt in the image, and
+never answers terms that need a typed agreement. An existing model selection
+is left unchanged.
 """
 import argparse
 import hashlib
@@ -208,7 +211,7 @@ def _command_cache(cache_dir, pin):
 
 
 def install_command_model(kilix, pin, cache_dir):
-    """Install LFM2 from the staged archive and record its custom terms."""
+    """Install LFM2 from the staged archive and record its notice terms."""
     cm, _defaults = _load(kilix)
     if _installed(cm, pin['asset_id']):
         print('Command model already verified; no archive install needed.')
@@ -237,12 +240,17 @@ def install_command_model(kilix, pin, cache_dir):
                 lic.require(lic.AssetRef(spec.asset_id, record.digest, spec.manifest_digest),
                             records=records, store=store)
             except lic.CoverageRefused:
-                # The image install is the acceptance of the terms published with
-                # this model. "yes" is the authority's explicit agreement, bound
-                # to the commercial-use condition and the exact licence bytes.
-                print('Command model: recording coverage of the published custom terms '
-                      'for ' + record.id)
-                agreement = lic.capture_agreement(record, 'yes')
+                # Owner determination 2026-11-07 (Debian style): LFM2's terms,
+                # including the commercial-use limitation, are a notice. They are
+                # shipped with the model under the documents path, not waived, and
+                # the receipt records that notice and claims no agreement. Terms
+                # that need a typed agreement are never answered here: the image
+                # install stops instead.
+                if record.expected_decision != 'record':
+                    raise ValueError('command model terms need a typed agreement; '
+                                     'the image never answers one')
+                print('Command model: recording the published notice terms for ' + record.id)
+                agreement = lic.capture_agreement(record)
                 store.write(lic.receipt_from_agreement(
                     record, agreement, manifest_digest=spec.manifest_digest,
                     catalogue_digest=catalogue_digest, release_digest=release_digest))

@@ -41,9 +41,11 @@ the same pinned archive using their existing admin context. Original licence
 documents are installed under
 `/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/notices/`.
 A new install or upgrade then installs that staged archive for the desktop
-user and records local coverage of its published custom terms, including the
-commercial-use limitation. The receipt is created on the machine. It is not
-shipped in the image, and the terms are not waived. Explicit model
+user. By the owner's 2026-11-07 determination, its published custom terms,
+including the commercial-use limitation, are a notice, as with a Debian
+non-free package: they are shipped with the model, and installation records a
+notice receipt that claims no agreement. The receipt is created on the machine.
+It is not shipped in the image, and the terms are not waived. Explicit model
 preferences remain in effect, and the previous `20261104-v8` directory is
 retained for rollback. The archive is published as release
 `lfm2-kilix-commands-20261106-v9` of kilix-needle. See the
