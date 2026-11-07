@@ -558,7 +558,11 @@ class ModelComplianceCarrierTests(unittest.TestCase):
     def test_whistle_authorization_requires_the_real_request_and_upstream_evidence(self):
         carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
         entry = carrier["models"]["whistle"]
-        text = (CARRIER / "determinations/whistle/OWNER-RC6-WHISTLE-2026-10-08.md").read_text()
+        # The receipt names the accepted record; its file name changes per release.
+        receipt = json.loads((CARRIER / "ACCEPTANCE.json").read_bytes())
+        paths = [item["path"] for item in receipt["determinations"] if item["model"] == "whistle"]
+        self.assertEqual(len(paths), 1, paths)
+        text = (CARRIER / paths[0]).read_text()
         self.assertEqual(determination_gaps("whistle", text, entry), [])
         for before, after in (
             ("> should we integrat", "> please inspect"),

@@ -10,10 +10,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   model. Delivery `lfm2-kilix-commands-20261106-v9` replaces
   `lfm2-kilix-commands-20261106-v8`. Kilix is `0ee27c65` and kilix-content is
   `5a472380`. kilix-license is `65e5ae07`. The modified-model notice is
-  `65e4cd26`. Seat review does not cover this weight. The archive URL is not
-  uploaded yet. GPU development admitted is 1346/1383, probes 61/64, fresh
-  confirmation 146/160, operational 28/32, and expand 8/8. Admitted losses
-  versus `20261106.8` are zero on those suites. CPU was not run.
+  `65e4cd26`. The archive is published as kilix-needle release
+  `lfm2-kilix-commands-20261106-v9`. Seat review does not cover this weight.
+  GPU development admitted is 1346/1383, probes 61/64, fresh confirmation
+  146/160, operational 28/32, and expand 8/8. Admitted losses versus
+  `20261106.8` are zero on those suites. CPU was not run.
 - Select Ask weight `lfm2-kilix-v5e1-wse-20261106.8` as the default command
   model. Delivery `lfm2-kilix-commands-20261106-v8` replaces
   `lfm2-kilix-commands-20261106-v4`. Kilix is `5b2da2f8` and kilix-content is

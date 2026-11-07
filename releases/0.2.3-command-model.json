@@ -32,7 +32,8 @@
     "agreement": "existing custom-model receipt policy; staging does not imply acceptance",
     "documents_path": "/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/notices/",
     "explicit_user_choices_preserved": true,
-    "release_uploaded": false
+    "release_uploaded": true,
+    "release_url": "https://github.com/itsmygithubacct/kilix-needle/releases/tag/lfm2-kilix-commands-20261106-v9"
   },
   "rollback": {
     "weight_version": "lfm2-kilix-v5e1-wse-20261104.8",
@@ -93,5 +94,5 @@
       ]
     }
   },
-  "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive URL is not uploaded yet. Seat review does not cover this weight. Final OS media and release acceptance remain separate."
+  "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive is published at the release URL. Seat review does not cover this weight. Final OS media and release acceptance remain separate."
 }

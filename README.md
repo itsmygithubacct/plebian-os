@@ -45,7 +45,8 @@ user and records local coverage of its published custom terms, including the
 commercial-use limitation. The receipt is created on the machine. It is not
 shipped in the image, and the terms are not waived. Explicit model
 preferences remain in effect, and the previous `20261104-v8` directory is
-retained for rollback. The archive URL is not uploaded yet. See the
+retained for rollback. The archive is published as release
+`lfm2-kilix-commands-20261106-v9` of kilix-needle. See the
 [command-model selection](releases/0.2.3-command-model.json)
 for exact hashes, source pins, results and limitations.
 
