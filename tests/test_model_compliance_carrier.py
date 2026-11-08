@@ -9,6 +9,8 @@ validator to refuse it for its own reason.
 AC-1, AC-3 and AC-4 read kilix-content at PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF and
 kilix-license at KILIX_LICENSE_REF from sibling checkouts (CI fetches exactly
 those commits), or from PLEBIAN_OS_KILIX_CONTENT_REPO / PLEBIAN_OS_KILIX_LICENSE_REPO.
+AC-8 also reads the kilix-needle the catalog selects, and the kilix-content it
+vendors, from sibling checkouts or PLEBIAN_OS_KILIX_NEEDLE_REPO.
 A missing checkout is a failure, never a skip: an unprovable binding is worth
 exactly as much as an absent one.
 """
@@ -273,6 +275,34 @@ def command_installer_gaps(installer: str) -> list[str]:
                and any(isinstance(statement, ast.Raise) for statement in node.body)
                for node in ast.walk(tree)):
         gaps.append("the image installer does not refuse terms that need agreement")
+    return gaps
+
+
+def needle_vendor_gaps(vendored_catalog: dict, vendored_record: bytes,
+                       commands_model: dict, root: Path = CARRIER) -> list[str]:
+    """AC-8: the Needle the catalog selects serves the carried command model terms.
+
+    kilix-needle reads the catalog and licence records from its own vendored
+    kilix-content, not from KILIX_REF's, so that copy must carry the carried
+    asset record and licence record, and its commands-model.json must describe
+    that asset. Otherwise `install --commands` asks for terms the image's
+    receipt does not cover."""
+    carrier = json.loads((root / "CARRIER.json").read_bytes())
+    gaps = []
+    for model, entry in carrier["models"].items():
+        if entry["provider"] != "kilix-needle":
+            continue
+        artifact = json.loads((root / model / "ARTIFACT.json").read_bytes())
+        served = {asset["id"]: asset for asset in vendored_catalog["assets"]}
+        if served.get(entry["artifact_id"]) != artifact:
+            gaps.append(f"{model}: Needle's vendored asset record is not the carried one")
+        if sha256(vendored_record) != entry["licence_record_file_sha256"]:
+            gaps.append(f"{model}: Needle's vendored licence record is not the carried one")
+        files = {item["path"]: {"bytes": item["bytes"], "sha256": item["sha256"]}
+                 for item in artifact["files"]}
+        if (commands_model.get("version") != entry["version"]
+                or commands_model.get("files") != files):
+            gaps.append(f"{model}: Needle's commands-model.json does not describe the carried asset")
     return gaps
 
 
@@ -541,6 +571,45 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         for model, entry in carrier["models"].items():
             artifact = json.loads((CARRIER / model / "ARTIFACT.json").read_bytes())
             self.assertEqual(served.get(entry["artifact_id"]), artifact, model)
+
+    def test_command_model_records_needle_serves_are_the_carried_ones(self):
+        # The Ask app installs LFM2 from kilix-needle's own vendored
+        # kilix-content. A review found that copy one delivery behind, with the
+        # agreement record the image's notice receipt does not cover.
+        pins = manifest(f"{VERSION}.env")
+        content_ref = pins["PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF"]
+        content = repo_holding("PLEBIAN_OS_KILIX_CONTENT_REPO", "kilix-content", content_ref)
+        self.assertIsNotNone(content, "no kilix-content checkout holds the carrier content ref")
+        show = lambda repo, ref, path: subprocess.run(
+            ["git", "-C", str(repo), "--no-replace-objects", "show", f"{ref}:{path}"],
+            capture_output=True, check=True).stdout
+        catalog = json.loads(show(content, content_ref, "src/kilix_content/catalog/plebian.json"))
+        (app,) = [item for item in catalog["content"] if item["id"] == "kilix-needle"]
+        ref = app["source"]["ref"]
+        needle = repo_holding("PLEBIAN_OS_KILIX_NEEDLE_REPO", "kilix-needle", ref)
+        self.assertIsNotNone(needle, f"no kilix-needle checkout holds {ref}; "
+                             "set PLEBIAN_OS_KILIX_NEEDLE_REPO")
+        vendored = subprocess.run(
+            ["git", "-C", str(needle), "--no-replace-objects", "rev-parse",
+             f"{ref}:third_party/kilix-content"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        holder = repo_holding("PLEBIAN_OS_KILIX_CONTENT_REPO", "kilix-content", vendored)
+        self.assertIsNotNone(holder, f"no kilix-content checkout holds {vendored}")
+        vendored_catalog = json.loads(show(holder, vendored, "src/kilix_content/catalog/plebian.json"))
+        record = show(holder, vendored, "third_party/kilix-license/src/kilix_license/data/"
+                      "lfm2-records/lfm2-kilix-commands.json")
+        commands_model = json.loads(show(needle, ref, "commands-model.json"))
+        self.assertEqual(needle_vendor_gaps(vendored_catalog, record, commands_model), [])
+        # Planted: the old delivery, the old agreement record, a stale model file.
+        stale = json.loads(json.dumps(vendored_catalog))
+        (asset,) = [item for item in stale["assets"] if item["id"] == "lfm2-kilix-commands"]
+        asset["version"] = "lfm2-kilix-commands-20261104-v8"
+        agreement = record.replace(b'"informational"', b'"affirmative"')
+        self.assertNotEqual(agreement, record)
+        old_model = dict(commands_model, version="lfm2-kilix-commands-20261104-v8")
+        for planted in ((stale, record, commands_model), (vendored_catalog, agreement, commands_model),
+                        (vendored_catalog, record, old_model)):
+            self.assertEqual(len(needle_vendor_gaps(*planted)), 1)
 
     # AC-5
     def test_carrier_covers_every_advertised_model(self):

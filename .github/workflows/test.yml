@@ -45,6 +45,11 @@ jobs:
           git -C ../kilix-content fetch -q --depth 1 \
             https://github.com/itsmygithubacct/kilix-content.git "$(pin PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF)"
           fetch ../kilix-license https://github.com/itsmygithubacct/kilix-license.git "$(pin KILIX_LICENSE_REF)"
+          # AC-8 reads the command model records Needle serves from its own
+          # vendored kilix-content, not KILIX_REF's.
+          git -C ../kilix-content fetch -q --depth 1 \
+            https://github.com/itsmygithubacct/kilix-content.git \
+            "$(git -C ../kilix-needle rev-parse "HEAD:third_party/kilix-content")"
           # AC-8 reads the speech licence gate in the kilix-bonsai KILIX_REF installs.
           bonsai_ref="$(git -C ../kilix show "$kilix_ref:scripts/install-kilix-bonsai.sh" \
             | sed -n 's/^KILIX_BONSAI_REF="\${KILIX_BONSAI_REF:-\([0-9a-f]\{40\}\)}"$/\1/p')"

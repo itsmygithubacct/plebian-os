@@ -6,11 +6,11 @@
   "delivery_version": "lfm2-kilix-commands-20261106-v9",
   "model_sha256": "3fa22c105b1f80823088de21a45fd2f3dc30a4cfdc63d21037c9344585fae4dd",
   "source_pins": {
-    "kilix": "52ba3cd11d3603b8557252caabb7a5b5b63136a0",
-    "kilix-content": "81f2321b51649effc3275493a351931497c3ba0f",
+    "kilix": "b0c8939b05b7c2b6ffad9d90f10f0a31ec194a9a",
+    "kilix-content": "d57fa62f2393363284a29a6d4024e6f9dfa66ac4",
     "kilix-license": "0984dd222bcb7f97859222b0dc2303b9225191fe",
     "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec",
-    "kilix-needle": "3a8e41c52f32f963c4bbeadfbec69b200f13eafe"
+    "kilix-needle": "5cbff3172224d5277adee5a3c826ee4b0698917a"
   },
   "model": {
     "bytes": 1388859040,
@@ -18,10 +18,10 @@
   },
   "manifest": {
     "repository": "https://github.com/itsmygithubacct/kilix-content",
-    "revision": "81f2321b51649effc3275493a351931497c3ba0f",
+    "revision": "d57fa62f2393363284a29a6d4024e6f9dfa66ac4",
     "path": "src/kilix_content/catalog/plebian.json",
     "asset_id": "lfm2-kilix-commands",
-    "note": "kilix-needle commands-model.json, unchanged from 8408183f909a7052bb14cc974a869909234d8bca to 3a8e41c52f32f963c4bbeadfbec69b200f13eafe, still describes lfm2-kilix-v5e1-wse-20261104.8 and is not this delivery"
+    "note": "kilix-needle 5cbff3172224d5277adee5a3c826ee4b0698917a commands-model.json describes this delivery and weight, and its vendored kilix-content carries the LFM2 notice record; through 3a8e41c52f32f963c4bbeadfbec69b200f13eafe it described lfm2-kilix-v5e1-wse-20261104.8"
   },
   "delivery": {
     "mode": "bundled-command-model-archive",
@@ -94,7 +94,7 @@
         "literal-expand-004"
       ]
     },
-    "grammar_note": "The figures above were measured with kilix-needle-runtime 4f3aeaff. The catalog selects kilix-needle 3a8e41c5, whose grammar alone reads 1352 of 1383 development cases correctly with no wrong action, against 1346 at 073f5e03; its grammar-only probes, fresh, operational and expand results equal those of 073f5e03. Admitted results with the model were not rerun at 3a8e41c5."
+    "grammar_note": "The figures above were measured with kilix-needle-runtime 4f3aeaff. The catalog selects kilix-needle 5cbff317, whose grammar, unchanged from 3a8e41c5, alone reads 1352 of 1383 development cases correctly with no wrong action, against 1346 at 073f5e03; its grammar-only probes, fresh, operational and expand results equal those of 073f5e03. Admitted results with the model were not rerun at 3a8e41c5."
   },
   "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive is published at the release URL. Seat review does not cover this weight. Final OS media and release acceptance remain separate. LFM2's terms are a notice by the owner's 2026-11-07 determination."
 }

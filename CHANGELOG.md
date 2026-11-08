@@ -10,10 +10,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Image installs and upgrades record a notice receipt that claims no
   agreement, and never answer terms that need a typed agreement. The terms,
   including the commercial-use limitation, are shipped and not waived. Kilix
-  is `52ba3cd1` and kilix-content is `81f2321b`, which selects Needle
-  `3a8e41c5`. kilix-license is `0984dd22`. Needle reads an unquoted spaced
-  path only when that exact path exists and a bare right, left or down before
-  an explicit path as the placement; its grammar alone reads 1352/1383
+  is `b0c8939b` and kilix-content is `d57fa62f`, which selects Needle
+  `5cbff317`; Needle's own bundled kilix-content carries the same notice
+  record and delivery. kilix-license is `0984dd22`. Needle reads an unquoted
+  spaced path only when that exact path exists and a bare right, left or down
+  before an explicit path as the placement; its grammar alone reads 1352/1383
   development cases with no wrong action, against 1346/1383 before. Admitted
   results with the model were not rerun.
 - Select Ask weight `lfm2-kilix-v5e1-wse-20261106.9` as the default command
