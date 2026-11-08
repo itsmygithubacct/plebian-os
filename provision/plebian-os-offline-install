@@ -114,9 +114,14 @@ Before=network.target network-online.target
 # Manager mode keeps running when no lease arrives (an unplugged cable), and
 # configures an interface whenever its link comes up. -w -t 30 holds
 # network-online.target, and so first boot, for up to 30 s for an address.
+# Debian's /etc/dhcpcd.conf sets "persistent", so dhcpcd would leave its
+# addresses behind when it exits. Stopping releases the leases and removes
+# them instead, so the NetworkManager started next configures the interfaces
+# itself rather than adopting an address that nothing renews.
 Type=forking
 PIDFile=/run/dhcpcd/pid
 ExecStart=/usr/sbin/dhcpcd -M -w -t 30 -z en* -z eth*
+ExecStop=/usr/sbin/dhcpcd -k
 Restart=on-failure
 
 [Install]

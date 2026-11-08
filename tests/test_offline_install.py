@@ -201,6 +201,10 @@ class LateCommand(unittest.TestCase):
             lines = text.splitlines()
             # Manager mode: keeps running without a lease and follows the link.
             self.assertIn("ExecStart=/usr/sbin/dhcpcd -M -w -t 30 -z en* -z eth*", lines)
+            # Debian's dhcpcd.conf sets "persistent": a plain SIGTERM leaves the
+            # address, which the restarted NetworkManager then adopts as an
+            # external connection and never renews. The stop must release it.
+            self.assertIn("ExecStop=/usr/sbin/dhcpcd -k", lines)
             self.assertIn("Type=forking", lines)
             self.assertIn("PIDFile=/run/dhcpcd/pid", lines)
             self.assertIn("ConditionPathExists=/etc/plebian-os/offline-install", lines)
