@@ -6,6 +6,25 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Install Kilix Playalong's default models when they are missing, by the
+  owner's 2026-11-08 decision: Demucs htdemucs_6s, Basic Pitch and Whisper
+  medium.en, under the standard distribution policy. Demucs ships in the image
+  as `demucs-htdemucs-6s.tar`, which holds Meta's unchanged weights file and
+  the Demucs MIT text. The build writes it from Meta's pinned URL and checks it
+  against `provision/demucs-model.json`. A fresh install takes Demucs and
+  Basic Pitch from the image. An online upgrade downloads Whisper medium.en,
+  and also Demucs when the image did not supply it. A failed download installs
+  nothing and the next upgrade retries. The model wizard's Playalong page
+  answered no, or `KILIX_PLAYALONG_MODELS=0` in the shared settings file,
+  declines all three, and an answer that cannot be read installs none of them.
+  Whisper large-v3 gets its own licence record, `faster-whisper-large-v3`
+  (owner determination 2026-11-08). It is offered for lyrics that are not in
+  English and is never a default. The carrier gives whisper-medium-en the
+  delivery mode `playalong-default-upstream-download`, bound to
+  `provision/playalong-models.json`, and carries the owner's distribution
+  record. Kilix is `9e58d314`, kilix-content is `c8f0b0f5` (it selects
+  Playalong `a11a0219`), and kilix-license is `f8486ed3`. This round also folds
+  in the round-3 wording fixes.
 - Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
   dictation model, a first-use download with its own licence record (owner
   determination 2026-11-07), and carry it in the model-compliance carrier.

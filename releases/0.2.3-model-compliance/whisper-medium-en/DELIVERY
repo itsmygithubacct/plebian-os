@@ -1,7 +1,12 @@
-mode: first-use-upstream-download
+mode: playalong-default-upstream-download
 This model's weights are not present in the image or downloaded by provisioning.
-whisper-medium-en reaches a machine only when a user installs it; it is downloaded from
-huggingface.co and verified against the pinned digests before installation.
+Plebian-OS installs it by default for Kilix Playalong: when it is missing, an online
+upgrade downloads it from huggingface.co and verifies it against the pinned digests before installation.
+The upgrade first records a local standard-policy receipt; build-time receipts are never distributed.
+It is not installed when the model wizard's kilix-playalong page was answered no, or when
+KILIX_PLAYALONG_MODELS=0 is set in the shared settings file. A failed download installs
+nothing, and the next upgrade tries again.
+A user can also install whisper-medium-en directly.
 No install route downloads it until a kilix-license receipt covers it:
 The model catalog validates the determined licence and records the receipt, and
 The speech install command hands the download to that model catalog

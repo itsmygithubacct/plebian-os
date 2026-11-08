@@ -1,0 +1,20 @@
+{
+  "schema": "plebian-os.demucs-archive/v1",
+  "since_release": "0.2.3-rc5",
+  "asset_id": "demucs-htdemucs-6s",
+  "manifest_digest": "21c129345826c583e5327902dde4e7fe610282c2b0594bc058afb003ec8b03ff",
+  "filename": "demucs-htdemucs-6s.tar",
+  "bytes": 55009280,
+  "sha256": "904731cf2e086256a4d3fe98f755bb74b07b4624929617607b697627ad365c2b",
+  "url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th",
+  "files": {
+    "models/5c90dfd2-34c22ccb.th": {
+      "bytes": 54996327,
+      "sha256": "34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd"
+    },
+    "notices/LICENSE-mit.txt": {
+      "bytes": 1087,
+      "sha256": "cf9b17822d1fcd4ff32ccbe14183386fb3adf6f2ff92dc184130823f7fc28173"
+    }
+  }
+}

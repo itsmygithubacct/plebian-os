@@ -43,6 +43,9 @@ ROOT = Path(__file__).resolve().parent.parent
 CARRIER_SCHEMA = "plebian-os.release-model-compliance/v1"
 ACCEPTANCE_SCHEMA = "plebian-os.release-model-compliance-acceptance/v1"
 DELIVERY_MODE = "first-use-upstream-download"
+# Kilix Playalong's defaults that are not in the image (provision/playalong-models.json,
+# owner decision 2026-11-08): online upgrades install them unless the machine declined.
+PLAYALONG_MODE = "playalong-default-upstream-download"
 # The ids of the acceptance lines, each one test in
 # tests/test_model_compliance_carrier.py (F100-CARRIER-DESIGN.md §7.3).
 QUALIFICATION = (
@@ -146,7 +149,8 @@ def load_module(src: Path, name: str):
 
 
 def delivery_text(model: str, host: str, runnable: bool, voice_ref: str,
-                  *, bundled: bool = False, command_archive: bool = False) -> str:
+                  *, bundled: bool = False, command_archive: bool = False,
+                  playalong: bool = False) -> str:
     # Every sentence here is a claim tests/test_model_compliance_carrier.py
     # checks (AC-8): delivery matches the exact default bundle inventory and
     # deferred downloads remain digest-verified and licence-receipt gated.
@@ -173,14 +177,29 @@ def delivery_text(model: str, host: str, runnable: bool, voice_ref: str,
             "Existing model selections are preserved. Bundling does not prove runtime quality or activation.",
             f"Upstream artifact provenance: {host}.",
         ]) + "\n"
-    lines = [
-        f"mode: {DELIVERY_MODE}",
-        "This model's weights are not present in the image or downloaded by provisioning.",
-        f"{model} reaches a machine only when a user installs it; it is downloaded from",
-        f"{host} and verified against the pinned digests before installation.",
-        "No install route downloads it until a kilix-license receipt covers it:",
-        "The model catalog validates the determined licence and records the receipt, and",
-    ]
+    if playalong:
+        lines = [
+            f"mode: {PLAYALONG_MODE}",
+            "This model's weights are not present in the image or downloaded by provisioning.",
+            "Plebian-OS installs it by default for Kilix Playalong: when it is missing, an online",
+            f"upgrade downloads it from {host} and verifies it against the pinned digests before installation.",
+            "The upgrade first records a local standard-policy receipt; build-time receipts are never distributed.",
+            "It is not installed when the model wizard's kilix-playalong page was answered no, or when",
+            "KILIX_PLAYALONG_MODELS=0 is set in the shared settings file. A failed download installs",
+            "nothing, and the next upgrade tries again.",
+            f"A user can also install {model} directly.",
+            "No install route downloads it until a kilix-license receipt covers it:",
+            "The model catalog validates the determined licence and records the receipt, and",
+        ]
+    else:
+        lines = [
+            f"mode: {DELIVERY_MODE}",
+            "This model's weights are not present in the image or downloaded by provisioning.",
+            f"{model} reaches a machine only when a user installs it; it is downloaded from",
+            f"{host} and verified against the pinned digests before installation.",
+            "No install route downloads it until a kilix-license receipt covers it:",
+            "The model catalog validates the determined licence and records the receipt, and",
+        ]
     if model == "kilix-diarization-cpu":
         lines += [
             "The generic model catalog downloads pinned upstream inputs and converts them locally.",
@@ -264,6 +283,18 @@ def build(args) -> dict[str, bytes]:
                 or not bundle.get("url", "").startswith("https://")):
             raise SystemExit("default bundle has no exact archive and asset inventory")
         files["DEFAULT-MODELS.json"] = canonical(bundle) + b"\n"
+    playalong_path = ROOT / "provision" / "playalong-models.json"
+    playalong = json.loads(playalong_path.read_bytes()) if playalong_path.exists() else None
+    online = {}
+    if playalong is not None:
+        if (playalong.get("schema") != "plebian-os.playalong-default-models/v1"
+                or not isinstance(playalong.get("assets"), dict)):
+            raise SystemExit("invalid Playalong default model inventory")
+        online = {asset_id: item["manifest_digest"] for asset_id, item in playalong["assets"].items()
+                  if item.get("delivery") == "online"}
+        if bundle is not None and set(online) & set(bundle["assets"]):
+            raise SystemExit("a Playalong online default is also in the default bundle")
+        files["PLAYALONG-MODELS.json"] = canonical(playalong) + b"\n"
 
     with tempfile.TemporaryDirectory() as scratch:
         scratch = Path(scratch)
@@ -296,6 +327,14 @@ def build(args) -> dict[str, bytes]:
                 for licence in by_id[asset_id].licenses:
                     if not policy.standard_policy_eligible(records.by_digest(licence.record_digest)):
                         raise SystemExit(f"{asset_id}: default delivery requires a standard-policy eligible record")
+        if online:
+            by_id = {asset.asset_id: asset for asset in assets}
+            for asset_id, digest in online.items():
+                if asset_id not in by_id or by_id[asset_id].manifest_digest != digest:
+                    raise SystemExit(f"Playalong inventory differs from the selected asset: {asset_id}")
+                for licence in by_id[asset_id].licenses:
+                    if not policy.standard_policy_eligible(records.by_digest(licence.record_digest)):
+                        raise SystemExit(f"{asset_id}: default delivery requires a standard-policy eligible record")
         texts = scratch / "license" / "src" / "kilix_license" / "data" / "texts"
         schema_bytes = (scratch / "content" / "contracts" / "kilix.content.asset-v3.schema.json").read_bytes()
 
@@ -310,6 +349,7 @@ def build(args) -> dict[str, bytes]:
             asset = matches[0]
             bundled = bundle is not None and asset.asset_id in bundle["assets"]
             command_archive = command is not None and asset.asset_id == command["asset_id"]
+            playalong_default = asset.asset_id in online
             if bundled:
                 if not policy.standard_policy_eligible(record):
                     raise SystemExit(f"{model}: default delivery requires a standard-policy eligible record")
@@ -336,7 +376,8 @@ def build(args) -> dict[str, bytes]:
                 "artifact_record_sha256": asset.digest,
                 "decision": record.decision_class,
                 "delivery": ("bundled-command-model-archive" if command_archive else
-                             "bundled-default-model" if bundled else DELIVERY_MODE),
+                             "bundled-default-model" if bundled else
+                             PLAYALONG_MODE if playalong_default else DELIVERY_MODE),
                 "download_bytes": asset.download_bytes,
                 "licence_ids": licence_ids,
                 "licence_record_digest": record.digest,
@@ -375,7 +416,8 @@ def build(args) -> dict[str, bytes]:
             files[base + "NOTICE"] = notice_text(model, entry, ", ".join(names)).encode()
             files[base + "DELIVERY"] = delivery_text(
                 model, entry["upstream_host"], runnable, pins["KILIX_VOICE_REF"],
-                bundled=bundled, command_archive=command_archive).encode()
+                bundled=bundled, command_archive=command_archive,
+                playalong=playalong_default).encode()
 
         # The advertised dictation model is the one the release pins.
         dictation = [m for m, e in entries.items()

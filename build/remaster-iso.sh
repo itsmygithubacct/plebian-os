@@ -262,7 +262,7 @@ is_hex_len() {
 }
 
 validate_model_delivery_inventory() {
-    python3 - "$1" "$2" "${3:-}" <<'PY'
+    python3 - "$1" "$2" "${3:-}" "${4:-}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -274,6 +274,14 @@ try:
         command = json.loads(Path(sys.argv[3]).read_bytes())
         if json.loads((root / 'COMMAND-MODEL.json').read_bytes()) != command:
             raise ValueError('command archive differs from the release inventory')
+    # Kilix Playalong's defaults that upgrades download (not in the image).
+    online = {}
+    if sys.argv[4]:
+        playalong = json.loads(Path(sys.argv[4]).read_bytes())
+        if json.loads((root / 'PLAYALONG-MODELS.json').read_bytes()) != playalong:
+            raise ValueError('Playalong defaults differ from the release inventory')
+        online = {asset: item['manifest_digest'] for asset, item in playalong['assets'].items()
+                  if item['delivery'] == 'online'}
     bundle = json.loads((root / 'DEFAULT-MODELS.json').read_bytes())
     if bundle != json.loads(expected.read_bytes()):
         raise ValueError('default bundle differs from the release inventory')
@@ -284,12 +292,16 @@ try:
         bundled = asset in bundle['assets']
         is_command = command is not None and asset == command['asset_id']
         mode = ('bundled-command-model-archive' if is_command else
-                'bundled-default-model' if bundled else 'first-use-upstream-download')
+                'bundled-default-model' if bundled else
+                'playalong-default-upstream-download' if asset in online else
+                'first-use-upstream-download')
         prefix = 'm_' + ''.join(c if c.isascii() and c.isalnum() else '_' for c in model)
         if entry['delivery'] != mode or env[prefix + '_delivery'] != mode:
             raise ValueError(model + ': delivery differs from the default inventory')
         if bundled and entry['manifest_digest'] != bundle['assets'][asset]:
             raise ValueError(model + ': bundled manifest digest differs')
+        if asset in online and entry['manifest_digest'] != online[asset]:
+            raise ValueError(model + ': Playalong default manifest digest differs')
         if is_command and any(entry[k] != command[v] for k, v in (
                 ('manifest_digest', 'manifest_digest'), ('archive_sha256', 'sha256'),
                 ('archive_bytes', 'bytes'), ('version', 'version'), ('source_url', 'url'))):
@@ -410,7 +422,7 @@ validate_voice_compliance_carrier() {
     [ "${cv[release_id]:-}" = "${PLEBIAN_OS_VERSION:-}" ] \
         || { carrier_refuse "carrier is for release ${cv[release_id]:-unknown}, not ${PLEBIAN_OS_VERSION:-unknown}"; return 1; }
     validate_model_delivery_inventory "$dir" "${HERE:-}/provision/default-models.json" \
-        "${HERE:-}/provision/command-model.json" || return 1
+        "${HERE:-}/provision/command-model.json" "${HERE:-}/provision/playalong-models.json" || return 1
     for model in $models; do
         prefix="m_${model//[^a-z0-9]/_}_"
         for field in artifact_id source_url upstream_host manifest_digest artifact_record_sha256 licence_record_digest licence_text_sha256s licensors decision delivery runnable; do
@@ -436,7 +448,7 @@ validate_voice_compliance_carrier() {
                 || { carrier_refuse "$model licence text $digest is missing or altered"; return 1; }
         done
         case "${cv[${prefix}delivery]}" in
-            first-use-upstream-download|bundled-default-model|bundled-command-model-archive) ;;
+            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|bundled-command-model-archive) ;;
             *) carrier_refuse "$model delivery mode is unsupported"; return 1 ;;
         esac
         host="${cv[${prefix}source_url]#https://}"; host="${host%%/*}"
@@ -1016,6 +1028,15 @@ COMMAND_MODEL_BUNDLE="${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}"
 python3 "$HERE/provision/stage-command-model.py" --verify-only --archive "$COMMAND_MODEL_BUNDLE"
 python3 "$HERE/provision/install-image-models.py" --verify-only \
     --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz"
+# Demucs htdemucs_6s ships in the image with Meta's MIT text beside it (owner
+# decision 2026-11-08). A supplied archive is checked here; without one the
+# build writes it from Meta's pinned weights file once the work tree exists.
+DEMUCS_MODEL_BUNDLE="${PLEBIAN_OS_DEMUCS_MODEL_BUNDLE:-}"
+if [ -n "$DEMUCS_MODEL_BUNDLE" ]; then
+    python3 "$HERE/provision/install-image-models.py" --verify-only \
+        --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+        --demucs "$DEMUCS_MODEL_BUNDLE"
+fi
 COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
     "$HERE/provision/command-model.json")"
 default_iso_name=plebian-os-netinst-amd64.iso
@@ -1988,6 +2009,23 @@ mkdir -p "$EXTRACT/plebian-os"
 install -m 0644 "$DEFAULT_MODELS_BUNDLE" "$EXTRACT/plebian-os/default-models.tar.xz"
 install -m 0644 "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
     "$EXTRACT/plebian-os/basic-pitch-icassp-2022-onnx.tar.xz"
+if [ -z "$DEMUCS_MODEL_BUNDLE" ]; then
+    demucs_pin="$HERE/provision/demucs-model.json"
+    demucs_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$demucs_pin")"
+    demucs_weight_bytes="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["files"]["models/5c90dfd2-34c22ccb.th"]["bytes"])' "$demucs_pin")"
+    echo "==> fetching the pinned Demucs weights for the image"
+    _bounded_download "$demucs_weight_bytes" 1800 "$WORK/demucs-weights.th" \
+        -fsSL --proto '=https' "$demucs_url" \
+        || { echo "could not download the pinned Demucs weights" >&2; exit 1; }
+    DEMUCS_MODEL_BUNDLE="$WORK/demucs-htdemucs-6s.tar"
+    python3 "$HERE/provision/install-image-models.py" \
+        --build-demucs-archive "$DEMUCS_MODEL_BUNDLE" --demucs-weights "$WORK/demucs-weights.th"
+    rm -f -- "$WORK/demucs-weights.th"
+fi
+python3 "$HERE/provision/install-image-models.py" --verify-only \
+    --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+    --demucs "$DEMUCS_MODEL_BUNDLE"
+install -m 0644 "$DEMUCS_MODEL_BUNDLE" "$EXTRACT/plebian-os/demucs-htdemucs-6s.tar"
 # Optional explicit source carrier is staged only after complete digest/graph checks.
 # Its immutable manifest and helper bytes are reviewed with the final source tuple.
 if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; then
