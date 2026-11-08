@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Kilix `c443c2f6` selects kitty-pty-broker `a5a5f2d3`. A pane's broker now
+  reaps the processes its shell orphans while the pane lives, instead of
+  leaving each one a zombie until the pane closes; long-lived agent panes had
+  accumulated about 20,000, which every process scan then paid for.
 - Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
   dictation model, a first-use download with its own licence record (owner
   determination 2026-11-07), and carry it in the model-compliance carrier.
@@ -15,7 +19,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   the LFM2 notice round: Needle `a887e2fa` no longer calls an uncovered notice
   licence "not accepted", Kilix's voice installer defaults to the release's
   kilix-voice `1a4e63b`, and the release-dictation fixture supplies
-  `KILIX_SECRETS_REF`. Kilix is `44b992ae`, kilix-content is `de2764f8` and
+  `KILIX_SECRETS_REF`. Kilix is `c443c2f6`, kilix-content is `de2764f8` and
   kilix-license is `80aab439`.
 - Deliver LFM2's terms as a notice, by the owner's 2026-11-07 determination.
   Image installs and upgrades record a notice receipt that claims no

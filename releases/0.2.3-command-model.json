@@ -6,7 +6,7 @@
   "delivery_version": "lfm2-kilix-commands-20261106-v9",
   "model_sha256": "3fa22c105b1f80823088de21a45fd2f3dc30a4cfdc63d21037c9344585fae4dd",
   "source_pins": {
-    "kilix": "44b992aeb9b1472f332514d55a145c8ebd312502",
+    "kilix": "c443c2f610653f9f32724c7af15e804c686f073c",
     "kilix-content": "de2764f87c6be98bd5dc18155403006952a4c9ac",
     "kilix-license": "80aab439d7243936dc69ddcf6a7e90c0753ea7bb",
     "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec",
