@@ -187,7 +187,7 @@ if [ -z "$ISO" ]; then
         release_iso_version="${PLEBIAN_OS_VERSION:-}"
     fi
     if [ -n "$release_iso_version" ]; then
-        [[ "$release_iso_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        [[ "$release_iso_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
             || die "release ISO filename requires a semantic version"
         default_iso_name="plebian-os-$release_iso_version-amd64.iso"
     fi

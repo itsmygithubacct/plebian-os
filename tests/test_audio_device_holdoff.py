@@ -1773,7 +1773,12 @@ done
         text = PROVISION.read_text()
         skip = '    && [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] \\\n'
         self.assertIn(skip, text)
-        older.write_text(text.replace(skip, "", 1))
+        # Remove only the logging guard: preflight independently uses the
+        # same library-only condition and must remain disabled when sourced.
+        log_start = text.index('PROVISION_LOG="${PLEBIAN_OS_PROVISION_LOG:')
+        log_text = text[log_start:]
+        self.assertIn(skip, log_text)
+        older.write_text(text[:log_start] + log_text.replace(skip, "", 1))
         older.chmod(0o755)
         with self.subTest(guard="library-only mode skips the log"):
             result = provision_call(":", root,

@@ -92,6 +92,26 @@ class LatestReleaseUpdateTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_maintenance_release_discovery_and_numeric_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = self._repo_with_tags(Path(td))
+            for tag in ('v0.2.2', 'v0.2.2.1', 'v0.2.2.9', 'v0.2.2.10',
+                        'v0.2.2.0', 'v0.2.2.01', 'v0.2.2.99-rc1', 'v0.2.2.99.1'):
+                subprocess.run(['git', '-C', str(repo), 'tag', tag], check=True)
+            result = self._source_and_run('latest_published_release', repo)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, '0.2.2.10\n')
+            result = self._source_and_run(
+                'release_is_newer 0.2.2.1 0.2.2'
+                ' && release_is_newer 0.2.2.10 0.2.2.9'
+                ' && release_is_newer 0.2.3 0.2.2.10'
+                ' && ! release_is_newer 0.2.2 0.2.2.1'
+                ' && ! release_is_newer 0.2.2.1 0.2.2.1'
+                ' && ! release_is_newer 0.2.2.0 0.2.2'
+                ' && ! release_is_newer 0.2.2.01 0.2.2'
+                ' && ! release_is_newer 0.2.2.1.1 0.2.2', repo)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_release_query_failure_is_not_reported_as_up_to_date(self):
         with tempfile.TemporaryDirectory() as td:
             missing = Path(td) / "missing"

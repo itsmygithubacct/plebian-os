@@ -27,6 +27,7 @@ QUALIFICATION=0
 VULKAN=0
 VULKAN_NOUVEAU=0
 VULKAN_TTS=0
+MODEL_CONVERTERS=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
@@ -34,8 +35,9 @@ for arg in "$@"; do
         --vulkan) VULKAN=1 ;;
         --vulkan-nouveau) VULKAN=1; VULKAN_NOUVEAU=1 ;;
         --vulkan-tts) VULKAN=1; VULKAN_TTS=1 ;;
+        --model-converters) MODEL_CONVERTERS=1 ;;
         *)
-            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau] [--vulkan-tts]\n' \
+            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau] [--vulkan-tts] [--model-converters]\n' \
                 "$0" >&2
             exit 2
             ;;
@@ -153,6 +155,7 @@ DEP_GROUPS=(
     "system call tracer|strace"
     "base system glue|sudo network-manager"
     "repo clone + engine fetch|git curl tar unzip ca-certificates"
+    "ISO authoring + inspection|xorriso"
     "bash tutorial prerequisites|bash python3 coreutils findutils grep sed gawk diffutils procps util-linux"
     # Provide /usr/bin/python for scripts and tools that use the unversioned
     # command. Debian owns the symlink and follows its default Python 3.
@@ -260,7 +263,8 @@ DEP_GROUPS=(
     # development module selected by its pinned CMake configuration explicit;
     # relying on transitive packages makes a fresh --no-install-recommends
     # image fail one pkg-config check at a time on first selection.
-    "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libsqlite3-dev libx11-dev libxres-dev libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libxcomposite-dev libxdamage-dev libxfixes-dev libimlib2-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev"
+    # kilix-secrets links libsodium 1.0.18 and libsystemd at provision time.
+    "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libsqlite3-dev libx11-dev libxres-dev libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libxcomposite-dev libxdamage-dev libxfixes-dev libimlib2-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev libsodium-dev libsystemd-dev"
     # F106's collector is read-only. dmidecode is invoked only through its
     # separately reviewed fixed privileged helper; no mutating hardware tools
     # or automatic sensors-detect run is part of provisioning.
@@ -314,10 +318,11 @@ QUAL_VULKAN_GROUPS=(
     "qualification Vulkan probe :: vulkan-tools"
 )
 
-# Pocket TTS conversion is a one-time, opt-in operation. These exact direct
+# Model Setup requires conversion software from 0.2.2.1 onward. These direct
 # pins reproduced the catalog's Q8_0 model and projector hashes against the
 # release Debian snapshot. python3-torch brings a large transitive closure, so
-# this group must never enter DEP_GROUPS, preseed.cfg, or qualification images.
+# this group stays separate from DEP_GROUPS and preseed.cfg. Provisioning
+# selects --model-converters before installing the converter helpers.
 # The runtime Vulkan path does not need these Python conversion packages after
 # the user's local GGUF derivation has completed.
 VULKAN_TTS_CONVERTER_GROUPS=(
@@ -450,11 +455,14 @@ if [ "$VULKAN_NOUVEAU" -eq 1 ]; then
     done
 fi
 
-if [ "$VULKAN_TTS" -eq 1 ]; then
+if [ "$VULKAN_TTS" -eq 1 ] || [ "$MODEL_CONVERTERS" -eq 1 ]; then
     for entry in "${VULKAN_TTS_CONVERTER_GROUPS[@]}"; do
         name=${entry%% :: *}; pkgs=${entry#* :: }
         install_package_group "optional converter group" "$name" "$pkgs"
     done
+fi
+
+if [ "$VULKAN_TTS" -eq 1 ]; then
     for entry in "${VULKAN_TTS_BUILD_GROUPS[@]}"; do
         name=${entry%% :: *}; pkgs=${entry#* :: }
         install_package_group "optional build group" "$name" "$pkgs"

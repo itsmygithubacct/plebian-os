@@ -29,8 +29,8 @@ class ReleaseVersioningTests(unittest.TestCase):
             )
         return path.read_text()
 
-    def test_version_file_is_semver(self):
-        self.assertRegex((ROOT / "VERSION").read_text().strip(), r"^\d+\.\d+\.\d+$")
+    def test_version_file_is_release_version(self):
+        self.assertRegex((ROOT / "VERSION").read_text().strip(), r"^\d+\.\d+\.\d+(?:\.[1-9][0-9]*)?$")
         self.assertIn(f"## [{self.version}]", _read("CHANGELOG.md"))
 
     def test_0_1_9_release_notes_document_the_upgrade_path(self):
@@ -607,7 +607,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("El Torito boot img.*BIOS", source)
         self.assertIn("El Torito boot img.*UEFI", source)
         self.assertIn('PLEBIAN-OS $RELEASE AMD64', source)
-        self.assertIn('cat-file -t "refs/tags/v$RELEASE"', source)
+        self.assertIn('cat-file -t "refs/tags/$manifest_os_ref"', source)
         self.assertIn('read_kv_file "$stage/build-info.env"', source)
         self.assertIn('read_kv_file "$manifest"', source)
         self.assertIn('for key in "${!release_manifest[@]}"', source)

@@ -40,6 +40,15 @@ argument 3. If both forms are set, they must resolve to the same file. The
 existing size and SHA-256 pins in `releases/0.2.2.env` are the byte acceptance
 check; no carrier download is performed.
 
+For 0.2.2 and later releases, remastering selects the carrier pins from
+`releases/<VERSION>.env` and checks its declared version before accepting the
+archive. The media carries that exact manifest as `ollama-release.env` for
+preseed and firstboot. Maintenance versions use their own manifest, such as
+`releases/0.2.2.1.env`. An explicit RC source tag does not change the numeric
+OS version: `v0.2.3-rc1` with `VERSION=0.2.3` requires `releases/0.2.3.env`.
+Prepare the matching manifest before building or updating; no older or
+latest-release manifest is used as a fallback.
+
 For example, from the clean `v0.2.2` checkout, with the release asset available
 locally:
 
@@ -153,12 +162,24 @@ never logged and is expired after verification.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The last published coordinated release is **0.2.1**, tagged at
-`83837599bf4a1f4eeb3338fbc448d908c909d1c9` and accepted 2026-09-01: fresh-install
-on both BIOS and UEFI, and the adjacent upgrade from 0.2.0. See
-[`releases/0.2.1-provenance.md`](releases/0.2.1-provenance.md) for the artifact
-hash and the coordinated commits it records. The next planned release is
-**0.2.2**.
+The last published coordinated release is **0.2.2**. Its published tags and
+artifacts remain immutable. The next planned release is
+**0.2.3**, starting with **v0.2.3-rc1** based on the patched 0.2.2.1 sources.
+The 0.2.2.1 work was a local source candidate; it did not produce a published
+release. RC1 requires its own component pins, mixed model-delivery carrier,
+independent review records and installation/update acceptance.
+
+A maintenance release may append one positive decimal component without leading
+zeroes: `MAJOR.MINOR.PATCH.MAINTENANCE`. Thus `0.2.2 < 0.2.2.1 < 0.2.3`.
+This is the stack's release format, not Semantic Versioning. Three-part releases
+remain valid. Release ordering, selectors and qualification tools accept both;
+third-party Go and uv versions retain their existing validation.
+
+Installed 0.2.2 tools cannot discover or select four-part releases. Bootstrap
+with the selector extracted from the immutable target tag as described in
+`releases/0.2.2.1-notes.md`. It deploys the target selector and updater within
+the existing closure transaction. Do not replace installed source files by hand.
+
 
 Two things 0.2.1 established that this procedure did not previously state, and
 which bind every release after it:
@@ -270,16 +291,15 @@ actually cutting.
 - pinned installer versions/checksums and a positive download byte bound for
   any optional network installers that are enabled (currently `uv`);
 - when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
-  library version/URL/SHA-256, and acoustic-model URL/SHA-256. Since OD-BB the
-  flag declares that **the release advertises the dictation model as a
-  first-use pull**, not that the image installs it: these pins are the
-  advertised identity — the source and digests the user's later, licence-
-  accepted install verifies its download against — and the image ships no model
-  bytes and downloads none unattended. The advertised model URL and SHA-256
-  must be the ones kilix-content's `vosk-model-small-en-us-0.15` asset record
-  carries, because that record is what the first-use screen and the F100
-  carrier read. The pinned Voice source must expose the exact
-  `kilix.speech.models/v1` document through download-free
+  library version/URL/SHA-256, and acoustic-model URL/SHA-256. The flag records
+  those pins. Speech weights are included as needed: `small-en-us` and
+  `whistle` ship with the image and may be installed for the desktop user.
+  `lgraph-en-us`, `vibevoice-asr-bitnet`, and `whisper-small-en` stay
+  first-use pulls and are not downloaded unattended. The advertised
+  `small-en-us` URL and SHA-256 must be the ones kilix-content's
+  `vosk-model-small-en-us-0.15` asset record carries, because that record is
+  what the first-use screen and the F100 carrier read. The pinned Voice source
+  must expose the exact `kilix.speech.models/v1` document through download-free
   `kilix-stt --models --json`; a consumer-specific copied catalog is not a
   release substitute.
 
@@ -541,15 +561,19 @@ release upgrade, physical or human acceptance gate. Retain the report and
      sizes, and the shared explicit install-and-default argv. This listing must
      not open the network or change installed/default state. Require the
      device-free acceptance smoke to synthesize a phrase with real espeak.
-     **Require the guest to hold no speech-model weights**: no
-     `voice/models/small-en-us`, no `voice/models/vosk-model-*` generation, no
-     `voice/lib/current`, and an install stamp recording `libvosk=skipped` and
-     `model-small-en-us=skipped`. A model present on a fresh image is a release
-     failure, not a convenience. Exercise the pinned first-use path: require the screen to show model id,
+     **Include speech-model weights as needed.** `small-en-us` and `whistle`
+     are bundled, so a fresh guest may hold `voice/models/small-en-us`, the
+     matching `voice/models/vosk-model-*` generation, `voice/lib/current`, the
+     content-store copies of those two models, and an install stamp that
+     records the installed libvosk and `model-small-en-us` digests.
+     `lgraph-en-us`, `vibevoice-asr-bitnet`, and `whisper-small-en` stay
+     first-use pulls and must be absent as installed weights. Exercise that
+     first-use path on `lgraph-en-us`: require the screen to show model id,
      upstream source URL and host, bytes, licence and licensor before any fetch;
      decline once and prove no bytes or model directory appeared; then accept
-     and require a receipt, verified download and atomic install matching
-     `KILIX_VOICE_MODEL_SHA256`. Old 0.2.1 receipts are not read, so accept
+     and require a receipt, verified download and atomic install matching that
+     model's pinned catalog checksum. Do not download the 1.6 GiB VibeVoice
+     weights to satisfy this paragraph. Old 0.2.1 receipts are not read, so accept
      again through the licence screen. Amp's unavailable-model refusal is
      silent. The supplied `--from DIR` installation records acceptance, but
      not file provenance. This guest check remains outstanding until a VM or
@@ -726,3 +750,22 @@ installed selector and updater are byte-for-byte those in that tag. This check
 does not require checkout HEAD to equal the candidate: selecting a closure reads
 the tag object and leaves the source checkout untouched. Development selections
 and any mismatch remain refused.
+
+### Explicit RC upgrade qualification
+
+The release-hop host and guest runners accept `--release-tag vX.Y.Z-rcN`
+alongside numeric `--target X.Y.Z`. This identity is forwarded to every dry-run,
+induced failure and successful hop, checked in the successful release state,
+and retained in the post-reboot checks. Stable `--latest` selection is unchanged.
+
+An immutable older CLI such as the one shipped in 0.2.2 cannot parse this new
+option. For that baseline, stage a separate verified Pleb checkout containing
+`bin/pleb-release-hop` in each disposable guest and supply its same literal
+absolute path with `--bootstrap-driver PATH --bootstrap-driver-ref COMMIT`.
+The driver must be outside the participating installed checkout. It reads the
+installed configuration and uses the installed checkout as the update target;
+no preparatory checkout replacement is allowed. Reports distinguish
+`explicit-legacy-bootstrap` from `installed-cli` and retain the exact driver
+commit. A successful bootstrap lane qualifies that migration route only, not
+an unavailable capability of the old installed CLI. Source fixture tests do
+not qualify either image or standalone guests, reboot, rollback or user data.

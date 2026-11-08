@@ -1,0 +1,9 @@
+mode: first-use-upstream-download
+This model's weights are not present in the image or downloaded by provisioning.
+kilix-diarization-cpu reaches a machine only when a user installs it; it is downloaded from
+www.modelscope.cn and verified against the pinned digests before installation.
+No install route downloads it until a kilix-license receipt covers it:
+The model catalog validates the determined licence and records the receipt, and
+The generic model catalog downloads pinned upstream inputs and converts them locally.
+Transcribe checks the covering receipt and installed manifest before diarization.
+Conversion software is installed separately; no model is selected by default.

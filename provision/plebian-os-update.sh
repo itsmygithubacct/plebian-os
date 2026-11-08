@@ -36,6 +36,17 @@
 # desktop providers as a clickable stack update action.
 set -euo pipefail
 
+# Keep the installed selector/updater self-contained. Only a stable tag or a
+# numbered RC of the same numeric VERSION is a supported release identity.
+valid_release_tag() {
+    local version="$1" tag="$2" suffix
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]]
+}
+
+
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 # `exit` does not trigger the ERR trap, so a die() -- the convention at 152 call
@@ -52,6 +63,18 @@ require_unprivileged_updater() {
 # invocation rejects root before config loading, allocation, locking, or writes.
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
     require_unprivileged_updater "$EUID"
+fi
+
+# Keep all existing source/rollback operations inside one bounded offline Git
+# environment when a digest-bound carrier is installed or explicitly selected.
+# The helper owns its temporary source pool for this invocation and cleans it.
+if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
+    && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
+         || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
+    _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
+    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=/usr/local/sbin/plebian-os-source-carrier
+    [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
+    exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
 fi
 
 # The deployed provisioner, which reconciles apt sources after a committed update.
@@ -594,6 +617,9 @@ KILIX_MEDIA_SDK_REF="${KILIX_MEDIA_SDK_REF:-}"
 KILIX_WAYDROID_REPO="${KILIX_WAYDROID_REPO:-https://github.com/itsmygithubacct/kilix-waydroid.git}"
 KILIX_WAYDROID_BRANCH="${KILIX_WAYDROID_BRANCH:-}"
 KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
+KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
+KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
+KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
 PLEB_DESKTOP="${PLEB_DESKTOP:-1}"
 PLEB_WM="${PLEB_WM:-openbox}"
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"
@@ -656,6 +682,7 @@ select_latest_release=1
 recover_interrupted=0
 # Set only after the complete local-candidate gate succeeds. These are reset
 # unconditionally so caller-provided environment cannot opt into the bypass.
+_PLEBIAN_OS_LOCAL_CANDIDATE_TAG=""
 _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
 _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
 while [ "$#" -gt 0 ]; do
@@ -1085,6 +1112,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -1106,6 +1134,7 @@ paths=(
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
+    /usr/local/share/plebian-os/ollama-release.env
     /usr/local/share/plebian-os/wallpapers/plebian-os.png
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
@@ -1279,6 +1308,7 @@ paths=(
     /usr/local/sbin/plebian-os-provision
     /usr/local/sbin/plebian-os-install-deps
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -1300,6 +1330,7 @@ paths=(
     /etc/systemd/system/plebian-os-firstboot.service
     /usr/local/sbin/plebian-os-firstboot-attempt
     /usr/local/share/plebian-os/VERSION
+    /usr/local/share/plebian-os/ollama-release.env
     /usr/local/share/plebian-os/wallpapers/plebian-os.png
     /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
     /usr/local/share/doc/plebian-os/COPYING.GPL-2
@@ -2005,7 +2036,7 @@ validate_qt_release_closure() {
     for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
@@ -2033,7 +2064,7 @@ validate_native_release_closure() {
         PLEBIAN_OS_NATIVE_CONTENT_REF; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 5 ] || {
@@ -2970,6 +3001,7 @@ KILIX_TUI_UTILS_REPO KILIX_TUI_UTILS_TRUST_EXISTING_CHECKOUT
 KILIX_VOICE_LIB_SHA256 KILIX_VOICE_LIB_URL KILIX_VOICE_LIB_VERSION
 KILIX_VOICE_MODEL_SHA256 KILIX_VOICE_MODEL_URL KILIX_VOICE_REF
 KILIX_WAYDROID_BRANCH KILIX_WAYDROID_REF KILIX_WAYDROID_REPO
+KILIX_SECRETS_BRANCH KILIX_SECRETS_REF KILIX_SECRETS_REPO
 PLEBIAN_OS_APT_SNAPSHOT PLEBIAN_OS_BRANCH PLEBIAN_OS_BUILD_KILIX_FORK
 PLEBIAN_OS_DIR PLEBIAN_OS_INSTALL_UV PLEBIAN_OS_INSTALL_VOICE_MODEL
 PLEBIAN_OS_INSTALL_WAYDROID PLEBIAN_OS_KILIX_GO_MIN_VERSION
@@ -3199,10 +3231,11 @@ require_clean_pinned_checkout() {
 
 checkout_pinned_ref() {
     local dir="$1" ref="$2" label="$3" resolved actual
+    local candidate_tag="${_PLEBIAN_OS_LOCAL_CANDIDATE_TAG:-v$PLEBIAN_OS_VERSION}"
     require_clean_pinned_checkout "$dir" "$label"
     if [ "$label" = plebian-os ] \
         && [ "$dir" = "$PLEBIAN_OS_DIR" ] \
-        && { [ "$ref" = "v$PLEBIAN_OS_VERSION" ] \
+        && { [ "$ref" = "$candidate_tag" ] \
             || [ "$ref" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ]; } \
         && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT:-}" ] \
         && [ -n "${_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT:-}" ]; then
@@ -3210,11 +3243,11 @@ checkout_pinned_ref() {
         # qualification. The earlier candidate gate bound its annotated tag,
         # manifest and deployed handoff bytes. Recheck both immutable object
         # identities here so a changed local tag cannot cross that boundary.
-        [ "$(git -C "$dir" rev-parse --verify "refs/tags/v$PLEBIAN_OS_VERSION" 2>/dev/null)" \
+        [ "$(git -C "$dir" rev-parse --verify "refs/tags/$candidate_tag" 2>/dev/null)" \
             = "$_PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT" ] \
-            || die "validated local Plebian-OS candidate tag v$PLEBIAN_OS_VERSION changed before checkout"
-        resolved="$(git -C "$dir" rev-parse --verify "v$PLEBIAN_OS_VERSION^{commit}" 2>/dev/null)" \
-            || die "validated local Plebian-OS candidate v$PLEBIAN_OS_VERSION no longer resolves to a commit"
+            || die "validated local Plebian-OS candidate tag $candidate_tag changed before checkout"
+        resolved="$(git -C "$dir" rev-parse --verify "${candidate_tag}^{commit}" 2>/dev/null)" \
+            || die "validated local Plebian-OS candidate $candidate_tag no longer resolves to a commit"
         [ "$resolved" = "$_PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT" ] \
             || die "validated local Plebian-OS candidate commit changed before checkout"
         log "using already-validated unpublished Plebian-OS candidate $ref at $resolved"
@@ -3312,20 +3345,20 @@ latest_published_release() {
     refs="$(git ls-remote --refs --tags "$PLEBIAN_OS_REPO" 'refs/tags/v*')" \
         || die "could not query published Plebian-OS releases from $PLEBIAN_OS_REPO"
     latest="$(printf '%s\n' "$refs" \
-        | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+$/ {
+        | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$/ {
                    sub(/^refs\/tags\/v/, "", $2); print $2
                }' \
         | LC_ALL=C sort -V \
         | tail -n 1)"
     [ -n "$latest" ] \
-        || die "no published stable vX.Y.Z release tags were found at $PLEBIAN_OS_REPO"
+        || die "no published stable vX.Y.Z or vX.Y.Z.N release tags were found at $PLEBIAN_OS_REPO"
     printf '%s\n' "$latest"
 }
 
 release_is_newer() {
     local candidate="$1" installed="$2" highest
-    [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
-    [[ "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [[ "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
     [ "$candidate" != "$installed" ] || return 1
     highest="$(printf '%s\n%s\n' "$installed" "$candidate" \
         | LC_ALL=C sort -V | tail -n 1)"
@@ -3336,15 +3369,24 @@ release_is_newer() {
 # while publication is pending. The tag must describe the exact installed
 # closure and the deployed handoff tools must still be its bytes.
 local_candidate_matches_selected_closure() {
-    local version="$1" tag="v$1" manifest key line value
+    local version="$1" tag manifest key line value
     local selector="${PLEBIAN_OS_INSTALLED_SELECTOR:-/usr/local/bin/plebian-os-select-closure}"
     local updater="${PLEBIAN_OS_INSTALLED_UPDATER:-/usr/local/bin/plebian-os-update}"
     local temp tag_object tag_commit
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG=""
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
     _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT=""
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] \
-        && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         && [ "${PLEBIAN_OS_RELEASE:-}" = "$version" ] || return 1
+    tag="${PLEBIAN_OS_REF:-v$version}"
+    if [[ "$tag" =~ ^[0-9a-f]{40}$ ]]; then
+        # The installed closure persists a peeled commit. Recover its one exact
+        # manifest tag, rather than guessing stable or scanning mutable tags.
+        tag="$(git -C "$PLEBIAN_OS_DIR" show "$tag:releases/$version.env" 2>/dev/null \
+            | awk -F= '$1 == "PLEBIAN_OS_REF" { value=$2; count++ } END { if (count != 1) exit 1; print value }')" || return 1
+    fi
+    valid_release_tag "$version" "$tag" || return 1
     [ "$(git -C "$PLEBIAN_OS_DIR" cat-file -t "refs/tags/$tag" 2>/dev/null)" = tag ] || return 1
     tag_object="$(git -C "$PLEBIAN_OS_DIR" rev-parse --verify "refs/tags/$tag" 2>/dev/null)" \
         || return 1
@@ -3392,6 +3434,7 @@ local_candidate_matches_selected_closure() {
         '; then rm -rf -- "$temp"; return 1; fi
     done <<<"$keys"
     rm -rf -- "$temp"
+    _PLEBIAN_OS_LOCAL_CANDIDATE_TAG="$tag"
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT="$tag_object"
     _PLEBIAN_OS_LOCAL_CANDIDATE_COMMIT="$tag_commit"
     return 0
@@ -3440,8 +3483,8 @@ select_latest_release_if_needed() {
         log "explicitly revalidating selected release $PLEBIAN_OS_VERSION"
         return 0
     }
-    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-        || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not semantic; use --revalidate-current only for recovery"
+    [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
+        || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not a release version; use --revalidate-current only for recovery"
     latest="$(latest_published_release)"
     if [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
         log "Plebian-OS $PLEBIAN_OS_VERSION is the latest published release"
@@ -3533,6 +3576,7 @@ stage_and_validate_os_layer() {
         "$prov/plebian-os-install-kilix-vulkan-tts"
         "$prov/plebian-os-install-kilix-ollama-runtime"
         "$prov/plebian-os-native-runtime"
+        "$prov/plebian-os-source-carrier"
         "$prov/plebian-os-qt-runtime"
         "$prov/plebian-os-mpv-runtime"
         "$prov/native_package.py"
@@ -3577,6 +3621,8 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-install-kilix-ollama-runtime"
     [ ! -L "$prov/plebian-os-native-runtime" ] || die "unsafe native helper entry-point symlink"
     install -m 0755 "$prov/plebian-os-native-runtime" "$stage/plebian-os-native-runtime"
+    [ ! -L "$prov/plebian-os-source-carrier" ] || die "unsafe source carrier helper symlink"
+    install -m 0755 "$prov/plebian-os-source-carrier" "$stage/plebian-os-source-carrier"
     [ ! -L "$prov/plebian-os-qt-runtime" ] || die "unsafe Qt runtime helper symlink"
     install -m 0755 "$prov/plebian-os-qt-runtime" "$stage/plebian-os-qt-runtime"
     [ ! -L "$prov/plebian-os-mpv-runtime" ] || die "unsafe mpv runtime helper symlink"
@@ -3590,6 +3636,17 @@ stage_and_validate_os_layer() {
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
     install -m 0755 "$prov/plebian-os-firstboot-attempt" "$stage/plebian-os-firstboot-attempt"
     install -m 0644 "$PLEBIAN_OS_DIR/VERSION" "$stage/VERSION"
+    local manifest_version manifest_source
+    manifest_version="$(cat "$stage/VERSION")"
+    [[ "$manifest_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
+        || die "invalid selected Ollama manifest version: $manifest_version"
+    [ "$manifest_version" = "$PLEBIAN_OS_VERSION" ] \
+        || die "checkout VERSION differs from the selected update version"
+    manifest_source="$PLEBIAN_OS_DIR/releases/$manifest_version.env"
+    python3 "$stage/plebian-os-install-kilix-ollama-runtime" \
+        --check-manifest --manifest "$manifest_source" --expected-version "$manifest_version" \
+        || die "selected update Ollama manifest is missing, unsafe or mismatched"
+    install -m 0644 "$manifest_source" "$stage/ollama-release.env"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/desktop/plebian-os.png" "$stage/desktop-wallpaper.png"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/installer/ATTRIBUTION.md" "$stage/ATTRIBUTION.md"
     install -m 0644 "$PLEBIAN_OS_DIR/assets/COPYING.GPL-2" "$stage/COPYING.GPL-2"
@@ -3598,6 +3655,31 @@ stage_and_validate_os_layer() {
     [ ! -L "$prov/plebian-os-nvidia-driver" ] || die "unsafe NVIDIA driver helper symlink"
     install -m 0755 "$prov/plebian-os-nvidia-driver" "$stage/plebian-os-nvidia-driver"
 
+    # Stage only the first-use boundary, never the optional app or Android.
+    # The root deployment binds these bytes and the outer snapshot rolls them
+    # back with the rest of the OS layer if a subsequent update step fails.
+    for file in plebian-os-waydroid-setup waydroid-closure.env waydroid-closure.sha256; do
+        [ -f "$prov/$file" ] && [ ! -L "$prov/$file" ] \
+            || die "missing or unsafe Waydroid first-use file: $file"
+        install -m 0644 "$prov/$file" "$stage/$file"
+    done
+    local waydroid_pin waydroid_actual
+    IFS= read -r waydroid_pin <"$stage/waydroid-closure.sha256" \
+        || die "could not read Waydroid closure pin"
+    printf '%s\n' "$waydroid_pin" | cmp -s - "$stage/waydroid-closure.sha256" \
+        || die "Waydroid closure pin has trailing data"
+    waydroid_actual="$(sha256sum "$stage/waydroid-closure.env")" \
+        || die "could not hash Waydroid closure"
+    [[ "$waydroid_pin" =~ ^[0-9a-f]{64}$ ]] \
+        && [ "${waydroid_actual%% *}" = "$waydroid_pin" ] \
+        || die "Waydroid closure checksum mismatch"
+    [ -z "$PLEBIAN_OS_WAYDROID_CLOSURE_SHA256" ] \
+        || [ "$waydroid_pin" = "$PLEBIAN_OS_WAYDROID_CLOSURE_SHA256" ] \
+        || die "Waydroid closure differs from the selected release"
+    chmod 0755 "$stage/plebian-os-waydroid-setup"
+    bash -n "$stage/plebian-os-waydroid-setup" \
+        || die "invalid Waydroid first-use helper"
+
     for file in "$stage/plebian-os-provision" "$stage/plebian-os-install-deps" \
         "$stage/plebian-os-update" "$stage/plebian-os-firstboot-attempt" \
         "$stage/plebian-os-select-closure" \
@@ -3605,7 +3687,7 @@ stage_and_validate_os_layer() {
         "$stage/plebian-os-native-runtime"; do
         bash -n "$file" || die "staged OS-layer shell validation failed: $file"
     done
-    python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
+    python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-source-carrier" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-diarization-converter" \
         "$stage/plebian-os-install-encodec-converter" \
@@ -3630,8 +3712,8 @@ PY
         systemd-analyze verify "$stage/plebian-os-firstboot.service" >/dev/null 2>&1 \
             || die "staged firstboot unit failed systemd-analyze verification"
     fi
-    grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' "$stage/VERSION" \
-        || die "staged VERSION is not semantic MAJOR.MINOR.PATCH"
+    grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "$stage/VERSION" \
+        || die "staged VERSION is not MAJOR.MINOR.PATCH[.MAINTENANCE]"
     python3 - "$stage/desktop-wallpaper.png" <<'PY' \
         || die "staged desktop wallpaper is not a 1920x1080 RGB PNG"
 import pathlib
@@ -3781,6 +3863,7 @@ names=(
     plebian-os-install-kilix-vulkan-tts
     plebian-os-install-kilix-ollama-runtime
     plebian-os-native-runtime
+    plebian-os-source-carrier
     native_package.py
     native_state.py
     native_process.py
@@ -3788,6 +3871,10 @@ names=(
     plebian-os-qt-runtime
     plebian-os-mpv-runtime
     plebian-os-nvidia-driver
+    plebian-os-waydroid-setup
+    waydroid-closure.env
+    waydroid-closure.sha256
+    ollama-release.env
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -3808,6 +3895,7 @@ dests=(
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/libexec/plebian-os/native_package.py
     /usr/local/libexec/plebian-os/native_state.py
     /usr/local/libexec/plebian-os/native_process.py
@@ -3815,9 +3903,13 @@ dests=(
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/bin/plebian-os-nvidia-driver
+    /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
+    /usr/lib/plebian-os/waydroid/waydroid-closure.env
+    /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
+    /usr/local/share/plebian-os/ollama-release.env
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644 0644)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65 65536)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -3873,7 +3965,7 @@ trap rollback ERR INT TERM HUP PIPE
 
 # Distribution assets live below fixed root-owned directories. Reject any
 # symlink or user-writable fixed ancestor before root stages bytes beneath it.
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm; do
+for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /usr/lib; do
     if [ ! -d "$dir" ] || [ -L "$dir" ]; then
         printf 'plebian-os-update: unsafe distribution asset destination ancestor: %s\n' "$dir" >&2
         false
@@ -3889,6 +3981,8 @@ done
 # The managed children may be created here, but must remain root-controlled and
 # traversable by the desktop user.
 for dir in \
+    /usr/lib/plebian-os \
+    /usr/lib/plebian-os/waydroid \
     /usr/local/libexec \
     /usr/local/libexec/plebian-os \
     /usr/local/share/plebian-os \
@@ -3993,13 +4087,14 @@ for i in "${!new_paths[@]}"; do
 done
 # Recheck executable syntax before any installed file is backed up or replaced.
 for file in "${new_paths[0]}" "${new_paths[1]}" "${new_paths[3]}" \
-    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[24]}"; do
+    "${new_paths[5]}" "${new_paths[11]}" "${new_paths[17]}" "${new_paths[25]}" \
+    "${new_paths[26]}"; do
     bash -n "$file"
 done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
     "${new_paths[15]}" "${new_paths[16]}" "${new_paths[18]}" \
     "${new_paths[19]}" "${new_paths[20]}" "${new_paths[21]}" \
-    "${new_paths[22]}" "${new_paths[23]}" <<'PY'
+    "${new_paths[22]}" "${new_paths[23]}" "${new_paths[24]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
@@ -4010,7 +4105,36 @@ grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^\[Service\]$' "${new_paths[4]}" \
     && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
     && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
-grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' "${new_paths[6]}"
+grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "${new_paths[6]}"
+# The manifest is the final member of the fixed deployment set. Validate its
+# inert data here; never execute a caller-supplied helper with root privileges.
+manifest_index=$((${#new_paths[@]} - 1))
+python3 "-" "${new_paths[$manifest_index]}" "${new_paths[6]}" <<'PY_MANIFEST'
+import pathlib
+import re
+import sys
+
+version = pathlib.Path(sys.argv[2]).read_text().strip()
+if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?", version):
+    raise SystemExit("invalid selected Ollama manifest version")
+values = {}
+required = {"PLEBIAN_OS_VERSION", "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES",
+            "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256"}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    key, separator, value = line.partition("=")
+    if separator and key in required:
+        if key in values:
+            raise SystemExit("duplicate selected Ollama manifest field")
+        values[key] = value
+if values.get("PLEBIAN_OS_VERSION") != version:
+    raise SystemExit("selected Ollama manifest version mismatch")
+size = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES", "")
+digest = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256", "")
+if not re.fullmatch(r"[1-9][0-9]{0,8}", size) or int(size) > 64 * 1024 * 1024:
+    raise SystemExit("invalid selected Ollama carrier byte pin")
+if not re.fullmatch(r"[0-9a-f]{64}", digest):
+    raise SystemExit("invalid selected Ollama carrier SHA-256 pin")
+PY_MANIFEST
 python3 - "${new_paths[7]}" <<'PY'
 import pathlib
 import struct
@@ -4118,6 +4242,7 @@ self_update_os_layer() {
         plebian-os-install-kilix-vulkan-tts
         plebian-os-install-kilix-ollama-runtime
         plebian-os-native-runtime
+        plebian-os-source-carrier
         native_package.py
         native_state.py
         native_process.py
@@ -4125,6 +4250,10 @@ self_update_os_layer() {
         plebian-os-qt-runtime
         plebian-os-mpv-runtime
         plebian-os-nvidia-driver
+        plebian-os-waydroid-setup
+        waydroid-closure.env
+        waydroid-closure.sha256
+        ollama-release.env
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
@@ -4234,6 +4363,29 @@ reconcile_legacy_remote_login() {
 # included in the root snapshot because they are directly selected on PATH.
 # Debian package upgrades pulled in by live sources are residue as well; apt
 # source changes happen only after commit.
+install_model_setup_software() {
+    local helper
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    for helper in /usr/local/sbin/plebian-os-install-ollama-converter \
+                  /usr/local/sbin/plebian-os-install-diarization-converter; do
+        if [ "${DRY_RUN:-0}" = 1 ]; then
+            log "would install model conversion software with $helper (no model weights)"
+            continue
+        fi
+        [ -x "$helper" ] && [ ! -L "$helper" ] \
+            || die "required model software installer is missing or unsafe: $helper"
+        "${elevate[@]}" "$helper" \
+            || die "required model conversion software installation failed: $helper"
+    done
+}
+
+install_kilix_needle() {
+    env "${stack_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-needle \
+        || die "required Needle application installation failed"
+}
+
 run_encodec_converter_installer() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
@@ -4255,7 +4407,7 @@ refresh_os_dependencies() {
         "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256" \
         "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=$PLEBIAN_OS_UV_INSTALLER_MAX_BYTES" \
         PLEBIAN_OS_ROOT_SESSION_HOME=/var/lib/plebian-os/session \
-        "$helper" \
+        "$helper" --model-converters \
         || die "selected OS dependency closure could not be installed"
 }
 
@@ -4476,7 +4628,7 @@ refuse_amd64_only_stack_inputs() {
     esac
     # The required converter is embedded in this OS source, not an optional
     # session feature. Do not let feature overrides certify a partial release.
-    if [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.2 ]; then
+    if [[ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
         die "0.2.2 has no source-qualified ARM64 closure: required EnCodec converter, native runtime and patched Qt/player artifacts must be selected together; installed stack unchanged"
     fi
     [ "${PLEBIAN_OS_INSTALL_WAYDROID:-0}" != 1 ] \
@@ -4627,6 +4779,9 @@ stack_env=(
     "KILIX_WAYDROID_REPO=$KILIX_WAYDROID_REPO"
     "KILIX_WAYDROID_BRANCH=$KILIX_WAYDROID_BRANCH"
     "KILIX_WAYDROID_REF=$KILIX_WAYDROID_REF"
+    "KILIX_SECRETS_REPO=$KILIX_SECRETS_REPO"
+    "KILIX_SECRETS_BRANCH=$KILIX_SECRETS_BRANCH"
+    "KILIX_SECRETS_REF=$KILIX_SECRETS_REF"
 )
 
 # Release apt index provenance has two phases, and the provisioner and updater
@@ -4858,9 +5013,22 @@ stage_final_provenance() {
         provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
         provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
         provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
-        if [ "$PLEBIAN_OS_INSTALL_WAYDROID" = 1 ]; then
+        provenance_kv KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
+        provenance_kv KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
+        provenance_kv KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+        # Lazy catalog delivery has no system source archive until requested.
+        # Preserve provenance for legacy system installs, checking hash failure
+        # directly rather than hiding it inside provenance_kv's arguments.
+        if [ -e /usr/local/share/kilix-waydroid/source.tar ] \
+                || [ -L /usr/local/share/kilix-waydroid/source.tar ]; then
+            [ -f /usr/local/share/kilix-waydroid/source.tar ] \
+                && [ ! -L /usr/local/share/kilix-waydroid/source.tar ] \
+                || die "unsafe installed Waydroid source archive"
+            local waydroid_source_sha
+            waydroid_source_sha="$(sha256sum /usr/local/share/kilix-waydroid/source.tar)" \
+                || die "could not hash installed Waydroid source archive"
             provenance_kv KILIX_WAYDROID_SOURCE_ARCHIVE /usr/local/share/kilix-waydroid/source.tar
-            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "$(sha256sum /usr/local/share/kilix-waydroid/source.tar | awk '{print $1}')"
+            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "${waydroid_source_sha%% *}"
         fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$PLEBIAN_OS_KILIX_GO_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$PLEBIAN_OS_KILIX_GO_SHA256_AMD64"
@@ -4937,7 +5105,7 @@ dests=(
     /var/lib/plebian-os/versions.env
     /var/lib/plebian-os/apt-sources.list
 )
-max_sizes=(67108864 2097152 8388608)
+max_sizes=(67108864 2097152 8388608 1048576 65536 65)
 new_paths=() backup_paths=() existed=() changed=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 for hash in "${expected_hashes[@]}"; do
@@ -5181,6 +5349,8 @@ test_fail_after_boundary dependencies
 # later stack rollback; it carries no models, receipts or active selection.
 run_encodec_converter_installer \
     || die "required EnCodec converter installation failed"
+install_model_setup_software
+test_fail_after_boundary model-setup-software
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected native runtime could not be prepared/applied"
 test_fail_after_boundary native-runtime
@@ -5200,6 +5370,26 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     log "updating kilix, submodules, fork engine, and optional desktop provider"
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart
     test_fail_after_boundary component-update
+    install_kilix_needle
+    test_fail_after_boundary needle
+    # The OS update stages the shared command archive with its admin context.
+    # The following image-model install records local licence coverage for the
+    # desktop user. It does not rewrite an existing Ask selection, and old
+    # archives survive rollback.
+    command_model_elevate=()
+    [ "$(id -u)" = 0 ] || command_model_elevate=(sudo)
+    "${command_model_elevate[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/stage-command-model.py" \
+        || die "required command model staging failed"
+    test_fail_after_boundary command-model
+    env "${stack_env[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" \
+        || die "required default model installation failed"
+    test_fail_after_boundary default-models
+    env "${stack_env[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" \
+        || die "required image model installation failed"
+    test_fail_after_boundary image-models
     # Last, after every step above that can install a package. See the
     # function's own header for why an update needs this at all.
     reapply_audio_holdoff

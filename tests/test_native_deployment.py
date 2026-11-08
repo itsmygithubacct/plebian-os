@@ -38,10 +38,16 @@ SOURCES = {
     'plebian-os-install-encodec-converter': 'provision/plebian-os-install-encodec-converter',
     'plebian-os-install-kilix-vulkan-tts': 'provision/plebian-os-install-kilix-vulkan-tts',
     'plebian-os-install-kilix-ollama-runtime': 'provision/plebian-os-install-kilix-ollama-runtime',
-    **{name: 'provision/' + name for name in NATIVE},
+    'plebian-os-native-runtime': 'provision/plebian-os-native-runtime',
+    'plebian-os-source-carrier': 'provision/plebian-os-source-carrier',
+    **{name: 'provision/' + name for name in MODULES},
     'plebian-os-qt-runtime': 'provision/plebian-os-qt-runtime',
     'plebian-os-mpv-runtime': 'provision/plebian-os-mpv-runtime',
     'plebian-os-nvidia-driver': 'provision/plebian-os-nvidia-driver',
+    'plebian-os-waydroid-setup': 'provision/plebian-os-waydroid-setup',
+    'waydroid-closure.env': 'provision/waydroid-closure.env',
+    'waydroid-closure.sha256': 'provision/waydroid-closure.sha256',
+    'ollama-release.env': 'releases/' + (ROOT / 'VERSION').read_text().strip() + '.env',
 }
 
 
@@ -76,6 +82,7 @@ set -euo pipefail
 export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
 source "$NATIVE_UPDATE"
 PLEBIAN_OS_DIR="$NATIVE_CHECKOUT"
+PLEBIAN_OS_VERSION="$(cat "$NATIVE_CHECKOUT/VERSION")"
 systemd-analyze() {
     [ "$#" = 2 ] && [ "$1" = verify ] && [ "$2" = "$NATIVE_STAGE/plebian-os-firstboot.service" ]
 }
@@ -109,6 +116,24 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
                     self.assertIn(b'required file missing', result.stderr)
                 finally:
                     saved.rename(source)
+
+    def test_waydroid_first_use_staging_refuses_changed_or_missing_closure(self):
+        closure = self.checkout / 'provision/waydroid-closure.env'
+        closure.write_text(closure.read_text() + '# changed\n')
+        result, _ = self.stage('changed-closure')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'Waydroid closure checksum mismatch', result.stderr)
+        closure.unlink()
+        result, _ = self.stage('missing-closure')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'missing or unsafe Waydroid first-use file', result.stderr)
+
+    def test_waydroid_first_use_stage_contains_no_app_or_android_payload(self):
+        result, stage = self.stage('optional-waydroid')
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        self.assertEqual(stat.S_IMODE((stage / 'plebian-os-waydroid-setup').stat().st_mode), 0o755)
+        self.assertFalse((stage / 'source.tar').exists())
+        self.assertFalse((stage / 'kilix-waydroid').exists())
 
     def test_every_native_source_link_refuses(self):
         for index, name in enumerate(NATIVE):

@@ -1,0 +1,100 @@
+{
+  "schema": "plebian-os.command-model-selection/v1",
+  "release_target": "0.2.3-rc5",
+  "default_backend": "lfm2",
+  "weight_version": "lfm2-kilix-v5e1-wse-20261106.9",
+  "delivery_version": "lfm2-kilix-commands-20261106-v9",
+  "model_sha256": "3fa22c105b1f80823088de21a45fd2f3dc30a4cfdc63d21037c9344585fae4dd",
+  "source_pins": {
+    "kilix": "4b9f29cf0914209cd76a853af1e53abc203238eb",
+    "kilix-content": "de2764f87c6be98bd5dc18155403006952a4c9ac",
+    "kilix-license": "80aab439d7243936dc69ddcf6a7e90c0753ea7bb",
+    "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec",
+    "kilix-needle": "a887e2fae221272aece6b7b9aef143df8bc7ba64"
+  },
+  "model": {
+    "bytes": 1388859040,
+    "sha256": "3fa22c105b1f80823088de21a45fd2f3dc30a4cfdc63d21037c9344585fae4dd"
+  },
+  "manifest": {
+    "repository": "https://github.com/itsmygithubacct/kilix-content",
+    "revision": "de2764f87c6be98bd5dc18155403006952a4c9ac",
+    "path": "src/kilix_content/catalog/plebian.json",
+    "asset_id": "lfm2-kilix-commands",
+    "note": "kilix-needle a887e2fae221272aece6b7b9aef143df8bc7ba64 commands-model.json, unchanged from 5cbff3172224d5277adee5a3c826ee4b0698917a, describes this delivery and weight, and its vendored kilix-content carries the LFM2 notice record; through 3a8e41c52f32f963c4bbeadfbec69b200f13eafe it described lfm2-kilix-v5e1-wse-20261104.8"
+  },
+  "delivery": {
+    "mode": "bundled-command-model-archive",
+    "archive_pin": "provision/command-model.json",
+    "bytes": 1362204317,
+    "sha256": "ea03c42ce0f36d12bca1844c558c0fcaeb442887e55e1e7b76ccb3ed632c3a85",
+    "iso_required": true,
+    "upgrade_stages_in_admin_context": true,
+    "agreement": "notice terms by the owner's 2026-11-07 determination: installation records a notice receipt that claims no agreement; the terms, including the commercial-use limitation, are shipped and not waived; terms that need a typed agreement are never answered by the image",
+    "documents_path": "/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/notices/",
+    "explicit_user_choices_preserved": true,
+    "release_uploaded": true,
+    "release_url": "https://github.com/itsmygithubacct/kilix-needle/releases/tag/lfm2-kilix-commands-20261106-v9"
+  },
+  "rollback": {
+    "weight_version": "lfm2-kilix-v5e1-wse-20261104.8",
+    "delivery_version": "lfm2-kilix-commands-20261104-v8",
+    "model_sha256": "7815032c4bdd44fbde002ec734ef3dd8eb14a8a44214b395738dae6e55ce897d",
+    "release_url": "https://github.com/itsmygithubacct/kilix-needle/releases/tag/lfm2-kilix-commands-20261104-v8",
+    "mechanism": "previous catalog selects its retained manifest-specific directory and covering receipt"
+  },
+  "quality": {
+    "scope": "Ask suites versus 20261106.8, GPU only. CPU was not run for 20261106.9. No general ranking.",
+    "independent_human_qualification": false,
+    "development": {
+      "cases": 1383,
+      "candidate_raw_correct": 1378,
+      "prior_raw_correct": 1372,
+      "candidate_admitted_correct_gpu": 1346,
+      "prior_admitted_correct_gpu": 1346,
+      "admitted_gains": [],
+      "candidate_losses_vs_prior": 0,
+      "false_abstentions": 0,
+      "incorrect_actions_admitted": 0
+    },
+    "fresh160": {
+      "candidate_raw_correct": 140,
+      "prior_raw_correct": 139,
+      "candidate_validated_correct": 146,
+      "prior_validated_correct": 145,
+      "admitted_gains": [
+        "copy-fresh-039"
+      ],
+      "candidate_losses_vs_prior": 0,
+      "candidate_false_abstentions": 2
+    },
+    "probes": {
+      "raw_correct": 61,
+      "admitted_correct": 61,
+      "cases": 64,
+      "prior_admitted_correct": 60,
+      "admitted_gains": [
+        "copy-probe-028"
+      ],
+      "candidate_losses_vs_prior": 0,
+      "false_abstentions": 1
+    },
+    "operational32": {
+      "raw_correct": 28,
+      "admitted_correct": 28,
+      "cases": 32,
+      "candidate_losses_vs_prior": 0,
+      "false_abstentions": 0
+    },
+    "expand8": {
+      "admitted_correct": 8,
+      "cases": 8,
+      "prior_admitted_correct": 7,
+      "admitted_gains": [
+        "literal-expand-004"
+      ]
+    },
+    "grammar_note": "The figures above were measured with kilix-needle-runtime 4f3aeaff. The catalog selects kilix-needle a887e2fa, whose grammar, unchanged from 3a8e41c5, alone reads 1352 of 1383 development cases correctly with no wrong action, against 1346 at 073f5e03; its grammar-only probes, fresh, operational and expand results equal those of 073f5e03. Admitted results with the model were not rerun at 3a8e41c5."
+  },
+  "acceptance_scope": "Default Ask command model for the 0.2.3 RC5 image-models branch. The archive is published at the release URL. Seat review does not cover this weight. Final OS media and release acceptance remain separate. LFM2's terms are a notice by the owner's 2026-11-07 determination."
+}

@@ -33,6 +33,56 @@ capture evidence, including user consent and Stop sharing. These component
 checks do not establish physical desktop acceptance; the published release
 notes below define the installed-release qualification scope.
 
+## 0.2.3 RC5 Ask default
+
+This RC5 image-models branch includes **LFM2 Kilix revision .9**
+(`lfm2-kilix-v5e1-wse-20261106.9`) as the Kilix Ask default. The installer
+includes its verified 1.36 GB archive; upgrades stage
+the same pinned archive using their existing admin context. Original licence
+documents are installed under
+`/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/notices/`.
+A new install or upgrade then installs that staged archive for the desktop
+user. By the owner's 2026-11-07 determination, its published custom terms,
+including the commercial-use limitation, are a notice, as with a Debian
+non-free package: they are shipped with the model, and installation records a
+notice receipt that claims no agreement. The receipt is created on the machine.
+It is not shipped in the image, and the terms are not waived. Explicit model
+preferences remain in effect, and the previous `20261104-v8` directory is
+retained for rollback. The archive is published as release
+`lfm2-kilix-commands-20261106-v9` of kilix-needle. See the
+[command-model selection](releases/0.2.3-command-model.json)
+for exact hashes, source pins, results and limitations.
+
+The image also includes **Basic Pitch** (`basic-pitch-icassp-2022-onnx`).
+The same new install and upgrade install its archive under the standard
+licence policy. The nine-model default bundle is unchanged.
+
+## 0.2.3 RC4 Help default
+
+The 0.2.3 RC4 candidate includes **kilix-qwen-sft1-2b** as the default local
+Help model. Ask everyday questions about using Kilix and Plebian-OS and receive
+a command, a brief explanation and related documentation links:
+
+```sh
+kilix help-setup
+kilix help-answer "How do I launch a Kilix pane?"
+kilix help-answer "How do I list panes?"
+kilix help-answer "How do I launch agents?"
+kilix help-answer "How do I use the TUI?"
+```
+
+Setup explicitly downloads about 4.6 GB of model files plus the CPU runtime,
+after checking memory and storage. A GPU is not required. For documentation
+passages without model setup, use `kilix help-search "How do I list panes?"`.
+Help does not inspect live machine state or execute its suggested commands.
+
+See the [Help setup and troubleshooting guide](https://github.com/itsmygithubacct/kilix/blob/6b6dbda8d75fe787b6e3bdfaac597980251fd03c/docs/help/answers.md)
+and the [0.2.3 release notes](releases/0.2.3-notes.md). The Help selection
+record pins source `4abc52e9236899a05738807d32a3431270b6a3c2` and the published
+adapter release `kilix-qwen-sft1-2b`. Final OS image and update qualification
+remain pending. The sections below retain the 0.2.2 baseline and component
+status; the 0.2.3 notes describe the newer selections and bundled models.
+
 ## Release 0.2.2 — Linux
 
 Published November 3, 2026 for Debian 13 (trixie), AMD64. The release includes
@@ -242,6 +292,9 @@ https://github.com/user-attachments/assets/4c3f0796-6023-41ad-975e-853ade4125af
    - seeds the owner's `~/.bash_aliases` with a `tb` alias for that same
      installed `tb.py` under `~/.local/bin`, skipping it with a note when `tb`
      already resolves to an existing command, alias, or function;
+   - seeds that same file with an `ask` alias for `kilix ask` (0.2.3 rc5 and
+     onward), skipping it with a note when `ask` already resolves to an
+     existing command, alias, or function;
    - installs and executes Kilix Voice's read-aloud tools; release 0.1.7 also
      installs the URL/SHA-256-pinned Vosk library and small US-English model,
      preserves their Apache-2.0 license and source provenance, and rejects
@@ -365,8 +418,14 @@ sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$ca
 
 The provisioner also accepts `PLEBIAN_OS_OLLAMA_CARRIER=/path/to/<asset>`.
 When running from a source checkout, it stages that checkout's
-`releases/0.2.2.env`; if an ISO-staged manifest is also present, both copies
-must match byte for byte.
+`releases/<VERSION>.env` as `ollama-release.env`; if an ISO-staged manifest is
+also present, both copies must match byte for byte. The manifest must declare
+the exact numeric OS version. For example, a `v0.2.3-rc1` source checkout with
+`VERSION=0.2.3` requires `releases/0.2.3.env`. A missing or mismatched manifest
+stops provisioning before package changes; another release's pins are never
+substituted. OS updates deploy this manifest with `VERSION` and restore both
+on rollback. Existing 0.2.2 installations may still use their legacy
+`0.2.2.env` file when `ollama-release.env` is absent.
 
 Log out, and at the LightDM greeter the session menu now offers **Pleb**.
 

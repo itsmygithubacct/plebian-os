@@ -2309,6 +2309,8 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "PLEB_REF": ref,
             "KILIX_REF": ref,
             "KILIX95_REF": ref,
+            # Release mode needs Kilix Secrets in the closure since be1bd99.
+            "KILIX_SECRETS_REF": ref,
             "KILIX_PREBUILT_SHA256": digest,
             "PLEBIAN_OS_KILIX_GO_VERSION": "go1.26.5",
             "PLEBIAN_OS_KILIX_GO_SHA256_AMD64": digest,
@@ -2404,6 +2406,10 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                 (
                     "whisper-small-en", "whisper", True,
                     486100128, "463.6 MiB",
+                ),
+                (
+                    "whisper-medium-en", "whisper", True,
+                    1530459085, "1.4 GiB",
                 ),
                 ("whistle", "whistle", True, 16937647, "16.2 MiB"),
             ):
@@ -2532,6 +2538,10 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             (
                 "whisper-small-en", "whisper", True,
                 486100128, "463.6 MiB",
+            ),
+            (
+                "whisper-medium-en", "whisper", True,
+                1530459085, "1.4 GiB",
             ),
             ("whistle", "whistle", True, 16937647, "16.2 MiB"),
         ):

@@ -11,6 +11,17 @@
 # operator gate.
 set -euo pipefail
 
+# Keep the installed selector/updater self-contained. Only a stable tag or a
+# numbered RC of the same numeric VERSION is a supported release identity.
+valid_release_tag() {
+    local version="$1" tag="$2" suffix
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]]
+}
+
+
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 . "$HERE/lib.sh"
@@ -63,7 +74,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-[[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+[[ "$RELEASE" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
     || { echo "acceptance-release-iso: invalid release: $RELEASE" >&2; exit 1; }
 case "$FIRMWARE" in bios|efi|both) ;; *)
     echo "acceptance-release-iso: firmware must be bios, efi, or both" >&2
@@ -179,14 +190,25 @@ for key in PLEBIAN_OS_SSH_ENABLED PLEBIAN_OS_AUTOBOOT PLEBIAN_OS_UNATTENDED_DISK
 done
 [[ "$iso_commit" =~ ^[0-9a-f]{40}$ ]] \
     || { echo "acceptance-release-iso: invalid ISO commit: $iso_commit" >&2; exit 1; }
-[ "${release_manifest[PLEBIAN_OS_REF]-}" = "v$RELEASE" ] \
-    || { echo "acceptance-release-iso: manifest OS ref must be v$RELEASE" >&2; exit 1; }
-[ "$(git -C "$ROOT" cat-file -t "refs/tags/v$RELEASE" 2>/dev/null || true)" = tag ] \
-    || { echo "acceptance-release-iso: v$RELEASE must be an annotated candidate tag" >&2; exit 1; }
-tag_commit="$(git -C "$ROOT" rev-parse --verify "v$RELEASE^{commit}" 2>/dev/null)" \
-    || { echo "acceptance-release-iso: local candidate tag v$RELEASE is missing" >&2; exit 1; }
+manifest_os_ref="${release_manifest[PLEBIAN_OS_REF]-}"
+valid_release_tag "$RELEASE" "$manifest_os_ref" \
+    || { echo "acceptance-release-iso: manifest OS ref must be v$RELEASE or v$RELEASE-rcN (N >= 1)" >&2; exit 1; }
+[ "$(git -C "$ROOT" cat-file -t "refs/tags/$manifest_os_ref" 2>/dev/null || true)" = tag ] \
+    || { echo "acceptance-release-iso: $manifest_os_ref must be an annotated candidate tag" >&2; exit 1; }
+tag_commit="$(git -C "$ROOT" rev-parse --verify "${manifest_os_ref}^{commit}" 2>/dev/null)" \
+    || { echo "acceptance-release-iso: local candidate tag $manifest_os_ref is missing" >&2; exit 1; }
 [ "$iso_commit" = "$tag_commit" ] \
-    || { echo "acceptance-release-iso: ISO commit $iso_commit is not v$RELEASE ($tag_commit)" >&2; exit 1; }
+    || { echo "acceptance-release-iso: ISO commit $iso_commit is not $manifest_os_ref ($tag_commit)" >&2; exit 1; }
+[ "$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}')" = "$tag_commit" ] \
+    || { echo "acceptance-release-iso: checkout HEAD does not match $manifest_os_ref" >&2; exit 1; }
+[ -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ] \
+    || { echo "acceptance-release-iso: refusing a dirty candidate checkout" >&2; exit 1; }
+[ "$(git -C "$ROOT" show "$tag_commit:VERSION")" = "$RELEASE" ] \
+    || { echo "acceptance-release-iso: candidate VERSION differs from $RELEASE" >&2; exit 1; }
+manifest_blob="$(git -C "$ROOT" rev-parse --verify "$tag_commit:releases/$RELEASE.env")" \
+    || { echo "acceptance-release-iso: candidate has no release manifest" >&2; exit 1; }
+[ "$(git -C "$ROOT" hash-object --no-filters "$manifest")" = "$manifest_blob" ] \
+    || { echo "acceptance-release-iso: manifest differs from candidate tag" >&2; exit 1; }
 
 for retired in IMAGE_PASSWORD RANDOM_PASSWORD; do
     [ -z "${release_manifest[$retired]+x}" ] || {

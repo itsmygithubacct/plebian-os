@@ -26,6 +26,18 @@
 # plan without touching anything.
 set -euo pipefail
 
+# Keep all existing source/rollback operations inside one bounded offline Git
+# environment when a digest-bound carrier is installed or explicitly selected.
+# The helper owns its temporary source pool for this invocation and cleans it.
+if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
+    && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
+         || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
+    _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
+    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=/usr/local/sbin/plebian-os-source-carrier
+    [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
+    exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
+fi
+
 # ── what a release closure controls ──────────────────────────────────────────
 # This list is plebian-os-select-closure.sh's RELEASE_CONTROLLED_KEYS, which
 # UPGRADING.md defines: "the coordinated version/release mode, the four source
@@ -74,6 +86,9 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_WAYDROID_REPO
     KILIX_WAYDROID_BRANCH
     KILIX_WAYDROID_REF
+    KILIX_SECRETS_REPO
+    KILIX_SECRETS_BRANCH
+    KILIX_SECRETS_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NATIVE_DEB_URL
     PLEBIAN_OS_NATIVE_DEB_SHA256
@@ -372,6 +387,7 @@ readonly PROVISION_VOICE_WEIGHTS=0
 PROVISION_COMPLETED_MARKER=/var/lib/plebian-os/provisioned
 PROVISION_VOICE_ASSETS_BEFORE=()
 PROVISION_VOICE_CENSUS_TAKEN=0
+PROVISION_DEFAULT_MODELS_VERIFIED=0
 # Android is an explicit release feature because its verified images are large.
 # The 0.2.0 release requirements enable it; uncoordinated provisioning stays
 # opt-in instead of silently downloading roughly a gigabyte.
@@ -426,6 +442,9 @@ KILIX_MEDIA_SDK_REF="${KILIX_MEDIA_SDK_REF:-}"
 KILIX_WAYDROID_REPO="${KILIX_WAYDROID_REPO:-https://github.com/itsmygithubacct/kilix-waydroid.git}"
 KILIX_WAYDROID_BRANCH="${KILIX_WAYDROID_BRANCH:-}"
 KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
+KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
+KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
+KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
 # Plebian-OS layer itself: where the provisioner/update-helper/deps script come
 # from, so `plebian-os-update` can refresh the OS layer (not just pleb/kilix).
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
@@ -520,7 +539,7 @@ if [ -z "$PLEBIAN_OS_VERSION" ] && [ -r /etc/plebian-os/build-info.env ]; then
     _build_info_version="$(
         sed -n 's/^PLEBIAN_OS_VERSION=//p' /etc/plebian-os/build-info.env 2>/dev/null
     )"
-    if [[ "$_build_info_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ "$_build_info_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]]; then
         PLEBIAN_OS_VERSION="$_build_info_version"
     fi
 fi
@@ -537,7 +556,7 @@ Usage: $0 [--user NAME] [--kiosk] [--nopasswd-sudo] [--desktop|--no-desktop] [--
   --desktop      load the configured desktop provider in Kilix page 1 (default)
   --no-desktop   load a shell in the first screen-filling Kilix page
   --branch REF   pleb branch/tag to clone (default: repo default)
-  --ollama-carrier PATH  use the local 0.2.2 Ollama release asset (no download)
+  --ollama-carrier PATH  use the selected release's local Ollama asset (no download)
   --dry-run      print what would happen; change nothing
   --reconcile-apt-sources internal: called by plebian-os-update after a committed update
   --version      print the Plebian-OS version and exit
@@ -571,6 +590,20 @@ scan_ollama_carrier_arguments() {
             *) shift ;;
         esac
     done
+}
+
+# Numeric OS versions select manifests; source tags (including RC tags) do not.
+# Keep this policy identical in remaster and provision (covered by tests).
+ollama_carrier_required() {
+    local version="$1"
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
+        || { echo "invalid Ollama release version: $version" >&2; exit 1; }
+    command -v awk >/dev/null 2>&1 \
+        || { echo "required preflight tool missing: awk" >&2; exit 1; }
+    awk -v version="$version" 'BEGIN {
+        split(version, v, ".")
+        exit !(v[1] + 0 > 0 || v[2] + 0 > 2 || (v[2] + 0 == 2 && v[3] + 0 >= 2))
+    }'
 }
 
 # The 0.2.2 Ollama runtime is mandatory and offline. Resolve and verify its
@@ -611,17 +644,17 @@ ollama_verify_carrier_pins() {
 
     bytes_count="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { n++ } END { print n + 0 }' "$manifest")"
     [ "$bytes_count" = 1 ] \
-        || die "0.2.2 release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES entry"
+        || die "$PLEBIAN_OS_VERSION release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES entry"
     expected_bytes="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { value=substr($0, index($0, "=") + 1) } END { print value }' "$manifest")"
     [[ "$expected_bytes" =~ ^[0-9]+$ ]] \
-        || die "0.2.2 release manifest carrier byte count must be decimal"
+        || die "$PLEBIAN_OS_VERSION release manifest carrier byte count must be decimal"
 
     digest_count="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { n++ } END { print n + 0 }' "$manifest")"
     [ "$digest_count" = 1 ] \
-        || die "0.2.2 release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 entry"
+        || die "$PLEBIAN_OS_VERSION release manifest must contain exactly one PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 entry"
     expected_digest="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256" { value=substr($0, index($0, "=") + 1) } END { print value }' "$manifest")"
     [[ "$expected_digest" =~ ^[0-9a-f]{64}$ ]] \
-        || die "0.2.2 release manifest carrier SHA-256 must be 64 lowercase hexadecimal characters"
+        || die "$PLEBIAN_OS_VERSION release manifest carrier SHA-256 must be 64 lowercase hexadecimal characters"
 
     [ -f "$carrier" ] && [ ! -L "$carrier" ] \
         || die "$label is not a regular non-symlink file: $carrier"
@@ -630,13 +663,13 @@ ollama_verify_carrier_pins() {
     [[ "$actual_bytes" =~ ^[0-9]+$ ]] \
         || die "could not read $label size: $carrier"
     [ "$actual_bytes" = "$expected_bytes" ] \
-        || die "$label size does not match the 0.2.2 release manifest: $carrier"
+        || die "$label size does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 
     actual_digest_output="$(sha256sum -- "$carrier" 2>/dev/null)" \
         || die "could not calculate $label SHA-256: $carrier"
     actual_digest="${actual_digest_output%% *}"
     [ "$actual_digest" = "$expected_digest" ] \
-        || die "$label SHA-256 does not match the 0.2.2 release manifest: $carrier"
+        || die "$label SHA-256 does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 }
 
 # Return success only when a carrier-free retry can take the install step's
@@ -679,10 +712,17 @@ ollama_installed_runtime_matches_manifest() {
 }
 
 preflight_ollama_carrier() {
+    ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
     local staging_root=/usr/local/share/plebian-os
-    local manifest_target="$staging_root/0.2.2.env"
+    local manifest_target="$staging_root/ollama-release.env"
+    # Older 0.2.2 installations carried this exact name. Never use it for a
+    # maintenance or newer release, or to bypass a present selected manifest.
+    if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest_target" ] \
+        && [ ! -L "$manifest_target" ] && [ -e "$staging_root/0.2.2.env" ]; then
+        manifest_target="$staging_root/0.2.2.env"
+    fi
     local carrier_target="$staging_root/ollama-runtime-carrier.tar.xz"
-    local checkout_manifest="$SELF_DIR/../releases/0.2.2.env"
+    local checkout_manifest="$SELF_DIR/../releases/$PLEBIAN_OS_VERSION.env"
     local cli_carrier="${PLEBIAN_OS_OLLAMA_CARRIER_ARG:-}"
     local env_carrier="${PLEBIAN_OS_OLLAMA_CARRIER:-}"
     local manifest_source="" carrier_source=""
@@ -725,7 +765,7 @@ preflight_ollama_carrier() {
         command -v cmp >/dev/null 2>&1 \
             || die "required preflight tool missing: cmp"
         cmp -s -- "$manifest_target" "$checkout_manifest" \
-            || die "staged and checkout 0.2.2 release manifests differ"
+            || die "staged and checkout $PLEBIAN_OS_VERSION release manifests differ"
     fi
     if [ "$staged_manifest_present" = 1 ]; then
         manifest_source="$manifest_target"
@@ -733,7 +773,7 @@ preflight_ollama_carrier() {
         manifest_source="$checkout_manifest"
         manifest_needs_stage=1
     else
-        die "0.2.2 Ollama release manifest is missing; provide the source checkout's releases/0.2.2.env"
+        die "$PLEBIAN_OS_VERSION Ollama release manifest is missing; provide the source checkout's releases/$PLEBIAN_OS_VERSION.env"
     fi
 
     manifest_count="$(awk -F= '$1 == "PLEBIAN_OS_VERSION" { count++ } END { print count + 0 }' "$manifest_source")"
@@ -763,7 +803,7 @@ preflight_ollama_carrier() {
         carrier_source="$carrier_target"
     else
         if ! ollama_installed_runtime_matches_manifest "$manifest_source"; then
-            die "0.2.2 Ollama carrier is missing; supply the offline 0.2.2 release asset ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz with --ollama-carrier PATH or PLEBIAN_OS_OLLAMA_CARRIER=PATH${OLLAMA_PREFLIGHT_RETRY_REASON:+; carrier-free retry rejected: $OLLAMA_PREFLIGHT_RETRY_REASON}"
+            die "$PLEBIAN_OS_VERSION Ollama carrier is missing; supply the offline $PLEBIAN_OS_VERSION release asset ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz with --ollama-carrier PATH or PLEBIAN_OS_OLLAMA_CARRIER=PATH${OLLAMA_PREFLIGHT_RETRY_REASON:+; carrier-free retry rejected: $OLLAMA_PREFLIGHT_RETRY_REASON}"
         fi
     fi
     if [ -n "$carrier_source" ]; then
@@ -812,32 +852,32 @@ preflight_ollama_carrier() {
         install -d -o root -g root -m 0755 "$staging_root" \
             || die "could not create Ollama carrier staging directory"
         if [ "$manifest_needs_stage" = 1 ]; then
-            temporary_manifest="$(mktemp "$staging_root/.0.2.2.env.XXXXXX")" \
-                || die "could not stage the 0.2.2 release manifest"
+            temporary_manifest="$(mktemp "$staging_root/.ollama-release.env.XXXXXX")" \
+                || die "could not stage the $PLEBIAN_OS_VERSION release manifest"
             if ! install -o root -g root -m 0644 -- "$manifest_source" "$temporary_manifest" \
                 || ! mv -fT -- "$temporary_manifest" "$manifest_target"; then
                 rm -f -- "$temporary_manifest"
-                die "could not install the 0.2.2 release manifest"
+                die "could not install the $PLEBIAN_OS_VERSION release manifest"
             fi
         fi
         if [ "$carrier_needs_stage" = 1 ]; then
             temporary_carrier="$(mktemp "$staging_root/.ollama-runtime-carrier.XXXXXX")" \
-                || die "could not stage the 0.2.2 Ollama carrier"
+                || die "could not stage the $PLEBIAN_OS_VERSION Ollama carrier"
             if ! install -o root -g root -m 0644 -- "$carrier_source" "$temporary_carrier" \
                 || ! mv -fT -- "$temporary_carrier" "$carrier_target"; then
                 rm -f -- "$temporary_carrier"
-                die "could not install the 0.2.2 Ollama carrier"
+                die "could not install the $PLEBIAN_OS_VERSION Ollama carrier"
             fi
         fi
     fi
 
     [ -f "$manifest_target" ] && [ ! -L "$manifest_target" ] \
         && [ "$(stat -c '%u:%a:%h' -- "$manifest_target")" = 0:644:1 ] \
-        || die "staged 0.2.2 release manifest is not a root-owned regular mode-0644 file"
+        || die "staged $PLEBIAN_OS_VERSION release manifest is not a root-owned regular mode-0644 file"
     if [ -n "$carrier_source" ]; then
         [ -f "$carrier_target" ] && [ ! -L "$carrier_target" ] \
             && [ "$(stat -c '%u:%a:%h' -- "$carrier_target")" = 0:644:1 ] \
-            || die "staged 0.2.2 Ollama carrier is not a root-owned regular mode-0644 file"
+            || die "staged $PLEBIAN_OS_VERSION Ollama carrier is not a root-owned regular mode-0644 file"
         ollama_verify_carrier_pins "$manifest_target" "$carrier_target" "staged Ollama carrier"
         log "offline Ollama carrier and release manifest are ready before provisioning changes"
     else
@@ -846,9 +886,9 @@ preflight_ollama_carrier() {
 }
 
 scan_ollama_carrier_arguments "$@"
-if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ] \
-    && [ "$OLLAMA_PREFLIGHT_SKIP" = 0 ] \
-    && [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ]; then
+if [ "$OLLAMA_PREFLIGHT_SKIP" = 0 ] \
+    && [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] \
+    && ollama_carrier_required "$PLEBIAN_OS_VERSION"; then
     preflight_ollama_carrier
 fi
 
@@ -1278,6 +1318,10 @@ release_requires_f120_roots() {
     [ "${PLEBIAN_OS_RELEASE:-}" = 0.2.1 ]
 }
 
+release_requires_secrets_root() {
+    [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.3 ]
+}
+
 # One externally selected inert .deb, never a checkpoint or a native build.
 # Older closures may omit it; a strict 0.2.2 closure may not. Any partial
 # selection is invalid in development too. Keep the three standalone callers
@@ -1313,7 +1357,7 @@ validate_qt_release_closure() {
     for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
@@ -1341,7 +1385,7 @@ validate_native_release_closure() {
         PLEBIAN_OS_NATIVE_CONTENT_REF; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 5 ] || {
@@ -1411,6 +1455,14 @@ validate_release_inputs() {
             [ -z "${!key}" ] || die "release mode requires $key to be empty"
         done
     fi
+    if release_requires_secrets_root; then
+        [[ "$KILIX_SECRETS_REF" =~ ^[0-9a-f]{40}$ ]] \
+            || die "release mode requires KILIX_SECRETS_REF to be a full 40-character lowercase commit SHA"
+        [ "$KILIX_SECRETS_REPO" = https://github.com/itsmygithubacct/kilix-secrets.git ] \
+            || die "release mode requires the canonical KILIX_SECRETS_REPO"
+        [ -z "$KILIX_SECRETS_BRANCH" ] \
+            || die "release mode requires KILIX_SECRETS_BRANCH to be empty"
+    fi
     for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
         [[ "${!key}" =~ ^[0-9a-fA-F]{64}$ ]] \
             || die "release mode requires a 64-character $key"
@@ -1476,7 +1528,7 @@ refuse_amd64_only_inputs() {
     esac
     # The required converter is embedded in this OS source, not an optional
     # session feature. Do not let feature overrides certify a partial release.
-    if [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.2 ]; then
+    if [[ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
         die "0.2.2 has no source-qualified ARM64 closure: required EnCodec converter, native runtime and patched Qt/player artifacts must be selected together; installed stack unchanged"
     fi
     [ "$INSTALL_WAYDROID" != 1 ] \
@@ -1500,7 +1552,14 @@ as_user() {
     command -v setpriv >/dev/null 2>&1 \
         || die "setpriv is required to run provisioning commands as $TARGET_USER"
     setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
-        --reset-env -- "$@"
+        --reset-env -- env \
+        ${GIT_CONFIG_GLOBAL:+"GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL"} \
+        ${GIT_ALLOW_PROTOCOL:+"GIT_ALLOW_PROTOCOL=$GIT_ALLOW_PROTOCOL"} \
+        ${GIT_CONFIG_NOSYSTEM:+"GIT_CONFIG_NOSYSTEM=$GIT_CONFIG_NOSYSTEM"} \
+        ${GIT_TERMINAL_PROMPT:+"GIT_TERMINAL_PROMPT=$GIT_TERMINAL_PROMPT"} \
+        ${KILIX_SOURCE_CARRIER_MANIFEST:+"KILIX_SOURCE_CARRIER_MANIFEST=$KILIX_SOURCE_CARRIER_MANIFEST"} \
+        ${KILIX_SOURCE_CARRIER_SHA256:+"KILIX_SOURCE_CARRIER_SHA256=$KILIX_SOURCE_CARRIER_SHA256"} \
+        "$@"
 }
 
 validate_target_user() {
@@ -1793,6 +1852,7 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
     /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     /usr/local/sbin/plebian-os-native-runtime
+    /usr/local/sbin/plebian-os-source-carrier
     /usr/local/sbin/plebian-os-qt-runtime
     /usr/local/sbin/plebian-os-mpv-runtime
     /usr/local/libexec/plebian-os/native_package.py
@@ -3426,7 +3486,14 @@ as_target_readonly() {
     command -v setpriv >/dev/null 2>&1 \
         || die "setpriv is required to validate the target user's Plebian-OS checkout"
     setpriv --reuid "$TARGET_UID" --regid "$TARGET_GID" --init-groups \
-        --reset-env -- "$@"
+        --reset-env -- env \
+        ${GIT_CONFIG_GLOBAL:+"GIT_CONFIG_GLOBAL=$GIT_CONFIG_GLOBAL"} \
+        ${GIT_ALLOW_PROTOCOL:+"GIT_ALLOW_PROTOCOL=$GIT_ALLOW_PROTOCOL"} \
+        ${GIT_CONFIG_NOSYSTEM:+"GIT_CONFIG_NOSYSTEM=$GIT_CONFIG_NOSYSTEM"} \
+        ${GIT_TERMINAL_PROMPT:+"GIT_TERMINAL_PROMPT=$GIT_TERMINAL_PROMPT"} \
+        ${KILIX_SOURCE_CARRIER_MANIFEST:+"KILIX_SOURCE_CARRIER_MANIFEST=$KILIX_SOURCE_CARRIER_MANIFEST"} \
+        ${KILIX_SOURCE_CARRIER_SHA256:+"KILIX_SOURCE_CARRIER_SHA256=$KILIX_SOURCE_CARRIER_SHA256"} \
+        "$@"
 }
 
 validated_checkout_wallpaper() {
@@ -3687,7 +3754,7 @@ install_desktop_wallpaper() {
 install_version_marker() {
     local dest_dir tmp path owner mode
 
-    if ! [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if ! [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]]; then
         [ "$PLEBIAN_OS_RELEASE_MODE" != 1 ] \
             || die "release provisioning requires a semantic Plebian-OS version marker"
         warn "not installing a VERSION marker for non-semantic version '$PLEBIAN_OS_VERSION'"
@@ -4231,7 +4298,10 @@ install_lid_defaults() {
         return 0
     fi
     dir="$(dirname "$conf")"
-    mkdir -p "$dir" || return 1
+    # Public configuration must stay traversable even under a private umask.
+    if [ ! -e "$dir" ]; then
+        install -d -m 0755 "$dir" || return 1
+    fi
     # A fixed name, so the transaction (provisioner and updater alike) lists
     # exactly this path: an interruption, even an uncatchable one, leaves nothing
     # the rollback does not remove, and nothing is swept by wildcard.
@@ -5340,9 +5410,21 @@ write_source_tool_manifest() {
         provenance_kv KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
         provenance_kv KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
         provenance_kv KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
-        if [ "$INSTALL_WAYDROID" = 1 ]; then
+        provenance_kv KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
+        provenance_kv KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
+        provenance_kv KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+        # Waydroid is an optional catalog application. Its legacy system
+        # archive exists only on machines that installed it before lazy delivery.
+        if [ -e /usr/local/share/kilix-waydroid/source.tar ] \
+                || [ -L /usr/local/share/kilix-waydroid/source.tar ]; then
+            [ -f /usr/local/share/kilix-waydroid/source.tar ] \
+                && [ ! -L /usr/local/share/kilix-waydroid/source.tar ] \
+                || die "unsafe installed Waydroid source archive"
+            local waydroid_source_sha
+            waydroid_source_sha="$(sha256sum /usr/local/share/kilix-waydroid/source.tar)" \
+                || die "could not hash installed Waydroid source archive"
             provenance_kv KILIX_WAYDROID_SOURCE_ARCHIVE /usr/local/share/kilix-waydroid/source.tar
-            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "$(sha256sum /usr/local/share/kilix-waydroid/source.tar | awk '{print $1}')"
+            provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "${waydroid_source_sha%% *}"
         fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
@@ -5564,6 +5646,64 @@ trap - EXIT
     log "tb alias installed -> $aliases (tb runs \$HOME/.local/bin/tb)"
 }
 
+# Seed the target user's ~/.bash_aliases with an `ask` alias for `kilix ask`.
+# Debian's stock ~/.bashrc sources ~/.bash_aliases into interactive shells, so
+# the alias is live from the first login after provisioning. This is the Ask
+# entrypoint from 0.2.3 rc5 onward: the name is `kilix` on PATH, not a
+# checkout path.
+#
+# No-clobber: when `ask` already resolves to anything in the target user's
+# interactive shell — a command on PATH, an alias, a function — note it and
+# change nothing. A ~/.bash_aliases the user turned into a symlink (a dotfiles
+# setup) is likewise left alone with a note rather than rewritten.
+install_ask_shell_alias() {
+    local aliases="$USER_HOME/.bash_aliases"
+    local resolved status=0
+    log "seeding the ask shell alias (kilix ask) for $TARGET_USER"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + (as $TARGET_USER) skip if ask already resolves, else append alias ask='kilix ask' -> $aliases"
+        return 0
+    fi
+    if resolved="$(as_user bash -ic 'command -v ask' 2>/dev/null)" \
+            && [ -n "$resolved" ]; then
+        log "ask already resolves for $TARGET_USER ($resolved); leaving it in place"
+        return 0
+    fi
+    # $USER_HOME is controlled by the target user: same rules as the tb writer.
+    # Write as the user, carry any existing alias lines forward with their file
+    # mode, and atomically replace the entry with `mv -T` so nothing here ever
+    # follows a pre-created symlink.
+    as_user bash -c '
+set -euo pipefail
+aliases="$1"
+if [ -e "$aliases" ] || [ -L "$aliases" ]; then
+    if [ ! -f "$aliases" ] || [ -L "$aliases" ]; then
+        exit 3
+    fi
+fi
+mode=644
+tmp="$(mktemp "${aliases}.tmp.XXXXXX")"
+trap '\''rm -f "$tmp"'\'' EXIT
+if [ -f "$aliases" ]; then
+    mode="$(stat -c %a -- "$aliases")"
+    cat -- "$aliases" > "$tmp"
+fi
+printf '\''%s\n'\'' \
+    '\''# ask: kilix ask (added by plebian-os-provision)'\'' \
+    "alias ask='\''kilix ask'\''" >> "$tmp"
+chmod "$mode" -- "$tmp"
+mv -fT -- "$tmp" "$aliases"
+trap - EXIT
+' plebian-os-ask-alias-writer "$aliases" || status=$?
+    if [ "$status" = 3 ]; then
+        warn "$aliases is not a plain file; leaving it alone — add the ask alias there yourself if you want it"
+        return 0
+    fi
+    [ "$status" = 0 ] \
+        || die "could not write the ask alias to $aliases as $TARGET_USER"
+    log "ask alias installed -> $aliases (ask runs kilix ask)"
+}
+
 desktop_provider_needs_kilix95() {
     case "$KILIX_DESKTOP_PROVIDER" in
         external|xp|kilix-xp) return 0 ;;
@@ -5627,6 +5767,122 @@ checkout_pinned_ref() {
     log "$name pinned ref $ref verified at $actual"
 }
 
+
+install_model_setup_software() {
+    local helper
+    local -a elevate=()
+    [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
+    for helper in /usr/local/sbin/plebian-os-install-ollama-converter \
+                  /usr/local/sbin/plebian-os-install-diarization-converter; do
+        if [ "${DRY_RUN:-0}" = 1 ]; then
+            log "would install model conversion software with $helper (no model weights)"
+            continue
+        fi
+        [ -x "$helper" ] && [ ! -L "$helper" ] \
+            || die "required model software installer is missing or unsafe: $helper"
+        "${elevate[@]}" "$helper" \
+            || die "required model conversion software installation failed: $helper"
+    done
+}
+
+install_kilix_needle() {
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install the catalog-pinned Needle application as $TARGET_USER"
+        return 0
+    fi
+    as_user env "${install_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-needle \
+        || die "required Needle application installation failed"
+}
+
+install_kilix_secrets() {
+    [ -n "$KILIX_SECRETS_REF" ] || return 0
+    [[ "$KILIX_SECRETS_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Kilix Secrets requires an exact KILIX_SECRETS_REF commit"
+    [ -z "$KILIX_SECRETS_BRANCH" ] \
+        || die "Kilix Secrets does not accept a mutable branch"
+    [ "$KILIX_SECRETS_REPO" = https://github.com/itsmygithubacct/kilix-secrets.git ] \
+        || die "Kilix Secrets requires the canonical KILIX_SECRETS_REPO"
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would build exact Kilix Secrets $KILIX_SECRETS_REF into /usr/local"
+        return 0
+    fi
+    validate_provision_root_transaction_dir "$PROVISION_ROOT_TRANSACTION_DIR" \
+        || die "Kilix Secrets installation requires an active root transaction"
+    local stage actual file mode source_sha link
+    local -a package_files=(
+        bin/kilix-secrets
+        bin/kilix-secretsd
+        include/kilix_secrets.h
+        lib/libkilix-secrets.a
+        lib/libkilix-secrets.so.0
+        lib/pkgconfig/kilix-secrets.pc
+        lib/systemd/user/kilix-secrets.service
+        lib/systemd/user/kilix-secrets.socket
+        share/doc/kilix-secrets/DEPENDENCIES.md
+        share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+        share/doc/kilix-secrets/LICENSE
+        share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+    )
+    stage="$(mktemp -d "$PROVISION_ROOT_TRANSACTION_DIR/kilix-secrets.XXXXXX")" \
+        || die "could not stage Kilix Secrets"
+    git init -q "$stage/repo" || die "could not initialize Kilix Secrets source staging"
+    git -C "$stage/repo" fetch --depth=1 "$KILIX_SECRETS_REPO" "$KILIX_SECRETS_REF" \
+        || die "could not fetch exact Kilix Secrets"
+    actual="$(git -C "$stage/repo" rev-parse 'FETCH_HEAD^{commit}')" \
+        || die "could not resolve Kilix Secrets commit"
+    [ "$actual" = "$KILIX_SECRETS_REF" ] || die "Kilix Secrets commit mismatch"
+    git -C "$stage/repo" archive --format=tar "$actual" >"$stage/source.tar" \
+        || die "could not archive exact Kilix Secrets source"
+    mkdir "$stage/source" || die "could not create Kilix Secrets build directory"
+    tar -xf "$stage/source.tar" -C "$stage/source" \
+        || die "could not extract Kilix Secrets source"
+    make -j2 -C "$stage/source" all PREFIX=/usr/local \
+        || die "could not build Kilix Secrets"
+    make -C "$stage/source" install DESTDIR="$stage/package" PREFIX=/usr/local \
+        || die "could not package Kilix Secrets"
+    printf '%s\n' "${package_files[@]}" | LC_ALL=C sort >"$stage/expected"
+    (cd "$stage/package/usr/local" && find . -type f -printf '%P\n' | LC_ALL=C sort) >"$stage/actual"
+    cmp -s "$stage/expected" "$stage/actual" || die "unexpected Kilix Secrets package layout"
+    link="$stage/package/usr/local/lib/libkilix-secrets.so"
+    [ -L "$link" ] && [ "$(readlink -- "$link")" = libkilix-secrets.so.0 ] \
+        || die "Kilix Secrets shared library link is not libkilix-secrets.so.0"
+    [ -z "$(find "$stage/package" ! -type f ! -type d ! -type l -print -quit)" ] \
+        || die "Kilix Secrets package contains an unexpected object"
+    for file in "${package_files[@]}" \
+            share/kilix-secrets/source.tar \
+            share/kilix-secrets/provenance.env; do
+        [ ! -L "/usr/local/$file" ] \
+            && { [ ! -e "/usr/local/$file" ] || [ -f "/usr/local/$file" ]; } \
+            || die "unsafe Kilix Secrets installed path: $file"
+    done
+    [ ! -d /usr/local/lib/libkilix-secrets.so ] \
+        || die "unsafe Kilix Secrets shared library path"
+    for file in "${package_files[@]}"; do
+        case "$file" in
+            bin/*|lib/libkilix-secrets.so.0) mode=0755 ;;
+            *) mode=0644 ;;
+        esac
+        install -D -o root -g root -m "$mode" "$stage/package/usr/local/$file" \
+            "/usr/local/$file" || die "could not install Kilix Secrets file $file"
+    done
+    ln -sfn libkilix-secrets.so.0 /usr/local/lib/libkilix-secrets.so \
+        || die "could not link Kilix Secrets shared library"
+    source_sha="$(sha256sum "$stage/source.tar" | awk '{print $1}')"
+    printf 'KILIX_SECRETS_REF=%s\nKILIX_SECRETS_SOURCE_SHA256=%s\n' \
+        "$actual" "$source_sha" >"$stage/provenance.env"
+    install -D -o root -g root -m 0644 "$stage/source.tar" \
+        /usr/local/share/kilix-secrets/source.tar \
+        || die "could not install Kilix Secrets source"
+    install -D -o root -g root -m 0644 "$stage/provenance.env" \
+        /usr/local/share/kilix-secrets/provenance.env \
+        || die "could not install Kilix Secrets provenance"
+    /sbin/ldconfig || die "could not refresh the linker cache for Kilix Secrets"
+    systemctl daemon-reload || die "could not reload systemd after installing Kilix Secrets"
+    systemctl --global enable kilix-secrets.socket \
+        || die "could not enable the Kilix Secrets user socket"
+    rm -rf -- "$stage" || die "could not clean Kilix Secrets staging"
+}
 
 install_waydroid_application() {
     [ "$INSTALL_WAYDROID" = 1 ] || return 0
@@ -5881,7 +6137,7 @@ run_voice_tool() {
 # `voice/lib/current` is the Vosk shared object — code, not weights, but at the
 # pinned KILIX_VOICE_REF it is fetched only on the same all-or-nothing leg that
 # fetches the model, so its arrival means that leg ran. `lgraph-en-us` and
-# `vibevoice-asr-bitnet`, `whisper-small-en` and `whistle` are the other carrier models'
+# `vibevoice-asr-bitnet`, `whisper-small-en`, `whisper-medium-en` and `whistle` are the other carrier models'
 # directories, and `desktop-apps/assets/<id>` is where `kilix models install`
 # puts each carrier model, so weights arriving by any install route are counted.
 voice_dictation_asset_paths() {
@@ -5890,11 +6146,13 @@ voice_dictation_asset_paths() {
     local assets_root="$KILIX_DATA_HOME/desktop-apps/assets"
     {
         for entry in "$models_root/lgraph-en-us" "$models_root/vibevoice-asr-bitnet" \
-                "$models_root/whisper-small-en" "$models_root/whistle" \
+                "$models_root/whisper-small-en" "$models_root/whisper-medium-en" \
+                "$models_root/whistle" \
                 "$assets_root/vosk-model-small-en-us-0.15" \
                 "$assets_root/vosk-model-en-us-0.22-lgraph" \
                 "$assets_root/vibevoice-asr-bitnet" \
-                "$assets_root/faster-whisper-small-en" "$assets_root/whistle" \
+                "$assets_root/faster-whisper-small-en" \
+                "$assets_root/faster-whisper-medium-en" "$assets_root/whistle" \
                 "$assets_root/kilix-diarization-cpu"; do
             [ -e "$entry" ] || [ -L "$entry" ] || continue
             printf '%s\n' "$entry"
@@ -6021,6 +6279,10 @@ expected = [
     ),
     (
         "whisper-small-en", "whisper", True, 486100128, "463.6 MiB",
+        ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"),
+    ),
+    (
+        "whisper-medium-en", "whisper", True, 1530459085, "1.4 GiB",
         ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"),
     ),
     (
@@ -6160,6 +6422,15 @@ verify_kilix_voice_install() {
     # ran, because presence alone cannot say who put it there.
     while IFS= read -r asset; do
         [ -n "$asset" ] || continue
+        # 0.2.2.1 supplies these two assets from the checksummed default
+        # bundle. Admission requires successful Content verification below;
+        # optional models and promoted voice generations retain their checks.
+        if [ "$PROVISION_DEFAULT_MODELS_VERIFIED" = 1 ]; then
+            case "$asset" in
+                "$KILIX_DATA_HOME/desktop-apps/assets/vosk-model-small-en-us-0.15"|\
+                "$KILIX_DATA_HOME/desktop-apps/assets/whistle") continue ;;
+            esac
+        fi
         if voice_asset_predates_this_run "$asset"; then
             carried_paths+=("$asset")
         else
@@ -6266,13 +6537,13 @@ verify_kilix_voice_install() {
         return 0
     fi
     if [ "$carried_is_the_users" = 1 ]; then
-        log "voice: read-aloud is ready; this run installed no model weights and left the dictation assets already on this machine alone (${carried_paths[*]})"
+        log "voice: read-aloud is ready; verified the release default bundle and left other existing dictation assets alone (${carried_paths[*]})"
     elif [ "$INSTALL_VOICE_MODEL" = 1 ]; then
         # Deliberately no command to run. At KILIX_REF the pinned Kilix
         # closure carries no first-use flow, so naming one here would send the
         # user at something this image cannot execute. See releases/0.2.2-notes.md,
         # "Known limitation: the first-use route is not in the pinned closure".
-        log "voice: read-aloud is ready and no model weights were installed; this release advertises the dictation model as a first-use pull, which becomes reachable when the pinned Kilix closure carries kilix-content's first-use flow"
+        log "voice: read-aloud is ready; release default assets are installed in Content and optional dictation assets retain first-use setup"
     else
         log "voice: all read-aloud tools execute; dictation assets were explicitly skipped"
     fi
@@ -6618,25 +6889,33 @@ export PLEBIAN_OS_UV_VERSION="$UV_VERSION_PIN"
 export PLEBIAN_OS_UV_INSTALLER_SHA256="$UV_INSTALLER_SHA256"
 export PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="$UV_INSTALLER_MAX_BYTES"
 if [ "$DRY_RUN" = 1 ]; then
-    bash "$DEPS_SCRIPT" --dry-run
+    bash "$DEPS_SCRIPT" --dry-run --model-converters
 else
-    bash "$DEPS_SCRIPT" || die "dependency install failed (see the group summary above)"
+    bash "$DEPS_SCRIPT" --model-converters || die "dependency install failed (see the group summary above)"
 fi
 normalize_accounts_service_package_directory
 
 install_ollama_runtime_from_carrier() {
-    [ "$PLEBIAN_OS_VERSION" = "0.2.2" ] || return 0
+    ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
     local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
     local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     # The release manifest and helper arrive from the same remastered ISO.
     # PLEBIAN_OS_DIR is cloned later in firstboot, after this runtime is needed.
     local source_installer="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
-    local manifest=/usr/local/share/plebian-os/0.2.2.env
+    local manifest=/usr/local/share/plebian-os/ollama-release.env
+    if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest" ] && [ ! -L "$manifest" ]; then
+        manifest=/usr/local/share/plebian-os/0.2.2.env
+    fi
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+        && awk -F= -v version="$PLEBIAN_OS_VERSION" '
+            $1 == "PLEBIAN_OS_VERSION" { n++; actual=substr($0, index($0, "=") + 1) }
+            END { exit !(n == 1 && actual == version) }
+        ' "$manifest" || die "Ollama release manifest version does not match PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
     local staging_root=/var/lib/plebian-os/session
     local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
     local work receipt_tmp bytes digest
 
-    log "installing the pinned 0.2.2 Ollama runtime from its offline carrier"
+    log "installing the pinned $PLEBIAN_OS_VERSION Ollama runtime from its offline carrier"
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + verify the installed runtime and receipt against $manifest; enable the service and return when they match"
         echo "    + otherwise verify the retained carrier size and SHA-256 against $manifest"
@@ -6648,7 +6927,7 @@ install_ollama_runtime_from_carrier() {
     fi
 
     [ -f "$manifest" ] && [ ! -L "$manifest" ] \
-        || die "the selected 0.2.2 release carrier manifest is missing or unsafe"
+        || die "the selected $PLEBIAN_OS_VERSION release carrier manifest is missing or unsafe"
     if [ ! -e "$installer" ] && [ ! -L "$installer" ] \
         && [ -f "$source_installer" ] && [ ! -L "$source_installer" ]; then
         install -m 0755 "$source_installer" "$installer" \
@@ -6662,7 +6941,7 @@ install_ollama_runtime_from_carrier() {
 
     if python3 "$installer" --verify >/dev/null 2>&1 \
         && ollama_carrier_receipt_matches_manifest "$receipt" "$manifest"; then
-        log "the installed Ollama runtime and carrier receipt match the 0.2.2 release pins"
+        log "the installed Ollama runtime and carrier receipt match the $PLEBIAN_OS_VERSION release pins"
         if ! systemctl daemon-reload \
             || ! systemctl enable --now plebian-os-ollama.service \
             || ! systemctl is-active --quiet plebian-os-ollama.service; then
@@ -6682,7 +6961,7 @@ install_ollama_runtime_from_carrier() {
         || die "could not create private Ollama carrier staging directory"
     chmod 0700 "$work"
 
-    if ! python3 "$installer" --manifest "$manifest" \
+    if ! python3 "$installer" --manifest "$manifest" --expected-version "$PLEBIAN_OS_VERSION" \
         --extract-carrier "$archive" --destination "$work/closure"; then
         rm -rf -- "$work"
         die "Ollama carrier verification or safe extraction failed"
@@ -6746,6 +7025,7 @@ else
 fi
 
 begin_provision_root_transaction
+install_kilix_secrets
 install_no_beep_defaults
 # Runs after the dependency install above, because that is what brings the
 # packages whose user units this has to look at.
@@ -6812,6 +7092,8 @@ else
     warn "optional diarization converter installer not found; continuing without it"
 fi
 
+install_model_setup_software
+
 # Likewise, ship the exact source-build helper without invoking it. The native
 # runtime and every model remain a deliberate, later opt-in.
 VULKAN_TTS_INSTALLER_SRC=""
@@ -6857,16 +7139,31 @@ if [ -n "$OLLAMA_RUNTIME_INSTALLER_SRC" ]; then
             /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
     fi
 else
-    if [ "$PLEBIAN_OS_VERSION" = "0.2.2" ]; then
+    if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
         die "required 0.2.2 Ollama runtime installer is missing"
     fi
     warn "Ollama runtime installer not found; continuing without it"
+fi
+
+# The ISO late_command already installs this helper beside the provisioner.
+# install(1) refuses to copy a path onto itself, and that refusal aborts first
+# boot after the selected Qt and native runtimes are in place. A checkout run
+# still copies the helper into place.
+if [ -f "$SELF_DIR/plebian-os-source-carrier" ]; then
+    if [ "$SELF_DIR/plebian-os-source-carrier" = /usr/local/sbin/plebian-os-source-carrier ]; then
+        log "source carrier helper already present at /usr/local/sbin/plebian-os-source-carrier"
+    elif [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -m 0755 $SELF_DIR/plebian-os-source-carrier /usr/local/sbin/plebian-os-source-carrier"
+    else
+        install -m 0755 "$SELF_DIR/plebian-os-source-carrier" /usr/local/sbin/plebian-os-source-carrier
+    fi
 fi
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same
 # helper here when the source file is available.
 UPDATE_SRC=""
+
 for cand in \
     "$SELF_DIR/plebian-os-update.sh" \
     "$SELF_DIR/plebian-os-update"; do
@@ -6938,6 +7235,11 @@ install_passwd_nag
 # tb.py into. Skipped with a note when `tb` already resolves to anything.
 install_tb_shell_alias
 
+# Interactive-shell convenience: an `ask` alias for `kilix ask` in the owner's
+# ~/.bash_aliases, from 0.2.3 rc5 onward. Skipped with a note when `ask`
+# already resolves to anything.
+install_ask_shell_alias
+
 # ── 2. allocate all coordinated source checkouts under the shared root ───────
 case "$GPU_TERMINAL_SOURCE_HOME" in
     /*) ;;
@@ -6954,11 +7256,10 @@ else
         || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
 fi
 ensure_plebian_os_checkout
-install_waydroid_application
 
 # Stage the fixed, root-owned first-use helper from the exact Plebian-OS
-# checkout. INSTALL_WAYDROID means the feature is present in this release; the
-# large runtime and image closure is deliberately not downloaded here.
+# checkout. INSTALL_WAYDROID enables this optional feature; the app is fetched
+# by the catalog only on request, and Android setup requires first-use consent.
 if [ "$INSTALL_WAYDROID" = 1 ]; then
     WAYDROID_SETUP="$PLEBIAN_OS_DIR/provision/plebian-os-waydroid-setup"
     WAYDROID_CLOSURE="$PLEBIAN_OS_DIR/provision/waydroid-closure.env"
@@ -7128,6 +7429,9 @@ install_env=(
     "KILIX_WAYDROID_REPO=$KILIX_WAYDROID_REPO"
     "KILIX_WAYDROID_BRANCH=$KILIX_WAYDROID_BRANCH"
     "KILIX_WAYDROID_REF=$KILIX_WAYDROID_REF"
+    "KILIX_SECRETS_REPO=$KILIX_SECRETS_REPO"
+    "KILIX_SECRETS_BRANCH=$KILIX_SECRETS_BRANCH"
+    "KILIX_SECRETS_REF=$KILIX_SECRETS_REF"
 )
 [ -n "${PROVISION_LOCK_FD:-}" ] \
     && install_env+=("PLEB_UPDATE_LOCK_FD=$PROVISION_LOCK_FD")
@@ -7143,6 +7447,20 @@ install_env=(
 record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
+install_kilix_needle
+if [ "$DRY_RUN" != 1 ]; then
+    /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/stage-command-model.py" --offline \
+        || die "required offline command model staging failed"
+fi
+as_user env "${install_env[@]}" /usr/bin/python3 \
+    "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
+    || die "required offline default model installation failed"
+as_user env "${install_env[@]}" /usr/bin/python3 \
+    "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" --offline \
+    || die "required offline image model installation failed"
+as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX_DIR/config/default_models.py" verify \
+    || die "default model verification failed"
+PROVISION_DEFAULT_MODELS_VERIFIED=1
 # `pleb install` is the last step that installs packages, and it installs some
 # this repository does not name: its own runtime set, and whatever the pinned
 # Kilix's scripts/install-build-deps.sh pulls in. Either can re-enable a user
@@ -7414,6 +7732,9 @@ EOF
     write_session_default KILIX_WAYDROID_REPO "$KILIX_WAYDROID_REPO"
     write_session_default KILIX_WAYDROID_BRANCH "$KILIX_WAYDROID_BRANCH"
     write_session_default KILIX_WAYDROID_REF "$KILIX_WAYDROID_REF"
+    write_session_default KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
+    write_session_default KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
+    write_session_default KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
     write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
     write_session_default PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
     write_session_default PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"

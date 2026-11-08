@@ -238,7 +238,7 @@ class ClosureSelectionTests(unittest.TestCase):
             env["PLEBIAN_OS_SELECT_TEST_FAIL_AFTER"] = fail_after
         if env_extra:
             env.update(env_extra)
-        target = next((arg for arg in args if re.fullmatch(r"\d+\.\d+\.\d+", arg)), None)
+        target = next((arg for arg in args if re.fullmatch(r"\d+\.\d+\.\d+(?:\.[1-9][0-9]*)?", arg)), None)
         source = base / "src"
         if trust_tag and target is not None and (source / ".git").is_dir():
             tag = subprocess.run(
@@ -412,6 +412,28 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("Do not run plebian-os-provision", result.stdout)
             meta = (self._recovery_records(base)[0] / "meta").read_text()
             self.assertNotIn("selection_kind=development-commit", meta)
+
+    def test_maintenance_selector_bootstraps_old_tools_and_rolls_back(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            text = (ROOT / 'releases/0.2.2.env').read_text().replace(
+                'PLEBIAN_OS_VERSION=0.2.2\n', 'PLEBIAN_OS_VERSION=0.2.2.1\n').replace(
+                'PLEBIAN_OS_REF=v0.2.2\n', 'PLEBIAN_OS_REF=v0.2.2.1\n')
+            self._source(base, text, version='0.2.2.1', release='0.2.2.1', tag='v0.2.2.1')
+            dry = self._run(base, '0.2.2.1', '--offline', '--dry-run')
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            self.assertEqual(env.read_bytes(), before)
+            selected = self._run(base, '0.2.2.1', '--offline')
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            tools = base / 'root/usr/local/bin'
+            self.assertEqual((tools / 'plebian-os-update').read_bytes(), UPDATE.read_bytes())
+            self.assertEqual((tools / 'plebian-os-select-closure').read_bytes(), SELECT.read_bytes())
+            self.assertEqual(self._values(env)['PLEBIAN_OS_VERSION'], '0.2.2.1')
+            rolled_back = self._run(base, '--rollback')
+            self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
+            self.assertEqual(env.read_bytes(), before)
 
     def test_development_commit_selects_untagged_source_and_restores_old_tools(self):
         with tempfile.TemporaryDirectory() as td:

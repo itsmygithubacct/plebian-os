@@ -88,7 +88,7 @@ def as_user(text: str) -> str:
 
 
 class ReapplyLidDefaults(unittest.TestCase):
-    def run_update_fn(self, fx, *, self_update="1", extra=""):
+    def run_update_fn(self, fx, *, self_update="1", extra="", umask="022"):
         sudo = fx.tmp / "bin"
         sudo.mkdir(exist_ok=True)
         (sudo / "sudo").write_text('#!/bin/sh\nexec "$@"\n')
@@ -96,7 +96,7 @@ class ReapplyLidDefaults(unittest.TestCase):
         script = ("set -euo pipefail\nexport PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
                   f"export PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT={fx.prov}\n"
                   f"export PLEBIAN_OS_SELF_UPDATE={self_update}\n"
-                  f"source {UPDATE}\nreapply_lid_defaults\n" + extra)
+                  f"source {UPDATE}\numask {umask}\nreapply_lid_defaults\n" + extra)
         env = {"PATH": f"{sudo}:/usr/bin:/bin", "HOME": str(fx.tmp)}
         return subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=60)
 
@@ -127,6 +127,14 @@ class ReapplyLidDefaults(unittest.TestCase):
         self.assertEqual(self.run_update_fn(fx).returncode, 0)
         self.assertEqual(fx.tree(), first)
         self.assertEqual(sorted(p.name for p in fx.dd.iterdir()), [NAME])
+
+    def test_restrictive_caller_umask_keeps_new_configuration_traversable(self):
+        fx = Fixture(self)
+        fx.install_provisioner()
+        result = self.run_update_fn(fx, umask="077")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(stat.S_IMODE(fx.dd.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(fx.conf.stat().st_mode), 0o644)
 
     def test_logind_is_never_restarted_or_signalled(self):
         fx = Fixture(self)

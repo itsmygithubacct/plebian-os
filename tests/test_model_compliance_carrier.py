@@ -9,10 +9,13 @@ validator to refuse it for its own reason.
 AC-1, AC-3 and AC-4 read kilix-content at PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF and
 kilix-license at KILIX_LICENSE_REF from sibling checkouts (CI fetches exactly
 those commits), or from PLEBIAN_OS_KILIX_CONTENT_REPO / PLEBIAN_OS_KILIX_LICENSE_REPO.
+AC-8 also reads the kilix-needle the catalog selects, and the kilix-content it
+vendors, from sibling checkouts or PLEBIAN_OS_KILIX_NEEDLE_REPO.
 A missing checkout is a failure, never a skip: an unprovable binding is worth
 exactly as much as an absent one.
 """
 
+import ast
 import hashlib
 import json
 import os
@@ -28,15 +31,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_voice_release_contract as voice_contract  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-# The one speech model whose licence record names its upstream artifact rather
+# The speech models whose licence records name their upstream artifact rather
 # than the catalog id; spelled here, not imported from the generator it checks.
-LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
+LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en",
+                      "whisper-medium-en": "faster-whisper-medium-en"}
 # Whistle's pinned authority is an application record; its release inclusion
 # is separately bound by this carrier's owner determination and review seats.
-LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records"}
+LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records",
+                       "lfm2-kilix-commands": "lfm2-records",
+                       "whisper-medium-en": "whisper-medium-records"}
 
 
 def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
+    if model == "lfm2-kilix-commands":
+        # Reuse the pinned project determination, without inventing user consent.
+        try:
+            determination = json.loads(text)
+        except ValueError:
+            return ["command-model determination is not the pinned JSON authority"]
+        expected = ROOT / 'provision/command-model-determination.json'
+        return [] if determination == json.loads(expected.read_bytes()) else [
+            "command-model determination differs from the recorded authority"]
     if model == "kilix-diarization-cpu":
         # Existing digest-specific determination; do not invent an owner signature.
         expected = "54b36539688fe450074a0105a2e43719837c321e4cf0eff8d7884a2d92ad21ad"
@@ -93,7 +108,7 @@ def repo_holding(env_var: str, name: str, commit: str) -> Path | None:
 
 def release_env(carrier: Path = CARRIER, **overrides: str) -> dict[str, str]:
     pins = manifest(f"{VERSION}.env")
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HERE": str(ROOT)}
     for key in ("PLEBIAN_OS_VERSION", "PLEBIAN_OS_RELEASE_MODE",
                 "PLEBIAN_OS_INSTALL_VOICE_MODEL", "KILIX_VOICE_REF",
                 "KILIX_VOICE_LIB_VERSION", "KILIX_VOICE_LIB_URL",
@@ -133,9 +148,13 @@ def regenerate(content: Path, license_: Path, out: Path,
 def advertised_models(provision: str) -> list[tuple[str, bool]]:
     block = provision[provision.index("validate_voice_model_catalog() {"):]
     block = block[:block.index("\n}\n")]
-    return [(name, flag == "True") for name, flag in re.findall(
+    models = [(name, flag == "True") for name, flag in re.findall(
         r'\(\s*"([a-z0-9.-]+)", "[a-z]+", (True|False),', block)] + [
             ("kilix-diarization-cpu", True)]
+    command_path = ROOT / 'provision/command-model.json'
+    if command_path.exists():
+        models.append((json.loads(command_path.read_bytes())['asset_id'], True))
+    return models
 
 
 def coverage_gaps(provision: str, root: Path = CARRIER) -> list[str]:
@@ -181,21 +200,54 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         gaps.append("provisioning may install model weights")
     carrier = json.loads((root / "CARRIER.json").read_bytes())
     voice_ref = carrier["voice_ref"]
+    bundle = json.loads((ROOT / "provision/default-models.json").read_bytes())
+    if json.loads((root / "DEFAULT-MODELS.json").read_bytes()) != bundle:
+        gaps.append("carried default inventory differs from provisioning")
+    command_path = ROOT / 'provision/command-model.json'
+    command = json.loads(command_path.read_bytes()) if command_path.exists() else None
+    if command and (not (root / 'COMMAND-MODEL.json').is_file()
+                    or json.loads((root / 'COMMAND-MODEL.json').read_bytes()) != command):
+        gaps.append("carried command archive differs from provisioning")
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
+        bundled = entry["artifact_id"] in bundle["assets"]
+        is_command = command is not None and entry['artifact_id'] == command['asset_id']
+        mode = ("bundled-command-model-archive" if is_command else
+                "bundled-default-model" if bundled else "first-use-upstream-download")
+        if entry["delivery"] != mode:
+            gaps.append(f"{model}: delivery differs from the pinned bundle")
+        if is_command:
+            if any(entry[k] != command[v] for k, v in (
+                    ('archive_sha256', 'sha256'), ('archive_bytes', 'bytes'),
+                    ('version', 'version'), ('manifest_digest', 'manifest_digest'))):
+                gaps.append(f"{model}: command archive binding differs")
+            for claim in ('mode: bundled-command-model-archive', 'stages it offline',
+                          'record a notice receipt', 'custom terms', 'are a notice',
+                          'not waived', 'no agreement is recorded',
+                          'never answered by the image', 'verifies every member'):
+                if claim not in delivery:
+                    gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            continue
+        if bundled:
+            if bundle["assets"][entry["artifact_id"]] != entry["manifest_digest"]:
+                gaps.append(f"{model}: bundled manifest differs")
+            for claim in ("mode: bundled-default-model", "installs the supplied bytes offline",
+                          "local standard-policy receipts", "build-time receipts are never distributed"):
+                if claim not in delivery:
+                    gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            continue
         # Whisper and Whistle installation hands off to the model catalog (the licence screen)
         # rather than asking the receipt check itself; say so, and nothing more.
         route = (f"hands the download to that model catalog\nand fetches no weights "
-                 f"itself (kilix-voice {voice_ref})." if model in {"whisper-small-en", "whistle"}
+                 f"itself (kilix-voice {voice_ref})." if model in {"whisper-small-en", "whisper-medium-en", "whistle"}
                  else f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).")
         if model == "kilix-diarization-cpu":
             route = "Transcribe checks the covering receipt and installed manifest before diarization."
             if "--check-licence" in delivery or "kilix-voice" in delivery:
                 gaps.append("diarization DELIVERY names the unrelated dictation install route")
-        if model in {"whisper-small-en", "whistle"} and "--check-licence" in delivery:
+        if model in {"whisper-small-en", "whisper-medium-en", "whistle"} and "--check-licence" in delivery:
             gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
-        for claim in ("No model weights are present in this image, and "
-                      "provisioning downloads none.",
+        for claim in ("This model's weights are not present in the image or downloaded by provisioning.",
                       "No install route downloads it until a kilix-license receipt covers it:",
                       route,
                       "mode: first-use-upstream-download"):
@@ -203,6 +255,56 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                 gaps.append(f"{model}: DELIVERY lacks {claim!r}")
         if ("not runnable" in delivery) == entry["runnable"]:
             gaps.append(f"{model}: DELIVERY misstates runnability")
+    return gaps
+
+
+def command_installer_gaps(installer: str) -> list[str]:
+    """AC-8: the command model DELIVERY is true of provision/install-image-models.py.
+
+    The image records the notice terms and never types an agreement answer,
+    and it stops rather than answer terms that need one.
+    """
+    gaps = []
+    tree = ast.parse(installer)
+    captures = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute) and node.func.attr == "capture_agreement"]
+    if not captures:
+        gaps.append("the image installer records no command model receipt")
+    if any(len(node.args) != 1 or node.keywords for node in captures):
+        gaps.append("the image installer types an agreement answer")
+    if not any(isinstance(node, ast.If)
+               and ast.unparse(node.test) == "record.expected_decision != 'record'"
+               and any(isinstance(statement, ast.Raise) for statement in node.body)
+               for node in ast.walk(tree)):
+        gaps.append("the image installer does not refuse terms that need agreement")
+    return gaps
+
+
+def needle_vendor_gaps(vendored_catalog: dict, vendored_record: bytes,
+                       commands_model: dict, root: Path = CARRIER) -> list[str]:
+    """AC-8: the Needle the catalog selects serves the carried command model terms.
+
+    kilix-needle reads the catalog and licence records from its own vendored
+    kilix-content, not from KILIX_REF's, so that copy must carry the carried
+    asset record and licence record, and its commands-model.json must describe
+    that asset. Otherwise `install --commands` asks for terms the image's
+    receipt does not cover."""
+    carrier = json.loads((root / "CARRIER.json").read_bytes())
+    gaps = []
+    for model, entry in carrier["models"].items():
+        if entry["provider"] != "kilix-needle":
+            continue
+        artifact = json.loads((root / model / "ARTIFACT.json").read_bytes())
+        served = {asset["id"]: asset for asset in vendored_catalog["assets"]}
+        if served.get(entry["artifact_id"]) != artifact:
+            gaps.append(f"{model}: Needle's vendored asset record is not the carried one")
+        if sha256(vendored_record) != entry["licence_record_file_sha256"]:
+            gaps.append(f"{model}: Needle's vendored licence record is not the carried one")
+        files = {item["path"]: {"bytes": item["bytes"], "sha256": item["sha256"]}
+                 for item in artifact["files"]}
+        if (commands_model.get("version") != entry["version"]
+                or commands_model.get("files") != files):
+            gaps.append(f"{model}: Needle's commands-model.json does not describe the carried asset")
     return gaps
 
 
@@ -472,6 +574,45 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             artifact = json.loads((CARRIER / model / "ARTIFACT.json").read_bytes())
             self.assertEqual(served.get(entry["artifact_id"]), artifact, model)
 
+    def test_command_model_records_needle_serves_are_the_carried_ones(self):
+        # The Ask app installs LFM2 from kilix-needle's own vendored
+        # kilix-content. A review found that copy one delivery behind, with the
+        # agreement record the image's notice receipt does not cover.
+        pins = manifest(f"{VERSION}.env")
+        content_ref = pins["PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF"]
+        content = repo_holding("PLEBIAN_OS_KILIX_CONTENT_REPO", "kilix-content", content_ref)
+        self.assertIsNotNone(content, "no kilix-content checkout holds the carrier content ref")
+        show = lambda repo, ref, path: subprocess.run(
+            ["git", "-C", str(repo), "--no-replace-objects", "show", f"{ref}:{path}"],
+            capture_output=True, check=True).stdout
+        catalog = json.loads(show(content, content_ref, "src/kilix_content/catalog/plebian.json"))
+        (app,) = [item for item in catalog["content"] if item["id"] == "kilix-needle"]
+        ref = app["source"]["ref"]
+        needle = repo_holding("PLEBIAN_OS_KILIX_NEEDLE_REPO", "kilix-needle", ref)
+        self.assertIsNotNone(needle, f"no kilix-needle checkout holds {ref}; "
+                             "set PLEBIAN_OS_KILIX_NEEDLE_REPO")
+        vendored = subprocess.run(
+            ["git", "-C", str(needle), "--no-replace-objects", "rev-parse",
+             f"{ref}:third_party/kilix-content"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        holder = repo_holding("PLEBIAN_OS_KILIX_CONTENT_REPO", "kilix-content", vendored)
+        self.assertIsNotNone(holder, f"no kilix-content checkout holds {vendored}")
+        vendored_catalog = json.loads(show(holder, vendored, "src/kilix_content/catalog/plebian.json"))
+        record = show(holder, vendored, "third_party/kilix-license/src/kilix_license/data/"
+                      "lfm2-records/lfm2-kilix-commands.json")
+        commands_model = json.loads(show(needle, ref, "commands-model.json"))
+        self.assertEqual(needle_vendor_gaps(vendored_catalog, record, commands_model), [])
+        # Planted: the old delivery, the old agreement record, a stale model file.
+        stale = json.loads(json.dumps(vendored_catalog))
+        (asset,) = [item for item in stale["assets"] if item["id"] == "lfm2-kilix-commands"]
+        asset["version"] = "lfm2-kilix-commands-20261104-v8"
+        agreement = record.replace(b'"informational"', b'"affirmative"')
+        self.assertNotEqual(agreement, record)
+        old_model = dict(commands_model, version="lfm2-kilix-commands-20261104-v8")
+        for planted in ((stale, record, commands_model), (vendored_catalog, agreement, commands_model),
+                        (vendored_catalog, record, old_model)):
+            self.assertEqual(len(needle_vendor_gaps(*planted)), 1)
+
     # AC-5
     def test_carrier_covers_every_advertised_model(self):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
@@ -512,7 +653,11 @@ class ModelComplianceCarrierTests(unittest.TestCase):
     def test_whistle_authorization_requires_the_real_request_and_upstream_evidence(self):
         carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
         entry = carrier["models"]["whistle"]
-        text = (CARRIER / "determinations/whistle/OWNER-RC6-WHISTLE-2026-10-08.md").read_text()
+        # The receipt names the accepted record; its file name changes per release.
+        receipt = json.loads((CARRIER / "ACCEPTANCE.json").read_bytes())
+        paths = [item["path"] for item in receipt["determinations"] if item["model"] == "whistle"]
+        self.assertEqual(len(paths), 1, paths)
+        text = (CARRIER / paths[0]).read_text()
         self.assertEqual(determination_gaps("whistle", text, entry), [])
         for before, after in (
             ("> should we integrat", "> please inspect"),
@@ -537,12 +682,25 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             text = path.read_text()
             self.assertRegex(text, r"(?i)did not author")
             self.assertRegex(text, r"(?m)^VERDICT: ship( with known issues)?\s*$")
+            self.assertIn(receipt["carrier_sha256"], text)
+            bundle = json.loads((CARRIER / "DEFAULT-MODELS.json").read_bytes())
+            self.assertIn(bundle["sha256"], text)
 
     # AC-8
     def test_delivery_statement_is_true_of_this_image(self):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         pins = manifest(f"{VERSION}.env")
         self.assertEqual(delivery_gaps(provision), [])
+        # The command model DELIVERY describes what the image installer does.
+        installer = (ROOT / "provision" / "install-image-models.py").read_text()
+        self.assertEqual(command_installer_gaps(installer), [])
+        for planted in (installer.replace("lic.capture_agreement(record)",
+                                          "lic.capture_agreement(record, 'yes')"),
+                        installer.replace("lic.capture_agreement(record)",
+                                          "lic.capture_agreement(record, typed='yes')"),
+                        installer.replace("if record.expected_decision != 'record':", "if False:")):
+            self.assertNotEqual(planted, installer)
+            self.assertTrue(command_installer_gaps(planted))
         # The download is digest-verified and receipt-gated at the pinned refs.
         self.assertIsNone(voice_contract.content_chain_gap(pins["KILIX_REF"]))
         self.assertIsNone(voice_contract.receipt_gate_gap(pins["KILIX_VOICE_REF"]))
@@ -637,9 +795,11 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             ("other content interface", lambda r: edit_env(r, "interface_content_ref", "f" * 40), {},
              "producing interfaces"),
             ("false delivery mode", lambda r: edit_env(r, f"{dictation}_delivery", "provisioned"), {},
-             "delivery is not first-use-upstream-download"),
+             "delivery differs from the default inventory"),
             ("undecided licence", lambda r: edit_env(r, f"{dictation}_decision", "pending"), {},
-             "decision is not affirmative"),
+             "decision is not affirmative or informational"),
+            ("unknown licence decision", lambda r: edit_env(r, f"{dictation}_decision", "record"), {},
+             "decision is not affirmative or informational"),
             ("foreign upstream host", lambda r: edit_env(r, f"{dictation}_upstream_host", "example.invalid"), {},
              "upstream host does not match its source"),
             ("D4b wrong release inputs", lambda r: None,

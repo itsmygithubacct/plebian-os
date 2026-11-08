@@ -25,6 +25,10 @@
 #                 releases/<x.y.z>-arm64.env) inside the published tag, never
 #                 from a working tree, so the pins are the immutable ones the
 #                 release was accepted with.
+#   --release-tag TAG
+#                 explicitly select v<x.y.z>-rcN (positive N), keeping the numeric
+#                 VERSION and manifest filename. Stable v<x.y.z> is the default.
+#                 The exact tag object trust and manifest/source checks apply.
 #   --development-commit SHA
 #                 explicitly select an untagged development source commit for
 #                 diagnostics. SHA must be a full lowercase 40-character commit.
@@ -59,6 +63,17 @@
 # Run as the Pleb user; the bounded writes under /etc, /var/lib, and
 # /usr/local/bin elevate through sudo.
 set -euo pipefail
+
+# Keep the installed selector/updater self-contained. Only a stable tag or a
+# numbered RC of the same numeric VERSION is a supported release identity.
+valid_release_tag() {
+    local version="$1" tag="$2" suffix
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]]
+}
+
 
 log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
@@ -163,6 +178,9 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_WAYDROID_REPO
     KILIX_WAYDROID_BRANCH
     KILIX_WAYDROID_REF
+    KILIX_SECRETS_REPO
+    KILIX_SECRETS_BRANCH
+    KILIX_SECRETS_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NATIVE_DEB_URL
     PLEBIAN_OS_NATIVE_DEB_SHA256
@@ -240,6 +258,8 @@ REQUIRED_VALUE_KEYS=(
     KILIX_MEDIA_SDK_REF
     KILIX_WAYDROID_REPO
     KILIX_WAYDROID_REF
+    KILIX_SECRETS_REPO
+    KILIX_SECRETS_REF
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
     PLEBIAN_OS_INSTALL_UV
@@ -264,6 +284,7 @@ REQUIRED_EMPTY_KEYS=(
     KILIX_ICEWM_BRANCH
     KILIX_MEDIA_SDK_BRANCH
     KILIX_WAYDROID_BRANCH
+    KILIX_SECRETS_BRANCH
 )
 
 VOICE_CLOSURE_KEYS=(
@@ -285,6 +306,7 @@ declare -A COMPONENT_TARGET=()
 declare -A COMPONENT_DIRECTION=()
 
 TARGET=""
+RELEASE_TAG=""
 DEVELOPMENT_COMMIT=""
 SOURCE_DIR=""
 OFFLINE=0
@@ -432,6 +454,17 @@ is_f120_root_key() {
     esac
 }
 
+release_requires_secrets_root() {
+    [ "$TARGET" = 0.2.3 ]
+}
+
+is_secrets_root_key() {
+    case "$1" in
+        KILIX_SECRETS_*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # One externally selected inert .deb, never a checkpoint or a native build.
 # Older closures may omit it; a strict 0.2.2 closure may not. Any partial
 # selection is invalid in development too. Keep the three standalone callers
@@ -467,7 +500,7 @@ validate_qt_release_closure() {
     for key in PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 3 ] || { echo 'Qt runtime closure requires all three exact fields' >&2; return 1; }
@@ -495,7 +528,7 @@ validate_native_release_closure() {
         PLEBIAN_OS_NATIVE_CONTENT_REF; do
         [ -z "${!key:-}" ] || present=$((present + 1))
     done
-    if [ "$present" = 0 ] && { [ "$version" != 0.2.2 ] || [ "$mode" != 1 ]; }; then
+    if [ "$present" = 0 ] && { [[ ! "$version" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$mode" != 1 ]; }; then
         return 0
     fi
     [ "$present" = 5 ] || {
@@ -543,7 +576,7 @@ validate_release_architecture() {
     esac
     # The selected 0.2.2 converter is required and source-embedded. A different
     # wheel or disabled optional feature cannot qualify the complete closure.
-    [ "$TARGET" != 0.2.2 ] || [ "$RELEASE_MANIFEST_STEM" = "$TARGET-arm64" ] \
+    [[ ! "$TARGET" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || [ "$RELEASE_MANIFEST_STEM" = "$TARGET-arm64" ] \
         || closure_reject "0.2.2 has no source-qualified ARM64 closure; required converter, native runtime and patched Qt/player artifacts are not selected for ARM64"
     [ "${MANIFEST[PLEBIAN_OS_INSTALL_WAYDROID]:-0}" != 1 ] \
         || closure_reject "selected Waydroid closure is amd64-only"
@@ -573,7 +606,7 @@ refuse_unadmitted_release_architecture() {
         aarch64|arm64) ;;
         *) return 0 ;;
     esac
-    [ "$TARGET" != 0.2.2 ] \
+    [[ ! "$TARGET" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] \
         || closure_reject "0.2.2 ARM64 release admission is closed: releases/$RELEASE_MANIFEST_STEM.env passed closure checks, but ARM64 installer media, voice carrier, Waydroid and installed acceptance are not qualified; installed stack unchanged"
 }
 
@@ -612,6 +645,9 @@ validate_release_closure() {
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
             continue
         fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]:-}" ] || missing+=("$key")
     done
     [ "${#missing[@]}" -eq 0 ] \
@@ -624,12 +660,18 @@ validate_release_closure() {
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
             continue
         fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]+x}" ] || present+=("$key")
     done
     [ "${#present[@]}" -eq 0 ] \
         || closure_reject "incomplete closure — these must be declared, even empty: ${present[*]}"
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
             continue
         fi
         [ -z "${MANIFEST[$key]}" ] \
@@ -661,6 +703,13 @@ validate_release_closure() {
         [ "${MANIFEST[KILIX_WAYDROID_REPO]}" = \
             https://github.com/itsmygithubacct/kilix-waydroid.git ] \
             || closure_reject "KILIX_WAYDROID_REPO must name the canonical release repository"
+    fi
+    if release_requires_secrets_root; then
+        require_manifest_format KILIX_SECRETS_REF '^[0-9a-f]{40}$' \
+            "a full 40-character lowercase commit SHA"
+        [ "${MANIFEST[KILIX_SECRETS_REPO]}" = \
+            https://github.com/itsmygithubacct/kilix-secrets.git ] \
+            || closure_reject "KILIX_SECRETS_REPO must name the canonical release repository"
     fi
     for key in PLEBIAN_OS_REPO PLEB_REPO KILIX_REPO KILIX95_REPO; do
         require_manifest_format "$key" '^https://[A-Za-z0-9._~:/?#@!$&+,;=%-]+\.git$' \
@@ -774,9 +823,9 @@ validate_release_closure() {
     # movable name.
     value="${MANIFEST[PLEBIAN_OS_REF]}"
     case "$value" in
-        "v$TARGET") ;;
+        "${RELEASE_TAG:-v$TARGET}") ;;
         "$OS_COMMIT") ;;
-        *) closure_reject "PLEBIAN_OS_REF must be v$TARGET or its exact commit $OS_COMMIT (got '$value')" ;;
+        *) closure_reject "PLEBIAN_OS_REF must be ${RELEASE_TAG:-v$TARGET} or its exact commit $OS_COMMIT (got '$value')" ;;
     esac
 }
 
@@ -793,6 +842,9 @@ build_selected_closure() {
     CLOSURE[PLEBIAN_OS_REF]="$OS_COMMIT"
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
+            continue
+        fi
+        if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
             continue
         fi
         CLOSURE["$key"]=""
@@ -812,7 +864,7 @@ build_selected_closure() {
 
 # ── resolving the immutable closure source ──────────────────────────────────
 resolve_closure_source() {
-    local remote expected tag_ref tag_object trusted
+    local remote expected tag_ref tag_object trusted release_tag="${RELEASE_TAG:-v$TARGET}"
     # A bare repository is a source too, and is in fact what Pleb hands us:
     # `_pleb_release_cache_prepare` builds the hop cache with `git init --bare`
     # and then *validates* that it is bare. Requiring a `.git` directory here
@@ -854,29 +906,33 @@ resolve_closure_source() {
         # F107-A's release-tag lane: fetch into a private ref namespace and
         # anchor the tag OBJECT, not the tag name.
         if [ "$OFFLINE" = 1 ]; then
-            tag_ref="refs/tags/v$TARGET"
+            tag_ref="refs/tags/$release_tag"
             tag_object="$(git -C "$SOURCE_DIR" rev-parse --verify --quiet "$tag_ref")" \
-                || die "release tag v$TARGET is not in $SOURCE_DIR and --offline forbids fetching it"
+                || die "release tag $release_tag is not in $SOURCE_DIR and --offline forbids fetching it"
         else
-            log "fetching the published release tag v$TARGET into $SOURCE_DIR"
-            tag_ref="refs/plebian-os-select/tags/v$TARGET"
+            log "fetching the published release tag $release_tag into $SOURCE_DIR"
+            tag_ref="refs/plebian-os-select/tags/$release_tag"
             git -C "$SOURCE_DIR" fetch --force --no-tags origin \
-                "refs/tags/v$TARGET:$tag_ref" \
-                || die "could not fetch release tag v$TARGET from origin — is $TARGET published?"
+                "refs/tags/$release_tag:$tag_ref" \
+                || die "could not fetch release tag $release_tag from origin — is $TARGET published?"
             tag_object="$(git -C "$SOURCE_DIR" rev-parse --verify "$tag_ref" 2>/dev/null)" \
-                || die "release tag v$TARGET did not resolve to an object"
+                || die "release tag $release_tag did not resolve to an object"
+        fi
+        if [ "$release_tag" != "v$TARGET" ]; then
+            [ "$(git -C "$SOURCE_DIR" cat-file -t "$tag_ref")" = tag ] \
+                || die "RC release tag $release_tag must be annotated"
         fi
         trusted="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}"
         if [ -n "$trusted" ]; then
             [[ "$trusted" =~ ^[0-9a-f]{40}$ ]] \
                 || die "PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA must be a full lowercase object SHA"
             [ "$tag_object" = "$trusted" ] \
-                || die "release tag v$TARGET object is $tag_object, not trusted object $trusted"
+                || die "release tag $release_tag object is $tag_object, not trusted object $trusted"
         elif [ "$OFFLINE" = 1 ]; then
             die "--offline requires PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA; a local tag name is not a trust anchor"
         fi
         OS_COMMIT="$(git -C "$SOURCE_DIR" rev-parse --verify "$tag_ref^{commit}" 2>/dev/null)" \
-            || die "release tag v$TARGET did not resolve to a commit"
+            || die "release tag $release_tag did not resolve to a commit"
     fi
     # Only the object store is read. HEAD and the working tree stay put, so the
     # updater still finds the clean pinned checkout it insists on.
@@ -886,7 +942,7 @@ resolve_closure_source() {
     RELEASE_MANIFEST_STEM="$TARGET"
     case "$(uname -m)" in
         aarch64|arm64)
-            [ "$TARGET" != 0.2.2 ] || RELEASE_MANIFEST_STEM="$TARGET-arm64" ;;
+            [[ ! "$TARGET" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]] || RELEASE_MANIFEST_STEM="$TARGET-arm64" ;;
     esac
     if ! git -C "$SOURCE_DIR" show "$OS_COMMIT:releases/$RELEASE_MANIFEST_STEM.env" >"$STAGE/manifest.env" 2>/dev/null; then
         [ "$RELEASE_MANIFEST_STEM" = "$TARGET" ] \
@@ -1154,6 +1210,11 @@ prepare_component_ancestry_checks() {
             "Kilix Waydroid" KILIX_WAYDROID_REF \
             KILIX_WAYDROID_REPO kilix-waydroid
     fi
+    if release_requires_secrets_root; then
+        prepare_component_target_only \
+            "Kilix Secrets" KILIX_SECRETS_REF \
+            KILIX_SECRETS_REPO kilix-secrets
+    fi
 }
 
 # ── rendering /etc/pleb/session.env ─────────────────────────────────────────
@@ -1367,7 +1428,7 @@ announce_component_moves() {
     local ref_key label installed target direction pinned_by
     for ref_key in PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF \
             KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF KILIX_ICEWM_REF \
-            KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF; do
+            KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF KILIX_SECRETS_REF; do
         case "$ref_key" in
             PLEBIAN_OS_REF) label="Plebian-OS" ;;
             PLEB_REF) label="Pleb" ;;
@@ -1378,6 +1439,7 @@ announce_component_moves() {
             KILIX_ICEWM_REF) label="Kilix IceWM" ;;
             KILIX_MEDIA_SDK_REF) label="Kilix Media SDK" ;;
             KILIX_WAYDROID_REF) label="Kilix Waydroid" ;;
+            KILIX_SECRETS_REF) label="Kilix Secrets" ;;
         esac
         installed="${COMPONENT_INSTALLED[$ref_key]:-}"
         target="${COMPONENT_TARGET[$ref_key]:-}"
@@ -1519,7 +1581,7 @@ record_release_value() {
     done
     case "$key" in
         PLEBIAN_OS_RELEASE_MODE) [[ "$value" =~ ^[01]$ ]] || return 2 ;;
-        PLEBIAN_OS_VERSION) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 2 ;;
+        PLEBIAN_OS_VERSION) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 2 ;;
         *) return 2 ;;
     esac
     printf '%s\n' "$value"
@@ -1987,7 +2049,7 @@ record_version="$(record_release_value PLEBIAN_OS_VERSION)" || exit 6
 record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
 if [ "$migrated" = 1 ] \
     && [ "$record_mode" = 1 ] \
-    && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
     && [ "$record_version" != 0.2.2 ] \
     && [ "$(printf '%s\n%s\n' "$record_version" 0.2.2 | sort -V | head -n 1)" = "$record_version" ]; then
     printf '%s\n' "$record_version"
@@ -2207,7 +2269,7 @@ if [ "$mode" = image ]; then
     record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
     if [ "$migrated" = 1 ] \
         && [ "$record_mode" = 1 ] \
-        && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        && [[ "$record_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         && [ "$record_version" != 0.2.2 ] \
         && [ "$(printf '%s\n%s\n' "$record_version" 0.2.2 | sort -V | head -n 1)" = "$record_version" ]; then
         printf '%s\n' "$record_version"
@@ -2556,6 +2618,10 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || die "--source needs a directory"
             SOURCE_DIR="$2"; shift ;;
         --source=*) SOURCE_DIR="${1#--source=}" ;;
+        --release-tag)
+            [ "$#" -ge 2 ] || die "--release-tag needs a tag"
+            [ -z "$RELEASE_TAG" ] || die "select one release tag at a time"
+            RELEASE_TAG="$2"; shift ;;
         --development-commit)
             [ "$#" -ge 2 ] || die "--development-commit needs a full commit"
             [ -z "$DEVELOPMENT_COMMIT" ] || die "select one development commit at a time"
@@ -2572,6 +2638,10 @@ done
 
 [ -z "$DEVELOPMENT_COMMIT" ] || [ "$MODE" = select ] \
     || die "--development-commit requires a target selection, not --show or --rollback"
+[ -z "$RELEASE_TAG" ] || { [ "$MODE" = select ] && [ -z "$DEVELOPMENT_COMMIT" ]; } \
+    || die "--release-tag requires a tagged target selection, not development/show/rollback"
+[ -z "$RELEASE_TAG" ] || valid_release_tag "$TARGET" "$RELEASE_TAG" \
+    || die "--release-tag must be v$TARGET or v$TARGET-rcN (N >= 1)"
 # Only a selection has a dry run; --rollback and --show would ignore the flag.
 [ "$DRY_RUN" = 0 ] || [ "$MODE" = select ] \
     || die "--dry-run applies to a selection only, not --show or --rollback"
@@ -2603,7 +2673,7 @@ case "$MODE" in
     select)
         [ -n "$TARGET" ] \
             || die "name the target release, e.g. plebian-os-select-closure 0.1.8 (try --help)"
-        [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
             || die "invalid release identifier: $TARGET"
         select_closure
         ;;

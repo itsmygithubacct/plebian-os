@@ -642,6 +642,40 @@ class SelectedClosureGateTests(unittest.TestCase):
 
 
 class VmBuilderEnvTests(unittest.TestCase):
+    def test_external_window_requires_graphical_qemu(self):
+        for arguments in (["--target", "qemu"], ["--target", "virtualbox", "--gui"]):
+            with self.subTest(arguments=arguments), \
+                    mock.patch.object(sys, "argv", ["build_vm_image.py", "--dry-run",
+                                                   "--external-window", *arguments]), \
+                    mock.patch.object(vm, "qemu_create") as create:
+                with self.assertRaises(SystemExit):
+                    vm.main()
+                create.assert_not_called()
+
+    def test_qemu_gui_defaults_to_foreground_tab_but_external_is_explicit(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(vm.qemu_tab, "launch") as tab, \
+                mock.patch.object(vm, "run") as invoke:
+            directory = Path(td) / "VM with spaces"
+            directory.mkdir(mode=0o700)
+            iso = Path(td) / "installer with spaces.iso"
+            vm.qemu_start(cfg(gui=True), iso, directory)
+            argv, title, selected = tab.call_args.args
+            self.assertEqual(selected, directory)
+            self.assertIn(f"file={iso},media=cdrom,readonly=on", argv)
+            self.assertEqual(argv[argv.index("-display") + 1], "gtk")
+            self.assertNotIn("-daemonize", argv)
+            invoke.assert_not_called()
+            tab.reset_mock()
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
+            vm.qemu_start(cfg(gui=True, external_window=True), iso, directory)
+            tab.assert_not_called()
+            external = invoke.call_args.args[0]
+            qmp_index = argv.index("-qmp") + 1
+            argv[qmp_index] = external[qmp_index]
+            self.assertEqual(external, [*argv, "-daemonize"])
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
+
     def test_qemu_creates_private_sparse_disk_and_boots_installer_once(self):
         with tempfile.TemporaryDirectory() as td, \
                 mock.patch.object(vm, "storage_dir", return_value=Path(td)), \
@@ -656,10 +690,24 @@ class VmBuilderEnvTests(unittest.TestCase):
             self.assertIn("q35,accel=kvm", argv)
             self.assertIn("once=d,order=c", argv)
             self.assertIn("user,id=net0,hostfwd=tcp:127.0.0.1:32222-:22", argv)
+            self.assertIn("pa,id=vm_audio", argv)
+            self.assertIn("ich9-intel-hda", argv)
+            self.assertIn("hda-duplex,audiodev=vm_audio", argv)
+            self.assertNotIn("hda-output,audiodev=vm_audio", argv)
             self.assertIn("none", argv)
             self.assertIn("-daemonize", argv)
+            self.assertTrue(vm.cleanup_empty_runtime(vm_dir))
             with self.assertRaises(SystemExit):
                 vm.qemu_create(selected)
+
+    def test_uncertain_tab_failure_retains_runtime_for_reconnect(self):
+        with tempfile.TemporaryDirectory() as td, \
+                mock.patch.object(vm.qemu_tab, "launch", side_effect=RuntimeError("uncertain")):
+            directory = Path(td)
+            with self.assertRaisesRegex(RuntimeError, "uncertain"):
+                vm.qemu_start(cfg(gui=True), directory / "image.iso", directory)
+            self.assertTrue((directory / "qmp.sock").is_symlink())
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
 
     def test_qemu_efi_uses_private_variables_and_readonly_code(self):
         with tempfile.TemporaryDirectory() as td, \
@@ -682,6 +730,7 @@ class VmBuilderEnvTests(unittest.TestCase):
             record = json.loads((directory / "firmware.json").read_text())
             self.assertEqual(record["OVMF_VARS.fd"]["sha256"],
                              hashlib.sha256(b"initial variables").hexdigest())
+            self.assertTrue(vm.cleanup_empty_runtime(directory))
 
     def test_missing_efi_inputs_refuse_before_creating_vm_state(self):
         with tempfile.TemporaryDirectory() as td, \

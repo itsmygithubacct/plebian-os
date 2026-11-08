@@ -1,0 +1,17 @@
+{
+  "schema": "plebian-os.default-models-archive/v1",
+  "bytes": 255638496,
+  "sha256": "e00614bf726154d09668820c061cbbcb402239a445bde666b0568d36f01528a6",
+  "url": "https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.3-rc1/default-models-0221.tar.xz",
+  "assets": {
+    "kilix-female-02": "075550906d308f9b9acdc51e3212e835bbe7594e9677e9813180697be5140c2e",
+    "needle2": "5042266fed65210dd1deaaa80951445c3e9d86f4f4d7f8a3879ee3dfd38743bf",
+    "needle2-runtime": "a02de7f0bb8a4086937e0dafabfd198cdf53a64897bb088825ade881a0f9bc9c",
+    "needle3-kilix-commands": "01c2e3c2e1c43b4b1caab4efc9b4138257d010856490c474f3cfa3ab3ab1022e",
+    "vosk-model-small-en-us-0.15": "1523d976c7609d33dc4e908115e22126c9f06b0a670511cd0fd7090075900341",
+    "whistle": "407cec51d26bc0574b09619c271007a49ec3289d1cee8e5fb73271d1088669c1",
+    "yamnet": "ca36bfec1375861b30229146c0c26027a818d31170dcbe5a3c7124150876051f",
+    "yolox_nano": "75acdeb64914ba7265965360ed859f2d1c2a94cd00ae5e2e8ef1b8812525bf73",
+    "yolox_s": "5158ffb39202ff9c707790b4a079808a2b7064655801983890e8e937474672c8"
+  }
+}

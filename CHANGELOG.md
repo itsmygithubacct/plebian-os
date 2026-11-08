@@ -4,6 +4,109 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [0.2.3] — 2026-11-05
+
+- Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
+  dictation model, a first-use download with its own licence record (owner
+  determination 2026-11-07), and carry it in the model-compliance carrier.
+  Add `kilix transcribe` and `kilix split`; split's Demucs htdemucs_6s weights
+  come only through their own licence record, `demucs-htdemucs-6s` (owner
+  determination 2026-11-08), and run offline. Fix the three known issues of
+  the LFM2 notice round: Needle `a887e2fa` no longer calls an uncovered notice
+  licence "not accepted", Kilix's voice installer defaults to the release's
+  kilix-voice `1a4e63b`, and the release-dictation fixture supplies
+  `KILIX_SECRETS_REF`. Kilix is `4b9f29cf`, kilix-content is `de2764f8` and
+  kilix-license is `80aab439`.
+- Deliver LFM2's terms as a notice, by the owner's 2026-11-07 determination.
+  Image installs and upgrades record a notice receipt that claims no
+  agreement, and never answer terms that need a typed agreement. The terms,
+  including the commercial-use limitation, are shipped and not waived. Kilix
+  is `b0c8939b` and kilix-content is `d57fa62f`, which selects Needle
+  `5cbff317`; Needle's own bundled kilix-content carries the same notice
+  record and delivery. kilix-license is `0984dd22`. Needle reads an unquoted
+  spaced path only when that exact path exists and a bare right, left or down
+  before an explicit path as the placement; its grammar alone reads 1352/1383
+  development cases with no wrong action, against 1346/1383 before. Admitted
+  results with the model were not rerun.
+- Select Ask weight `lfm2-kilix-v5e1-wse-20261106.9` as the default command
+  model. Delivery `lfm2-kilix-commands-20261106-v9` replaces
+  `lfm2-kilix-commands-20261106-v8`. Kilix is `0ee27c65` and kilix-content is
+  `5a472380`. kilix-license is `65e5ae07`. The modified-model notice is
+  `65e4cd26`. The archive is published as kilix-needle release
+  `lfm2-kilix-commands-20261106-v9`. Seat review does not cover this weight.
+  GPU development admitted is 1346/1383, probes 61/64, fresh confirmation
+  146/160, operational 28/32, and expand 8/8. Admitted losses versus
+  `20261106.8` are zero on those suites. CPU was not run.
+- Select Ask weight `lfm2-kilix-v5e1-wse-20261106.8` as the default command
+  model. Delivery `lfm2-kilix-commands-20261106-v8` replaces
+  `lfm2-kilix-commands-20261106-v4`. Kilix is `5b2da2f8` and kilix-content is
+  `51e87e76`. kilix-license is `be1bf18d`. The modified-model notice is
+  `61784d40`. Seat review does not cover this weight. The archive URL is not
+  uploaded yet. GPU development admitted is 1346/1383, probes 60/64, fresh
+  confirmation 145/160, and operational 28/32. Admitted losses versus
+  `20261106.4` are zero on those suites. CPU was not run.
+- Select Ask weight `lfm2-kilix-v5e1-wse-20261106.4` as the default command
+  model. Delivery `lfm2-kilix-commands-20261106-v4` replaces
+  `lfm2-kilix-commands-20261104-v8`. Kilix is `dda0072b` and kilix-content is
+  `9ddc492e`. kilix-license is `a516f392`. The modified-model notice is
+  `a71fadf0`. Seat review does not cover this weight. The archive URL is not
+  uploaded yet.
+- Install python3-torch and the pinned model-converter dependency group on
+  upgrades before running the required converter installers.
+- Build RC1 from the patched 0.2.2.1 baseline and the selected 0.2.3
+  desktop, terminal, camera, model integration and transport changes.
+- Keep Waydroid optional. Installation and upgrades stage its first-use
+  helper; launching Android installs the application on demand.
+- Verify the default model archive against its exact catalog inventory and
+  distinguish bundled speech models from downloads requested on first use.
+- Retain the 0.2.2.1 password transcript protection, offline defaults,
+  standard licence policy, conversion tools and updater fixes.
+- Select the trained `kilix-qwen-sft1-2b` Help model. Explicit
+  `kilix help-setup` prepares local answers with commands, short explanations
+  and documentation links; `kilix help-search` works without model weights.
+- Bind RC3 to the aligned diarization catalog. Kilix `e6c946a1` serves
+  kilix-content `00fe843`, and the model-compliance receipt is `8e30956a`.
+- Pin Kilix to `d7cf37e8`, whose content catalog `c9901809` records kilix-find.
+  Model artifact records are unchanged. The carrier is `c578757b` and its
+  receipt is `c233c030`.
+- Keep Ask `lfm2-kilix-v5e1-wse-20261104.8` and Help `kilix-qwen-sft1-2b`
+  as the defaults included in the 0.2.3 RC4 candidate. The Help record pins
+  source `4abc52e9236899a05738807d32a3431270b6a3c2`.
+- Point Kilix at `e7296d14`. `kilix ask` is documented as the person-facing
+  route. The content catalog pin is unchanged.
+- Point Kilix at `7844cf3e`. `kilix llm lab` lists edit options and does not
+  load a model. The content catalog pin is unchanged.
+- Point Kilix at `8f99917a`. The installed GParted program starts through
+  sudo, and Kilix asks for the password in a dialog. The content catalog
+  pin is unchanged.
+- Point Kilix at `55dd1651`. The catalog records playalong, Help source
+  `4abc52e9`, and Needle source `073f5e03`, and a fresh setup installs
+  Piper voice kilix-female-02 with no speech prompt. The content catalog
+  pin is `bc7ab69d`. Model artifact records are unchanged. The carrier is
+  `988b30d9` and its receipt is `27e7dbc6`. The attached seat records still
+  describe the `c9901809` review.
+- Point Kilix at `273347ac`. Catalogued Paradee 1.2 stays optional and is
+  not an advertised model; its Apache-2.0 receipt names Sahil Mahendrakar.
+  The content catalog pin is `020a186a` and kilix-license is `7de1b709`.
+  Desktop first run installs Piper voice kilix-female-02, and the greeting
+  session uses that voice. Kilix 95 is `ede37270` and kilix-voice is
+  `1a4e63b1`. Advertised model artifact records are unchanged. The carrier
+  is `8cda0b9c` and its receipt is `a706255e`. The attached seat records
+  still describe the `c9901809` review.
+
+## [0.2.2.1] — 2026-11-03
+
+- Remove submitted Model Setup passwords from displayed and saved terminal output.
+- Accept positive fourth-part maintenance versions in release selection, ordering, provisioning and media tooling.
+- Preserve the 0.2.2 runtime closure and platform limitations.
+- Install Needle and conversion software during OS installation and upgrades,
+  without administrator password prompts inside Model Setup.
+- Supply nine verified default model assets in the ISO and reuse the same
+  checksummed bundle on upgrades, preserving model selections.
+- Handle standard licences by local distribution policy, retain compatibility
+  with existing receipt readers, and expose installed licence documents.
+- Keep Whisper Tiny out of the defaults until a compatible GGML runtime ships.
+
 ## [0.2.2] — 2026-09-23
 
 - Keep successful model setup categories complete when another model fails,

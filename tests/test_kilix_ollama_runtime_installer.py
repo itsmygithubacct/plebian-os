@@ -221,9 +221,9 @@ class KilixOllamaRuntimeInstallerTests(unittest.TestCase):
         self.assertIn("resolve to different files", remaster)
         self.assertIn("--verify-carrier \"$OLLAMA_CARRIER\"", remaster)
         self.assertIn("/plebian-os/ollama-runtime-carrier.tar.xz", remaster)
-        self.assertIn('install -m 0644 "$HERE/releases/0.2.2.env"', remaster)
-        self.assertIn("/cdrom/plebian-os/0.2.2.env", preseed)
-        self.assertIn("local manifest=/usr/local/share/plebian-os/0.2.2.env", provision)
+        self.assertIn('install -m 0644 "$OLLAMA_MANIFEST"', remaster)
+        self.assertIn("/cdrom/plebian-os/ollama-release.env", preseed)
+        self.assertIn("local manifest=/usr/local/share/plebian-os/ollama-release.env", provision)
         self.assertIn(
             "cp /cdrom/plebian-os/ollama-runtime-carrier.tar.xz "
             "/target/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz",
@@ -233,7 +233,7 @@ class KilixOllamaRuntimeInstallerTests(unittest.TestCase):
         self.assertIn("--closure \"$work/closure\"", provision)
         self.assertIn("systemctl enable --now plebian-os-ollama.service", provision)
         self.assertLess(
-            provision.index('bash "$DEPS_SCRIPT" ||'),
+            provision.index('bash "$DEPS_SCRIPT" --model-converters ||'),
             provision.index("install_ollama_runtime_from_carrier\n\n"),
         )
         self.assertIn('"--ollama-carrier", type=Path', vm_builder)

@@ -1,0 +1,59 @@
+# DRAFT maintenance requirements inherited from 0.2.2.
+# Replace the model-compliance carrier pins after qualifying bundled delivery.
+# The old first-use-only carrier is not approval for 0.2.2.1 model delivery.
+# No final 0.2.2.1 manifest is supplied until that qualification completes.
+#
+# These are not a partial release manifest. The final releases/0.2.2.env must
+# declare these exact values in addition to the complete coordinated closure.
+# Both the release-image loader and closure selector reject a mismatch.
+#
+# uv 0.12.5 was released by Astral on 2026-08-14. The installer checksum was
+# independently derived from both official versioned installer endpoints:
+#   https://astral.sh/uv/0.12.5/install.sh
+#   https://releases.astral.sh/github/uv/releases/download/0.12.5/uv-installer.sh
+
+# The 2026-10-30 latest-stable recheck selects Debian 13.7.0 amd64 netinst
+# from its versioned Debian download directory. SHA256SUMS was verified
+# with Debian CD key DF9B9C49EAA9298432589D76DA87E80D6294BE9B.
+# This verified bootstrap media uses signed live
+# trixie, trixie-updates and trixie-security packages. snapshot.debian.org is
+# unsuitable for the normal network installer: an outage prevents installation.
+# Empty PLEBIAN_OS_APT_SNAPSHOT explicitly selects live Debian sources through
+# both installation and first boot; installed package versions are recorded.
+PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso
+PLEBIAN_OS_NETINST_SHA256=a7ef94ac2fb9a7fec454552abd629b7cc9d5155c886165a45649f5ce6167e355
+PLEBIAN_OS_NETINST_MAX_BYTES=792723456
+PLEBIAN_OS_APT_SNAPSHOT=
+
+PLEBIAN_OS_INSTALL_UV=1
+PLEBIAN_OS_UV_VERSION=0.12.5
+PLEBIAN_OS_UV_INSTALLER_SHA256=504511fbbbd811aeaba6738abc79408956b6c7da0ca35437b3dcc24a41efc111
+PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
+
+# Enable the optional first-use helper only. The catalog installs the app on
+# request; Android, Weston and images require confirmation on first launch.
+PLEBIAN_OS_INSTALL_WAYDROID=1
+PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=4f2fef049ab669fc43d7873c2e1c55ad180fec13d730cad681645e60a8410a33
+
+# The RC6 model compliance carrier and the licence interface it binds. Two
+# independent RC6 review seats are bound by the acceptance receipt; runtime,
+# image and final release acceptance remain separate gates.
+# A carrier change moves these pins in both files (AC-12).
+PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.2-model-compliance
+PLEBIAN_OS_VOICE_CARRIER_SHA256=a96cb1dfe884dcd04699b8012a59adcf2a2c2b9095348efa10a94fe81b48af94
+PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=bb16f2fc5321302739a45149d17ecdc06b0095105acc9bd4405c95c1595cb1f6
+KILIX_LICENSE_REF=daa518a05dfc0337e10a9ebc514e6c5e4d261943
+PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=8085aed526aa9b129cf0c032658797b21d7fe6c7
+
+# The qualified RC6 QtGui/XcbQpa/XCB plugin delivery.
+PLEBIAN_OS_QT_RUNTIME_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/qt-runtime-rc6/qt-runtime-rc6.tar.xz
+PLEBIAN_OS_QT_RUNTIME_SHA256=623b5f2669fbf42679694ca5c8d3f841536a1f2bc449d66166f057650c8f4ad1
+PLEBIAN_OS_QT_RUNTIME_BYTES=6708392
+
+# Required 0.2.2 terminal player; published Debian 13 CI artifact.
+PLEBIAN_OS_MPV_URL=https://github.com/itsmygithubacct/kilix-mpv/releases/download/v0.40.0-kilix.7-test.1/kilix-mpv_0.40.0%2Bkilix.7_amd64.deb
+PLEBIAN_OS_MPV_SHA256=4b62dc8deca92d5b7a3bea80bd2a48b3c7ad9fc8f17fa73846a2c814ee10cb5a
+PLEBIAN_OS_MPV_BYTES=878628
+PLEBIAN_OS_MPV_VERSION=0.40.0+kilix.7
+PLEBIAN_OS_MPV_SOURCE_REF=d743a367aec512deaa43783516981818f6d61d39
+PLEBIAN_OS_MPV_LAUNCHER_REF=fb0a7f036fbe599dcf060d2d389e309c6261ceaf
