@@ -6137,7 +6137,7 @@ run_voice_tool() {
 # `voice/lib/current` is the Vosk shared object — code, not weights, but at the
 # pinned KILIX_VOICE_REF it is fetched only on the same all-or-nothing leg that
 # fetches the model, so its arrival means that leg ran. `lgraph-en-us` and
-# `vibevoice-asr-bitnet`, `whisper-small-en` and `whistle` are the other carrier models'
+# `vibevoice-asr-bitnet`, `whisper-small-en`, `whisper-medium-en` and `whistle` are the other carrier models'
 # directories, and `desktop-apps/assets/<id>` is where `kilix models install`
 # puts each carrier model, so weights arriving by any install route are counted.
 voice_dictation_asset_paths() {
@@ -6146,11 +6146,13 @@ voice_dictation_asset_paths() {
     local assets_root="$KILIX_DATA_HOME/desktop-apps/assets"
     {
         for entry in "$models_root/lgraph-en-us" "$models_root/vibevoice-asr-bitnet" \
-                "$models_root/whisper-small-en" "$models_root/whistle" \
+                "$models_root/whisper-small-en" "$models_root/whisper-medium-en" \
+                "$models_root/whistle" \
                 "$assets_root/vosk-model-small-en-us-0.15" \
                 "$assets_root/vosk-model-en-us-0.22-lgraph" \
                 "$assets_root/vibevoice-asr-bitnet" \
-                "$assets_root/faster-whisper-small-en" "$assets_root/whistle" \
+                "$assets_root/faster-whisper-small-en" \
+                "$assets_root/faster-whisper-medium-en" "$assets_root/whistle" \
                 "$assets_root/kilix-diarization-cpu"; do
             [ -e "$entry" ] || [ -L "$entry" ] || continue
             printf '%s\n' "$entry"
@@ -6277,6 +6279,10 @@ expected = [
     ),
     (
         "whisper-small-en", "whisper", True, 486100128, "463.6 MiB",
+        ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"),
+    ),
+    (
+        "whisper-medium-en", "whisper", True, 1530459085, "1.4 GiB",
         ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"),
     ),
     (

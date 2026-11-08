@@ -6,6 +6,17 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
+  dictation model, a first-use download with its own licence record (owner
+  determination 2026-11-07), and carry it in the model-compliance carrier.
+  Add `kilix transcribe` and `kilix split`; split's Demucs htdemucs_6s weights
+  come only through their own licence record, `demucs-htdemucs-6s` (owner
+  determination 2026-11-08), and run offline. Fix the three known issues of
+  the LFM2 notice round: Needle `a887e2fa` no longer calls an uncovered notice
+  licence "not accepted", Kilix's voice installer defaults to the release's
+  kilix-voice `1a4e63b`, and the release-dictation fixture supplies
+  `KILIX_SECRETS_REF`. Kilix is `4b9f29cf`, kilix-content is `de2764f8` and
+  kilix-license is `80aab439`.
 - Deliver LFM2's terms as a notice, by the owner's 2026-11-07 determination.
   Image installs and upgrades record a notice receipt that claims no
   agreement, and never answer terms that need a typed agreement. The terms,

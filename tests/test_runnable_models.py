@@ -6,9 +6,13 @@ For each model the speech catalog marks runnable, the pinned kilix-voice must
 mark it runtime-supported, and for VibeVoice the pinned Kilix must carry the
 pinned runtime installer and the `kilix voice vibeasr` verb that builds it.
 """
+import io
 import json
 import re
 import subprocess
+import sys
+import tarfile
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -22,6 +26,20 @@ def show(repo: Path, commit: str, path: str) -> str | None:
     result = subprocess.run(["git", "-C", str(repo), "show", f"{commit}:{path}"],
                             capture_output=True, text=True)
     return result.stdout if result.returncode == 0 else None
+
+
+def patched_catalog(voice: Path, ref: str, patcher: str) -> str:
+    """voicelib/models.py at ref after Kilix's medium patcher has run on it."""
+    archive = subprocess.run(["git", "-C", str(voice), "archive", "--format=tar", ref, "voicelib"],
+                             capture_output=True, check=True).stdout
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+            tar.extractall(root / "voice", filter="data")
+        (root / "patch.py").write_text(patcher)
+        subprocess.run([sys.executable, str(root / "patch.py"), str(root / "voice")],
+                       capture_output=True, check=True)
+        return (root / "voice" / "voicelib" / "models.py").read_text()
 
 
 class RunnableModelTests(unittest.TestCase):
@@ -40,6 +58,15 @@ class RunnableModelTests(unittest.TestCase):
         self.assertIsNotNone(voice, "no kilix-voice checkout holds KILIX_VOICE_REF; "
                              "set PLEBIAN_OS_KILIX_VOICE_REPO")
         catalog = show(voice, self.pins["KILIX_VOICE_REF"], "voicelib/models.py")
+        # KILIX_REF's voice installer adds whisper-medium-en to the staged
+        # library, so the catalog the release runs is the patched one.
+        kilix = carrier.repo_holding("PLEBIAN_OS_KILIX_REPO", "kilix", self.pins["KILIX_REF"])
+        self.assertIsNotNone(kilix, "no kilix checkout holds KILIX_REF; set PLEBIAN_OS_KILIX_REPO")
+        patcher = show(kilix, self.pins["KILIX_REF"], "scripts/patch-whisper-medium-model.py")
+        if patcher is not None:
+            installer = show(kilix, self.pins["KILIX_REF"], "scripts/install-kilix-voice.sh")
+            self.assertIn("patch-whisper-medium-model.py", installer)
+            catalog = patched_catalog(voice, self.pins["KILIX_VOICE_REF"], patcher)
         for model in self.runnable:
             if model == "kilix-diarization-cpu":
                 # Optional generic-catalog asset; the separate Transcribe

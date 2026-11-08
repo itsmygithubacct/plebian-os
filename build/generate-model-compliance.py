@@ -88,13 +88,15 @@ def read_manifest(version: str, path: Path | None = None) -> dict[str, str]:
 
 
 # Licence records are keyed by the speech catalog id, except where the record
-# names the upstream artifact: whisper-small-en runs the faster-whisper
-# conversion, whose record is faster-whisper-small-en.
-LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
+# names the upstream artifact: whisper-small-en and whisper-medium-en run the
+# faster-whisper conversions, whose records are faster-whisper-small-en and
+# faster-whisper-medium-en.
+LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en",
+                      "whisper-medium-en": "faster-whisper-medium-en"}
 # Models whose only download route is the model catalog itself: `kilix stt
 # --install` runs `kilix models install`, the licence screen, and fetches
 # nothing on its own, so there is no separate receipt check to cite.
-CATALOG_INSTALLED_MODELS = frozenset({"whisper-small-en", "whistle"})
+CATALOG_INSTALLED_MODELS = frozenset({"whisper-small-en", "whisper-medium-en", "whistle"})
 
 
 def licence_record_id(model: str) -> str:

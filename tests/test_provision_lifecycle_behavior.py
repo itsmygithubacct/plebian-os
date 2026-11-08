@@ -2407,6 +2407,10 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
                     "whisper-small-en", "whisper", True,
                     486100128, "463.6 MiB",
                 ),
+                (
+                    "whisper-medium-en", "whisper", True,
+                    1530459085, "1.4 GiB",
+                ),
                 ("whistle", "whistle", True, 16937647, "16.2 MiB"),
             ):
                 records.append({
@@ -2534,6 +2538,10 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             (
                 "whisper-small-en", "whisper", True,
                 486100128, "463.6 MiB",
+            ),
+            (
+                "whisper-medium-en", "whisper", True,
+                1530459085, "1.4 GiB",
             ),
             ("whistle", "whistle", True, 16937647, "16.2 MiB"),
         ):

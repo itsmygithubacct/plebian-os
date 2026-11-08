@@ -31,13 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_voice_release_contract as voice_contract  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-# The one speech model whose licence record names its upstream artifact rather
+# The speech models whose licence records name their upstream artifact rather
 # than the catalog id; spelled here, not imported from the generator it checks.
-LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en"}
+LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en",
+                      "whisper-medium-en": "faster-whisper-medium-en"}
 # Whistle's pinned authority is an application record; its release inclusion
 # is separately bound by this carrier's owner determination and review seats.
 LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records",
-                       "lfm2-kilix-commands": "lfm2-records"}
+                       "lfm2-kilix-commands": "lfm2-records",
+                       "whisper-medium-en": "whisper-medium-records"}
 
 
 def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
@@ -237,13 +239,13 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         # Whisper and Whistle installation hands off to the model catalog (the licence screen)
         # rather than asking the receipt check itself; say so, and nothing more.
         route = (f"hands the download to that model catalog\nand fetches no weights "
-                 f"itself (kilix-voice {voice_ref})." if model in {"whisper-small-en", "whistle"}
+                 f"itself (kilix-voice {voice_ref})." if model in {"whisper-small-en", "whisper-medium-en", "whistle"}
                  else f"`kilix-stt --check-licence` (kilix-voice {voice_ref}).")
         if model == "kilix-diarization-cpu":
             route = "Transcribe checks the covering receipt and installed manifest before diarization."
             if "--check-licence" in delivery or "kilix-voice" in delivery:
                 gaps.append("diarization DELIVERY names the unrelated dictation install route")
-        if model in {"whisper-small-en", "whistle"} and "--check-licence" in delivery:
+        if model in {"whisper-small-en", "whisper-medium-en", "whistle"} and "--check-licence" in delivery:
             gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
         for claim in ("This model's weights are not present in the image or downloaded by provisioning.",
                       "No install route downloads it until a kilix-license receipt covers it:",

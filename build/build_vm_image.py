@@ -1614,6 +1614,10 @@ expected = [
         ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"),
     ),
     (
+        "whisper-medium-en", "whisper", True, 1530459085, "1.4 GiB",
+        ("model.bin", "config.json", "tokenizer.json", "vocabulary.txt"),
+    ),
+    (
         "whistle", "whistle", True, 16937647, "16.2 MiB",
         ("whistle.cact",),
     ),
@@ -1713,11 +1717,13 @@ SPEECH_WEIGHT_PATHS = (
     "voice/models/lgraph-en-us",
     "voice/models/vibevoice-asr-bitnet",
     "voice/models/whisper-small-en",
+    "voice/models/whisper-medium-en",
     "voice/models/whistle",
     "desktop-apps/assets/vosk-model-small-en-us-0.15",
     "desktop-apps/assets/vosk-model-en-us-0.22-lgraph",
     "desktop-apps/assets/vibevoice-asr-bitnet",
     "desktop-apps/assets/faster-whisper-small-en",
+    "desktop-apps/assets/faster-whisper-medium-en",
     "desktop-apps/assets/whistle",
     "desktop-apps/assets/kilix-diarization-cpu",
 )
