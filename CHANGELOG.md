@@ -6,6 +6,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Complete an install made without a network mirror. A pkgsel pre-hook defers
+  the preseed package list to first-boot provisioning when the target has no
+  network package source; wired interfaces then get DHCP from the base
+  system's dhcpcd until provisioning hands them to NetworkManager; and
+  `apt-setup/disable-cdrom-entries` disables the install medium's apt entry,
+  which provisioning's apt provenance check refused. Network installs keep
+  the same package selection.
 - Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
   dictation model, a first-use download with its own licence record (owner
   determination 2026-11-07), and carry it in the model-compliance carrier.
