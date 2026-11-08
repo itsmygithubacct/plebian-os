@@ -7847,7 +7847,10 @@ trap - EXIT INT TERM HUP
 # hand the interfaces over: remove the hold, stop and disable the offline
 # service, then restart NetworkManager so it manages them as on a network
 # install. dhcpcd stops first so it cannot remove an address NetworkManager has
-# just configured. This runs only after provisioning has committed; a failure
+# just configured, and the service's stop releases its leases and removes its
+# addresses: a NetworkManager that finds an address already configured adopts
+# it as an external connection and never renews it, until the next boot. This
+# runs only after provisioning has committed; a failure
 # warns and never changes the provisioning result.
 OFFLINE_INSTALL_MARKER=/etc/plebian-os/offline-install
 OFFLINE_NETWORK_UNIT=plebian-os-offline-network.service
