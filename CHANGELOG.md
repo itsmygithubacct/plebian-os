@@ -6,6 +6,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Complete an install made without a network mirror. A pkgsel pre-hook defers
+  the preseed package list to first-boot provisioning when the target has no
+  network package source; wired interfaces then get DHCP from the base
+  system's dhcpcd until provisioning hands them to NetworkManager; and
+  `apt-setup/disable-cdrom-entries` disables the install medium's apt entry,
+  which provisioning's apt provenance check refused. Network installs keep
+  the same package selection.
 - Install Kilix Playalong's default models when they are missing, by the
   owner's 2026-11-08 decision: Demucs htdemucs_6s, Basic Pitch and Whisper
   medium.en, under the standard distribution policy. Demucs ships in the image

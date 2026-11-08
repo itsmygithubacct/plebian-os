@@ -1,0 +1,150 @@
+#!/bin/sh
+# plebian-os-offline-install — Debian Installer support for an install made
+# with no network package source (no network at install time, or the operator
+# declined a mirror).
+#
+# The netinst media carries Debian's base system but not the preseed's
+# pkgsel/include list (Xorg, LightDM, NetworkManager, the toolchain ...), so
+# without a network source that step stops the install with "Installation step
+# failed". First-boot provisioning installs the same package groups from the
+# network (provision/install-deps.sh), so an offline install can defer them.
+#
+#   (no argument)  pkgsel pre-hook. The release preseed's early_command
+#                  installs this file as /usr/lib/pre-pkgsel.d/05plebian-os-offline;
+#                  pkgsel runs its hooks before it reads pkgsel/include. With
+#                  no active network source in the target's apt configuration
+#                  it clears pkgsel/include and records the offline install.
+#                  With a network source it changes nothing.
+#   late           Called from late_command. On a recorded offline install it
+#                  writes a wired DHCP service and a NetworkManager hold into
+#                  the target (see below). Otherwise it changes nothing.
+#
+# Why a service of its own: Debian Installer writes only the loopback stanza
+# when the network was not configured, and NetworkManager arrives with the
+# deferred packages, so nothing would configure the interface when the cable is
+# plugged in. dhcpcd and ifupdown are in Debian's base system, but ifupdown runs
+# dhcpcd for a single interface, which exits when no lease arrives within its
+# timeout. Manager mode keeps watching the link, so restoring the network later
+# brings the interface up without operator configuration. Provisioning hands
+# the interfaces to NetworkManager once it has installed it.
+#
+# TARGET and PLEBIAN_OS_DEBCONF_CONFMODULE are test seams; the installer uses
+# /target and Debian Installer's own confmodule.
+set -eu
+
+target="${TARGET:-/target}"
+marker="$target/etc/plebian-os/offline-install"
+unit_name=plebian-os-offline-network.service
+hold_name=90-plebian-os-offline.conf
+
+log() { logger -t plebian-os-offline "$*" 2>/dev/null || true; printf '%s\n' "plebian-os-offline: $*" >&2; }
+
+# True when the target's apt configuration names an enabled http, https or ftp
+# archive: an active one-line entry, or a deb822 stanza whose URIs field does
+# and which is not Enabled: no.
+has_network_source() {
+    for list in "$target/etc/apt/sources.list" "$target"/etc/apt/sources.list.d/*.list; do
+        [ -f "$list" ] || continue
+        if grep -Eq '^[[:space:]]*deb(-src)?[[:space:]]+(\[[^]]*\][[:space:]]+)?(https?|ftp)://' "$list"; then
+            return 0
+        fi
+    done
+    for sources in "$target"/etc/apt/sources.list.d/*.sources; do
+        [ -f "$sources" ] || continue
+        if awk '
+            function flush() { if (net && enabled) found = 1; net = 0; enabled = 1 }
+            BEGIN { net = 0; enabled = 1; found = 0 }
+            /^[[:space:]]*#/ { next }
+            /^[[:space:]]*$/ { flush(); next }
+            tolower($1) == "uris:" { for (i = 2; i <= NF; i++) if ($i ~ /^(https?|ftp):\/\//) net = 1 }
+            tolower($1) == "enabled:" { if (tolower($2) == "no") enabled = 0 }
+            END { flush(); exit found ? 0 : 1 }
+        ' "$sources"; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+pkgsel_hook() {
+    if has_network_source; then
+        log "a network package source is configured; package selection is unchanged"
+        return 0
+    fi
+    # shellcheck source=/dev/null
+    . "${PLEBIAN_OS_DEBCONF_CONFMODULE:-/usr/share/debconf/confmodule}"
+    db_set pkgsel/include ""
+    mkdir -p "$target/etc/plebian-os"
+    tmp="$marker.new"
+    cat > "$tmp" <<'EOF'
+# Written by the Plebian-OS installer: no network package source was configured,
+# so the desktop, NetworkManager and toolchain packages were left to first-boot
+# provisioning, and wired interfaces use plebian-os-offline-network.service
+# until provisioning hands them to NetworkManager.
+PLEBIAN_OS_OFFLINE_INSTALL=1
+EOF
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$marker"
+    log "no network package source: deferred pkgsel/include to first-boot provisioning"
+}
+
+late() {
+    if [ ! -f "$marker" ]; then
+        log "not an offline install; nothing to do"
+        return 0
+    fi
+    unit_dir="$target/etc/systemd/system"
+    wants="$unit_dir/multi-user.target.wants"
+    hold_dir="$target/etc/NetworkManager/conf.d"
+    mkdir -p "$wants" "$hold_dir"
+
+    cat > "$unit_dir/$unit_name.new" <<'EOF'
+# Written by the Plebian-OS installer for an install with no network package
+# source. dhcpcd from Debian's base system configures wired interfaces until
+# first-boot provisioning has installed NetworkManager; provisioning then stops
+# and disables this unit and NetworkManager manages networking.
+[Unit]
+Description=Plebian-OS offline install: wired DHCP until NetworkManager is provisioned
+ConditionPathExists=/etc/plebian-os/offline-install
+ConditionPathExists=!/etc/plebian-os/offline-network-handed-off
+Wants=network.target
+Before=network.target network-online.target
+
+[Service]
+# Manager mode keeps running when no lease arrives (an unplugged cable), and
+# configures an interface whenever its link comes up. -w -t 30 holds
+# network-online.target, and so first boot, for up to 30 s for an address.
+Type=forking
+PIDFile=/run/dhcpcd/pid
+ExecStart=/usr/sbin/dhcpcd -M -w -t 30 -z en* -z eth*
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    chmod 0644 "$unit_dir/$unit_name.new"
+    mv -f "$unit_dir/$unit_name.new" "$unit_dir/$unit_name"
+    ln -sfn "/etc/systemd/system/$unit_name" "$wants/$unit_name"
+
+    cat > "$hold_dir/$hold_name.new" <<'EOF'
+# Written by the Plebian-OS installer for an install with no network package
+# source. plebian-os-offline-network.service runs DHCP on wired interfaces until
+# provisioning hands them to NetworkManager; until then NetworkManager leaves
+# those interfaces and resolv.conf alone, so two DHCP clients never share a
+# link. Provisioning removes this file and restarts NetworkManager.
+[main]
+dns=none
+
+[keyfile]
+unmanaged-devices=interface-name:en*;interface-name:eth*
+EOF
+    chmod 0644 "$hold_dir/$hold_name.new"
+    mv -f "$hold_dir/$hold_name.new" "$hold_dir/$hold_name"
+    log "offline install: enabled $unit_name and the NetworkManager hold"
+}
+
+case "${1:-}" in
+    "") pkgsel_hook ;;
+    late) late ;;
+    *) echo "usage: plebian-os-offline-install [late]" >&2; exit 2 ;;
+esac
