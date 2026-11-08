@@ -97,6 +97,10 @@ LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en",
 # --install` runs `kilix models install`, the licence screen, and fetches
 # nothing on its own, so there is no separate receipt check to cite.
 CATALOG_INSTALLED_MODELS = frozenset({"whisper-small-en", "whisper-medium-en", "whistle"})
+# Models the pinned kilix-voice catalog lacks: Kilix's voice installer adds
+# their catalog entry to the staged library with this patcher, so the install
+# route above exists only after it runs.
+KILIX_PATCHED_MODELS = {"whisper-medium-en": "scripts/patch-whisper-medium-model.py"}
 
 
 def licence_record_id(model: str) -> str:
@@ -188,6 +192,11 @@ def delivery_text(model: str, host: str, runnable: bool, voice_ref: str,
             "The speech install command hands the download to that model catalog",
             f"and fetches no weights itself (kilix-voice {voice_ref}).",
         ]
+        if model in KILIX_PATCHED_MODELS:
+            lines += [
+                f"kilix-voice itself has no {model} entry: Kilix's voice installer adds it to the",
+                f"staged library's catalog with {KILIX_PATCHED_MODELS[model]} at the release's KILIX_REF.",
+            ]
     else:
         lines += [
             "The speech install command, voice installer and Bonsai pull command first ask",

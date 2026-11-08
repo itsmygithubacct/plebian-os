@@ -15,7 +15,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   the LFM2 notice round: Needle `a887e2fa` no longer calls an uncovered notice
   licence "not accepted", Kilix's voice installer defaults to the release's
   kilix-voice `1a4e63b`, and the release-dictation fixture supplies
-  `KILIX_SECRETS_REF`. Kilix is `4b9f29cf`, kilix-content is `de2764f8` and
+  `KILIX_SECRETS_REF`. Kilix is `44b992ae`, kilix-content is `de2764f8` and
   kilix-license is `80aab439`.
 - Deliver LFM2's terms as a notice, by the owner's 2026-11-07 determination.
   Image installs and upgrades record a notice receipt that claims no

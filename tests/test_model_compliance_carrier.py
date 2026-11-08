@@ -247,6 +247,12 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                 gaps.append("diarization DELIVERY names the unrelated dictation install route")
         if model in {"whisper-small-en", "whisper-medium-en", "whistle"} and "--check-licence" in delivery:
             gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
+        # Medium's catalog entry is not in kilix-voice; Kilix's patcher adds it. The route
+        # the statement cites exists only through that patcher, so it must name it.
+        if model == "whisper-medium-en" and (
+                "kilix-voice itself has no whisper-medium-en entry" not in delivery
+                or "scripts/patch-whisper-medium-model.py at the release's KILIX_REF." not in delivery):
+            gaps.append(f"{model}: DELIVERY does not name the Kilix patcher its route depends on")
         for claim in ("This model's weights are not present in the image or downloaded by provisioning.",
                       "No install route downloads it until a kilix-license receipt covers it:",
                       route,
@@ -710,6 +716,22 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         installer = kilix_show(kilix, pins["KILIX_REF"], "scripts/install-kilix-voice.sh")
         self.assertEqual(kilix_gate_gaps(installer), [])
         self.assertTrue(kilix_gate_gaps(installer.replace('require_dictation_receipt "', 'true "')))
+        # The patcher the medium DELIVERY names exists at KILIX_REF, the voice installer runs
+        # it, and a DELIVERY that drops it is caught.
+        self.assertIn("patch-whisper-medium-model.py", installer)
+        self.assertIn("whisper-medium-en", kilix_show(
+            kilix, pins["KILIX_REF"], "scripts/patch-whisper-medium-model.py"))
+        with tempfile.TemporaryDirectory() as scratch:
+            planted = Path(scratch) / "carrier"
+            shutil.copytree(CARRIER, planted)
+            medium = planted / "whisper-medium-en" / "DELIVERY"
+            text = medium.read_text()
+            stripped = "".join(line for line in text.splitlines(keepends=True)
+                               if "patch-whisper-medium-model.py" not in line)
+            self.assertNotEqual(stripped, text)
+            medium.write_text(stripped)
+            self.assertIn("whisper-medium-en: DELIVERY does not name the Kilix patcher its route depends on",
+                          delivery_gaps(provision, planted))
         # ...and so does the kilix-bonsai that KILIX_REF installs.
         ref = bonsai_ref(kilix_show(kilix, pins["KILIX_REF"], "scripts/install-kilix-bonsai.sh"))
         self.assertRegex(ref, r"^[0-9a-f]{40}$", "KILIX_REF pins no kilix-bonsai commit")
