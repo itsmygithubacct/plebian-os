@@ -6,6 +6,7 @@ For each model the speech catalog marks runnable, the pinned kilix-voice must
 mark it runtime-supported, and for VibeVoice the pinned Kilix must carry the
 pinned runtime installer and the `kilix voice vibeasr` verb that builds it.
 """
+import json
 import re
 import subprocess
 import unittest
@@ -29,6 +30,9 @@ class RunnableModelTests(unittest.TestCase):
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.runnable = [name for name, runnable in carrier.advertised_models(provision)
                          if runnable]
+        command = ROOT / "provision" / "command-model.json"
+        self.command_model = (json.loads(command.read_bytes())["asset_id"]
+                              if command.exists() else None)
 
     def test_the_pinned_voice_runs_every_runnable_model(self):
         voice = carrier.repo_holding("PLEBIAN_OS_KILIX_VOICE_REPO", "kilix-voice",
@@ -40,6 +44,11 @@ class RunnableModelTests(unittest.TestCase):
             if model == "kilix-diarization-cpu":
                 # Optional generic-catalog asset; the separate Transcribe
                 # route below owns it, not the dictation model protocol.
+                continue
+            if model == self.command_model:
+                # Needle runs the Ask command model, not kilix-voice. AC-8
+                # (test_command_model_records_needle_serves_are_the_carried_ones)
+                # ties it to the Needle the pinned catalog selects.
                 continue
             with self.subTest(model=model):
                 entry = re.search(rf'ModelSpec\(\s*"{re.escape(model)}",\s*\w+,\s*\d+,\s*(True|False),',
