@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Release acceptance clean-builds the pinned catalog one entry at a time:
+  each entry is built, verified and deleted before the next. It kept every
+  build until the end, and on the default 20 GB acceptance disk it ran out of
+  space. Each entry's free space is printed in the guest log.
 - Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
   dictation model, a first-use download with its own licence record (owner
   determination 2026-11-07), and carry it in the model-compliance carrier.

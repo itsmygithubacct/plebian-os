@@ -1358,6 +1358,7 @@ class VmBuilderEnvTests(unittest.TestCase):
     def test_catalog_acceptance_program_clean_builds_and_selects_every_pin(self):
         installed = []
         roots = []
+        left_behind = []
 
         class Installer:
             def __init__(self, root):
@@ -1368,6 +1369,10 @@ class VmBuilderEnvTests(unittest.TestCase):
                 return str(self.root / spec.content_id / spec.binary)
 
             def ensure(self, spec, report):
+                # The guest disk holds one entry's build at a time: every
+                # earlier entry's root is already deleted.
+                left_behind.extend(
+                    root.parent for root in roots[:-1] if root.parent.exists())
                 installed.append(spec.content_id)
                 report(f"building {spec.content_id}")
                 executable = Path(self.executable(spec))
@@ -1402,9 +1407,11 @@ class VmBuilderEnvTests(unittest.TestCase):
             exec(vm._catalog_build_script(), {})
 
         self.assertEqual(installed, ["game", "app"])
-        self.assertTrue(roots)
+        self.assertEqual(len(roots), 2)
         self.assertTrue(all(root.parent.parent == Path.home() for root in roots))
-        self.assertTrue(all(not root.exists() for root in roots))
+        self.assertEqual(len({root.parent for root in roots}), 2)
+        self.assertEqual(left_behind, [])
+        self.assertTrue(all(not root.parent.exists() for root in roots))
 
     def test_yes_mode_generates_harness_only_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):

@@ -294,6 +294,8 @@ guest source root without redirecting host-side build storage.
    devices. Release acceptance additionally enables a real induced OS-layer
    update failure with byte-exact rollback, a successful whole-stack
    update/restart, and clean builds of every installable pinned catalog entry.
+   Each entry is built, verified and deleted before the next starts, so the
+   check needs free space for the largest entry, not for the whole catalog.
 6. **Evidence.** When `--report` is supplied, each completed stage and guest
    check is persisted immediately, followed by a SHA-256 sidecar.
 
