@@ -16,6 +16,13 @@ os.umask(0o022)
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 README = ROOT / "README.md"
 
+
+def _readme_and_docs():
+    """README.md plus the docs/*.md explainers it links to."""
+    paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
 ALIAS_LINE = 'alias tb="$HOME/.local/bin/tb"'
 ALIAS_COMMENT = (
     "# tb: tmux-cli tb.py from ~/.local/bin (added by plebian-os-provision)"
@@ -62,7 +69,7 @@ class TbAliasContractTests(unittest.TestCase):
         self.assertLess(call.start(), publish)
 
     def test_readme_documents_the_alias_and_its_guard(self):
-        readme = README.read_text()
+        readme = _readme_and_docs()
         self.assertIn("`~/.bash_aliases`", readme)
         self.assertIn("already resolves", readme)
 

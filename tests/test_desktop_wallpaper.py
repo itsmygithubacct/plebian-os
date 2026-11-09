@@ -20,6 +20,12 @@ PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 
 
+def _readme_and_docs():
+    """README.md plus the docs/*.md explainers it links to."""
+    paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
 def wallpaper_destination_ancestors_are_root_owned() -> bool:
     """Mirror the provisioner's own precondition for installing the wallpaper.
 
@@ -715,7 +721,7 @@ desktop_wallpaper_matches_expected_hash \
             self.assertIn(directory, restore)
 
     def test_upgrade_baseline_preserves_existing_desktop_state(self):
-        readme = (ROOT / "README.md").read_text()
+        readme = _readme_and_docs()
         asset_docs = (ROOT / "assets" / "desktop" / "README.md").read_text()
         upgrading = (ROOT / "UPGRADING.md").read_text()
         self.assertIn("0.1.7 fresh", " ".join(readme.split()))

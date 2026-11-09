@@ -10,6 +10,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _readme_and_docs():
+    """README.md plus the docs/*.md explainers it links to."""
+    paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
 def _read(*parts):
     return (ROOT.joinpath(*parts)).read_text()
 
@@ -508,7 +514,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertTrue(all(policy["release_gate"].values()))
 
     def test_upgrade_docs_retire_the_pre_baseline_bridge(self):
-        readme = _read("README.md")
+        readme = _readme_and_docs()
         releasing = _read("RELEASING.md")
         upgrading = _read("UPGRADING.md")
         self.assertNotIn("Upgrading from v0.1.1", readme)

@@ -16,6 +16,13 @@ os.umask(0o022)
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 README = ROOT / "README.md"
 
+
+def _readme_and_docs():
+    """README.md plus the docs/*.md explainers it links to."""
+    paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
 ALIAS_LINE = "alias ask='kilix ask'"
 ALIAS_COMMENT = "# ask: kilix ask (added by plebian-os-provision)"
 # A PATH with no `ask` on it, for probes that must see an unprovisioned shell.
@@ -60,7 +67,7 @@ class AskAliasContractTests(unittest.TestCase):
         self.assertLess(call.start(), publish)
 
     def test_readme_documents_the_ask_alias_and_its_guard(self):
-        readme = README.read_text()
+        readme = _readme_and_docs()
         self.assertIn("`ask` alias for `kilix ask`", readme)
         self.assertIn("0.2.3 rc5", readme)
         self.assertIn("already resolves", readme)

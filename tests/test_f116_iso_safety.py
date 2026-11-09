@@ -14,6 +14,12 @@ import build_vm_image as vm
 from test_build_vm_image import cfg
 
 
+def _readme_and_docs():
+    """README.md plus the docs/*.md explainers it links to."""
+    paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
 class F116IsoSafetyTests(unittest.TestCase):
     def test_vm_default_is_isolated_under_acceptance_artifacts(self):
         with tempfile.TemporaryDirectory() as td, mock.patch.dict(
@@ -121,7 +127,7 @@ class F116IsoSafetyTests(unittest.TestCase):
 
     def test_documentation_names_both_media_classes_and_the_durable_warning(self):
         vm_guide = (ROOT / "build" / "build_vm_image.md").read_text()
-        readme = (ROOT / "README.md").read_text()
+        readme = _readme_and_docs()
         releasing = (ROOT / "RELEASING.md").read_text()
         for text in (vm_guide, readme, releasing):
             self.assertIn("PLEBIAN-TEST-ERASES-DISK", text)

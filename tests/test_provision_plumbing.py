@@ -6,6 +6,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _readme_and_docs():
+    """README.md plus the docs/*.md explainers it links to."""
+    paths = [ROOT / "README.md", *sorted((ROOT / "docs").glob("*.md"))]
+    return "\n".join(path.read_text() for path in paths)
+
+
 class ProvisionPlumbingTests(unittest.TestCase):
     def test_shell_scripts_parse(self):
         scripts = [
@@ -191,7 +197,7 @@ class ProvisionPlumbingTests(unittest.TestCase):
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
         deps = (ROOT / "provision" / "install-deps.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
-        readme = (ROOT / "README.md").read_text()
+        readme = _readme_and_docs()
 
         self.assertIn('$GPU_TERMINAL_HOME/settings.conf', provision)
         self.assertIn('"GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"',
