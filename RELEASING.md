@@ -382,7 +382,7 @@ together.
 ## Cutting `<x.y.z>`
 
 1. Update `VERSION` and each repository's release notes
-   (`CHANGELOG.md` in Plebian-OS/Pleb and the `README.md` release section in
+   (`CHANGELOG.md` in Plebian-OS/Pleb and `docs/release-notes.md` in
    Kilix/Kilix-95). Create and review `releases/<x.y.z>.env`; verify every URL
    and checksum from its official upstream source. Advance
    `KILIX_COMMIT` in `kilix-95/.github/workflows/test.yml` to this release's
