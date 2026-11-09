@@ -15,8 +15,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Kilix Avatar entries for the model. Kilix is `58c36b2e`, kilix-content is
   `b0c6f650`, kilix-license is `2737f321`, Kilix 95 is `24130253` and Kilix
   Avatar is `a383f65a`, each the RC6 pin plus this change. The regenerated
-  model carrier `42b6956b` changes only its interface refs; its attached seats
-  reviewed the RC6 carrier `4fdbffce`.
+  model carrier `42b6956b` changes only its interface refs from the RC6
+  carrier `4fdbffce`; two independent seats reviewed it (ship with known
+  issues, listed in the 0.2.3 follow-ups).
 - Kilix `beb39587` selects kitty-pty-broker `a5a5f2d3`. A pane's broker now
   reaps the processes its shell orphans while the pane lives, instead of
   leaving each one a zombie until the pane closes; long-lived agent panes had
