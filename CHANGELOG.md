@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Kilix `beb39587` selects kitty-pty-broker `a5a5f2d3`. A pane's broker now
+  reaps the processes its shell orphans while the pane lives, instead of
+  leaving each one a zombie until the pane closes; long-lived agent panes had
+  accumulated about 20,000, which every process scan then paid for.
 - Kilix 95 `44525e24` keeps the first-run voice install off the desktop. Its
   package build output was painted over the first desktop page of a new
   login, and the install could read keys typed at the desktop. It now runs
@@ -44,7 +48,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   English and is never a default. The carrier gives whisper-medium-en the
   delivery mode `playalong-default-upstream-download`, bound to
   `provision/playalong-models.json`, and carries the owner's distribution
-  record. Kilix is `c90d48ef`, kilix-content is `c8f0b0f5` (it selects
+  record. Kilix is `beb39587`, kilix-content is `c8f0b0f5` (it selects
   Playalong `a11a0219`), and kilix-license is `f8486ed3`. This round also folds
   in the round-3 wording fixes.
 - Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
