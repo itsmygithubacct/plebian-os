@@ -265,7 +265,7 @@ class InstallPolicyTests(unittest.TestCase):
             def ensure_supplied_asset(inner, spec, **kwargs):
                 self.calls.append(('supplied', spec.asset_id, str(kwargs['supplied'])))
 
-        api = SimpleNamespace(Installer=Installer)
+        api = SimpleNamespace(Installer=Installer, InstallError=type('InstallError', (RuntimeError,), {}))
         lic = Licence()
         catalog = SimpleNamespace(require_asset=lambda name: spec)
         setup = type('SetupError', (Exception,), {})
@@ -405,6 +405,59 @@ class InstallPolicyTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             installer.fetch_default(Path('/kilix'), 'faster-whisper-medium-en', 'Whisper medium.en',
                                     MEDIUM_MANIFEST)
+
+    def incomplete(self):
+        """Verify as kilix-content does when a receipt exists but its files do not."""
+        error = self.cm._api().InstallError
+
+        def verify(*args, **kwargs):
+            raise error('could not open supplied file: README.md')
+        self.cm._verify = verify
+
+    def test_the_upgrade_after_a_failed_download_downloads_again(self):
+        self.eligible = True
+        self.spec.asset_id = 'faster-whisper-medium-en'
+        self.spec.manifest_digest = MEDIUM_MANIFEST
+        # This upgrade records the receipt, then the download fails.
+        self.fetch_error = RuntimeError('all content downloads failed')
+        with patch('sys.stderr', new_callable=io.StringIO):
+            installer.install_whisper_medium(Path('/kilix'), MEDIUM_MANIFEST, offline=False)
+        # The next one finds that receipt and no files: it must try again, not stop.
+        self.incomplete()
+        self.fetch_error = None
+        with patch('sys.stderr', new_callable=io.StringIO) as stderr, \
+                patch('sys.stdout', new_callable=io.StringIO):
+            installer.install_whisper_medium(Path('/kilix'), MEDIUM_MANIFEST, offline=False)
+            self.spec.asset_id = 'demucs-htdemucs-6s'
+            self.spec.manifest_digest = DEMUCS_MANIFEST
+            installer.install_demucs(Path('/kilix'), None, _demucs_pin(), offline=False)
+            # Offline, an incomplete install still downloads nothing.
+            installer.install_demucs(Path('/kilix'), None, _demucs_pin(), offline=True)
+            installer.install_whisper_medium(Path('/kilix'), MEDIUM_MANIFEST, offline=True)
+        self.assertEqual(self.calls, [
+            ('authorize', 'faster-whisper-medium-en'), ('upstream', 'faster-whisper-medium-en', None),
+            ('authorize', 'faster-whisper-medium-en'), ('upstream', 'faster-whisper-medium-en', None),
+            ('authorize', 'demucs-htdemucs-6s'), ('upstream', 'demucs-htdemucs-6s', None)])
+        self.assertIn('is not completely installed', stderr.getvalue())
+        self.assertIn('installing it again', stderr.getvalue())
+
+    def test_an_incomplete_image_model_is_installed_again_from_the_image(self):
+        self.eligible = True
+        self.incomplete()
+        self.spec.asset_id = 'basic-pitch-icassp-2022-onnx'
+        self.spec.manifest_digest = MANIFEST
+        pin = json.loads((ROOT / 'provision/basic-pitch-model.json').read_text())
+        archive = ROOT / 'provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz'
+        with patch('sys.stderr', new_callable=io.StringIO):
+            installer.install_basic_pitch(Path('/kilix'), archive, pin)
+        self.assertEqual(self.kinds(), ['authorize', 'supplied'])
+
+    def test_the_command_model_still_stops_on_an_incomplete_install(self):
+        # Unchanged from 0.2.3-rc5's approved installer: only Playalong defaults retry.
+        self.incomplete()
+        with self.assertRaises(self.cm._api().InstallError):
+            installer.install_command_model(Path('/kilix'), self.pin, self.cache)
+        self.assertEqual(self.calls, [])
 
     def test_a_download_runs_only_for_the_pinned_asset(self):
         self.eligible = True

@@ -322,7 +322,9 @@ def playalong_installer_gaps(installer: str) -> list[str]:
 
     The machine's answer is read before any Playalong model is installed, every
     Playalong install sits under "not declined", an offline run downloads
-    nothing, and the standard-policy receipt is written before the download.
+    nothing, the standard-policy receipt is written before the download, and
+    the run after a failed download tries again: that run finds the receipt
+    without the files, which must read as "not installed", never as an error.
     """
     gaps = []
     tree = ast.parse(installer)
@@ -370,6 +372,17 @@ def playalong_installer_gaps(installer: str) -> list[str]:
         and call.func.attr in ("authorize", "ensure_upstream_asset"))
     if [name for _, name in order] != ["authorize", "ensure_upstream_asset"]:
         gaps.append("the Playalong download is not preceded by its standard-policy receipt")
+    for name in ("_install_from_image", "install_demucs", "install_whisper_medium"):
+        function = functions.get(name)
+        if function is None or called(function, "_installed") or not called(function, "_playalong_installed"):
+            gaps.append(f"{name} does not retry an install a failed download left incomplete")
+    retry = functions.get("_playalong_installed")
+    handlers = [] if retry is None else [node for node in ast.walk(retry) if isinstance(node, ast.ExceptHandler)]
+    if not any(handler.type is not None and ast.unparse(handler.type) == "cm._api().InstallError"
+               and any(isinstance(node, ast.Return) and isinstance(node.value, ast.Constant)
+                       and node.value.value is False for node in handler.body)
+               for handler in handlers):
+        gaps.append("an install a failed download left incomplete stops the next upgrade")
     return gaps
 
 
@@ -802,7 +815,11 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                                           "        print('Whisper medium.en is not in the image"),
                         installer.replace("        defaults.authorize(lic, spec, records, store)\n"
                                           "        installer = api.Installer(_apps_root())\n        try:",
-                                          "        installer = api.Installer(_apps_root())\n        try:")):
+                                          "        installer = api.Installer(_apps_root())\n        try:"),
+                        installer.replace("    if _playalong_installed(cm, WHISPER_MEDIUM):",
+                                          "    if _installed(cm, WHISPER_MEDIUM):"),
+                        installer.replace("    except cm._api().InstallError as error:",
+                                          "    except cm.SetupError as error:")):
             self.assertNotEqual(planted, installer)
             self.assertTrue(playalong_installer_gaps(planted))
         for planted in (installer.replace("lic.capture_agreement(record)",

@@ -285,6 +285,22 @@ def _installed(cm, asset_id):
         return False
 
 
+def _playalong_installed(cm, asset_id):
+    """_installed for a Playalong default, where an incomplete install means "not installed".
+
+    A failed download keeps the standard-policy receipt recorded before it, so
+    the next run's verify finds that receipt but not the files and raises
+    kilix-content's InstallError. That must lead to another install attempt,
+    never to a failed upgrade. The command model keeps _installed as it is.
+    """
+    try:
+        return _installed(cm, asset_id)
+    except cm._api().InstallError as error:
+        print(f'{asset_id} is not completely installed ({error}); installing it again.',
+              file=sys.stderr)
+        return False
+
+
 def _catalog_spec(cm, asset_id):
     api, lic = cm._api(), cm._license()
     spec = cm._verified_catalog(api).require_asset(asset_id)
@@ -300,7 +316,7 @@ def _require_standard_policy(cm, lic, spec, records, label):
 
 def _install_from_image(kilix, archive, pin, label, unpack):
     cm, defaults = _load(kilix)
-    if _installed(cm, pin['asset_id']):
+    if _playalong_installed(cm, pin['asset_id']):
         print(label + ' already verified; no bundle install needed.')
         return
     with tempfile.TemporaryDirectory(prefix='plebian-image-model-') as temporary:
@@ -357,7 +373,7 @@ def install_demucs(kilix, archive, pin, *, offline):
         _install_from_image(kilix, archive, pin, 'Demucs', materialize_demucs)
         return
     cm, _defaults = _load(kilix)
-    if _installed(cm, pin['asset_id']):
+    if _playalong_installed(cm, pin['asset_id']):
         print('Demucs already verified; no download needed.')
     elif offline:
         print('Demucs: the installation media did not supply its archive; '
@@ -369,7 +385,7 @@ def install_demucs(kilix, archive, pin, *, offline):
 def install_whisper_medium(kilix, manifest_digest, *, offline):
     """Whisper medium.en is not in the image: an online run downloads it."""
     cm, _defaults = _load(kilix)
-    if _installed(cm, WHISPER_MEDIUM):
+    if _playalong_installed(cm, WHISPER_MEDIUM):
         print('Whisper medium.en already verified; no download needed.')
     elif offline:
         print('Whisper medium.en is not in the image; the first online upgrade downloads it.')

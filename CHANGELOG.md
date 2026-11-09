@@ -14,15 +14,18 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   against `provision/demucs-model.json`. A fresh install takes Demucs and
   Basic Pitch from the image. An online upgrade downloads Whisper medium.en,
   and also Demucs when the image did not supply it. A failed download installs
-  nothing and the next upgrade retries. The model wizard's Playalong page
-  answered no, or `KILIX_PLAYALONG_MODELS=0` in the shared settings file,
-  declines all three, and an answer that cannot be read installs none of them.
+  nothing and the next upgrade retries; the receipt it leaves without files
+  reads as "not installed". The model wizard's Playalong page answered no, a
+  licence of one of the three refused in the model wizard, or
+  `KILIX_PLAYALONG_MODELS=0` in the shared settings file declines all three;
+  refusing only Whisper large-v3's licence declines nothing, and an answer that
+  cannot be read installs none of them.
   Whisper large-v3 gets its own licence record, `faster-whisper-large-v3`
   (owner determination 2026-11-08). It is offered for lyrics that are not in
   English and is never a default. The carrier gives whisper-medium-en the
   delivery mode `playalong-default-upstream-download`, bound to
   `provision/playalong-models.json`, and carries the owner's distribution
-  record. Kilix is `9e58d314`, kilix-content is `c8f0b0f5` (it selects
+  record. Kilix is `c90d48ef`, kilix-content is `c8f0b0f5` (it selects
   Playalong `a11a0219`), and kilix-license is `f8486ed3`. This round also folds
   in the round-3 wording fixes.
 - Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
