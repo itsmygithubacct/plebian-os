@@ -6,6 +6,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Kilix 95 `44525e24` keeps the first-run voice install off the desktop. Its
+  package build output was painted over the first desktop page of a new
+  login, and the install could read keys typed at the desktop. It now runs
+  with stdin closed, in its own session without the desktop's terminal and
+  with git's terminal prompt off, and writes its output to `default-voice.log`
+  in the desktop's private state.
 - Release acceptance clean-builds the pinned catalog one entry at a time:
   each entry is built, verified and deleted before the next. It kept every
   build until the end, and on the default 20 GB acceptance disk it ran out of
