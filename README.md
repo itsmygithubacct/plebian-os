@@ -36,6 +36,8 @@ repository a Plebian-OS user receives.
   `unattended-upgrades`, a text console on `Ctrl+Alt+F2`, and the open nouveau
   driver with an optional NVIDIA helper.
 
+![A Plebian-OS session: one screen-filling Kilix, with Kilix 95 on page 1 and the page strip and status bar across the top](docs/images/plebian-os-desktop.jpg)
+
 ## Get it
 
 | | |
@@ -72,6 +74,10 @@ your full name, a username and a password; root login stays disabled and no SSH
 server is installed. The machine needs a network connection on first boot:
 `plebian-os-firstboot.service` provisions the stack before the greeter starts,
 then LightDM offers the **Pleb** session.
+
+| Installer menu (UEFI, 0.2.3 candidate) | Greeter |
+|---|---|
+| ![The Plebian-OS UEFI installer menu: graphical install, install, advanced options, accessible dark contrast menu, install with speech synthesis](docs/images/plebian-os-installer-menu.jpg) | ![The LightDM greeter on the Plebian-OS wallpaper](docs/images/plebian-os-greeter.jpg) |
 
 ### Convert an existing Debian 13
 
