@@ -5795,6 +5795,24 @@ install_kilix_needle() {
         || die "required Needle application installation failed"
 }
 
+# kilix-llm runs the optional qwen-0.8b-no-loop-02 chat model (LLM Chat and
+# Kilix Avatar rows). Kilix pins its revision; the installer places the
+# launcher and llama.cpp source, and this step builds the CPU runtime so the
+# rows work offline. The model itself arrives only through the model wizard.
+install_kilix_llm() {
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install the Kilix-pinned kilix-llm and build its CPU runtime as $TARGET_USER"
+        return 0
+    fi
+    local installer="$KILIX_DIR/scripts/install-kilix-llm.sh"
+    [ -f "$installer" ] && [ -x "$installer" ] && [ ! -L "$installer" ] \
+        || die "required kilix-llm installer is missing or unsafe: $installer"
+    as_user env "${install_env[@]}" "$installer" \
+        || die "required kilix-llm installation failed"
+    as_user env "${install_env[@]}" "$USER_HOME/.local/bin/kilix-llm" build --backend cpu \
+        || die "required kilix-llm CPU runtime build failed"
+}
+
 install_kilix_secrets() {
     [ -n "$KILIX_SECRETS_REF" ] || return 0
     [[ "$KILIX_SECRETS_REF" =~ ^[0-9a-f]{40}$ ]] \
@@ -7442,6 +7460,7 @@ record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 install_kilix_needle
+install_kilix_llm
 if [ "$DRY_RUN" != 1 ]; then
     /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/stage-command-model.py" --offline \
         || die "required offline command model staging failed"

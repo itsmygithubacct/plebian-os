@@ -6,6 +6,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Offer the optional chat model `qwen-0.8b-no-loop-02`, a modified
+  Qwen3.5-0.8B GGUF that loops less often in thinking mode, through kilix-llm.
+  The model wizard downloads it from the kilix-llm release of the same name
+  under the standard licence policy; its Apache-2.0 and CC BY 4.0 components
+  are owner-approved. Installation and upgrades install kilix-llm `b26cadcd`
+  and build its CPU runtime, and Kilix 95 then offers LLM Chat and Kilix Avatar
+  entries for the model. Kilix is `3baf1b9a`, kilix-content is `09686a00`,
+  kilix-license is `0bc59ccc`, Kilix 95 is `e98850de` and Kilix Avatar is
+  `a383f65a`. The regenerated model carrier `b5d645c4` changes only its
+  interface refs; its attached seats reviewed `bf003bf7`.
 - Deliver LFM2's terms as a notice, by the owner's 2026-11-07 determination.
   Image installs and upgrades record a notice receipt that claims no
   agreement, and never answer terms that need a typed agreement. The terms,

@@ -4386,6 +4386,19 @@ install_kilix_needle() {
         || die "required Needle application installation failed"
 }
 
+# The same kilix-llm closure provisioning installs: the launcher at the
+# updated Kilix's pin, then its CPU runtime, so the qwen-0.8b-no-loop-02 rows
+# work offline after an upgrade.
+install_kilix_llm() {
+    local installer="$KILIX_DIR/scripts/install-kilix-llm.sh"
+    [ -f "$installer" ] && [ -x "$installer" ] && [ ! -L "$installer" ] \
+        || die "required kilix-llm installer is missing or unsafe: $installer"
+    env "${stack_env[@]}" "$installer" \
+        || die "required kilix-llm installation failed"
+    env "${stack_env[@]}" "$HOME/.local/bin/kilix-llm" build --backend cpu \
+        || die "required kilix-llm CPU runtime build failed"
+}
+
 run_encodec_converter_installer() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
@@ -5372,6 +5385,8 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     test_fail_after_boundary component-update
     install_kilix_needle
     test_fail_after_boundary needle
+    install_kilix_llm
+    test_fail_after_boundary kilix-llm
     # The OS update stages the shared command archive with its admin context.
     # The following image-model install records local licence coverage for the
     # desktop user. It does not rewrite an existing Ask selection, and old
