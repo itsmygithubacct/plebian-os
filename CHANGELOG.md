@@ -9,7 +9,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Release acceptance clean-builds the pinned catalog one entry at a time:
   each entry is built, verified and deleted before the next. It kept every
   build until the end, and on the default 20 GB acceptance disk it ran out of
-  space. Each entry's free space is printed in the guest log.
+  space. Each entry, failed or not, prints the guest's free space just before
+  its build is deleted; a passing check records those lines in the
+  acceptance report.
 - Complete an install made without a network mirror. A pkgsel pre-hook defers
   the preseed package list to first-boot provisioning when the target has no
   network package source; wired interfaces then get DHCP from the base
