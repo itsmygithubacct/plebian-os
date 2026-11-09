@@ -1315,6 +1315,7 @@ def _catalog_build_script() -> str:
     """Guest-side clean-build program used by release acceptance."""
     return "\n".join((
         "import os",
+        "import shutil",
         "import tempfile",
         "from pathlib import Path",
         "from kilix_content import Installer, default_catalog",
@@ -1322,12 +1323,14 @@ def _catalog_build_script() -> str:
         "                    if spec.source_type in ('git', 'archive'))",
         "if not installable:",
         "    raise RuntimeError('catalog contains no pinned installable content')",
-        "with tempfile.TemporaryDirectory(prefix='.plebian-content-acceptance-',",
+        # Build, verify and delete one entry at a time, so the check needs the
+        # space of the largest entry, not of the whole catalog.
+        "for spec in installable:",
+        "    kind = 'apps' if spec.kind == 'app' else 'games'",
+        "    print(f'[content] {spec.content_id}', flush=True)",
+        "    with tempfile.TemporaryDirectory(prefix='.plebian-content-acceptance-',",
         "                                     dir=Path.home()) as root:",
-        "    for spec in installable:",
-        "        kind = 'apps' if spec.kind == 'app' else 'games'",
         "        destination = Path(root) / kind",
-        "        print(f'[content] {spec.content_id}', flush=True)",
         "        installer = Installer(str(destination))",
         "        executable = Path(installer.ensure(",
         "            spec, lambda message: print(message, flush=True)))",
@@ -1336,6 +1339,9 @@ def _catalog_build_script() -> str:
         "            raise RuntimeError(f'{spec.content_id}: installed executable is not selected')",
         "        if not executable.is_file() or not os.access(executable, os.X_OK):",
         "            raise RuntimeError(f'{spec.content_id}: final executable is not runnable')",
+        "        free = shutil.disk_usage(root).free",
+        "    print(f'[content] {spec.content_id} verified; {free} bytes were free before cleanup',",
+        "          flush=True)",
         "print(f'[content] verified {len(installable)} pinned clean builds', flush=True)",
     ))
 
