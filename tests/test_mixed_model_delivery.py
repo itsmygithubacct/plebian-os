@@ -28,15 +28,16 @@ class MixedModelDeliveryTests(unittest.TestCase):
         self.env = {f'm_{name}_delivery': entry['delivery']
                     for name, entry in self.carrier['models'].items()}
 
-    def guard(self, command=None):
+    def guard(self, command=None, playalong=None):
         (self.root / 'CARRIER.json').write_text(json.dumps(self.carrier))
         (self.root / 'CARRIER.env').write_text(''.join(f'{k}={v}\n' for k, v in self.env.items()))
         source = (ROOT / 'build/remaster-iso.sh').read_text()
         start = source.index('validate_model_delivery_inventory() {')
         end = source.index('\n}\n', start) + 3
         return subprocess.run(['bash', '-c', source[start:end] +
-                               '\nvalidate_model_delivery_inventory "$1" "$2" "$3"',
-                               'guard', str(self.root), str(self.expected), str(command) if command else ''],
+                               '\nvalidate_model_delivery_inventory "$1" "$2" "$3" "$4"',
+                               'guard', str(self.root), str(self.expected), str(command) if command else '',
+                               str(playalong) if playalong else ''],
                               capture_output=True, text=True)
 
     def test_mixed_inventory_is_accepted(self):
@@ -113,6 +114,43 @@ class MixedModelDeliveryTests(unittest.TestCase):
             self.assertNotEqual(self.guard(expected).returncode, 0)
         del self.carrier['models']['lfm2-kilix-commands']
         self.assertNotEqual(self.guard(expected).returncode, 0)
+
+    def playalong_fixture(self):
+        playalong = {'schema': 'plebian-os.playalong-default-models/v1', 'assets': {
+            'image-only': {'delivery': 'image', 'manifest_digest': 'f' * 64},
+            'deferred': {'delivery': 'online', 'manifest_digest': 'c' * 64}}}
+        expected = self.root / 'playalong-release.json'
+        expected.write_text(json.dumps(playalong))
+        (self.root / 'PLAYALONG-MODELS.json').write_text(json.dumps(playalong))
+        entry = self.carrier['models']['deferred']
+        entry['delivery'] = self.env['m_deferred_delivery'] = 'playalong-default-upstream-download'
+        return expected, playalong
+
+    def test_a_playalong_default_has_its_own_delivery(self):
+        expected, _ = self.playalong_fixture()
+        result = self.guard(playalong=expected)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Without the inventory the same entry is a false label.
+        self.assertIn('delivery differs', self.guard().stderr)
+
+    def test_a_playalong_default_cannot_be_relabelled_or_drift(self):
+        expected, playalong = self.playalong_fixture()
+        entry = self.carrier['models']['deferred']
+        for mode in ('first-use-upstream-download', 'bundled-default-model'):
+            with self.subTest(mode=mode):
+                entry['delivery'] = self.env['m_deferred_delivery'] = mode
+                self.assertIn('delivery differs', self.guard(playalong=expected).stderr)
+        entry['delivery'] = self.env['m_deferred_delivery'] = 'playalong-default-upstream-download'
+        entry['manifest_digest'] = 'e' * 64
+        self.assertIn('Playalong default manifest digest differs', self.guard(playalong=expected).stderr)
+        entry['manifest_digest'] = 'c' * 64
+        (self.root / 'PLAYALONG-MODELS.json').write_text(json.dumps(
+            {**playalong, 'assets': {**playalong['assets'], 'deferred': {
+                'delivery': 'image', 'manifest_digest': 'c' * 64}}}))
+        self.assertIn('Playalong defaults differ from the release inventory',
+                      self.guard(playalong=expected).stderr)
+        (self.root / 'PLAYALONG-MODELS.json').unlink()
+        self.assertNotEqual(self.guard(playalong=expected).returncode, 0)
 
 
 class MandatoryDefaultModelAdmissionTests(unittest.TestCase):

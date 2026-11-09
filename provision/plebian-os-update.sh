@@ -5375,7 +5375,10 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     # The OS update stages the shared command archive with its admin context.
     # The following image-model install records local licence coverage for the
     # desktop user. It does not rewrite an existing Ask selection, and old
-    # archives survive rollback.
+    # archives survive rollback. It also installs Kilix Playalong's missing
+    # default models unless the machine declined them, downloading Whisper
+    # medium.en (and Demucs, when the image did not supply it) from their pinned
+    # sources; a failed download does not fail the update.
     command_model_elevate=()
     [ "$(id -u)" = 0 ] || command_model_elevate=(sudo)
     "${command_model_elevate[@]}" /usr/bin/python3 \

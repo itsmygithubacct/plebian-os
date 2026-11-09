@@ -1358,6 +1358,7 @@ class VmBuilderEnvTests(unittest.TestCase):
     def test_catalog_acceptance_program_clean_builds_and_selects_every_pin(self):
         installed = []
         roots = []
+        left_behind = []
 
         class Installer:
             def __init__(self, root):
@@ -1368,6 +1369,10 @@ class VmBuilderEnvTests(unittest.TestCase):
                 return str(self.root / spec.content_id / spec.binary)
 
             def ensure(self, spec, report):
+                # The guest disk holds one entry's build at a time: every
+                # earlier entry's root is already deleted.
+                left_behind.extend(
+                    root.parent for root in roots[:-1] if root.parent.exists())
                 installed.append(spec.content_id)
                 report(f"building {spec.content_id}")
                 executable = Path(self.executable(spec))
@@ -1398,13 +1403,73 @@ class VmBuilderEnvTests(unittest.TestCase):
         module.Installer = Installer
         module.default_catalog = lambda: specs
         with mock.patch.dict(sys.modules, {"kilix_content": module}), \
-                mock.patch("builtins.print"):
+                mock.patch("builtins.print") as printed:
             exec(vm._catalog_build_script(), {})
 
         self.assertEqual(installed, ["game", "app"])
-        self.assertTrue(roots)
+        self.assertEqual(len(roots), 2)
         self.assertTrue(all(root.parent.parent == Path.home() for root in roots))
-        self.assertTrue(all(not root.exists() for root in roots))
+        self.assertEqual(len({root.parent for root in roots}), 2)
+        self.assertEqual(left_behind, [])
+        self.assertTrue(all(not root.parent.exists() for root in roots))
+        lines = [str(call.args[0]) for call in printed.call_args_list if call.args]
+        free = [line for line in lines if line.endswith(" bytes free before cleanup")]
+        self.assertEqual([line.split(":")[0] for line in free],
+                         ["[content] game", "[content] app"])
+
+    def test_catalog_acceptance_program_stops_on_a_failed_entry_and_deletes_it(self):
+        roots = []
+        attempted = []
+
+        class Installer:
+            def __init__(self, root):
+                self.root = Path(root)
+                roots.append(self.root)
+
+            def ensure(self, spec, report):
+                attempted.append(spec.content_id)
+                self.root.mkdir(parents=True, exist_ok=True)
+                (self.root / "partial-build").write_text("x" * 64)
+                raise RuntimeError(f"{spec.content_id}: build failed")
+
+        specs = tuple(
+            SimpleNamespace(content_id=name, source_type="git", kind="game", binary=name)
+            for name in ("broken", "later")
+        )
+        module = ModuleType("kilix_content")
+        module.Installer = Installer
+        module.default_catalog = lambda: specs
+        with mock.patch.dict(sys.modules, {"kilix_content": module}), \
+                mock.patch("builtins.print") as printed, \
+                self.assertRaisesRegex(RuntimeError, "broken: build failed"):
+            exec(vm._catalog_build_script(), {})
+
+        self.assertEqual(attempted, ["broken"])
+        self.assertEqual(len(roots), 1)
+        self.assertFalse(roots[0].parent.exists())
+        lines = [str(call.args[0]) for call in printed.call_args_list if call.args]
+        self.assertTrue(any(line.startswith("[content] broken: ")
+                            and line.endswith(" bytes free before cleanup") for line in lines))
+        self.assertFalse(any("verified" in line for line in lines))
+
+    def test_catalog_acceptance_records_free_space_on_a_pass(self):
+        stdout = ("[content] game\nbuilding game\n"
+                  "[content] game: 5368709120 bytes free before cleanup\n"
+                  "[content] app\n"
+                  "[content] app: 4294967296 bytes free before cleanup\n"
+                  "[content] verified 2 pinned clean builds\n")
+        result = SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+        recorder = mock.Mock()
+        with mock.patch.object(vm, "ssh", return_value=result), \
+                mock.patch.object(vm, "_RECORDER", recorder), \
+                mock.patch.object(vm, "info") as shown:
+            vm.verify_catalog_builds(cfg(), "askpass")
+        recorder.check.assert_called_once_with(
+            "pinned catalog clean builds", True,
+            "[content] game: 5368709120 bytes free before cleanup\n"
+            "[content] app: 4294967296 bytes free before cleanup")
+        logged = [call.args[0] for call in shown.call_args_list]
+        self.assertIn("    [content] app: 4294967296 bytes free before cleanup", logged)
 
     def test_yes_mode_generates_harness_only_password(self):
         with mock.patch.object(vm, "generated_password", return_value="random-pass"):

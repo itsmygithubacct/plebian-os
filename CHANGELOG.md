@@ -6,6 +6,51 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.3] — 2026-11-05
 
+- Kilix `beb39587` selects kitty-pty-broker `a5a5f2d3`. A pane's broker now
+  reaps the processes its shell orphans while the pane lives, instead of
+  leaving each one a zombie until the pane closes; long-lived agent panes had
+  accumulated about 20,000, which every process scan then paid for.
+- Kilix 95 `44525e24` keeps the first-run voice install off the desktop. Its
+  package build output was painted over the first desktop page of a new
+  login, and the install could read keys typed at the desktop. It now runs
+  with stdin closed, in its own session without the desktop's terminal and
+  with git's terminal prompt off, and writes its output to `default-voice.log`
+  in the desktop's private state.
+- Release acceptance clean-builds the pinned catalog one entry at a time:
+  each entry is built, verified and deleted before the next. It kept every
+  build until the end, and on the default 20 GB acceptance disk it ran out of
+  space. Each entry, failed or not, prints the guest's free space just before
+  its build is deleted; a passing check records those lines in the
+  acceptance report.
+- Complete an install made without a network mirror. A pkgsel pre-hook defers
+  the preseed package list to first-boot provisioning when the target has no
+  network package source; wired interfaces then get DHCP from the base
+  system's dhcpcd until provisioning hands them to NetworkManager; and
+  `apt-setup/disable-cdrom-entries` disables the install medium's apt entry,
+  which provisioning's apt provenance check refused. Network installs keep
+  the same package selection.
+- Install Kilix Playalong's default models when they are missing, by the
+  owner's 2026-11-08 decision: Demucs htdemucs_6s, Basic Pitch and Whisper
+  medium.en, under the standard distribution policy. Demucs ships in the image
+  as `demucs-htdemucs-6s.tar`, which holds Meta's unchanged weights file and
+  the Demucs MIT text. The build writes it from Meta's pinned URL and checks it
+  against `provision/demucs-model.json`. A fresh install takes Demucs and
+  Basic Pitch from the image. An online upgrade downloads Whisper medium.en,
+  and also Demucs when the image did not supply it. A failed download installs
+  nothing and the next upgrade retries; the receipt it leaves without files
+  reads as "not installed". The model wizard's Playalong page answered no, a
+  licence of one of the three refused in the model wizard, or
+  `KILIX_PLAYALONG_MODELS=0` in the shared settings file declines all three;
+  refusing only Whisper large-v3's licence declines nothing, and an answer that
+  cannot be read installs none of them.
+  Whisper large-v3 gets its own licence record, `faster-whisper-large-v3`
+  (owner determination 2026-11-08). It is offered for lyrics that are not in
+  English and is never a default. The carrier gives whisper-medium-en the
+  delivery mode `playalong-default-upstream-download`, bound to
+  `provision/playalong-models.json`, and carries the owner's distribution
+  record. Kilix is `beb39587`, kilix-content is `c8f0b0f5` (it selects
+  Playalong `a11a0219`), and kilix-license is `f8486ed3`. This round also folds
+  in the round-3 wording fixes.
 - Offer Whisper medium English (`whisper-medium-en`) as a second Whisper
   dictation model, a first-use download with its own licence record (owner
   determination 2026-11-07), and carry it in the model-compliance carrier.
@@ -15,7 +60,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   the LFM2 notice round: Needle `a887e2fa` no longer calls an uncovered notice
   licence "not accepted", Kilix's voice installer defaults to the release's
   kilix-voice `1a4e63b`, and the release-dictation fixture supplies
-  `KILIX_SECRETS_REF`. Kilix is `4b9f29cf`, kilix-content is `de2764f8` and
+  `KILIX_SECRETS_REF`. Kilix is `44b992ae`, kilix-content is `de2764f8` and
   kilix-license is `80aab439`.
 - Deliver LFM2's terms as a notice, by the owner's 2026-11-07 determination.
   Image installs and upgrades record a notice receipt that claims no

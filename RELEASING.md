@@ -502,7 +502,7 @@ release upgrade, physical or human acceptance gate. Retain the report and
    installed closure
    selector, voice, a real induced OS-layer update failure with byte-exact
    rollback, a successful whole-stack update/restart, and clean builds of every
-   installable catalog pin. Guest exit status—not output text—decides each
+   installable catalog pin, one entry at a time. Guest exit status—not output text—decides each
    check. The wrapper
    inherits the builder's 120-minute combined Debian-install and firstboot
    ceiling; pass a larger `--timeout` on a slower host or mirror. Retain the

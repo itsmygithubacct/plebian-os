@@ -7840,6 +7840,53 @@ finish_release_apt_install
 cleanup
 trap - EXIT INT TERM HUP
 
+# An install made without a network package source defers NetworkManager to
+# this run, so the installer left wired interfaces to
+# plebian-os-offline-network.service and kept NetworkManager off them
+# (provision/plebian-os-offline-install). Once NetworkManager is installed,
+# hand the interfaces over: remove the hold, stop and disable the offline
+# service, then restart NetworkManager so it manages them as on a network
+# install. dhcpcd stops first so it cannot remove an address NetworkManager has
+# just configured, and the service's stop releases its leases and removes its
+# addresses: a NetworkManager that finds an address already configured adopts
+# it as an external connection and never renews it, until the next boot. This
+# runs only after provisioning has committed; a failure
+# warns and never changes the provisioning result.
+OFFLINE_INSTALL_MARKER=/etc/plebian-os/offline-install
+OFFLINE_NETWORK_UNIT=plebian-os-offline-network.service
+OFFLINE_NETWORK_HOLD=/etc/NetworkManager/conf.d/90-plebian-os-offline.conf
+OFFLINE_NETWORK_STAMP=/etc/plebian-os/offline-network-handed-off
+hand_offline_network_to_networkmanager() {
+    [ -f "$OFFLINE_INSTALL_MARKER" ] || return 0
+    [ ! -e "$OFFLINE_NETWORK_STAMP" ] || return 0
+    if ! systemctl is-enabled --quiet NetworkManager.service 2>/dev/null; then
+        warn "offline install: NetworkManager is not enabled; $OFFLINE_NETWORK_UNIT keeps managing wired interfaces"
+        return 0
+    fi
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + rm -f $OFFLINE_NETWORK_HOLD"
+        echo "    + systemctl disable --now $OFFLINE_NETWORK_UNIT"
+        echo "    + systemctl restart NetworkManager.service"
+        return 0
+    fi
+    rm -f "$OFFLINE_NETWORK_HOLD" \
+        || { warn "offline install: could not remove $OFFLINE_NETWORK_HOLD; $OFFLINE_NETWORK_UNIT keeps managing wired interfaces"; return 0; }
+    # The stamp also fails the unit's start condition, so a later start of the
+    # offline service is a no-op even if disabling it below fails.
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$OFFLINE_NETWORK_STAMP" \
+        || warn "offline install: could not write $OFFLINE_NETWORK_STAMP"
+    systemctl disable --quiet "$OFFLINE_NETWORK_UNIT" \
+        || warn "offline install: could not disable $OFFLINE_NETWORK_UNIT"
+    systemctl stop "$OFFLINE_NETWORK_UNIT" \
+        || warn "offline install: could not stop $OFFLINE_NETWORK_UNIT"
+    if systemctl restart NetworkManager.service; then
+        log "offline install: NetworkManager now manages wired interfaces"
+    else
+        warn "offline install: NetworkManager did not restart; it manages wired interfaces from the next boot"
+    fi
+}
+hand_offline_network_to_networkmanager
+
 log "done. Plebian-OS is provisioned."
 log "  reboot → LightDM → Pleb → $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'screen-filling Kilix with visible chrome')."
 [ "$KIOSK" = 1 ] && log "  (kiosk: autologin + kilix respawn on exit; rescue console on Ctrl+Alt+F2)"

@@ -42,6 +42,9 @@ LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diari
                        "whisper-medium-en": "whisper-medium-records"}
 
 
+DISTRIBUTION_HEADING = "# Owner distribution decision"
+
+
 def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
     if model == "lfm2-kilix-commands":
         # Reuse the pinned project determination, without inventing user consent.
@@ -58,6 +61,10 @@ def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
         return [] if hashlib.sha256(text.encode()).hexdigest() == expected else [
             "diarization checkpoint determination differs from the recorded authority"]
     if model != "whistle":
+        if text.startswith(DISTRIBUTION_HEADING):
+            # A distribution decision changes how the model reaches a machine,
+            # not its terms; the model's determination is carried beside it.
+            return [] if "| Decided by | The owner" in text else ["missing owner decision"]
         return [] if "Determined by | The owner" in text else ["missing owner determination"]
     # The owner authorized this optional engine's RC6 integration. Licence
     # identity comes from the pinned upstream declaration, not an invented
@@ -208,14 +215,25 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
     if command and (not (root / 'COMMAND-MODEL.json').is_file()
                     or json.loads((root / 'COMMAND-MODEL.json').read_bytes()) != command):
         gaps.append("carried command archive differs from provisioning")
+    playalong = json.loads((ROOT / "provision/playalong-models.json").read_bytes())
+    if (not (root / "PLAYALONG-MODELS.json").is_file()
+            or json.loads((root / "PLAYALONG-MODELS.json").read_bytes()) != playalong):
+        gaps.append("carried Playalong defaults differ from provisioning")
+    online = {asset: item["manifest_digest"] for asset, item in playalong["assets"].items()
+              if item["delivery"] == "online"}
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
         bundled = entry["artifact_id"] in bundle["assets"]
         is_command = command is not None and entry['artifact_id'] == command['asset_id']
+        playalong_default = entry["artifact_id"] in online
         mode = ("bundled-command-model-archive" if is_command else
-                "bundled-default-model" if bundled else "first-use-upstream-download")
+                "bundled-default-model" if bundled else
+                "playalong-default-upstream-download" if playalong_default else
+                "first-use-upstream-download")
         if entry["delivery"] != mode:
             gaps.append(f"{model}: delivery differs from the pinned bundle")
+        if playalong_default and entry["manifest_digest"] != online[entry["artifact_id"]]:
+            gaps.append(f"{model}: Playalong default manifest differs")
         if is_command:
             if any(entry[k] != command[v] for k, v in (
                     ('archive_sha256', 'sha256'), ('archive_bytes', 'bytes'),
@@ -247,10 +265,29 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                 gaps.append("diarization DELIVERY names the unrelated dictation install route")
         if model in {"whisper-small-en", "whisper-medium-en", "whistle"} and "--check-licence" in delivery:
             gaps.append(f"{model}: DELIVERY claims a receipt check its install does not make")
-        for claim in ("This model's weights are not present in the image or downloaded by provisioning.",
-                      "No install route downloads it until a kilix-license receipt covers it:",
-                      route,
-                      "mode: first-use-upstream-download"):
+        # Medium's catalog entry is not in kilix-voice; Kilix's patcher adds it. The route
+        # the statement cites exists only through that patcher, so it must name it.
+        if model == "whisper-medium-en" and (
+                "kilix-voice itself has no whisper-medium-en entry" not in delivery
+                or "scripts/patch-whisper-medium-model.py at the release's KILIX_REF." not in delivery):
+            gaps.append(f"{model}: DELIVERY does not name the Kilix patcher its route depends on")
+        claims = ["This model's weights are not present in the image or downloaded by provisioning.",
+                  "No install route downloads it until a kilix-license receipt covers it:",
+                  route]
+        if playalong_default:
+            # An online upgrade installs it unless the machine declined Playalong's models.
+            claims += ["mode: playalong-default-upstream-download",
+                       "installs it by default for Kilix Playalong",
+                       "verifies it against the pinned digests before installation.",
+                       "records a local standard-policy receipt",
+                       "kilix-playalong page was answered no",
+                       "KILIX_PLAYALONG_MODELS=0 is set in the shared settings file",
+                       "the next upgrade tries again."]
+            if "reaches a machine only when a user installs it" in delivery:
+                gaps.append(f"{model}: DELIVERY says only a user installs a Playalong default")
+        else:
+            claims.append("mode: first-use-upstream-download")
+        for claim in claims:
             if claim not in delivery:
                 gaps.append(f"{model}: DELIVERY lacks {claim!r}")
         if ("not runnable" in delivery) == entry["runnable"]:
@@ -277,6 +314,75 @@ def command_installer_gaps(installer: str) -> list[str]:
                and any(isinstance(statement, ast.Raise) for statement in node.body)
                for node in ast.walk(tree)):
         gaps.append("the image installer does not refuse terms that need agreement")
+    return gaps
+
+
+def playalong_installer_gaps(installer: str) -> list[str]:
+    """AC-8: the Playalong DELIVERY is true of provision/install-image-models.py.
+
+    The machine's answer is read before any Playalong model is installed, every
+    Playalong install sits under "not declined", an offline run downloads
+    nothing, the standard-policy receipt is written before the download, and
+    the run after a failed download tries again: that run finds the receipt
+    without the files, which must read as "not installed", never as an error.
+    """
+    gaps = []
+    tree = ast.parse(installer)
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    main = functions.get("main")
+    playalong_calls = ("install_basic_pitch", "install_demucs", "install_whisper_medium")
+    if main is None:
+        return ["the image installer has no main"]
+
+    def called(node, name):
+        return [call for call in ast.walk(node) if isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name) and call.func.id == name]
+
+    guarded = set()
+    for node in ast.walk(main):
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "declined is None":
+            for statement in node.body:
+                guarded.update(id(call) for name in playalong_calls for call in called(statement, name))
+    for name in playalong_calls:
+        calls = called(main, name)
+        if not calls:
+            gaps.append(f"the image installer never calls {name}")
+        if any(id(call) not in guarded for call in calls):
+            gaps.append(f"{name} runs even when the machine declined Playalong's models")
+    answer = called(main, "playalong_declined")
+    if not answer or any(call.lineno > min(c.lineno for name in playalong_calls for c in called(main, name))
+                         for call in answer):
+        gaps.append("the image installer installs before it reads the machine's answer")
+    for name in ("install_demucs", "install_whisper_medium"):
+        function = functions.get(name)
+        if function is None:
+            gaps.append(f"the image installer has no {name}")
+            continue
+        for node in ast.walk(function):
+            if (isinstance(node, ast.If) and ast.unparse(node.test) == "offline"
+                    and any(called(statement, "fetch_default") for statement in node.body)):
+                gaps.append(f"{name} downloads in an offline run")
+        if not any(isinstance(node, ast.If) and ast.unparse(node.test) == "offline"
+                   for node in ast.walk(function)):
+            gaps.append(f"{name} does not tell an offline run apart")
+    fetch = functions.get("fetch_default")
+    order = [] if fetch is None else sorted(
+        (call.lineno, call.func.attr) for call in ast.walk(fetch) if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Attribute)
+        and call.func.attr in ("authorize", "ensure_upstream_asset"))
+    if [name for _, name in order] != ["authorize", "ensure_upstream_asset"]:
+        gaps.append("the Playalong download is not preceded by its standard-policy receipt")
+    for name in ("_install_from_image", "install_demucs", "install_whisper_medium"):
+        function = functions.get(name)
+        if function is None or called(function, "_installed") or not called(function, "_playalong_installed"):
+            gaps.append(f"{name} does not retry an install a failed download left incomplete")
+    retry = functions.get("_playalong_installed")
+    handlers = [] if retry is None else [node for node in ast.walk(retry) if isinstance(node, ast.ExceptHandler)]
+    if not any(handler.type is not None and ast.unparse(handler.type) == "cm._api().InstallError"
+               and any(isinstance(node, ast.Return) and isinstance(node.value, ast.Constant)
+                       and node.value.value is False for node in handler.body)
+               for handler in handlers):
+        gaps.append("an install a failed download left incomplete stops the next upgrade")
     return gaps
 
 
@@ -647,8 +753,12 @@ class ModelComplianceCarrierTests(unittest.TestCase):
             text = path.read_text()
             self.assertEqual(determination_gaps(item["model"], text, carrier["models"][item["model"]]),
                              [], item["path"])
-            covered.add(item["model"])
+            if not text.startswith(DISTRIBUTION_HEADING):
+                covered.add(item["model"])
+        # Every carried model has a determination; a distribution decision never stands in for one.
         self.assertEqual(covered, set(carrier["models"]))
+        planted = "# Owner distribution decision — x\n| Decided by | someone else |\n"
+        self.assertEqual(determination_gaps("whisper-medium-en", planted, {}), ["missing owner decision"])
 
     def test_whistle_authorization_requires_the_real_request_and_upstream_evidence(self):
         carrier = json.loads((CARRIER / "CARRIER.json").read_bytes())
@@ -694,6 +804,24 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         # The command model DELIVERY describes what the image installer does.
         installer = (ROOT / "provision" / "install-image-models.py").read_text()
         self.assertEqual(command_installer_gaps(installer), [])
+        # ...and the Playalong default DELIVERY too, with each claim it rests on planted false.
+        self.assertEqual(playalong_installer_gaps(installer), [])
+        for planted in (installer.replace("    if declined is None:\n        install_whisper_medium",
+                                          "    if True:\n        install_whisper_medium"),
+                        installer.replace("    declined = playalong_declined(args.kilix)\n",
+                                          "    declined = None\n"),
+                        installer.replace("    elif offline:\n        print('Whisper medium.en is not in the image",
+                                          "    elif offline:\n        fetch_default(kilix, WHISPER_MEDIUM, 'x', manifest_digest)\n"
+                                          "        print('Whisper medium.en is not in the image"),
+                        installer.replace("        defaults.authorize(lic, spec, records, store)\n"
+                                          "        installer = api.Installer(_apps_root())\n        try:",
+                                          "        installer = api.Installer(_apps_root())\n        try:"),
+                        installer.replace("    if _playalong_installed(cm, WHISPER_MEDIUM):",
+                                          "    if _installed(cm, WHISPER_MEDIUM):"),
+                        installer.replace("    except cm._api().InstallError as error:",
+                                          "    except cm.SetupError as error:")):
+            self.assertNotEqual(planted, installer)
+            self.assertTrue(playalong_installer_gaps(planted))
         for planted in (installer.replace("lic.capture_agreement(record)",
                                           "lic.capture_agreement(record, 'yes')"),
                         installer.replace("lic.capture_agreement(record)",
@@ -710,6 +838,22 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         installer = kilix_show(kilix, pins["KILIX_REF"], "scripts/install-kilix-voice.sh")
         self.assertEqual(kilix_gate_gaps(installer), [])
         self.assertTrue(kilix_gate_gaps(installer.replace('require_dictation_receipt "', 'true "')))
+        # The patcher the medium DELIVERY names exists at KILIX_REF, the voice installer runs
+        # it, and a DELIVERY that drops it is caught.
+        self.assertIn("patch-whisper-medium-model.py", installer)
+        self.assertIn("whisper-medium-en", kilix_show(
+            kilix, pins["KILIX_REF"], "scripts/patch-whisper-medium-model.py"))
+        with tempfile.TemporaryDirectory() as scratch:
+            planted = Path(scratch) / "carrier"
+            shutil.copytree(CARRIER, planted)
+            medium = planted / "whisper-medium-en" / "DELIVERY"
+            text = medium.read_text()
+            stripped = "".join(line for line in text.splitlines(keepends=True)
+                               if "patch-whisper-medium-model.py" not in line)
+            self.assertNotEqual(stripped, text)
+            medium.write_text(stripped)
+            self.assertIn("whisper-medium-en: DELIVERY does not name the Kilix patcher its route depends on",
+                          delivery_gaps(provision, planted))
         # ...and so does the kilix-bonsai that KILIX_REF installs.
         ref = bonsai_ref(kilix_show(kilix, pins["KILIX_REF"], "scripts/install-kilix-bonsai.sh"))
         self.assertRegex(ref, r"^[0-9a-f]{40}$", "KILIX_REF pins no kilix-bonsai commit")
