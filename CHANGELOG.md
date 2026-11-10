@@ -20,6 +20,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   model carrier `42b6956b` changes only its interface refs from the RC6
   carrier `4fdbffce`; two independent seats reviewed it (ship with known
   issues, listed in the 0.2.3 follow-ups).
+- Pin Go 1.27.3 (go.dev, both architecture hashes) for the Kilix engine build
+  in place of 1.27.0 (RC7); 1.27.2 and 1.27.3 are security releases. Fresh
+  installs build with it. Upgrades keep the Go they have until the engine is
+  rebuilt, which RC7 does not require.
 - Kilix `beb39587` selects kitty-pty-broker `a5a5f2d3`. A pane's broker now
   reaps the processes its shell orphans while the pane lives, instead of
   leaving each one a zombie until the pane closes; long-lived agent panes had
