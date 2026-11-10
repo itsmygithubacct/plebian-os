@@ -6,9 +6,9 @@
   "delivery_version": "lfm2-kilix-commands-20261106-v9",
   "model_sha256": "3fa22c105b1f80823088de21a45fd2f3dc30a4cfdc63d21037c9344585fae4dd",
   "source_pins": {
-    "kilix": "f93c100cf2b3c17c6b0b9d0b5b8d310a63f47e05",
-    "kilix-content": "c7aaac12049277b38e4876f24d11d4588a6e9698",
-    "kilix-license": "f33fdf2a0e8396bd32f3617633629bc3f7973e79",
+    "kilix": "b77e49b37068a8fad7be110cad830c17407edbaa",
+    "kilix-content": "32722d0be0e00974635ba3ab2ee9543fa35db92f",
+    "kilix-license": "596ada2ab68b9ec441674ff4da2d431559d47378",
     "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec",
     "kilix-needle": "30ee74fe770a6c3b19b23e68e3a4c7dbe4deae77"
   },
@@ -18,7 +18,7 @@
   },
   "manifest": {
     "repository": "https://github.com/itsmygithubacct/kilix-content",
-    "revision": "c7aaac12049277b38e4876f24d11d4588a6e9698",
+    "revision": "32722d0be0e00974635ba3ab2ee9543fa35db92f",
     "path": "src/kilix_content/catalog/plebian.json",
     "asset_id": "lfm2-kilix-commands",
     "note": "kilix-needle 30ee74fe770a6c3b19b23e68e3a4c7dbe4deae77 commands-model.json, unchanged from 5cbff3172224d5277adee5a3c826ee4b0698917a, describes this delivery and weight, and its vendored kilix-content carries the LFM2 notice record; through 3a8e41c52f32f963c4bbeadfbec69b200f13eafe it described lfm2-kilix-v5e1-wse-20261104.8"

@@ -1,4 +1,4 @@
-"""Basic Pitch and Demucs are on the image; they, Whisper medium.en and LFM2 install by default."""
+"""Basic Pitch, Demucs and page OCR are on the image; they, Whisper medium.en and LFM2 install by default."""
 import hashlib
 import importlib.util
 import io
@@ -26,6 +26,19 @@ DEMUCS_MANIFEST = '21c129345826c583e5327902dde4e7fe610282c2b0594bc058afb003ec8b0
 DEMUCS_WEIGHTS = '34c22ccb381c6f9fdbf324f04e1e2fe21aaaf293f5ded163a162697ff9a02ddd'
 DEMUCS_LICENCE = 'cf9b17822d1fcd4ff32ccbe14183386fb3adf6f2ff92dc184130823f7fc28173'
 MEDIUM_MANIFEST = '133afbde25b1a801f2f68d3a033c006a1979004df4452ea2496d12908006ce4b'
+APACHE = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
+PP_OCR = {
+    # asset id: (catalog manifest digest, archive bytes, archive sha256, {file: (bytes, sha256)})
+    'pp-ocrv6-small-det': (
+        '953752951e3805d83e0da54d24566d75d1e9a52d95101c6d900d45940fbd511e', 9902080,
+        'dbd78e6646688f55b167ffc6f27548ae52952f82bb746c2eea77293a715bf21c',
+        {'inference.onnx': (9880512, 'd73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e')}),
+    'pp-ocrv6-small-rec': (
+        '19566d34492f0fc80fa188a24195abd485777d3a211a99ae0fa9b17ef85d7a4e', 21329920,
+        'b358b3821a26000da53ebb8bdbd59dafdefe09c7797d7a820d848ad38368cda6',
+        {'inference.onnx': (21159378, '5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634'),
+         'inference.yml': (150579, 'ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1')}),
+}
 
 
 def _demucs_pin():
@@ -376,6 +389,158 @@ class SpacyArchiveTests(unittest.TestCase):
                 patch('builtins.print') as printed:
             installer.install_spacy('/kilix', None, self.pin)
         printed.assert_called_with('en_core_web_sm already verified; no bundle install needed.')
+
+
+def _pp_ocr_pin(asset_id):
+    return json.loads((ROOT / f'provision/{asset_id}-model.json').read_text())
+
+
+class PageOcrArchiveTests(unittest.TestCase):
+    """PDF Conversion's PP-OCRv6 small models ship in the image (owner, 2026-11-10)."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        # Stand-in files; each pin is re-made for them, as the build makes it
+        # for PaddlePaddle's files.
+        self.sources = {}
+        self.pins = {}
+        for asset_id, (_manifest, _bytes, _sha, files) in PP_OCR.items():
+            source = self.root / asset_id
+            source.mkdir()
+            pin = _pp_ocr_pin(asset_id)
+            for name in files:
+                data = (asset_id + name).encode() * 64
+                (source / name).write_bytes(data)
+                pin['files'][name] = {**pin['files'][name], 'bytes': len(data),
+                                      'sha256': hashlib.sha256(data).hexdigest()}
+            self.sources[asset_id] = source
+            self.pins[asset_id] = pin
+
+    def build(self, asset_id, name):
+        with patch.object(installer, 'verify_pp_ocr_archive'), patch('builtins.print'):
+            installer.build_pp_ocr_archive(self.sources[asset_id], self.root / name, self.pins[asset_id])
+        raw = (self.root / name).read_bytes()
+        return raw, {**self.pins[asset_id], 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+
+    def test_pins_name_paddlepaddle_s_files_the_apache_text_and_the_catalogued_assets(self):
+        self.assertEqual(hashlib.sha256(installer.PP_OCR_LICENCE_SOURCE.read_bytes()).hexdigest(), APACHE)
+        for asset_id, (manifest, size, digest, files) in PP_OCR.items():
+            pin = _pp_ocr_pin(asset_id)
+            with self.subTest(asset=asset_id):
+                installer.validate_pp_ocr_pin(pin, asset_id)
+                self.assertEqual(pin['since_release'], '0.2.3-rc8')
+                self.assertEqual((pin['manifest_digest'], pin['bytes'], pin['sha256']), (manifest, size, digest))
+                self.assertEqual(pin['filename'], asset_id + '.tar')
+                self.assertEqual(list(pin['files']), list(installer.pp_ocr_files(asset_id)))
+                for name, (length, sha) in files.items():
+                    self.assertEqual((pin['files'][name]['bytes'], pin['files'][name]['sha256']), (length, sha))
+                    self.assertTrue(pin['files'][name]['url'].startswith(
+                        'https://huggingface.co/PaddlePaddle/PP-OCRv6_small_'))
+                    self.assertIn('/resolve/' + pin['files'][name]['url'].split('/resolve/')[1].split('/')[0] + '/',
+                                  installer.PP_OCR_MODELS[asset_id][0])
+                self.assertEqual(pin['files'][installer.PP_OCR_LICENCE], {'bytes': 11358, 'sha256': APACHE})
+                other = 'pp-ocrv6-small-rec' if asset_id.endswith('det') else 'pp-ocrv6-small-det'
+                for field, value in (('filename', asset_id + '.tar.xz'), ('asset_id', other),
+                                     ('schema', 'plebian-os.demucs-archive/v1')):
+                    with self.assertRaises(ValueError):
+                        installer.validate_pp_ocr_pin({**pin, field: value}, asset_id)
+                moved = json.loads(json.dumps(pin))
+                name = next(iter(files))
+                moved['files'][name]['url'] = moved['files'][name]['url'].replace('/resolve/', '/resolve/main/x')
+                with self.assertRaisesRegex(ValueError, 'URL is not the pinned file'):
+                    installer.validate_pp_ocr_pin(moved, asset_id)
+        with self.assertRaisesRegex(ValueError, 'not a page OCR model'):
+            installer.pp_ocr_files('granite-docling-258m')
+
+    def test_the_archives_are_reproducible_verify_and_unpack(self):
+        for asset_id in PP_OCR:
+            with self.subTest(asset=asset_id):
+                raw, pin = self.build(asset_id, asset_id + '-first.tar')
+                self.assertEqual(self.build(asset_id, asset_id + '-second.tar')[0], raw)
+                path = self.root / (asset_id + '-first.tar')
+                installer.verify_pp_ocr_archive(path, pin)
+                with tarfile.open(path, mode='r:') as archive:
+                    members = archive.getmembers()
+                self.assertEqual([member.name for member in members], list(installer.pp_ocr_files(asset_id)))
+                for member in members:
+                    self.assertEqual((member.mtime, member.uid, member.gid, member.mode, member.uname),
+                                     (0, 0, 0, 0o644, ''))
+                unpacked = self.root / (asset_id + '-unpacked')
+                unpacked.mkdir()
+                installer.materialize_pp_ocr(path, pin, unpacked)
+                self.assertEqual((unpacked / installer.PP_OCR_LICENCE).read_bytes(),
+                                 installer.PP_OCR_LICENCE_SOURCE.read_bytes())
+                for name in PP_OCR[asset_id][3]:
+                    self.assertEqual((unpacked / name).read_bytes(), (self.sources[asset_id] / name).read_bytes())
+
+    def test_the_builder_refuses_other_files_and_leaves_nothing(self):
+        asset_id = 'pp-ocrv6-small-rec'
+        (self.sources[asset_id] / 'inference.yml').write_bytes(b'other characters')
+        with self.assertRaisesRegex(ValueError, 'pp-ocrv6-small-rec input size or checksum mismatch'):
+            self.build(asset_id, 'bad.tar')
+        self.assertFalse((self.root / 'bad.tar').exists())
+        wrong = {**self.pins['pp-ocrv6-small-det'], 'bytes': 10240, 'sha256': 'f' * 64}
+        with patch('builtins.print'), self.assertRaisesRegex(ValueError, 'size or checksum'):
+            installer.build_pp_ocr_archive(self.sources['pp-ocrv6-small-det'], self.root / 'wrong.tar', wrong)
+        self.assertFalse((self.root / 'wrong.tar').exists())
+
+    def test_bad_members_are_refused(self):
+        asset_id = 'pp-ocrv6-small-det'
+        model = (self.sources[asset_id] / 'inference.onnx').read_bytes()
+        licence = installer.PP_OCR_LICENCE_SOURCE.read_bytes()
+        cases = [
+            ('escape', [('../escape', model, tarfile.REGTYPE)]),
+            ('link', [('inference.onnx', b'', tarfile.SYMTYPE),
+                      (installer.PP_OCR_LICENCE, licence, tarfile.REGTYPE)]),
+            ('extra', [('inference.onnx', model, tarfile.REGTYPE),
+                       (installer.PP_OCR_LICENCE, licence, tarfile.REGTYPE),
+                       ('README.md', b'card', tarfile.REGTYPE)]),
+            ('no-licence', [('inference.onnx', model, tarfile.REGTYPE)]),
+        ]
+        for name, members in cases:
+            raw = _archive(members, mode='w')
+            path = self.root / (name + '.tar')
+            path.write_bytes(raw)
+            forged = {**self.pins[asset_id], 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                installer.verify_pp_ocr_archive(path, forged)
+
+    def test_the_image_archive_is_preferred_and_a_symlink_is_not_used(self):
+        with patch.object(installer, 'SHARED_BASIC_PITCH', self.root):
+            for asset_id in PP_OCR:
+                with self.subTest(asset=asset_id):
+                    self.assertIsNone(installer.resolve_pp_ocr(None, asset_id))
+                    (self.root / (asset_id + '-elsewhere.tar')).write_bytes(b'x')
+                    (self.root / (asset_id + '.tar')).symlink_to(self.root / (asset_id + '-elsewhere.tar'))
+                    self.assertIsNone(installer.resolve_pp_ocr(None, asset_id))
+                    (self.root / (asset_id + '.tar')).unlink()
+                    (self.root / (asset_id + '.tar')).write_bytes(b'x')
+                    self.assertEqual(installer.resolve_pp_ocr(None, asset_id), self.root / (asset_id + '.tar'))
+                    self.assertEqual(installer.resolve_pp_ocr(self.root / 'given.tar', asset_id),
+                                     self.root / 'given.tar')
+
+    def test_the_command_line_builds_and_verifies_each_archive(self):
+        pins = {}
+        for asset_id in PP_OCR:
+            raw, pins[asset_id] = self.build(asset_id, asset_id + '-expected.tar')
+        real = installer._load_pin
+        for asset_id in PP_OCR:
+            with self.subTest(asset=asset_id), patch.dict(installer.__dict__), patch('builtins.print'):
+                installer._load_pin = lambda name: (pins[name[:-len('-model.json')]]
+                                                    if name[:-len('-model.json')] in pins else real(name))
+                output = self.root / (asset_id + '-cli.tar')
+                self.assertEqual(installer.main(['--build-pp-ocr-archive', asset_id, str(output),
+                                                 '--pp-ocr-files', str(self.sources[asset_id])]), 0)
+                self.assertEqual(output.read_bytes(), (self.root / (asset_id + '-expected.tar')).read_bytes())
+                self.assertEqual(installer.main([
+                    '--verify-only', '--basic-pitch',
+                    str(ROOT / 'provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz'),
+                    '--' + asset_id, str(output)]), 0)
+        with patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit):
+            installer.main(['--build-pp-ocr-archive', 'granite-docling-258m', str(self.root / 'x.tar'),
+                            '--pp-ocr-files', str(self.root)])
 
 
 class ParadeeWheelTests(unittest.TestCase):
@@ -761,6 +926,50 @@ class InstallPolicyTests(unittest.TestCase):
         installer.install_whisper_medium(Path('/kilix'), MEDIUM_MANIFEST, offline=False)
         self.assertEqual(self.calls, [])
 
+    def test_page_ocr_from_the_image_uses_the_standard_policy_and_supplied_bytes(self):
+        self.eligible = True
+        case = PageOcrArchiveTests('test_the_archives_are_reproducible_verify_and_unpack')
+        case.setUp()
+        self.addCleanup(case.doCleanups)
+        for asset_id, (manifest, *_rest) in PP_OCR.items():
+            self.calls.clear()
+            self.spec.asset_id, self.spec.manifest_digest = asset_id, manifest
+            _raw, pin = case.build(asset_id, asset_id + '-image.tar')
+            with self.subTest(asset=asset_id), patch('builtins.print'):
+                installer.install_pp_ocr(Path('/kilix'), case.root / (asset_id + '-image.tar'), pin, offline=True)
+                self.assertEqual(self.calls, [('authorize', asset_id),
+                                              ('supplied', asset_id, self.calls[1][2])])
+
+    def test_page_ocr_downloads_only_online_and_only_its_pinned_asset(self):
+        self.eligible = True
+        for asset_id, (manifest, *_rest) in PP_OCR.items():
+            pin = _pp_ocr_pin(asset_id)
+            self.spec.asset_id, self.spec.manifest_digest = asset_id, manifest
+            with self.subTest(asset=asset_id):
+                self.calls.clear()
+                with patch('builtins.print') as shown:
+                    installer.install_pp_ocr(Path('/kilix'), None, pin, offline=True)
+                self.assertEqual(self.calls, [])
+                self.assertIn('the first online upgrade downloads it', str(shown.call_args))
+                with patch('builtins.print'):
+                    installer.install_pp_ocr(Path('/kilix'), None, pin, offline=False)
+                self.assertEqual(self.calls, [('authorize', asset_id), ('upstream', asset_id, None)])
+                self.calls.clear()
+                self.spec.manifest_digest = 'e' * 64
+                with self.assertRaisesRegex(ValueError, asset_id + ' catalog differs from its image pin'):
+                    installer.install_pp_ocr(Path('/kilix'), None, pin, offline=False)
+                self.assertEqual(self.calls, [])
+        self.cm._verify = lambda *args, **kwargs: 0
+        with patch('builtins.print'):
+            installer.install_pp_ocr(Path('/kilix'), None, _pp_ocr_pin('pp-ocrv6-small-det'), offline=False)
+        self.assertEqual(self.calls, [])
+
+    def test_page_ocr_refuses_custom_terms_before_a_download(self):
+        self.spec.asset_id, self.spec.manifest_digest = 'pp-ocrv6-small-rec', PP_OCR['pp-ocrv6-small-rec'][0]
+        with self.assertRaisesRegex(ValueError, 'standard distribution policy'):
+            installer.install_pp_ocr(Path('/kilix'), None, _pp_ocr_pin('pp-ocrv6-small-rec'), offline=False)
+        self.assertEqual(self.calls, [])
+
     def kilix_module(self, *, declined=None, error=None, defaults=None):
         module = SimpleNamespace(DEFAULT_MODELS=defaults or installer.PLAYALONG_DEFAULTS)
 
@@ -829,6 +1038,9 @@ class PlayalongOrderTests(unittest.TestCase):
                 patch.object(installer, 'install_paradee', record('paradee')), \
                 patch.object(installer, 'install_spacy', record('spacy')), \
                 patch.object(installer, 'install_command_model', record('command')), \
+                patch.object(installer, 'install_pp_ocr',
+                             lambda kilix, archive, pin, **kwargs: calls.append(
+                                 (pin['asset_id'], kwargs.get('offline')))), \
                 patch.object(installer, 'install_whisper_medium', record('medium')), \
                 patch('builtins.print'):
             self.assertEqual(installer.main(['--kilix', '/kilix', *extra]), 0)
@@ -837,16 +1049,20 @@ class PlayalongOrderTests(unittest.TestCase):
     def test_image_models_first_and_the_large_download_last(self):
         self.assertEqual(self.run_main(None, '--offline'), [
             ('basic-pitch', None), ('demucs', True), ('paradee', None), ('spacy', None),
-            ('command', None), ('medium', True)])
+            ('command', None), ('pp-ocrv6-small-det', True), ('pp-ocrv6-small-rec', True),
+            ('medium', True)])
         self.assertEqual(self.run_main(None), [
             ('basic-pitch', None), ('demucs', False), ('paradee', None), ('spacy', None),
-            ('command', None), ('medium', False)])
+            ('command', None), ('pp-ocrv6-small-det', False), ('pp-ocrv6-small-rec', False),
+            ('medium', False)])
 
-    def test_a_declining_machine_still_gets_paradee_and_the_command_model(self):
+    def test_a_declining_machine_still_gets_paradee_page_ocr_and_the_command_model(self):
         voice = [('paradee', None), ('spacy', None), ('command', None)]
-        self.assertEqual(self.run_main("the model wizard's Playalong page was answered no"), voice)
+        self.assertEqual(self.run_main("the model wizard's Playalong page was answered no"),
+                         voice + [('pp-ocrv6-small-det', False), ('pp-ocrv6-small-rec', False)])
         self.assertEqual(self.run_main('whether this machine declined them cannot be read (x)',
-                                       '--offline'), voice)
+                                       '--offline'),
+                         voice + [('pp-ocrv6-small-det', True), ('pp-ocrv6-small-rec', True)])
 
 
 class ImageWiringTests(unittest.TestCase):
@@ -903,6 +1119,33 @@ class ImageWiringTests(unittest.TestCase):
         self.assertLess(built, checked)
         self.assertLess(checked, staged)
         self.assertLess(remaster.index('WORK="$(mktemp -d'), download)
+
+    def test_page_ocr_travels_from_the_build_to_the_installed_system(self):
+        preseed = (ROOT / 'preseed/preseed.cfg').read_text()
+        remaster = (ROOT / 'build/remaster-iso.sh').read_text()
+        self.assertIn('build_pp_ocr_bundle() {', remaster)
+        download = remaster.index('_bounded_download "$bytes" 600 "$files/$name"')
+        built = remaster.index('--build-pp-ocr-archive "$asset_id" "$WORK/$asset_id.tar"')
+        self.assertLess(remaster.index('WORK="$(mktemp -d'), download)
+        self.assertLess(download, built)
+        for asset_id, variable in (('pp-ocrv6-small-det', 'PP_OCR_DET_MODEL_BUNDLE'),
+                                   ('pp-ocrv6-small-rec', 'PP_OCR_REC_MODEL_BUNDLE')):
+            with self.subTest(asset=asset_id):
+                self.assertEqual(installer.SHARED_BASIC_PITCH / _pp_ocr_pin(asset_id)['filename'],
+                                 Path(f'/usr/local/share/plebian-os/{asset_id}.tar'))
+                self.assertIn(
+                    f'cp /cdrom/plebian-os/{asset_id}.tar /target/usr/local/share/plebian-os/{asset_id}.tar',
+                    preseed)
+                self.assertIn(f'chmod 0644 /target/usr/local/share/plebian-os/{asset_id}.tar', preseed)
+                # A supplied archive is checked early; a built one is checked
+                # again before staging.
+                self.assertIn(f'{variable}="${{PLEBIAN_OS_{variable}:-}}"', remaster)
+                called = remaster.index(f'    build_pp_ocr_bundle {asset_id}\n')
+                checked = remaster.rindex(f'--{asset_id} "${variable}"')
+                staged = remaster.index(f'install -m 0644 "${variable}" "$EXTRACT/plebian-os/{asset_id}.tar"')
+                self.assertLess(built, called)
+                self.assertLess(called, checked)
+                self.assertLess(checked, staged)
 
     def test_paradee_travels_from_the_build_to_the_installed_system(self):
         preseed = (ROOT / 'preseed/preseed.cfg').read_text()

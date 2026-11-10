@@ -1,0 +1,25 @@
+{
+  "schema": "plebian-os.pp-ocrv6-small-archive/v1",
+  "since_release": "0.2.3-rc8",
+  "asset_id": "pp-ocrv6-small-rec",
+  "manifest_digest": "19566d34492f0fc80fa188a24195abd485777d3a211a99ae0fa9b17ef85d7a4e",
+  "filename": "pp-ocrv6-small-rec.tar",
+  "bytes": 21329920,
+  "sha256": "b358b3821a26000da53ebb8bdbd59dafdefe09c7797d7a820d848ad38368cda6",
+  "files": {
+    "inference.onnx": {
+      "bytes": 21159378,
+      "sha256": "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634",
+      "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.onnx"
+    },
+    "inference.yml": {
+      "bytes": 150579,
+      "sha256": "ab078671bb49f06228eadccd34f1bb501e157f7a047095ffb943ba81512c77d1",
+      "url": "https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/b8f84f0b80c529de40b4fbb3544b84fa7233a513/inference.yml"
+    },
+    "notices/LICENSE-apache-2.0.txt": {
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  }
+}

@@ -13,6 +13,12 @@ Demucs from Meta's pinned URL and medium.en from its pinned revision; a failed
 download leaves the model out and the next upgrade tries again. Whisper
 large-v3 is never a default.
 
+PDF Conversion's page OCR models, PaddlePaddle's PP-OCRv6 small detector and
+recogniser, are Apache-2.0 (owner determination, 2026-11-10) and ship in the
+image. They install whether or not Playalong's models were declined. A fresh
+install takes them from the image; an online run without the archives
+downloads the same files from the pinned revisions.
+
 LFM2 is the pinned command-model archive. By the owner's 2026-11-07
 determination its published custom terms, including the commercial-use
 limitation, are a notice. Installation records a notice receipt for them on
@@ -70,6 +76,19 @@ SPACY_WHEEL_URL = (
     'en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl')
 SPACY_LICENCE_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'en-core-web-sm-3.8.0-LICENSE-mit.txt'
 SPACY_SOURCES_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'en-core-web-sm-3.8.0-LICENSES_SOURCES.txt'
+# PDF Conversion's page OCR models: each asset id, the pinned revision's file
+# URL prefix and the files page OCR reads. Neither repository has a LICENSE
+# file, so the Apache-2.0 text is Debian's copy (owner determination 2026-11-10).
+PP_OCR_MODELS = {
+    'pp-ocrv6-small-det': (
+        'https://huggingface.co/PaddlePaddle/PP-OCRv6_small_det_onnx/resolve/'
+        '28fe5895c24fd108c19eb3e8479f4ab385fbfc62/', ('inference.onnx',)),
+    'pp-ocrv6-small-rec': (
+        'https://huggingface.co/PaddlePaddle/PP-OCRv6_small_rec_onnx/resolve/'
+        'b8f84f0b80c529de40b4fbb3544b84fa7233a513/', ('inference.onnx', 'inference.yml')),
+}
+PP_OCR_LICENCE = 'notices/LICENSE-apache-2.0.txt'
+PP_OCR_LICENCE_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'pp-ocrv6-small-LICENSE-apache-2.0.txt'
 WHISPER_MEDIUM = 'faster-whisper-medium-en'
 PLAYALONG_DEFAULTS = ('demucs-htdemucs-6s', 'basic-pitch-icassp-2022-onnx', WHISPER_MEDIUM)
 # One online fetch may take this long; Whisper medium.en is 1.5 GB.
@@ -134,6 +153,25 @@ def validate_spacy_pin(pin):
         members=SPACY_FILES, limit=16 * 1024 * 1024)
     if pin['files'][SPACY_WHEEL].get('url') != SPACY_WHEEL_URL:
         raise ValueError('invalid en_core_web_sm pin: the wheel URL is not the pinned file')
+
+
+def pp_ocr_files(asset_id):
+    """The members of one page OCR archive, in archive order."""
+    if asset_id not in PP_OCR_MODELS:
+        raise ValueError(f'not a page OCR model: {asset_id!r}')
+    return PP_OCR_MODELS[asset_id][1] + (PP_OCR_LICENCE,)
+
+
+def validate_pp_ocr_pin(pin, asset_id):
+    members = pp_ocr_files(asset_id)
+    base, models = PP_OCR_MODELS[asset_id]
+    _validate_archive_pin(
+        pin, label=asset_id, schema='plebian-os.pp-ocrv6-small-archive/v1',
+        asset_id=asset_id, filename=asset_id + '.tar',
+        members=members, limit=32 * 1024 * 1024)
+    for name in models:
+        if pin['files'][name].get('url') != base + name:
+            raise ValueError(f'invalid {asset_id} pin: the {name} URL is not the pinned file')
 
 
 def validate_playalong_inventory(inventory, basic_pin, demucs_pin):
@@ -357,6 +395,33 @@ def build_spacy_archive(wheel, output, pin):
     print('en_core_web_sm image archive written: ' + str(output))
 
 
+def verify_pp_ocr_archive(path, pin):
+    """Check one page OCR archive, PaddlePaddle's unchanged files and the Apache-2.0 text."""
+    validate_pp_ocr_pin(pin, pin.get('asset_id'))
+    _verify_image_archive(path, pin, pin['asset_id'], 'r:')
+
+
+def materialize_pp_ocr(path, pin, destination):
+    verify_pp_ocr_archive(path, pin)
+    _materialize_image_archive(path, pin, destination, pin['asset_id'], 'r:')
+
+
+def build_pp_ocr_archive(sources, output, pin):
+    """Write one page OCR image archive from the pinned files in sources and the Apache-2.0 text.
+
+    sources holds each upstream file at its member path, as the build fetched it.
+    """
+    asset_id = pin.get('asset_id')
+    validate_pp_ocr_pin(pin, asset_id)
+    members = [
+        (name, _checked_input(pin, name, Path(sources) / name, asset_id))
+        for name in PP_OCR_MODELS[asset_id][1]
+    ]
+    members.append((PP_OCR_LICENCE, _checked_input(pin, PP_OCR_LICENCE, PP_OCR_LICENCE_SOURCE, asset_id)))
+    _build_ustar(members, output, lambda path: verify_pp_ocr_archive(path, pin))
+    print(asset_id + ' image archive written: ' + str(output))
+
+
 def verify_paradee_runtime(pin, root=None):
     """The runtime files preseed wrote, including the Apache-2.0 text. This does not write them."""
     validate_paradee_pin(pin)
@@ -511,6 +576,10 @@ def resolve_spacy(explicit):
     return _resolve_shared_archive(explicit, 'en-core-web-sm-3.8.0.tar')
 
 
+def resolve_pp_ocr(explicit, asset_id):
+    return _resolve_shared_archive(explicit, asset_id + '.tar')
+
+
 def _load(kilix):
     config = str(Path(kilix) / 'config')
     if config not in sys.path:
@@ -593,8 +662,8 @@ def install_basic_pitch(kilix, archive, pin):
     _install_from_image(kilix, archive, pin, 'Basic Pitch', materialize)
 
 
-def fetch_default(kilix, asset_id, label, manifest_digest):
-    """Download one Playalong default from its pinned source; False if that failed.
+def fetch_default(kilix, asset_id, label, manifest_digest, pinned_by='the Playalong inventory'):
+    """Download one Playalong default or page OCR model from its pinned source; False if that failed.
 
     The catalogued asset must be the one this release pinned, and the licence
     gate is the same as the image's: the standard distribution policy or
@@ -603,7 +672,7 @@ def fetch_default(kilix, asset_id, label, manifest_digest):
     cm, defaults = _load(kilix)
     api, lic, spec, records, store = _catalog_spec(cm, asset_id)
     if spec.asset_id != asset_id or spec.manifest_digest != manifest_digest:
-        raise ValueError(label + ' catalog differs from the Playalong inventory')
+        raise ValueError(label + ' catalog differs from ' + pinned_by)
     _require_standard_policy(cm, lic, spec, records, label)
     with tempfile.TemporaryDirectory(prefix='plebian-playalong-texts-') as scratch:
         texts = lic.load_determined_texts(Path(scratch) / 'texts')
@@ -668,6 +737,25 @@ def install_whisper_medium(kilix, manifest_digest, *, offline):
         print('Whisper medium.en is not in the image; the first online upgrade downloads it.')
     else:
         fetch_default(kilix, WHISPER_MEDIUM, 'Whisper medium.en', manifest_digest)
+
+
+def install_pp_ocr(kilix, archive, pin, *, offline):
+    """A page OCR model from the image archive when this machine has it, else from its revision.
+
+    PDF Conversion reads it from the content root and never downloads it.
+    """
+    asset_id = pin['asset_id']
+    if archive is not None:
+        _install_from_image(kilix, archive, pin, asset_id, materialize_pp_ocr)
+        return
+    cm, _defaults = _load(kilix)
+    if _playalong_installed(cm, asset_id):
+        print(asset_id + ' already verified; no download needed.')
+    elif offline:
+        print(asset_id + ': the installation media did not supply its archive; '
+              'the first online upgrade downloads it.')
+    else:
+        fetch_default(kilix, asset_id, asset_id, pin['manifest_digest'], pinned_by='its image pin')
 
 
 def playalong_declined(kilix):
@@ -775,6 +863,13 @@ def main(argv=None):
     parser.add_argument('--build-en-core-web-sm-archive', type=Path, dest='build_spacy_archive', metavar='OUTPUT',
                         help='write the en_core_web_sm image archive from --en-core-web-sm-wheel and exit')
     parser.add_argument('--en-core-web-sm-wheel', type=Path, dest='spacy_wheel')
+    for asset_id in PP_OCR_MODELS:
+        parser.add_argument('--' + asset_id, type=Path, dest=asset_id.replace('-', '_'),
+                            help=f'the {asset_id} image archive (default: the copy the image installed, if any)')
+    parser.add_argument('--build-pp-ocr-archive', nargs=2, metavar=('ASSET_ID', 'OUTPUT'),
+                        help='write one page OCR image archive from --pp-ocr-files and exit')
+    parser.add_argument('--pp-ocr-files', type=Path, metavar='DIR',
+                        help='the pinned upstream files of the page OCR model, at their member paths')
     parser.add_argument('--install-paradee-runtime', action='store_true',
                         help='as root, copy a missing Paradee ONNX and config.json into the runtime directory')
     parser.add_argument('--paradee-runtime', type=Path, default=PARADEE_RUNTIME)
@@ -789,11 +884,14 @@ def main(argv=None):
     paradee_pin = _load_pin('paradee-model.json')
     spacy_pin = _load_pin('en-core-web-sm-model.json')
     playalong = _load_pin('playalong-models.json')
+    pp_ocr_pins = {asset_id: _load_pin(asset_id + '-model.json') for asset_id in PP_OCR_MODELS}
     validate_basic_pitch_pin(basic_pin)
     validate_command_pin(command_pin)
     validate_demucs_pin(demucs_pin)
     validate_paradee_pin(paradee_pin)
     validate_spacy_pin(spacy_pin)
+    for asset_id, pin in pp_ocr_pins.items():
+        validate_pp_ocr_pin(pin, asset_id)
     validate_playalong_inventory(playalong, basic_pin, demucs_pin)
     if args.verify_paradee_wheels is not None:
         verify_paradee_wheels(args.verify_paradee_wheels, load_wheel_lock())
@@ -814,6 +912,14 @@ def main(argv=None):
             parser.error('--build-en-core-web-sm-archive needs --en-core-web-sm-wheel')
         build_spacy_archive(args.spacy_wheel, args.build_spacy_archive, spacy_pin)
         return 0
+    if args.build_pp_ocr_archive is not None:
+        asset_id, output = args.build_pp_ocr_archive[0], Path(args.build_pp_ocr_archive[1])
+        if asset_id not in pp_ocr_pins:
+            parser.error('--build-pp-ocr-archive names no page OCR model: ' + asset_id)
+        if args.pp_ocr_files is None:
+            parser.error('--build-pp-ocr-archive needs --pp-ocr-files')
+        build_pp_ocr_archive(args.pp_ocr_files, output, pp_ocr_pins[asset_id])
+        return 0
     if args.install_paradee_runtime:
         paradee_archive = resolve_paradee(args.paradee)
         if paradee_archive is None:
@@ -830,12 +936,16 @@ def main(argv=None):
         verify_paradee_archive(args.paradee, paradee_pin)
     if args.spacy is not None:
         verify_spacy_archive(args.spacy, spacy_pin)
+    pp_ocr_archives = {asset_id: getattr(args, asset_id.replace('-', '_')) for asset_id in PP_OCR_MODELS}
+    for asset_id, path in pp_ocr_archives.items():
+        if path is not None:
+            verify_pp_ocr_archive(path, pp_ocr_pins[asset_id])
     if args.verify_only:
         return 0
     if args.kilix is None:
         parser.error('--kilix is required')
     # --offline is the fresh-install call: it downloads nothing. Basic Pitch,
-    # Demucs, Paradee, en_core_web_sm and the command model come from the image.
+    # Demucs, Paradee, en_core_web_sm, page OCR and the command model come from the image.
     if args.offline and not archive.is_file():
         raise ValueError('the installation media did not supply the Basic Pitch model')
     declined = playalong_declined(args.kilix)
@@ -847,6 +957,9 @@ def main(argv=None):
     install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin)
     install_spacy(args.kilix, resolve_spacy(args.spacy), spacy_pin)
     install_command_model(args.kilix, command_pin, args.command_cache)
+    for asset_id, pin in pp_ocr_pins.items():
+        install_pp_ocr(args.kilix, resolve_pp_ocr(pp_ocr_archives[asset_id], asset_id), pin,
+                       offline=args.offline)
     # The one large download comes last, after everything the image supplies.
     if declined is None:
         install_whisper_medium(args.kilix, playalong['assets'][WHISPER_MEDIUM]['manifest_digest'],

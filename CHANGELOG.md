@@ -15,15 +15,27 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   and checks the Apache-2.0 text before install and synthesis, and ships the
   espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
   `libespeak-ng`. The 0.2.3 carrier names both image models as
-  `image-offline-model`. Carrier `81994103` binds kilix-content
-  `c7aaac1`, which selects Needle `30ee74fe`. The attached seats still
+  `image-offline-model`. Carrier `2a9839f7` binds kilix-content
+  `32722d0` and kilix-license `596ada2`. The attached seats still
   quote carrier `9701a082` and do not accept this carrier.
 - Install Debian's Tesseract (`tesseract-ocr`, `tesseract-ocr-eng`,
   5.5.0-1+b1 with language data 4.1.0-2) on the Debian-installer path and
   in `install-deps.sh`. kilix-pdf-conversion 0.4.0 uses it for page OCR,
   beside RapidOCR with the PP-OCRv6 small models. This adds five packages,
-  about 23 MiB installed. Tesseract is Apache-2.0. The content catalog
-  does not yet pin that app version or its two model assets.
+  about 23 MiB installed. Tesseract is Apache-2.0.
+- Ship PDF Conversion's page OCR models in the image:
+  `pp-ocrv6-small-det` and `pp-ocrv6-small-rec`, PaddlePaddle's PP-OCRv6
+  small text detector and recogniser as ONNX. The owner determined
+  Apache-2.0 for both on 2026-11-10. Neither Hugging Face repository has a
+  LICENSE file, so each archive carries Debian's Apache-2.0 text. The two
+  archives are 31,232,000 bytes. A fresh install installs both offline into
+  the content root. An upgrade on a machine without the archives downloads
+  the same files from the pinned revisions. Both models install whether or
+  not Playalong's models were declined. They are outside the voice carrier,
+  like Demucs. Kilix `b77e49b` moves its kilix-content gitlink to `32722d0`.
+  That commit catalogues both models and selects kilix-pdf-conversion
+  `2cff8ff`, which adds page OCR. Kilix 95 is `fdf62f1`, and kilix-license
+  is `596ada2`.
 
 ## [0.2.3] — 2026-11-05
 

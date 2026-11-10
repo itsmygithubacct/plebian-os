@@ -1065,6 +1065,22 @@ if [ -n "$PARADEE_MODEL_BUNDLE" ] || [ -n "$SPACY_MODEL_BUNDLE" ]; then
         --paradee "$PARADEE_MODEL_BUNDLE" \
         --en-core-web-sm "$SPACY_MODEL_BUNDLE"
 fi
+# PDF Conversion's page OCR models, PaddlePaddle's PP-OCRv6 small detector and
+# recogniser, ship in the image with the Apache-2.0 text (owner determination
+# 2026-11-10). A supplied archive is checked here; without one the build fetches
+# the pinned Hugging Face files once the work tree exists.
+PP_OCR_DET_MODEL_BUNDLE="${PLEBIAN_OS_PP_OCR_DET_MODEL_BUNDLE:-}"
+PP_OCR_REC_MODEL_BUNDLE="${PLEBIAN_OS_PP_OCR_REC_MODEL_BUNDLE:-}"
+if [ -n "$PP_OCR_DET_MODEL_BUNDLE" ]; then
+    python3 "$HERE/provision/install-image-models.py" --verify-only \
+        --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+        --pp-ocrv6-small-det "$PP_OCR_DET_MODEL_BUNDLE"
+fi
+if [ -n "$PP_OCR_REC_MODEL_BUNDLE" ]; then
+    python3 "$HERE/provision/install-image-models.py" --verify-only \
+        --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+        --pp-ocrv6-small-rec "$PP_OCR_REC_MODEL_BUNDLE"
+fi
 COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
     "$HERE/provision/command-model.json")"
 default_iso_name=plebian-os-netinst-amd64.iso
@@ -2094,6 +2110,38 @@ python3 "$HERE/provision/install-image-models.py" --verify-only \
     --en-core-web-sm "$SPACY_MODEL_BUNDLE"
 install -m 0644 "$PARADEE_MODEL_BUNDLE" "$EXTRACT/plebian-os/paradee-8m-v1.2.tar"
 install -m 0644 "$SPACY_MODEL_BUNDLE" "$EXTRACT/plebian-os/en-core-web-sm-3.8.0.tar"
+# Write one page OCR archive from its pin's Hugging Face files, each fetched
+# through the bounded download at its pinned size; the builder checks them.
+build_pp_ocr_bundle() {
+    local asset_id="$1" files="$WORK/$1-files" name bytes url
+    mkdir -p "$files"
+    while IFS=$'\t' read -r name bytes url; do
+        _bounded_download "$bytes" 600 "$files/$name" -fsSL --proto '=https' "$url" \
+            || { echo "could not download the pinned $asset_id file $name" >&2; exit 1; }
+    done < <(python3 -c 'import json,sys
+for name, item in json.load(open(sys.argv[1]))["files"].items():
+    if "url" in item:
+        print(name, item["bytes"], item["url"], sep="\t")' "$HERE/provision/$asset_id-model.json")
+    python3 "$HERE/provision/install-image-models.py" \
+        --build-pp-ocr-archive "$asset_id" "$WORK/$asset_id.tar" --pp-ocr-files "$files"
+    rm -rf -- "$files"
+}
+if [ -z "$PP_OCR_DET_MODEL_BUNDLE" ]; then
+    echo "==> fetching the pinned PP-OCRv6 small detector for the image"
+    build_pp_ocr_bundle pp-ocrv6-small-det
+    PP_OCR_DET_MODEL_BUNDLE="$WORK/pp-ocrv6-small-det.tar"
+fi
+if [ -z "$PP_OCR_REC_MODEL_BUNDLE" ]; then
+    echo "==> fetching the pinned PP-OCRv6 small recogniser for the image"
+    build_pp_ocr_bundle pp-ocrv6-small-rec
+    PP_OCR_REC_MODEL_BUNDLE="$WORK/pp-ocrv6-small-rec.tar"
+fi
+python3 "$HERE/provision/install-image-models.py" --verify-only \
+    --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+    --pp-ocrv6-small-det "$PP_OCR_DET_MODEL_BUNDLE" \
+    --pp-ocrv6-small-rec "$PP_OCR_REC_MODEL_BUNDLE"
+install -m 0644 "$PP_OCR_DET_MODEL_BUNDLE" "$EXTRACT/plebian-os/pp-ocrv6-small-det.tar"
+install -m 0644 "$PP_OCR_REC_MODEL_BUNDLE" "$EXTRACT/plebian-os/pp-ocrv6-small-rec.tar"
 # The Paradee Python environment is a hash-locked wheelhouse. docopt has no
 # upstream wheel, so its wheel is the one file carried in provision/bundles.
 mkdir -p "$WORK/paradee-wheels"
