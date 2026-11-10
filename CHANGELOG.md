@@ -9,11 +9,15 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Follow published RC7 (`b7e7e0d3`) with an RC8 candidate. kilix-llm
   `93f2202b` refuses `pull` of `qwen-0.8b-no-loop-02` and builds without
   llama.cpp's web UI. Kilix Avatar `202f03cd` names `kilix models install`
-  when that file is missing. Kilix is `97040d34` and Kilix 95 is `a4e73d05`.
-  Ask answers a closed sum and the closed machine readings directly, and
-  arithmetic reads a written thousand, million, or billion.
-  `kilix ask --repl` stays open until exit, quit, or the end of input.
-  The numeric keypad reaches Chromium in a `kilix run` pane.
+  when that file is missing. Kilix is `5ea48af6` and Kilix 95 is `a4e73d05`.
+  Ask answers a closed sum and the closed machine readings directly.
+  An integer sum prints in full, a conversion keeps its unit, and "and"
+  is addition except inside one hundred. A written thousand, million,
+  or billion still reads as that number. `kilix ask --repl` stays open
+  until exit, quit, or the end of input, including a final line with no
+  newline. How-to search calls the installed help program. A wifi
+  question uses wifi devices only. A temperature down to -100°C is a
+  reading. The numeric keypad reaches Chromium in a `kilix run` pane.
   kilix-content `dfcda81b` reports an early end of a pinned download as
   interrupted and is not pinned: carrier `42b6956b` still binds
   kilix-content `b0c6f650`. The local tag `v0.2.3-rc8` is not pushed, and
