@@ -9,7 +9,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Follow published RC7 (`b7e7e0d3`) with an RC8 candidate. kilix-llm
   `93f2202b` refuses `pull` of `qwen-0.8b-no-loop-02` and builds without
   llama.cpp's web UI. Kilix Avatar `202f03cd` names `kilix models install`
-  when that file is missing. Kilix is `763e6e88` and Kilix 95 is `a4e73d05`.
+  when that file is missing. Kilix is `3da4f21a` and Kilix 95 is `a4e73d05`.
+  Ask answers a closed sum and the closed machine readings directly.
   kilix-content `dfcda81b` reports an early end of a pinned download as
   interrupted and is not pinned: carrier `42b6956b` still binds
   kilix-content `b0c6f650`. The local tag `v0.2.3-rc8` is not pushed, and
