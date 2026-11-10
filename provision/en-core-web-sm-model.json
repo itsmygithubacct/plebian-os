@@ -1,6 +1,6 @@
 {
   "schema": "plebian-os.en-core-web-sm-archive/v1",
-  "since_release": "0.2.4",
+  "since_release": "0.2.3-rc8",
   "asset_id": "en-core-web-sm-3.8.0",
   "manifest_digest": "ce7a28de5ef369d1e1c7bd58571e4fe615a6783124721f8142de651755239271",
   "filename": "en-core-web-sm-3.8.0.tar",

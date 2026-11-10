@@ -282,6 +282,12 @@ try:
             raise ValueError('Playalong defaults differ from the release inventory')
         online = {asset: item['manifest_digest'] for asset, item in playalong['assets'].items()
                   if item['delivery'] == 'online'}
+    image = {}
+    for filename in ('paradee-model.json', 'en-core-web-sm-model.json'):
+        path = expected.parent / filename
+        if path.is_file():
+            pin = json.loads(path.read_bytes())
+            image[pin['asset_id']] = pin['manifest_digest']
     bundle = json.loads((root / 'DEFAULT-MODELS.json').read_bytes())
     if bundle != json.loads(expected.read_bytes()):
         raise ValueError('default bundle differs from the release inventory')
@@ -294,6 +300,7 @@ try:
         mode = ('bundled-command-model-archive' if is_command else
                 'bundled-default-model' if bundled else
                 'playalong-default-upstream-download' if asset in online else
+                'image-offline-model' if asset in image else
                 'first-use-upstream-download')
         prefix = 'm_' + ''.join(c if c.isascii() and c.isalnum() else '_' for c in model)
         if entry['delivery'] != mode or env[prefix + '_delivery'] != mode:
@@ -302,6 +309,8 @@ try:
             raise ValueError(model + ': bundled manifest digest differs')
         if asset in online and entry['manifest_digest'] != online[asset]:
             raise ValueError(model + ': Playalong default manifest digest differs')
+        if asset in image and entry['manifest_digest'] != image[asset]:
+            raise ValueError(model + ': image model manifest digest differs')
         if is_command and any(entry[k] != command[v] for k, v in (
                 ('manifest_digest', 'manifest_digest'), ('archive_sha256', 'sha256'),
                 ('archive_bytes', 'bytes'), ('version', 'version'), ('source_url', 'url'))):
@@ -309,6 +318,9 @@ try:
     if command is not None and not any(e['artifact_id'] == command['asset_id']
                                        for e in carrier['models'].values()):
         raise ValueError('command model is missing from the carrier')
+    for asset in image:
+        if not any(e['artifact_id'] == asset for e in carrier['models'].values()):
+            raise ValueError(asset + ' is missing from the carrier')
 except (OSError, ValueError, KeyError, TypeError) as error:
     sys.exit('carrier: ' + str(error))
 PY
@@ -448,7 +460,7 @@ validate_voice_compliance_carrier() {
                 || { carrier_refuse "$model licence text $digest is missing or altered"; return 1; }
         done
         case "${cv[${prefix}delivery]}" in
-            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|bundled-command-model-archive) ;;
+            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|bundled-command-model-archive|image-offline-model) ;;
             *) carrier_refuse "$model delivery mode is unsupported"; return 1 ;;
         esac
         host="${cv[${prefix}source_url]#https://}"; host="${host%%/*}"
@@ -2112,9 +2124,33 @@ while IFS="$(printf '\t')" read -r wheel_bytes wheel_url wheel_name; do
 done < "$WORK/paradee-wheel-downloads.tsv"
 python3 "$HERE/provision/install-image-models.py" \
     --verify-paradee-wheels "$WORK/paradee-wheels"
+# libespeak-ng in the espeakng-loader wheel is GPL-3.0-or-later. The wheel
+# ships no licence file. The image carries the loader's MIT text, the build
+# script, and the espeak-ng 1.52.0 source that script compiles.
+espeak_pin="$HERE/provision/espeak-ng-source.json"
+espeak_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$espeak_pin")"
+espeak_bytes="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bytes"])' "$espeak_pin")"
+echo "==> fetching the espeak-ng 1.52.0 source for the bundled libespeak-ng"
+_bounded_download "$espeak_bytes" 600 "$WORK/espeak-ng-1.52.0.tar.gz" \
+    -fsSL --proto '=https' "$espeak_url" \
+    || { echo "could not download the espeak-ng source" >&2; exit 1; }
+python3 - "$espeak_pin" "$WORK/espeak-ng-1.52.0.tar.gz" << 'PY'
+import hashlib, json, sys
+pin = json.load(open(sys.argv[1]))
+data = open(sys.argv[2], "rb").read()
+if len(data) != pin["bytes"] or hashlib.sha256(data).hexdigest() != pin["sha256"]:
+    raise SystemExit("espeak-ng source size or checksum mismatch")
+PY
+for notice in espeakng-loader-0.2.4-LICENSE espeakng-loader-0.2.4-build.txt espeakng-loader-0.2.4-build.sh; do
+    install -m 0644 "$HERE/provision/bundles/$notice" "$WORK/paradee-wheels/$notice"
+done
 mkdir -p "$EXTRACT/plebian-os/paradee-wheels"
 cp -a "$WORK/paradee-wheels/." "$EXTRACT/plebian-os/paradee-wheels/"
 chmod 0644 "$EXTRACT/plebian-os/paradee-wheels/"*
+install -m 0644 "$WORK/espeak-ng-1.52.0.tar.gz" "$EXTRACT/plebian-os/espeak-ng-1.52.0.tar.gz"
+for notice in espeakng-loader-0.2.4-LICENSE espeakng-loader-0.2.4-build.txt espeakng-loader-0.2.4-build.sh; do
+    install -m 0644 "$HERE/provision/bundles/$notice" "$EXTRACT/plebian-os/$notice"
+done
 # Optional explicit source carrier is staged only after complete digest/graph checks.
 # Its immutable manifest and helper bytes are reviewed with the final source tuple.
 if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; then

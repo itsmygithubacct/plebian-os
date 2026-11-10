@@ -1,6 +1,6 @@
 {
   "schema": "plebian-os.paradee-archive/v1",
-  "since_release": "0.2.4",
+  "since_release": "0.2.3-rc8",
   "asset_id": "paradee-8m-v1.2",
   "manifest_digest": "99929f0a7f1811eb7b7cc5821526d9e486e0a46fbccbf178959ade25e3f3f967",
   "filename": "paradee-8m-v1.2.tar",

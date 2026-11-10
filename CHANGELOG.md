@@ -11,6 +11,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   hash-locked Python wheelhouse in the image. Provision installs those bytes
   offline and does not download them. An existing voice selection is left
   unchanged, and Female-02 stays installed.
+- RC8 creates the Paradee interpreter with `python3 -m venv --copies`, stages
+  and checks the Apache-2.0 text before install and synthesis, and ships the
+  espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
+  `libespeak-ng`. The 0.2.3 carrier names both image models as
+  `image-offline-model`. The attached seats reviewed the RC7 carrier, so
+  acceptance stays open until two seats review this one.
 
 ## [0.2.3] — 2026-11-05
 

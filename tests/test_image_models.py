@@ -57,8 +57,11 @@ class VendoredBasicPitchTests(unittest.TestCase):
     def test_nine_model_bundle_does_not_absorb_either_model(self):
         bundle = json.loads((ROOT / 'provision/default-models.json').read_text())
         self.assertEqual(len(bundle['assets']), 9)
+        self.assertIn('kilix-female-02', bundle['assets'])
         self.assertNotIn('basic-pitch-icassp-2022-onnx', bundle['assets'])
         self.assertNotIn('lfm2-kilix-commands', bundle['assets'])
+        self.assertNotIn('paradee-8m-v1.2', bundle['assets'])
+        self.assertNotIn('en-core-web-sm-3.8.0', bundle['assets'])
         self.assertEqual(bundle['sha256'],
                          'e00614bf726154d09668820c061cbbcb402239a445bde666b0568d36f01528a6')
 
@@ -300,7 +303,8 @@ class ParadeeArchiveTests(unittest.TestCase):
         runtime = self.root / 'runtime'
         installer.stage_paradee_runtime(self.root / 'runtime.tar', pin, runtime)
         self.assertEqual((runtime / 'onnx/paradee_int8.onnx').read_bytes(), self.onnx.read_bytes())
-        self.assertFalse((runtime / 'notices/LICENSE-apache-2.0.txt').exists())
+        self.assertEqual((runtime / 'notices/LICENSE-apache-2.0.txt').read_bytes(),
+                         installer.PARADEE_LICENCE_SOURCE.read_bytes())
         (runtime / 'config.json').write_bytes(b'not-the-config')
         with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
             installer.verify_paradee_runtime(pin, runtime)
@@ -308,6 +312,8 @@ class ParadeeArchiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
             installer.stage_paradee_runtime(self.root / 'runtime.tar', pin, runtime)
         self.assertEqual((runtime / 'config.json').read_bytes(), before)
+        self.assertEqual((runtime / 'notices/LICENSE-apache-2.0.txt').read_bytes(),
+                         installer.PARADEE_LICENCE_SOURCE.read_bytes())
 
     def test_the_image_archive_is_preferred_and_a_symlink_is_not_used(self):
         with patch.object(installer, 'SHARED_BASIC_PITCH', self.root):
@@ -433,6 +439,35 @@ class ParadeeWheelTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'wheel is missing'):
                 installer.install_paradee_venv(root / 'wheels', self.lock(), python)
         self.assertFalse((root / 'pd').exists())
+
+    def test_a_fresh_venv_copies_the_interpreter(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        wheels = root / 'wheels'
+        wheels.mkdir()
+        blob = b'wheel'
+        lock = self.lock()
+        lock['wheels'][0]['bytes'] = len(blob)
+        lock['wheels'][0]['sha256'] = hashlib.sha256(blob).hexdigest()
+        (wheels / lock['wheels'][0]['filename']).write_bytes(blob)
+        python = root / 'pd' / 'bin' / 'python'
+        real = installer.subprocess.run
+        calls = []
+
+        def run(argv, **kwargs):
+            calls.append(list(argv))
+            if '-m' in argv and argv[argv.index('-m') + 1] == 'venv':
+                return real(argv, **kwargs)
+            return installer.subprocess.CompletedProcess(argv, 0)
+
+        with patch.object(installer.subprocess, 'run', side_effect=run), patch('builtins.print'):
+            installer.install_paradee_venv(wheels, lock, python)
+        self.assertEqual(calls[0][3:5], ['venv', '--copies'])
+        self.assertFalse(python.is_symlink())
+        self.assertTrue(python.is_file())
+        self.assertIn('--no-index', calls[1])
+        self.assertEqual(calls[1][0], str(python))
 
 
 class InstallPolicyTests(unittest.TestCase):
@@ -878,7 +913,7 @@ class ImageWiringTests(unittest.TestCase):
             '/target/usr/local/share/plebian-os/paradee-8m-v1.2.tar', preseed)
         self.assertIn(
             'tar -x -C /target/usr/lib/kilix/paradee -f /cdrom/plebian-os/paradee-8m-v1.2.tar '
-            'onnx/paradee_int8.onnx config.json', preseed)
+            'onnx/paradee_int8.onnx config.json notices/LICENSE-apache-2.0.txt', preseed)
         self.assertIn(
             'cp /cdrom/plebian-os/en-core-web-sm-3.8.0.tar '
             '/target/usr/local/share/plebian-os/en-core-web-sm-3.8.0.tar', preseed)
@@ -900,6 +935,19 @@ class ImageWiringTests(unittest.TestCase):
             '        --install-paradee-runtime', provision)
         self.assertLess(provision.index('--install-paradee-runtime'),
                         provision.index('install-image-models.py" --kilix "$KILIX_DIR" --offline'))
+        source = json.loads((ROOT / 'provision/espeak-ng-source.json').read_text())
+        licence = (ROOT / 'provision/bundles/espeakng-loader-0.2.4-LICENSE').read_bytes()
+        self.assertEqual(hashlib.sha256(licence).hexdigest(), source['loader_licence_sha256'])
+        self.assertEqual(len(licence), 1069)
+        self.assertEqual(source['bytes'], 17739803)
+        self.assertEqual(source['sha256'],
+                         'bb4338102ff3b49a81423da8a1a158b420124b055b60fa76cfb4b18677130a23')
+        self.assertIn('espeak-ng source size or checksum mismatch', remaster)
+        self.assertIn(
+            'cp /cdrom/plebian-os/espeak-ng-1.52.0.tar.gz '
+            '/target/usr/local/share/doc/plebian-os/espeak-ng/espeak-ng-1.52.0.tar.gz', preseed)
+        self.assertIn('espeakng-loader-0.2.4-LICENSE', preseed)
+        self.assertIn('espeakng-loader-0.2.4-build.sh', preseed)
 
 
 if __name__ == '__main__':

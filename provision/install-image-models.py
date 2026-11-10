@@ -358,10 +358,10 @@ def build_spacy_archive(wheel, output, pin):
 
 
 def verify_paradee_runtime(pin, root=None):
-    """The runtime files preseed wrote. This does not write them."""
+    """The runtime files preseed wrote, including the Apache-2.0 text. This does not write them."""
     validate_paradee_pin(pin)
     root = PARADEE_RUNTIME if root is None else Path(root)
-    for name in (PARADEE_ONNX, PARADEE_CONFIG):
+    for name in PARADEE_FILES:
         item = pin['files'][name]
         try:
             stream = _open_regular(root / name)
@@ -374,11 +374,11 @@ def verify_paradee_runtime(pin, root=None):
 
 
 def stage_paradee_runtime(archive, pin, root):
-    """Copy a missing ONNX or config.json from the image archive. Root calls this."""
+    """Copy a missing ONNX, config.json, or Apache-2.0 text. Root calls this."""
     verify_paradee_archive(archive, pin)
     root = Path(root)
     missing = []
-    for name in (PARADEE_ONNX, PARADEE_CONFIG):
+    for name in PARADEE_FILES:
         target = root / name
         if target.exists() or target.is_symlink():
             continue
@@ -457,7 +457,7 @@ def install_paradee_venv(wheelhouse, lock, python):
     if venv.exists():
         raise ValueError('Paradee runtime directory exists without its Python')
     verify_paradee_wheels(wheelhouse, lock)
-    subprocess.run([sys.executable, '-I', '-m', 'venv', str(venv)], check=True)
+    subprocess.run([sys.executable, '-I', '-m', 'venv', '--copies', str(venv)], check=True)
     if python.is_symlink() or not python.is_file():
         raise ValueError('Paradee runtime Python was not created')
     with tempfile.TemporaryDirectory(prefix='plebian-paradee-wheels-') as temporary:

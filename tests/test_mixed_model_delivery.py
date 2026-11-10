@@ -133,6 +133,32 @@ class MixedModelDeliveryTests(unittest.TestCase):
         # Without the inventory the same entry is a false label.
         self.assertIn('delivery differs', self.guard().stderr)
 
+    def test_an_image_offline_model_keeps_its_delivery(self):
+        pin = {'asset_id': 'paradee-8m-v1.2', 'manifest_digest': '9' * 64}
+        (self.root / 'paradee-model.json').write_text(json.dumps(pin))
+        (self.root / 'en-core-web-sm-model.json').write_text(json.dumps(
+            {'asset_id': 'en-core-web-sm-3.8.0', 'manifest_digest': '8' * 64}))
+        self.carrier['models']['paradee-8m-v1.2'] = {
+            'artifact_id': 'paradee-8m-v1.2', 'manifest_digest': '9' * 64,
+            'delivery': 'image-offline-model'}
+        self.carrier['models']['en-core-web-sm-3.8.0'] = {
+            'artifact_id': 'en-core-web-sm-3.8.0', 'manifest_digest': '8' * 64,
+            'delivery': 'image-offline-model'}
+        self.env['m_paradee_8m_v1_2_delivery'] = 'image-offline-model'
+        self.env['m_en_core_web_sm_3_8_0_delivery'] = 'image-offline-model'
+        result = self.guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.carrier['models']['paradee-8m-v1.2']['delivery'] = 'first-use-upstream-download'
+        self.env['m_paradee_8m_v1_2_delivery'] = 'first-use-upstream-download'
+        self.assertIn('delivery differs', self.guard().stderr)
+        self.carrier['models']['paradee-8m-v1.2']['delivery'] = 'image-offline-model'
+        self.env['m_paradee_8m_v1_2_delivery'] = 'image-offline-model'
+        self.carrier['models']['paradee-8m-v1.2']['manifest_digest'] = '7' * 64
+        self.assertIn('image model manifest digest differs', self.guard().stderr)
+        self.carrier['models']['paradee-8m-v1.2']['manifest_digest'] = '9' * 64
+        del self.carrier['models']['en-core-web-sm-3.8.0']
+        self.assertIn('en-core-web-sm-3.8.0 is missing from the carrier', self.guard().stderr)
+
     def test_a_playalong_default_cannot_be_relabelled_or_drift(self):
         expected, playalong = self.playalong_fixture()
         entry = self.carrier['models']['deferred']

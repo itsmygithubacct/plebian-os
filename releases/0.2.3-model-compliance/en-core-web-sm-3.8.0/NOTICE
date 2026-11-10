@@ -1,0 +1,13 @@
+Plebian-OS 0.2.3 conveyance notice for en-core-web-sm-3.8.0.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS distributes these model bytes in a verified archive on installation media.
+
+Artifact: en-core-web-sm-3.8.0 (provider spacy, version 3.8.0)
+Source: https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
+Upstream host: github.com
+Download size: 12806118 bytes
+Installed member manifest digest: ce7a28de5ef369d1e1c7bd58571e4fe615a6783124721f8142de651755239271
+Licence(s): mit
+Licensor(s): ExplosionAI GmbH
+Licence, advisory and attribution texts: licence-texts/3933c176979b68bc6d0bcc902c7d6c130f1d127f476f17ba5cdba8d99cfd0012.txt, licence-texts/20d9dfacd215112251f15341edd1a47b1f98bf393a212f10f194ffdc7ee98a90.txt
+Owner determination: determinations/en-core-web-sm-3.8.0/OWNER-DETERMINATION-en-core-web-sm-3.8.0-20261110.md
