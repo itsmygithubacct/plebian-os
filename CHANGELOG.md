@@ -23,7 +23,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - Follow published RC7 (`b7e7e0d3`) with an RC8 candidate. kilix-llm
   `93f2202b` refuses `pull` of `qwen-0.8b-no-loop-02` and builds without
   llama.cpp's web UI. Kilix Avatar `202f03cd` names `kilix models install`
-  when that file is missing. Kilix is `c763c292` and Kilix 95 is `9fae665d`.
+  when that file is missing. Kilix is `b1596021` and Kilix 95 is `9fae665d`.
   Ask answers a closed sum and the closed machine readings directly.
   An integer sum prints in full, a conversion keeps its unit, and "and"
   is addition except inside one hundred. A written thousand, million,
@@ -35,9 +35,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Ask also answers dates and other clocks, facts about this computer,
   unit conversions, text and status-code questions, and dice directly,
   and "what can you do?" lists them. Courtesy around a request is ignored.
-  kilix-content `dfcda81b` reports an early end of a pinned download as
-  interrupted and is not pinned. The image carrier `0935ea79` binds
-  kilix-content `543e4673`. The local tag `v0.2.3-rc8` is not pushed, and
+  kilix-content `f9ba621e` merges the Paradee catalog `543e4673` into
+  the download-interrupt fix `dfcda81b`. The image carrier `9701a082`
+  binds that content commit. The local tag `v0.2.3-rc8` is not pushed, and
   RC8 acceptance is not claimed.
 - Configure Debian's `<codename>-backports` archive in
   `plebian-os-debian-backports.sources` whenever live Debian sources are in
