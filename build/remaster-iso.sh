@@ -282,6 +282,12 @@ try:
             raise ValueError('Playalong defaults differ from the release inventory')
         online = {asset: item['manifest_digest'] for asset, item in playalong['assets'].items()
                   if item['delivery'] == 'online'}
+    image = {}
+    for filename in ('paradee-model.json', 'en-core-web-sm-model.json'):
+        path = expected.parent / filename
+        if path.is_file():
+            pin = json.loads(path.read_bytes())
+            image[pin['asset_id']] = pin['manifest_digest']
     bundle = json.loads((root / 'DEFAULT-MODELS.json').read_bytes())
     if bundle != json.loads(expected.read_bytes()):
         raise ValueError('default bundle differs from the release inventory')
@@ -294,6 +300,7 @@ try:
         mode = ('bundled-command-model-archive' if is_command else
                 'bundled-default-model' if bundled else
                 'playalong-default-upstream-download' if asset in online else
+                'image-offline-model' if asset in image else
                 'first-use-upstream-download')
         prefix = 'm_' + ''.join(c if c.isascii() and c.isalnum() else '_' for c in model)
         if entry['delivery'] != mode or env[prefix + '_delivery'] != mode:
@@ -302,6 +309,8 @@ try:
             raise ValueError(model + ': bundled manifest digest differs')
         if asset in online and entry['manifest_digest'] != online[asset]:
             raise ValueError(model + ': Playalong default manifest digest differs')
+        if asset in image and entry['manifest_digest'] != image[asset]:
+            raise ValueError(model + ': image model manifest digest differs')
         if is_command and any(entry[k] != command[v] for k, v in (
                 ('manifest_digest', 'manifest_digest'), ('archive_sha256', 'sha256'),
                 ('archive_bytes', 'bytes'), ('version', 'version'), ('source_url', 'url'))):
@@ -309,6 +318,9 @@ try:
     if command is not None and not any(e['artifact_id'] == command['asset_id']
                                        for e in carrier['models'].values()):
         raise ValueError('command model is missing from the carrier')
+    for asset in image:
+        if not any(e['artifact_id'] == asset for e in carrier['models'].values()):
+            raise ValueError(asset + ' is missing from the carrier')
 except (OSError, ValueError, KeyError, TypeError) as error:
     sys.exit('carrier: ' + str(error))
 PY
@@ -448,7 +460,7 @@ validate_voice_compliance_carrier() {
                 || { carrier_refuse "$model licence text $digest is missing or altered"; return 1; }
         done
         case "${cv[${prefix}delivery]}" in
-            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|bundled-command-model-archive) ;;
+            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|bundled-command-model-archive|image-offline-model) ;;
             *) carrier_refuse "$model delivery mode is unsupported"; return 1 ;;
         esac
         host="${cv[${prefix}source_url]#https://}"; host="${host%%/*}"
@@ -1036,6 +1048,22 @@ if [ -n "$DEMUCS_MODEL_BUNDLE" ]; then
     python3 "$HERE/provision/install-image-models.py" --verify-only \
         --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
         --demucs "$DEMUCS_MODEL_BUNDLE"
+fi
+# Paradee 8M is the fresh-install system voice (owner decision 2026-11-10).
+# The image carries the ONNX, config.json, the spaCy wheel and their licence
+# texts. A supplied pair is checked here; without one the build fetches the
+# pinned files once the work tree exists. Provision does not download them.
+PARADEE_MODEL_BUNDLE="${PLEBIAN_OS_PARADEE_MODEL_BUNDLE:-}"
+SPACY_MODEL_BUNDLE="${PLEBIAN_OS_SPACY_MODEL_BUNDLE:-}"
+if [ -n "$PARADEE_MODEL_BUNDLE" ] || [ -n "$SPACY_MODEL_BUNDLE" ]; then
+    [ -n "$PARADEE_MODEL_BUNDLE" ] && [ -n "$SPACY_MODEL_BUNDLE" ] || {
+        echo "Paradee and en_core_web_sm image archives must be supplied together" >&2
+        exit 1
+    }
+    python3 "$HERE/provision/install-image-models.py" --verify-only \
+        --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+        --paradee "$PARADEE_MODEL_BUNDLE" \
+        --en-core-web-sm "$SPACY_MODEL_BUNDLE"
 fi
 COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
     "$HERE/provision/command-model.json")"
@@ -2028,6 +2056,101 @@ python3 "$HERE/provision/install-image-models.py" --verify-only \
     --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
     --demucs "$DEMUCS_MODEL_BUNDLE"
 install -m 0644 "$DEMUCS_MODEL_BUNDLE" "$EXTRACT/plebian-os/demucs-htdemucs-6s.tar"
+if [ -z "$PARADEE_MODEL_BUNDLE" ] || [ -z "$SPACY_MODEL_BUNDLE" ]; then
+    paradee_pin="$HERE/provision/paradee-model.json"
+    spacy_pin="$HERE/provision/en-core-web-sm-model.json"
+    paradee_onnx_url="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["onnx/paradee_int8.onnx"]["url"])' "$paradee_pin")"
+    paradee_onnx_bytes="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["onnx/paradee_int8.onnx"]["bytes"])' "$paradee_pin")"
+    paradee_config_url="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["config.json"]["url"])' "$paradee_pin")"
+    paradee_config_bytes="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["config.json"]["bytes"])' "$paradee_pin")"
+    spacy_wheel_url="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["en_core_web_sm-3.8.0-py3-none-any.whl"]["url"])' "$spacy_pin")"
+    spacy_wheel_bytes="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["en_core_web_sm-3.8.0-py3-none-any.whl"]["bytes"])' "$spacy_pin")"
+    echo "==> fetching the pinned Paradee files for the image"
+    _bounded_download "$paradee_onnx_bytes" 1800 "$WORK/paradee_int8.onnx" \
+        -fsSL --proto '=https' "$paradee_onnx_url" \
+        || { echo "could not download the pinned Paradee ONNX" >&2; exit 1; }
+    _bounded_download "$paradee_config_bytes" 120 "$WORK/paradee-config.json" \
+        -fsSL --proto '=https' "$paradee_config_url" \
+        || { echo "could not download the pinned Paradee config.json" >&2; exit 1; }
+    echo "==> fetching the pinned en_core_web_sm wheel for the image"
+    _bounded_download "$spacy_wheel_bytes" 600 "$WORK/en_core_web_sm-3.8.0-py3-none-any.whl" \
+        -fsSL --proto '=https' "$spacy_wheel_url" \
+        || { echo "could not download the pinned en_core_web_sm wheel" >&2; exit 1; }
+    PARADEE_MODEL_BUNDLE="$WORK/paradee-8m-v1.2.tar"
+    SPACY_MODEL_BUNDLE="$WORK/en-core-web-sm-3.8.0.tar"
+    python3 "$HERE/provision/install-image-models.py" \
+        --build-paradee-archive "$PARADEE_MODEL_BUNDLE" \
+        --paradee-onnx "$WORK/paradee_int8.onnx" \
+        --paradee-config "$WORK/paradee-config.json"
+    python3 "$HERE/provision/install-image-models.py" \
+        --build-en-core-web-sm-archive "$SPACY_MODEL_BUNDLE" \
+        --en-core-web-sm-wheel "$WORK/en_core_web_sm-3.8.0-py3-none-any.whl"
+    rm -f -- "$WORK/paradee_int8.onnx" "$WORK/paradee-config.json" \
+        "$WORK/en_core_web_sm-3.8.0-py3-none-any.whl"
+fi
+python3 "$HERE/provision/install-image-models.py" --verify-only \
+    --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+    --paradee "$PARADEE_MODEL_BUNDLE" \
+    --en-core-web-sm "$SPACY_MODEL_BUNDLE"
+install -m 0644 "$PARADEE_MODEL_BUNDLE" "$EXTRACT/plebian-os/paradee-8m-v1.2.tar"
+install -m 0644 "$SPACY_MODEL_BUNDLE" "$EXTRACT/plebian-os/en-core-web-sm-3.8.0.tar"
+# The Paradee Python environment is a hash-locked wheelhouse. docopt has no
+# upstream wheel, so its wheel is the one file carried in provision/bundles.
+mkdir -p "$WORK/paradee-wheels"
+python3 - "$HERE/provision/paradee-wheels.json" "$HERE/provision/bundles" \
+    "$WORK/paradee-wheels" "$WORK/paradee-wheel-downloads.tsv" << 'PY'
+import json
+import sys
+from pathlib import Path
+lock_path, bundles, dest, listing = sys.argv[1:]
+lock = json.load(open(lock_path))
+dest = Path(dest)
+lines = []
+for item in lock["wheels"]:
+    if "bundle" in item:
+        source = Path(bundles) / item["filename"]
+        target = dest / item["filename"]
+        target.write_bytes(source.read_bytes())
+        target.chmod(0o644)
+    else:
+        lines.append(f"{item['bytes']}\t{item['url']}\t{item['filename']}")
+Path(listing).write_text("\n".join(lines) + "\n")
+PY
+while IFS="$(printf '\t')" read -r wheel_bytes wheel_url wheel_name; do
+    [ -n "$wheel_name" ] || continue
+    _bounded_download "$wheel_bytes" 600 "$WORK/paradee-wheels/$wheel_name" \
+        -fsSL --proto '=https' "$wheel_url" \
+        || { echo "could not download Paradee wheel $wheel_name" >&2; exit 1; }
+done < "$WORK/paradee-wheel-downloads.tsv"
+python3 "$HERE/provision/install-image-models.py" \
+    --verify-paradee-wheels "$WORK/paradee-wheels"
+# libespeak-ng in the espeakng-loader wheel is GPL-3.0-or-later. The wheel
+# ships no licence file. The image carries the loader's MIT text, the build
+# script, and the espeak-ng 1.52.0 source that script compiles.
+espeak_pin="$HERE/provision/espeak-ng-source.json"
+espeak_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$espeak_pin")"
+espeak_bytes="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bytes"])' "$espeak_pin")"
+echo "==> fetching the espeak-ng 1.52.0 source for the bundled libespeak-ng"
+_bounded_download "$espeak_bytes" 600 "$WORK/espeak-ng-1.52.0.tar.gz" \
+    -fsSL --proto '=https' "$espeak_url" \
+    || { echo "could not download the espeak-ng source" >&2; exit 1; }
+python3 - "$espeak_pin" "$WORK/espeak-ng-1.52.0.tar.gz" << 'PY'
+import hashlib, json, sys
+pin = json.load(open(sys.argv[1]))
+data = open(sys.argv[2], "rb").read()
+if len(data) != pin["bytes"] or hashlib.sha256(data).hexdigest() != pin["sha256"]:
+    raise SystemExit("espeak-ng source size or checksum mismatch")
+PY
+for notice in espeakng-loader-0.2.4-LICENSE espeakng-loader-0.2.4-build.txt espeakng-loader-0.2.4-build.sh; do
+    install -m 0644 "$HERE/provision/bundles/$notice" "$WORK/paradee-wheels/$notice"
+done
+mkdir -p "$EXTRACT/plebian-os/paradee-wheels"
+cp -a "$WORK/paradee-wheels/." "$EXTRACT/plebian-os/paradee-wheels/"
+chmod 0644 "$EXTRACT/plebian-os/paradee-wheels/"*
+install -m 0644 "$WORK/espeak-ng-1.52.0.tar.gz" "$EXTRACT/plebian-os/espeak-ng-1.52.0.tar.gz"
+for notice in espeakng-loader-0.2.4-LICENSE espeakng-loader-0.2.4-build.txt espeakng-loader-0.2.4-build.sh; do
+    install -m 0644 "$HERE/provision/bundles/$notice" "$EXTRACT/plebian-os/$notice"
+done
 # Optional explicit source carrier is staged only after complete digest/graph checks.
 # Its immutable manifest and helper bytes are reviewed with the final source tuple.
 if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; then

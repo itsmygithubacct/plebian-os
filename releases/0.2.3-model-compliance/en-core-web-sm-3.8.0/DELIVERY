@@ -1,0 +1,9 @@
+mode: image-offline-model
+Installation media includes this model.
+Provisioning installs the supplied bytes offline and does not download them.
+An online install uses the same image archive. A missing archive is an error.
+Original licence documents accompany the model, and installation verifies every catalogued file.
+Installation creates a local standard-policy receipt; build-time receipts are never distributed.
+An existing voice selection is left unchanged.
+Female-02 stays installed and selectable. This bundling does not remove it.
+Upstream artifact provenance: github.com.

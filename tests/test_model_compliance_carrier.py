@@ -39,7 +39,9 @@ LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en",
 # is separately bound by this carrier's owner determination and review seats.
 LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records",
                        "lfm2-kilix-commands": "lfm2-records",
-                       "whisper-medium-en": "whisper-medium-records"}
+                       "whisper-medium-en": "whisper-medium-records",
+                       "paradee-8m-v1.2": "paradee-records",
+                       "en-core-web-sm-3.8.0": "en-core-web-sm-records"}
 
 
 DISTRIBUTION_HEADING = "# Owner distribution decision"
@@ -152,6 +154,15 @@ def regenerate(content: Path, license_: Path, out: Path,
     return subprocess.run(args, text=True, capture_output=True)
 
 
+def image_offline_inventory() -> dict[str, str]:
+    """asset id -> manifest digest for models the image installs offline."""
+    found = {}
+    for filename in ("paradee-model.json", "en-core-web-sm-model.json"):
+        pin = json.loads((ROOT / "provision" / filename).read_bytes())
+        found[pin["asset_id"]] = pin["manifest_digest"]
+    return found
+
+
 def advertised_models(provision: str) -> list[tuple[str, bool]]:
     block = provision[provision.index("validate_voice_model_catalog() {"):]
     block = block[:block.index("\n}\n")]
@@ -161,6 +172,7 @@ def advertised_models(provision: str) -> list[tuple[str, bool]]:
     command_path = ROOT / 'provision/command-model.json'
     if command_path.exists():
         models.append((json.loads(command_path.read_bytes())['asset_id'], True))
+    models.extend((asset_id, True) for asset_id in image_offline_inventory())
     return models
 
 
@@ -221,14 +233,17 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         gaps.append("carried Playalong defaults differ from provisioning")
     online = {asset: item["manifest_digest"] for asset, item in playalong["assets"].items()
               if item["delivery"] == "online"}
+    image = image_offline_inventory()
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
         bundled = entry["artifact_id"] in bundle["assets"]
         is_command = command is not None and entry['artifact_id'] == command['asset_id']
         playalong_default = entry["artifact_id"] in online
+        image_offline = entry["artifact_id"] in image
         mode = ("bundled-command-model-archive" if is_command else
                 "bundled-default-model" if bundled else
                 "playalong-default-upstream-download" if playalong_default else
+                "image-offline-model" if image_offline else
                 "first-use-upstream-download")
         if entry["delivery"] != mode:
             gaps.append(f"{model}: delivery differs from the pinned bundle")
@@ -253,6 +268,32 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                           "local standard-policy receipts", "build-time receipts are never distributed"):
                 if claim not in delivery:
                     gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            continue
+        if image_offline:
+            if entry["manifest_digest"] != image[entry["artifact_id"]]:
+                gaps.append(f"{model}: image archive manifest differs")
+            notice = (root / model / "NOTICE").read_text()
+            if "Plebian-OS distributes these model bytes" not in notice:
+                gaps.append(f"{model}: NOTICE does not say the image distributes the bytes")
+            if "does not distribute these model bytes" in notice:
+                gaps.append(f"{model}: NOTICE says the image omits an offline model")
+            for claim in (
+                    "mode: image-offline-model",
+                    "Installation media includes this model.",
+                    "installs the supplied bytes offline and does not download them.",
+                    "An online install uses the same image archive. A missing archive is an error.",
+                    "Original licence documents accompany the model, and installation verifies every catalogued file.",
+                    "creates a local standard-policy receipt",
+                    "build-time receipts are never distributed.",
+                    "An existing voice selection is left unchanged.",
+                    "Female-02 stays installed and selectable.",
+                    "This bundling does not remove it.",
+                    f"Upstream artifact provenance: {entry['upstream_host']}.",
+            ):
+                if claim not in delivery:
+                    gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            if "This model's weights are not present in the image" in delivery:
+                gaps.append(f"{model}: DELIVERY says the image omits an offline model")
             continue
         # Whisper and Whistle installation hands off to the model catalog (the licence screen)
         # rather than asking the receipt check itself; say so, and nothing more.
@@ -292,6 +333,24 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                 gaps.append(f"{model}: DELIVERY lacks {claim!r}")
         if ("not runnable" in delivery) == entry["runnable"]:
             gaps.append(f"{model}: DELIVERY misstates runnability")
+    return gaps
+
+
+def image_offline_installer_gaps(installer: str) -> list[str]:
+    """AC-8: Paradee and en_core_web_sm install from the image, with a copied interpreter."""
+    gaps = []
+    if "'--copies'" not in installer:
+        gaps.append("the Paradee runtime venv is not created with --copies")
+    if installer.count("for name in PARADEE_FILES:") < 2:
+        gaps.append("runtime staging omits the Apache-2.0 text")
+    for claim in ("the installation media did not supply the Paradee model",
+                  "the installation media did not supply the en_core_web_sm model"):
+        if claim not in installer:
+            gaps.append("a missing image archive is not an error: " + claim)
+    paradee = installer.split("def install_paradee(", 1)[1].split("def install_spacy(", 1)[0]
+    spacy = installer.split("def install_spacy(", 1)[1].split("def install_whisper_medium(", 1)[0]
+    if "fetch_default" in paradee or "fetch_default" in spacy:
+        gaps.append("an image-offline install can download weights")
     return gaps
 
 
@@ -804,6 +863,15 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         # The command model DELIVERY describes what the image installer does.
         installer = (ROOT / "provision" / "install-image-models.py").read_text()
         self.assertEqual(command_installer_gaps(installer), [])
+        self.assertEqual(image_offline_installer_gaps(installer), [])
+        for planted in (
+                installer.replace("'--copies'", "'--symlinks'"),
+                installer.replace("for name in PARADEE_FILES:",
+                                  "for name in (PARADEE_ONNX, PARADEE_CONFIG):", 1),
+                installer.replace("the installation media did not supply the Paradee model",
+                                  "the installation media will download the Paradee model")):
+            self.assertNotEqual(planted, installer)
+            self.assertTrue(image_offline_installer_gaps(planted))
         # ...and the Playalong default DELIVERY too, with each claim it rests on planted false.
         self.assertEqual(playalong_installer_gaps(installer), [])
         for planted in (installer.replace("    if declined is None:\n        install_whisper_medium",

@@ -4,12 +4,26 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [Unreleased]
+
+- Ship Paradee 8M as the fresh-install system voice, with its int8 ONNX,
+  `config.json`, Apache-2.0 text, the `en_core_web_sm` 3.8.0 wheel and a
+  hash-locked Python wheelhouse in the image. Provision installs those bytes
+  offline and does not download them. An existing voice selection is left
+  unchanged, and Female-02 stays installed.
+- RC8 creates the Paradee interpreter with `python3 -m venv --copies`, stages
+  and checks the Apache-2.0 text before install and synthesis, and ships the
+  espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
+  `libespeak-ng`. The 0.2.3 carrier names both image models as
+  `image-offline-model`. The attached seats reviewed the RC7 carrier, so
+  acceptance stays open until two seats review this one.
+
 ## [0.2.3] — 2026-11-05
 
 - Follow published RC7 (`b7e7e0d3`) with an RC8 candidate. kilix-llm
   `93f2202b` refuses `pull` of `qwen-0.8b-no-loop-02` and builds without
   llama.cpp's web UI. Kilix Avatar `202f03cd` names `kilix models install`
-  when that file is missing. Kilix is `425695ed` and Kilix 95 is `a4e73d05`.
+  when that file is missing. Kilix is `c763c292` and Kilix 95 is `9fae665d`.
   Ask answers a closed sum and the closed machine readings directly.
   An integer sum prints in full, a conversion keeps its unit, and "and"
   is addition except inside one hundred. A written thousand, million,
@@ -22,8 +36,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   unit conversions, text and status-code questions, and dice directly,
   and "what can you do?" lists them. Courtesy around a request is ignored.
   kilix-content `dfcda81b` reports an early end of a pinned download as
-  interrupted and is not pinned: carrier `42b6956b` still binds
-  kilix-content `b0c6f650`. The local tag `v0.2.3-rc8` is not pushed, and
+  interrupted and is not pinned. The image carrier `0935ea79` binds
+  kilix-content `543e4673`. The local tag `v0.2.3-rc8` is not pushed, and
   RC8 acceptance is not claimed.
 - Configure Debian's `<codename>-backports` archive in
   `plebian-os-debian-backports.sources` whenever live Debian sources are in

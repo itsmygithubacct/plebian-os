@@ -46,6 +46,9 @@ DELIVERY_MODE = "first-use-upstream-download"
 # Kilix Playalong's defaults that are not in the image (provision/playalong-models.json,
 # owner decision 2026-11-08): online upgrades install them unless the machine declined.
 PLAYALONG_MODE = "playalong-default-upstream-download"
+# Paradee and en_core_web_sm ride in the image. Provisioning installs the
+# supplied archives offline and does not download them.
+IMAGE_MODE = "image-offline-model"
 # The ids of the acceptance lines, each one test in
 # tests/test_model_compliance_carrier.py (F100-CARRIER-DESIGN.md §7.3).
 QUALIFICATION = (
@@ -124,6 +127,19 @@ def advertised_models() -> list[tuple[str, bool]]:
     ]
 
 
+def image_offline_pins() -> dict[str, str]:
+    """asset id -> manifest digest for models the image installs offline."""
+    found = {}
+    for filename in ("paradee-model.json", "en-core-web-sm-model.json"):
+        pin = json.loads((ROOT / "provision" / filename).read_bytes())
+        asset = pin.get("asset_id")
+        digest = pin.get("manifest_digest")
+        if not isinstance(asset, str) or not asset or not re.fullmatch(r"[0-9a-f]{64}", digest or ""):
+            raise SystemExit(f"invalid image model pin: {filename}")
+        found[asset] = digest
+    return found
+
+
 def extract(repo: Path, ref: str, dest: Path) -> None:
     """The tree of `ref`, exactly; the working tree of `repo` is never read."""
     archive = subprocess.run(["git", "-C", str(repo), "archive", "--format=tar", ref],
@@ -150,7 +166,7 @@ def load_module(src: Path, name: str):
 
 def delivery_text(model: str, host: str, runnable: bool, voice_ref: str,
                   *, bundled: bool = False, command_archive: bool = False,
-                  playalong: bool = False) -> str:
+                  playalong: bool = False, image: bool = False) -> str:
     # Every sentence here is a claim tests/test_model_compliance_carrier.py
     # checks (AC-8): delivery matches the exact default bundle inventory and
     # deferred downloads remain digest-verified and licence-receipt gated.
@@ -191,6 +207,18 @@ def delivery_text(model: str, host: str, runnable: bool, voice_ref: str,
             "No install route downloads it until a kilix-license receipt covers it:",
             "The model catalog validates the determined licence and records the receipt, and",
         ]
+    elif image:
+        return "\n".join([
+            f"mode: {IMAGE_MODE}",
+            "Installation media includes this model.",
+            "Provisioning installs the supplied bytes offline and does not download them.",
+            "An online install uses the same image archive. A missing archive is an error.",
+            "Original licence documents accompany the model, and installation verifies every catalogued file.",
+            "Installation creates a local standard-policy receipt; build-time receipts are never distributed.",
+            "An existing voice selection is left unchanged.",
+            "Female-02 stays installed and selectable. This bundling does not remove it.",
+            f"Upstream artifact provenance: {host}.",
+        ]) + "\n"
     else:
         lines = [
             f"mode: {DELIVERY_MODE}",
@@ -232,7 +260,7 @@ def notice_text(model: str, entry: dict, determination: str) -> str:
         f"Plebian-OS {entry['release_id']} conveyance notice for {model}.",
         "This file is written by Plebian-OS. It is not an upstream NOTICE file.",
         ("Plebian-OS distributes these model bytes in a verified archive on installation media."
-         if entry["delivery"] in ("bundled-default-model", "bundled-command-model-archive")
+         if entry["delivery"] in ("bundled-default-model", "bundled-command-model-archive", IMAGE_MODE)
          else "Plebian-OS does not distribute these model bytes."),
         "",
         f"Artifact: {entry['artifact_id']} (provider {entry['provider']}, version {entry['version']})",
@@ -275,6 +303,12 @@ def build(args) -> dict[str, bytes]:
             raise SystemExit("invalid command-model archive selection")
         models.append((command["asset_id"], True))
         files["COMMAND-MODEL.json"] = canonical(command) + b"\n"
+    image = image_offline_pins()
+    known = {name for name, _runnable in models}
+    for asset_id in image:
+        if asset_id in known:
+            raise SystemExit(f"{asset_id} is already advertised")
+        models.append((asset_id, True))
     if bundle is not None:
         if (bundle.get("schema") != "plebian-os.default-models-archive/v1"
                 or not isinstance(bundle.get("assets"), dict) or not bundle["assets"]
@@ -350,7 +384,10 @@ def build(args) -> dict[str, bytes]:
             bundled = bundle is not None and asset.asset_id in bundle["assets"]
             command_archive = command is not None and asset.asset_id == command["asset_id"]
             playalong_default = asset.asset_id in online
-            if bundled:
+            image_offline = asset.asset_id in image
+            if image_offline and asset.manifest_digest != image[asset.asset_id]:
+                raise SystemExit(f"{model}: image pin manifest differs")
+            if bundled or image_offline:
                 if not policy.standard_policy_eligible(record):
                     raise SystemExit(f"{model}: default delivery requires a standard-policy eligible record")
             mapping = asset.to_mapping()
@@ -377,7 +414,8 @@ def build(args) -> dict[str, bytes]:
                 "decision": record.decision_class,
                 "delivery": ("bundled-command-model-archive" if command_archive else
                              "bundled-default-model" if bundled else
-                             PLAYALONG_MODE if playalong_default else DELIVERY_MODE),
+                             PLAYALONG_MODE if playalong_default else
+                             IMAGE_MODE if image_offline else DELIVERY_MODE),
                 "download_bytes": asset.download_bytes,
                 "licence_ids": licence_ids,
                 "licence_record_digest": record.digest,
@@ -417,7 +455,7 @@ def build(args) -> dict[str, bytes]:
             files[base + "DELIVERY"] = delivery_text(
                 model, entry["upstream_host"], runnable, pins["KILIX_VOICE_REF"],
                 bundled=bundled, command_archive=command_archive,
-                playalong=playalong_default).encode()
+                playalong=playalong_default, image=image_offline).encode()
 
         # The advertised dictation model is the one the release pins.
         dictation = [m for m, e in entries.items()
