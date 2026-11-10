@@ -210,6 +210,11 @@ DEP_GROUPS=(
     # manager or desktop link handing off a PNG or JPEG needs a viewer present
     # on a fresh install. 3.10.3-1 is in the 0.2.2 apt snapshot.
     "images|feh"
+    # PDF Conversion's page OCR runs Debian's Tesseract as a program, beside
+    # RapidOCR in its own locked runtime. It reads scans when no Granite model
+    # is installed. tesseract-ocr depends on the eng and osd language data;
+    # eng is named because the converter requires it. Apache-2.0.
+    "page OCR|tesseract-ocr tesseract-ocr-eng"
     "session-log archiving|zstd"
     "optional diarization converter GCC runtimes|libgomp1 libgfortran5 libquadmath0"
     # F103 exposes the common archive formats from both its TUI and app. Keep

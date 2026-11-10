@@ -18,6 +18,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   `image-offline-model`. Carrier `81994103` binds kilix-content
   `c7aaac1`, which selects Needle `30ee74fe`. The attached seats still
   quote carrier `9701a082` and do not accept this carrier.
+- Install Debian's Tesseract (`tesseract-ocr`, `tesseract-ocr-eng`,
+  5.5.0-1+b1 with language data 4.1.0-2) on the Debian-installer path and
+  in `install-deps.sh`. kilix-pdf-conversion 0.4.0 uses it for page OCR,
+  beside RapidOCR with the PP-OCRv6 small models. This adds five packages,
+  about 23 MiB installed. Tesseract is Apache-2.0. The content catalog
+  does not yet pin that app version or its two model assets.
 
 ## [0.2.3] — 2026-11-05
 

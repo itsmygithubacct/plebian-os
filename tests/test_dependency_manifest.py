@@ -117,6 +117,10 @@ DEFAULT_PDF_VIEWER_PACKAGES = {"okular", "evince"}
 # only to the browser.
 DEFAULT_IMAGE_VIEWER_PACKAGES = {"feh"}
 
+# PDF Conversion's page OCR runs the Tesseract program with English data on
+# both install paths, so a scan converts without a first-use model.
+PDF_PAGE_OCR_PACKAGES = {"tesseract-ocr", "tesseract-ocr-eng"}
+
 # Pleb preinstalls the catalog-pinned terminal viewer. These packages let its
 # native Poppler/Cairo core build during provisioning; the wrapper retains
 # Evince and CPU-rendering fallbacks if GPU presentation is unavailable.
@@ -635,6 +639,12 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(DEFAULT_IMAGE_VIEWER_PACKAGES,
                              install_deps_packages())
         self.assertLessEqual(DEFAULT_IMAGE_VIEWER_PACKAGES,
+                             preseed_packages())
+
+    def test_pdf_page_ocr_is_installed_on_both_paths(self):
+        self.assertLessEqual(PDF_PAGE_OCR_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(PDF_PAGE_OCR_PACKAGES,
                              preseed_packages())
 
     def test_native_pdf_viewer_builds_on_both_paths(self):
