@@ -457,29 +457,48 @@ REWRITTEN_CLAIMS = (
         "require `kilix-stt --print` to report `dictation=ready`",
         "require `kilix-stt --print` to produce a dictation report",
     ),
+    # RELEASING.md is the living checklist. 0.2.3 bundles small-en-us and
+    # whistle (owner determination 2026-11-05; b473a74), so each 0.2.1 sentence
+    # below is paired with the 0.2.3 sentence that now covers its ground, and
+    # the 0.2.2 sentences b473a74 replaced are pairs of their own.
     (
         "RELEASING.md",
         "Both installed Vosk assets must retain readable upstream provenance "
         "and Apache-2.0 license material",
-        "these pins are the advertised identity",
+        "The flag records those pins.",
     ),
     (
         "RELEASING.md",
         "Require the device-free acceptance smoke to synthesize a phrase with "
         "real espeak, load the pinned Vosk library/model, and recognize "
         "nonempty text",
-        "**Require the guest to hold no speech-model weights**",
+        "**Include speech-model weights as needed.**",
     ),
     (
         "RELEASING.md",
         "Verify the installed library/model match the exact release stamp",
-        "A model present on a fresh image is a release failure",
+        "stay first-use pulls and must be absent as installed weights",
     ),
     (
         "RELEASING.md",
         "The first-use acceptance leg is deferred and must not be attempted "
         "on a 0.2.2 image",
-        "Exercise the pinned first-use path",
+        "Exercise that first-use path on `lgraph-en-us`",
+    ),
+    (
+        "RELEASING.md",
+        "**Require the guest to hold no speech-model weights**",
+        "**Include speech-model weights as needed.**",
+    ),
+    (
+        "RELEASING.md",
+        "A model present on a fresh image is a release failure",
+        "stay first-use pulls and must be absent as installed weights",
+    ),
+    (
+        "RELEASING.md",
+        "the image ships no model bytes and downloads none unattended",
+        "first-use pulls and are not downloaded unattended",
     ),
     (
         "releases/0.2.2-notes.md",

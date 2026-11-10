@@ -14,7 +14,9 @@ class OllamaCarrierWrapperTests(unittest.TestCase):
     def setUpClass(cls):
         source = REMASTER.read_text()
         start = source.index("resolve_ollama_carrier() {")
-        end = source.index("\ndefault_iso_name=", start)
+        # Only the function: the top-level model-bundle checks that follow it
+        # would otherwise run, and stop, inside the harness.
+        end = source.index("\n}\n", start) + 2
         cls.resolver = source[start:end]
 
     def run_resolver(self, argument=None, configured=None):
@@ -71,7 +73,8 @@ class OllamaCarrierWrapperTests(unittest.TestCase):
             env.update({
                 "HOME": td,
                 "PLEBIAN_OS_OLLAMA_CARRIER": str(carrier),
-                "PLEBIAN_OS_RELEASE": "0.2.2",
+                # The builders require the release to match checkout VERSION.
+                "PLEBIAN_OS_RELEASE": (ROOT / "VERSION").read_text().strip(),
                 "PLEBIAN_OS_ARTIFACTS": str(root / "artifacts"),
                 "PLEBIAN_OS_CACHE": str(root / "cache"),
                 "PLEBIAN_OS_SESSION_HOME": str(root / "session"),
