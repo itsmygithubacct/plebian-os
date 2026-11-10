@@ -15,8 +15,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   and checks the Apache-2.0 text before install and synthesis, and ships the
   espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
   `libespeak-ng`. The 0.2.3 carrier names both image models as
-  `image-offline-model`. The attached seats reviewed the RC7 carrier, so
-  acceptance stays open until two seats review this one.
+  `image-offline-model`. Two seats reviewed carrier `9701a082` and both
+  say ship with known issues.
 
 ## [0.2.3] — 2026-11-05
 
