@@ -1,9 +1,11 @@
-"""Install and upgrade place the Kilix-pinned kilix-llm and build its CPU runtime.
+"""Install and upgrade place the Kilix-pinned kilix-llm and compile nothing.
 
 The qwen-0.8b-no-loop-02 LLM Chat and Kilix Avatar rows run kilix-llm, so the
-image installs it after Kilix (which pins its revision) and builds the CPU
-runtime while the network is still there. The model itself is not installed
-here; it arrives only through the model wizard.
+image installs it after Kilix (which pins its revision): the launcher and the
+pinned llama.cpp source. kilix-llm builds its CPU runtime on first use, so a
+machine that never uses the model does not pay about 1.5 GB and ten minutes for
+it. The model itself is not installed here; it arrives only through the model
+wizard.
 """
 import os
 from pathlib import Path
@@ -61,14 +63,16 @@ class KilixLlmInstallTests(unittest.TestCase):
         return subprocess.run(['bash', '-c', script], capture_output=True, text=True,
                               env=dict(os.environ, HOME=str(home)))
 
-    def test_install_and_upgrade_install_then_build_the_cpu_runtime(self):
+    def test_install_and_upgrade_install_without_building(self):
         for run in (self.run_provision, self.run_update):
             with self.subTest(run.__name__), tempfile.TemporaryDirectory() as home:
                 kilix, log = self.fixture(home)
                 result = run(home, kilix)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(log.read_text().splitlines(),
-                                 ['install ', 'kilix-llm build --backend cpu'])
+                self.assertEqual(log.read_text().splitlines(), ['install '])
+        for script in (PROVISION, UPDATE):
+            with self.subTest(script.name):
+                self.assertNotIn('kilix-llm" build', function(script.read_text(), 'install_kilix_llm'))
 
     def test_a_missing_or_linked_installer_stops_the_install(self):
         for run in (self.run_provision, self.run_update):
@@ -82,15 +86,15 @@ class KilixLlmInstallTests(unittest.TestCase):
                 self.assertIn('missing or unsafe', result.stderr)
                 self.assertFalse(log.exists())
 
-    def test_a_failed_build_stops_the_install(self):
-        with tempfile.TemporaryDirectory() as home:
-            kilix, log = self.fixture(home)
-            installer = kilix / 'scripts/install-kilix-llm.sh'
-            installer.write_text(installer.read_text().replace(
-                'printf \'#!/bin/sh\\necho', 'printf \'#!/bin/sh\\nexit 1\\necho'))
-            result = self.run_provision(home, kilix)
-            self.assertEqual(result.returncode, 3)
-            self.assertIn('CPU runtime build failed', result.stderr)
+    def test_a_failed_installer_stops_the_install(self):
+        for run in (self.run_provision, self.run_update):
+            with self.subTest(run.__name__), tempfile.TemporaryDirectory() as home:
+                kilix, log = self.fixture(home)
+                installer = kilix / 'scripts/install-kilix-llm.sh'
+                installer.write_text(installer.read_text() + 'exit 1\n')
+                result = run(home, kilix)
+                self.assertEqual(result.returncode, 3)
+                self.assertIn('kilix-llm installation failed', result.stderr)
 
     def test_dry_run_installs_nothing(self):
         body = function(PROVISION.read_text(), 'install_kilix_llm')
@@ -98,7 +102,7 @@ class KilixLlmInstallTests(unittest.TestCase):
                                  'DRY_RUN=1 TARGET_USER=desktop\n' + body + 'install_kilix_llm\n'],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('would install the Kilix-pinned kilix-llm', result.stdout)
+        self.assertIn('would install the Kilix-pinned kilix-llm (source only', result.stdout)
 
     def test_it_runs_after_kilix_and_needle_and_before_the_models(self):
         provision, update = PROVISION.read_text(), UPDATE.read_text()

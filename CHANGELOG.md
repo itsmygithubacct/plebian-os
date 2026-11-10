@@ -11,10 +11,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   (RC7). The model wizard downloads it from the kilix-llm release of the same
   name under the standard licence policy; its Apache-2.0 and CC BY 4.0
   components are owner-approved. Installation and upgrades install kilix-llm
-  `b26cadcd` and build its CPU runtime, and Kilix 95 then offers LLM Chat and
-  Kilix Avatar entries for the model. Kilix is `58c36b2e`, kilix-content is
-  `b0c6f650`, kilix-license is `2737f321`, Kilix 95 is `24130253` and Kilix
-  Avatar is `a383f65a`, each the RC6 pin plus this change. The regenerated
+  `ba4eaca3` (launcher and shallow pinned llama.cpp source, nothing compiled),
+  and Kilix 95 then offers LLM Chat and Kilix Avatar entries for the model.
+  Their first start builds kilix-llm's CPU runtime once and keeps only its
+  `bin/`, about 25 MB. Kilix is `55d7ea2a`, kilix-content is `b0c6f650`,
+  kilix-license is `2737f321`, Kilix 95 is `a9f28965` and Kilix Avatar is
+  `c06f6aec`, each the RC6 pin plus this change. The regenerated
   model carrier `42b6956b` changes only its interface refs from the RC6
   carrier `4fdbffce`; two independent seats reviewed it (ship with known
   issues, listed in the 0.2.3 follow-ups).

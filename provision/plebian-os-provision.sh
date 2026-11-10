@@ -5797,11 +5797,13 @@ install_kilix_needle() {
 
 # kilix-llm runs the optional qwen-0.8b-no-loop-02 chat model (LLM Chat and
 # Kilix Avatar rows). Kilix pins its revision; the installer places the
-# launcher and llama.cpp source, and this step builds the CPU runtime so the
-# rows work offline. The model itself arrives only through the model wizard.
+# launcher and a shallow copy of the pinned llama.cpp source, so the rows'
+# first start can build the CPU runtime offline. Nothing is compiled here: a
+# machine that never uses the model does not pay about 1.5 GB and ten
+# minutes for it. The model itself arrives only through the model wizard.
 install_kilix_llm() {
     if [ "$DRY_RUN" = 1 ]; then
-        log "would install the Kilix-pinned kilix-llm and build its CPU runtime as $TARGET_USER"
+        log "would install the Kilix-pinned kilix-llm (source only; it builds on first use) as $TARGET_USER"
         return 0
     fi
     local installer="$KILIX_DIR/scripts/install-kilix-llm.sh"
@@ -5809,8 +5811,6 @@ install_kilix_llm() {
         || die "required kilix-llm installer is missing or unsafe: $installer"
     as_user env "${install_env[@]}" "$installer" \
         || die "required kilix-llm installation failed"
-    as_user env "${install_env[@]}" "$USER_HOME/.local/bin/kilix-llm" build --backend cpu \
-        || die "required kilix-llm CPU runtime build failed"
 }
 
 install_kilix_secrets() {

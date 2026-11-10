@@ -4386,17 +4386,15 @@ install_kilix_needle() {
         || die "required Needle application installation failed"
 }
 
-# The same kilix-llm closure provisioning installs: the launcher at the
-# updated Kilix's pin, then its CPU runtime, so the qwen-0.8b-no-loop-02 rows
-# work offline after an upgrade.
+# The same kilix-llm closure provisioning installs: the launcher and pinned
+# llama.cpp source at the updated Kilix's pin. Nothing is compiled; a runtime
+# built for an older pin is rebuilt once by its next first use.
 install_kilix_llm() {
     local installer="$KILIX_DIR/scripts/install-kilix-llm.sh"
     [ -f "$installer" ] && [ -x "$installer" ] && [ ! -L "$installer" ] \
         || die "required kilix-llm installer is missing or unsafe: $installer"
     env "${stack_env[@]}" "$installer" \
         || die "required kilix-llm installation failed"
-    env "${stack_env[@]}" "$HOME/.local/bin/kilix-llm" build --backend cpu \
-        || die "required kilix-llm CPU runtime build failed"
 }
 
 run_encodec_converter_installer() {
