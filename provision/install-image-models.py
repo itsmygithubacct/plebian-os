@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import subprocess
 import tarfile
 import tempfile
 import time
@@ -45,6 +46,30 @@ DEMUCS_WEIGHTS = 'models/5c90dfd2-34c22ccb.th'
 DEMUCS_LICENCE = 'notices/LICENSE-mit.txt'
 DEMUCS_FILES = (DEMUCS_WEIGHTS, DEMUCS_LICENCE)
 DEMUCS_LICENCE_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'demucs-htdemucs-6s-LICENSE-mit.txt'
+PARADEE_ONNX = 'onnx/paradee_int8.onnx'
+PARADEE_CONFIG = 'config.json'
+PARADEE_LICENCE = 'notices/LICENSE-apache-2.0.txt'
+PARADEE_FILES = (PARADEE_ONNX, PARADEE_CONFIG, PARADEE_LICENCE)
+PARADEE_ONNX_URL = (
+    'https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.2/resolve/'
+    'ed2934d4df8a4fd891e29584c5e1104649409765/onnx/paradee_int8.onnx')
+PARADEE_CONFIG_URL = (
+    'https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.2/resolve/'
+    'ed2934d4df8a4fd891e29584c5e1104649409765/config.json')
+PARADEE_LICENCE_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'paradee-8m-v1.2-LICENSE-apache-2.0.txt'
+PARADEE_RUNTIME = Path('/usr/lib/kilix/paradee')
+PARADEE_PYTHON = Path('/usr/lib/kilix/pd/bin/python')
+PARADEE_WHEELHOUSE = SHARED_BASIC_PITCH / 'paradee-wheels'
+PARADEE_WHEEL_LOCK = 'paradee-wheels.json'
+SPACY_WHEEL = 'en_core_web_sm-3.8.0-py3-none-any.whl'
+SPACY_LICENCE = 'notices/LICENSE-mit.txt'
+SPACY_SOURCES = 'notices/LICENSES_SOURCES.txt'
+SPACY_FILES = (SPACY_WHEEL, SPACY_LICENCE, SPACY_SOURCES)
+SPACY_WHEEL_URL = (
+    'https://github.com/explosion/spacy-models/releases/download/'
+    'en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl')
+SPACY_LICENCE_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'en-core-web-sm-3.8.0-LICENSE-mit.txt'
+SPACY_SOURCES_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'en-core-web-sm-3.8.0-LICENSES_SOURCES.txt'
 WHISPER_MEDIUM = 'faster-whisper-medium-en'
 PLAYALONG_DEFAULTS = ('demucs-htdemucs-6s', 'basic-pitch-icassp-2022-onnx', WHISPER_MEDIUM)
 # One online fetch may take this long; Whisper medium.en is 1.5 GB.
@@ -89,6 +114,26 @@ def validate_demucs_pin(pin):
         members=DEMUCS_FILES, limit=64 * 1024 * 1024)
     if pin.get('url') != 'https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/5c90dfd2-34c22ccb.th':
         raise ValueError('invalid Demucs pin: the weights URL is not Meta\'s pinned URL')
+
+
+def validate_paradee_pin(pin):
+    _validate_archive_pin(
+        pin, label='Paradee', schema='plebian-os.paradee-archive/v1',
+        asset_id='paradee-8m-v1.2', filename='paradee-8m-v1.2.tar',
+        members=PARADEE_FILES, limit=16 * 1024 * 1024)
+    if pin['files'][PARADEE_ONNX].get('url') != PARADEE_ONNX_URL:
+        raise ValueError('invalid Paradee pin: the ONNX URL is not the pinned file')
+    if pin['files'][PARADEE_CONFIG].get('url') != PARADEE_CONFIG_URL:
+        raise ValueError('invalid Paradee pin: config.json URL is not the pinned file')
+
+
+def validate_spacy_pin(pin):
+    _validate_archive_pin(
+        pin, label='en_core_web_sm', schema='plebian-os.en-core-web-sm-archive/v1',
+        asset_id='en-core-web-sm-3.8.0', filename='en-core-web-sm-3.8.0.tar',
+        members=SPACY_FILES, limit=16 * 1024 * 1024)
+    if pin['files'][SPACY_WHEEL].get('url') != SPACY_WHEEL_URL:
+        raise ValueError('invalid en_core_web_sm pin: the wheel URL is not the pinned file')
 
 
 def validate_playalong_inventory(inventory, basic_pin, demucs_pin):
@@ -235,6 +280,197 @@ def build_demucs_archive(weights, output, pin):
     print('Demucs image archive written: ' + str(output))
 
 
+def _checked_input(pin, name, source, label):
+    item = pin['files'][name]
+    with _open_regular(source) as stream:
+        data = stream.read(item['bytes'] + 1)
+    if len(data) != item['bytes'] or hashlib.sha256(data).hexdigest() != item['sha256']:
+        raise ValueError(label + ' input size or checksum mismatch: ' + name)
+    return data
+
+
+def _build_ustar(members, output, verify):
+    """Uncompressed ustar with the same fixed metadata as the Demucs archive."""
+    output = Path(output)
+    with output.open('xb') as stream:
+        try:
+            with tarfile.open(fileobj=stream, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+                for name, data in members:
+                    info = tarfile.TarInfo(name)
+                    info.size, info.mode, info.mtime = len(data), 0o644, 0
+                    info.uid = info.gid = 0
+                    info.uname = info.gname = ''
+                    archive.addfile(info, io.BytesIO(data))
+        except BaseException:
+            output.unlink()
+            raise
+    try:
+        verify(output)
+    except BaseException:
+        output.unlink()
+        raise
+
+
+def verify_paradee_archive(path, pin):
+    """Check the Paradee archive, the int8 ONNX, config.json and the Apache-2.0 text."""
+    validate_paradee_pin(pin)
+    _verify_image_archive(path, pin, 'Paradee', 'r:')
+
+
+def materialize_paradee(path, pin, destination):
+    verify_paradee_archive(path, pin)
+    _materialize_image_archive(path, pin, destination, 'Paradee', 'r:')
+
+
+def build_paradee_archive(onnx, config, output, pin):
+    """Write the image's Paradee archive from the pinned ONNX, config.json and Apache-2.0 text."""
+    validate_paradee_pin(pin)
+    members = [
+        (PARADEE_ONNX, _checked_input(pin, PARADEE_ONNX, onnx, 'Paradee')),
+        (PARADEE_CONFIG, _checked_input(pin, PARADEE_CONFIG, config, 'Paradee')),
+        (PARADEE_LICENCE, _checked_input(pin, PARADEE_LICENCE, PARADEE_LICENCE_SOURCE, 'Paradee')),
+    ]
+    _build_ustar(members, output, lambda path: verify_paradee_archive(path, pin))
+    print('Paradee image archive written: ' + str(output))
+
+
+def verify_spacy_archive(path, pin):
+    """Check the spaCy archive, the en_core_web_sm wheel, its MIT text and LICENSES_SOURCES."""
+    validate_spacy_pin(pin)
+    _verify_image_archive(path, pin, 'en_core_web_sm', 'r:')
+
+
+def materialize_spacy(path, pin, destination):
+    verify_spacy_archive(path, pin)
+    _materialize_image_archive(path, pin, destination, 'en_core_web_sm', 'r:')
+
+
+def build_spacy_archive(wheel, output, pin):
+    """Write the image's en_core_web_sm archive from the pinned wheel and its two texts."""
+    validate_spacy_pin(pin)
+    members = [
+        (SPACY_WHEEL, _checked_input(pin, SPACY_WHEEL, wheel, 'en_core_web_sm')),
+        (SPACY_LICENCE, _checked_input(pin, SPACY_LICENCE, SPACY_LICENCE_SOURCE, 'en_core_web_sm')),
+        (SPACY_SOURCES, _checked_input(pin, SPACY_SOURCES, SPACY_SOURCES_SOURCE, 'en_core_web_sm')),
+    ]
+    _build_ustar(members, output, lambda path: verify_spacy_archive(path, pin))
+    print('en_core_web_sm image archive written: ' + str(output))
+
+
+def verify_paradee_runtime(pin, root=None):
+    """The runtime files preseed wrote. This does not write them."""
+    validate_paradee_pin(pin)
+    root = PARADEE_RUNTIME if root is None else Path(root)
+    for name in (PARADEE_ONNX, PARADEE_CONFIG):
+        item = pin['files'][name]
+        try:
+            stream = _open_regular(root / name)
+        except (FileNotFoundError, OSError) as error:
+            raise ValueError('Paradee runtime file is missing: ' + name) from error
+        with stream:
+            data = stream.read(item['bytes'] + 1)
+        if len(data) != item['bytes'] or hashlib.sha256(data).hexdigest() != item['sha256']:
+            raise ValueError('Paradee runtime file size or checksum mismatch: ' + name)
+
+
+def stage_paradee_runtime(archive, pin, root):
+    """Copy a missing ONNX or config.json from the image archive. Root calls this."""
+    verify_paradee_archive(archive, pin)
+    root = Path(root)
+    missing = []
+    for name in (PARADEE_ONNX, PARADEE_CONFIG):
+        target = root / name
+        if target.exists() or target.is_symlink():
+            continue
+        missing.append(name)
+    if missing:
+        with tempfile.TemporaryDirectory(prefix='plebian-paradee-runtime-') as temporary:
+            materialize_paradee(archive, pin, Path(temporary))
+            for name in missing:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                data = (Path(temporary) / name).read_bytes()
+                with target.open('xb') as output:
+                    output.write(data)
+                target.chmod(0o644)
+    verify_paradee_runtime(pin, root)
+
+
+def load_wheel_lock(path=None):
+    path = Path(__file__).with_name(PARADEE_WHEEL_LOCK) if path is None else Path(path)
+    lock = json.loads(path.read_text())
+    wheels = lock.get('wheels')
+    if (lock.get('schema') != 'plebian-os.paradee-wheels/v1' or lock.get('python') != '3.13'
+            or not isinstance(wheels, list) or not wheels):
+        raise ValueError('invalid Paradee wheel lock')
+    seen = set()
+    for item in wheels:
+        filename = item.get('filename') if isinstance(item, dict) else None
+        bundled = item.get('bundle') == filename if isinstance(item, dict) else False
+        has_url = (isinstance(item, dict) and isinstance(item.get('url'), str)
+                   and item['url'].startswith('https://'))
+        if (not isinstance(item, dict) or not isinstance(item.get('name'), str) or not item['name']
+                or not isinstance(item.get('version'), str) or not item['version']
+                or not isinstance(filename, str) or not filename or filename in seen
+                or '/' in filename or filename.startswith('.')
+                or bundled == has_url
+                or type(item.get('bytes')) is not int or item['bytes'] <= 0
+                or not _hex64(item.get('sha256'))):
+            raise ValueError('invalid Paradee wheel lock entry')
+        seen.add(filename)
+    if not any(item['name'] == 'en_core_web_sm' for item in wheels):
+        raise ValueError('invalid Paradee wheel lock: en_core_web_sm is missing')
+    return lock
+
+
+def wheel_requirements(lock):
+    lines = []
+    for item in lock['wheels']:
+        lines.append(item['name'] + '==' + item['version'] + ' \\\n    --hash=sha256:' + item['sha256'])
+    return '\n'.join(lines) + '\n'
+
+
+def verify_paradee_wheels(wheelhouse, lock):
+    wheelhouse = Path(wheelhouse)
+    if not wheelhouse.is_dir() or wheelhouse.is_symlink():
+        raise ValueError('the installation media did not supply the Paradee wheelhouse')
+    for item in lock['wheels']:
+        try:
+            stream = _open_regular(wheelhouse / item['filename'])
+        except (FileNotFoundError, OSError) as error:
+            raise ValueError('Paradee wheel is missing: ' + item['filename']) from error
+        with stream:
+            data = stream.read(item['bytes'] + 1)
+        if len(data) != item['bytes'] or hashlib.sha256(data).hexdigest() != item['sha256']:
+            raise ValueError('Paradee wheel size or checksum mismatch: ' + item['filename'])
+
+
+def install_paradee_venv(wheelhouse, lock, python):
+    """Create /usr/lib/kilix/pd from the hash-locked wheelhouse. An existing Python is left alone."""
+    python = Path(python)
+    if python.is_symlink():
+        raise ValueError('Paradee runtime Python is a symlink')
+    if python.is_file():
+        print('Paradee runtime Python already present: ' + str(python))
+        return
+    venv = python.parents[1]
+    if venv.exists():
+        raise ValueError('Paradee runtime directory exists without its Python')
+    verify_paradee_wheels(wheelhouse, lock)
+    subprocess.run([sys.executable, '-I', '-m', 'venv', str(venv)], check=True)
+    if python.is_symlink() or not python.is_file():
+        raise ValueError('Paradee runtime Python was not created')
+    with tempfile.TemporaryDirectory(prefix='plebian-paradee-wheels-') as temporary:
+        requirements = Path(temporary) / 'requirements.txt'
+        requirements.write_text(wheel_requirements(lock))
+        subprocess.run([
+            str(python), '-I', '-m', 'pip', 'install', '--disable-pip-version-check',
+            '--no-index', '--no-deps', '--find-links', str(wheelhouse),
+            '--require-hashes', '--ignore-requires-python', '-r', str(requirements),
+        ], check=True)
+    print('Paradee runtime Python installed: ' + str(python))
+
+
 def resolve_basic_pitch(explicit):
     if explicit is not None:
         return Path(explicit)
@@ -255,6 +491,24 @@ def resolve_demucs(explicit):
     if shared.is_file() and not shared.is_symlink():
         return shared
     return None
+
+
+def _resolve_shared_archive(explicit, filename):
+    """An image archive, or None when this machine has no regular copy of it."""
+    if explicit is not None:
+        return Path(explicit)
+    shared = SHARED_BASIC_PITCH / filename
+    if shared.is_file() and not shared.is_symlink():
+        return shared
+    return None
+
+
+def resolve_paradee(explicit):
+    return _resolve_shared_archive(explicit, 'paradee-8m-v1.2.tar')
+
+
+def resolve_spacy(explicit):
+    return _resolve_shared_archive(explicit, 'en-core-web-sm-3.8.0.tar')
 
 
 def _load(kilix):
@@ -382,6 +636,29 @@ def install_demucs(kilix, archive, pin, *, offline):
         fetch_default(kilix, pin['asset_id'], 'Demucs', pin['manifest_digest'])
 
 
+def install_paradee(kilix, archive, pin):
+    """Paradee from the image. The runtime files are checked and never rewritten here."""
+    verify_paradee_runtime(pin)
+    cm, _defaults = _load(kilix)
+    if _playalong_installed(cm, pin['asset_id']):
+        print('Paradee already verified; no bundle install needed.')
+        return
+    if archive is None:
+        raise ValueError('the installation media did not supply the Paradee model')
+    _install_from_image(kilix, archive, pin, 'Paradee', materialize_paradee)
+
+
+def install_spacy(kilix, archive, pin):
+    """en_core_web_sm from the image. This never downloads the wheel."""
+    cm, _defaults = _load(kilix)
+    if _playalong_installed(cm, pin['asset_id']):
+        print('en_core_web_sm already verified; no bundle install needed.')
+        return
+    if archive is None:
+        raise ValueError('the installation media did not supply the en_core_web_sm model')
+    _install_from_image(kilix, archive, pin, 'en_core_web_sm', materialize_spacy)
+
+
 def install_whisper_medium(kilix, manifest_digest, *, offline):
     """Whisper medium.en is not in the image: an online run downloads it."""
     cm, _defaults = _load(kilix)
@@ -484,33 +761,81 @@ def main(argv=None):
     parser.add_argument('--command-cache', type=Path, default=COMMAND_CACHE)
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--verify-only', action='store_true')
+    parser.add_argument('--paradee', type=Path,
+                        help='the Paradee image archive (default: the copy the image installed, if any)')
+    parser.add_argument('--en-core-web-sm', type=Path, dest='spacy',
+                        help='the en_core_web_sm image archive (default: the copy the image installed, if any)')
     parser.add_argument('--build-demucs-archive', type=Path, metavar='OUTPUT',
                         help='write the Demucs image archive from --demucs-weights and exit')
     parser.add_argument('--demucs-weights', type=Path)
+    parser.add_argument('--build-paradee-archive', type=Path, metavar='OUTPUT',
+                        help='write the Paradee image archive from --paradee-onnx and --paradee-config and exit')
+    parser.add_argument('--paradee-onnx', type=Path)
+    parser.add_argument('--paradee-config', type=Path)
+    parser.add_argument('--build-en-core-web-sm-archive', type=Path, dest='build_spacy_archive', metavar='OUTPUT',
+                        help='write the en_core_web_sm image archive from --en-core-web-sm-wheel and exit')
+    parser.add_argument('--en-core-web-sm-wheel', type=Path, dest='spacy_wheel')
+    parser.add_argument('--install-paradee-runtime', action='store_true',
+                        help='as root, copy a missing Paradee ONNX and config.json into the runtime directory')
+    parser.add_argument('--paradee-runtime', type=Path, default=PARADEE_RUNTIME)
+    parser.add_argument('--paradee-wheels', type=Path, default=PARADEE_WHEELHOUSE)
+    parser.add_argument('--paradee-python', type=Path, default=PARADEE_PYTHON)
+    parser.add_argument('--verify-paradee-wheels', type=Path, metavar='DIR',
+                        help='check the hash-locked Paradee wheelhouse and exit')
     args = parser.parse_args(argv)
     basic_pin = _load_pin('basic-pitch-model.json')
     command_pin = _load_pin('command-model.json')
     demucs_pin = _load_pin('demucs-model.json')
+    paradee_pin = _load_pin('paradee-model.json')
+    spacy_pin = _load_pin('en-core-web-sm-model.json')
     playalong = _load_pin('playalong-models.json')
     validate_basic_pitch_pin(basic_pin)
     validate_command_pin(command_pin)
     validate_demucs_pin(demucs_pin)
+    validate_paradee_pin(paradee_pin)
+    validate_spacy_pin(spacy_pin)
     validate_playalong_inventory(playalong, basic_pin, demucs_pin)
+    if args.verify_paradee_wheels is not None:
+        verify_paradee_wheels(args.verify_paradee_wheels, load_wheel_lock())
+        print('Paradee wheelhouse verified: ' + str(args.verify_paradee_wheels))
+        return 0
     if args.build_demucs_archive is not None:
         if args.demucs_weights is None:
             parser.error('--build-demucs-archive needs --demucs-weights')
         build_demucs_archive(args.demucs_weights, args.build_demucs_archive, demucs_pin)
         return 0
+    if args.build_paradee_archive is not None:
+        if args.paradee_onnx is None or args.paradee_config is None:
+            parser.error('--build-paradee-archive needs --paradee-onnx and --paradee-config')
+        build_paradee_archive(args.paradee_onnx, args.paradee_config, args.build_paradee_archive, paradee_pin)
+        return 0
+    if args.build_spacy_archive is not None:
+        if args.spacy_wheel is None:
+            parser.error('--build-en-core-web-sm-archive needs --en-core-web-sm-wheel')
+        build_spacy_archive(args.spacy_wheel, args.build_spacy_archive, spacy_pin)
+        return 0
+    if args.install_paradee_runtime:
+        paradee_archive = resolve_paradee(args.paradee)
+        if paradee_archive is None:
+            raise ValueError('the installation media did not supply the Paradee model')
+        stage_paradee_runtime(paradee_archive, paradee_pin, args.paradee_runtime)
+        install_paradee_venv(args.paradee_wheels, load_wheel_lock(), args.paradee_python)
+        print('Paradee runtime files verified: ' + str(args.paradee_runtime))
+        return 0
     archive = resolve_basic_pitch(args.basic_pitch)
     verify_archive(archive, basic_pin)
     if args.demucs is not None:
         verify_demucs_archive(args.demucs, demucs_pin)
+    if args.paradee is not None:
+        verify_paradee_archive(args.paradee, paradee_pin)
+    if args.spacy is not None:
+        verify_spacy_archive(args.spacy, spacy_pin)
     if args.verify_only:
         return 0
     if args.kilix is None:
         parser.error('--kilix is required')
     # --offline is the fresh-install call: it downloads nothing. Basic Pitch,
-    # Demucs and the command model come from the image.
+    # Demucs, Paradee, en_core_web_sm and the command model come from the image.
     if args.offline and not archive.is_file():
         raise ValueError('the installation media did not supply the Basic Pitch model')
     declined = playalong_declined(args.kilix)
@@ -519,6 +844,8 @@ def main(argv=None):
         install_demucs(args.kilix, resolve_demucs(args.demucs), demucs_pin, offline=args.offline)
     else:
         print("Playalong's default models skipped: " + declined)
+    install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin)
+    install_spacy(args.kilix, resolve_spacy(args.spacy), spacy_pin)
     install_command_model(args.kilix, command_pin, args.command_cache)
     # The one large download comes last, after everything the image supplies.
     if declined is None:

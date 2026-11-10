@@ -1,0 +1,24 @@
+{
+  "schema": "plebian-os.en-core-web-sm-archive/v1",
+  "since_release": "0.2.4",
+  "asset_id": "en-core-web-sm-3.8.0",
+  "manifest_digest": "ce7a28de5ef369d1e1c7bd58571e4fe615a6783124721f8142de651755239271",
+  "filename": "en-core-web-sm-3.8.0.tar",
+  "bytes": 12820480,
+  "sha256": "eedbef109150c8b8f0534fae3ac6ee1a79d9616f09f638247c35a7a309f180fb",
+  "files": {
+    "en_core_web_sm-3.8.0-py3-none-any.whl": {
+      "bytes": 12806118,
+      "sha256": "1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85",
+      "url": "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+    },
+    "notices/LICENSE-mit.txt": {
+      "bytes": 1056,
+      "sha256": "3933c176979b68bc6d0bcc902c7d6c130f1d127f476f17ba5cdba8d99cfd0012"
+    },
+    "notices/LICENSES_SOURCES.txt": {
+      "bytes": 2347,
+      "sha256": "20d9dfacd215112251f15341edd1a47b1f98bf393a212f10f194ffdc7ee98a90"
+    }
+  }
+}

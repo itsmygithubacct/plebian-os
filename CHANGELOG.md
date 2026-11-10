@@ -4,6 +4,14 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## [Unreleased]
+
+- Ship Paradee 8M as the fresh-install system voice, with its int8 ONNX,
+  `config.json`, Apache-2.0 text, the `en_core_web_sm` 3.8.0 wheel and a
+  hash-locked Python wheelhouse in the image. Provision installs those bytes
+  offline and does not download them. An existing voice selection is left
+  unchanged, and Female-02 stays installed.
+
 ## [0.2.3] — 2026-11-05
 
 - Offer the optional chat model `qwen-0.8b-no-loop-02`, a modified
