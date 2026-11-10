@@ -2034,7 +2034,9 @@ fi
 # indexes, and its exact package pins predate the security updates now
 # installed. Only what a committed Plebian-OS migration leaves counts (the
 # retired installer source or the managed live source, with the snapshot source
-# gone). The security policy is written before a switch that can still roll
+# gone). The managed backports source is not evidence: it is removed again
+# under a snapshot, and a copy of it alone does not show this migration. The
+# security policy is written before a switch that can still roll
 # back, so it is not evidence, and a machine an administrator unpinned by hand
 # can still undo a selection. The record is read as data, never sourced.
 apt_root="${env_path%/etc/pleb/session.env}/etc/apt"
@@ -2256,6 +2258,7 @@ done
 
 # Apply the same live-APT downgrade floor as legacy rollback, reading the
 # saved split pair in configuration order. Never source recovery records.
+# plebian-os-debian-backports.sources is not evidence of the migration.
 if [ "$mode" = image ]; then
     apt_root="${session_path%/etc/pleb/session.env}/etc/apt"
     migrated=0

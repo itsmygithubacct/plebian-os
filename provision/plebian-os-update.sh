@@ -4799,10 +4799,11 @@ stack_env=(
 # must agree on both (a test holds their copies byte-identical). The run that
 # records a release install resolves every index from the exact install
 # snapshot; afterwards the machine tracks live Debian, and every index must still
-# come from the official Debian archive for its codename. Returns 2 for an empty
+# come from the official Debian archive for its codename. The codename's
+# backports suite counts only from deb.debian.org/debian. Returns 2 for an empty
 # index list and 1, naming the index, for any other violation.
 validate_release_apt_provenance() {
-    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release
+    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release suite_ok
     [ -s "$file" ] || return 2
     while IFS= read -r line || [ -n "$line" ]; do
         read -r site release _ <<<"$line"
@@ -4817,9 +4818,17 @@ validate_release_apt_provenance() {
                 fi
                 ;;
             lifetime)
-                if ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
-                    || { [ "$release" != "$codename" ] && [ "$release" != "$codename-updates" ] \
-                        && [ "$release" != "$codename-security" ]; }; then
+                # $codename-backports is part of the official archive only when
+                # it comes from deb.debian.org/debian. The same suite on the
+                # security or snapshot archive is not.
+                suite_ok=0
+                case "$release" in
+                    "$codename"|"$codename-updates"|"$codename-security") suite_ok=1 ;;
+                    "$codename-backports") suite_ok=2 ;;
+                esac
+                if [ "$suite_ok" = 0 ] \
+                    || ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
+                    || { [ "$suite_ok" = 2 ] && ! [[ "$site" =~ ^https?://deb\.debian\.org/debian/?$ ]]; }; then
                     printf 'apt index outside the Debian archive for %s: %s\n' "$codename" "$line" >&2
                     return 1
                 fi

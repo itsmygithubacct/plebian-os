@@ -972,6 +972,12 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
             ("lifetime", ["https://dl.google.com/linux/chrome/deb stable main amd64"], 1),
             ("lifetime", ["https://deb.debian.org/debian sid main amd64"], 1),
             ("lifetime", ["http://deb.debian.org.evil.example/debian trixie main amd64"], 1),
+            ("lifetime", ["https://deb.debian.org/debian trixie-backports main amd64"], 0),
+            ("lifetime", ["http://deb.debian.org/debian/ trixie-backports main amd64"], 0),
+            ("lifetime", ["https://security.debian.org/debian-security trixie-backports main amd64"], 1),
+            ("lifetime", ["https://deb.debian.org/debian-security trixie-backports main amd64"], 1),
+            ("lifetime", [f"https://snapshot.debian.org/archive/debian/{ts} trixie-backports main amd64"], 1),
+            ("lifetime", ["https://deb.debian.org/debian bookworm-backports main amd64"], 1),
             ("lifetime", [], 2),
         )
         for phase, lines, expected in cases:
@@ -1081,8 +1087,11 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
         cases = (
             ([f"http://deb.debian.org/debian {codename} main amd64",
               f"https://deb.debian.org/debian {codename}-updates main amd64",
+              f"https://deb.debian.org/debian {codename}-backports main amd64",
               f"https://security.debian.org/debian-security {codename}-security main amd64"],
              None),
+            ([f"https://security.debian.org/debian-security {codename}-backports main amd64"],
+             "release apt provenance contains an index outside the Debian archive"),
             (["https://dl.google.com/linux/chrome/deb stable main amd64"],
              "release apt provenance contains an index outside the Debian archive"),
             ([], "release apt index provenance is empty"),

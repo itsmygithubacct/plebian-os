@@ -508,7 +508,9 @@ release upgrade, physical or human acceptance gate. Retain the report and
    ceiling; pass a larger `--timeout` on a slower host or mirror. Retain the
    generated JSON and `.sha256`; only `status: "passed"` satisfies this lane.
    `--no-wait` or `--no-verify` is diagnostic and cannot satisfy release
-   acceptance.
+   acceptance. The live switch also writes `plebian-os-debian-backports.sources`
+   for `<codename>-backports`. The security-source check does not read that
+   file, and apt's default priority leaves the suite unselected.
 
    Then validate and boot the exact, publishable bytes produced in step 5:
 

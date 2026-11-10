@@ -1827,6 +1827,17 @@ class ClosureSelectionTests(unittest.TestCase):
 
         self._assert_rollback_restores_selection(self._release_values(), unpin_by_hand)
 
+    def test_rollback_works_when_only_the_backports_source_is_present(self):
+        def only_backports(base: Path):
+            sources = base / "root" / "etc" / "apt" / "sources.list.d"
+            (sources / "plebian-os-snapshot.sources").unlink()
+            (sources / "plebian-os-debian-backports.sources").write_text(
+                "Types: deb\nURIs: https://deb.debian.org/debian\n"
+                "Suites: trixie-backports\nComponents: main\n"
+            )
+
+        self._assert_rollback_restores_selection(self._release_values(), only_backports)
+
     def test_rollback_before_update_still_works_while_snapshot_sources_remain(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

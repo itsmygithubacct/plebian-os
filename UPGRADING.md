@@ -216,7 +216,15 @@ installer's snapshot `sources.list`, restores sources Plebian-OS had disabled,
 removes the global `Acquire::Check-Valid-Until "false"` that the installer and
 earlier provisioners wrote, and writes `plebian-os-debian.sources` unless
 operator sources already provide live `trixie`, `trixie-updates`, and
-`trixie-security`. It refuses to activate live sources while any other global
+`trixie-security`. The 0.2.3 RC8 candidate also writes
+`plebian-os-debian-backports.sources` for `<codename>-backports` on
+`deb.debian.org` whenever live Debian sources are in use, including when
+those operator sources already provide the three suites above. A snapshot
+pin removes that file along with `plebian-os-debian.sources`. Debian marks
+backports `NotAutomatic`, so apt's priority for the suite stays 100 and a
+package is installed from it only when an install asks for that suite. The
+Kilix engine in this candidate still installs the pinned go.dev archive.
+The reconcile refuses to activate live sources while any other global
 validity or date-check override remains (find it with
 `grep -rE 'Check-Valid-Until|Check-Date' /etc/apt`), or while an operator
 source for those Debian suites turns off signature or replay checks with

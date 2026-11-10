@@ -4380,6 +4380,7 @@ _active_apt_source_paths() {
     local out_name="$1" path
     local snapshot="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local managed_live="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local managed_backports="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian-backports.sources"
     # shellcheck disable=SC2178  # nameref intentionally targets an array
     local -n out="$out_name"
     local -a candidates
@@ -4392,10 +4393,13 @@ _active_apt_source_paths() {
     )
     shopt -u nullglob
     for path in "${candidates[@]}"; do
-        # Both managed Debian source files belong to this provisioner and are
-        # never inventoried as operator sources.
+        # Managed Debian source files belong to this provisioner and are
+        # never inventoried as operator sources. The backports file is one
+        # of them: snapshot mode must remove it, not disable it as an
+        # operator source, and it must not count as live Debian coverage.
         [ "$path" = "$snapshot" ] && continue
         [ "$path" = "$managed_live" ] && continue
+        [ "$path" = "$managed_backports" ] && continue
         [ -f "$path" ] || [ -L "$path" ] || continue
         case "$path" in *$'\n'*|*$'\r'*) die "invalid newline in apt source path" ;; esac
         out+=("$path")
@@ -4726,18 +4730,22 @@ _live_debian_coverage_complete() {
 # restored except the Debian Installer's snapshot sources.list, which is
 # retired; global validity overrides are removed; and the managed live Debian
 # source is written only when operator sources do not already provide it. The
-# move is one transaction and never finishes while replay protection is off.
+# managed backports source is written whenever live sources are in use. Apt's
+# default priority for that suite is 100, so nothing is selected from it
+# unless an install asks for the suite. The move is one transaction and never
+# finishes while replay protection is off.
 restore_live_apt_sources() {
     local apt_dir="$APT_ETC_ROOT/apt" state_dir="$APT_ETC_ROOT/plebian-os"
     local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
     local live_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local backports_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian-backports.sources"
     local aptconf="$APT_ETC_ROOT/apt/apt.conf"
     local retired="$APT_ETC_ROOT/apt/sources.list.plebian-os-installer-snapshot"
     local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
-    local live backup target txn codename live_tmp failed=0 rollback_ok=1 signal_rc=0
+    local live backup target txn codename live_tmp backports_tmp failed=0 rollback_ok=1 signal_rc=0
     local retire_mode=1 changed=0 staged=1 coverage
-    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 aptconf_old=0
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 backports_src_old=0 aptconf_old=0
     local -a managed=() moved_from=() moved_to=()
     log "leaving the apt snapshot; restoring disabled sources and ensuring live Debian sources"
     if [ "$DRY_RUN" = 1 ]; then
@@ -4746,6 +4754,7 @@ restore_live_apt_sources() {
         echo "    + retire the Debian Installer snapshot sources.list -> $retired"
         echo "    + also retire an active installer snapshot sources.list an earlier live switch restored"
         echo "    + ensure live Debian and security sources ($live_src unless operator sources already provide them)"
+        echo "    + ensure the Debian backports suite ($backports_src); apt's default priority leaves it unselected"
         echo "    + remove Plebian-OS's global Check-Valid-Until overrides; refuse live sources while a global Check-Valid-Until or Check-Date override remains, or an operator source disables apt checks"
         echo "    + apt-get update (a failure warns; apt retries on its daily timer)"
         return 0
@@ -4802,6 +4811,8 @@ restore_live_apt_sources() {
         || die "could not create apt restore transaction directory"
     live_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-live.XXXXXX")" \
         || _abort_apt_staging "$txn" "could not stage the live Debian source; apt was not changed"
+    backports_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-backports.XXXXXX")" \
+        || _abort_apt_staging "$txn" "could not stage the Debian backports source; apt was not changed" "$live_tmp"
     cat > "$live_tmp" <<EOF || staged=0
 # Managed by plebian-os-provision. Live Debian, including security updates, with
 # apt's replay protection. Removed when operator sources already provide it.
@@ -4817,15 +4828,27 @@ Suites: ${codename}-security
 Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
-    chmod 0644 "$live_tmp" || staged=0
+    cat > "$backports_tmp" <<EOF || staged=0
+# Managed by plebian-os-provision. Debian backports for this codename.
+# Apt's default priority for this suite is 100, so nothing here is selected
+# unless an install asks for it. Removed while apt is pinned to a snapshot.
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: ${codename}-backports
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+    chmod 0644 "$live_tmp" "$backports_tmp" || staged=0
     if [ -e "$src" ] || [ -L "$src" ]; then src_old=1; cp -a "$src" "$txn/src" || staged=0; fi
     if [ -e "$cfg" ] || [ -L "$cfg" ]; then cfg_old=1; cp -a "$cfg" "$txn/cfg" || staged=0; fi
     if [ -e "$marker" ] || [ -L "$marker" ]; then marker_old=1; cp -a "$marker" "$txn/marker" || staged=0; fi
     if [ -e "$inventory" ] || [ -L "$inventory" ]; then inventory_old=1; cp -a "$inventory" "$txn/inventory" || staged=0; fi
     if [ -e "$live_src" ] || [ -L "$live_src" ]; then live_src_old=1; cp -a "$live_src" "$txn/live_src" || staged=0; fi
+    if [ -e "$backports_src" ] || [ -L "$backports_src" ]; then backports_src_old=1; cp -a "$backports_src" "$txn/backports_src" || staged=0; fi
     if [ -e "$aptconf" ] || [ -L "$aptconf" ]; then aptconf_old=1; cp -a "$aptconf" "$txn/aptconf" || staged=0; fi
     [ "$staged" = 1 ] \
-        || _abort_apt_staging "$txn" "could not stage the move to live Debian sources; apt was not changed" "$live_tmp"
+        || _abort_apt_staging "$txn" "could not stage the move to live Debian sources; apt was not changed" \
+            "$live_tmp" "$backports_tmp"
 
     # Defer termination only across the mutation window so every signal takes
     # the same rollback path as an ordinary command failure.
@@ -4874,10 +4897,13 @@ EOF
         esac
     fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
+        mv -fT "$backports_tmp" "$backports_src" || failed=1
+    fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
         _assert_no_global_validity_override || failed=1
     fi
     [ "$signal_rc" = 0 ] || failed=1
-    rm -f "$live_tmp"
+    rm -f "$live_tmp" "$backports_tmp"
     if [ "$failed" != 0 ]; then
         for ((i=${#moved_to[@]}-1; i>=0; i--)); do
             mv -T "${moved_to[$i]}" "${moved_from[$i]}" 2>/dev/null || rollback_ok=0
@@ -4887,6 +4913,7 @@ EOF
         _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
         _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
         _restore_managed_apt_file "$live_src" "$txn/live_src" "$live_src_old" || rollback_ok=0
+        _restore_managed_apt_file "$backports_src" "$txn/backports_src" "$backports_src_old" || rollback_ok=0
         _restore_managed_apt_file "$aptconf" "$txn/aptconf" "$aptconf_old" || rollback_ok=0
         if [ "$rollback_ok" = 1 ]; then
             rm -rf "$txn"
@@ -4904,6 +4931,11 @@ EOF
     if [ "$live_src_old" = 1 ]; then
         { [ -e "$live_src" ] && cmp -s "$txn/live_src" "$live_src"; } || changed=1
     elif [ -e "$live_src" ]; then
+        changed=1
+    fi
+    if [ "$backports_src_old" = 1 ]; then
+        { [ -e "$backports_src" ] && cmp -s "$txn/backports_src" "$backports_src"; } || changed=1
+    elif [ -e "$backports_src" ]; then
         changed=1
     fi
     if [ "$aptconf_old" = 1 ]; then
@@ -4945,6 +4977,7 @@ _configure_apt_snapshot() {
     local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
     local live_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local backports_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian-backports.sources"
     local aptconf="$APT_ETC_ROOT/apt/apt.conf"
     local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
     [[ "$ts" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] \
@@ -4963,7 +4996,7 @@ _configure_apt_snapshot() {
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + disable every active apt source (inventoried in $inventory)"
         echo "    + write $src (deb822 snapshot sources for $ts, per-source Check-Valid-Until: no)"
-        echo "    + remove global Check-Valid-Until overrides and $live_src"
+        echo "    + remove global Check-Valid-Until overrides, $live_src, and $backports_src"
         echo "    + apt-get update"
         return 0
     fi
@@ -4972,7 +5005,7 @@ _configure_apt_snapshot() {
     # Inventory every source this provisioner disables. Existing inventories are
     # extended when an operator adds a source while snapshot mode is active.
     local d backup txn src_tmp marker_tmp inventory_tmp failed=0 rollback_ok=1 signal_rc=0 staged=1
-    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 aptconf_old=0
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 backports_src_old=0 aptconf_old=0
     local -a managed=() active=() moved=() combined=()
     _load_apt_snapshot_inventory "$inventory" managed
     if [ "${#managed[@]}" -eq 0 ] && [ ! -f "$inventory" ]; then
@@ -5035,6 +5068,7 @@ EOF
     if [ -e "$marker" ] || [ -L "$marker" ]; then marker_old=1; cp -a "$marker" "$txn/marker" || staged=0; fi
     if [ -e "$inventory" ] || [ -L "$inventory" ]; then inventory_old=1; cp -a "$inventory" "$txn/inventory" || staged=0; fi
     if [ -e "$live_src" ] || [ -L "$live_src" ]; then live_src_old=1; cp -a "$live_src" "$txn/live_src" || staged=0; fi
+    if [ -e "$backports_src" ] || [ -L "$backports_src" ]; then backports_src_old=1; cp -a "$backports_src" "$txn/backports_src" || staged=0; fi
     if [ -e "$aptconf" ] || [ -L "$aptconf" ]; then aptconf_old=1; cp -a "$aptconf" "$txn/aptconf" || staged=0; fi
     [ "$staged" = 1 ] \
         || _abort_apt_staging "$txn" "could not stage the apt snapshot configuration; apt was not changed" \
@@ -5052,7 +5086,7 @@ EOF
         fi
     done
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$src_tmp" "$src" || failed=1; fi
-    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then rm -f "$live_src" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then rm -f "$live_src" "$backports_src" || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then _remove_global_validity_overrides || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$marker_tmp" "$marker" || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$inventory_tmp" "$inventory" || failed=1; fi
@@ -5064,6 +5098,7 @@ EOF
         _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
         _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
         _restore_managed_apt_file "$live_src" "$txn/live_src" "$live_src_old" || rollback_ok=0
+        _restore_managed_apt_file "$backports_src" "$txn/backports_src" "$backports_src_old" || rollback_ok=0
         _restore_managed_apt_file "$aptconf" "$txn/aptconf" "$aptconf_old" || rollback_ok=0
         for ((i=${#moved[@]}-1; i>=0; i--)); do
             d="${moved[$i]}"
@@ -5168,10 +5203,11 @@ validate_component_versions() {
 # must agree on both (a test holds their copies byte-identical). The run that
 # records a release install resolves every index from the exact install
 # snapshot; afterwards the machine tracks live Debian, and every index must still
-# come from the official Debian archive for its codename. Returns 2 for an empty
+# come from the official Debian archive for its codename. The codename's
+# backports suite counts only from deb.debian.org/debian. Returns 2 for an empty
 # index list and 1, naming the index, for any other violation.
 validate_release_apt_provenance() {
-    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release
+    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release suite_ok
     [ -s "$file" ] || return 2
     while IFS= read -r line || [ -n "$line" ]; do
         read -r site release _ <<<"$line"
@@ -5186,9 +5222,17 @@ validate_release_apt_provenance() {
                 fi
                 ;;
             lifetime)
-                if ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
-                    || { [ "$release" != "$codename" ] && [ "$release" != "$codename-updates" ] \
-                        && [ "$release" != "$codename-security" ]; }; then
+                # $codename-backports is part of the official archive only when
+                # it comes from deb.debian.org/debian. The same suite on the
+                # security or snapshot archive is not.
+                suite_ok=0
+                case "$release" in
+                    "$codename"|"$codename-updates"|"$codename-security") suite_ok=1 ;;
+                    "$codename-backports") suite_ok=2 ;;
+                esac
+                if [ "$suite_ok" = 0 ] \
+                    || ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
+                    || { [ "$suite_ok" = 2 ] && ! [[ "$site" =~ ^https?://deb\.debian\.org/debian/?$ ]]; }; then
                     printf 'apt index outside the Debian archive for %s: %s\n' "$codename" "$line" >&2
                     return 1
                 fi

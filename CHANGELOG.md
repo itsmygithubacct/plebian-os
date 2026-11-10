@@ -16,6 +16,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   interrupted and is not pinned: carrier `42b6956b` still binds
   kilix-content `b0c6f650`. The local tag `v0.2.3-rc8` is not pushed, and
   RC8 acceptance is not claimed.
+- Configure Debian's `<codename>-backports` archive in
+  `plebian-os-debian-backports.sources` whenever live Debian sources are in
+  use, and remove it while apt is pinned to a snapshot. Apt's default
+  priority leaves the suite unselected. Release apt provenance accepts that
+  suite only from `deb.debian.org/debian`. The Kilix engine still installs
+  the go.dev go1.27.3 archive.
 - Offer the optional chat model `qwen-0.8b-no-loop-02`, a modified
   Qwen3.5-0.8B GGUF that loops less often in thinking mode, through kilix-llm
   (RC7). The model wizard downloads it from the kilix-llm release of the same
