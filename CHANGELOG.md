@@ -15,15 +15,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   and checks the Apache-2.0 text before install and synthesis, and ships the
   espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
   `libespeak-ng`. The 0.2.3 carrier names both image models as
-  `image-offline-model`. Two seats reviewed carrier `9701a082` and both
-  say ship with known issues.
+  `image-offline-model`. Carrier `81994103` binds kilix-content
+  `c7aaac1`, which selects Needle `30ee74fe`. The attached seats still
+  quote carrier `9701a082` and do not accept this carrier.
 
 ## [0.2.3] — 2026-11-05
 
 - Follow published RC7 (`b7e7e0d3`) with an RC8 candidate. kilix-llm
   `93f2202b` refuses `pull` of `qwen-0.8b-no-loop-02` and builds without
   llama.cpp's web UI. Kilix Avatar `202f03cd` names `kilix models install`
-  when that file is missing. Kilix is `b1596021` and Kilix 95 is `9fae665d`.
+  when that file is missing. Kilix is `f93c100c` and Kilix 95 is `e54c186`.
   Ask answers a closed sum and the closed machine readings directly.
   An integer sum prints in full, a conversion keeps its unit, and "and"
   is addition except inside one hundred. A written thousand, million,
@@ -35,10 +36,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Ask also answers dates and other clocks, facts about this computer,
   unit conversions, text and status-code questions, and dice directly,
   and "what can you do?" lists them. Courtesy around a request is ignored.
-  kilix-content `f9ba621e` merges the Paradee catalog `543e4673` into
-  the download-interrupt fix `dfcda81b`. The image carrier `9701a082`
-  binds that content commit. The local tag `v0.2.3-rc8` is not pushed, and
-  RC8 acceptance is not claimed.
+  kilix-content `c7aaac12` selects Needle `30ee74fe`. Its parent
+  `f9ba621e` merges the Paradee catalog `543e4673` into
+  the download-interrupt fix `dfcda81b`. The image carrier `81994103`
+  binds that content commit. The local tag `v0.2.3-rc8` does not name
+  this commit, and RC8 acceptance is not claimed.
 - Configure Debian's `<codename>-backports` archive in
   `plebian-os-debian-backports.sources` whenever live Debian sources are in
   use, and remove it while apt is pinned to a snapshot. Apt's default
