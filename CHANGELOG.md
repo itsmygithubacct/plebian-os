@@ -23,10 +23,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   `required image model installation failed`. As root, the updater
   downloads:
   - the pinned Paradee ONNX and `config.json`;
-  - the `en_core_web_sm` wheel;
-  - the Paradee wheels the lock names, about 163 MB in all.
+  - the Paradee wheels the lock names. Those wheels include the
+    `en_core_web_sm` wheel, downloaded once.
 
-  It builds the same archives with the image's builders and checks each
+  That is 150,535,592 bytes. It builds the same archives with the image's
+  builders and checks each
   against its image pin before placing it where the image would have. A
   failed download changes nothing, and the next upgrade tries again. A
   fresh install still never downloads them. The same failure had kept
