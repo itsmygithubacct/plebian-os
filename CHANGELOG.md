@@ -60,8 +60,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   not Playalong's models were declined. They are outside the voice carrier,
   like Demucs. Kilix `b77e49b` moves its kilix-content gitlink to `32722d0`.
   That commit catalogues both models and selects kilix-pdf-conversion
-  `2cff8ff`, which adds page OCR. Kilix 95 is `ae04576`, and kilix-license
+  `2cff8ff`, which adds page OCR. Kilix 95 is `f8f58c9`, and kilix-license
   is `596ada2`.
+- Kilix 95 `f8f58c9` expects a NumLock keypad digit to type in kilix
+  browse. Its workflow still names Kilix `f0f3639b`. Two seats reviewed
+  that commit and both say ship. The plebian-os pin of it has no seat
+  review yet.
 - Ask answers a question Needle finds no job for with the catalog's
   `qwen3.5-4b` through the local Ollama, when the model sizer says it fits
   (Kilix `f0f3639b`). The answer is labelled as a model answer, and the
