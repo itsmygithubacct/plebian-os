@@ -74,6 +74,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   `kilix ask --model-answers setup` registers the verified install with
   Ollama. Kilix's kilix-content gitlink stays at `32722d0`, so Needle stays
   `30ee74fe` and the carrier is unchanged.
+- Kilix `b3719704` points Bonsai at `5fd3ef95`. Loading a Bonsai image
+  checks out the pinned kilix-content gitlink when that checkout is empty,
+  instead of reporting that the content API is unavailable. Kilix's
+  kilix-content gitlink stays at `32722d0`.
 
 ## [0.2.3] — 2026-11-05
 
