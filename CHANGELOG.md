@@ -57,8 +57,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   not Playalong's models were declined. They are outside the voice carrier,
   like Demucs. Kilix `b77e49b` moves its kilix-content gitlink to `32722d0`.
   That commit catalogues both models and selects kilix-pdf-conversion
-  `2cff8ff`, which adds page OCR. Kilix 95 is `fdf62f1`, and kilix-license
+  `2cff8ff`, which adds page OCR. Kilix 95 is `ae04576`, and kilix-license
   is `596ada2`.
+- Ask answers a question Needle finds no job for with the catalog's
+  `qwen3.5-4b` through the local Ollama, when the model sizer says it fits
+  (Kilix `f0f3639b`). The answer is labelled as a model answer, and the
+  model never acts. No model ships in the image. `kilix models install
+  qwen3.5-4b` shows the licence and asks for agreement, and
+  `kilix ask --model-answers setup` registers the verified install with
+  Ollama. Kilix's kilix-content gitlink stays at `32722d0`, so Needle stays
+  `30ee74fe` and the carrier is unchanged.
 
 ## [0.2.3] — 2026-11-05
 
