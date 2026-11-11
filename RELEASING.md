@@ -287,7 +287,8 @@ actually cutting.
   Omitting the key is invalid. Installed machines track live Debian security
   and point-release suites after successful provisioning or migration;
 - the fallback kitty bundle version and SHA-256;
-- the exact Go version and SHA-256 for every supported build architecture;
+- the exact Go version and either archive SHA-256 values for every supported
+  build architecture or an exact authenticated Debian backports package version;
 - pinned installer versions/checksums and a positive download byte bound for
   any optional network installers that are enabled (currently `uv`);
 - when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
@@ -420,7 +421,8 @@ together.
    commits are still the intended branch tips; classify any newer commit as
    either part of this release or explicitly post-release. For the pinned Kilix
    commit, inspect its `src/go.mod` `toolchain` line and make the manifest's
-   exact Go version and architecture hashes match it.
+   exact Go version matches it. Archive selections require architecture hashes;
+   Debian selections require the matching exact package version and live apt policy.
 3. Push the reviewed commits **without tags**. Firstboot fetches the exact
    component SHAs from GitHub, so the pinned acceptance guest cannot test an
    unpublished object. A failed acceptance is fixed with new commits; no

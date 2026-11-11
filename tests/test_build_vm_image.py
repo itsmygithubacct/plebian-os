@@ -582,6 +582,11 @@ class SelectedClosureGateTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        # Match the other updater fixtures: never load the host's selected release.
+        self.update = self.root / "update.sh"
+        self.update.write_text((ROOT / "provision" / "plebian-os-update.sh").read_text().replace(
+            "/etc/pleb/session.env", str(self.root / "session.env")).replace(
+            "/etc/pleb/closure.env", str(self.root / "closure.env")))
         self.remote = self.root / "published"
         subprocess.run(["git", "init", "-q", str(self.remote)], check=True)
         subprocess.run([
@@ -604,7 +609,7 @@ class SelectedClosureGateTests(unittest.TestCase):
             'PLEBIAN_OS_REPO=$FIXTURE_PUBLISHED_REPO; '
             'select_latest_release_if_needed; '
             'printf "SELECTED:%s:%s\\n" "$PLEBIAN_OS_VERSION" "$restart_arg"',
-            "bash", str(ROOT / "provision" / "plebian-os-update.sh"), *options,
+            "bash", str(self.update), *options,
         ], env=environment, text=True, capture_output=True)
 
     def generated_options(self, gate):

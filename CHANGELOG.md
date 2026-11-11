@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Select merged PDF Conversion `873f3298`, retaining OCR and batch path
+  confinement with complete dependency notices. Plain pane close now reaps
+  stopped and detached descendants. Debian Go reconciliation supports
+  restoring the release pin after a newer package was installed.
+
 - Restore **Close pane** in the coding-session close dialog. Closing no
   longer requires a successful rollout-log lookup or recovery handoff.
   Log recovery, background-to-tmux, and cancel remain separate choices.
@@ -19,9 +24,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   and checks the Apache-2.0 text before install and synthesis, and ships the
   espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
   `libespeak-ng`. The 0.2.3 carrier names both image models as
-  `image-offline-model`. Carrier `09ef84ae` binds kilix-content
-  `32722d0` and kilix-license `596ada2`. Two seats reviewed carrier
-  `09ef84ae` and both say ship with known issues.
+  `image-offline-model`. Carrier `62d0c800` binds kilix-content
+  `db463a7` and kilix-license `596ada2`. Two seats reviewed carrier
+  `62d0c800` and both say ship with known issues.
 - Upgrading a machine installed without the Paradee and `en_core_web_sm`
   archives, such as one installed from 0.2.2, no longer stops at
   `required image model installation failed`. As root, the updater

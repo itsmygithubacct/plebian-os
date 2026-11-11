@@ -1143,7 +1143,8 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         env = manifest(f"{VERSION}.env")
         requirements = manifest(f"{VERSION}.requirements")
         for key in ("PLEBIAN_OS_VOICE_CARRIER_DIR", "PLEBIAN_OS_VOICE_CARRIER_SHA256",
-                    "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256", "KILIX_LICENSE_REF"):
+                    "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256", "PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF",
+                    "KILIX_LICENSE_REF"):
             self.assertIn(key, requirements)
             self.assertEqual(requirements[key], env[key], key)
         self.assertEqual(env["PLEBIAN_OS_VOICE_CARRIER_DIR"],
