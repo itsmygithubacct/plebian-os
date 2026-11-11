@@ -798,6 +798,103 @@ class ParadeeUpgradeTests(unittest.TestCase):
         self.assertEqual(self.downloads, [])
         self.assertEqual(venv.call_args.args[0], self.shared / 'paradee-wheels')
 
+    def umask(self, mask):
+        previous = os.umask(mask)
+        self.addCleanup(os.umask, previous)
+
+    def modes(self, top):
+        """Every path under top, with its mode, not following symlinks."""
+        found = {'.': stat.S_IMODE(top.lstat().st_mode)}
+        for current, directories, files in os.walk(top):
+            for name in directories + files:
+                path = Path(current) / name
+                found[str(path.relative_to(top))] = stat.S_IMODE(path.lstat().st_mode)
+        return found
+
+    def venv_with_cfg(self, wheelhouse, lock, python):
+        """The fake venv, plus the pyvenv.cfg and executable bit a real one has."""
+        type(self).venv(self, wheelhouse, lock, python)
+        (python.parents[1] / 'pyvenv.cfg').write_text('home = /usr/bin\n')
+        python.chmod(0o755)
+        (python.parents[1] / 'lib').mkdir(exist_ok=True)
+        (python.parents[1] / 'lib' / 'module.py').write_text('x = 1\n')
+
+    def expected_runtime_modes(self):
+        expected = {'.': 0o755, 'onnx': 0o755, 'notices': 0o755}
+        expected.update({name: 0o644 for name in installer.PARADEE_FILES})
+        return expected
+
+    def expected_venv_modes(self):
+        return {'.': 0o755, 'bin': 0o755, 'bin/python': 0o755, 'pyvenv.cfg': 0o644,
+                'lib': 0o755, 'lib/module.py': 0o644}
+
+    def test_a_0077_umask_still_leaves_a_runtime_the_desktop_user_can_read(self):
+        # sudo keeps the caller's umask. Under 0077 the runtime came out root-only.
+        self.umask(0o077)
+        with patch.object(self, 'venv', self.venv_with_cfg):
+            result, _venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.modes(self.runtime), self.expected_runtime_modes())
+        self.assertEqual(self.modes(self.python.parents[1]), self.expected_venv_modes())
+        self.assertEqual(stat.S_IMODE(self.shared.stat().st_mode), 0o755)
+        # The caller's umask is put back.
+        self.assertEqual(os.umask(0o077), 0o077)
+
+    def test_a_runtime_an_earlier_run_left_root_only_is_repaired(self):
+        with patch.object(self, 'venv', self.venv_with_cfg):
+            self.run_root()
+        # What a run under umask 0077 left: nothing for group or other.
+        for top in (self.runtime, self.python.parents[1]):
+            for current, _directories, files in os.walk(top):
+                os.chmod(current, 0o700)
+                for name in files:
+                    path = Path(current) / name
+                    os.chmod(path, stat.S_IMODE(path.stat().st_mode) & 0o700)
+        self.downloads.clear()
+        result, _venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.downloads, [])
+        self.assertEqual(self.modes(self.runtime), self.expected_runtime_modes())
+        self.assertEqual(self.modes(self.python.parents[1]), self.expected_venv_modes())
+
+    def test_the_parent_of_the_default_runtime_is_made_readable(self):
+        kilix = self.root / 'kilix'
+        kilix.mkdir(mode=0o700)
+        self.runtime = kilix / 'paradee'
+        with patch.object(installer, 'PARADEE_RUNTIME', self.runtime):
+            result, _venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(stat.S_IMODE(kilix.stat().st_mode), 0o755)
+
+    def test_an_interpreter_outside_a_venv_is_not_walked(self):
+        # --paradee-python /usr/bin/python3 must not chmod /usr.
+        usr = self.root / 'usr'
+        (usr / 'bin').mkdir(parents=True)
+        self.python = usr / 'bin' / 'python3'
+        self.python.write_bytes(b'#!/bin/sh\n')
+        self.python.chmod(0o700)
+        secret = usr / 'private'
+        secret.mkdir(mode=0o700)
+        (secret / 'key').write_text('k')
+        os.chmod(secret / 'key', 0o600)
+        before = self.modes(usr)
+        result, _venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.modes(usr), before)
+
+    def test_symlinks_in_the_venv_are_not_followed(self):
+        outside = self.root / 'outside'
+        outside.mkdir(mode=0o700)
+        (outside / 'file').write_text('o')
+        os.chmod(outside / 'file', 0o600)
+        with patch.object(self, 'venv', self.venv_with_cfg):
+            self.run_root()
+        (self.python.parents[1] / 'lib' / 'link').symlink_to(outside)
+        (self.python.parents[1] / 'lib' / 'filelink').symlink_to(outside / 'file')
+        installer.publish_paradee_venv(self.python.parents[1])
+        self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((outside / 'file').stat().st_mode), 0o600)
+
     def test_the_download_is_https_and_exactly_the_pinned_size(self):
         class Response(io.BytesIO):
             def __enter__(self):

@@ -617,6 +617,43 @@ def fetch_paradee_media(paradee_pin, spacy_pin, lock, scratch, *, paradee, spacy
     return placed.get(paradee_pin['asset_id']), wheelhouse
 
 
+def _chmod_owned(path, mode):
+    """chmod one path the step created, never through a symlink."""
+    if not path.is_symlink() and path.exists():
+        os.chmod(path, mode)
+
+
+def publish_paradee_runtime(runtime):
+    """The staged runtime, readable by the desktop user: its directories 0755 and its files 0644.
+
+    Only the runtime's own files and their directories are touched.
+    """
+    runtime = Path(runtime)
+    for directory in sorted({runtime} | {(runtime / name).parent for name in PARADEE_FILES}):
+        _chmod_owned(directory, 0o755)
+    for name in PARADEE_FILES:
+        _chmod_owned(runtime / name, 0o644)
+
+
+def publish_paradee_venv(venv):
+    """The interpreter tree, readable and runnable by the desktop user.
+
+    Directories become 0755. Files become 0755 when already executable and
+    0644 otherwise. Only a directory holding pyvenv.cfg is walked, and the walk
+    does not follow symlinks.
+    """
+    venv = Path(venv)
+    if venv.is_symlink() or not (venv / 'pyvenv.cfg').is_file():
+        return
+    for current, _directories, files in os.walk(venv):
+        os.chmod(current, 0o755)
+        for name in files:
+            target = Path(current) / name
+            if target.is_symlink() or not target.is_file():
+                continue
+            os.chmod(target, 0o755 if target.stat().st_mode & 0o111 else 0o644)
+
+
 def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None, runtime=None,
                             wheelhouse=None, python=None, offline):
     """The root half of Paradee: the runtime files, the en_core_web_sm archive, and /usr/lib/kilix/pd.
@@ -624,33 +661,47 @@ def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None,
     A fresh install (offline) takes all of it from the image. An online run on
     a machine without the image archives or the wheelhouse downloads them first,
     see fetch_paradee_media. False when that download failed and nothing changed.
+
+    sudo keeps the caller's umask, and a 0077 umask would leave a root-only
+    runtime that the desktop user cannot read. So this step runs under 0022.
+    Afterwards the runtime, the interpreter and /usr/lib/kilix are made
+    readable. That also repairs a runtime an earlier run left root-only.
     """
-    runtime = PARADEE_RUNTIME if runtime is None else Path(runtime)
-    wheelhouse = PARADEE_WHEELHOUSE if wheelhouse is None else Path(wheelhouse)
-    python = PARADEE_PYTHON if python is None else Path(python)
-    lock = load_wheel_lock()
-    archive = resolve_paradee(paradee)
-    need_spacy = resolve_spacy(spacy) is None
-    need_wheels = not python.is_file() and not wheelhouse.is_dir()
-    with tempfile.TemporaryDirectory(prefix='plebian-paradee-download-') as scratch:
-        if offline or (archive is not None and not need_spacy and not need_wheels):
-            if archive is None:
-                raise ValueError('the installation media did not supply the Paradee model')
-        else:
-            try:
-                fetched, downloaded = fetch_paradee_media(
-                    paradee_pin, spacy_pin, lock, scratch,
-                    paradee=archive is None, spacy=need_spacy, wheels=need_wheels)
-            except (OSError, ValueError) as error:
-                print(f'Paradee and en_core_web_sm were not installed ({error}); '
-                      'the next upgrade tries again.', file=sys.stderr)
-                return False
-            archive = fetched or archive
-            wheelhouse = downloaded or wheelhouse
-        stage_paradee_runtime(archive, paradee_pin, runtime)
-        install_paradee_venv(wheelhouse, lock, python)
-    print('Paradee runtime files verified: ' + str(runtime))
-    return True
+    previous_umask = os.umask(0o022)
+    try:
+        runtime = PARADEE_RUNTIME if runtime is None else Path(runtime)
+        wheelhouse = PARADEE_WHEELHOUSE if wheelhouse is None else Path(wheelhouse)
+        python = PARADEE_PYTHON if python is None else Path(python)
+        lock = load_wheel_lock()
+        archive = resolve_paradee(paradee)
+        need_spacy = resolve_spacy(spacy) is None
+        need_wheels = not python.is_file() and not wheelhouse.is_dir()
+        with tempfile.TemporaryDirectory(prefix='plebian-paradee-download-') as scratch:
+            if offline or (archive is not None and not need_spacy and not need_wheels):
+                if archive is None:
+                    raise ValueError('the installation media did not supply the Paradee model')
+            else:
+                try:
+                    fetched, downloaded = fetch_paradee_media(
+                        paradee_pin, spacy_pin, lock, scratch,
+                        paradee=archive is None, spacy=need_spacy, wheels=need_wheels)
+                except (OSError, ValueError) as error:
+                    print(f'Paradee and en_core_web_sm were not installed ({error}); '
+                          'the next upgrade tries again.', file=sys.stderr)
+                    return False
+                archive = fetched or archive
+                wheelhouse = downloaded or wheelhouse
+            stage_paradee_runtime(archive, paradee_pin, runtime)
+            install_paradee_venv(wheelhouse, lock, python)
+        publish_paradee_runtime(runtime)
+        if len(python.parents) >= 2:
+            publish_paradee_venv(python.parents[1])
+        if runtime.parent == PARADEE_RUNTIME.parent:
+            _chmod_owned(runtime.parent, 0o755)
+        print('Paradee runtime files verified: ' + str(runtime))
+        return True
+    finally:
+        os.umask(previous_umask)
 
 
 def resolve_basic_pitch(explicit):

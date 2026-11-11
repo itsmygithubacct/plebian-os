@@ -344,8 +344,10 @@ def image_offline_installer_gaps(installer: str) -> list[str]:
     gaps = []
     if "'--copies'" not in installer:
         gaps.append("the Paradee runtime venv is not created with --copies")
-    if installer.count("for name in PARADEE_FILES:") < 2:
-        gaps.append("runtime staging omits the Apache-2.0 text")
+    for function in ("def verify_paradee_runtime(", "def stage_paradee_runtime("):
+        body = installer.split(function, 1)[1].split("\ndef ", 1)[0] if function in installer else ""
+        if "for name in PARADEE_FILES:" not in body:
+            gaps.append("runtime staging omits the Apache-2.0 text")
     for claim in ("the installation media did not supply the Paradee model",
                   "the installation media did not supply the en_core_web_sm model"):
         if claim not in installer:
@@ -894,6 +896,8 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                 installer.replace("'--copies'", "'--symlinks'"),
                 installer.replace("for name in PARADEE_FILES:",
                                   "for name in (PARADEE_ONNX, PARADEE_CONFIG):", 1),
+                installer.replace("    for name in PARADEE_FILES:\n        target = root / name",
+                                  "    for name in (PARADEE_ONNX, PARADEE_CONFIG):\n        target = root / name"),
                 installer.replace("the installation media did not supply the Paradee model",
                                   "the installation media will download the Paradee model"),
                 installer.replace("        build_spacy_archive(scratch / SPACY_WHEEL, output, spacy_pin)\n",
