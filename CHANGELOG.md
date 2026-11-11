@@ -78,6 +78,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   checks out the pinned kilix-content gitlink when that checkout is empty,
   instead of reporting that the content API is unavailable. Kilix's
   kilix-content gitlink stays at `32722d0`.
+- Kilix `755f1123` installs a model the first time a command calls it.
+  The licence screen is shown, and a decline installs nothing. Bonsai
+  moves to `124d9a4e`, which does the same for a missing runtime. The
+  kilix-content gitlink stays at `32722d0`.
 
 ## [0.2.3] — 2026-11-05
 
