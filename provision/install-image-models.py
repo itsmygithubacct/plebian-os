@@ -588,6 +588,8 @@ def fetch_paradee_media(paradee_pin, spacy_pin, lock, scratch, *, paradee, spacy
     """
     scratch = Path(scratch)
     built = []
+    # Upstream files already downloaded and checked here, by size and digest.
+    checked = {}
     if paradee:
         for name in (PARADEE_ONNX, PARADEE_CONFIG):
             item = paradee_pin['files'][name]
@@ -602,16 +604,21 @@ def fetch_paradee_media(paradee_pin, spacy_pin, lock, scratch, *, paradee, spacy
         output = scratch / spacy_pin['filename']
         build_spacy_archive(scratch / SPACY_WHEEL, output, spacy_pin)
         built.append((output, spacy_pin, verify_spacy_archive))
+        # The builder checked the wheel, so the wheelhouse can reuse it.
+        checked[(item['bytes'], item['sha256'])] = scratch / SPACY_WHEEL
     wheelhouse = None
     if wheels:
         wheelhouse = scratch / 'paradee-wheels'
         wheelhouse.mkdir()
         bundles = Path(__file__).resolve().parent / 'bundles'
         for item in lock['wheels']:
+            target = wheelhouse / item['filename']
             if 'bundle' in item:
-                (wheelhouse / item['filename']).write_bytes((bundles / item['bundle']).read_bytes())
+                target.write_bytes((bundles / item['bundle']).read_bytes())
+            elif (item['bytes'], item['sha256']) in checked:
+                target.write_bytes(checked[(item['bytes'], item['sha256'])].read_bytes())
             else:
-                _download_pinned(item['url'], item['bytes'], wheelhouse / item['filename'])
+                _download_pinned(item['url'], item['bytes'], target)
         verify_paradee_wheels(wheelhouse, lock)
     placed = {pin['asset_id']: _place_shared_archive(path, pin, verify) for path, pin, verify in built}
     return placed.get(paradee_pin['asset_id']), wheelhouse

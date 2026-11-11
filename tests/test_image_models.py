@@ -747,6 +747,29 @@ class ParadeeUpgradeTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(self.downloads, [])
 
+    def test_the_en_core_wheel_is_downloaded_once_for_the_archive_and_the_wheelhouse(self):
+        # In the real lock the en_core_web_sm wheel is the spaCy pin's wheel.
+        item = self.spin['files'][installer.SPACY_WHEEL]
+        self.lock['wheels'][0].update(url=item['url'], bytes=item['bytes'], sha256=item['sha256'])
+        result, venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.downloads, [
+            self.pin['files']['onnx/paradee_int8.onnx']['url'], self.pin['files']['config.json']['url'],
+            item['url']])
+        # The fake venv checked the wheelhouse against the lock before "installing".
+        self.assertTrue(self.python.is_file())
+        venv.assert_called_once()
+
+    def test_the_wheel_is_downloaded_when_the_spacy_archive_was_on_the_image(self):
+        item = self.spin['files'][installer.SPACY_WHEEL]
+        self.lock['wheels'][0].update(url=item['url'], bytes=item['bytes'], sha256=item['sha256'])
+        self.run_root()
+        self.python.unlink()
+        self.downloads.clear()
+        result, _venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.downloads, [item['url']])
+
     def test_a_failed_download_places_nothing_and_does_not_fail_the_upgrade(self):
         self.upstream['https://example.invalid/en_core_web_sm.whl'] = OSError('network is unreachable')
         result, venv, printed = self.run_root()
