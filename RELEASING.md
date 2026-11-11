@@ -421,7 +421,7 @@ together.
    commits are still the intended branch tips; classify any newer commit as
    either part of this release or explicitly post-release. For the pinned Kilix
    commit, inspect its `src/go.mod` `toolchain` line and make the manifest's
-   exact Go version matches it. Archive selections require architecture hashes;
+   exact Go version match it. Archive selections require architecture hashes;
    Debian selections require the matching exact package version and live apt policy.
 3. Push the reviewed commits **without tags**. Firstboot fetches the exact
    component SHAs from GitHub, so the pinned acceptance guest cannot test an
