@@ -87,6 +87,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   decline installs nothing. The wizard's default-voice check stays a
   verify. The short-path interpreter stays the image copy. The
   kilix-content gitlink stays at `32722d0`.
+- Kilix `fafc0a14` installs Bonsai weights, a named Qwen voice,
+  Female-02, YAMNet, YOLOX, Playalong, PDF conversion, and Pocket weights
+  the first time a terminal calls them. The licence screen is shown, and
+  a decline installs nothing. Status, doctor, and listing stay read-only.
+  Bonsai is `48e18c7`. The kilix-content gitlink stays at `32722d0`.
 
 ## [0.2.3] — 2026-11-05
 
