@@ -13,6 +13,16 @@ Demucs from Meta's pinned URL and medium.en from its pinned revision; a failed
 download leaves the model out and the next upgrade tries again. Whisper
 large-v3 is never a default.
 
+Paradee and en_core_web_sm ship in the image, and a fresh install that lacks
+their archives is an error. A machine installed without them, such as one
+installed from 0.2.2, gets them on an online upgrade. The root step
+(--install-paradee-runtime) downloads the pinned files and builds the same
+archives, checks each against its image pin, and only then puts it where the
+image would have. The Paradee wheels are downloaded and checked against the
+hash lock the same way. A failed download changes nothing, and the next
+upgrade tries again. The desktop user's step then installs both from those
+archives, as on a fresh install.
+
 PDF Conversion's page OCR models, PaddlePaddle's PP-OCRv6 small detector and
 recogniser, are Apache-2.0 (owner determination, 2026-11-10) and ship in the
 image. They install whether or not Playalong's models were declined. A fresh
@@ -536,6 +546,113 @@ def install_paradee_venv(wheelhouse, lock, python):
     print('Paradee runtime Python installed: ' + str(python))
 
 
+def _download_pinned(url, size, target):
+    """Write exactly the pinned number of bytes from an https URL. The caller checks the digest."""
+    if not isinstance(url, str) or not url.startswith('https://'):
+        raise ValueError('refusing a download that is not https: ' + str(url))
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=120) as source, Path(target).open('xb') as output:
+        remaining = size
+        while remaining:
+            block = source.read(min(1024 * 1024, remaining))
+            if not block:
+                raise ValueError('incomplete download: ' + url)
+            output.write(block)
+            remaining -= len(block)
+        if source.read(1):
+            raise ValueError('download exceeds its pinned size: ' + url)
+
+
+def _place_shared_archive(built, pin, verify):
+    """Put a checked archive where the image would have, without replacing another copy."""
+    SHARED_BASIC_PITCH.mkdir(parents=True, exist_ok=True)
+    target = SHARED_BASIC_PITCH / pin['filename']
+    with tempfile.TemporaryDirectory(prefix='.plebian-image-archive-', dir=SHARED_BASIC_PITCH) as tmp:
+        staged = Path(tmp) / pin['filename']
+        staged.write_bytes(Path(built).read_bytes())
+        verify(staged, pin)
+        staged.chmod(0o644)
+        try:
+            os.link(staged, target)
+        except FileExistsError:
+            verify(target, pin)
+    return target
+
+
+def fetch_paradee_media(paradee_pin, spacy_pin, lock, scratch, *, paradee, spacy, wheels):
+    """Download what this machine's image did not supply; nothing is placed unless all of it checks.
+
+    Each archive is built from its pinned upstream files by the image's own
+    builder, which checks every input and then the archive against its pin.
+    Returns the Paradee archive and the wheelhouse to install from.
+    """
+    scratch = Path(scratch)
+    built = []
+    if paradee:
+        for name in (PARADEE_ONNX, PARADEE_CONFIG):
+            item = paradee_pin['files'][name]
+            _download_pinned(item['url'], item['bytes'], scratch / Path(name).name)
+        output = scratch / paradee_pin['filename']
+        build_paradee_archive(scratch / Path(PARADEE_ONNX).name, scratch / PARADEE_CONFIG,
+                              output, paradee_pin)
+        built.append((output, paradee_pin, verify_paradee_archive))
+    if spacy:
+        item = spacy_pin['files'][SPACY_WHEEL]
+        _download_pinned(item['url'], item['bytes'], scratch / SPACY_WHEEL)
+        output = scratch / spacy_pin['filename']
+        build_spacy_archive(scratch / SPACY_WHEEL, output, spacy_pin)
+        built.append((output, spacy_pin, verify_spacy_archive))
+    wheelhouse = None
+    if wheels:
+        wheelhouse = scratch / 'paradee-wheels'
+        wheelhouse.mkdir()
+        bundles = Path(__file__).resolve().parent / 'bundles'
+        for item in lock['wheels']:
+            if 'bundle' in item:
+                (wheelhouse / item['filename']).write_bytes((bundles / item['bundle']).read_bytes())
+            else:
+                _download_pinned(item['url'], item['bytes'], wheelhouse / item['filename'])
+        verify_paradee_wheels(wheelhouse, lock)
+    placed = {pin['asset_id']: _place_shared_archive(path, pin, verify) for path, pin, verify in built}
+    return placed.get(paradee_pin['asset_id']), wheelhouse
+
+
+def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None, runtime=None,
+                            wheelhouse=None, python=None, offline):
+    """The root half of Paradee: the runtime files, the en_core_web_sm archive, and /usr/lib/kilix/pd.
+
+    A fresh install (offline) takes all of it from the image. An online run on
+    a machine without the image archives or the wheelhouse downloads them first,
+    see fetch_paradee_media. False when that download failed and nothing changed.
+    """
+    runtime = PARADEE_RUNTIME if runtime is None else Path(runtime)
+    wheelhouse = PARADEE_WHEELHOUSE if wheelhouse is None else Path(wheelhouse)
+    python = PARADEE_PYTHON if python is None else Path(python)
+    lock = load_wheel_lock()
+    archive = resolve_paradee(paradee)
+    need_spacy = resolve_spacy(spacy) is None
+    need_wheels = not python.is_file() and not wheelhouse.is_dir()
+    with tempfile.TemporaryDirectory(prefix='plebian-paradee-download-') as scratch:
+        if offline or (archive is not None and not need_spacy and not need_wheels):
+            if archive is None:
+                raise ValueError('the installation media did not supply the Paradee model')
+        else:
+            try:
+                fetched, downloaded = fetch_paradee_media(
+                    paradee_pin, spacy_pin, lock, scratch,
+                    paradee=archive is None, spacy=need_spacy, wheels=need_wheels)
+            except (OSError, ValueError) as error:
+                print(f'Paradee and en_core_web_sm were not installed ({error}); '
+                      'the next upgrade tries again.', file=sys.stderr)
+                return False
+            archive = fetched or archive
+            wheelhouse = downloaded or wheelhouse
+        stage_paradee_runtime(archive, paradee_pin, runtime)
+        install_paradee_venv(wheelhouse, lock, python)
+    print('Paradee runtime files verified: ' + str(runtime))
+    return True
+
+
 def resolve_basic_pitch(explicit):
     if explicit is not None:
         return Path(explicit)
@@ -705,26 +822,50 @@ def install_demucs(kilix, archive, pin, *, offline):
         fetch_default(kilix, pin['asset_id'], 'Demucs', pin['manifest_digest'])
 
 
-def install_paradee(kilix, archive, pin):
-    """Paradee from the image. The runtime files are checked and never rewritten here."""
-    verify_paradee_runtime(pin)
+def _skip_without_archive(label):
+    """An online run whose root step could not download the archive: try again next upgrade."""
+    print(f'{label} was not installed: this machine has no {label} archive and the download '
+          'before this step did not supply one; the next upgrade tries again.', file=sys.stderr)
+
+
+def install_paradee(kilix, archive, pin, *, offline):
+    """Paradee from the image archive. The runtime files are checked and never rewritten here.
+
+    This never downloads. On an upgrade the archive is the one the root step
+    built from the pinned files (see fetch_paradee_media).
+    """
+    if archive is None and not offline:
+        try:
+            verify_paradee_runtime(pin)
+        except ValueError as error:
+            print(f'Paradee was not installed ({error}); the next upgrade tries again.',
+                  file=sys.stderr)
+            return
+    else:
+        verify_paradee_runtime(pin)
     cm, _defaults = _load(kilix)
     if _playalong_installed(cm, pin['asset_id']):
         print('Paradee already verified; no bundle install needed.')
         return
     if archive is None:
-        raise ValueError('the installation media did not supply the Paradee model')
+        if offline:
+            raise ValueError('the installation media did not supply the Paradee model')
+        _skip_without_archive('Paradee')
+        return
     _install_from_image(kilix, archive, pin, 'Paradee', materialize_paradee)
 
 
-def install_spacy(kilix, archive, pin):
-    """en_core_web_sm from the image. This never downloads the wheel."""
+def install_spacy(kilix, archive, pin, *, offline):
+    """en_core_web_sm from the image archive. This never downloads the wheel."""
     cm, _defaults = _load(kilix)
     if _playalong_installed(cm, pin['asset_id']):
         print('en_core_web_sm already verified; no bundle install needed.')
         return
     if archive is None:
-        raise ValueError('the installation media did not supply the en_core_web_sm model')
+        if offline:
+            raise ValueError('the installation media did not supply the en_core_web_sm model')
+        _skip_without_archive('en_core_web_sm')
+        return
     _install_from_image(kilix, archive, pin, 'en_core_web_sm', materialize_spacy)
 
 
@@ -871,7 +1012,8 @@ def main(argv=None):
     parser.add_argument('--pp-ocr-files', type=Path, metavar='DIR',
                         help='the pinned upstream files of the page OCR model, at their member paths')
     parser.add_argument('--install-paradee-runtime', action='store_true',
-                        help='as root, copy a missing Paradee ONNX and config.json into the runtime directory')
+                        help='as root, copy a missing Paradee ONNX and config.json into the runtime directory; '
+                             'without --offline, first download what the image did not supply')
     parser.add_argument('--paradee-runtime', type=Path, default=PARADEE_RUNTIME)
     parser.add_argument('--paradee-wheels', type=Path, default=PARADEE_WHEELHOUSE)
     parser.add_argument('--paradee-python', type=Path, default=PARADEE_PYTHON)
@@ -921,12 +1063,10 @@ def main(argv=None):
         build_pp_ocr_archive(args.pp_ocr_files, output, pp_ocr_pins[asset_id])
         return 0
     if args.install_paradee_runtime:
-        paradee_archive = resolve_paradee(args.paradee)
-        if paradee_archive is None:
-            raise ValueError('the installation media did not supply the Paradee model')
-        stage_paradee_runtime(paradee_archive, paradee_pin, args.paradee_runtime)
-        install_paradee_venv(args.paradee_wheels, load_wheel_lock(), args.paradee_python)
-        print('Paradee runtime files verified: ' + str(args.paradee_runtime))
+        install_paradee_runtime(
+            paradee_pin, spacy_pin, paradee=args.paradee, spacy=args.spacy,
+            runtime=args.paradee_runtime, wheelhouse=args.paradee_wheels,
+            python=args.paradee_python, offline=args.offline)
         return 0
     archive = resolve_basic_pitch(args.basic_pitch)
     verify_archive(archive, basic_pin)
@@ -954,8 +1094,8 @@ def main(argv=None):
         install_demucs(args.kilix, resolve_demucs(args.demucs), demucs_pin, offline=args.offline)
     else:
         print("Playalong's default models skipped: " + declined)
-    install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin)
-    install_spacy(args.kilix, resolve_spacy(args.spacy), spacy_pin)
+    install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin, offline=args.offline)
+    install_spacy(args.kilix, resolve_spacy(args.spacy), spacy_pin, offline=args.offline)
     install_command_model(args.kilix, command_pin, args.command_cache)
     for asset_id, pin in pp_ocr_pins.items():
         install_pp_ocr(args.kilix, resolve_pp_ocr(pp_ocr_archives[asset_id], asset_id), pin,

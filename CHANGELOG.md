@@ -15,9 +15,22 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   and checks the Apache-2.0 text before install and synthesis, and ships the
   espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
   `libespeak-ng`. The 0.2.3 carrier names both image models as
-  `image-offline-model`. Carrier `2a9839f7` binds kilix-content
+  `image-offline-model`. Carrier `09ef84ae` binds kilix-content
   `32722d0` and kilix-license `596ada2`. The attached seats still
   quote carrier `9701a082` and do not accept this carrier.
+- Upgrading a machine installed without the Paradee and `en_core_web_sm`
+  archives, such as one installed from 0.2.2, no longer stops at
+  `required image model installation failed`. As root, the updater
+  downloads:
+  - the pinned Paradee ONNX and `config.json`;
+  - the `en_core_web_sm` wheel;
+  - the Paradee wheels the lock names, about 163 MB in all.
+
+  It builds the same archives with the image's builders and checks each
+  against its image pin before placing it where the image would have. A
+  failed download changes nothing, and the next upgrade tries again. A
+  fresh install still never downloads them. The same failure had kept
+  the page OCR models from that upgrade path.
 - Install Debian's Tesseract (`tesseract-ocr`, `tesseract-ocr-eng`,
   5.5.0-1+b1 with language data 4.1.0-2) on the Debian-installer path and
   in `install-deps.sh`. kilix-pdf-conversion 0.4.0 uses it for page OCR,

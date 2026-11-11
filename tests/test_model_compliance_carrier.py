@@ -281,7 +281,10 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                     "mode: image-offline-model",
                     "Installation media includes this model.",
                     "installs the supplied bytes offline and does not download them.",
-                    "An online install uses the same image archive. A missing archive is an error.",
+                    "An online install uses the same image archive. A fresh install without it is an error.",
+                    "An online upgrade of a machine installed without that archive downloads the pinned files",
+                    "builds the same archive, and checks it against the image pin before installation.",
+                    "A failed download installs nothing, and the next upgrade tries again.",
                     "Original licence documents accompany the model, and installation verifies every catalogued file.",
                     "creates a local standard-policy receipt",
                     "build-time receipts are never distributed.",
@@ -351,6 +354,29 @@ def image_offline_installer_gaps(installer: str) -> list[str]:
     spacy = installer.split("def install_spacy(", 1)[1].split("def install_whisper_medium(", 1)[0]
     if "fetch_default" in paradee or "fetch_default" in spacy:
         gaps.append("an image-offline install can download weights")
+    # Only Playalong's online defaults and page OCR fetch through the catalog.
+    callers = set()
+    for function in ast.walk(ast.parse(installer)):
+        if isinstance(function, ast.FunctionDef):
+            for node in ast.walk(function):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "fetch_default"):
+                    callers.add(function.name)
+    if not callers <= {"install_demucs", "install_whisper_medium", "install_pp_ocr"}:
+        gaps.append("an image-offline install can download weights through the catalog")
+    # The upgrade download (DELIVERY) builds the image's archives with the
+    # image's own checked builders and places nothing it has not verified.
+    fetch = installer.split("def fetch_paradee_media(", 1)[1].split("\ndef ", 1)[0]
+    for call in ("build_paradee_archive(", "build_spacy_archive(", "verify_paradee_wheels(",
+                 "_place_shared_archive("):
+        if call not in fetch:
+            gaps.append("the upgrade download skips " + call.rstrip("("))
+    place = installer.split("def _place_shared_archive(", 1)[1].split("\ndef ", 1)[0]
+    if place.find("verify(staged, pin)") < 0 or place.find("verify(staged, pin)") > place.find("os.link("):
+        gaps.append("an upgrade archive is placed before it is checked")
+    root = installer.split("def install_paradee_runtime(", 1)[1].split("\ndef ", 1)[0]
+    if "if offline or" not in root or "the next upgrade tries again" not in root:
+        gaps.append("the root step can download on a fresh install, or fails an upgrade on a download")
     return gaps
 
 
@@ -869,7 +895,16 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                 installer.replace("for name in PARADEE_FILES:",
                                   "for name in (PARADEE_ONNX, PARADEE_CONFIG):", 1),
                 installer.replace("the installation media did not supply the Paradee model",
-                                  "the installation media will download the Paradee model")):
+                                  "the installation media will download the Paradee model"),
+                installer.replace("        build_spacy_archive(scratch / SPACY_WHEEL, output, spacy_pin)\n",
+                                  "        output.write_bytes((scratch / SPACY_WHEEL).read_bytes())\n"),
+                installer.replace("        verify_paradee_wheels(wheelhouse, lock)\n    placed",
+                                  "    placed"),
+                installer.replace("        verify(staged, pin)\n        staged.chmod", "        staged.chmod"),
+                installer.replace("        if offline or (archive", "        if (archive"),
+                installer.replace("    install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin, offline=args.offline)",
+                                  "    install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin, offline=args.offline)\n"
+                                  "    fetch_default(args.kilix, paradee_pin['asset_id'], 'Paradee', paradee_pin['manifest_digest'])")):
             self.assertNotEqual(planted, installer)
             self.assertTrue(image_offline_installer_gaps(planted))
         # ...and the Playalong default DELIVERY too, with each claim it rests on planted false.

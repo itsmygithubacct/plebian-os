@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import stat
 import tarfile
 import sys
 import tempfile
@@ -383,12 +384,23 @@ class SpacyArchiveTests(unittest.TestCase):
                 patch.object(installer, '_playalong_installed', return_value=False), \
                 patch.object(installer, '_install_from_image', side_effect=AssertionError('download')):
             with self.assertRaisesRegex(ValueError, 'did not supply the en_core_web_sm model'):
-                installer.install_spacy('/kilix', None, self.pin)
+                installer.install_spacy('/kilix', None, self.pin, offline=True)
+        for offline in (True, False):
+            with self.subTest(offline=offline), \
+                    patch.object(installer, '_load', return_value=(None, None)), \
+                    patch.object(installer, '_playalong_installed', return_value=True), \
+                    patch('builtins.print') as printed:
+                installer.install_spacy('/kilix', None, self.pin, offline=offline)
+            printed.assert_called_with('en_core_web_sm already verified; no bundle install needed.')
+
+    def test_an_upgrade_without_the_archive_skips_and_never_downloads(self):
         with patch.object(installer, '_load', return_value=(None, None)), \
-                patch.object(installer, '_playalong_installed', return_value=True), \
+                patch.object(installer, '_playalong_installed', return_value=False), \
+                patch.object(installer, '_install_from_image', side_effect=AssertionError('install')), \
+                patch.object(installer, 'fetch_default', side_effect=AssertionError('download')), \
                 patch('builtins.print') as printed:
-            installer.install_spacy('/kilix', None, self.pin)
-        printed.assert_called_with('en_core_web_sm already verified; no bundle install needed.')
+            installer.install_spacy('/kilix', None, self.pin, offline=False)
+        self.assertIn('the next upgrade tries again', printed.call_args.args[0])
 
 
 def _pp_ocr_pin(asset_id):
@@ -633,6 +645,178 @@ class ParadeeWheelTests(unittest.TestCase):
         self.assertTrue(python.is_file())
         self.assertIn('--no-index', calls[1])
         self.assertEqual(calls[1][0], str(python))
+
+
+class ParadeeUpgradeTests(unittest.TestCase):
+    """A machine installed without the Paradee archives gets them on an online upgrade."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.shared = self.root / 'shared'
+        self.runtime = self.root / 'runtime'
+        self.python = self.root / 'pd' / 'bin' / 'python'
+        self.upstream = {}
+        pin = _paradee_pin()
+        files = dict(pin['files'])
+        for name, blob in (('onnx/paradee_int8.onnx', b'paradee-onnx' * 40),
+                           ('config.json', b'{"voices":["af_heart"]}')):
+            files[name] = {'bytes': len(blob), 'sha256': hashlib.sha256(blob).hexdigest(),
+                           'url': pin['files'][name]['url']}
+            self.upstream[files[name]['url']] = blob
+        self.pin = self.forged({**pin, 'files': files}, 'paradee')
+        spin = _spacy_pin()
+        wheel = b'spacy-wheel' * 50
+        item = {'bytes': len(wheel), 'sha256': hashlib.sha256(wheel).hexdigest(),
+                'url': spin['files'][installer.SPACY_WHEEL]['url']}
+        self.upstream[item['url']] = wheel
+        self.spin = self.forged({**spin, 'files': {**spin['files'], installer.SPACY_WHEEL: item}}, 'spacy')
+        blob = b'a-wheel'
+        self.lock = {'schema': 'plebian-os.paradee-wheels/v1', 'python': '3.13', 'wheels': [{
+            'name': 'en_core_web_sm', 'version': '3.8.0', 'filename': 'en_core_web_sm.whl',
+            'url': 'https://example.invalid/en_core_web_sm.whl', 'bytes': len(blob),
+            'sha256': hashlib.sha256(blob).hexdigest()}]}
+        self.upstream['https://example.invalid/en_core_web_sm.whl'] = blob
+        self.downloads = []
+
+    def forged(self, pin, kind):
+        """The pin with the archive bytes and digest that its builder writes for these inputs."""
+        with tempfile.TemporaryDirectory() as scratch, patch('builtins.print'):
+            scratch = Path(scratch)
+            output = scratch / 'archive.tar'
+            if kind == 'paradee':
+                (scratch / 'onnx').write_bytes(self.upstream[pin['files']['onnx/paradee_int8.onnx']['url']])
+                (scratch / 'config').write_bytes(self.upstream[pin['files']['config.json']['url']])
+                with patch.object(installer, 'verify_paradee_archive'):
+                    installer.build_paradee_archive(scratch / 'onnx', scratch / 'config', output, pin)
+            else:
+                (scratch / 'wheel').write_bytes(self.upstream[pin['files'][installer.SPACY_WHEEL]['url']])
+                with patch.object(installer, 'verify_spacy_archive'):
+                    installer.build_spacy_archive(scratch / 'wheel', output, pin)
+            raw = output.read_bytes()
+        return {**pin, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest()}
+
+    def download(self, url, size, target):
+        self.downloads.append(url)
+        if isinstance(self.upstream.get(url), Exception):
+            raise self.upstream[url]
+        Path(target).write_bytes(self.upstream[url])
+
+    def venv(self, wheelhouse, lock, python):
+        """install_paradee_venv without pip: an existing interpreter is left alone."""
+        if python.is_file():
+            return
+        installer.verify_paradee_wheels(wheelhouse, lock)
+        python.parent.mkdir(parents=True, exist_ok=True)
+        python.write_bytes(b'#!/bin/sh\n')
+
+    def run_root(self, *, offline=False):
+        with patch.object(installer, 'SHARED_BASIC_PITCH', self.shared), \
+                patch.object(installer, 'load_wheel_lock', return_value=self.lock), \
+                patch.object(installer, '_download_pinned', side_effect=self.download), \
+                patch.object(installer, 'install_paradee_venv', side_effect=self.venv) as venv, \
+                patch('builtins.print') as printed:
+            result = installer.install_paradee_runtime(
+                self.pin, self.spin, runtime=self.runtime, wheelhouse=self.shared / 'paradee-wheels',
+                python=self.python, offline=offline)
+        return result, venv, printed
+
+    def test_an_upgrade_downloads_checks_and_places_the_image_archives(self):
+        result, venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.downloads, [
+            self.pin['files']['onnx/paradee_int8.onnx']['url'], self.pin['files']['config.json']['url'],
+            self.spin['files'][installer.SPACY_WHEEL]['url'], 'https://example.invalid/en_core_web_sm.whl'])
+        for pin, verify in ((self.pin, installer.verify_paradee_archive),
+                            (self.spin, installer.verify_spacy_archive)):
+            placed = self.shared / pin['filename']
+            verify(placed, pin)
+            self.assertEqual(stat.S_IMODE(placed.stat().st_mode), 0o644)
+        self.assertEqual(sorted(path.name for path in self.shared.iterdir()),
+                         [self.spin['filename'], self.pin['filename']])
+        installer.verify_paradee_runtime(self.pin, self.runtime)
+        self.assertEqual((self.runtime / 'notices/LICENSE-apache-2.0.txt').read_bytes(),
+                         installer.PARADEE_LICENCE_SOURCE.read_bytes())
+        # The wheels were checked against the lock and installed from scratch.
+        self.assertEqual(venv.call_args.args[2], self.python)
+        self.assertNotEqual(venv.call_args.args[0], self.shared / 'paradee-wheels')
+        # The next upgrade finds the archives and the interpreter and downloads nothing.
+        self.downloads.clear()
+        result, _venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.downloads, [])
+
+    def test_a_failed_download_places_nothing_and_does_not_fail_the_upgrade(self):
+        self.upstream['https://example.invalid/en_core_web_sm.whl'] = OSError('network is unreachable')
+        result, venv, printed = self.run_root()
+        self.assertFalse(result)
+        venv.assert_not_called()
+        self.assertFalse(self.shared.exists() and any(self.shared.iterdir()))
+        self.assertFalse(self.runtime.exists())
+        self.assertIn('the next upgrade tries again', printed.call_args.args[0])
+
+    def test_other_upstream_bytes_are_refused_and_nothing_is_placed(self):
+        url = self.pin['files']['onnx/paradee_int8.onnx']['url']
+        self.upstream[url] = b'other-onnx' * 40
+        result, venv, printed = self.run_root()
+        self.assertFalse(result)
+        venv.assert_not_called()
+        self.assertFalse(self.shared.exists() and any(self.shared.iterdir()))
+        self.assertFalse(self.runtime.exists())
+        self.assertIn('input size or checksum mismatch', printed.call_args.args[0])
+
+    def test_a_wheel_with_other_bytes_is_refused_before_anything_is_placed(self):
+        self.upstream['https://example.invalid/en_core_web_sm.whl'] = b'b-wheel'
+        result, venv, printed = self.run_root()
+        self.assertFalse(result)
+        venv.assert_not_called()
+        self.assertFalse(self.shared.exists() and any(self.shared.iterdir()))
+        self.assertIn('wheel size or checksum mismatch', printed.call_args.args[0])
+
+    def test_an_archive_is_checked_again_where_it_is_placed(self):
+        built = self.root / 'built.tar'
+        built.write_bytes(b'not the archive')
+        with patch.object(installer, 'SHARED_BASIC_PITCH', self.shared), \
+                self.assertRaisesRegex(ValueError, 'size or checksum'):
+            installer._place_shared_archive(built, self.pin, installer.verify_paradee_archive)
+        self.assertEqual(list(self.shared.iterdir()), [])
+
+    def test_a_fresh_install_without_the_archive_is_an_error_and_downloads_nothing(self):
+        with self.assertRaisesRegex(ValueError, 'did not supply the Paradee model'):
+            self.run_root(offline=True)
+        self.assertEqual(self.downloads, [])
+
+    def test_with_the_image_archives_present_nothing_is_downloaded(self):
+        self.run_root()
+        (self.shared / 'paradee-wheels').mkdir()
+        self.python.unlink()
+        self.downloads.clear()
+        with patch.object(installer, 'verify_paradee_wheels'):
+            result, venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.downloads, [])
+        self.assertEqual(venv.call_args.args[0], self.shared / 'paradee-wheels')
+
+    def test_the_download_is_https_and_exactly_the_pinned_size(self):
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+        with self.assertRaisesRegex(ValueError, 'not https'):
+            installer._download_pinned('http://example.invalid/x', 4, self.root / 'x')
+        import urllib.request
+        for body, message in ((b'abc', 'incomplete'), (b'abcde', 'exceeds')):
+            target = self.root / message
+            with self.subTest(body=body), \
+                    patch.object(urllib.request, 'urlopen', return_value=Response(body)), \
+                    self.assertRaisesRegex(ValueError, message):
+                installer._download_pinned('https://example.invalid/x', 4, target)
+        with patch.object(urllib.request, 'urlopen', return_value=Response(b'abcd')):
+            installer._download_pinned('https://example.invalid/x', 4, self.root / 'exact')
+        self.assertEqual((self.root / 'exact').read_bytes(), b'abcd')
 
 
 class InstallPolicyTests(unittest.TestCase):
@@ -1048,21 +1232,22 @@ class PlayalongOrderTests(unittest.TestCase):
 
     def test_image_models_first_and_the_large_download_last(self):
         self.assertEqual(self.run_main(None, '--offline'), [
-            ('basic-pitch', None), ('demucs', True), ('paradee', None), ('spacy', None),
+            ('basic-pitch', None), ('demucs', True), ('paradee', True), ('spacy', True),
             ('command', None), ('pp-ocrv6-small-det', True), ('pp-ocrv6-small-rec', True),
             ('medium', True)])
         self.assertEqual(self.run_main(None), [
-            ('basic-pitch', None), ('demucs', False), ('paradee', None), ('spacy', None),
+            ('basic-pitch', None), ('demucs', False), ('paradee', False), ('spacy', False),
             ('command', None), ('pp-ocrv6-small-det', False), ('pp-ocrv6-small-rec', False),
             ('medium', False)])
 
     def test_a_declining_machine_still_gets_paradee_page_ocr_and_the_command_model(self):
-        voice = [('paradee', None), ('spacy', None), ('command', None)]
         self.assertEqual(self.run_main("the model wizard's Playalong page was answered no"),
-                         voice + [('pp-ocrv6-small-det', False), ('pp-ocrv6-small-rec', False)])
+                         [('paradee', False), ('spacy', False), ('command', None),
+                          ('pp-ocrv6-small-det', False), ('pp-ocrv6-small-rec', False)])
         self.assertEqual(self.run_main('whether this machine declined them cannot be read (x)',
                                        '--offline'),
-                         voice + [('pp-ocrv6-small-det', True), ('pp-ocrv6-small-rec', True)])
+                         [('paradee', True), ('spacy', True), ('command', None),
+                          ('pp-ocrv6-small-det', True), ('pp-ocrv6-small-rec', True)])
 
 
 class ImageWiringTests(unittest.TestCase):
@@ -1173,11 +1358,22 @@ class ImageWiringTests(unittest.TestCase):
         self.assertLess(download, built)
         self.assertLess(built, checked)
         self.assertLess(checked, staged)
+        # A fresh install stages the runtime from the image only; an upgrade, as
+        # root and before the desktop user's step, downloads what the image did not supply.
         self.assertIn(
             '"$PLEBIAN_OS_DIR/provision/install-image-models.py" \\\n'
-            '        --install-paradee-runtime', provision)
+            '        --install-paradee-runtime --offline', provision)
         self.assertLess(provision.index('--install-paradee-runtime'),
                         provision.index('install-image-models.py" --kilix "$KILIX_DIR" --offline'))
+        update = (ROOT / 'provision/plebian-os-update.sh').read_text()
+        root_step = update.index(
+            '"${command_model_elevate[@]}" /usr/bin/python3 \\\n'
+            '        "$PLEBIAN_OS_DIR/provision/install-image-models.py" --install-paradee-runtime \\\n'
+            '        || die "required Paradee runtime staging failed"')
+        self.assertLess(update.index('test_fail_after_boundary default-models'), root_step)
+        self.assertLess(root_step, update.index('test_fail_after_boundary paradee-runtime'))
+        self.assertLess(update.index('test_fail_after_boundary paradee-runtime'),
+                        update.index('install-image-models.py" --kilix "$KILIX_DIR"'))
         source = json.loads((ROOT / 'provision/espeak-ng-source.json').read_text())
         licence = (ROOT / 'provision/bundles/espeakng-loader-0.2.4-LICENSE').read_bytes()
         self.assertEqual(hashlib.sha256(licence).hexdigest(), source['loader_licence_sha256'])

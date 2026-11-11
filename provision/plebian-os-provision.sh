@@ -7520,7 +7520,7 @@ as_user env "${install_env[@]}" /usr/bin/python3 \
     || die "required offline default model installation failed"
 if [ "$DRY_RUN" != 1 ]; then
     /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/install-image-models.py" \
-        --install-paradee-runtime \
+        --install-paradee-runtime --offline \
         || die "required offline Paradee runtime staging failed"
 fi
 as_user env "${install_env[@]}" /usr/bin/python3 \

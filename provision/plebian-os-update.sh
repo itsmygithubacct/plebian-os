@@ -5411,6 +5411,15 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
         "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" \
         || die "required default model installation failed"
     test_fail_after_boundary default-models
+    # A machine installed without the image's Paradee and en_core_web_sm
+    # archives, as one installed from 0.2.2 is, gets them here: as root, the
+    # pinned files and wheels are downloaded, built into the same archives and
+    # checked against the image pins before anything is placed. A failed
+    # download changes nothing, and the next update tries again.
+    "${command_model_elevate[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-image-models.py" --install-paradee-runtime \
+        || die "required Paradee runtime staging failed"
+    test_fail_after_boundary paradee-runtime
     env "${stack_env[@]}" /usr/bin/python3 \
         "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" \
         || die "required image model installation failed"

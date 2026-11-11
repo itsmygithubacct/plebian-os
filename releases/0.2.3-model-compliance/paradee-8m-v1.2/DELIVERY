@@ -1,7 +1,10 @@
 mode: image-offline-model
 Installation media includes this model.
 Provisioning installs the supplied bytes offline and does not download them.
-An online install uses the same image archive. A missing archive is an error.
+An online install uses the same image archive. A fresh install without it is an error.
+An online upgrade of a machine installed without that archive downloads the pinned files
+from huggingface.co, builds the same archive, and checks it against the image pin before installation.
+A failed download installs nothing, and the next upgrade tries again.
 Original licence documents accompany the model, and installation verifies every catalogued file.
 Installation creates a local standard-policy receipt; build-time receipts are never distributed.
 An existing voice selection is left unchanged.
