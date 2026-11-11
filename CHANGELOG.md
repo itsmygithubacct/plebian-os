@@ -82,6 +82,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   The licence screen is shown, and a decline installs nothing. Bonsai
   moves to `124d9a4e`, which does the same for a missing runtime. The
   kilix-content gitlink stays at `32722d0`.
+- Kilix `2cb82cf6` installs Paradee the first time a terminal calls it
+  and the image copy is absent. The licence screen is shown, and a
+  decline installs nothing. The wizard's default-voice check stays a
+  verify. The short-path interpreter stays the image copy. The
+  kilix-content gitlink stays at `32722d0`.
 
 ## [0.2.3] — 2026-11-05
 
