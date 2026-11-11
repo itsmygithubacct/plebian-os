@@ -16,8 +16,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
   `libespeak-ng`. The 0.2.3 carrier names both image models as
   `image-offline-model`. Carrier `09ef84ae` binds kilix-content
-  `32722d0` and kilix-license `596ada2`. The attached seats still
-  quote carrier `9701a082` and do not accept this carrier.
+  `32722d0` and kilix-license `596ada2`. Two seats reviewed carrier
+  `09ef84ae` and both say ship with known issues.
 - Upgrading a machine installed without the Paradee and `en_core_web_sm`
   archives, such as one installed from 0.2.2, no longer stops at
   `required image model installation failed`. As root, the updater
