@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Restore **Close pane** in the coding-session close dialog. Closing no
+  longer requires a successful rollout-log lookup or recovery handoff.
+  Log recovery, background-to-tmux, and cancel remain separate choices.
+
 - Ship Paradee 8M as the fresh-install system voice, with its int8 ONNX,
   `config.json`, Apache-2.0 text, the `en_core_web_sm` 3.8.0 wheel and a
   hash-locked Python wheelhouse in the image. Provision installs those bytes
