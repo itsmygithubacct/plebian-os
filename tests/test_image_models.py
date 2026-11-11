@@ -678,6 +678,11 @@ class ParadeeUpgradeTests(unittest.TestCase):
             'url': 'https://example.invalid/en_core_web_sm.whl', 'bytes': len(blob),
             'sha256': hashlib.sha256(blob).hexdigest()}]}
         self.upstream['https://example.invalid/en_core_web_sm.whl'] = blob
+        source = b'espeak-ng-source' * 30
+        espeak = installer.load_espeak_pin()
+        self.espeak = {**espeak, 'bytes': len(source), 'sha256': hashlib.sha256(source).hexdigest()}
+        self.upstream[espeak['url']] = source
+        self.docs = self.root / 'doc' / 'espeak-ng'
         self.downloads = []
 
     def forged(self, pin, kind):
@@ -719,7 +724,7 @@ class ParadeeUpgradeTests(unittest.TestCase):
                 patch('builtins.print') as printed:
             result = installer.install_paradee_runtime(
                 self.pin, self.spin, runtime=self.runtime, wheelhouse=self.shared / 'paradee-wheels',
-                python=self.python, offline=offline)
+                python=self.python, docs=self.docs, espeak_pin=self.espeak, offline=offline)
         return result, venv, printed
 
     def test_an_upgrade_downloads_checks_and_places_the_image_archives(self):
@@ -727,7 +732,8 @@ class ParadeeUpgradeTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(self.downloads, [
             self.pin['files']['onnx/paradee_int8.onnx']['url'], self.pin['files']['config.json']['url'],
-            self.spin['files'][installer.SPACY_WHEEL]['url'], 'https://example.invalid/en_core_web_sm.whl'])
+            self.spin['files'][installer.SPACY_WHEEL]['url'], 'https://example.invalid/en_core_web_sm.whl',
+            self.espeak['url']])
         for pin, verify in ((self.pin, installer.verify_paradee_archive),
                             (self.spin, installer.verify_spacy_archive)):
             placed = self.shared / pin['filename']
@@ -755,7 +761,7 @@ class ParadeeUpgradeTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(self.downloads, [
             self.pin['files']['onnx/paradee_int8.onnx']['url'], self.pin['files']['config.json']['url'],
-            item['url']])
+            item['url'], self.espeak['url']])
         # The fake venv checked the wheelhouse against the lock before "installing".
         self.assertTrue(self.python.is_file())
         venv.assert_called_once()
@@ -860,6 +866,7 @@ class ParadeeUpgradeTests(unittest.TestCase):
         self.assertEqual(self.modes(self.runtime), self.expected_runtime_modes())
         self.assertEqual(self.modes(self.python.parents[1]), self.expected_venv_modes())
         self.assertEqual(stat.S_IMODE(self.shared.stat().st_mode), 0o755)
+        self.assertEqual(self.modes(self.docs), self.expected_docs_modes())
         # The caller's umask is put back.
         self.assertEqual(os.umask(0o077), 0o077)
 
@@ -917,6 +924,90 @@ class ParadeeUpgradeTests(unittest.TestCase):
         installer.publish_paradee_venv(self.python.parents[1])
         self.assertEqual(stat.S_IMODE(outside.stat().st_mode), 0o700)
         self.assertEqual(stat.S_IMODE((outside / 'file').stat().st_mode), 0o600)
+
+    def expected_docs_modes(self, *, source=True):
+        names = installer.ESPEAK_NOTICES + ((self.espeak['filename'],) if source else ())
+        return {'.': 0o755, **{name: 0o644 for name in names}}
+
+    def test_an_upgrade_installs_the_espeak_source_and_loader_texts(self):
+        result, _venv, _printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.modes(self.docs), self.expected_docs_modes())
+        bundles = ROOT / 'provision' / 'bundles'
+        for name in installer.ESPEAK_NOTICES:
+            self.assertEqual((self.docs / name).read_bytes(), (bundles / name).read_bytes())
+        self.assertEqual((self.docs / self.espeak['filename']).read_bytes(),
+                         self.upstream[self.espeak['url']])
+        # The same files the image installs.
+        preseed = (ROOT / 'preseed' / 'preseed.cfg').read_text()
+        for name in installer.ESPEAK_NOTICES + (self.espeak['filename'],):
+            self.assertIn('/target' + str(installer.ESPEAK_DOCS / name), preseed)
+        self.downloads.clear()
+        self.assertTrue(self.run_root()[0])
+        self.assertEqual(self.downloads, [])
+
+    def test_a_failed_espeak_download_leaves_only_the_source_out(self):
+        self.upstream[self.espeak['url']] = OSError('network is unreachable')
+        result, _venv, printed = self.run_root()
+        self.assertTrue(result)
+        self.assertEqual(self.modes(self.docs), self.expected_docs_modes(source=False))
+        messages = [call.args[0] for call in printed.call_args_list]
+        self.assertTrue(any('espeak-ng source was not installed' in message
+                            and 'the next upgrade tries again' in message for message in messages))
+        # The next upgrade tries again.
+        self.upstream[self.espeak['url']] = b'espeak-ng-source' * 30
+        self.downloads.clear()
+        self.assertTrue(self.run_root()[0])
+        self.assertEqual(self.downloads, [self.espeak['url']])
+        self.assertEqual(self.modes(self.docs), self.expected_docs_modes())
+
+    def test_other_espeak_source_bytes_are_refused(self):
+        self.upstream[self.espeak['url']] = b'other-source' * 40
+        result, _venv, printed = self.run_root()
+        self.assertTrue(result)
+        self.assertFalse((self.docs / self.espeak['filename']).exists())
+        self.assertEqual(sorted(path.name for path in self.docs.iterdir()),
+                         sorted(installer.ESPEAK_NOTICES))
+        messages = [call.args[0] for call in printed.call_args_list]
+        self.assertTrue(any('espeak-ng source size or checksum mismatch' in message for message in messages))
+
+    def test_a_fresh_install_copies_the_loader_texts_and_downloads_nothing(self):
+        self.run_root()
+        for path in self.docs.iterdir():
+            path.unlink()
+        self.downloads.clear()
+        result, _venv, printed = self.run_root(offline=True)
+        self.assertTrue(result)
+        self.assertEqual(self.downloads, [])
+        self.assertEqual(self.modes(self.docs), self.expected_docs_modes(source=False))
+        messages = [call.args[0] for call in printed.call_args_list]
+        self.assertTrue(any('did not supply it' in message for message in messages))
+
+    def test_files_already_there_are_left_alone(self):
+        self.docs.mkdir(parents=True)
+        for name in installer.ESPEAK_NOTICES + (self.espeak['filename'],):
+            (self.docs / name).write_bytes(b'already here')
+        self.assertTrue(self.run_root()[0])
+        self.assertNotIn(self.espeak['url'], self.downloads)
+        for name in installer.ESPEAK_NOTICES + (self.espeak['filename'],):
+            self.assertEqual((self.docs / name).read_bytes(), b'already here')
+
+    def test_a_loader_licence_other_than_the_pinned_one_is_refused(self):
+        self.espeak['loader_licence_sha256'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'espeakng-loader licence size or checksum mismatch'):
+            self.run_root()
+        self.assertFalse((self.docs / 'espeakng-loader-0.2.4-LICENSE').exists())
+
+    def test_the_espeak_pin_is_checked(self):
+        pin = installer.load_espeak_pin()
+        self.assertEqual(pin['sha256'], 'bb4338102ff3b49a81423da8a1a158b420124b055b60fa76cfb4b18677130a23')
+        for change in ({'url': 'http://example.invalid/x.tar.gz'}, {'filename': '../x'},
+                       {'bytes': 0}, {'sha256': 'x'}, {'loader_licence_sha256': None},
+                       {'schema': 'other'}):
+            path = self.root / 'pin.json'
+            path.write_text(json.dumps({**pin, **change}))
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, 'invalid espeak-ng'):
+                installer.load_espeak_pin(path)
 
     def test_the_download_is_https_and_exactly_the_pinned_size(self):
         class Response(io.BytesIO):

@@ -23,6 +23,15 @@ hash lock the same way. A failed download changes nothing, and the next
 upgrade tries again. The desktop user's step then installs both from those
 archives, as on a fresh install.
 
+The espeakng-loader wheel in that interpreter bundles libespeak-ng
+(GPL-3.0-or-later) and ships no licence file. The image puts the loader's MIT
+text, its build notes and script, and the pinned espeak-ng 1.52.0 source under
+/usr/local/share/doc/plebian-os/espeak-ng. The root step puts any of them that
+are missing there too, so an upgraded machine has them. The loader texts come
+from this checkout. An online run downloads the source and checks it against
+espeak-ng-source.json. A failed download leaves it out, and the next upgrade
+tries again.
+
 PDF Conversion's page OCR models, PaddlePaddle's PP-OCRv6 small detector and
 recogniser, are Apache-2.0 (owner determination, 2026-11-10) and ship in the
 image. They install whether or not Playalong's models were declined. A fresh
@@ -77,7 +86,11 @@ PARADEE_RUNTIME = Path('/usr/lib/kilix/paradee')
 PARADEE_PYTHON = Path('/usr/lib/kilix/pd/bin/python')
 PARADEE_WHEELHOUSE = SHARED_BASIC_PITCH / 'paradee-wheels'
 PARADEE_WHEEL_LOCK = 'paradee-wheels.json'
-SPACY_WHEEL = 'en_core_web_sm-3.8.0-py3-none-any.whl'
+ESPEAK_SOURCE_PIN = 'espeak-ng-source.json'
+ESPEAK_DOCS = Path('/usr/local/share/doc/plebian-os/espeak-ng')
+ESPEAK_NOTICES = ('espeakng-loader-0.2.4-LICENSE', 'espeakng-loader-0.2.4-build.txt',
+                  'espeakng-loader-0.2.4-build.sh')
+SPACY_WHEEL ='en_core_web_sm-3.8.0-py3-none-any.whl'
 SPACY_LICENCE = 'notices/LICENSE-mit.txt'
 SPACY_SOURCES = 'notices/LICENSES_SOURCES.txt'
 SPACY_FILES = (SPACY_WHEEL, SPACY_LICENCE, SPACY_SOURCES)
@@ -624,6 +637,85 @@ def fetch_paradee_media(paradee_pin, spacy_pin, lock, scratch, *, paradee, spacy
     return placed.get(paradee_pin['asset_id']), wheelhouse
 
 
+def load_espeak_pin(path=None):
+    path = Path(__file__).with_name(ESPEAK_SOURCE_PIN) if path is None else Path(path)
+    pin = json.loads(path.read_text())
+    filename = pin.get('filename')
+    if (pin.get('schema') != 'plebian-os.espeak-ng-source/v1'
+            or not isinstance(filename, str) or not filename or '/' in filename
+            or filename.startswith('.')
+            or not isinstance(pin.get('url'), str) or not pin['url'].startswith('https://')
+            or type(pin.get('bytes')) is not int or pin['bytes'] <= 0
+            or not _hex64(pin.get('sha256')) or not _hex64(pin.get('loader_licence_sha256'))):
+        raise ValueError('invalid espeak-ng source pin')
+    return pin
+
+
+def _check_bytes(path, size, digest, label):
+    with _open_regular(path) as stream:
+        data = stream.read(size + 1) if size is not None else stream.read()
+    if (size is not None and len(data) != size) or hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError(label + ' size or checksum mismatch')
+
+
+def _place_doc(source, target, check):
+    """Put a checked copy of source at target, 0644, without replacing a file already there."""
+    with tempfile.TemporaryDirectory(prefix='.plebian-espeak-', dir=target.parent) as tmp:
+        staged = Path(tmp) / target.name
+        staged.write_bytes(Path(source).read_bytes())
+        check(staged)
+        staged.chmod(0o644)
+        try:
+            os.link(staged, target)
+        except FileExistsError:
+            pass
+
+
+def install_espeak_notices(docs, pin, scratch, *, offline):
+    """The espeak-ng source and the espeakng-loader texts, where the image puts them.
+
+    Missing files only; what is there is left alone. The loader texts come
+    from this checkout, the licence checked against the pin. An online run
+    downloads a missing source tarball and checks it first. False when that
+    download failed; nothing else is changed by a failure.
+    """
+    docs = Path(docs)
+    if docs.is_symlink():
+        raise ValueError('the espeak-ng notice directory is a symlink')
+    docs.mkdir(parents=True, exist_ok=True)
+    _chmod_owned(docs, 0o755)
+    bundles = Path(__file__).resolve().parent / 'bundles'
+    for name in ESPEAK_NOTICES:
+        target = docs / name
+        if target.exists() or target.is_symlink():
+            continue
+        if name.endswith('-LICENSE'):
+            check = lambda path: _check_bytes(path, None, pin['loader_licence_sha256'],
+                                              'espeakng-loader licence')
+        else:
+            check = lambda path: None
+        _place_doc(bundles / name, target, check)
+    source = docs / pin['filename']
+    if source.exists() or source.is_symlink():
+        return True
+    if offline:
+        print('The espeak-ng source is not installed: the installation media did not supply it.',
+              file=sys.stderr)
+        return False
+    download = Path(scratch) / pin['filename']
+    try:
+        _download_pinned(pin['url'], pin['bytes'], download)
+        check = lambda path: _check_bytes(path, pin['bytes'], pin['sha256'], 'espeak-ng source')
+        check(download)
+        _place_doc(download, source, check)
+    except (OSError, ValueError) as error:
+        print(f'The espeak-ng source was not installed ({error}); the next upgrade tries again.',
+              file=sys.stderr)
+        return False
+    print('espeak-ng source installed: ' + str(source))
+    return True
+
+
 def _chmod_owned(path, mode):
     """chmod one path the step created, never through a symlink."""
     if not path.is_symlink() and path.exists():
@@ -662,7 +754,7 @@ def publish_paradee_venv(venv):
 
 
 def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None, runtime=None,
-                            wheelhouse=None, python=None, offline):
+                            wheelhouse=None, python=None, docs=None, espeak_pin=None, offline):
     """The root half of Paradee: the runtime files, the en_core_web_sm archive, and /usr/lib/kilix/pd.
 
     A fresh install (offline) takes all of it from the image. An online run on
@@ -679,6 +771,8 @@ def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None,
         runtime = PARADEE_RUNTIME if runtime is None else Path(runtime)
         wheelhouse = PARADEE_WHEELHOUSE if wheelhouse is None else Path(wheelhouse)
         python = PARADEE_PYTHON if python is None else Path(python)
+        docs = ESPEAK_DOCS if docs is None else Path(docs)
+        espeak_pin = load_espeak_pin() if espeak_pin is None else espeak_pin
         lock = load_wheel_lock()
         archive = resolve_paradee(paradee)
         need_spacy = resolve_spacy(spacy) is None
@@ -700,6 +794,8 @@ def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None,
                 wheelhouse = downloaded or wheelhouse
             stage_paradee_runtime(archive, paradee_pin, runtime)
             install_paradee_venv(wheelhouse, lock, python)
+            # libespeak-ng is now on the machine; so are its licence and source.
+            install_espeak_notices(docs, espeak_pin, scratch, offline=offline)
         publish_paradee_runtime(runtime)
         if len(python.parents) >= 2:
             publish_paradee_venv(python.parents[1])
