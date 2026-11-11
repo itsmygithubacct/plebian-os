@@ -929,7 +929,18 @@ validate_release_refs_resolve_on_their_remotes() {
     }
 }
 
+validate_debian_go_selection() {
+    [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ] || return 0
+    [[ "$PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION" =~ ^1\.27\.[0-9]+-[0-9]+~bpo13\+[0-9]+$ ]] \
+        && [[ "$PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION" == "${PLEBIAN_OS_KILIX_GO_VERSION#go}-"* ]] \
+        && [ -z "${PLEBIAN_OS_APT_SNAPSHOT:-}" ] || {
+            echo "Debian Go requires matching compiler/package pins and live trixie-backports" >&2
+            return 1
+        }
+}
+
 release_preflight() {
+    validate_debian_go_selection || exit 1
     validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" "${PLEBIAN_OS_RELEASE_MODE:-0}" || return 1
     validate_mpv_release_closure || return 1
     validate_native_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" \
@@ -942,6 +953,7 @@ release_preflight() {
         KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
         PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == PLEBIAN_OS_KILIX_GO_SHA256_* ]] && [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ]; then continue; fi
         [ -n "${!key:-}" ] || missing+=("$key")
     done
     if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
@@ -982,6 +994,7 @@ release_preflight() {
     done
     for key in PLEBIAN_OS_NETINST_SHA256 KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == PLEBIAN_OS_KILIX_GO_SHA256_* ]] && [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ]; then continue; fi
         is_hex_len "${!key}" 64 || { echo "release mode requires a 64-character $key" >&2; exit 1; }
     done
     case "${PLEBIAN_OS_APT_SNAPSHOT-unset}" in
@@ -1331,6 +1344,7 @@ env_kv() {
 }
 
 release_mode_check() {
+    validate_debian_go_selection || exit 1
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
     local missing=()
     for key in \
@@ -1340,6 +1354,7 @@ release_mode_check() {
         PLEBIAN_OS_KILIX_GO_VERSION \
         PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
         PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == PLEBIAN_OS_KILIX_GO_SHA256_* ]] && [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ]; then continue; fi
         [ -n "${!key:-}" ] || missing+=("$key")
     done
     if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
@@ -1499,6 +1514,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_BUILD_KILIX_FORK "${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
         manifest_kv PLEBIAN_OS_KILIX_GO_MIN_VERSION "${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
         manifest_kv PLEBIAN_OS_KILIX_GO_VERSION "${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
         manifest_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
         manifest_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
         manifest_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-auto}"
@@ -1642,6 +1658,7 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_BUILD_KILIX_FORK "${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
         env_kv PLEBIAN_OS_KILIX_GO_MIN_VERSION "${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
         env_kv PLEBIAN_OS_KILIX_GO_VERSION "${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
         env_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
         env_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
         env_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-auto}"

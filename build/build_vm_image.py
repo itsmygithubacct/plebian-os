@@ -2510,6 +2510,7 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "KILIX_PREBUILT_VERSION",
         "KILIX_PREBUILT_SHA256",
         "PLEBIAN_OS_KILIX_GO_VERSION",
+        "PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION",
         "PLEBIAN_OS_KILIX_GO_SHA256_AMD64",
         "PLEBIAN_OS_KILIX_GO_SHA256_ARM64",
         "KILIX_VOICE_REF",

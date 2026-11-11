@@ -119,8 +119,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   `plebian-os-debian-backports.sources` whenever live Debian sources are in
   use, and remove it while apt is pinned to a snapshot. Apt's default
   priority leaves the suite unselected. Release apt provenance accepts that
-  suite only from `deb.debian.org/debian`. The Kilix engine still installs
-  the go.dev go1.27.3 archive.
+  suite only from `deb.debian.org/debian`. RC8 selects Debian Go
+  `1.27.3-1~bpo13+1` with authenticated apt package indexes and package
+  verification. Upgrades reconcile Go even without an engine rebuild.
 - Offer the optional chat model `qwen-0.8b-no-loop-02`, a modified
   Qwen3.5-0.8B GGUF that loops less often in thinking mode, through kilix-llm
   (RC7). The model wizard downloads it from the kilix-llm release of the same

@@ -125,6 +125,10 @@ class ReleaseVersioningTests(unittest.TestCase):
             "PLEBIAN_OS_KILIX_GO_SHA256_AMD64",
             "PLEBIAN_OS_KILIX_GO_SHA256_ARM64",
         ):
+            if key.startswith("PLEBIAN_OS_KILIX_GO_SHA256_") and re.search(
+                    r"(?m)^PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION=1\.27\.[0-9]+-[0-9]+~bpo13\+[0-9]+$", m):
+                self.assertRegex(m, rf"(?m)^{key}=$")
+                continue
             self.assertTrue(re.search(rf"^{key}=[0-9a-f]{{64}}$", m, re.M),
                             f"{key} should be a real sha256")
         self.assertRegex(m, r"(?m)^PLEBIAN_OS_NETINST_URL=https://")

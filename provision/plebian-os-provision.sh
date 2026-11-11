@@ -113,6 +113,7 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_BUILD_KILIX_FORK
     PLEBIAN_OS_KILIX_GO_MIN_VERSION
     PLEBIAN_OS_KILIX_GO_VERSION
+    PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION
     PLEBIAN_OS_KILIX_GO_SHA256_AMD64
     PLEBIAN_OS_KILIX_GO_SHA256_ARM64
     PLEBIAN_OS_INSTALL_VOICE_MODEL
@@ -182,6 +183,7 @@ declare -A PERSISTED_KEY_VARS=(
     [PLEBIAN_OS_BUILD_KILIX_FORK]=BUILD_KILIX_FORK
     [PLEBIAN_OS_KILIX_GO_MIN_VERSION]=KILIX_GO_MIN_VERSION
     [PLEBIAN_OS_KILIX_GO_VERSION]=KILIX_GO_VERSION
+    [PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION]=KILIX_GO_DEBIAN_VERSION
     [PLEBIAN_OS_KILIX_GO_SHA256_AMD64]=KILIX_GO_SHA256_AMD64
     [PLEBIAN_OS_KILIX_GO_SHA256_ARM64]=KILIX_GO_SHA256_ARM64
     [PLEBIAN_OS_INSTALL_VOICE_MODEL]=INSTALL_VOICE_MODEL
@@ -422,6 +424,7 @@ KILIX_LAND_DESKTOP_AUDIO="${KILIX_LAND_DESKTOP_AUDIO:-}"
 BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
 KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+KILIX_GO_DEBIAN_VERSION="${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
 KILIX_GO_SHA256_AMD64="${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
 KILIX_GO_SHA256_ARM64="${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
@@ -1024,10 +1027,11 @@ restore_installed_closure() {
     while IFS=$'\t' read -r key state value; do
         case " ${candidates[*]} " in *" $key "*) ;; *) continue ;; esac
         if [ "$state" != set ]; then
+            [ "$key" != PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION ] || continue
             missing+=("$key")
             continue
         fi
-        [ -n "$value" ] || [ "$key" = PLEBIAN_OS_APT_SNAPSHOT ] || continue
+        [ -n "$value" ] || [[ "$key" = PLEBIAN_OS_APT_SNAPSHOT || "$key" = PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION || "$key" = PLEBIAN_OS_KILIX_GO_SHA256_* ]] || continue
         # The machine answered for this key, so /etc/default must not answer for
         # it again below, even where the value matches what this run already had.
         PERSISTED_KEY_RESTORED["$key"]=1
@@ -1464,11 +1468,18 @@ validate_release_inputs() {
             || die "release mode requires KILIX_SECRETS_BRANCH to be empty"
     fi
     for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == KILIX_GO_SHA256_* ]] && [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then continue; fi
         [[ "${!key}" =~ ^[0-9a-fA-F]{64}$ ]] \
             || die "release mode requires a 64-character $key"
     done
     [[ "$KILIX_GO_VERSION" =~ ^(go)?[0-9]+\.[0-9]+\.[0-9]+$ ]] \
         || die "release mode requires an exact PLEBIAN_OS_KILIX_GO_VERSION"
+    if [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then
+        [[ "$KILIX_GO_DEBIAN_VERSION" =~ ^1\.27\.[0-9]+-[0-9]+~bpo13\+[0-9]+$ ]] \
+            && [[ "$KILIX_GO_DEBIAN_VERSION" == "${KILIX_GO_VERSION#go}-"* ]] \
+            && [ -z "$PLEBIAN_OS_APT_SNAPSHOT" ] \
+            || die "Debian Go requires matching compiler/package pins and live trixie-backports"
+    fi
     if [ "$INSTALL_UV" = 1 ]; then
         [[ "$UV_VERSION_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || die "release mode requires an exact PLEBIAN_OS_UV_VERSION when uv is enabled"
@@ -5343,7 +5354,11 @@ write_source_tool_manifest() {
     else
         kilix95_version=""
     fi
-    go_version="$(as_user bash -lc 'go version' 2>/dev/null || true)"
+    if [ -n "${KILIX_GO_DEBIAN_VERSION:-}" ]; then
+        go_version="$(GOTOOLCHAIN=local /usr/lib/go-1.27/bin/go version 2>/dev/null || true)"
+    else
+        go_version="$(as_user bash -lc 'go version' 2>/dev/null || true)"
+    fi
     uv_version="$(/usr/local/bin/uv --version 2>/dev/null || true)"
     engine="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
     if [ -n "$engine" ] && [ -x "$engine" ]; then
@@ -5471,6 +5486,7 @@ write_source_tool_manifest() {
             provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "${waydroid_source_sha%% *}"
         fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "$KILIX_GO_DEBIAN_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
         provenance_kv GO_VERSION "$go_version"
@@ -6123,6 +6139,12 @@ pinned_go_provenance_ok() {
 }
 
 ensure_go_for_kilix_build() {
+    if [ -n "${KILIX_GO_DEBIAN_VERSION:-}" ]; then
+        "$PLEB_DIR/scripts/install-debian-go.sh" "$KILIX_GO_VERSION" "$KILIX_GO_DEBIAN_VERSION" \
+            || die "Debian Go toolchain install failed"
+        install_env+=("PATH=/usr/lib/go-1.27/bin:/usr/local/bin:/usr/bin:/bin" "GOROOT=/usr/lib/go-1.27" "GOENV=off" "GOTOOLCHAIN=local")
+        return 0
+    fi
     local arch sha="" version_ok=0
     case "$(uname -m)" in
         x86_64|amd64) arch=amd64; sha="$KILIX_GO_SHA256_AMD64" ;;
@@ -6689,7 +6711,11 @@ build_kilix_fork() {
 
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + (as $TARGET_USER) git -C $KILIX_DIR submodule update --init --recursive"
-        echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
+        if [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then
+            echo "    + ensure Debian Go $KILIX_GO_DEBIAN_VERSION from trixie-backports"
+        else
+            echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
+        fi
         echo "    + (as $TARGET_USER) $KILIX_DIR/kilix --build"
         echo "    + verify fork + kitten, source-id, $KILIX_STATE_DIRECTORY/fork-built-ref, and $KILIX_DIR/kilix --which"
         return 0
@@ -7439,6 +7465,7 @@ install_env=(
     "PLEBIAN_OS_BUILD_KILIX_FORK=$BUILD_KILIX_FORK"
     "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION"
     "PLEBIAN_OS_KILIX_GO_VERSION=$KILIX_GO_VERSION"
+    "PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION=$KILIX_GO_DEBIAN_VERSION"
     "PLEBIAN_OS_KILIX_GO_SHA256_AMD64=$KILIX_GO_SHA256_AMD64"
     "PLEBIAN_OS_KILIX_GO_SHA256_ARM64=$KILIX_GO_SHA256_ARM64"
     "KILIX_DESKTOP_PROVIDER=$KILIX_DESKTOP_PROVIDER"
@@ -7743,6 +7770,7 @@ EOF
     write_session_default PLEBIAN_OS_BUILD_KILIX_FORK "$BUILD_KILIX_FORK"
     write_session_default PLEBIAN_OS_KILIX_GO_MIN_VERSION "$KILIX_GO_MIN_VERSION"
     write_session_default PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "$KILIX_GO_DEBIAN_VERSION"
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
     write_session_default PLEB_DESKTOP "$DESKTOP"

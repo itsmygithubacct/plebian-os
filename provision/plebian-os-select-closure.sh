@@ -205,6 +205,7 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_BUILD_KILIX_FORK
     PLEBIAN_OS_KILIX_GO_MIN_VERSION
     PLEBIAN_OS_KILIX_GO_VERSION
+    PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION
     PLEBIAN_OS_KILIX_GO_SHA256_AMD64
     PLEBIAN_OS_KILIX_GO_SHA256_ARM64
     PLEBIAN_OS_INSTALL_VOICE_MODEL
@@ -642,6 +643,9 @@ validate_release_closure() {
     validate_release_requirements
 
     for key in "${REQUIRED_VALUE_KEYS[@]}"; do
+        if [[ "$key" == PLEBIAN_OS_KILIX_GO_SHA256_* ]] && [ -n "${MANIFEST[PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION]:-}" ]; then
+            continue
+        fi
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
             continue
         fi
@@ -739,9 +743,19 @@ validate_release_closure() {
     require_manifest_format PLEBIAN_OS_KILIX_GO_VERSION \
         '^go[0-9]+\.[0-9]+(\.[0-9]+)?$' "an exact goX.Y.Z toolchain version"
     for key in PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        [ -z "${MANIFEST[PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION]:-}" ] || continue
         require_manifest_format "$key" '^[0-9a-f]{64}$' \
             "a 64-character lowercase SHA-256"
     done
+
+    if [ -n "${MANIFEST[PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION]:-}" ]; then
+        require_manifest_format PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION \
+            '^1\.27\.[0-9]+-[0-9]+~bpo13\+[0-9]+$' "an exact trixie-backports Go package version"
+        [[ "${MANIFEST[PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION]}" == "${MANIFEST[PLEBIAN_OS_KILIX_GO_VERSION]#go}-"* ]] \
+            || closure_reject "Debian Go package and compiler versions differ"
+        [ -z "${MANIFEST[PLEBIAN_OS_APT_SNAPSHOT]}" ] \
+            || closure_reject "Debian Go requires the live backports source"
+    fi
 
     value="${MANIFEST[PLEBIAN_OS_INSTALL_UV]:-}"
     case "$value" in

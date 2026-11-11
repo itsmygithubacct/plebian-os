@@ -384,6 +384,39 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("no Plebian-OS source checkout", result.stderr)
 
+    def test_debian_go_selection_replaces_archive_pins(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            manifest = self._manifest_text(
+                PLEBIAN_OS_APT_SNAPSHOT="",
+                PLEBIAN_OS_KILIX_GO_VERSION="go1.27.3",
+                PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION="1.27.3-1~bpo13+1",
+                PLEBIAN_OS_KILIX_GO_SHA256_AMD64="",
+                PLEBIAN_OS_KILIX_GO_SHA256_ARM64="")
+            self._source(base, manifest)
+            result = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            after = self._values(env)
+            self.assertEqual(after["PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION"],
+                             "1.27.3-1~bpo13+1")
+            self.assertEqual(after["PLEBIAN_OS_KILIX_GO_SHA256_AMD64"], "")
+
+    def test_debian_go_mismatched_package_leaves_machine_unchanged(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            manifest = self._manifest_text(
+                PLEBIAN_OS_APT_SNAPSHOT="",
+                PLEBIAN_OS_KILIX_GO_VERSION="go1.27.3",
+                PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION="1.27.2-1~bpo13+1")
+            self._source(base, manifest)
+            result = self._run(base, "0.1.8", "--offline")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("package and compiler versions differ", result.stderr)
+            self.assertEqual(env.read_bytes(), before)
+
     def test_complete_closure_selects_every_release_controlled_key(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
