@@ -5415,7 +5415,10 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     # archives, as one installed from 0.2.2 is, gets them here: as root, the
     # pinned files and wheels are downloaded, built into the same archives and
     # checked against the image pins before anything is placed. A failed
-    # download changes nothing, and the next update tries again.
+    # download changes nothing, and the next update tries again. The same
+    # step adds the espeak-ng source and the espeakng-loader texts the image
+    # installs beside libespeak-ng. It runs under umask 0022, so a 0077 umask
+    # kept by sudo cannot leave the runtime root-only.
     "${command_model_elevate[@]}" /usr/bin/python3 \
         "$PLEBIAN_OS_DIR/provision/install-image-models.py" --install-paradee-runtime \
         || die "required Paradee runtime staging failed"

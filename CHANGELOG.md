@@ -31,6 +31,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   failed download changes nothing, and the next upgrade tries again. A
   fresh install still never downloads them. The same failure had kept
   the page OCR models from that upgrade path.
+- The root Paradee step runs under umask 0022, so a 0077 umask kept by
+  sudo no longer leaves `/usr/lib/kilix/paradee` and `/usr/lib/kilix/pd`
+  root-only, which the desktop user cannot read. It also makes a runtime
+  that an earlier run left root-only readable again. An upgrade downloads
+  the `en_core_web_sm` wheel once, not twice.
+- An upgraded machine now also gets the espeak-ng 1.52.0 source and the
+  espeakng-loader texts under `/usr/local/share/doc/plebian-os/espeak-ng`,
+  as a fresh install does. The source is downloaded and checked against
+  its pin. A failed download leaves only the source out, and the next
+  upgrade tries again.
 - Install Debian's Tesseract (`tesseract-ocr`, `tesseract-ocr-eng`,
   5.5.0-1+b1 with language data 4.1.0-2) on the Debian-installer path and
   in `install-deps.sh`. kilix-pdf-conversion 0.4.0 uses it for page OCR,
