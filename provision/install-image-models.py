@@ -461,10 +461,27 @@ def verify_paradee_runtime(pin, root=None):
             raise ValueError('Paradee runtime file size or checksum mismatch: ' + name)
 
 
+def refuse_runtime_symlinks(root):
+    """Refuse a runtime that is a symlink, or has one in place of any of its directories or files.
+
+    Root writes and chmods inside the runtime, and a symlink there would send
+    those writes and modes outside it.
+    """
+    root = Path(root)
+    paths = {root}
+    for name in PARADEE_FILES:
+        parts = Path(name).parts
+        paths.update(root.joinpath(*parts[:index]) for index in range(1, len(parts) + 1))
+    for path in sorted(paths):
+        if path.is_symlink():
+            raise ValueError('Paradee runtime path is a symlink: ' + str(path))
+
+
 def stage_paradee_runtime(archive, pin, root):
     """Copy a missing ONNX, config.json, or Apache-2.0 text. Root calls this."""
     verify_paradee_archive(archive, pin)
     root = Path(root)
+    refuse_runtime_symlinks(root)
     missing = []
     for name in PARADEE_FILES:
         target = root / name
@@ -725,9 +742,11 @@ def _chmod_owned(path, mode):
 def publish_paradee_runtime(runtime):
     """The staged runtime, readable by the desktop user: its directories 0755 and its files 0644.
 
-    Only the runtime's own files and their directories are touched.
+    Only the runtime's own files and their directories are touched, and a
+    symlink at any of them is refused first.
     """
     runtime = Path(runtime)
+    refuse_runtime_symlinks(runtime)
     for directory in sorted({runtime} | {(runtime / name).parent for name in PARADEE_FILES}):
         _chmod_owned(directory, 0o755)
     for name in PARADEE_FILES:
@@ -764,7 +783,9 @@ def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None,
     sudo keeps the caller's umask, and a 0077 umask would leave a root-only
     runtime that the desktop user cannot read. So this step runs under 0022.
     Afterwards the runtime, the interpreter and /usr/lib/kilix are made
-    readable. That also repairs a runtime an earlier run left root-only.
+    readable. That also repairs a runtime an earlier run left root-only. A
+    runtime that is a symlink, or holds one in place of its own directories
+    or files, is refused before anything is downloaded, written or chmodded.
     """
     previous_umask = os.umask(0o022)
     try:
@@ -773,6 +794,8 @@ def install_paradee_runtime(paradee_pin, spacy_pin, *, paradee=None, spacy=None,
         python = PARADEE_PYTHON if python is None else Path(python)
         docs = ESPEAK_DOCS if docs is None else Path(docs)
         espeak_pin = load_espeak_pin() if espeak_pin is None else espeak_pin
+        # Before any download: a symlinked runtime is refused, not filled.
+        refuse_runtime_symlinks(runtime)
         lock = load_wheel_lock()
         archive = resolve_paradee(paradee)
         need_spacy = resolve_spacy(spacy) is None

@@ -5,6 +5,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import tarfile
 import sys
@@ -911,6 +912,56 @@ class ParadeeUpgradeTests(unittest.TestCase):
         result, _venv, _printed = self.run_root()
         self.assertTrue(result)
         self.assertEqual(self.modes(usr), before)
+
+    def outside_dir(self):
+        """A root-only directory outside the runtime, holding a root-only file."""
+        outside = self.root / 'outside'
+        outside.mkdir(mode=0o700)
+        (outside / 'paradee_int8.onnx').write_bytes(b'outside')
+        os.chmod(outside / 'paradee_int8.onnx', 0o600)
+        return outside
+
+    def test_a_symlinked_runtime_is_refused_before_anything_is_downloaded(self):
+        outside = self.outside_dir()
+        before = self.modes(outside)
+        self.runtime.symlink_to(outside)
+        self.umask(0o077)
+        with self.assertRaisesRegex(ValueError, 'Paradee runtime path is a symlink'):
+            self.run_root()
+        self.assertEqual(self.downloads, [])
+        self.assertEqual(self.modes(outside), before)
+        self.assertEqual(os.umask(0o077), 0o077)
+
+    def test_a_symlink_inside_the_runtime_is_refused(self):
+        for name in ('onnx', 'notices', 'config.json', 'onnx/paradee_int8.onnx'):
+            with self.subTest(name=name):
+                shutil.rmtree(self.root / 'outside', ignore_errors=True)
+                shutil.rmtree(self.runtime, ignore_errors=True)
+                outside = self.outside_dir()
+                (self.runtime / 'onnx').mkdir(parents=True)
+                target = outside / 'paradee_int8.onnx' if '.' in name else outside
+                link = self.runtime / name
+                if link.exists():
+                    link.rmdir()
+                link.symlink_to(target)
+                before = self.modes(outside)
+                self.downloads.clear()
+                with self.assertRaisesRegex(ValueError, 'Paradee runtime path is a symlink'):
+                    self.run_root()
+                self.assertEqual(self.downloads, [])
+                self.assertEqual(self.modes(outside), before)
+
+    def test_staging_and_publishing_refuse_a_symlink_on_their_own(self):
+        self.run_root()
+        outside = self.outside_dir()
+        shutil.rmtree(self.runtime / 'notices')
+        (self.runtime / 'notices').symlink_to(outside)
+        before = self.modes(outside)
+        with self.assertRaisesRegex(ValueError, 'Paradee runtime path is a symlink'):
+            installer.publish_paradee_runtime(self.runtime)
+        with self.assertRaisesRegex(ValueError, 'Paradee runtime path is a symlink'):
+            installer.stage_paradee_runtime(self.shared / self.pin['filename'], self.pin, self.runtime)
+        self.assertEqual(self.modes(outside), before)
 
     def test_symlinks_in_the_venv_are_not_followed(self):
         outside = self.root / 'outside'
