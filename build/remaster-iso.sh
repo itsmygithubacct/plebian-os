@@ -2223,6 +2223,13 @@ if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; 
 fi
 cp "$HERE/provision/plebian-os-source-carrier" "$EXTRACT/plebian-os/"
 
+# RC9 carries a complete, digest-pinned Zell runtime for offline installation.
+python3 "$HERE/provision/install-zell-runtime.py" --verify-only \
+    --archive "$HERE/provision/bundles/zell-0.1.1-x86_64.tar.xz" --pin "$HERE/provision/zell-runtime.json"
+install -m 0644 "$HERE/provision/bundles/zell-0.1.1-x86_64.tar.xz" "$EXTRACT/plebian-os/zell-0.1.1-x86_64.tar.xz"
+install -m 0644 "$HERE/provision/zell-runtime.json" "$EXTRACT/plebian-os/zell-runtime.json"
+install -m 0755 "$HERE/provision/install-zell-runtime.py" "$EXTRACT/plebian-os/install-zell-runtime.py"
+
 mkdir -p "$EXTRACT/plebian-os/model-archives"
 install -m 0644 "$COMMAND_MODEL_BUNDLE" "$EXTRACT/plebian-os/model-archives/$COMMAND_MODEL_SHA256"
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"

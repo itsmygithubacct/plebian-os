@@ -1,0 +1,12 @@
+{
+  "schema": "plebian.zell-runtime/v1",
+  "version": "0.1.1",
+  "architecture": "x86_64",
+  "filename": "zell-0.1.1-x86_64.tar.xz",
+  "bytes": 15562860,
+  "sha256": "a223c788ec676c265c57b6a103b5e4a6ac56ff0c8b47d6344257675e8573b500",
+  "source": {
+    "repository": "https://github.com/itsmygithubacct/kilix-zell.git",
+    "commit": "e2eb9488551822df9e9c4623678a8e177579ca24"
+  }
+}

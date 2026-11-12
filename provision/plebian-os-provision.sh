@@ -7260,7 +7260,8 @@ runtime_root=${GPU_TERMINAL_HOME:-"$HOME/.local/gpu_terminal"}
 source_root=${GPU_TERMINAL_SOURCE_HOME:-"$HOME/gpu_terminal"}
 for app in "${ZELL_NEURONTE_HOME:-}" \
     "$runtime_root/kilix/data/desktop-apps/kilix-zell" \
-    "$source_root/kilix-apps/kilix-zell"
+    "$source_root/kilix-apps/kilix-zell" \
+    /usr/local/share/kilix-zell
 do
     [ -n "$app" ] || continue
     if [ -x "$app/zell-neuronte" ]; then
@@ -7275,6 +7276,25 @@ printf '%s\n' 'Zell Neuronte is not installed. Build kilix-apps/kilix-zell and r
 exit 127
 ZELL_NEURONTE_LAUNCHER
     chmod 0755 /usr/local/bin/zell
+fi
+
+# The RC9 carrier is pinned and fully verified before replacing the runtime.
+ZELL_CARRIER_DIR="$SELF_DIR"
+[ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ] || ZELL_CARRIER_DIR=/usr/local/share/plebian-os
+ZELL_ARCHIVE="$ZELL_CARRIER_DIR/bundles/zell-0.1.1-x86_64.tar.xz"
+[ -f "$ZELL_ARCHIVE" ] || ZELL_ARCHIVE="$ZELL_CARRIER_DIR/zell-0.1.1-x86_64.tar.xz"
+if [ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ]; then
+    ZELL_INSTALLER="$SELF_DIR/install-zell-runtime.py"
+    [ -f "$ZELL_INSTALLER" ] || ZELL_INSTALLER=/usr/local/sbin/install-zell-runtime.py
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + verify and install pinned Zell 0.1.1 runtime from $ZELL_ARCHIVE"
+    else
+        python3 "$ZELL_INSTALLER" --archive "$ZELL_ARCHIVE" --pin "$ZELL_CARRIER_DIR/zell-runtime.json" \
+            --bin-dir /usr/local/bin --unit-dir /usr/local/lib/systemd/user \
+            || die "Zell runtime installation failed"
+    fi
+else
+    die "RC9 Zell runtime pin is missing"
 fi
 
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
