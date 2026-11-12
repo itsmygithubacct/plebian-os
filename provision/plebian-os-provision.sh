@@ -7247,6 +7247,56 @@ if [ -f "$SELF_DIR/plebian-os-source-carrier" ]; then
     fi
 fi
 
+# RC9 and later: keep the user-facing command independent of the legacy raster
+# executable. A missing desktop payload produces an actionable error.
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + install Zell Neuronte launcher -> /usr/local/bin/zell"
+else
+    cat > /usr/local/bin/zell <<'ZELL_NEURONTE_LAUNCHER'
+#!/bin/sh
+# Stable command name for Zell Neuronte (Plebian-OS RC9 and later).
+set -eu
+runtime_root=${GPU_TERMINAL_HOME:-"$HOME/.local/gpu_terminal"}
+source_root=${GPU_TERMINAL_SOURCE_HOME:-"$HOME/gpu_terminal"}
+for app in "${ZELL_NEURONTE_HOME:-}" \
+    "$runtime_root/kilix/data/desktop-apps/kilix-zell" \
+    "$source_root/kilix-apps/kilix-zell" \
+    /usr/local/share/kilix-zell
+do
+    [ -n "$app" ] || continue
+    if [ -x "$app/zell-neuronte" ]; then
+        if [ -z "${ZELL_NEURONTE_WEIGHTS:-}" ] && [ -f "$app/weights/neuronte-split-v4.nrt" ]; then
+            ZELL_NEURONTE_WEIGHTS="$app/weights/neuronte-split-v4.nrt"
+            export ZELL_NEURONTE_WEIGHTS
+        fi
+        exec "$app/zell-neuronte" "$@"
+    fi
+done
+printf '%s\n' 'Zell Neuronte is not installed. Build kilix-apps/kilix-zell and run make install, or set ZELL_NEURONTE_HOME to its installed directory.' >&2
+exit 127
+ZELL_NEURONTE_LAUNCHER
+    chmod 0755 /usr/local/bin/zell
+fi
+
+# The RC9 carrier is pinned and fully verified before replacing the runtime.
+ZELL_CARRIER_DIR="$SELF_DIR"
+[ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ] || ZELL_CARRIER_DIR=/usr/local/share/plebian-os
+ZELL_ARCHIVE="$ZELL_CARRIER_DIR/bundles/zell-0.1.1-x86_64.tar.xz"
+[ -f "$ZELL_ARCHIVE" ] || ZELL_ARCHIVE="$ZELL_CARRIER_DIR/zell-0.1.1-x86_64.tar.xz"
+if [ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ]; then
+    ZELL_INSTALLER="$SELF_DIR/install-zell-runtime.py"
+    [ -f "$ZELL_INSTALLER" ] || ZELL_INSTALLER=/usr/local/sbin/install-zell-runtime.py
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + verify and install pinned Zell 0.1.1 runtime from $ZELL_ARCHIVE"
+    else
+        python3 "$ZELL_INSTALLER" --archive "$ZELL_ARCHIVE" --pin "$ZELL_CARRIER_DIR/zell-runtime.json" \
+            --bin-dir /usr/local/bin --unit-dir /usr/local/lib/systemd/user \
+            || die "Zell runtime installation failed"
+    fi
+else
+    die "RC9 Zell runtime pin is missing"
+fi
+
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same
 # helper here when the source file is available.
