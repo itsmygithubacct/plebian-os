@@ -21,6 +21,8 @@ class ZellRuntimeTests(unittest.TestCase):
             manifest = runtime.install(ARCHIVE, PIN, root/'app', root/'bin', root/'units')
             self.assertEqual(manifest['version'], '0.1.1')
             self.assertTrue((root/'bin/zell').is_file())
+            for name in ('zell_os','zell_system','zell_files','zell_schedule','zell_devices','zell_audio'):
+                self.assertTrue((root/'app/tools'/(name+'.py')).is_file())
             unit = (root/'units/kilix-secrets.service').read_text()
             self.assertIn(str(root/'app/libexec/kilix-secretsd'), unit)
             self.assertIn('ProtectSystem=strict', unit)
@@ -59,6 +61,10 @@ class ZellRuntimeTests(unittest.TestCase):
             self.assertIn('zell-runtime.json', source)
             self.assertIn('install-zell-runtime.py', source)
         self.assertIn('python3-numpy', preseed)
+        deps=(ROOT/'provision/install-deps.sh').read_text()
+        for package in ('upower','bluez','scrot','brightnessctl','power-profiles-daemon','nftables','wtmpdb'):
+            self.assertIn(package,preseed)
+            self.assertIn(package,deps)
 
 
 if __name__ == '__main__':

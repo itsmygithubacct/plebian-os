@@ -258,6 +258,7 @@ DEP_GROUPS=(
     # installed by this package group. Crypto headers remain in build toolchain.
     "F101 native codec dependencies|libonnxruntime1.21=1.21.0+dfsg-1 libonnxruntime-dev=1.21.0+dfsg-1 libsamplerate0=0.2.2-4+b2 libsamplerate0-dev=0.2.2-4+b2 libssl3t64=3.5.6-1~deb13u2"
     "disk management|gparted"
+    "Zell operating-system stations|upower bluez scrot brightnessctl power-profiles-daemon nftables wtmpdb"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     # Native Wayland applications reuse Kilix's existing X surfaces through a
     # supervised Weston X11 backend. Waydroid itself is a separately pinned
