@@ -3,6 +3,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -21,8 +23,11 @@ class ZellRuntimeTests(unittest.TestCase):
             manifest = runtime.install(ARCHIVE, PIN, root/'app', root/'bin', root/'units')
             self.assertEqual(manifest['version'], '0.1.1')
             self.assertTrue((root/'bin/zell').is_file())
-            for name in ('zell_os','zell_system','zell_files','zell_schedule','zell_devices','zell_audio'):
+            for name in ('zell_os','zell_system','zell_files','zell_schedule','zell_devices','zell_audio','zell_paths'):
                 self.assertTrue((root/'app/tools'/(name+'.py')).is_file())
+            subprocess.run([sys.executable, '-I', '-c',
+                'import sys; sys.path.insert(0, sys.argv[1]); import zell_os; zell_os.load_tasks()',
+                str(root/'app/tools')], check=True, capture_output=True, timeout=20)
             unit = (root/'units/kilix-secrets.service').read_text()
             self.assertIn(str(root/'app/libexec/kilix-secretsd'), unit)
             self.assertIn('ProtectSystem=strict', unit)
@@ -62,9 +67,13 @@ class ZellRuntimeTests(unittest.TestCase):
             self.assertIn('install-zell-runtime.py', source)
         self.assertIn('python3-numpy', preseed)
         deps=(ROOT/'provision/install-deps.sh').read_text()
-        for package in ('upower','bluez','scrot','brightnessctl','power-profiles-daemon','nftables','wtmpdb'):
+        for package in ('upower','bluez','scrot','brightnessctl','power-profiles-daemon','nftables','wtmpdb','smartmontools'):
             self.assertIn(package,preseed)
             self.assertIn(package,deps)
+        plan=subprocess.run(['bash',str(ROOT/'provision/install-deps.sh'),'--dry-run'],
+                            check=True,capture_output=True,text=True,timeout=30).stdout
+        installs=[line.split() for line in plan.splitlines() if 'apt-get install ' in line]
+        self.assertTrue(any('smartmontools' in command for command in installs))
 
 
 if __name__ == '__main__':
