@@ -11,7 +11,7 @@
 # Debian 13.7.0 amd64 netinst SHA256SUMS was verified for 0.2.2 with
 # Debian CD key DF9B9C49EAA9298432589D76DA87E80D6294BE9B and is unchanged.
 # Empty PLEBIAN_OS_APT_SNAPSHOT selects live Debian sources.
-# RC9 carrier a1e68577 binds content e78e1cb. Its receipt is empty until two
+# RC9 carrier d5dd1a40 binds content b861d44. Its receipt is empty until two
 # independent seats review it once RC9's scope is final.
 
 PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso
@@ -25,10 +25,10 @@ PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
 PLEBIAN_OS_INSTALL_WAYDROID=0
 PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=
 PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.3-model-compliance
-PLEBIAN_OS_VOICE_CARRIER_SHA256=a1e685776dd4cea28500813b1951f31ce304ead8fea39e7b1ec4690372e8b618
+PLEBIAN_OS_VOICE_CARRIER_SHA256=d5dd1a404e47201f655733a3da5c9015ba06c020099526aab9f189f9604ba1ad
 PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=
 KILIX_LICENSE_REF=596ada2ab68b9ec441674ff4da2d431559d47378
-PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=e78e1cb51c580569680d496ed95bbb6a4c6484ab
+PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=b861d4452cdbafbed044365f344484f6eac30778
 PLEBIAN_OS_QT_RUNTIME_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/qt-runtime-rc6/qt-runtime-rc6.tar.xz
 PLEBIAN_OS_QT_RUNTIME_SHA256=623b5f2669fbf42679694ca5c8d3f841536a1f2bc449d66166f057650c8f4ad1
 PLEBIAN_OS_QT_RUNTIME_BYTES=6708392
