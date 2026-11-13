@@ -118,6 +118,18 @@ NEURONTE_INSTALLER = Path(__file__).resolve().parent / 'install-neuronte.py'
 NEURONTE_MANIFEST = Path(__file__).resolve().parent / 'neuronte-payload.json'
 NEURONTE_REPO = 'https://github.com/itsmygithubacct/neuronte.git'
 SELECTED_CLOSURE = Path('/etc/pleb/closure.env')
+# The Ollama runtime (plebian-os-provision's install_ollama_runtime_for_update),
+# for an updater that predates its own step.
+INSTALLED_PROVISIONER = Path('/usr/local/sbin/plebian-os-provision')
+CHECKOUT_VERSION = Path(__file__).resolve().parent.parent / 'VERSION'
+OLLAMA_RUNTIME_UNAVAILABLE = 75
+OLLAMA_STEP_TOO_OLD = 98
+OLLAMA_STEP = '''set -uo pipefail
+. "$0" || exit 97
+declare -F install_ollama_runtime_for_update >/dev/null || exit 98
+DRY_RUN=0
+install_ollama_runtime_for_update
+'''
 WHISPER_MEDIUM = 'faster-whisper-medium-en'
 PLAYALONG_DEFAULTS = ('demucs-htdemucs-6s', 'basic-pitch-icassp-2022-onnx', WHISPER_MEDIUM)
 # One online fetch may take this long; Whisper medium.en is 1.5 GB.
@@ -1197,6 +1209,9 @@ def main(argv=None):
     parser.add_argument('--install-paradee-runtime', action='store_true',
                         help='as root, copy a missing Paradee ONNX and config.json into the runtime directory; '
                              'without --offline, first download what the image did not supply')
+    parser.add_argument('--no-ollama-runtime', action='store_true',
+                        help='with --install-paradee-runtime: leave the Ollama runtime to the '
+                             'updater that runs this (it has its own step)')
     parser.add_argument('--paradee-runtime', type=Path, default=PARADEE_RUNTIME)
     parser.add_argument('--paradee-wheels', type=Path, default=PARADEE_WHEELHOUSE)
     parser.add_argument('--paradee-python', type=Path, default=PARADEE_PYTHON)
@@ -1250,6 +1265,8 @@ def main(argv=None):
             paradee_pin, spacy_pin, paradee=args.paradee, spacy=args.spacy,
             runtime=args.paradee_runtime, wheelhouse=args.paradee_wheels,
             python=args.paradee_python, offline=args.offline)
+        if not args.offline and not args.no_ollama_runtime:
+            return install_ollama_runtime_for_an_older_updater()
         return 0
     archive = resolve_basic_pitch(args.basic_pitch)
     verify_archive(archive, basic_pin)
@@ -1332,7 +1349,84 @@ def install_neuronte_for_an_older_updater(closure=None, environ=None, run=subpro
                   '--fetch-failure', 'warn'])
     if result.returncode != 0:
         raise ValueError('Neuronte installation failed (see above)')
+    desktop = Path(environ.get('KILIX95_DIR') or sources / 'kilix-desktops/kilix-95') / 'main.py'
+    if desktop.is_file():
+        result = run([sys.executable, str(desktop), '--prepare-cache'])
+        if result.returncode != 0:
+            print('Kilix 95 cache preparation failed; the desktop will retry at launch', file=sys.stderr)
     return 0
+
+
+def provisioner_is_root_controlled(path, *, owner=0):
+    """The bar the updater holds a provisioner it sources as root to: a regular
+    file, not a symlink, owned by `owner`, writable by nobody else, in
+    directories owned by `owner` that nobody else can write."""
+    path = Path(path)
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != owner or info.st_mode & 0o022:
+        return False
+    directory = path.parent
+    while True:
+        info = os.lstat(directory)
+        if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != owner or info.st_mode & 0o022):
+            return False
+        if directory == directory.parent:
+            return True
+        directory = directory.parent
+
+
+def install_ollama_runtime_for_an_older_updater(provisioner=None, version=None,
+                                                safe=provisioner_is_root_controlled,
+                                                run=subprocess.run):
+    """Install the pinned Ollama runtime when the updater running this step
+    has no step of its own for it.
+
+    An RC8 machine moves to RC9 with `pleb update --to 0.2.3 --release-tag ...`,
+    which runs the RC8 updater. That process deploys the RC9 OS layer (the
+    provisioner, the Ollama installer and the release manifest) but keeps
+    executing its own steps, and it has none for Ollama; it does run this mode
+    from the RC9 checkout, as root, after its dependency refresh. So this runs
+    the step the RC9 updater runs: the deployed provisioner's
+    install_ollama_runtime_for_update, sourced in library mode. An updater with
+    its own step passes --no-ollama-runtime and this does not run.
+
+    A carrier that could not be downloaded, or a deployed provisioner without
+    the step, is reported and changes nothing; any other failure raises, and
+    the update fails.
+    """
+    provisioner = INSTALLED_PROVISIONER if provisioner is None else Path(provisioner)
+    if version is None:
+        version = CHECKOUT_VERSION.read_text().strip()
+    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?', version):
+        raise ValueError('invalid checkout VERSION for the Ollama runtime: %r' % version)
+    if not safe(provisioner):
+        raise ValueError('the installed provisioner is missing or unsafe: %s' % provisioner)
+    text = provisioner.read_text(errors='replace')
+    if ('\ninstall_ollama_runtime_for_update() {\n' not in text
+            or '\nif [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ]; then\n' not in text):
+        print('Ollama runtime: the installed provisioner cannot install it; not checked')
+        return 0
+    print('Ollama runtime: checking the pinned runtime for an updater that predates the step')
+    result = run(['/bin/bash', '-c', OLLAMA_STEP, str(provisioner)],
+                 env={'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                      'LANG': 'C.UTF-8', 'HOME': '/root',
+                      'PLEBIAN_OS_PROVISION_LIB_ONLY': '1',
+                      'PLEBIAN_OS_PROVISION_LOG_ACTIVE': '1',
+                      'PLEBIAN_OS_VERSION': version},
+                 stdin=subprocess.DEVNULL, check=False)
+    if result.returncode == 0:
+        return 0
+    if result.returncode == OLLAMA_RUNTIME_UNAVAILABLE:
+        print('Ollama runtime: not installed (see above); the next update tries again')
+        return 0
+    if result.returncode == OLLAMA_STEP_TOO_OLD:
+        print('Ollama runtime: the installed provisioner cannot install it; not checked')
+        return 0
+    raise ValueError('Ollama runtime installation failed (exit %d; see above)' % result.returncode)
 
 
 if __name__ == '__main__':

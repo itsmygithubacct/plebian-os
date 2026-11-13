@@ -517,7 +517,10 @@ fi
         for marker in (
             'created_dirs+=("$dir")',
             'rmdir -- "${created_dirs[$i]}"',
-            'dir.$i.present',
+            # Each managed directory's presence record keeps its dir.<index>
+            # key; Zell's directories take their own zell-dir.<index> keys.
+            'dir_keys+=("dir.$i")',
+            '${dir_keys[$i]}.present',
             'rmdir -- "$dir"',
         ):
             self.assertIn(marker, update)

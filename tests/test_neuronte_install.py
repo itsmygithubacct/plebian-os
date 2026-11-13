@@ -67,6 +67,7 @@ FILES = {
     'README.md': '# Neuronte\n',
     'include/neuronte.h': 'int neuronte_open_file(const char *, void **);\nvoid neuronte_close(void *);\n',
     'src/neuronte.c': LIBRARY_C,
+    'src/utf8.c': '/* fixture */\n',
     'train/glyphs.py': 'UI_TOP = {12: 3}\n',
     'weights/neuronte-ui12-v0.nrt': 'NRT small 12\n',
     'weights/neuronte-ui12-italic-v0.nrt': 'NRT italic 12\n',
@@ -80,9 +81,31 @@ FILES = {
     'font/ui-40.txt': 'unused header 40\n',
     'tests/check.py': 'unused test\n',
 }
-SELECTED = sorted(name for name in FILES
-                  if not name.startswith(('tests/', 'font/ui-40', 'weights/neuronte-ui40',
-                                          'weights/neuronte-full')))
+# The fixture contains the full runtime inventory, plus known development
+# and redundant files to prove that selection does not copy a whole directory.
+for em in range(1, 33):
+    for suffix in ('', '-italic') if em >= 3 else ('',):
+        FILES.setdefault(f'weights/neuronte-ui{em}{suffix}-v0.nrt', 'NRT face\n')
+        FILES.setdefault(f'font/ui-{em}{suffix}.txt', '# The baseline is row 0.\n')
+for name in ('ascii-v0.nrt', 'emoji-v0.nrt', 'icon-v1.nrt', 'pointer-v0.nrt',
+             'video-masks-v0.nrt', 'split-v5.nrt', 'video-speed-v1.json',
+             'video-quality-v1.json'):
+    FILES['weights/neuronte-' + name] = 'runtime model\n'
+for name in ('font/ui-tops.json', 'font/octants.txt', 'train/strokes.py',
+             'weights/neuronte-pointer-v0.manifest.json', 'tools/neuronte-play.py',
+             'tools/neuronte_video.py', 'tools/neuronte_video_helpers.py',
+             'tools/neuronte-video.md'):
+    FILES[name] = 'runtime support\n'
+EXCLUDED = {'weights/neuronte-ui40-v0.nrt', 'weights/neuronte-full-v3.nrt',
+            'font/ui-40.txt', 'tests/check.py',
+            'weights/neuronte-pointer-v0.raw.nrt', 'weights/neuronte-pointer-v0-seed1.nrt',
+            'weights/neuronte-emoji-e0-v0.nrt', 'weights/neuronte-accent-v2.nrt',
+            'weights/neuronte-split-v4.nrt', 'weights/neuronte-video-speed-v0.json',
+            'weights/neuronte-video-quality-v0.json', 'weights/neuronte-ui12-v0.json',
+            'weights/report.json'}
+for name in EXCLUDED:
+    FILES.setdefault(name, 'development-only or redundant\n')
+SELECTED = sorted(set(FILES) - EXCLUDED)
 
 
 def git(*args, cwd):
@@ -177,7 +200,7 @@ class ReleasePinTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'not NEURONTE_REF'):
             neuronte.load_manifest(MANIFEST, '0' * 40)
 
-    def test_manifest_holds_exactly_what_the_desktop_opens(self):
+    def test_manifest_holds_the_approved_runtime_inventory(self):
         files = json.loads(MANIFEST.read_text())['files']
         for name in files:
             with self.subTest(name=name):
@@ -199,9 +222,30 @@ class ReleasePinTests(unittest.TestCase):
         for name in ('weights/neuronte-ui33-v0.nrt', 'font/ui-33.txt', 'font/ui-128.txt'):
             self.assertNotIn(name, files)
             self.assertFalse(neuronte.selected(name))
-        self.assertEqual(len(files), 135)
+        for name in EXCLUDED:
+            self.assertNotIn(name, files)
+            self.assertFalse(neuronte.selected(name))
+        models = {name for name in files if name.startswith('weights/')
+                  and not name.endswith('.manifest.json')}
+        self.assertEqual(models, neuronte.RUNTIME_MODELS)
+        self.assertEqual(len(models), 72)
+        self.assertEqual(len(neuronte.PROBES), 70)
+        self.assertTrue(neuronte.RUNTIME_SUPPORT <= files.keys())
         total = sum(entry['bytes'] for entry in files.values())
-        self.assertLess(total, 50 * 1024 * 1024)
+        self.assertLess(total, 60 * 1024 * 1024)
+
+    def test_manifest_requires_each_runtime_component(self):
+        manifest = json.loads(MANIFEST.read_text())
+        for name in ('weights/neuronte-icon-v1.nrt', 'weights/neuronte-video-speed-v1.json',
+                     'weights/neuronte-pointer-v0.manifest.json', 'font/ui-tops.json',
+                     'train/strokes.py', 'tools/neuronte-play.py'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                changed = dict(manifest, files=dict(manifest['files']))
+                del changed['files'][name]
+                path = Path(temporary) / 'manifest.json'
+                path.write_text(json.dumps(changed))
+                with self.assertRaisesRegex(ValueError, 'incomplete'):
+                    neuronte.load_manifest(path, manifest['commit'])
 
     def test_no_payload_blob_is_committed(self):
         tracked = subprocess.run(['git', 'ls-files', '-s', 'provision'], cwd=ROOT,
@@ -560,6 +604,23 @@ class ShellPathTests(unittest.TestCase):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] \
             if self.calls.exists() else []
 
+    def test_install_leaves_the_desktop_cache_to_its_own_later_step(self):
+        # prepare_kilix95_caches / prepare_kilix95_caches_update run
+        # --prepare-cache once, after this (tests/test_kilix95_prepare_cache.py).
+        desktop = self.base / 'kilix-95'
+        desktop.mkdir()
+        (desktop / 'main.py').write_text(
+            'import json, sys\n'
+            'open(%r, "a").write(json.dumps(sys.argv[1:]) + "\\n")\n' % str(self.calls))
+        for method in (self.provision, self.update):
+            with self.subTest(method=method.__name__):
+                self.calls.unlink(missing_ok=True)
+                result = method(f'NEURONTE_REF={self.ref}\n'
+                                f'KILIX95_DIR={str(desktop)!r}\n'
+                                'install_neuronte' + ('_update' if method == self.update else '') + '\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([call[0] for call in self.recorded()], ['install'])
+
     def test_provision_passes_the_image_archive_and_dies_on_failure(self):
         result = self.provision(f'NEURONTE_REF={self.ref}\ninstall_neuronte\necho done\n')
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -713,6 +774,14 @@ class OlderUpdaterTests(unittest.TestCase):
         self.assertEqual(argv[argv.index('--archive') + 1],
                          '/usr/local/share/plebian-os/neuronte-%s.tar.xz' % self.ref)
         self.assertEqual(argv[argv.index('--fetch-failure') + 1], 'warn')
+
+    def test_older_updater_also_prepares_the_installed_desktop(self):
+        sources = self.base / 'sources'
+        desktop = sources / 'kilix-desktops/kilix-95'
+        desktop.mkdir(parents=True)
+        (desktop / 'main.py').write_text('# desktop\n')
+        self.assertEqual(self.run_shim(self.pinned(), {'GPU_TERMINAL_SOURCE_HOME': str(sources)}), 0)
+        self.assertEqual(self.calls[-1], [sys.executable, str(desktop / 'main.py'), '--prepare-cache'])
 
     def test_an_updater_that_installs_neuronte_itself_is_not_doubled(self):
         for value in (self.ref, ''):

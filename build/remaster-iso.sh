@@ -148,6 +148,7 @@ load_release_manifest() {
     PLEBIAN_OS_MPV_SOURCE_REF=
     PLEBIAN_OS_MPV_LAUNCHER_REF=
     PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=
+    PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL=
     declare -A seen=()
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in ''|\#*) continue ;; esac
@@ -1152,6 +1153,13 @@ if ollama_carrier_required "$PLEBIAN_OS_VERSION"; then
     python3 "$HERE/provision/plebian-os-install-kilix-ollama-runtime" \
         --manifest "$OLLAMA_MANIFEST" --expected-version "$PLEBIAN_OS_VERSION" \
         --verify-carrier "$OLLAMA_CARRIER"
+    # Optional (0.2.2 names none). When present it is the one release asset an
+    # upgraded machine without the runtime downloads; keep it the canonical one.
+    if [ -n "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL:-}" ] \
+        && ! [[ "$PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL" =~ ^https://github\.com/itsmygithubacct/plebian-os/releases/download/[A-Za-z0-9._-]+/ollama-0\.32\.14-kilix-unix-vulkan-r1\.tar\.xz$ ]]; then
+        echo "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL must name the canonical Plebian-OS release asset" >&2
+        exit 1
+    fi
 fi
 if [ -z "$SRC_ISO" ]; then
     SRC_ISO="$(fetch_netinst)"           # auto-pull the Debian netinst
@@ -1479,6 +1487,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_MPV_LAUNCHER_REF "${PLEBIAN_OS_MPV_LAUNCHER_REF:-}"
         manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES:-}"
         manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256:-}"
+        manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL:-}"
         manifest_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         manifest_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
         manifest_kv PLEBIAN_OS_KIOSK "${PLEBIAN_OS_KIOSK:-0}"
