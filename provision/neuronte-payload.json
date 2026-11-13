@@ -1,8 +1,8 @@
 {
  "schema": "plebian.neuronte-payload/v1",
  "repository": "https://github.com/itsmygithubacct/neuronte.git",
- "commit": "399f19b6e36fbb84f4e98e266da7933f89bbc0ad",
- "tree": "a8b44ed3969c9b604012c34de6b703b641f765ec",
+ "commit": "08c9ef21fafa3ad6e7e859ce178efd61d46100f4",
+ "tree": "6b5bdc4740aa9f15c5f54ed2f3bb4a560b18d572",
  "reader": "Kilix 95 desktop faces and flame; Neuronte runtime assets and video player",
  "license": "MIT; LICENSE and THIRD_PARTY_NOTICES.md are carried with the files",
  "files": {
@@ -367,14 +367,14 @@
    "bytes": 1805
   },
   "tools/neuronte-play.py": {
-   "blob": "d18713a3731ef2d4290c9f75f40e2b633f24f683",
+   "blob": "bd13cf7be55095dfe05eaf0f53fdcd3b983fca94",
    "mode": "100755",
-   "bytes": 33633
+   "bytes": 36554
   },
   "tools/neuronte-video.md": {
-   "blob": "84c090f1bc8179fca0d5afd31bf7427210e0a784",
+   "blob": "30ead56a7bac9ae24c35cac7298d28dc9f3e733f",
    "mode": "100644",
-   "bytes": 11511
+   "bytes": 11873
   },
   "tools/neuronte_video.py": {
    "blob": "b47c14028ac94f0e544777250ceb95d58685d171",
