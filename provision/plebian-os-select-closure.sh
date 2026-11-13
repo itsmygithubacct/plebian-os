@@ -138,6 +138,9 @@ closure_elevate() {
 # Mirrors the updater's test_fail_after_boundary: a named boundary an induced
 # failure can be aimed at, so rollback is provable rather than asserted.
 select_test_fail_after() {
+    # "interrupt:<boundary>" delivers a real SIGINT there instead of failing.
+    [ "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" != "interrupt:$1" ] \
+        || kill -INT "$$"
     [ "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" != "$1" ] \
         || die "injected closure selection failure after $1"
 }
@@ -318,9 +321,19 @@ SOURCE_VERSION=""
 STAGE=""
 STANDALONE_PLEB_BOOTSTRAP=""
 
+PENDING_SELECTION=""
+SELECT_SIGNALLED=0
+
 cleanup_stage() {
     [ -z "$STAGE" ] || rm -rf -- "$STAGE"
     STAGE=""
+    # A selection that failed by itself leaves no marker. One that was
+    # signalled keeps it: the marker is how the next --rollback learns that
+    # this selection may never have replaced the closure.
+    if [ -n "$PENDING_SELECTION" ] && [ "$SELECT_SIGNALLED" = 0 ]; then
+        rm -f -- "$PENDING_SELECTION"
+    fi
+    PENDING_SELECTION=""
 }
 trap cleanup_stage EXIT
 
@@ -2543,6 +2556,63 @@ select_closure() {
     log "To put the previous closure back, invoke this selector with --rollback."
 }
 
+# ── a rollback restores only what its own selection replaced ───────────────
+# --rollback restores the newest record nobody has restored yet. A caller that
+# was interrupted while selecting (Pleb's `selecting` phase, a Ctrl-C during the
+# component fetch) asks for exactly that rollback, but its selection wrote no
+# record: the newest record then belongs to an EARLIER hop, and restoring it
+# moves the machine back a whole release. So a selection states that it has
+# begun, with the fingerprints of everything it may replace, before it does
+# anything slow; and a rollback asked on behalf of the same tag, finding those
+# fingerprints unchanged, restores nothing because nothing was replaced.
+pending_selection_path() {
+    selector_state_home
+    printf '%s\n' "$PLEB_STATE_HOME/selection-pending"
+}
+
+pending_selection_facts() {
+    printf 'format=1\n'
+    printf 'tag=%s\n' "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:--}"
+    printf 'session=%s\n' "$(installed_tool_fingerprint "$SESSION_ENV")"
+    printf 'closure=%s\n' "$(installed_tool_fingerprint "$CLOSURE_ENV")"
+    if [ -n "$SELECTOR_DST" ]; then
+        printf 'selector=%s\n' "$(installed_tool_fingerprint "$SELECTOR_DST")"
+        printf 'updater=%s\n' "$(installed_tool_fingerprint "$UPDATER_DST")"
+    fi
+}
+
+begin_pending_selection() {
+    local path tmp
+    path="$(pending_selection_path)"
+    mkdir -p -- "$(dirname -- "$path")"
+    tmp="$(mktemp "$(dirname -- "$path")/.selection-pending.XXXXXX")" \
+        || die "could not record that a selection has begun"
+    pending_selection_facts >"$tmp"
+    mv -fT -- "$tmp" "$path"
+    PENDING_SELECTION="$path"
+    trap 'SELECT_SIGNALLED=1; exit 130' INT
+    trap 'SELECT_SIGNALLED=1; exit 143' TERM
+    trap 'SELECT_SIGNALLED=1; exit 129' HUP
+}
+
+end_pending_selection() {
+    [ -z "$PENDING_SELECTION" ] || rm -f -- "$PENDING_SELECTION"
+    PENDING_SELECTION=""
+}
+
+# True only when a selection for this same tag began, was interrupted, and left
+# every file it could have replaced exactly as it found it. Any other marker is
+# spent: a selection that did replace the closure wrote its own record, which
+# the ordinary rollback below restores.
+interrupted_selection_changed_nothing() {
+    local path recorded
+    path="$(pending_selection_path)"
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    recorded="$(cat -- "$path")"
+    rm -f -- "$path"
+    [ "$recorded" = "$(pending_selection_facts)" ]
+}
+
 # ── an interrupted update must be recovered before a new selection ─────────
 # Selecting a closure while an update is waiting for recovery leaves the
 # machine pinned to a release that is not installed. The four functions below
@@ -2681,6 +2751,10 @@ case "$MODE" in
         ;;
     rollback)
         [ -z "$TARGET" ] || die "--rollback takes no release argument"
+        if interrupted_selection_changed_nothing; then
+            log "the interrupted selection had not replaced the closure; the installed closure is unchanged and nothing was restored"
+            exit 0
+        fi
         if split_layout_active; then
             rollback_split_closure
         else
@@ -2692,6 +2766,8 @@ case "$MODE" in
             || die "name the target release, e.g. plebian-os-select-closure 0.1.8 (try --help)"
         [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
             || die "invalid release identifier: $TARGET"
+        [ "$DRY_RUN" = 1 ] || begin_pending_selection
         select_closure
+        end_pending_selection
         ;;
 esac

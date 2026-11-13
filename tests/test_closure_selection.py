@@ -1731,6 +1731,99 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("no closure to roll back to", again.stderr)
 
+    # ── a rollback after an interrupted selection ──────────────────────────
+    @staticmethod
+    def _pending(base: Path) -> Path:
+        return (base / "home" / ".local" / "gpu_terminal" / "pleb" / "state" /
+                "selection-pending")
+
+    def _rollback_for_pending_tag(self, base: Path, tag_line: str):
+        tag = tag_line.split("=", 1)[1]
+        extra = {} if tag == "-" else {"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag}
+        return self._run(base, "--rollback", env_extra=extra)
+
+    def test_rollback_after_an_interrupted_selection_restores_nothing(self):
+        """The observed hazard: Ctrl-C while selecting, then a rollback, must not
+        restore the record an EARLIER hop wrote."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            original = env.read_bytes()
+            self._source(base)
+            self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
+            selected = env.read_bytes()
+            self.assertNotEqual(selected, original)
+            self.assertFalse(self._pending(base).exists())
+            interrupted = self._run(base, "0.1.8", "--offline",
+                                    fail_after="interrupt:render")
+            self.assertEqual(interrupted.returncode, 130, interrupted.stderr)
+            self.assertEqual(env.read_bytes(), selected)
+            facts = self._pending(base).read_text().splitlines()
+            self.assertEqual(facts[0], "format=1")
+            self.assertEqual(len(self._recovery_records(base)), 1)
+            result = self._rollback_for_pending_tag(base, facts[1])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("nothing was restored", result.stderr + result.stdout)
+            self.assertEqual(env.read_bytes(), selected)
+            records = self._recovery_records(base)
+            self.assertEqual(len(records), 1)
+            self.assertFalse((records[0] / "restored").exists())
+            self.assertFalse(self._pending(base).exists())
+            # The marker is spent: a deliberate rollback now undoes the first hop.
+            deliberate = self._rollback_for_pending_tag(base, facts[1])
+            self.assertEqual(deliberate.returncode, 0, deliberate.stderr)
+            self.assertEqual(env.read_bytes(), original)
+
+    def test_pending_marker_of_a_selection_that_did_replace_is_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            original = env.read_bytes()
+            self._source(base)
+            interrupted = self._run(base, "0.1.8", "--offline",
+                                    fail_after="interrupt:render")
+            self.assertEqual(interrupted.returncode, 130, interrupted.stderr)
+            marker = self._pending(base).read_text()
+            # The same selection, completed; then its marker reappears, as it
+            # would if the selector died between the write and its last line.
+            self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
+            self.assertNotEqual(env.read_bytes(), original)
+            self._pending(base).write_text(marker)
+            result = self._rollback_for_pending_tag(base, marker.splitlines()[1])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(env.read_bytes(), original)
+            self.assertFalse(self._pending(base).exists())
+
+    def test_pending_marker_of_another_tag_is_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            original = env.read_bytes()
+            self._source(base)
+            self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
+            interrupted = self._run(base, "0.1.8", "--offline",
+                                    fail_after="interrupt:render")
+            self.assertEqual(interrupted.returncode, 130, interrupted.stderr)
+            result = self._run(base, "--rollback", env_extra={
+                "PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": "1" * 40})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(env.read_bytes(), original)
+            self.assertFalse(self._pending(base).exists())
+
+    def test_only_a_signalled_selection_leaves_a_pending_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            self._machine(base)
+            self._source(base)
+            dry = self._run(base, "0.1.8", "--offline", "--dry-run")
+            self.assertEqual(dry.returncode, 0, dry.stderr)
+            self.assertFalse(self._pending(base).exists())
+            failed = self._run(base, "0.1.8", "--offline", fail_after="render")
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertFalse(self._pending(base).exists())
+            self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
+            self.assertFalse(self._pending(base).exists())
+
     def test_selection_replaces_and_rollback_restores_older_tools(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
