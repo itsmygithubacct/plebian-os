@@ -1250,6 +1250,31 @@ zell_dirs=(
     /usr/local/lib/systemd
     /usr/local/lib/systemd/user
 )
+# Named keys keep recovery of snapshots from older updaters unchanged. Zell
+# already owns the two shared user units; record each destination only once.
+secrets_paths=(
+    /usr/local/bin/kilix-secrets
+    /usr/local/bin/kilix-secretsd
+    /usr/local/include/kilix_secrets.h
+    /usr/local/lib/libkilix-secrets.a
+    /usr/local/lib/libkilix-secrets.so.0
+    /usr/local/lib/libkilix-secrets.so
+    /usr/local/lib/pkgconfig/kilix-secrets.pc
+    /usr/local/share/doc/kilix-secrets/DEPENDENCIES.md
+    /usr/local/share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+    /usr/local/share/doc/kilix-secrets/LICENSE
+    /usr/local/share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+    /usr/local/share/kilix-secrets/source.tar
+    /usr/local/share/kilix-secrets/provenance.env
+    /etc/systemd/user/sockets.target.wants/kilix-secrets.socket
+)
+secrets_dirs=(
+    /usr/local/include
+    /usr/local/lib/pkgconfig
+    /usr/local/share/doc/kilix-secrets
+    /usr/local/share/kilix-secrets
+    /etc/systemd/user/sockets.target.wants
+)
 path_keys=("${!paths[@]}")
 dir_keys=()
 for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
@@ -1260,6 +1285,14 @@ done
 for i in "${!zell_dirs[@]}"; do
     managed_dirs+=("${zell_dirs[$i]}")
     dir_keys+=("zell-dir.$i")
+done
+for i in "${!secrets_paths[@]}"; do
+    paths+=("${secrets_paths[$i]}")
+    path_keys+=("secrets.$i")
+done
+for i in "${!secrets_dirs[@]}"; do
+    managed_dirs+=("${secrets_dirs[$i]}")
+    dir_keys+=("secrets-dir.$i")
 done
 cleanup() {
     rc=$?
@@ -1300,6 +1333,7 @@ for i in "${!paths[@]}"; do
     fi
 done
 : >"$txn/zell-runtime"
+: >"$txn/kilix-secrets"
 printf '%s\n' "$txn"
 ROOT_SNAPSHOT
 }
@@ -1475,6 +1509,29 @@ zell_dirs=(
     /usr/local/lib/systemd
     /usr/local/lib/systemd/user
 )
+secrets_paths=(
+    /usr/local/bin/kilix-secrets
+    /usr/local/bin/kilix-secretsd
+    /usr/local/include/kilix_secrets.h
+    /usr/local/lib/libkilix-secrets.a
+    /usr/local/lib/libkilix-secrets.so.0
+    /usr/local/lib/libkilix-secrets.so
+    /usr/local/lib/pkgconfig/kilix-secrets.pc
+    /usr/local/share/doc/kilix-secrets/DEPENDENCIES.md
+    /usr/local/share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+    /usr/local/share/doc/kilix-secrets/LICENSE
+    /usr/local/share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+    /usr/local/share/kilix-secrets/source.tar
+    /usr/local/share/kilix-secrets/provenance.env
+    /etc/systemd/user/sockets.target.wants/kilix-secrets.socket
+)
+secrets_dirs=(
+    /usr/local/include
+    /usr/local/lib/pkgconfig
+    /usr/local/share/doc/kilix-secrets
+    /usr/local/share/kilix-secrets
+    /etc/systemd/user/sockets.target.wants
+)
 path_keys=("${!paths[@]}")
 dir_keys=()
 for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
@@ -1493,6 +1550,23 @@ if [ -f "$txn/zell-runtime" ]; then
     for i in "${!zell_dirs[@]}"; do
         managed_dirs+=("${zell_dirs[$i]}")
         dir_keys+=("zell-dir.$i")
+    done
+fi
+if [ -f "$txn/kilix-secrets" ]; then
+    for dir in /usr/local/share/doc /etc/systemd/user "${secrets_dirs[@]}"; do
+        if [ -e "$dir" ] || [ -L "$dir" ]; then
+            [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+            dir_mode="$(stat -c '%a' "$dir")"
+            (( (8#$dir_mode & 8#22) == 0 )) && (( (8#$dir_mode & 8#1) != 0 )) || exit 2
+        fi
+    done
+    for i in "${!secrets_paths[@]}"; do
+        paths+=("${secrets_paths[$i]}")
+        path_keys+=("secrets.$i")
+    done
+    for i in "${!secrets_dirs[@]}"; do
+        managed_dirs+=("${secrets_dirs[$i]}")
+        dir_keys+=("secrets-dir.$i")
     done
 fi
 new_paths=()
@@ -1546,6 +1620,7 @@ if [ -x /usr/sbin/sshd ] && [ -f /etc/ssh/sshd_config ] \
     fi
 fi
 systemctl daemon-reload
+[ ! -f "$txn/kilix-secrets-installed" ] || ldconfig
 trap - EXIT
 cleanup_new
 ROOT_RESTORE
@@ -4578,6 +4653,107 @@ install_ollama_runtime_update() {
     esac
 }
 
+# Install the exact Secrets source selected by the closure, as provisioning
+# does. The root transaction owns all package files and socket enablement.
+# Run before Zell so its bundled daemon keeps the same unit precedence as a
+# fresh installation. Neither step restarts an existing user's vault daemon.
+install_kilix_secrets_update() {
+    [ -n "$KILIX_SECRETS_REF" ] || return 0
+    [[ "$KILIX_SECRETS_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Kilix Secrets requires an exact KILIX_SECRETS_REF commit"
+    [ -z "$KILIX_SECRETS_BRANCH" ] \
+        || die "Kilix Secrets does not accept a mutable branch"
+    [ "$KILIX_SECRETS_REPO" = https://github.com/itsmygithubacct/kilix-secrets.git ] \
+        || die "Kilix Secrets requires the canonical KILIX_SECRETS_REPO"
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        log "would build exact Kilix Secrets $KILIX_SECRETS_REF into /usr/local"
+        return 0
+    fi
+    validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
+        || die "Kilix Secrets installation requires the stack recovery snapshot"
+    local -a elevate=()
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    log "installing exact Kilix Secrets $KILIX_SECRETS_REF (needs root)"
+    "${elevate[@]}" bash -s -- "$_STACK_ROOT_TXN_DIR" "$KILIX_SECRETS_REF" \
+        "$KILIX_SECRETS_REPO" <<'ROOT_SECRETS_INSTALL'
+set -euo pipefail
+umask 022
+txn="$1"; ref="$2"; repo="$3"
+case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
+[ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
+[ "$(stat -c '%a' "$txn")" = 700 ] \
+    && [ -f "$txn/kilix-secrets" ] && [ -f "$txn/zell-runtime" ] || exit 2
+[[ "$ref" =~ ^[0-9a-f]{40}$ ]] || exit 2
+[ "$repo" = https://github.com/itsmygithubacct/kilix-secrets.git ] || exit 2
+for dir in / /usr /usr/local /usr/local/bin /usr/local/include /usr/local/lib \
+    /usr/local/lib/pkgconfig /usr/local/lib/systemd /usr/local/lib/systemd/user \
+    /usr/local/share /usr/local/share/doc /usr/local/share/doc/kilix-secrets \
+    /usr/local/share/kilix-secrets /etc /etc/systemd /etc/systemd/user \
+    /etc/systemd/user/sockets.target.wants; do
+    if [ -e "$dir" ] || [ -L "$dir" ]; then
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+        mode="$(stat -c '%a' "$dir")"
+        (( (8#$mode & 8#22) == 0 )) && (( (8#$mode & 8#1) != 0 )) || exit 2
+    fi
+done
+package_files=(
+    bin/kilix-secrets
+    bin/kilix-secretsd
+    include/kilix_secrets.h
+    lib/libkilix-secrets.a
+    lib/libkilix-secrets.so.0
+    lib/pkgconfig/kilix-secrets.pc
+    lib/systemd/user/kilix-secrets.service
+    lib/systemd/user/kilix-secrets.socket
+    share/doc/kilix-secrets/DEPENDENCIES.md
+    share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+    share/doc/kilix-secrets/LICENSE
+    share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+)
+for file in "${package_files[@]}" share/kilix-secrets/source.tar share/kilix-secrets/provenance.env; do
+    [ ! -L "/usr/local/$file" ] \
+        && { [ ! -e "/usr/local/$file" ] || [ -f "/usr/local/$file" ]; } || exit 2
+done
+[ ! -d /usr/local/lib/libkilix-secrets.so ] || exit 2
+stage="$(mktemp -d "$txn/kilix-secrets.XXXXXX")"
+trap 'rm -rf -- "$stage"' EXIT
+git init -q "$stage/repo"
+git -C "$stage/repo" fetch --depth=1 "$repo" "$ref"
+actual="$(git -C "$stage/repo" rev-parse 'FETCH_HEAD^{commit}')"
+[ "$actual" = "$ref" ] || { echo 'Kilix Secrets commit mismatch' >&2; exit 2; }
+git -C "$stage/repo" archive --format=tar "$actual" >"$stage/source.tar"
+mkdir "$stage/source"
+tar -xf "$stage/source.tar" -C "$stage/source"
+make -j2 -C "$stage/source" all PREFIX=/usr/local
+make -C "$stage/source" install DESTDIR="$stage/package" PREFIX=/usr/local
+printf '%s\n' "${package_files[@]}" | LC_ALL=C sort >"$stage/expected"
+(cd "$stage/package/usr/local" && find . -type f -printf '%P\n' | LC_ALL=C sort) >"$stage/actual"
+cmp -s "$stage/expected" "$stage/actual" \
+    || { echo 'unexpected Kilix Secrets package layout' >&2; exit 2; }
+link="$stage/package/usr/local/lib/libkilix-secrets.so"
+[ -L "$link" ] && [ "$(readlink -- "$link")" = libkilix-secrets.so.0 ] || exit 2
+[ "$(find "$stage/package" -type l -print)" = "$link" ] || exit 2
+[ -z "$(find "$stage/package" ! -type f ! -type d ! -type l -print -quit)" ] || exit 2
+: >"$txn/kilix-secrets-installed"
+for file in "${package_files[@]}"; do
+    case "$file" in
+        bin/*|lib/libkilix-secrets.so.0) mode=0755 ;;
+        *) mode=0644 ;;
+    esac
+    install -D -o root -g root -m "$mode" "$stage/package/usr/local/$file" "/usr/local/$file"
+done
+ln -sfn libkilix-secrets.so.0 /usr/local/lib/libkilix-secrets.so
+source_sha="$(sha256sum "$stage/source.tar")"; source_sha="${source_sha%% *}"
+printf 'KILIX_SECRETS_REF=%s\nKILIX_SECRETS_SOURCE_SHA256=%s\n' \
+    "$actual" "$source_sha" >"$stage/provenance.env"
+install -D -o root -g root -m 0644 "$stage/source.tar" /usr/local/share/kilix-secrets/source.tar
+install -D -o root -g root -m 0644 "$stage/provenance.env" /usr/local/share/kilix-secrets/provenance.env
+ldconfig
+systemctl daemon-reload
+systemctl --global enable kilix-secrets.socket
+ROOT_SECRETS_INSTALL
+}
+
 # Install the same offline Zell carrier used by provisioning. The outer root
 # snapshot owns the runtime, launcher, helper, pin, archive and global user
 # units. Keep this step independent of other desktop runtime installers.
@@ -6294,6 +6470,8 @@ apply_selected_mpv_runtime "$_STACK_TXN_DIR" 0 \
 test_fail_after_boundary mpv-runtime
 refresh_os_dependencies
 test_fail_after_boundary dependencies
+install_kilix_secrets_update
+test_fail_after_boundary kilix-secrets
 install_zell_runtime
 test_fail_after_boundary zell-runtime
 # Like apt dependencies, this verified software remains available after a
