@@ -4829,7 +4829,7 @@ kilix_claudex_guard_finish() {
     w="${_KILIX_CLAUDEX_GUARD_W:-}"
     r="${_KILIX_CLAUDEX_GUARD_R:-}"
     if [ "${_KILIX_CLAUDEX_GUARD_HELD:-0}" = 1 ] && [[ "$w" =~ ^[0-9]+$ ]]; then
-        printf 'release\n' >&"$w" 2>/dev/null || true
+        printf 'release\n' 1>&"$w" 2>/dev/null || true
     fi
     _KILIX_CLAUDEX_GUARD_HELD=0
     if [[ "$w" =~ ^[0-9]+$ ]]; then
