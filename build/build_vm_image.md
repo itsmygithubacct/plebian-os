@@ -197,7 +197,7 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
 - `PLEB_DESKTOP=1` → the main screen-filling Kilix instance with visible chrome
   and `kilix desktop` running as page 1's program (the default);
   `0` → put a bare shell in page 1 instead.
-- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|xp|cap|tui|command|none` selects
+- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|xp|cap|tui|land|icewm|zell|command|none` selects
   what `kilix desktop` runs. `cap` downloads and builds Kilix Cap; `tui`
   installs the text-native Kilix TUI desktop from Kilix’s pinned
   `kilix-tui-utils` checkout. `command` uses `KILIX_DESKTOP_COMMAND` and is the
