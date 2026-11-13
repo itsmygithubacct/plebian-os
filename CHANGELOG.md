@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Attach two independent RC9 carrier reviews, both ship with known issues,
+  and pin their acceptance receipt. Carrier `d5dd1a40` binds content `b861d44`
+  and licence `596ada2`; model artifacts and licence records remain unchanged.
+  The records state their exact source scope and do not qualify an RC9 image.
+
 - Select merged PDF Conversion `873f3298`, retaining OCR and batch path
   confinement with complete dependency notices. Plain pane close now reaps
   stopped and detached descendants. Debian Go reconciliation supports
