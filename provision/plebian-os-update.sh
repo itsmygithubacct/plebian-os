@@ -12,8 +12,8 @@
 # checkout. Updates are
 # serialized; participating checkouts must be clean and pinned refs resolve to
 # the fetched commit. One outer recovery transaction covers the deployed OS
-# layer, checkout positions, engine artifacts, shared settings, and `pleb
-# install` outputs.
+# layer, checkout positions, engine artifacts, shared settings, `pleb
+# install` outputs, and the catalog Claudex checkout.
 # Disable OS-layer refresh with PLEBIAN_OS_SELF_UPDATE=0.
 #
 # Usage: plebian-os-update [--restart] [--revalidate-current]
@@ -2460,10 +2460,11 @@ rollback_stack_transaction() {
     restore_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection file || failed=1
     restore_stack_path \
         "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build || failed=1
+    restore_kilix_claudex_install || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
     if [ "$failed" = 0 ]; then
-        log "restored the pre-update OS layer, checkout positions, engine, shared settings, and Pleb install outputs"
+        log "restored the pre-update OS layer, checkout positions, engine, shared settings, Pleb install outputs, and Claudex checkout"
         # The stack rolled back, but the closure selection did not: it was
         # committed before this transaction opened. Saying "restored" and
         # stopping would tell the operator the machine is coherent when it is
@@ -2855,6 +2856,8 @@ begin_stack_transaction() {
     acquire_voicebox_delivery_lock
     snapshot_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection
     snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
+    # Claudex checkout, entrypoint, and git bookkeeping, including absence.
+    snapshot_kilix_claudex_install
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
     validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
@@ -4525,6 +4528,190 @@ install_kilix_needle() {
     env "${stack_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
         "$KILIX_DIR/kilix" app install kilix-needle \
         || die "required Needle application installation failed"
+}
+
+# `kilix app install kilix-claudex` writes one managed git checkout at
+# $KILIX_DATA_HOME/desktop-apps/kilix-claudex. The entrypoint is that tree's
+# `claudex` file. The bookkeeping is its `.git` directory (origin and HEAD).
+# The installer also uses two short-lived siblings under the shared
+# desktop-apps directory: `.kilix-claudex.lock` and `.kilix-claudex.install-*`.
+# Other applications, model assets, user config, browser profiles, credentials,
+# and usage state are not part of this set. Snapshot only the owned names,
+# including original absence. A transaction recorded before this snapshot
+# exists has no kilix-claudex-managed marker and is left untouched.
+kilix_claudex_refuse() {
+    printf 'refusing unsafe Claudex installation path: %s\n' "$*" >&2
+}
+
+kilix_claudex_require_user_dir() {
+    local path="$1" label="$2" resolved owner mode
+    resolved="$(readlink -m -- "$path" 2>/dev/null)" || {
+        kilix_claudex_refuse "could not resolve $label: $path"
+        return 1
+    }
+    [ "$resolved" = "$path" ] || {
+        kilix_claudex_refuse "$label must not contain symlinks or non-normal components: $path"
+        return 1
+    }
+    [ -d "$path" ] && [ ! -L "$path" ] || {
+        kilix_claudex_refuse "$label is not a safe directory: $path"
+        return 1
+    }
+    owner="$(stat -c '%u' -- "$path" 2>/dev/null)" || {
+        kilix_claudex_refuse "could not inspect $label: $path"
+        return 1
+    }
+    mode="$(stat -c '%a' -- "$path" 2>/dev/null)" || {
+        kilix_claudex_refuse "could not inspect $label mode: $path"
+        return 1
+    }
+    if ! { [ "$owner" = "$EUID" ] && (( (8#$mode & 8#22) == 0 )); }; then
+        kilix_claudex_refuse "$label must be user-owned and not group/world writable: $path"
+        return 1
+    fi
+}
+
+kilix_claudex_install_paths_are_safe() {
+    local data root checkout lock stage base count owner mode links
+    data="${KILIX_DATA_HOME:-}"
+    case "$data" in
+        /*) ;;
+        *) kilix_claudex_refuse "KILIX_DATA_HOME must be absolute: $data"; return 1 ;;
+    esac
+    case "$data" in
+        *$'\n'*|*$'\r'*) kilix_claudex_refuse "KILIX_DATA_HOME contains a break"; return 1 ;;
+    esac
+    kilix_claudex_require_user_dir "$data" "KILIX_DATA_HOME" || return 1
+    root="$data/desktop-apps"
+    checkout="$root/kilix-claudex"
+    lock="$root/.kilix-claudex.lock"
+    if [ -e "$root" ] || [ -L "$root" ]; then
+        kilix_claudex_require_user_dir "$root" "Claudex install parent" || return 1
+    fi
+    if [ -e "$checkout" ] || [ -L "$checkout" ]; then
+        kilix_claudex_require_user_dir "$checkout" "Claudex checkout" || return 1
+    fi
+    if [ -e "$lock" ] || [ -L "$lock" ]; then
+        if [ ! -f "$lock" ] || [ -L "$lock" ]; then
+            kilix_claudex_refuse "Claudex install lock is not a regular file: $lock"
+            return 1
+        fi
+        owner="$(stat -c '%u' -- "$lock" 2>/dev/null)" || {
+            kilix_claudex_refuse "could not inspect Claudex install lock: $lock"
+            return 1
+        }
+        mode="$(stat -c '%a' -- "$lock" 2>/dev/null)" || {
+            kilix_claudex_refuse "could not inspect Claudex install lock mode: $lock"
+            return 1
+        }
+        links="$(stat -c '%h' -- "$lock" 2>/dev/null)" || {
+            kilix_claudex_refuse "could not inspect Claudex install lock links: $lock"
+            return 1
+        }
+        if [ "$owner" != "$EUID" ] || [ "$links" != 1 ] \
+            || ! (( (8#$mode & 8#22) == 0 )); then
+            kilix_claudex_refuse "Claudex install lock must be one user-owned, unshared, non-writable link: $lock"
+            return 1
+        fi
+    fi
+    count=0
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        while IFS= read -r -d '' stage; do
+            base="${stage##*/}"
+            [[ "$base" =~ ^\.kilix-claudex\.install-[A-Za-z0-9._-]+$ ]] || {
+                kilix_claudex_refuse "Claudex staging name is not owned: $base"
+                return 1
+            }
+            [ "$stage" = "$root/$base" ] || {
+                kilix_claudex_refuse "Claudex staging path escapes its parent: $stage"
+                return 1
+            }
+            kilix_claudex_require_user_dir "$stage" "Claudex install stage" || return 1
+            count=$((count + 1))
+            [ "$count" -le 32 ] || {
+                kilix_claudex_refuse "too many Claudex install staging directories"
+                return 1
+            }
+        done < <(find "$root" -mindepth 1 -maxdepth 1 -name '.kilix-claudex.install-*' -print0)
+    fi
+}
+
+snapshot_kilix_claudex_install() {
+    local root stage base index
+    kilix_claudex_install_paths_are_safe \
+        || die "refusing unsafe Claudex installation path"
+    root="$KILIX_DATA_HOME/desktop-apps"
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        : >"$_STACK_TXN_DIR/kilix-claudex-parent.present" \
+            || die "could not record the Claudex install parent"
+    fi
+    snapshot_stack_path "$root/kilix-claudex" kilix-claudex-checkout
+    snapshot_stack_path "$root/.kilix-claudex.lock" kilix-claudex-lock
+    : >"$_STACK_TXN_DIR/kilix-claudex-stages" \
+        || die "could not record Claudex install stages"
+    index=0
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        while IFS= read -r -d '' stage; do
+            base="${stage##*/}"
+            printf '%s\n' "$base" >>"$_STACK_TXN_DIR/kilix-claudex-stages" \
+                || die "could not record Claudex install stage $base"
+            snapshot_stack_path "$stage" "kilix-claudex-stage-$index"
+            index=$((index + 1))
+        done < <(find "$root" -mindepth 1 -maxdepth 1 -name '.kilix-claudex.install-*' -print0)
+    fi
+    printf '%s\n' "$index" >"$_STACK_TXN_DIR/kilix-claudex-stage.count" \
+        || die "could not record the Claudex install stage count"
+    : >"$_STACK_TXN_DIR/kilix-claudex-managed" \
+        || die "could not record the Claudex installation snapshot"
+}
+
+restore_kilix_claudex_install() {
+    local root checkout lock count recorded base found keep index
+    # An older updater never wrote this marker. Do not delete a checkout it
+    # did not snapshot.
+    [ -f "$_STACK_TXN_DIR/kilix-claudex-managed" ] || return 0
+    kilix_claudex_install_paths_are_safe || return 1
+    root="$KILIX_DATA_HOME/desktop-apps"
+    checkout="$root/kilix-claudex"
+    lock="$root/.kilix-claudex.lock"
+    count="$(cat "$_STACK_TXN_DIR/kilix-claudex-stage.count" 2>/dev/null)" || return 1
+    [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -le 32 ] || return 1
+    recorded=0
+    if [ -s "$_STACK_TXN_DIR/kilix-claudex-stages" ]; then
+        recorded="$(grep -c '' "$_STACK_TXN_DIR/kilix-claudex-stages")" || return 1
+    fi
+    [ "$recorded" = "$count" ] || return 1
+    restore_stack_path "$checkout" kilix-claudex-checkout || return 1
+    restore_stack_path "$lock" kilix-claudex-lock file || return 1
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        while IFS= read -r -d '' found; do
+            base="${found##*/}"
+            [[ "$base" =~ ^\.kilix-claudex\.install-[A-Za-z0-9._-]+$ ]] || return 1
+            [ "$found" = "$root/$base" ] || return 1
+            [ -d "$found" ] && [ ! -L "$found" ] || return 1
+            keep=0
+            if [ "$count" -gt 0 ] && grep -Fxq -- "$base" "$_STACK_TXN_DIR/kilix-claudex-stages"; then
+                keep=1
+            fi
+            if [ "$keep" = 0 ]; then
+                rm -rf -- "$found" || return 1
+            fi
+        done < <(find "$root" -mindepth 1 -maxdepth 1 -name '.kilix-claudex.install-*' -print0)
+    fi
+    index=0
+    while IFS= read -r base || [ -n "$base" ]; do
+        [ -n "$base" ] || continue
+        [[ "$base" =~ ^\.kilix-claudex\.install-[A-Za-z0-9._-]+$ ]] || return 1
+        restore_stack_path "$root/$base" "kilix-claudex-stage-$index" || return 1
+        index=$((index + 1))
+    done <"$_STACK_TXN_DIR/kilix-claudex-stages"
+    [ "$index" = "$count" ] || return 1
+    if [ ! -f "$_STACK_TXN_DIR/kilix-claudex-parent.present" ] \
+        && [ -d "$root" ] && [ ! -L "$root" ]; then
+        if [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+            rmdir -- "$root" || return 1
+        fi
+    fi
 }
 
 install_kilix_claudex() {
