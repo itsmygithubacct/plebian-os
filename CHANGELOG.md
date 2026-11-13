@@ -6,6 +6,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Preserve the distribution's verified local Go compiler through the Kilix
+  engine build, avoiding an unexpected download of an older compiler.
+  Leave the successor receipt empty pending independent delta reviews.
+
 - Select the reviewed Zell four-room and theater payload, with native playback,
   browser hold controls and preservation of the displayed frame after rejected
   media opens. Wait for queued private-bus activation within its existing

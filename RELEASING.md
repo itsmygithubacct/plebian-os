@@ -420,9 +420,11 @@ together.
    Immediately before tagging, confirm those
    commits are still the intended branch tips; classify any newer commit as
    either part of this release or explicitly post-release. For the pinned Kilix
-   commit, inspect its `src/go.mod` `toolchain` line and make the manifest's
-   exact Go version match it. Archive selections require architecture hashes;
-   Debian selections require the matching exact package version and live apt policy.
+   commit, inspect its `src/go.mod` `toolchain` line and pin an exact compiler
+   that satisfies it. Archive selections require architecture hashes. Debian
+   selections require the matching exact package version and live apt policy;
+   verify that `GOTOOLCHAIN=local` and the selected compiler reach the engine
+   build, so its declaration cannot trigger a second toolchain download.
 3. Push the reviewed commits **without tags**. Firstboot fetches the exact
    component SHAs from GitHub, so the pinned acceptance guest cannot test an
    unpublished object. A failed acceptance is fixed with new commits; no
