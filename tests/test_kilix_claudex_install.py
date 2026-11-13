@@ -19,10 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PROVISION = ROOT / 'provision/plebian-os-provision.sh'
 UPDATE = ROOT / 'provision/plebian-os-update.sh'
 ENV = ROOT / 'releases/0.2.3.env'
-# Present on the RC9 integration host. Absent in other checkouts; those runs
-# still exercise a temporary env carrying different pin values.
-ASSEMBLER_ENV = Path('/home/pleb/gpu_terminal/worktrees/023rc9-os/releases/0.2.3.env')
 PIN_KEYS = ('KILIX_REF', 'KILIX95_REF', 'PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF')
+# Deterministic alternate pin file, inlined from the RC9 assembler pins.
+# A temporary fixture carries it, including when the release file has the same values.
+ALTERNATE_ENV = """\
+KILIX_REF=3b953489a436b88d3e464192a5203fc0bbad376e
+KILIX95_REF=1e59c1e28d856a7cd0a9e61b431245ab68a2275b
+PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=e78e1cb51c580569680d496ed95bbb6a4c6484ab
+"""
 ROLLBACK_FUNCTIONS = (
     'kilix_claudex_refuse',
     'kilix_claudex_require_user_dir',
@@ -123,50 +127,60 @@ class KilixClaudexInstallTests(unittest.TestCase):
         self.assertLess(update.index('    install_kilix_claudex\n'), update.index('    install_kilix_llm\n'))
         self.assertIn('    install_kilix_claudex\n    test_fail_after_boundary claudex\n', update)
 
-    def test_install_leaves_release_pins_unchanged(self):
+    def assert_install_leaves_pins(self, source_bytes, label):
+        """Run both installers against one pin file and leave that file unchanged."""
+        found = pins(source_bytes.decode())
+        self.assertEqual(set(found), set(PIN_KEYS), label)
+        for value in found.values():
+            self.assertRegex(value, r'^[0-9a-f]{40}$', label)
         update = UPDATE.read_text()
-        for label, script in (('provision', PROVISION.read_text()), ('update', update)):
-            body = function(script, 'install_kilix_claudex')
+        for origin, script_text in (('provision', PROVISION.read_text()), ('update', update)):
+            body = function(script_text, 'install_kilix_claudex')
             for key in PIN_KEYS:
-                self.assertNotIn(key, body, label)
-        sources = [ENV]
-        if ASSEMBLER_ENV.is_file():
-            sources.append(ASSEMBLER_ENV)
-            self.assertNotEqual(ENV.read_bytes(), ASSEMBLER_ENV.read_bytes())
-        seen = []
-        for source in sources:
-            with self.subTest(source=str(source)):
-                before = source.read_bytes()
-                found = pins(before.decode())
-                self.assertEqual(set(found), set(PIN_KEYS))
-                for value in found.values():
-                    self.assertRegex(value, r'^[0-9a-f]{40}$')
-                seen.append(found)
-                with tempfile.TemporaryDirectory() as home:
-                    home = Path(home)
-                    copy = home / 'pins.env'
-                    copy.write_bytes(before)
-                    kilix, _log = self.fixture(home)
-                    body = function(update, 'install_kilix_claudex')
-                    script = (
-                        'set -eu\n'
-                        'die() { echo "die: $*" >&2; exit 3; }\n'
-                        'stack_env=()\n'
-                        'saved=$(printf "%s\\n" "$KILIX_REF" "$KILIX95_REF" '
-                        '"$PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF")\n'
-                        f'KILIX_DIR={kilix}\n'
-                        + body + 'install_kilix_claudex\n'
-                        'now=$(printf "%s\\n" "$KILIX_REF" "$KILIX95_REF" '
-                        '"$PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF")\n'
-                        '[ "$saved" = "$now" ]\n')
-                    result = subprocess.run(
-                        ['bash', '-c', script], capture_output=True, text=True,
-                        env={**os.environ, 'HOME': str(home), **found})
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(copy.read_bytes(), before)
-                    self.assertEqual(source.read_bytes(), before)
-        if len(seen) == 2:
-            self.assertNotEqual(seen[0], seen[1])
+                self.assertNotIn(key, body, origin)
+        with tempfile.TemporaryDirectory() as home:
+            home = Path(home)
+            copy = home / 'pins.env'
+            copy.write_bytes(source_bytes)
+            kilix, _log = self.fixture(home)
+            for origin, script_text in (('provision', PROVISION.read_text()), ('update', update)):
+                body = function(script_text, 'install_kilix_claudex')
+                if origin == 'provision':
+                    prelude = (
+                        'log() { :; }\n'
+                        'as_user() { "$@"; }\n'
+                        'install_env=()\n'
+                        'DRY_RUN=0 TARGET_USER=desktop\n')
+                else:
+                    prelude = 'stack_env=()\n'
+                script = (
+                    'set -eu\n'
+                    'die() { echo "die: $*" >&2; exit 3; }\n'
+                    + prelude +
+                    'saved=$(printf "%s\\n" "$KILIX_REF" "$KILIX95_REF" '
+                    '"$PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF")\n'
+                    f'KILIX_DIR={kilix}\n'
+                    + body + 'install_kilix_claudex\n'
+                    'now=$(printf "%s\\n" "$KILIX_REF" "$KILIX95_REF" '
+                    '"$PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF")\n'
+                    '[ "$saved" = "$now" ]\n')
+                result = subprocess.run(
+                    ['bash', '-c', script], capture_output=True, text=True,
+                    env={**os.environ, 'HOME': str(home), **found})
+                self.assertEqual(result.returncode, 0, f'{label} {origin}: {result.stderr}')
+            self.assertEqual(copy.read_bytes(), source_bytes, label)
+
+    def test_install_leaves_release_pins_unchanged(self):
+        release = ENV.read_bytes()
+        cases = (
+            ('release', release),
+            ('alternate', ALTERNATE_ENV.encode()),
+            ('identical', release),
+        )
+        for label, source_bytes in cases:
+            with self.subTest(label=label):
+                self.assert_install_leaves_pins(source_bytes, label)
+        self.assertEqual(ENV.read_bytes(), release)
 
     def test_upgrade_snapshots_only_the_owned_claudex_outputs(self):
         update = UPDATE.read_text()
