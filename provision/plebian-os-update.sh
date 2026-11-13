@@ -4446,6 +4446,28 @@ install_kilix_llm() {
         || die "required kilix-llm installation failed"
 }
 
+# Kilix 95's bytecode and font caches for the updated Kilix 95, Kilix SDK and
+# Neuronte, as the desktop user (this updater already runs as that user):
+# provisioning's prepare_kilix95_caches. It runs after the stack transaction
+# has committed, so the caches match the committed sources and a failure here
+# cannot touch the update. Every failure is a warning; the next desktop start
+# builds whatever is missing.
+KILIX95_PREPARE_CACHE_TIMEOUT=600s
+prepare_kilix95_caches_update() {
+    local main="$KILIX95_DIR/main.py" launcher
+    [ -f "$main" ] && [ ! -L "$main" ] || return 0
+    launcher="$(readlink -f -- "$KILIX_DIR/kilix" 2>/dev/null)" && [ -f "$launcher" ] || {
+        warn "Kilix 95 caches not prepared: no kilix launcher in $KILIX_DIR"
+        return 0
+    }
+    log "preparing Kilix 95 bytecode and font caches"
+    env "${stack_env[@]}" "KILIX_HOME=${launcher%/*}" \
+        /usr/bin/timeout --signal=TERM --kill-after=10s "$KILIX95_PREPARE_CACHE_TIMEOUT" \
+        /usr/bin/python3 "$main" --prepare-cache \
+        || warn "Kilix 95 cache preparation did not complete; the desktop will retry at launch"
+    return 0
+}
+
 # The Neuronte faces at the selected NEURONTE_REF, as the desktop user, in
 # $GPU_TERMINAL_SOURCE_HOME/neuronte: provisioning's install_neuronte, for a
 # machine installed before 0.2.3 or one whose pin moved. The image's archive is
@@ -4472,11 +4494,8 @@ install_neuronte_update() {
         --archive "/usr/local/share/plebian-os/neuronte-$NEURONTE_REF.tar.xz" \
         --fetch-failure warn \
         || die "required Neuronte installation failed"
-    if [ -f "${KILIX95_DIR:-}/main.py" ]; then
-        log "preparing Kilix 95 bytecode and font caches for the desktop user"
-        env "${stack_env[@]}" /usr/bin/python3 "$KILIX95_DIR/main.py" --prepare-cache \
-            || warn "Kilix 95 cache preparation failed; the desktop will retry at launch"
-    fi
+    # Kilix 95's caches are prepared once, by prepare_kilix95_caches_update,
+    # after the stack transaction has committed.
 }
 
 # The commit the installed Neuronte tree records, or nothing.
@@ -5565,6 +5584,7 @@ reconcile_release_apt_sources_after_commit || apt_reconcile_rc=1
 if ! seed_desktop_wallpaper_after_commit; then
     warn "stack committed, but wallpaper state seeding failed; existing state was not changed"
 fi
+prepare_kilix95_caches_update
 log "Plebian-OS stack updated."
 restart_session_after_commit
 if [ "$restart_arg" = --no-restart ]; then

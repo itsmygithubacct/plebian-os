@@ -5931,11 +5931,46 @@ install_neuronte() {
         --manifest "$manifest" --ref "$NEURONTE_REF" --repo "$NEURONTE_REPO" \
         --destination "$GPU_TERMINAL_SOURCE_HOME/neuronte" --archive "$archive" \
         || die "required Neuronte installation failed"
-    if [ -f "${KILIX95_DIR:-}/main.py" ]; then
-        log "preparing Kilix 95 bytecode and font caches for the desktop user"
-        as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX95_DIR/main.py" --prepare-cache \
-            || warn "Kilix 95 cache preparation failed; the desktop will retry at launch"
+    # Kilix 95's caches are prepared once, by prepare_kilix95_caches, after
+    # the last step that installs desktop sources.
+}
+
+# Kilix 95's caches for the desktop user, written ahead of the first start:
+# its own, the Kilix SDK's and the SDK's pinned packages' bytecode (Kilix 95
+# keeps it in a private cache, so without this the first desktop start
+# compiles it, and each application its own on first open) and the two
+# start-up Neuronte letter caches. `main.py --prepare-cache` is Kilix 95's
+# entry point for both. It runs main.py's own storage bootstrap, so the cache
+# is the one the desktop reads, and it rewrites only stale files. KILIX_HOME
+# is computed the way the kilix launcher computes it for the desktop (the
+# directory of the resolved launcher), so the SDK paths in the cache are the
+# paths the desktop imports. It runs after install_neuronte, so the letter
+# caches are those of the installed Neuronte. It is a cache: every failure is
+# a warning, and a desktop that finds a file missing builds it, as it always
+# has. Release images run this on first boot, where provisioning holds the
+# greeter until it is done, so no session can start before it.
+KILIX95_PREPARE_CACHE_TIMEOUT=600s
+prepare_kilix95_caches() {
+    local main="$KILIX95_DIR/main.py" launcher
+    [ "$PLEB_INSTALL_KILIX95" = 1 ] || return 0
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would prepare Kilix 95 bytecode and font caches for $TARGET_USER"
+        return 0
     fi
+    if [ ! -f "$main" ] || [ -L "$main" ]; then
+        warn "Kilix 95 caches not prepared: $main is missing; the desktop will build them at launch"
+        return 0
+    fi
+    launcher="$(readlink -f -- "$KILIX_DIR/kilix" 2>/dev/null)" && [ -f "$launcher" ] || {
+        warn "Kilix 95 caches not prepared: no kilix launcher in $KILIX_DIR"
+        return 0
+    }
+    log "preparing Kilix 95 bytecode and font caches for $TARGET_USER"
+    as_user env "${install_env[@]}" "KILIX_HOME=${launcher%/*}" \
+        /usr/bin/timeout --signal=TERM --kill-after=10s "$KILIX95_PREPARE_CACHE_TIMEOUT" \
+        /usr/bin/python3 "$main" --prepare-cache \
+        || warn "Kilix 95 cache preparation did not complete; the desktop will retry at launch"
+    return 0
 }
 
 # The commit the installed Neuronte tree records, or nothing.
@@ -7742,6 +7777,7 @@ fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
 record_default_desktop
+prepare_kilix95_caches
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
 # With no other desktop task installed, Pleb is the only /usr/share/xsessions
