@@ -4527,6 +4527,12 @@ install_kilix_needle() {
         || die "required Needle application installation failed"
 }
 
+install_kilix_claudex() {
+    env "${stack_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-claudex \
+        || die "required Claudex application installation failed"
+}
+
 # The same kilix-llm closure provisioning installs: the launcher and pinned
 # llama.cpp source at the updated Kilix's pin. Nothing is compiled; a runtime
 # built for an older pin is rebuilt once by its next first use.
@@ -5541,6 +5547,8 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     test_fail_after_boundary component-update
     install_kilix_needle
     test_fail_after_boundary needle
+    install_kilix_claudex
+    test_fail_after_boundary claudex
     install_kilix_llm
     test_fail_after_boundary kilix-llm
     # The OS update stages the shared command archive with its admin context.
