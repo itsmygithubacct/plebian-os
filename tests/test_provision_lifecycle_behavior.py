@@ -2397,6 +2397,8 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "KILIX95_REF": ref,
             # Release mode needs Kilix Secrets in the closure since be1bd99.
             "KILIX_SECRETS_REF": ref,
+            # ... and, for 0.2.3, the pinned Neuronte faces.
+            "NEURONTE_REF": ref,
             "KILIX_PREBUILT_SHA256": digest,
             "PLEBIAN_OS_KILIX_GO_VERSION": "go1.26.5",
             "PLEBIAN_OS_KILIX_GO_SHA256_AMD64": digest,

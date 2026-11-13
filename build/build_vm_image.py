@@ -1928,6 +1928,29 @@ def guest_hostname_command(hostname: str, hostname_path: str = "/etc/hostname") 
             f'test "$stored" = {expected} && test "$active" = {expected}')
 
 
+def neuronte_contract(ref: str) -> str:
+    """The image's archive is on disk, the installed tree records the pinned
+    commit, and Kilix 95's own loader opens the library, a small face and the
+    flame from $GPU_TERMINAL_SOURCE_HOME/neuronte."""
+    probe = (
+        "import json, os, sys\n"
+        "root, ref = sys.argv[1:]\n"
+        "record = json.load(open(os.path.join(root, '.plebian-os-neuronte.json')))\n"
+        "assert record['commit'] == ref, record['commit']\n"
+        "import neuronte_face, neuronte_flame\n"
+        "assert neuronte_face._ROOT == root, neuronte_face._ROOT\n"
+        "assert neuronte_face._library() is not None, 'no library'\n"
+        "assert neuronte_face.open_size(12) is not None, 'no 12 px face'\n"
+        "assert neuronte_flame.image(32) is not None, 'no flame'\n")
+    return (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        f'test -f /usr/local/share/plebian-os/neuronte-{ref}.tar.xz && '
+        'root="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}/neuronte" && '
+        'cd "$KILIX95_DIR" && env -u NEURONTE_HOME -u NEURONTE_LIB PYTHONDONTWRITEBYTECODE=1 '
+        f'python3 -c {shlex.quote(probe)} "$root" {shlex.quote(ref)}'
+    )
+
+
 def verify_provisioning(cfg: Config, askpass: str) -> None:
     """Prove the real installer→firstboot→session boundary: check the markers a
     correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
@@ -2368,6 +2391,9 @@ if default is not None:
         checks.append(("selected terminal player", "sudo -n /usr/local/sbin/plebian-os-mpv-runtime --verify"))
     if os.environ.get("PLEBIAN_OS_QT_RUNTIME_URL"):
         checks.append(("selected Qt runtime", "/usr/local/sbin/plebian-os-qt-runtime --verify"))
+    neuronte_ref = os.environ.get("NEURONTE_REF", "")
+    if neuronte_ref:
+        checks.append(("Neuronte faces", neuronte_contract(neuronte_ref)))
     if cfg.desktop:
         checks.append(("first-page Kilix desktop", first_page_desktop))
     # The clickable fork engine only exists when fork-building is on (the default);
@@ -2497,6 +2523,7 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "PLEB_REF",
         "KILIX_REF",
         "KILIX95_REF",
+        "NEURONTE_REF",
         *F120_ROOT_KEYS,
         "PLEBIAN_OS_NETINST_URL",
         "PLEBIAN_OS_NETINST_SHA256",

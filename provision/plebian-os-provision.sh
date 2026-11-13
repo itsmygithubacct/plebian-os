@@ -89,6 +89,8 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_SECRETS_REPO
     KILIX_SECRETS_BRANCH
     KILIX_SECRETS_REF
+    NEURONTE_REPO
+    NEURONTE_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NATIVE_DEB_URL
     PLEBIAN_OS_NATIVE_DEB_SHA256
@@ -448,6 +450,9 @@ KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
 KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
 KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
 KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
+# Neuronte: the desktop faces Kilix 95 reads from $GPU_TERMINAL_SOURCE_HOME/neuronte.
+NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte.git}"
+NEURONTE_REF="${NEURONTE_REF:-}"
 # Plebian-OS layer itself: where the provisioner/update-helper/deps script come
 # from, so `plebian-os-update` can refresh the OS layer (not just pleb/kilix).
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
@@ -1326,6 +1331,11 @@ release_requires_secrets_root() {
     [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.3 ]
 }
 
+# 0.2.3 installs the pinned Neuronte faces (owner decision 2026-11-13).
+release_requires_neuronte() {
+    [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.3 ]
+}
+
 # One externally selected inert .deb, never a checkpoint or a native build.
 # Older closures may omit it; a strict 0.2.2 closure may not. Any partial
 # selection is invalid in development too. Keep the three standalone callers
@@ -1466,6 +1476,12 @@ validate_release_inputs() {
             || die "release mode requires the canonical KILIX_SECRETS_REPO"
         [ -z "$KILIX_SECRETS_BRANCH" ] \
             || die "release mode requires KILIX_SECRETS_BRANCH to be empty"
+    fi
+    if release_requires_neuronte; then
+        [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
+            || die "release mode requires NEURONTE_REF to be a full 40-character lowercase commit SHA"
+        [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+            || die "release mode requires the canonical NEURONTE_REPO"
     fi
     for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
         if [[ "$key" == KILIX_GO_SHA256_* ]] && [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then continue; fi
@@ -5336,7 +5352,7 @@ write_source_tool_manifest() {
         return 0
     fi
     local state=/var/lib/plebian-os versions_tmp sources_tmp
-    local plebian_os_commit pleb_commit kilix_commit kilix_source_commit kilix95_commit
+    local plebian_os_commit pleb_commit kilix_commit kilix_source_commit kilix95_commit neuronte_commit
     local pleb_version kilix_version kilix95_version go_version engine engine_version uv_version
     mkdir -p "$state"
     versions_tmp="$(mktemp "$state/.versions.env.XXXXXX")"
@@ -5347,6 +5363,7 @@ write_source_tool_manifest() {
     kilix_commit="$(as_user git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
     kilix_source_commit="$(as_user git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
     kilix95_commit="$(as_user git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
+    neuronte_commit="$(installed_neuronte_commit)"
     pleb_version="$(as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
     kilix_version="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
     if [ -f "$KILIX95_DIR/main.py" ]; then
@@ -5472,6 +5489,9 @@ write_source_tool_manifest() {
         provenance_kv KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
         provenance_kv KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
         provenance_kv KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+        provenance_kv NEURONTE_REPO "$NEURONTE_REPO"
+        provenance_kv NEURONTE_REF "$NEURONTE_REF"
+        provenance_kv NEURONTE_COMMIT "$neuronte_commit"
         # Waydroid is an optional catalog application. Its legacy system
         # archive exists only on machines that installed it before lazy delivery.
         if [ -e /usr/local/share/kilix-waydroid/source.tar ] \
@@ -5871,6 +5891,55 @@ install_kilix_llm() {
         || die "required kilix-llm installer is missing or unsafe: $installer"
     as_user env "${install_env[@]}" "$installer" \
         || die "required kilix-llm installation failed"
+}
+
+# The Neuronte faces Kilix 95 reads (releases/0.2.3.env NEURONTE_REF): the pinned
+# files listed in provision/neuronte-payload.json, with build/libneuronte.so built
+# from their C source, in the desktop user's $GPU_TERMINAL_SOURCE_HOME/neuronte.
+# The image carries them as /usr/local/share/plebian-os/neuronte-<ref>.tar.xz, so
+# an installation from it needs no network; without that archive (a bootstrap
+# onto plain Debian) the pinned files are fetched. Either way each file is checked
+# against its pinned git blob id before anything is built. A tree the installer
+# did not write, or one changed since, is refused, and NEURONTE_HOME naming the
+# destination leaves it alone. Every failure here fails the provision.
+NEURONTE_IMAGE_ARCHIVE_DIR=/usr/local/share/plebian-os
+install_neuronte() {
+    [ -n "$NEURONTE_REF" ] || return 0
+    [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Neuronte requires an exact NEURONTE_REF commit"
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+        || die "Neuronte requires the canonical NEURONTE_REPO"
+    local file installer="$PLEBIAN_OS_DIR/provision/install-neuronte.py"
+    local manifest="$PLEBIAN_OS_DIR/provision/neuronte-payload.json"
+    local archive="$NEURONTE_IMAGE_ARCHIVE_DIR/neuronte-$NEURONTE_REF.tar.xz"
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install Neuronte ${NEURONTE_REF:0:12} into $GPU_TERMINAL_SOURCE_HOME/neuronte as $TARGET_USER"
+        return 0
+    fi
+    for file in "$installer" "$manifest"; do
+        [ -f "$file" ] && [ ! -L "$file" ] \
+            || die "required Neuronte installer file is missing or unsafe: $file"
+    done
+    if [ -e "$archive" ] || [ -L "$archive" ]; then
+        [ -f "$archive" ] && [ ! -L "$archive" ] \
+            || die "the image's Neuronte archive is unsafe: $archive"
+        log "installing Neuronte ${NEURONTE_REF:0:12} from the image"
+    else
+        log "installing Neuronte ${NEURONTE_REF:0:12} from $NEURONTE_REPO"
+    fi
+    as_user env "${install_env[@]}" /usr/bin/python3 "$installer" install \
+        --manifest "$manifest" --ref "$NEURONTE_REF" --repo "$NEURONTE_REPO" \
+        --destination "$GPU_TERMINAL_SOURCE_HOME/neuronte" --archive "$archive" \
+        || die "required Neuronte installation failed"
+}
+
+# The commit the installed Neuronte tree records, or nothing.
+installed_neuronte_commit() {
+    local record="$GPU_TERMINAL_SOURCE_HOME/neuronte/.plebian-os-neuronte.json"
+    [ -f "$record" ] && [ ! -L "$record" ] || return 0
+    python3 -I -c 'import json, re, sys
+commit = json.load(open(sys.argv[1])).get("commit", "")
+print(commit if re.fullmatch("[0-9a-f]{40}", str(commit)) else "")' "$record" 2>/dev/null || true
 }
 
 install_kilix_secrets() {
@@ -7571,6 +7640,8 @@ install_env=(
     "KILIX_SECRETS_REPO=$KILIX_SECRETS_REPO"
     "KILIX_SECRETS_BRANCH=$KILIX_SECRETS_BRANCH"
     "KILIX_SECRETS_REF=$KILIX_SECRETS_REF"
+    "NEURONTE_REPO=$NEURONTE_REPO"
+    "NEURONTE_REF=$NEURONTE_REF"
 )
 [ -n "${PROVISION_LOCK_FD:-}" ] \
     && install_env+=("PLEB_UPDATE_LOCK_FD=$PROVISION_LOCK_FD")
@@ -7606,6 +7677,7 @@ as_user env "${install_env[@]}" /usr/bin/python3 \
 as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX_DIR/config/default_models.py" verify \
     || die "default model verification failed"
 PROVISION_DEFAULT_MODELS_VERIFIED=1
+install_neuronte
 # `pleb install` is the last step that installs packages, and it installs some
 # this repository does not name: its own runtime set, and whatever the pinned
 # Kilix's scripts/install-build-deps.sh pulls in. Either can re-enable a user
@@ -7881,6 +7953,8 @@ EOF
     write_session_default KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
     write_session_default KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
     write_session_default KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+    write_session_default NEURONTE_REPO "$NEURONTE_REPO"
+    write_session_default NEURONTE_REF "$NEURONTE_REF"
     write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
     write_session_default PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
     write_session_default PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
