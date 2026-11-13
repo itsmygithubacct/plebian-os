@@ -1,8 +1,8 @@
 {
  "schema": "plebian.neuronte-payload/v1",
  "repository": "https://github.com/itsmygithubacct/neuronte.git",
- "commit": "4134bf909594cf5c774f49677405fd1e22c4e2e4",
- "tree": "44f84642b398cd8e73f411c23fca11c3426d6939",
+ "commit": "d1033ab56f49bc31368b396bdc3e0164c79a7027",
+ "tree": "fd715d85b0ff26ea82ad5670797fdba23cf6af68",
  "reader": "Kilix 95 desktop faces and flame; Neuronte runtime assets and video player",
  "license": "MIT renderer and weights; LGPL-2.1-or-later media decoder; see LICENSE, LICENSES and THIRD_PARTY_NOTICES.md",
  "files": {
@@ -17,9 +17,9 @@
    "bytes": 26419
   },
   "Makefile": {
-   "blob": "a11844cc8faece8397c3a72e7beed2bc24fbbaf4",
+   "blob": "9b6bca29028f9f5679525d7bce1e4f166930ce63",
    "mode": "100644",
-   "bytes": 24540
+   "bytes": 26431
   },
   "PROVENANCE.md": {
    "blob": "afe5193ba12881f8a862654760c8d2b075a06a12",
@@ -27,9 +27,9 @@
    "bytes": 5279
   },
   "README.md": {
-   "blob": "f6d7facfad246e8d0831f3552d7b94f16ff20525",
+   "blob": "65a20d114536d701ea35856c5c5b0f578829cac9",
    "mode": "100644",
-   "bytes": 48271
+   "bytes": 50157
   },
   "THIRD_PARTY_NOTICES.md": {
    "blob": "5013cdea84285e5e060d32e77b34cc39e61fb05c",
@@ -357,9 +357,9 @@
    "bytes": 1835
   },
   "include/neuronte.h": {
-   "blob": "9ef2f27ee06e5fcace697308c954ee3c8203d498",
+   "blob": "fca945e9148a2ed1977d43b3527a69329d4ae021",
    "mode": "100644",
-   "bytes": 15595
+   "bytes": 15898
   },
   "include/neuronte_media.h": {
    "blob": "c0ea73581b55bb3eabbfb3df963f44a2e96d5e61",
@@ -372,9 +372,9 @@
    "bytes": 41743
   },
   "src/neuronte.c": {
-   "blob": "a35f44f46b159f2146d1579df774654152a46348",
+   "blob": "24acdb87d271cecd8f5f3509b4118d5c1024e4c6",
    "mode": "100644",
-   "bytes": 70022
+   "bytes": 84387
   },
   "src/utf8.c": {
    "blob": "ffe75a8c245f8d8a4bc0191c0ca9e2eacb72ac9e",
@@ -387,19 +387,19 @@
    "bytes": 8619
   },
   "tools/neuronte-play.py": {
-   "blob": "4be00c0e07fa32f67a2149d92a3117f88e9d4741",
+   "blob": "23a89ba59b84101056c493d4fdf75859b283429b",
    "mode": "100755",
-   "bytes": 42116
+   "bytes": 42257
   },
   "tools/neuronte-video.md": {
-   "blob": "3bff138611cd60211c0eef68d7ecfbc4bbfa80fb",
+   "blob": "8121919105297fc1bc941d87296d1873ab38eaea",
    "mode": "100644",
-   "bytes": 17862
+   "bytes": 18106
   },
   "tools/neuronte_video.py": {
-   "blob": "571ec9889e01058695fdcceca668c33294dbf113",
+   "blob": "46e05a0179ebaa9d2240d50d9b493e0f4e948cea",
    "mode": "100644",
-   "bytes": 28078
+   "bytes": 28911
   },
   "tools/neuronte_video_helpers.py": {
    "blob": "d6d1265c4b54a93ef301d823d312750841e9d84b",
@@ -450,6 +450,11 @@
    "blob": "ef49f0f2bf8717e8088e90061fc85926fff5ed62",
    "mode": "100644",
    "bytes": 1573128
+  },
+  "weights/neuronte-split-v6.nrt": {
+   "blob": "52db1085920e4ad9086a02cf0abc8a8bac1f2ca7",
+   "mode": "100644",
+   "bytes": 1539388
   },
   "weights/neuronte-ui-large-v0.nrt": {
    "blob": "f232fd69c013e6f355c0094c409f0b1a3d845dad",

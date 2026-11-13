@@ -59,6 +59,8 @@ MAX_TOTAL_BYTES = 256 * 1024 * 1024
 # General-image runtime inventory. Training checkpoints, reports, redundant
 # bundle members and native upright faces above 32 remain in the development
 # checkout. The two video JSON files are inference models, not training data.
+# split-v6 is the video player's full-mode bundle (split-v5 with the tiled
+# Braille expert); split-v5 stays because the video helpers are bound to it.
 SMALL_FACES = {(em, italic) for em in range(1, 33) for italic in (False, True)
                if not italic or em >= 3}
 RUNTIME_MODELS = {
@@ -67,7 +69,7 @@ RUNTIME_MODELS = {
 } | {'weights/neuronte-%s' % name for name in (
     'ui-large-v0.nrt', 'flame-v0.nrt', 'ascii-v0.nrt', 'emoji-v0.nrt',
     'icon-v1.nrt', 'pointer-v0.nrt', 'video-masks-v0.nrt', 'split-v5.nrt',
-    'video-speed-v1.json', 'video-quality-v1.json')}
+    'split-v6.nrt', 'video-speed-v1.json', 'video-quality-v1.json')}
 HEADERS = {'font/ui-%d%s.txt' % (em, '-italic' if italic else '')
            for em, italic in SMALL_FACES}
 RUNTIME_SUPPORT = {

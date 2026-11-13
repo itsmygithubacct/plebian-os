@@ -103,7 +103,7 @@ for em in range(1, 33):
         FILES.setdefault(f'weights/neuronte-ui{em}{suffix}-v0.nrt', 'NRT face\n')
         FILES.setdefault(f'font/ui-{em}{suffix}.txt', '# The baseline is row 0.\n')
 for name in ('ascii-v0.nrt', 'emoji-v0.nrt', 'icon-v1.nrt', 'pointer-v0.nrt',
-             'video-masks-v0.nrt', 'split-v5.nrt', 'video-speed-v1.json',
+             'video-masks-v0.nrt', 'split-v5.nrt', 'split-v6.nrt', 'video-speed-v1.json',
              'video-quality-v1.json'):
     FILES['weights/neuronte-' + name] = 'runtime model\n'
 for name in ('font/ui-tops.json', 'font/octants.txt', 'train/strokes.py',
@@ -115,6 +115,7 @@ EXCLUDED = {'weights/neuronte-ui40-v0.nrt', 'weights/neuronte-full-v3.nrt',
             'font/ui-40.txt', 'tests/check.py',
             'weights/neuronte-pointer-v0.raw.nrt', 'weights/neuronte-pointer-v0-seed1.nrt',
             'weights/neuronte-emoji-e0-v0.nrt', 'weights/neuronte-accent-v2.nrt',
+            'weights/neuronte-braille-v1.nrt', 'weights/neuronte-braille-v1.json',
             'weights/neuronte-split-v4.nrt', 'weights/neuronte-video-speed-v0.json',
             'weights/neuronte-video-quality-v0.json', 'weights/neuronte-ui12-v0.json',
             'weights/report.json'}
@@ -245,8 +246,8 @@ class ReleasePinTests(unittest.TestCase):
         models = {name for name in files if name.startswith('weights/')
                   and not name.endswith('.manifest.json')}
         self.assertEqual(models, neuronte.RUNTIME_MODELS)
-        self.assertEqual(len(models), 72)
-        self.assertEqual(len(neuronte.PROBES), 70)
+        self.assertEqual(len(models), 73)
+        self.assertEqual(len(neuronte.PROBES), 71)
         self.assertTrue(neuronte.RUNTIME_SUPPORT <= files.keys())
         total = sum(entry['bytes'] for entry in files.values())
         self.assertLess(total, 60 * 1024 * 1024)
