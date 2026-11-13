@@ -12,6 +12,7 @@ import fcntl
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import tempfile
 import time
@@ -36,7 +37,9 @@ ROLLBACK_FUNCTIONS = (
     'snapshot_stack_path',
     'restore_stack_path',
     'kilix_claudex_guard_unlink_created',
+    'kilix_claudex_guard_kill',
     'kilix_claudex_guard_finish',
+    'kilix_claudex_guard_helper',
     'kilix_claudex_guard_run',
     'kilix_claudex_snapshot_locked',
     'kilix_claudex_restore_locked',
@@ -241,6 +244,19 @@ class KilixClaudexInstallTests(unittest.TestCase):
         self.assertNotIn('kilix_claudex_guard_run', function(update, 'install_kilix_claudex'))
         self.assertNotIn('kilix-claudex-lock', function(update, 'kilix_claudex_snapshot_locked'))
         self.assertNotIn('kilix-claudex-lock', function(update, 'kilix_claudex_restore_locked'))
+        self.assertIn('\n    trap stack_transaction_cleanup EXIT\n', begin)
+        self.assertIn("\n    trap 'exit 130' INT\n", begin)
+        self.assertIn("\n    trap 'exit 143' TERM\n", begin)
+        self.assertIn("\n    trap 'exit 129' HUP\n", begin)
+        self.assertIn("\n    trap 'exit 141' PIPE\n", begin)
+        guard = function(update, 'kilix_claudex_guard_run')
+        self.assertNotIn('stack_transaction_cleanup', guard)
+        self.assertIn("trap 'kilix_claudex_guard_finish || true' EXIT", guard)
+        self.assertIn('kilix_claudex_guard_helper ', guard)
+        self.assertNotIn('import fcntl', guard)
+        helper = function(update, 'kilix_claudex_guard_helper')
+        self.assertIn('close_inherited_descriptors', helper)
+        self.assertIn('trap - EXIT INT TERM HUP PIPE', helper)
 
 
 class ClaudexRollbackTests(unittest.TestCase):
@@ -326,9 +342,18 @@ class ClaudexRollbackTests(unittest.TestCase):
         lock.write_bytes(b'previous lock\n')
         lock.chmod(0o600)
 
-    def run_rollback(self, script, timeout=30, **extra):
+    def rollback_script(self, script):
         update = UPDATE.read_text()
         body = ''.join(function(update, name) for name in ROLLBACK_FUNCTIONS)
+        return (
+            'set -euo pipefail\n'
+            'die() { printf "die: %s\\n" "$*" >&2; exit 1; }\n'
+            'stack_env=("KILIX_DATA_HOME=$KILIX_DATA_HOME")\n'
+            '_STACK_TXN_DIR="$TXN"\n'
+            'umask 077\n'
+            + body + script)
+
+    def rollback_env(self, **extra):
         env = {
             'PATH': '/usr/bin:/bin',
             'HOME': str(self.home),
@@ -338,15 +363,71 @@ class ClaudexRollbackTests(unittest.TestCase):
             'CLAUDEX_TEST_LOG': str(self.log),
         }
         env.update(extra)
-        harness = (
-            'set -euo pipefail\n'
-            'die() { printf "die: %s\\n" "$*" >&2; exit 1; }\n'
-            'stack_env=("KILIX_DATA_HOME=$KILIX_DATA_HOME")\n'
-            '_STACK_TXN_DIR="$TXN"\n'
-            'umask 077\n'
-            + body + script)
+        return env
+
+    def run_rollback(self, script, timeout=30, **extra):
         return subprocess.run(
-            ['bash', '-c', harness], env=env, capture_output=True, text=True, timeout=timeout)
+            ['bash', '-c', self.rollback_script(script)],
+            env=self.rollback_env(**extra),
+            capture_output=True, text=True, timeout=timeout)
+
+    def reap_group(self, proc):
+        """Stop one private session started with start_new_session.
+
+        Signals only that process group. It does not search by command name.
+        """
+        if proc is None or proc.pid is None or proc.pid <= 1:
+            return
+        if proc.poll() is None:
+            try:
+                os.kill(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+
+    def run_contained(self, script, timeout=30, **extra):
+        proc = subprocess.Popen(
+            ['bash', '-c', self.rollback_script(script)],
+            env=self.rollback_env(**extra),
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True)
+        self.addCleanup(self.reap_group, proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            self.reap_group(proc)
+            raise
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+
+    def assert_reaped(self, pid):
+        self.assertGreater(pid, 1)
+        self.assertFalse(Path(f'/proc/{pid}').exists(), f'pid {pid} still present')
+
+    def assert_lock_not_held(self, path):
+        if path.is_symlink() or not path.exists():
+            return
+        fd = os.open(path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                self.fail(f'lock still held: {path}')
+            else:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
 
     def test_later_failure_restores_absence_and_previous_bytes(self):
         settings = self.data / 'user-config/settings.json'
@@ -661,6 +742,185 @@ class ClaudexRollbackTests(unittest.TestCase):
         self.assertFalse(app.exists())
         self.assertEqual(needle.read_bytes(), needle_before)
         self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
+
+    def test_callback_exit_reaps_the_guardian(self):
+        pidfile = self.home / 'guard-pid'
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        self.assertFalse(lock.exists())
+        started = time.monotonic()
+        result = self.run_contained(
+            'trap \'printf outer-exit\\n\' EXIT\n'
+            'trap \'printf outer-int\\n\' INT\n'
+            'trap \'printf outer-pipe\\n\' PIPE\n'
+            'before_exit="$(trap -p EXIT)"\n'
+            'before_int="$(trap -p INT)"\n'
+            'before_pipe="$(trap -p PIPE)"\n'
+            'snapshot_stack_path() {\n'
+            '  printf "%s\\n" "$_KILIX_CLAUDEX_GUARD_PID" >> "$GUARD_PID"\n'
+            '  exit 23\n'
+            '}\n'
+            'status=0\n'
+            'kilix_claudex_guard_run snapshot || status=$?\n'
+            '[ "$status" -eq 23 ]\n'
+            '[ "$(trap -p EXIT)" = "$before_exit" ]\n'
+            '[ "$(trap -p INT)" = "$before_int" ]\n'
+            '[ "$(trap -p PIPE)" = "$before_pipe" ]\n'
+            'kilix_claudex_restore_locked() {\n'
+            '  printf "%s\\n" "$_KILIX_CLAUDEX_GUARD_PID" >> "$GUARD_PID"\n'
+            '  exit 23\n'
+            '}\n'
+            'status=0\n'
+            'kilix_claudex_guard_run restore || status=$?\n'
+            '[ "$status" -eq 23 ]\n'
+            '[ "$(trap -p EXIT)" = "$before_exit" ]\n'
+            '[ "$(trap -p INT)" = "$before_int" ]\n'
+            '[ "$(trap -p PIPE)" = "$before_pipe" ]\n',
+            timeout=12,
+            GUARD_PID=str(pidfile))
+        self.assertLess(time.monotonic() - started, 8, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pids = [int(line) for line in pidfile.read_text().split()]
+        self.assertEqual(len(pids), 2, pidfile.read_text())
+        for pid in pids:
+            self.assert_reaped(pid)
+        self.assertFalse(lock.exists())
+        self.assert_lock_not_held(lock)
+
+    def test_callback_exit_preserves_an_inactive_lock(self):
+        pidfile = self.home / 'guard-pid'
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        lock.write_bytes(b'previous lock\n')
+        lock.chmod(0o600)
+        identity = (lock.stat().st_dev, lock.stat().st_ino)
+        result = self.run_contained(
+            'snapshot_stack_path() {\n'
+            '  printf "%s\\n" "$_KILIX_CLAUDEX_GUARD_PID" > "$GUARD_PID"\n'
+            '  exit 23\n'
+            '}\n'
+            'status=0\n'
+            'kilix_claudex_guard_run snapshot || status=$?\n'
+            '[ "$status" -eq 23 ]\n',
+            timeout=12,
+            GUARD_PID=str(pidfile))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_reaped(int(pidfile.read_text().strip()))
+        self.assertEqual(lock.read_bytes(), b'previous lock\n')
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
+        self.assert_lock_not_held(lock)
+
+    def test_snapshot_failure_reaps_before_the_outer_die(self):
+        pidfile = self.home / 'guard-pid'
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        result = self.run_contained(
+            'snapshot_stack_path() {\n'
+            '  printf "%s\\n" "$_KILIX_CLAUDEX_GUARD_PID" > "$GUARD_PID"\n'
+            '  exit 23\n'
+            '}\n'
+            'snapshot_kilix_claudex_install\n',
+            timeout=12,
+            GUARD_PID=str(pidfile))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('die: could not snapshot the Claudex installation', result.stderr)
+        self.assert_reaped(int(pidfile.read_text().strip()))
+        self.assertFalse(lock.exists())
+        self.assert_lock_not_held(lock)
+
+    def test_parent_kill_reaps_the_guardian(self):
+        ready = self.home / 'guard-ready'
+        block = self.home / 'guard-block'
+        os.mkfifo(block, 0o600)
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        script = (
+            'exec 7<>"$GUARD_BLOCK"\n'
+            'snapshot_stack_path() {\n'
+            '  printf "%s %s\\n" "$_KILIX_CLAUDEX_GUARD_PID" "$BASHPID" > "$GUARD_READY"\n'
+            '  while true; do\n'
+            '    read -r -t 30 _pause <&7 || true\n'
+            '  done\n'
+            '}\n'
+            'kilix_claudex_guard_run snapshot\n')
+        proc = subprocess.Popen(
+            ['bash', '-c', self.rollback_script(script)],
+            env=self.rollback_env(GUARD_READY=str(ready), GUARD_BLOCK=str(block)),
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True)
+        self.addCleanup(self.reap_group, proc)
+        deadline = time.monotonic() + 5
+        fields = None
+        while time.monotonic() < deadline:
+            if ready.exists() and ready.stat().st_size > 0:
+                parts = ready.read_text().split()
+                if len(parts) == 2:
+                    fields = parts
+                    break
+            if proc.poll() is not None:
+                err = proc.stderr.read() if proc.stderr is not None else ''
+                self.fail(f'guard exited early: {err}')
+            time.sleep(0.02)
+        self.assertIsNotNone(fields, 'guardian did not become ready')
+        guard_pid = int(fields[0])
+        shell_pid = int(fields[1])
+        self.assertNotEqual(shell_pid, proc.pid)
+        self.assertNotEqual(guard_pid, proc.pid)
+        self.assertTrue(Path(f'/proc/{guard_pid}').exists())
+        os.kill(proc.pid, signal.SIGKILL)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            guard_gone = not Path(f'/proc/{guard_pid}').exists()
+            shell_gone = not Path(f'/proc/{shell_pid}').exists()
+            if guard_gone and shell_gone:
+                break
+            time.sleep(0.05)
+        self.assert_reaped(guard_pid)
+        self.assert_reaped(shell_pid)
+        self.assert_lock_not_held(lock)
+        self.assertFalse(lock.exists())
+
+    def test_startup_timeout_reaps_the_helper(self):
+        pidfile = self.home / 'guard-pid'
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        started = time.monotonic()
+        result = self.run_contained(
+            'kilix_claudex_guard_helper() {\n'
+            '  trap - EXIT INT TERM HUP PIPE\n'
+            '  printf "%s\\n" "$BASHPID" > "$GUARD_PID"\n'
+            '  exec sleep 30\n'
+            '}\n'
+            'status=0\n'
+            'kilix_claudex_guard_run snapshot || status=$?\n'
+            '[ "$status" -ne 0 ]\n',
+            timeout=12,
+            GUARD_PID=str(pidfile))
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 10, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('could not lock the Claudex installation', result.stderr)
+        self.assert_reaped(int(pidfile.read_text().strip()))
+        self.assert_lock_not_held(lock)
+
+    def test_startup_exit_reaps_the_helper(self):
+        pidfile = self.home / 'guard-pid'
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        started = time.monotonic()
+        result = self.run_contained(
+            'kilix_claudex_guard_helper() {\n'
+            '  trap - EXIT INT TERM HUP PIPE\n'
+            '  printf "%s\\n" "$BASHPID" > "$GUARD_PID"\n'
+            '  exit 9\n'
+            '}\n'
+            'status=0\n'
+            'kilix_claudex_guard_run snapshot || status=$?\n'
+            '[ "$status" -ne 0 ]\n',
+            timeout=12,
+            GUARD_PID=str(pidfile))
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 10, result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('could not lock the Claudex installation', result.stderr)
+        self.assert_reaped(int(pidfile.read_text().strip()))
+        self.assert_lock_not_held(lock)
 
 
 def tree(path):
