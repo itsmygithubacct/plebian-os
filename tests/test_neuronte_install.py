@@ -53,21 +53,36 @@ int neuronte_open_file(const char *path, void **out) {
 }
 void neuronte_close(void *handle) { free(handle); }
 '''
+MEDIA_C = r'''
+int neuronte_media_open(void **out, const char *url, const char *start,
+                        const char *filters, const char *format,
+                        int dec, int filter, char *message, int size) { return -3; }
+int neuronte_media_next(void *media, void *frame, int timeout) { return -3; }
+const char *neuronte_media_message(const void *media) { return ""; }
+void neuronte_media_close(void *media) { }
+'''
 MAKEFILE = (
     'CC ?= cc\nCFLAGS ?= -O2\n'
     'build/libneuronte.so: src/neuronte.c include/neuronte.h\n'
     '\tmkdir -p build\n'
     '\t$(CC) $(CFLAGS) -std=c11 -fPIC -Iinclude -c -o build/neuronte.o src/neuronte.c\n'
-    '\t$(CC) -shared -o $@ build/neuronte.o\n')
+    '\t$(CC) -shared -o $@ build/neuronte.o\n'
+    'build/libneuronte-media.so: src/media.c include/neuronte_media.h\n'
+    '\tmkdir -p build\n'
+    '\t$(CC) $(CFLAGS) -std=c11 -shared -fPIC -o $@ src/media.c\n')
 FILES = {
     'Makefile': MAKEFILE,
     'LICENSE': 'MIT License\n',
+    'LICENSES/FFmpeg-LGPL-2.1-or-later.txt': 'LGPL fixture\n',
     'THIRD_PARTY_NOTICES.md': '# Third-party notices\n',
     'PROVENANCE.md': '# Provenance\n',
     'README.md': '# Neuronte\n',
     'include/neuronte.h': 'int neuronte_open_file(const char *, void **);\nvoid neuronte_close(void *);\n',
     'src/neuronte.c': LIBRARY_C,
     'src/utf8.c': '/* fixture */\n',
+    'src/video.c': '/* fixture */\n',
+    'src/media.c': MEDIA_C,
+    'include/neuronte_media.h': '/* fixture */\n',
     'train/glyphs.py': 'UI_TOP = {12: 3}\n',
     'weights/neuronte-ui12-v0.nrt': 'NRT small 12\n',
     'weights/neuronte-ui12-italic-v0.nrt': 'NRT italic 12\n',
@@ -216,7 +231,9 @@ class ReleasePinTests(unittest.TestCase):
             self.assertIn('font/ui-%d-italic.txt' % em, files)
         for name in ('weights/neuronte-ui-large-v0.nrt', 'weights/neuronte-flame-v0.nrt',
                      'train/glyphs.py', 'Makefile', 'src/neuronte.c', 'src/utf8.c',
-                     'include/neuronte.h', 'LICENSE', 'THIRD_PARTY_NOTICES.md'):
+                     'include/neuronte.h', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+                     'src/video.c', 'src/media.c', 'include/neuronte_media.h',
+                     'LICENSES/FFmpeg-LGPL-2.1-or-later.txt'):
             self.assertIn(name, files)
         # Never opened: em 33 and up go to ui-large, which reads no header.
         for name in ('weights/neuronte-ui33-v0.nrt', 'font/ui-33.txt', 'font/ui-128.txt'):
@@ -238,7 +255,9 @@ class ReleasePinTests(unittest.TestCase):
         manifest = json.loads(MANIFEST.read_text())
         for name in ('weights/neuronte-icon-v1.nrt', 'weights/neuronte-video-speed-v1.json',
                      'weights/neuronte-pointer-v0.manifest.json', 'font/ui-tops.json',
-                     'train/strokes.py', 'tools/neuronte-play.py'):
+                     'train/strokes.py', 'tools/neuronte-play.py', 'src/video.c',
+                     'src/media.c', 'include/neuronte_media.h',
+                     'LICENSES/FFmpeg-LGPL-2.1-or-later.txt'):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
                 changed = dict(manifest, files=dict(manifest['files']))
                 del changed['files'][name]
@@ -329,17 +348,19 @@ class PayloadTests(unittest.TestCase):
         tree = self.fx.destination
         self.assertEqual(sorted(p.relative_to(tree).as_posix() for p in tree.rglob('*')
                                 if p.is_file()),
-                         sorted(SELECTED + ['build/libneuronte.so', neuronte.RECORD]))
+                         sorted(SELECTED + list(neuronte.LIBRARIES) + [neuronte.RECORD]))
         record = json.loads((tree / neuronte.RECORD).read_text())
         self.assertEqual(record['commit'], self.fx.ref)
         self.assertEqual(record['repository'], self.fx.url)
         self.assertEqual(record['library_sha256'],
                          hashlib.sha256((tree / 'build/libneuronte.so').read_bytes()).hexdigest())
+        self.assertEqual(record['media_library_sha256'],
+                         hashlib.sha256((tree / neuronte.MEDIA_LIBRARY).read_bytes()).hexdigest())
         self.assertEqual(record['manifest_sha256'],
                          hashlib.sha256(self.fx.manifest.read_bytes()).hexdigest())
         for path in [tree, *tree.rglob('*')]:
             mode = path.stat().st_mode & 0o777
-            expected = 0o755 if path.is_dir() or path.name == 'libneuronte.so' else 0o644
+            expected = 0o755 if path.is_dir() or path.relative_to(tree).as_posix() in neuronte.LIBRARIES else 0o644
             self.assertEqual(mode, expected, path)
         self.assertEqual(list(tree.parent.glob('.neuronte-*')), [])
         again = self.fx.install('--archive', self.fx.archive, '--no-fetch')
@@ -388,6 +409,46 @@ class PayloadTests(unittest.TestCase):
         self.assertEqual((self.fx.destination / 'LICENSE').read_text(), 'MIT License (next)\n')
         self.assertEqual(json.loads((self.fx.destination / neuronte.RECORD).read_text())['commit'], ref)
 
+    def test_upgrade_accepts_an_intact_record_before_media_was_installed(self):
+        self.assertEqual(self.fx.install('--archive', self.fx.archive, '--no-fetch').returncode, 0)
+        tree = self.fx.destination
+        record = json.loads((tree / neuronte.RECORD).read_text())
+        record.pop('media_library_sha256')
+        (tree / neuronte.MEDIA_LIBRARY).unlink()
+        # A pre-media managed tree records only the files it installed.
+        for name in ('src/media.c', 'include/neuronte_media.h', 'src/video.c',
+                     'LICENSES/FFmpeg-LGPL-2.1-or-later.txt'):
+            record['files'].pop(name)
+            (tree / name).unlink()
+        record['commit'] = '0' * 40
+        (tree / neuronte.RECORD).write_text(json.dumps(record))
+        result = self.fx.install('--archive', self.fx.archive, '--no-fetch')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((tree / neuronte.MEDIA_LIBRARY).is_file())
+        self.assertEqual(neuronte.inspect(tree, self.manifest)[0], 'current')
+
+    def test_failed_media_build_or_probe_preserves_the_previous_install(self):
+        self.assertEqual(self.fx.install('--archive', self.fx.archive, '--no-fetch').returncode, 0)
+        tree = self.fx.destination
+        before = {p.relative_to(tree).as_posix(): p.read_bytes() for p in tree.rglob('*') if p.is_file()}
+        for source, message in (('invalid C source', 'could not build'),
+                                (MEDIA_C.replace('return -3;', 'return 0;'), 'failed its probe')):
+            with self.subTest(message=message):
+                (self.fx.repo / 'src/media.c').write_text(source)
+                git('commit', '-q', '-am', 'broken media fixture', cwd=self.fx.repo)
+                ref = git('rev-parse', 'HEAD', cwd=self.fx.repo)
+                moved = self.base / 'next.json'
+                result = run_installer('write-manifest', '--repo-dir', self.fx.repo, '--commit', ref,
+                                       '--repository', self.fx.url, '--out', moved)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                result = run_installer('install', '--manifest', moved, '--ref', ref,
+                                       '--repo', self.fx.url, '--destination', tree)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(message, result.stderr)
+                self.assertEqual({p.relative_to(tree).as_posix(): p.read_bytes()
+                                  for p in tree.rglob('*') if p.is_file()}, before)
+                self.assertEqual(list(tree.parent.glob('.neuronte-*')), [])
+
     def test_local_changes_and_foreign_trees_are_refused_untouched(self):
         def installed():
             shutil.rmtree(self.fx.destination, ignore_errors=True)
@@ -406,10 +467,16 @@ class PayloadTests(unittest.TestCase):
         def rebuild(tree):
             (tree / 'build/libneuronte.so').write_bytes(b'not the recorded library')
 
+        def change_media(tree):
+            (tree / neuronte.MEDIA_LIBRARY).write_bytes(b'not the recorded media library')
+
+        def remove_media(tree):
+            (tree / neuronte.MEDIA_LIBRARY).unlink()
+
         def link(tree):
             (tree / 'weights/link.nrt').symlink_to(tree / 'LICENSE')
 
-        for change in (edit, add, remove, rebuild, link):
+        for change in (edit, add, remove, rebuild, change_media, remove_media, link):
             with self.subTest(change=change.__name__):
                 tree = installed()
                 change(tree)
@@ -485,6 +552,11 @@ class PayloadTests(unittest.TestCase):
 
 class HookTests(unittest.TestCase):
     """Where each path calls the installer, and what it passes."""
+
+    def test_media_build_dependencies_are_provisioned(self):
+        text = (ROOT / 'provision/install-deps.sh').read_text()
+        for package in ('libavformat-dev', 'libavcodec-dev', 'libavfilter-dev', 'libavutil-dev'):
+            self.assertIn(package, text)
 
     def test_image_build_fetches_verifies_and_stages_the_archive(self):
         text = REMASTER.read_text()
