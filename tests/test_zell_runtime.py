@@ -23,10 +23,10 @@ class ZellRuntimeTests(unittest.TestCase):
             manifest = runtime.install(ARCHIVE, PIN, root/'app', root/'bin', root/'units')
             self.assertEqual(manifest['version'], '0.1.1')
             self.assertTrue((root/'bin/zell').is_file())
-            for name in ('zell_os','zell_system','zell_files','zell_schedule','zell_devices','zell_audio','zell_paths', 'zell_agents'):
+            for name in ('zell_os','zell_system','zell_files','zell_schedule','zell_devices','zell_audio','zell_paths', 'zell_agents', 'zell_mana'):
                 self.assertTrue((root/'app/tools'/(name+'.py')).is_file())
             subprocess.run([sys.executable, '-I', '-c',
-                'import sys; sys.path.insert(0, sys.argv[1]); import zell_os; zell_os.load_tasks()',
+                'import sys; sys.path.insert(0, sys.argv[1]); import zell_os, zell_mana; zell_os.load_tasks()',
                 str(root/'app/tools')], check=True, capture_output=True, timeout=20)
             unit = (root/'units/kilix-secrets.service').read_text()
             self.assertIn(str(root/'app/libexec/kilix-secretsd'), unit)
