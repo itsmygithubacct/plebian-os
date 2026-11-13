@@ -20,8 +20,8 @@ on the git and xz that wrote it.
   fetch-archive   Fetch the pinned commit without blobs, check out only the
                   pinned paths, and write a tar of them (ISO build, upgrade).
   verify          Check an archive against the manifest.
-  install         As the desktop user: verify, build build/libneuronte.so
-                  in a staging tree, load it and open every packed model, write
+  install         As the desktop user: verify, build the renderer and media
+                  libraries in a staging tree, probe them and every packed model, write
                   the install record and swap the tree in.
 
 install refuses a tree it did not write, or one whose files differ from its
@@ -50,6 +50,8 @@ SCHEMA = 'plebian.neuronte-payload/v1'
 RECORD = '.plebian-os-neuronte.json'
 RECORD_SCHEMA = 'plebian.neuronte-install/v1'
 LIBRARY = 'build/libneuronte.so'
+MEDIA_LIBRARY = 'build/libneuronte-media.so'
+LIBRARIES = {LIBRARY: 'library_sha256', MEDIA_LIBRARY: 'media_library_sha256'}
 CANONICAL_REPO = 'https://github.com/itsmygithubacct/neuronte.git'
 MAX_FILES = 512
 MAX_FILE_BYTES = 64 * 1024 * 1024
@@ -83,7 +85,9 @@ SELECTION = (
 )
 REQUIRED = RUNTIME_MODELS | HEADERS | RUNTIME_SUPPORT | {
     'Makefile', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
-    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c',
+    'LICENSES/FFmpeg-LGPL-2.1-or-later.txt',
+    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c', 'src/video.c',
+    'include/neuronte_media.h', 'src/media.c',
 }
 
 
@@ -307,7 +311,14 @@ def inspect(destination, manifest):
     try:
         record = json.loads(record_path.read_text())
         recorded = record['files']
-        library_sha = record['library_sha256']
+        # Older managed installs contain only the renderer. Keep accepting
+        # their intact records so the first media-enabled release can upgrade.
+        library_hashes = {LIBRARY: record['library_sha256']}
+        if 'media_library_sha256' in record:
+            library_hashes[MEDIA_LIBRARY] = record['media_library_sha256']
+        if any(not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value)
+               for value in library_hashes.values()):
+            raise ValueError
         if record.get('schema') != RECORD_SCHEMA or not isinstance(recorded, dict):
             raise ValueError
     except (ValueError, KeyError, TypeError):
@@ -325,21 +336,21 @@ def inspect(destination, manifest):
     for rel in sorted(present):
         if rel == RECORD:
             continue
-        if rel == LIBRARY:
-            if hashlib.sha256((destination / rel).read_bytes()).hexdigest() != library_sha:
+        if rel in library_hashes:
+            if hashlib.sha256((destination / rel).read_bytes()).hexdigest() != library_hashes[rel]:
                 changed.append(rel)
         elif rel not in recorded or file_blob(destination / rel) != recorded[rel]:
             changed.append(rel)
     for rel in recorded:
         if rel not in present:
             changed.append(rel)
-    if LIBRARY not in present:
-        changed.append(LIBRARY)
+    changed.extend(rel for rel in library_hashes if rel not in present)
     if changed:
         raise Refusal('%s has local changes (%s%s); refusing to replace them'
                       % (destination, ', '.join(sorted(set(changed))[:5]),
                          ', ...' if len(set(changed)) > 5 else ''))
     if (record.get('commit') == manifest['commit']
+            and set(library_hashes) == set(LIBRARIES)
             and recorded == {name: entry['blob'] for name, entry in manifest['files'].items()}):
         return 'current', record
     return 'other', record
@@ -348,22 +359,23 @@ def inspect(destination, manifest):
 def build_library(tree):
     env = {key: value for key, value in os.environ.items()
            if key not in ('CC', 'CFLAGS', 'CPPFLAGS', 'LDFLAGS', 'MAKEFLAGS', 'MFLAGS')}
-    result = subprocess.run(['make', '-C', str(tree), LIBRARY], env=env,
+    result = subprocess.run(['make', '-C', str(tree), *LIBRARIES], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             timeout=900)
     if result.returncode != 0:
-        raise ValueError('could not build %s:\n%s' % (LIBRARY, result.stdout[-2000:]))
+        raise ValueError('could not build Neuronte libraries:\n' + result.stdout[-2000:])
     build = tree / 'build'
     for entry in build.iterdir():
-        if entry.name != 'libneuronte.so':
+        if entry.name not in {Path(name).name for name in LIBRARIES}:
             if entry.is_dir() and not entry.is_symlink():
                 shutil.rmtree(entry)
             else:
                 entry.unlink()
-    library = tree / LIBRARY
-    if library.is_symlink() or not library.is_file():
-        raise ValueError('the build did not produce ' + LIBRARY)
-    library.chmod(0o755)
+    for name in LIBRARIES:
+        library = tree / name
+        if library.is_symlink() or not library.is_file():
+            raise ValueError('the build did not produce ' + name)
+        library.chmod(0o755)
     build.chmod(0o755)
 
 
@@ -376,12 +388,26 @@ def probe_library(tree):
         'lib.neuronte_open_file.restype=ctypes.c_int\n'
         'lib.neuronte_close.argtypes=[ctypes.c_void_p]\n'
         'lib.neuronte_close.restype=None\n'
-        'for path in sys.argv[2:]:\n'
+        'media=ctypes.CDLL(sys.argv[2])\n'
+        'media.neuronte_media_open.argtypes=[ctypes.POINTER(ctypes.c_void_p)]+'
+        '[ctypes.c_char_p]*4+[ctypes.c_int]*2+[ctypes.c_void_p,ctypes.c_int]\n'
+        'media.neuronte_media_open.restype=ctypes.c_int\n'
+        'media.neuronte_media_next.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_int]\n'
+        'media.neuronte_media_next.restype=ctypes.c_int\n'
+        'media.neuronte_media_message.argtypes=[ctypes.c_void_p]\n'
+        'media.neuronte_media_message.restype=ctypes.c_char_p\n'
+        'media.neuronte_media_close.argtypes=[ctypes.c_void_p]\n'
+        'media.neuronte_media_close.restype=None\n'
+        'if media.neuronte_media_open(None,None,None,None,None,0,0,None,0)!=-3:\n'
+        '    sys.exit("media decoder failed its argument probe")\n'
+        'media.neuronte_media_close(None)\n'
+        'for path in sys.argv[3:]:\n'
         '    handle=ctypes.c_void_p()\n'
         '    if lib.neuronte_open_file(path.encode(),ctypes.byref(handle))!=0 or not handle.value:\n'
         '        sys.exit("cannot open "+path)\n'
         '    lib.neuronte_close(handle)\n')
     result = subprocess.run([sys.executable, '-I', '-c', code, str(tree / LIBRARY),
+                             str(tree / MEDIA_LIBRARY),
                              *(str(tree / name) for name in PROBES)],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             timeout=120)
@@ -456,7 +482,8 @@ def install(args):
             'commit': args.ref,
             'manifest_sha256': manifest_digest(args.manifest),
             'files': {name: entry['blob'] for name, entry in manifest['files'].items()},
-            'library_sha256': hashlib.sha256((tree / LIBRARY).read_bytes()).hexdigest(),
+            **{key: hashlib.sha256((tree / name).read_bytes()).hexdigest()
+               for name, key in LIBRARIES.items()},
             'installed_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
         }
         (tree / RECORD).write_text(json.dumps(record, indent=1, sort_keys=True) + '\n')
