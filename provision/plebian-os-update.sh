@@ -4169,9 +4169,11 @@ if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?", version):
 values = {}
 required = {"PLEBIAN_OS_VERSION", "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES",
             "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256"}
+# Optional: 0.2.2 manifests and the earliest 0.2.3 candidates name no download.
+optional = {"PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL"}
 for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
     key, separator, value = line.partition("=")
-    if separator and key in required:
+    if separator and key in required | optional:
         if key in values:
             raise SystemExit("duplicate selected Ollama manifest field")
         values[key] = value
@@ -4183,6 +4185,11 @@ if not re.fullmatch(r"[1-9][0-9]{0,8}", size) or int(size) > 64 * 1024 * 1024:
     raise SystemExit("invalid selected Ollama carrier byte pin")
 if not re.fullmatch(r"[0-9a-f]{64}", digest):
     raise SystemExit("invalid selected Ollama carrier SHA-256 pin")
+url = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL")
+if url is not None and not re.fullmatch(
+        r"https://github\.com/itsmygithubacct/plebian-os/releases/download/"
+        r"[A-Za-z0-9._-]+/ollama-0\.32\.14-kilix-unix-vulkan-r1\.tar\.xz", url):
+    raise SystemExit("invalid selected Ollama carrier URL pin")
 PY_MANIFEST
 python3 - "${new_paths[7]}" <<'PY'
 import pathlib
@@ -4427,6 +4434,74 @@ install_model_setup_software() {
         "${elevate[@]}" "$helper" \
             || die "required model conversion software installation failed: $helper"
     done
+}
+
+# The pinned Ollama runtime (no model weights) on a machine that has none: one
+# installed from an ISO built before Ollama shipped has the installer and the
+# manifest but no runtime, no carrier and no service, so the wizard's
+# system-local LLM cannot install. The provisioner this update just deployed
+# does the work as root, with first boot's own install function, sourced in
+# library mode exactly as the lid defaults below (same safety gate, same
+# elevation): an installed runtime whose receipt matches is only enabled and
+# started; otherwise a retained carrier that verifies is installed; otherwise
+# the manifest's pinned release asset is downloaded, held to the pinned size,
+# verified for size and SHA-256, retained and installed.
+#
+# A download that fails changes nothing: the update warns and carries on, and
+# the next update tries again (the wizard reports the missing Ollama with the
+# reason and a command that declines the page). A downloaded carrier that fails
+# verification, or a failed install, fails the update. The stack snapshot
+# restores the installer and the manifest; the runtime generation, launcher,
+# unit, PATH client, account, retained carrier and receipt stay installed after
+# a rollback, like the Ollama converter beside them and the apt packages: they
+# are the bytes 0.2.2 and every 0.2.3 candidate pin.
+OLLAMA_RUNTIME_UNAVAILABLE=75
+
+install_ollama_runtime_update() {
+    local provisioner="$AUDIO_HOLDOFF_PROVISIONER" test_mode=0 rc=0
+    local -a elevate=()
+    if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        test_mode=1
+        provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-$provisioner}"
+    fi
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        log "would install the pinned Ollama runtime when this machine has none (no model weights)"
+        return 0
+    fi
+    audio_holdoff_provisioner_is_safe "$provisioner" "$test_mode" \
+        || die "installed provisioner is missing or unsafe: $provisioner"
+    if ! grep -q '^install_ollama_runtime_for_update() {' "$provisioner" \
+        || ! grep -q '^if \[ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 \]; then' \
+            "$provisioner"; then
+        rc=98
+    else
+        [ "$(id -u)" = 0 ] || elevate=(sudo)
+        log "checking the pinned Ollama runtime (installed from its carrier when missing; no model weights)"
+        # $0 is the provisioner, so its SELF_DIR is the directory it was deployed to.
+        "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 \
+            PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 \
+            "PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION" bash -c '
+            set -uo pipefail
+            . "$0" || exit 97
+            declare -F install_ollama_runtime_for_update >/dev/null || exit 98
+            DRY_RUN=0
+            install_ollama_runtime_for_update
+        ' "$provisioner" || rc=$?
+    fi
+    case "$rc" in
+        0) return 0 ;;
+        "$OLLAMA_RUNTIME_UNAVAILABLE")
+            warn "the Ollama runtime is not installed (see above); this update carries on and the next one tries again"
+            return 0
+            ;;
+        98)
+            warn "the installed provisioner ($provisioner) cannot install the Ollama"
+            warn "  runtime on upgrade; the runtime was not checked by this update"
+            return 0
+            ;;
+        97) die "the installed provisioner could not be loaded to install the Ollama runtime: $provisioner" ;;
+        *) die "the Ollama runtime installation failed (exit $rc): see its message above" ;;
+    esac
 }
 
 install_kilix_needle() {
@@ -5477,6 +5552,8 @@ run_encodec_converter_installer \
     || die "required EnCodec converter installation failed"
 install_model_setup_software
 test_fail_after_boundary model-setup-software
+install_ollama_runtime_update
+test_fail_after_boundary ollama-runtime
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected native runtime could not be prepared/applied"
 test_fail_after_boundary native-runtime
@@ -5527,6 +5604,7 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     # kept by sudo cannot leave the runtime root-only.
     "${command_model_elevate[@]}" /usr/bin/python3 \
         "$PLEBIAN_OS_DIR/provision/install-image-models.py" --install-paradee-runtime \
+        --no-ollama-runtime \
         || die "required Paradee runtime staging failed"
     test_fail_after_boundary paradee-runtime
     env "${stack_env[@]}" /usr/bin/python3 \

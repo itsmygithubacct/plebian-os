@@ -1631,6 +1631,7 @@ class ImageWiringTests(unittest.TestCase):
         root_step = update.index(
             '"${command_model_elevate[@]}" /usr/bin/python3 \\\n'
             '        "$PLEBIAN_OS_DIR/provision/install-image-models.py" --install-paradee-runtime \\\n'
+            '        --no-ollama-runtime \\\n'
             '        || die "required Paradee runtime staging failed"')
         self.assertLess(update.index('test_fail_after_boundary default-models'), root_step)
         self.assertLess(root_step, update.index('test_fail_after_boundary paradee-runtime'))
