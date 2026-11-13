@@ -5855,6 +5855,18 @@ install_kilix_needle() {
         || die "required Needle application installation failed"
 }
 
+# Claudex is catalog-pinned and does not auto-install. The image installs that
+# pin explicitly. Agent logins and account checks stay out of this step.
+install_kilix_claudex() {
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install the catalog-pinned Claudex application as $TARGET_USER"
+        return 0
+    fi
+    as_user env "${install_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-claudex \
+        || die "required Claudex application installation failed"
+}
+
 # kilix-llm runs the optional qwen-0.8b-no-loop-02 chat model (LLM Chat and
 # Kilix Avatar rows). Kilix pins its revision; the installer places the
 # launcher and a shallow copy of the pinned llama.cpp source, so the rows'
@@ -7587,6 +7599,7 @@ record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 install_kilix_needle
+install_kilix_claudex
 install_kilix_llm
 if [ "$DRY_RUN" != 1 ]; then
     /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/stage-command-model.py" --offline \
