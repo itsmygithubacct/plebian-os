@@ -2391,6 +2391,7 @@ rollback_stack_transaction() {
     restore_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection file || failed=1
     restore_stack_path \
         "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build || failed=1
+    restore_stack_path "$GPU_TERMINAL_SOURCE_HOME/neuronte" neuronte || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
     if [ "$failed" = 0 ]; then
@@ -2786,6 +2787,9 @@ begin_stack_transaction() {
     acquire_voicebox_delivery_lock
     snapshot_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection
     snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
+    # The default Neuronte tree (install_neuronte_update replaces or creates it):
+    # a later failure puts the previous tree back, or removes one this update made.
+    snapshot_stack_path "$GPU_TERMINAL_SOURCE_HOME/neuronte" neuronte
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
     validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \

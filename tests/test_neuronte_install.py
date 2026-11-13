@@ -629,6 +629,45 @@ class ShellPathTests(unittest.TestCase):
         (tree / neuronte.RECORD).write_text(json.dumps({'commit': 'not-a-commit'}))
         self.assertEqual(self.update('installed_neuronte_commit\n').stdout.strip(), '')
 
+    # Only the parts of the whole-stack transaction that are not about the
+    # Neuronte tree are stubbed: begin_stack_transaction's snapshot list and
+    # rollback_stack_transaction's restore list are the production ones.
+    STACK_STUBS = '\n'.join(f'{name}() {{ :; }}' for name in (
+        'require_standard_install_destinations', 'acquire_kilix_transaction_lock',
+        'release_kilix_transaction_lock', 'validate_kilix_fork_stamp_path',
+        'validate_legacy_kilix_fork_stamp_path', 'validate_shared_settings_snapshot_path',
+        'record_stack_transaction_owner', 'record_stack_checkout', 'record_kilix_submodule_tree',
+        'snapshot_kilix_engine_generation', 'acquire_voicebox_delivery_lock',
+        'validate_root_transaction_dir', 'begin_kilix_engine_mutation',
+        'rollback_mpv_runtime_transaction', 'rollback_qt_runtime_transaction',
+        'rollback_native_runtime_transaction', 'deinit_new_kilix_submodules',
+        'restore_stack_checkout', 'restore_recorded_kilix_submodules',
+        'restore_kilix_engine_generation', 'restore_root_stack_snapshot')) + '\n' \
+        'begin_root_stack_snapshot() { echo /var/lib/plebian-os/update-rollback.test; }\n'
+
+    def test_a_failed_update_puts_the_previous_tree_back(self):
+        tree = self.base / 'sources' / 'neuronte'
+        for previous in ('present', 'absent'):
+            with self.subTest(previous=previous):
+                shutil.rmtree(tree, ignore_errors=True)
+                if previous == 'present':
+                    (tree / 'weights').mkdir(parents=True)
+                    (tree / 'weights' / 'face.nrt').write_text('old')
+                    (tree / neuronte.RECORD).write_text('{"commit": "old"}')
+                result = self.update(
+                    self.STACK_STUBS +
+                    'begin_stack_transaction\ntrap - EXIT INT TERM HUP PIPE\n'
+                    f'rm -rf -- {str(tree)!r}\nmkdir -p {str(tree / "weights")!r}\n'
+                    f'echo new >{str(tree / "weights" / "face.nrt")!r}\n'
+                    'rollback_stack_transaction\necho rolled-back\n')
+                self.assertIn('rolled-back', result.stdout, result.stderr)
+                if previous == 'present':
+                    self.assertEqual((tree / 'weights' / 'face.nrt').read_text(), 'old')
+                    self.assertEqual((tree / neuronte.RECORD).read_text(), '{"commit": "old"}')
+                else:
+                    self.assertFalse(tree.exists() or tree.is_symlink(),
+                                     'a tree this update created must not survive its rollback')
+
 
 class OlderUpdaterTests(unittest.TestCase):
     """RC8's updater runs RC9's image-model step; that step installs Neuronte for it."""
