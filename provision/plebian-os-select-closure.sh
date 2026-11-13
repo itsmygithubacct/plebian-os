@@ -181,6 +181,8 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_SECRETS_REPO
     KILIX_SECRETS_BRANCH
     KILIX_SECRETS_REF
+    NEURONTE_REPO
+    NEURONTE_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NATIVE_DEB_URL
     PLEBIAN_OS_NATIVE_DEB_SHA256
@@ -261,6 +263,8 @@ REQUIRED_VALUE_KEYS=(
     KILIX_WAYDROID_REF
     KILIX_SECRETS_REPO
     KILIX_SECRETS_REF
+    NEURONTE_REPO
+    NEURONTE_REF
     PLEBIAN_OS_NETINST_URL
     PLEBIAN_OS_NETINST_SHA256
     PLEBIAN_OS_INSTALL_UV
@@ -466,6 +470,18 @@ is_secrets_root_key() {
     esac
 }
 
+# 0.2.3 installs the pinned Neuronte faces Kilix 95 reads.
+release_requires_neuronte() {
+    [ "$TARGET" = 0.2.3 ]
+}
+
+is_neuronte_key() {
+    case "$1" in
+        NEURONTE_*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # One externally selected inert .deb, never a checkpoint or a native build.
 # Older closures may omit it; a strict 0.2.2 closure may not. Any partial
 # selection is invalid in development too. Keep the three standalone callers
@@ -652,6 +668,9 @@ validate_release_closure() {
         if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
             continue
         fi
+        if is_neuronte_key "$key" && ! release_requires_neuronte; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]:-}" ] || missing+=("$key")
     done
     [ "${#missing[@]}" -eq 0 ] \
@@ -667,6 +686,9 @@ validate_release_closure() {
         if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
             continue
         fi
+        if is_neuronte_key "$key" && ! release_requires_neuronte; then
+            continue
+        fi
         [ -n "${MANIFEST[$key]+x}" ] || present+=("$key")
     done
     [ "${#present[@]}" -eq 0 ] \
@@ -676,6 +698,9 @@ validate_release_closure() {
             continue
         fi
         if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
+            continue
+        fi
+        if is_neuronte_key "$key" && ! release_requires_neuronte; then
             continue
         fi
         [ -z "${MANIFEST[$key]}" ] \
@@ -714,6 +739,13 @@ validate_release_closure() {
         [ "${MANIFEST[KILIX_SECRETS_REPO]}" = \
             https://github.com/itsmygithubacct/kilix-secrets.git ] \
             || closure_reject "KILIX_SECRETS_REPO must name the canonical release repository"
+    fi
+    if release_requires_neuronte; then
+        require_manifest_format NEURONTE_REF '^[0-9a-f]{40}$' \
+            "a full 40-character lowercase commit SHA"
+        [ "${MANIFEST[NEURONTE_REPO]}" = \
+            https://github.com/itsmygithubacct/neuronte.git ] \
+            || closure_reject "NEURONTE_REPO must name the canonical release repository"
     fi
     for key in PLEBIAN_OS_REPO PLEB_REPO KILIX_REPO KILIX95_REPO; do
         require_manifest_format "$key" '^https://[A-Za-z0-9._~:/?#@!$&+,;=%-]+\.git$' \
@@ -859,6 +891,9 @@ build_selected_closure() {
             continue
         fi
         if is_secrets_root_key "$key" && ! release_requires_secrets_root; then
+            continue
+        fi
+        if is_neuronte_key "$key" && ! release_requires_neuronte; then
             continue
         fi
         CLOSURE["$key"]=""
@@ -1020,7 +1055,7 @@ stage_target_tools() {
 # be reachable from at least one of them. Offline selection trusts only a
 # previously populated mirror; an arbitrary loose object is not enough.
 component_public_cache() {
-    local label="$1" repo="$2" cache_name="$3"
+    local label="$1" repo="$2" cache_name="$3" filter="${4:-}"
     local cache_root cache remote
     cache_root="${PLEBIAN_OS_COMPONENT_CACHE_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/plebian-os/closure-components}"
     case "$cache_root" in /*) ;; *) closure_reject "component cache root must be absolute" ;; esac
@@ -1032,6 +1067,12 @@ component_public_cache() {
             || closure_reject "could not create the $label public-ref cache"
         git -C "$cache" remote add origin "$repo" \
             || closure_reject "could not configure the $label public-ref cache"
+        # A filtered cache holds commits and trees; ancestry needs nothing more.
+        if [ -n "$filter" ]; then
+            git -C "$cache" config remote.origin.promisor true \
+                && git -C "$cache" config remote.origin.partialclonefilter "$filter" \
+                || closure_reject "could not configure the $label public-ref cache filter"
+        fi
     fi
     [ ! -L "$cache" ] \
         && [ "$(git -C "$cache" rev-parse --is-bare-repository 2>/dev/null)" = true ] \
@@ -1044,8 +1085,10 @@ component_public_cache() {
 
 verify_component_public_reachability() {
     local label="$1" ref_key="$2" repo="$3" cache_name="$4"
-    local target="$5" cache ref tip support="" ref_count=0
-    cache="$(component_public_cache "$label" "$repo" "$cache_name")"
+    local target="$5" filter="${6:-}" cache ref tip support="" ref_count=0
+    local -a filter_args=()
+    [ -z "$filter" ] || filter_args=("--filter=$filter")
+    cache="$(component_public_cache "$label" "$repo" "$cache_name" "$filter")"
     COMPONENT_PUBLIC_CACHE="$cache"
     # Publication is a property of a RELEASE. A --development-commit selection
     # states in its own log line that it is "not release or published-image
@@ -1062,7 +1105,7 @@ verify_component_public_reachability() {
     fi
     if [ "$OFFLINE" != 1 ]; then
         log "refreshing advertised refs for $label public reachability"
-        git -C "$cache" fetch --quiet --prune --force --no-tags origin \
+        git -C "$cache" fetch --quiet --prune --force --no-tags "${filter_args[@]}" origin \
             '+refs/heads/*:refs/plebian-os-public/heads/*' \
             '+refs/tags/*:refs/plebian-os-public/tags/*' \
             || closure_reject "could not fetch advertised refs for $label from $repo"
@@ -1153,13 +1196,13 @@ prepare_component_ancestry() {
 }
 
 prepare_component_target_only() {
-    local label="$1" ref_key="$2" repo_key="$3" cache_name="$4"
+    local label="$1" ref_key="$2" repo_key="$3" cache_name="$4" filter="${5:-}"
     local target="${CLOSURE[$ref_key]:-}" repo="${CLOSURE[$repo_key]:-}"
     local installed="${BEFORE[$ref_key]:-}" cache
     [[ "$target" =~ ^[0-9a-f]{40}$ ]] \
         || closure_reject "selected $ref_key is not a full 40-character commit"
     verify_component_public_reachability \
-        "$label" "$ref_key" "$repo" "$cache_name" "$target"
+        "$label" "$ref_key" "$repo" "$cache_name" "$target" "$filter"
     cache="$COMPONENT_PUBLIC_CACHE"
     COMPONENT_INSTALLED["$ref_key"]="$installed"
     COMPONENT_TARGET["$ref_key"]="$target"
@@ -1228,6 +1271,11 @@ prepare_component_ancestry_checks() {
         prepare_component_target_only \
             "Kilix Secrets" KILIX_SECRETS_REF \
             KILIX_SECRETS_REPO kilix-secrets
+    fi
+    if release_requires_neuronte; then
+        # Commits and trees only: the history carries every weight trained.
+        prepare_component_target_only \
+            "Neuronte" NEURONTE_REF NEURONTE_REPO neuronte blob:none
     fi
 }
 
@@ -1442,7 +1490,7 @@ announce_component_moves() {
     local ref_key label installed target direction pinned_by
     for ref_key in PLEBIAN_OS_REF PLEB_REF KILIX_REF KILIX95_REF \
             KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF KILIX_ICEWM_REF \
-            KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF KILIX_SECRETS_REF; do
+            KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF KILIX_SECRETS_REF NEURONTE_REF; do
         case "$ref_key" in
             PLEBIAN_OS_REF) label="Plebian-OS" ;;
             PLEB_REF) label="Pleb" ;;
@@ -1454,6 +1502,7 @@ announce_component_moves() {
             KILIX_MEDIA_SDK_REF) label="Kilix Media SDK" ;;
             KILIX_WAYDROID_REF) label="Kilix Waydroid" ;;
             KILIX_SECRETS_REF) label="Kilix Secrets" ;;
+            NEURONTE_REF) label="Neuronte" ;;
         esac
         installed="${COMPONENT_INSTALLED[$ref_key]:-}"
         target="${COMPONENT_TARGET[$ref_key]:-}"

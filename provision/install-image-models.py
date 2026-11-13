@@ -51,6 +51,7 @@ import hashlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import sys
@@ -112,6 +113,11 @@ PP_OCR_MODELS = {
 }
 PP_OCR_LICENCE = 'notices/LICENSE-apache-2.0.txt'
 PP_OCR_LICENCE_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'pp-ocrv6-small-LICENSE-apache-2.0.txt'
+# The Neuronte faces (install-neuronte.py), for an updater that predates them.
+NEURONTE_INSTALLER = Path(__file__).resolve().parent / 'install-neuronte.py'
+NEURONTE_MANIFEST = Path(__file__).resolve().parent / 'neuronte-payload.json'
+NEURONTE_REPO = 'https://github.com/itsmygithubacct/neuronte.git'
+SELECTED_CLOSURE = Path('/etc/pleb/closure.env')
 WHISPER_MEDIUM = 'faster-whisper-medium-en'
 PLAYALONG_DEFAULTS = ('demucs-htdemucs-6s', 'basic-pitch-icassp-2022-onnx', WHISPER_MEDIUM)
 # One online fetch may take this long; Whisper medium.en is 1.5 GB.
@@ -1281,6 +1287,51 @@ def main(argv=None):
     if declined is None:
         install_whisper_medium(args.kilix, playalong['assets'][WHISPER_MEDIUM]['manifest_digest'],
                                offline=args.offline)
+    if not args.offline:
+        return install_neuronte_for_an_older_updater()
+    return 0
+
+
+def install_neuronte_for_an_older_updater(closure=None, environ=None, run=subprocess.run):
+    """Install the selected Neuronte pin when the updater running this step
+    does not know about Neuronte.
+
+    An RC8 machine moves to RC9 with `pleb update --to 0.2.3 --release-tag ...`,
+    which runs the RC8 updater. That process deploys the RC9 updater but keeps
+    executing its own steps, and it has none for Neuronte; it does run this
+    file from the RC9 checkout, as the desktop user. An updater that installs
+    Neuronte itself passes NEURONTE_REF, and then this does nothing; so does a
+    closure that pins no Neuronte. Otherwise the pin is read from the selected
+    closure and install-neuronte.py runs exactly as the RC9 updater runs it.
+    """
+    environ = os.environ if environ is None else environ
+    if 'NEURONTE_REF' in environ:
+        return 0
+    closure = SELECTED_CLOSURE if closure is None else Path(closure)
+    try:
+        lines = closure.read_text().splitlines()
+    except FileNotFoundError:
+        return 0
+    values = {}
+    for line in lines:
+        key, sep, value = line.partition('=')
+        if sep and key in ('NEURONTE_REF', 'NEURONTE_REPO'):
+            values[key] = value.strip().strip("'\"")
+    ref = values.get('NEURONTE_REF', '')
+    if not ref:
+        return 0
+    if not re.fullmatch(r'[0-9a-f]{40}', ref) or values.get('NEURONTE_REPO') != NEURONTE_REPO:
+        raise ValueError('the selected closure names an invalid Neuronte pin')
+    sources = Path(environ.get('GPU_TERMINAL_SOURCE_HOME')
+                   or Path(environ.get('HOME', '~')).expanduser() / '.local/gpu_terminal/sources')
+    print('Neuronte %s: installing the selected pin for an updater that predates it' % ref[:12])
+    result = run([sys.executable, str(NEURONTE_INSTALLER), 'install',
+                  '--manifest', str(NEURONTE_MANIFEST), '--ref', ref, '--repo', NEURONTE_REPO,
+                  '--destination', str(sources / 'neuronte'),
+                  '--archive', str(SHARED_BASIC_PITCH / ('neuronte-%s.tar.xz' % ref)),
+                  '--fetch-failure', 'warn'])
+    if result.returncode != 0:
+        raise ValueError('Neuronte installation failed (see above)')
     return 0
 
 

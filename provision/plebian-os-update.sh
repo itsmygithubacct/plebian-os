@@ -621,6 +621,8 @@ KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
 KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
 KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
 KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
+NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte.git}"
+NEURONTE_REF="${NEURONTE_REF:-}"
 PLEB_DESKTOP="${PLEB_DESKTOP:-1}"
 PLEB_WM="${PLEB_WM:-openbox}"
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"
@@ -3003,6 +3005,7 @@ KILIX_VOICE_LIB_SHA256 KILIX_VOICE_LIB_URL KILIX_VOICE_LIB_VERSION
 KILIX_VOICE_MODEL_SHA256 KILIX_VOICE_MODEL_URL KILIX_VOICE_REF
 KILIX_WAYDROID_BRANCH KILIX_WAYDROID_REF KILIX_WAYDROID_REPO
 KILIX_SECRETS_BRANCH KILIX_SECRETS_REF KILIX_SECRETS_REPO
+NEURONTE_REF NEURONTE_REPO
 PLEBIAN_OS_APT_SNAPSHOT PLEBIAN_OS_BRANCH PLEBIAN_OS_BUILD_KILIX_FORK
 PLEBIAN_OS_DIR PLEBIAN_OS_INSTALL_UV PLEBIAN_OS_INSTALL_VOICE_MODEL
 PLEBIAN_OS_INSTALL_WAYDROID PLEBIAN_OS_KILIX_GO_MIN_VERSION
@@ -4398,6 +4401,43 @@ install_kilix_llm() {
         || die "required kilix-llm installation failed"
 }
 
+# The Neuronte faces at the selected NEURONTE_REF, as the desktop user, in
+# $GPU_TERMINAL_SOURCE_HOME/neuronte: provisioning's install_neuronte, for a
+# machine installed before 0.2.3 or one whose pin moved. The image's archive is
+# used when this machine has the one for this ref; otherwise only the pinned
+# files are fetched (blob-less, about 37 MB) and each is checked against its
+# pinned git blob id. A failed download leaves the installed tree as it is and
+# the next update tries again; a refused or failed install fails the update.
+install_neuronte_update() {
+    [ -n "$NEURONTE_REF" ] || return 0
+    [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Neuronte requires an exact NEURONTE_REF commit"
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+        || die "Neuronte requires the canonical NEURONTE_REPO"
+    local file installer="$PLEBIAN_OS_DIR/provision/install-neuronte.py"
+    local manifest="$PLEBIAN_OS_DIR/provision/neuronte-payload.json"
+    for file in "$installer" "$manifest"; do
+        [ -f "$file" ] && [ ! -L "$file" ] \
+            || die "required Neuronte installer file is missing or unsafe: $file"
+    done
+    log "installing Neuronte ${NEURONTE_REF:0:12} in $GPU_TERMINAL_SOURCE_HOME/neuronte"
+    env "${stack_env[@]}" /usr/bin/python3 "$installer" install \
+        --manifest "$manifest" --ref "$NEURONTE_REF" --repo "$NEURONTE_REPO" \
+        --destination "$GPU_TERMINAL_SOURCE_HOME/neuronte" \
+        --archive "/usr/local/share/plebian-os/neuronte-$NEURONTE_REF.tar.xz" \
+        --fetch-failure warn \
+        || die "required Neuronte installation failed"
+}
+
+# The commit the installed Neuronte tree records, or nothing.
+installed_neuronte_commit() {
+    local record="$GPU_TERMINAL_SOURCE_HOME/neuronte/.plebian-os-neuronte.json"
+    [ -f "$record" ] && [ ! -L "$record" ] || return 0
+    python3 -I -c 'import json, re, sys
+commit = json.load(open(sys.argv[1])).get("commit", "")
+print(commit if re.fullmatch("[0-9a-f]{40}", str(commit)) else "")' "$record" 2>/dev/null || true
+}
+
 run_encodec_converter_installer() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
@@ -4795,6 +4835,8 @@ stack_env=(
     "KILIX_SECRETS_REPO=$KILIX_SECRETS_REPO"
     "KILIX_SECRETS_BRANCH=$KILIX_SECRETS_BRANCH"
     "KILIX_SECRETS_REF=$KILIX_SECRETS_REF"
+    "NEURONTE_REPO=$NEURONTE_REPO"
+    "NEURONTE_REF=$NEURONTE_REF"
 )
 
 # Release apt index provenance has two phases, and the provisioner and updater
@@ -4901,7 +4943,7 @@ preflight_release_apt_provenance() {
 stage_final_provenance() {
     local stage="$1"
     local plebian_os_commit pleb_commit kilix_commit kilix_source_commit
-    local kilix95_commit pleb_version kilix_version kilix95_version
+    local kilix95_commit pleb_version kilix_version kilix95_version neuronte_commit
     local go_version engine engine_version uv_version
 
     command -v dpkg-query >/dev/null 2>&1 \
@@ -4917,6 +4959,7 @@ stage_final_provenance() {
     kilix_commit="$(git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
     kilix_source_commit="$(git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
     kilix95_commit="$(git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
+    neuronte_commit="$(installed_neuronte_commit)"
     pleb_version="$(env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
     kilix_version="$(env "${stack_env[@]}" "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
     if [ -f "$KILIX95_DIR/main.py" ]; then
@@ -5042,6 +5085,9 @@ stage_final_provenance() {
         provenance_kv KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
         provenance_kv KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
         provenance_kv KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+        provenance_kv NEURONTE_REPO "$NEURONTE_REPO"
+        provenance_kv NEURONTE_REF "$NEURONTE_REF"
+        provenance_kv NEURONTE_COMMIT "$neuronte_commit"
         # Lazy catalog delivery has no system source archive until requested.
         # Preserve provenance for legacy system installs, checking hash failure
         # directly rather than hiding it inside provenance_kv's arguments.
@@ -5434,6 +5480,8 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
         "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" \
         || die "required image model installation failed"
     test_fail_after_boundary image-models
+    install_neuronte_update
+    test_fail_after_boundary neuronte
     # Last, after every step above that can install a package. See the
     # function's own header for why an update needs this at all.
     reapply_audio_holdoff

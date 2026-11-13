@@ -751,6 +751,28 @@ validate_kilix_secrets_release_root() {
     }
 }
 
+# 0.2.3 carries the pinned Neuronte faces (provision/neuronte-payload.json).
+release_requires_neuronte() {
+    [ "${PLEBIAN_OS_VERSION:-}" = 0.2.3 ]
+}
+
+validate_neuronte_release_root() {
+    release_requires_neuronte || return 0
+    local key
+    for key in NEURONTE_REPO NEURONTE_REF; do
+        [ -n "${!key:-}" ] || {
+            echo "PLEBIAN_OS_RELEASE_MODE=1 requires a pinned $key" >&2
+            exit 1
+        }
+    done
+    is_hex_len "${NEURONTE_REF}" 40 || {
+        echo "release mode requires NEURONTE_REF to be a full 40-character lowercase commit SHA" >&2
+        exit 1
+    }
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+        || { echo "release mode requires the canonical NEURONTE_REPO" >&2; exit 1; }
+}
+
 validate_f120_release_roots() {
     release_requires_f120_roots || return 0
     local key missing=()
@@ -968,6 +990,7 @@ release_preflight() {
     validate_uv_release_closure
     validate_f120_release_roots
     validate_kilix_secrets_release_root
+    validate_neuronte_release_root
     validate_voice_release_closure
     validate_waydroid_release_closure
     # A publishable image always uses the interactive identity profile. Secrets
@@ -1369,6 +1392,7 @@ release_mode_check() {
     validate_uv_release_closure
     validate_f120_release_roots
     validate_kilix_secrets_release_root
+    validate_neuronte_release_root
     validate_voice_release_closure
     case "${PLEBIAN_OS_APT_SNAPSHOT-unset}" in
         '') ;; # Explicit live Debian sources, including security updates.
@@ -1565,6 +1589,8 @@ write_build_info() {
         manifest_kv KILIX_SECRETS_REPO "${KILIX_SECRETS_REPO:-}"
         manifest_kv KILIX_SECRETS_BRANCH "${KILIX_SECRETS_BRANCH:-}"
         manifest_kv KILIX_SECRETS_REF "${KILIX_SECRETS_REF:-}"
+        manifest_kv NEURONTE_REPO "${NEURONTE_REPO:-}"
+        manifest_kv NEURONTE_REF "${NEURONTE_REF:-}"
         manifest_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         manifest_kv KILIX_DIR "${KILIX_DIR:-}"
         manifest_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"
@@ -1709,6 +1735,8 @@ write_firstboot_env() {
         env_kv KILIX_SECRETS_REPO "${KILIX_SECRETS_REPO:-}"
         env_kv KILIX_SECRETS_BRANCH "${KILIX_SECRETS_BRANCH:-}"
         env_kv KILIX_SECRETS_REF "${KILIX_SECRETS_REF:-}"
+        env_kv NEURONTE_REPO "${NEURONTE_REPO:-}"
+        env_kv NEURONTE_REF "${NEURONTE_REF:-}"
         env_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         env_kv KILIX_DIR "${KILIX_DIR:-}"
         env_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"
@@ -2229,6 +2257,32 @@ python3 "$HERE/provision/install-zell-runtime.py" --verify-only \
 install -m 0644 "$HERE/provision/bundles/zell-0.1.1-x86_64.tar.xz" "$EXTRACT/plebian-os/zell-0.1.1-x86_64.tar.xz"
 install -m 0644 "$HERE/provision/zell-runtime.json" "$EXTRACT/plebian-os/zell-runtime.json"
 install -m 0755 "$HERE/provision/install-zell-runtime.py" "$EXTRACT/plebian-os/install-zell-runtime.py"
+
+# The Neuronte faces Kilix 95 reads, for an installation without network: the
+# files provision/neuronte-payload.json pins at NEURONTE_REF, as one xz tar that
+# first boot verifies file by file before building build/libneuronte.so. A
+# supplied PLEBIAN_OS_NEURONTE_ARCHIVE is checked the same way; without one the
+# build fetches only the pinned files (blob-less, about 37 MB).
+if [ -n "${NEURONTE_REF:-}" ]; then
+    neuronte_archive="${PLEBIAN_OS_NEURONTE_ARCHIVE:-}"
+    if [ -z "$neuronte_archive" ]; then
+        echo "==> fetching the pinned Neuronte files for the image"
+        neuronte_archive="$WORK/neuronte-$NEURONTE_REF.tar.xz"
+        python3 "$HERE/provision/install-neuronte.py" fetch-archive --xz \
+            --manifest "$HERE/provision/neuronte-payload.json" \
+            --ref "$NEURONTE_REF" --repo "${NEURONTE_REPO:-}" --out "$neuronte_archive" \
+            || { echo "could not fetch the pinned Neuronte files" >&2; exit 1; }
+    fi
+    xz -t -- "$neuronte_archive" \
+        || { echo "the Neuronte image archive is not an xz file: $neuronte_archive" >&2; exit 1; }
+    python3 "$HERE/provision/install-neuronte.py" verify \
+        --manifest "$HERE/provision/neuronte-payload.json" --ref "$NEURONTE_REF" \
+        --archive "$neuronte_archive"
+    install -m 0644 "$neuronte_archive" "$EXTRACT/plebian-os/neuronte-$NEURONTE_REF.tar.xz"
+elif release_requires_neuronte; then
+    echo "$PLEBIAN_OS_VERSION carries Neuronte; NEURONTE_REF is not set" >&2
+    exit 1
+fi
 
 mkdir -p "$EXTRACT/plebian-os/model-archives"
 install -m 0644 "$COMMAND_MODEL_BUNDLE" "$EXTRACT/plebian-os/model-archives/$COMMAND_MODEL_SHA256"
