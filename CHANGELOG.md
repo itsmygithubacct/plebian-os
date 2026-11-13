@@ -6,6 +6,16 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Ask for a default desktop on first login, with Kilix 95, IceWM, Kilix TUI
+  and zell (RPG Desktop) as the primary choices. Save the answer for later
+  sessions and support zell through the normal desktop provider commands.
+- Stack notifications in one window that expands and retracts downward.
+  Clicking each cat invokes that notification's pane action directly.
+- Verify the provisioned `ask` alias accepts quoted and unquoted questions.
+- Install pinned Kilix Secrets on upgrade with rollback; close the abandoned
+  parent race in early release hops. Include reviewed X11 scroll fixes,
+  pinned icon glyphs, and complete writes for the desktop letter cache.
+
 - Preserve two independent RC9 carrier reviews, both ship with known issues,
   and their original receipt. Carrier `d5dd1a40` binds content `b861d44`
   and licence `596ada2`; model artifacts and licence records remain unchanged.
