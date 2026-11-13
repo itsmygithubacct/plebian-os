@@ -8,11 +8,13 @@ Rollback covers the owned checkout only. The entrypoint and git bookkeeping
 live inside that checkout; user config, browser state, credentials, and usage
 state stay out of the snapshot.
 """
+import fcntl
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,10 +35,50 @@ ROLLBACK_FUNCTIONS = (
     'kilix_claudex_install_paths_are_safe',
     'snapshot_stack_path',
     'restore_stack_path',
+    'kilix_claudex_guard_unlink_created',
+    'kilix_claudex_guard_finish',
+    'kilix_claudex_guard_run',
+    'kilix_claudex_snapshot_locked',
+    'kilix_claudex_restore_locked',
     'snapshot_kilix_claudex_install',
     'restore_kilix_claudex_install',
     'install_kilix_claudex',
 )
+_HOLDER = r"""
+import fcntl
+import os
+import sys
+import time
+
+root, stage_name, ready, release = sys.argv[1:5]
+lock = os.path.join(root, ".kilix-claudex.lock")
+os.makedirs(root, mode=0o700, exist_ok=True)
+fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+os.fchmod(fd, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+stage = os.path.join(root, stage_name)
+os.mkdir(stage, 0o700)
+os.chmod(stage, 0o700)
+with open(os.path.join(stage, "payload"), "wb") as handle:
+    handle.write(b"live-stage\n")
+probe = os.open(lock, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+try:
+    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    blocked = True
+else:
+    blocked = False
+os.close(probe)
+if not blocked:
+    sys.stderr.write("holder probe acquired\n")
+    raise SystemExit(1)
+ident = os.fstat(fd)
+with open(ready, "w", encoding="ascii") as handle:
+    handle.write("%s %s\n" % (ident.st_dev, ident.st_ino))
+while not os.path.exists(release):
+    time.sleep(0.02)
+os.close(fd)
+"""
 
 
 def function(script, name):
@@ -196,6 +238,9 @@ class KilixClaudexInstallTests(unittest.TestCase):
                         rollback.index('restore_root_stack_snapshot'))
         self.assertNotIn('snapshot_stack_path "$KILIX_DATA_HOME"', update)
         self.assertNotIn('snapshot_stack_path "$KILIX_DATA_HOME/desktop-apps"', update)
+        self.assertNotIn('kilix_claudex_guard_run', function(update, 'install_kilix_claudex'))
+        self.assertNotIn('kilix-claudex-lock', function(update, 'kilix_claudex_snapshot_locked'))
+        self.assertNotIn('kilix-claudex-lock', function(update, 'kilix_claudex_restore_locked'))
 
 
 class ClaudexRollbackTests(unittest.TestCase):
@@ -281,7 +326,7 @@ class ClaudexRollbackTests(unittest.TestCase):
         lock.write_bytes(b'previous lock\n')
         lock.chmod(0o600)
 
-    def run_rollback(self, script, **extra):
+    def run_rollback(self, script, timeout=30, **extra):
         update = UPDATE.read_text()
         body = ''.join(function(update, name) for name in ROLLBACK_FUNCTIONS)
         env = {
@@ -301,7 +346,7 @@ class ClaudexRollbackTests(unittest.TestCase):
             'umask 077\n'
             + body + script)
         return subprocess.run(
-            ['bash', '-c', harness], env=env, capture_output=True, text=True, timeout=30)
+            ['bash', '-c', harness], env=env, capture_output=True, text=True, timeout=timeout)
 
     def test_later_failure_restores_absence_and_previous_bytes(self):
         settings = self.data / 'user-config/settings.json'
@@ -317,6 +362,7 @@ class ClaudexRollbackTests(unittest.TestCase):
                     stage = self.data / 'desktop-apps/.kilix-claudex.install-previous/payload'
                     lock = self.data / 'desktop-apps/.kilix-claudex.lock'
                     stage_before, lock_before = stage.read_bytes(), lock.read_bytes()
+                    lock_identity = (lock.stat().st_dev, lock.stat().st_ino)
                 before_decoys = {path: path.read_bytes() for path in self.decoys}
                 result = self.run_rollback(
                     'snapshot_kilix_claudex_install\n'
@@ -330,10 +376,12 @@ class ClaudexRollbackTests(unittest.TestCase):
                 for path, original in before_decoys.items():
                     expected = original + b' during' if path == settings else original
                     self.assertEqual(path.read_bytes(), expected, path)
+                self.assertEqual(list(self.txn.glob('kilix-claudex-lock*')), [])
                 if previous:
                     self.assertEqual(tree(self.checkout()), before)
                     self.assertEqual(stage.read_bytes(), stage_before)
                     self.assertEqual(lock.read_bytes(), lock_before)
+                    self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), lock_identity)
                     self.assertEqual(self.checkout().joinpath('claudex').stat().st_mode & 0o777, 0o755)
                 else:
                     self.assertFalse(self.checkout().exists())
@@ -351,6 +399,8 @@ class ClaudexRollbackTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((empty / 'desktop-apps').exists())
         self.assertFalse((empty / 'desktop-apps/kilix-claudex').exists())
+        self.assertFalse((self.txn / 'kilix-claudex-parent.present').exists())
+        self.assertTrue((self.txn / 'kilix-claudex-managed').is_file())
 
     def test_interruption_removes_partial_outputs_and_keeps_user_state(self):
         apps = self.data / 'desktop-apps'
@@ -366,7 +416,8 @@ class ClaudexRollbackTests(unittest.TestCase):
             CLAUDEX_TEST_INTERRUPT='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.checkout().exists())
-        self.assertFalse((apps / '.kilix-claudex.lock').exists())
+        # The interrupted installer left an inactive mutex. It is not payload.
+        self.assertEqual((apps / '.kilix-claudex.lock').read_bytes(), b'lock')
         self.assertFalse((apps / '.kilix-claudex.install-dead').exists())
         self.assertTrue((apps / 'kilix-needle/kilix-needle').is_file())
         self.assertTrue((apps / 'assets/faster-whisper-small-en/model.bin').is_file())
@@ -396,9 +447,17 @@ class ClaudexRollbackTests(unittest.TestCase):
     def test_older_snapshot_does_not_remove_an_unrecorded_checkout(self):
         self.plant_previous()
         before = tree(self.checkout())
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        lock_before = lock.read_bytes()
+        lock_identity = (lock.stat().st_dev, lock.stat().st_ino)
+        stage = self.data / 'desktop-apps/.kilix-claudex.install-previous/payload'
+        stage_before = stage.read_bytes()
         result = self.run_rollback('restore_kilix_claudex_install\n')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(tree(self.checkout()), before)
+        self.assertEqual(lock.read_bytes(), lock_before)
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), lock_identity)
+        self.assertEqual(stage.read_bytes(), stage_before)
 
     def test_unsafe_paths_are_refused_before_any_copy_or_delete(self):
         outside = self.home / 'outside'
@@ -457,6 +516,151 @@ class ClaudexRollbackTests(unittest.TestCase):
         self.assertEqual(sentinel.read_bytes(), b'keep on restore')
         self.assertTrue(checkout.is_symlink())
         self.assertEqual(list(outside.iterdir()), [sentinel])
+
+    def test_absent_lock_is_not_snapshot_payload(self):
+        lock = self.data / 'desktop-apps/.kilix-claudex.lock'
+        needle = self.data / 'desktop-apps/kilix-needle/kilix-needle'
+        needle_before = needle.read_bytes()
+        self.assertFalse(lock.exists())
+        result = self.run_rollback('snapshot_kilix_claudex_install\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(lock.exists())
+        self.assertEqual(list(self.txn.glob('kilix-claudex-lock*')), [])
+        self.assertTrue((self.txn / 'kilix-claudex-parent.present').is_file())
+        self.assertTrue((self.txn / 'kilix-claudex-managed').is_file())
+        self.assertEqual(needle.read_bytes(), needle_before)
+
+    def start_holder(self, root, stage_name):
+        ready = self.home / ('ready-' + stage_name)
+        release = self.home / ('release-' + stage_name)
+        proc = subprocess.Popen(
+            ['/usr/bin/python3', '-I', '-B', '-c', _HOLDER,
+             str(root), stage_name, str(ready), str(release)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(self.stop_holder, proc, release)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if ready.exists():
+                return proc, ready, release
+            if proc.poll() is not None:
+                raise AssertionError(proc.stderr.read())
+            time.sleep(0.02)
+        proc.kill()
+        raise AssertionError('holder did not lock')
+
+    def stop_holder(self, proc, release):
+        if proc.poll() is None:
+            release.write_text('go\n')
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None and not stream.closed:
+                stream.close()
+
+    def assert_exclusive_lock_blocked(self, path):
+        fd = os.open(path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+        acquired = False
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            acquired = True
+        finally:
+            os.close(fd)
+        if acquired:
+            self.fail('second exclusive lock acquired')
+
+    def test_snapshot_refuses_a_held_installer_lock(self):
+        apps = self.data / 'desktop-apps'
+        app = self.checkout()
+        app.mkdir(mode=0o700)
+        app.chmod(0o700)
+        (app / 'claudex').write_bytes(b'live-app\n')
+        needle = apps / 'kilix-needle/kilix-needle'
+        needle_before = needle.read_bytes()
+        proc, ready, release = self.start_holder(apps, '.kilix-claudex.install-active')
+        dev, ino = ready.read_text().split()
+        lock = apps / '.kilix-claudex.lock'
+        stage = apps / '.kilix-claudex.install-active/payload'
+        identity = (lock.stat().st_dev, lock.stat().st_ino)
+        self.assertEqual(identity, (int(dev), int(ino)))
+        started = time.monotonic()
+        result = self.run_rollback('snapshot_kilix_claudex_install\n', timeout=12)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 8, result.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('Claudex install lock is held', result.stderr)
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
+        self.assertEqual(stage.read_bytes(), b'live-stage\n')
+        self.assertEqual((app / 'claudex').read_bytes(), b'live-app\n')
+        self.assertEqual(needle.read_bytes(), needle_before)
+        self.assertFalse((self.txn / 'kilix-claudex-managed').exists())
+        self.assert_exclusive_lock_blocked(lock)
+        self.stop_holder(proc, release)
+        result = self.run_rollback(
+            'snapshot_kilix_claudex_install\n'
+            'lock="$KILIX_DATA_HOME/desktop-apps/.kilix-claudex.lock"\n'
+            '/usr/bin/python3 -I -B - "$lock" <<\'PY\'\n'
+            'import fcntl, os, sys\n'
+            'path = sys.argv[1]\n'
+            'if not os.path.lexists(path):\n'
+            '    raise SystemExit(0)\n'
+            'fd = os.open(path, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)\n'
+            'try:\n'
+            '    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n'
+            'except BlockingIOError:\n'
+            '    raise SystemExit(2)\n'
+            'finally:\n'
+            '    os.close(fd)\n'
+            'PY\n'
+            'install_kilix_claudex\n'
+            'false || restore_kilix_claudex_install\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines()[-2:],
+                         ['1', 'app install kilix-claudex'])
+        self.assertEqual((app / 'claudex').read_bytes(), b'live-app\n')
+        self.assertEqual(stage.read_bytes(), b'live-stage\n')
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
+        self.assertEqual(needle.read_bytes(), needle_before)
+
+    def test_restore_refuses_a_held_installer_lock(self):
+        apps = self.data / 'desktop-apps'
+        needle = apps / 'kilix-needle/kilix-needle'
+        needle_before = needle.read_bytes()
+        result = self.run_rollback('snapshot_kilix_claudex_install\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        proc, ready, release = self.start_holder(apps, '.kilix-claudex.install-active')
+        dev, ino = ready.read_text().split()
+        lock = apps / '.kilix-claudex.lock'
+        stage = apps / '.kilix-claudex.install-active/payload'
+        identity = (lock.stat().st_dev, lock.stat().st_ino)
+        self.assertEqual(identity, (int(dev), int(ino)))
+        app = self.checkout()
+        app.mkdir(mode=0o700)
+        app.chmod(0o700)
+        (app / 'claudex').write_bytes(b'during-install\n')
+        started = time.monotonic()
+        result = self.run_rollback('restore_kilix_claudex_install\n', timeout=12)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 8, result.stderr)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('Claudex install lock is held', result.stderr)
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
+        self.assertEqual(stage.read_bytes(), b'live-stage\n')
+        self.assertEqual((app / 'claudex').read_bytes(), b'during-install\n')
+        self.assertEqual(needle.read_bytes(), needle_before)
+        self.assert_exclusive_lock_blocked(lock)
+        self.stop_holder(proc, release)
+        result = self.run_rollback('restore_kilix_claudex_install\n')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(stage.parent.exists())
+        self.assertFalse(app.exists())
+        self.assertEqual(needle.read_bytes(), needle_before)
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino), identity)
 
 
 def tree(path):

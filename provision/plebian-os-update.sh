@@ -4533,12 +4533,15 @@ install_kilix_needle() {
 # `kilix app install kilix-claudex` writes one managed git checkout at
 # $KILIX_DATA_HOME/desktop-apps/kilix-claudex. The entrypoint is that tree's
 # `claudex` file. The bookkeeping is its `.git` directory (origin and HEAD).
-# The installer also uses two short-lived siblings under the shared
-# desktop-apps directory: `.kilix-claudex.lock` and `.kilix-claudex.install-*`.
-# Other applications, model assets, user config, browser profiles, credentials,
-# and usage state are not part of this set. Snapshot only the owned names,
-# including original absence. A transaction recorded before this snapshot
-# exists has no kilix-claudex-managed marker and is left untouched.
+# Stage directories are the short-lived `.kilix-claudex.install-*` siblings.
+# `.kilix-claudex.lock` is the catalog installer's flock mutex, not checkout
+# data. Snapshot and restore take that mutex nonblocking and never copy,
+# replace, or delete a lock they do not own. The mutex is released before
+# `kilix app install` runs. Other applications, model assets, user config,
+# browser profiles, credentials, and usage state are not part of this set.
+# Snapshot the owned checkout and abandoned stages, including original
+# absence. A transaction recorded before this snapshot exists has no
+# kilix-claudex-managed marker and is left untouched.
 kilix_claudex_refuse() {
     printf 'refusing unsafe Claudex installation path: %s\n' "$*" >&2
 }
@@ -4636,44 +4639,267 @@ kilix_claudex_install_paths_are_safe() {
     fi
 }
 
-snapshot_kilix_claudex_install() {
-    local root stage base index
-    kilix_claudex_install_paths_are_safe \
-        || die "refusing unsafe Claudex installation path"
+# Drop a guard-created mutex inode while its flock is still held. A mutex that
+# already existed is left untouched. Replies are only "unlinked" or "kept".
+kilix_claudex_guard_unlink_created() {
+    local reply
+    [[ "${_KILIX_CLAUDEX_GUARD_W:-}" =~ ^[0-9]+$ ]] || return 1
+    [[ "${_KILIX_CLAUDEX_GUARD_R:-}" =~ ^[0-9]+$ ]] || return 1
+    printf 'unlink-created\n' >&"$_KILIX_CLAUDEX_GUARD_W" || return 1
+    IFS= read -r -t 5 reply <&"$_KILIX_CLAUDEX_GUARD_R" || return 1
+    case "$reply" in
+        unlinked|kept) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Release the guardian. Safe to call more than once. Unknown earlier state
+# still closes the descriptors and removes the private fifo directory.
+kilix_claudex_guard_finish() {
+    local w r pid
+    w="${_KILIX_CLAUDEX_GUARD_W:-}"
+    r="${_KILIX_CLAUDEX_GUARD_R:-}"
+    if [ "${_KILIX_CLAUDEX_GUARD_HELD:-0}" = 1 ] && [[ "$w" =~ ^[0-9]+$ ]]; then
+        printf 'release\n' >&"$w" 2>/dev/null || true
+    fi
+    _KILIX_CLAUDEX_GUARD_HELD=0
+    pid="${_KILIX_CLAUDEX_GUARD_PID:-}"
+    if [ -n "$pid" ]; then
+        wait "$pid" 2>/dev/null || true
+        _KILIX_CLAUDEX_GUARD_PID=
+    fi
+    if [[ "$w" =~ ^[0-9]+$ ]]; then
+        eval "exec ${w}>&-"
+    fi
+    if [[ "$r" =~ ^[0-9]+$ ]]; then
+        eval "exec ${r}>&-"
+    fi
+    _KILIX_CLAUDEX_GUARD_W=
+    _KILIX_CLAUDEX_GUARD_R=
+    if [ -n "${_KILIX_CLAUDEX_GUARD_DIR:-}" ]; then
+        rm -rf -- "$_KILIX_CLAUDEX_GUARD_DIR"
+        _KILIX_CLAUDEX_GUARD_DIR=
+    fi
+}
+
+# Run one fixed callback while the install mutex is held. The action is only
+# snapshot or restore; it is not read from the environment. The guardian
+# receives the lock path and the words unlink-created and release.
+kilix_claudex_guard_run() {
+    local action="$1" root lock dir status rc
+    case "$action" in
+        snapshot|restore) ;;
+        *) printf 'refusing Claudex guard action\n' >&2; return 1 ;;
+    esac
+    [ -x /usr/bin/python3 ] || {
+        printf 'could not lock the Claudex installation\n' >&2
+        return 1
+    }
     root="$KILIX_DATA_HOME/desktop-apps"
+    lock="$root/.kilix-claudex.lock"
+    _KILIX_CLAUDEX_PARENT_WAS_PRESENT=0
+    _KILIX_CLAUDEX_PARENT_CREATED=0
+    _KILIX_CLAUDEX_GUARD_HELD=0
+    _KILIX_CLAUDEX_GUARD_PID=
+    _KILIX_CLAUDEX_GUARD_W=
+    _KILIX_CLAUDEX_GUARD_R=
+    _KILIX_CLAUDEX_GUARD_DIR=
     if [ -d "$root" ] && [ ! -L "$root" ]; then
-        : >"$_STACK_TXN_DIR/kilix-claudex-parent.present" \
-            || die "could not record the Claudex install parent"
+        kilix_claudex_require_user_dir "$root" "Claudex install parent" || return 1
+        _KILIX_CLAUDEX_PARENT_WAS_PRESENT=1
+    elif [ -e "$root" ] || [ -L "$root" ]; then
+        kilix_claudex_refuse "Claudex install parent is not a safe directory: $root"
+        return 1
+    else
+        mkdir -m 0700 -- "$root" || {
+            kilix_claudex_require_user_dir "$root" "Claudex install parent" || return 1
+            _KILIX_CLAUDEX_PARENT_WAS_PRESENT=1
+        }
+        if [ "$_KILIX_CLAUDEX_PARENT_WAS_PRESENT" != 1 ]; then
+            _KILIX_CLAUDEX_PARENT_CREATED=1
+        fi
+    fi
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/kilix-claudex-guard.XXXXXX")" || return 1
+    _KILIX_CLAUDEX_GUARD_DIR="$dir"
+    mkfifo "$dir/ctl" "$dir/status" || {
+        kilix_claudex_guard_finish
+        return 1
+    }
+    exec {_KILIX_CLAUDEX_GUARD_W}<>"$dir/ctl"
+    exec {_KILIX_CLAUDEX_GUARD_R}<>"$dir/status"
+    /usr/bin/python3 -I -B -u /dev/fd/3 "$lock" \
+        <"$dir/ctl" >"$dir/status" 3<<'PY' &
+import fcntl
+import os
+import stat
+import sys
+
+lock_path = sys.argv[1]
+if (
+    not lock_path.startswith("/")
+    or lock_path != os.path.abspath(lock_path)
+    or not lock_path.endswith("/.kilix-claudex.lock")
+    or "\n" in lock_path
+    or ".." in lock_path.split("/")
+):
+    print("error", flush=True)
+    raise SystemExit(0)
+
+def same_inode(fd, path):
+    try:
+        current = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    owned = os.fstat(fd)
+    return (
+        stat.S_ISREG(current.st_mode)
+        and (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino)
+    )
+
+def lock_is_valid(fd):
+    owned = os.fstat(fd)
+    if not stat.S_ISREG(owned.st_mode):
+        return False
+    if owned.st_nlink != 1 or owned.st_uid != os.geteuid():
+        return False
+    if owned.st_mode & 0o022:
+        return False
+    return same_inode(fd, lock_path)
+
+def acquire():
+    for _attempt in (1, 2):
+        try:
+            before = os.lstat(lock_path)
+        except FileNotFoundError:
+            before = None
+        if before is not None and stat.S_ISLNK(before.st_mode):
+            print("error", flush=True)
+            raise SystemExit(0)
+        try:
+            fd = os.open(
+                lock_path,
+                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError:
+            print("error", flush=True)
+            raise SystemExit(0)
+        owned = os.fstat(fd)
+        created = before is None or (
+            (before.st_dev, before.st_ino) != (owned.st_dev, owned.st_ino)
+        )
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            print("busy", flush=True)
+            raise SystemExit(0)
+        except OSError:
+            os.close(fd)
+            print("error", flush=True)
+            raise SystemExit(0)
+        if not same_inode(fd, lock_path):
+            os.close(fd)
+            continue
+        if not lock_is_valid(fd):
+            if created and same_inode(fd, lock_path):
+                try:
+                    os.unlink(lock_path)
+                except OSError:
+                    pass
+            os.close(fd)
+            print("error", flush=True)
+            raise SystemExit(0)
+        return fd, created
+    print("error", flush=True)
+    raise SystemExit(0)
+
+fd, created = acquire()
+print("owned", flush=True)
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    command = line.strip()
+    if command == "unlink-created":
+        if created and same_inode(fd, lock_path):
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                print("kept", flush=True)
+                continue
+            created = False
+            print("unlinked", flush=True)
+        else:
+            print("kept", flush=True)
+    elif command == "release":
+        break
+    else:
+        print("error", flush=True)
+        break
+if created and same_inode(fd, lock_path):
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        pass
+os.close(fd)
+PY
+    _KILIX_CLAUDEX_GUARD_PID=$!
+    status=error
+    IFS= read -r -t 5 status <&"$_KILIX_CLAUDEX_GUARD_R" || status=error
+    if [ "$status" != owned ]; then
+        kilix_claudex_guard_finish
+        if [ "$status" = busy ]; then
+            printf 'Claudex install lock is held: %s\n' "$lock" >&2
+        else
+            printf 'could not lock the Claudex installation: %s\n' "$lock" >&2
+        fi
+        if [ "$_KILIX_CLAUDEX_PARENT_CREATED" = 1 ]; then
+            rmdir -- "$root" 2>/dev/null || true
+        fi
+        return 1
+    fi
+    _KILIX_CLAUDEX_GUARD_HELD=1
+    rc=0
+    # The callback is selected here, from the fixed action, while the guardian
+    # still holds the mutex. It is not a command string from the caller.
+    case "$action" in
+        snapshot) kilix_claudex_snapshot_locked || rc=$? ;;
+        restore) kilix_claudex_restore_locked || rc=$? ;;
+    esac
+    kilix_claudex_guard_finish
+    return "$rc"
+}
+
+kilix_claudex_snapshot_locked() {
+    local root stage base index
+    kilix_claudex_install_paths_are_safe || return 1
+    root="$KILIX_DATA_HOME/desktop-apps"
+    if [ "${_KILIX_CLAUDEX_PARENT_WAS_PRESENT:-0}" = 1 ]; then
+        : >"$_STACK_TXN_DIR/kilix-claudex-parent.present" || return 1
     fi
     snapshot_stack_path "$root/kilix-claudex" kilix-claudex-checkout
-    snapshot_stack_path "$root/.kilix-claudex.lock" kilix-claudex-lock
-    : >"$_STACK_TXN_DIR/kilix-claudex-stages" \
-        || die "could not record Claudex install stages"
+    : >"$_STACK_TXN_DIR/kilix-claudex-stages" || return 1
     index=0
     if [ -d "$root" ] && [ ! -L "$root" ]; then
         while IFS= read -r -d '' stage; do
             base="${stage##*/}"
             printf '%s\n' "$base" >>"$_STACK_TXN_DIR/kilix-claudex-stages" \
-                || die "could not record Claudex install stage $base"
+                || return 1
             snapshot_stack_path "$stage" "kilix-claudex-stage-$index"
             index=$((index + 1))
         done < <(find "$root" -mindepth 1 -maxdepth 1 -name '.kilix-claudex.install-*' -print0)
     fi
     printf '%s\n' "$index" >"$_STACK_TXN_DIR/kilix-claudex-stage.count" \
-        || die "could not record the Claudex install stage count"
-    : >"$_STACK_TXN_DIR/kilix-claudex-managed" \
-        || die "could not record the Claudex installation snapshot"
+        || return 1
+    : >"$_STACK_TXN_DIR/kilix-claudex-managed" || return 1
 }
 
-restore_kilix_claudex_install() {
-    local root checkout lock count recorded base found keep index
-    # An older updater never wrote this marker. Do not delete a checkout it
-    # did not snapshot.
-    [ -f "$_STACK_TXN_DIR/kilix-claudex-managed" ] || return 0
+kilix_claudex_restore_locked() {
+    local root checkout count recorded base found keep index
     kilix_claudex_install_paths_are_safe || return 1
     root="$KILIX_DATA_HOME/desktop-apps"
     checkout="$root/kilix-claudex"
-    lock="$root/.kilix-claudex.lock"
     count="$(cat "$_STACK_TXN_DIR/kilix-claudex-stage.count" 2>/dev/null)" || return 1
     [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -le 32 ] || return 1
     recorded=0
@@ -4682,7 +4908,6 @@ restore_kilix_claudex_install() {
     fi
     [ "$recorded" = "$count" ] || return 1
     restore_stack_path "$checkout" kilix-claudex-checkout || return 1
-    restore_stack_path "$lock" kilix-claudex-lock file || return 1
     if [ -d "$root" ] && [ ! -L "$root" ]; then
         while IFS= read -r -d '' found; do
             base="${found##*/}"
@@ -4708,10 +4933,26 @@ restore_kilix_claudex_install() {
     [ "$index" = "$count" ] || return 1
     if [ ! -f "$_STACK_TXN_DIR/kilix-claudex-parent.present" ] \
         && [ -d "$root" ] && [ ! -L "$root" ]; then
+        kilix_claudex_guard_unlink_created || return 1
         if [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
             rmdir -- "$root" || return 1
         fi
     fi
+}
+
+snapshot_kilix_claudex_install() {
+    kilix_claudex_install_paths_are_safe \
+        || die "refusing unsafe Claudex installation path"
+    kilix_claudex_guard_run snapshot \
+        || die "could not snapshot the Claudex installation"
+}
+
+restore_kilix_claudex_install() {
+    # An older updater never wrote this marker. Do not delete a checkout it
+    # did not snapshot, and do not take the install mutex to do so.
+    [ -f "$_STACK_TXN_DIR/kilix-claudex-managed" ] || return 0
+    kilix_claudex_install_paths_are_safe || return 1
+    kilix_claudex_guard_run restore
 }
 
 install_kilix_claudex() {
