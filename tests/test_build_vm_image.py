@@ -1155,7 +1155,7 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('"session selection"', verify)
         self.assertIn('"session provenance"', verify)
         self.assertIn('"visible kilix chrome"', verify)
-        self.assertIn('"first-page Kilix desktop"', verify)
+        self.assertIn('"desktop session-start wiring"', verify)
         self.assertIn(
             "KILIX_ARGV=(--start-as=maximized -o "
             "hide_window_decorations=yes)",
@@ -1163,13 +1163,38 @@ class VmBuilderEnvTests(unittest.TestCase):
         )
         self.assertIn("KILIX_ARGV=(--start-as=fullscreen)", verify)
         self.assertIn("DESKTOP_ARGS=(env KILIX_IN_OVERLAY=1", verify)
-        self.assertIn('\\"$KILIX\\" desktop)', verify)
+        self.assertIn('\\"$KILIX\\" desktop --session-start)', verify)
         for key in (
             "PLEB_DESKTOP", "PLEB_RESPAWN", "PLEBIAN_OS_DESKTOP",
             "PLEBIAN_OS_KIOSK", "KILIX_DESKTOP_PROVIDER",
             "KILIX_DESKTOP_FLAVOR",
         ):
             self.assertIn(key, verify)
+
+    def test_desktop_acceptance_executes_the_session_chooser_contract(self):
+        result = SimpleNamespace(returncode=0, stdout="", stderr="")
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(vm, "ssh", return_value=result) as remote, \
+                mock.patch.object(vm, "info"):
+            vm.verify_provisioning(cfg(), "askpass")
+        commands = [call.args[1] for call in remote.call_args_list
+                    if "DESKTOP_ARGS=" in call.args[1]]
+        self.assertEqual(len(commands), 1)
+        chooser = ('DESKTOP_ARGS=(env KILIX_IN_OVERLAY=1\n'
+                   '              "$KILIX" desktop --session-start)\n')
+        with tempfile.TemporaryDirectory() as directory:
+            session = Path(directory) / "session launcher"
+            command = commands[0].replace("/usr/local/bin/pleb-session", shlex.quote(str(session)))
+            for label, contents, accepted in (
+                ("first-login chooser", chooser, True),
+                ("chooser bypassed", chooser.replace(" --session-start", ""), False),
+                ("overlay context missing", chooser.replace("KILIX_IN_OVERLAY=1", ""), False),
+                ("shell instead of desktop", 'exec "$KILIX" bash\n', False),
+            ):
+                with self.subTest(label=label):
+                    session.write_text(contents)
+                    checked = subprocess.run(["bash", "-c", command], capture_output=True, text=True)
+                    self.assertEqual(checked.returncode == 0, accepted, checked.stderr)
 
     def test_catalog_acceptance_builds_in_temporary_guest_roots(self):
         result = SimpleNamespace(returncode=0, stdout="", stderr="")

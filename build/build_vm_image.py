@@ -2196,7 +2196,7 @@ if default is not None:
     first_page_desktop = (
         "grep -Fq 'DESKTOP_ARGS=(env KILIX_IN_OVERLAY=1' "
         "/usr/local/bin/pleb-session && "
-        "grep -Fq '\"$KILIX\" desktop)' /usr/local/bin/pleb-session"
+        "grep -Fq '\"$KILIX\" desktop --session-start)' /usr/local/bin/pleb-session"
     )
     coordinated_checkouts = (kdir +
         ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
@@ -2395,7 +2395,7 @@ if default is not None:
     if neuronte_ref:
         checks.append(("Neuronte faces", neuronte_contract(neuronte_ref)))
     if cfg.desktop:
-        checks.append(("first-page Kilix desktop", first_page_desktop))
+        checks.append(("desktop session-start wiring", first_page_desktop))
     # The clickable fork engine only exists when fork-building is on (the default);
     # with it off, provisioning ships the prebuilt engine, so check that instead.
     fork_on = os.environ.get("PLEBIAN_OS_BUILD_KILIX_FORK", "1") not in ("0", "no", "false", "off")
