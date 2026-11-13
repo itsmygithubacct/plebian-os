@@ -8,7 +8,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 - Preserve the distribution's verified local Go compiler through the Kilix
   engine build, avoiding an unexpected download of an older compiler.
-  Leave the successor receipt empty pending independent delta reviews.
+  Attach two independent delta reviews of OS `b72655d6` and their receipt;
+  preserve prior receipts and review records verbatim under their original scope.
 
 - Select the reviewed Zell four-room and theater payload, with native playback,
   browser hold controls and preservation of the displayed frame after rejected
