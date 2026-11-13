@@ -604,26 +604,22 @@ class ShellPathTests(unittest.TestCase):
         return [json.loads(line) for line in self.calls.read_text().splitlines()] \
             if self.calls.exists() else []
 
-    def test_install_prepares_the_selected_desktop_cache_as_the_same_user(self):
+    def test_install_leaves_the_desktop_cache_to_its_own_later_step(self):
+        # prepare_kilix95_caches / prepare_kilix95_caches_update run
+        # --prepare-cache once, after this (tests/test_kilix95_prepare_cache.py).
         desktop = self.base / 'kilix-95'
         desktop.mkdir()
         (desktop / 'main.py').write_text(
-            'import json, os, sys\n'
-            'open(%r, "a").write(json.dumps(sys.argv[1:]) + "\\n")\n'
-            'sys.exit(int(os.environ.get("CACHE_RC", "0")))\n' % str(self.calls))
+            'import json, sys\n'
+            'open(%r, "a").write(json.dumps(sys.argv[1:]) + "\\n")\n' % str(self.calls))
         for method in (self.provision, self.update):
-            for cache_rc in ('0', '1'):
-                with self.subTest(method=method.__name__, cache_rc=cache_rc):
-                    self.calls.unlink(missing_ok=True)
-                    result = method(f'NEURONTE_REF={self.ref}\n'
-                                    f'KILIX95_DIR={str(desktop)!r}\n'
-                                    'install_neuronte' + ('_update' if method == self.update else '') + '\n',
-                                    CACHE_RC=cache_rc)
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(self.recorded()[0][0], 'install')
-                    self.assertEqual(self.recorded()[1], ['--prepare-cache'])
-                    if cache_rc == '1':
-                        self.assertIn('retry at launch', result.stderr)
+            with self.subTest(method=method.__name__):
+                self.calls.unlink(missing_ok=True)
+                result = method(f'NEURONTE_REF={self.ref}\n'
+                                f'KILIX95_DIR={str(desktop)!r}\n'
+                                'install_neuronte' + ('_update' if method == self.update else '') + '\n')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual([call[0] for call in self.recorded()], ['install'])
 
     def test_provision_passes_the_image_archive_and_dies_on_failure(self):
         result = self.provision(f'NEURONTE_REF={self.ref}\ninstall_neuronte\necho done\n')

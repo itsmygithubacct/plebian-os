@@ -1124,6 +1124,7 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
                     "reconcile_release_apt_sources_after_commit() "
                     f'{{ echo reconcile >>"$calls"; return {reconcile_rc}; }}\n'
                     'seed_desktop_wallpaper_after_commit() { echo wallpaper >>"$calls"; }\n'
+                    'prepare_kilix95_caches_update() { echo prepare >>"$calls"; }\n'
                     'restart_session_after_commit() { echo restart >>"$calls"; }\n'
                     "restart_arg=--restart\n"
                     + tail
@@ -1133,7 +1134,7 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, reconcile_rc, result.stderr)
                 self.assertEqual(calls.read_text().split(),
-                                 ["commit", "reconcile", "wallpaper", "restart"])
+                                 ["commit", "reconcile", "wallpaper", "prepare", "restart"])
 
     def test_updater_reconciles_apt_sources_only_after_commit(self):
         committed = UPDATE.index("\ncommit_stack_transaction\n")

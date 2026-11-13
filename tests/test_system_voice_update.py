@@ -40,6 +40,7 @@ warn() {{ :; }}
 commit_stack_transaction() {{ echo commit; return {commit_rc}; }}
 reconcile_release_apt_sources_after_commit() {{ echo reconcile; return {apt_rc}; }}
 seed_desktop_wallpaper_after_commit() {{ :; }}
+prepare_kilix95_caches_update() {{ :; }}
 restart_session_after_commit() {{ echo restart-policy; }}
 notify_system_voice_update_complete() {{ echo notice; return {notice_rc}; }}
 restart_arg={mode}
