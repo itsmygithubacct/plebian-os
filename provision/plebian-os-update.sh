@@ -1233,6 +1233,34 @@ managed_dirs=(
     /etc/pleb
     /usr/local/lib/pleb/session-bin
 )
+# Keep Zell's keys separate from the older numeric snapshot layout, including
+# snapshots made before Zell was managed by the updater.
+zell_paths=(
+    /usr/local/bin/zell
+    /usr/local/share/kilix-zell
+    /usr/local/sbin/install-zell-runtime.py
+    /usr/local/share/plebian-os/zell-runtime.json
+    /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+    /usr/local/lib/systemd/user/kilix-secrets.service
+    /usr/local/lib/systemd/user/kilix-secrets.socket
+)
+zell_dirs=(
+    /usr/local/bin
+    /usr/local/sbin
+    /usr/local/lib/systemd
+    /usr/local/lib/systemd/user
+)
+path_keys=("${!paths[@]}")
+dir_keys=()
+for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
+for i in "${!zell_paths[@]}"; do
+    paths+=("${zell_paths[$i]}")
+    path_keys+=("zell.$i")
+done
+for i in "${!zell_dirs[@]}"; do
+    managed_dirs+=("${zell_dirs[$i]}")
+    dir_keys+=("zell-dir.$i")
+done
 cleanup() {
     rc=$?
     trap - EXIT
@@ -1262,15 +1290,16 @@ for i in "${!managed_dirs[@]}"; do
         dir_mode="$(stat -c '%a' "$dir")"
         (( (8#$dir_mode & 8#22) == 0 )) \
             && (( (8#$dir_mode & 8#1) != 0 )) || exit 2
-        : >"$txn/dir.$i.present"
+        : >"$txn/${dir_keys[$i]}.present"
     fi
 done
 for i in "${!paths[@]}"; do
     if [ -e "${paths[$i]}" ] || [ -L "${paths[$i]}" ]; then
-        : >"$txn/$i.present"
-        cp -a -- "${paths[$i]}" "$txn/items/$i"
+        : >"$txn/${path_keys[$i]}.present"
+        cp -a -- "${paths[$i]}" "$txn/items/${path_keys[$i]}"
     fi
 done
+: >"$txn/zell-runtime"
 printf '%s\n' "$txn"
 ROOT_SNAPSHOT
 }
@@ -1429,6 +1458,43 @@ managed_dirs=(
     /etc/pleb
     /usr/local/lib/pleb/session-bin
 )
+# Keep Zell's keys separate from the older numeric snapshot layout, including
+# snapshots made before Zell was managed by the updater.
+zell_paths=(
+    /usr/local/bin/zell
+    /usr/local/share/kilix-zell
+    /usr/local/sbin/install-zell-runtime.py
+    /usr/local/share/plebian-os/zell-runtime.json
+    /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+    /usr/local/lib/systemd/user/kilix-secrets.service
+    /usr/local/lib/systemd/user/kilix-secrets.socket
+)
+zell_dirs=(
+    /usr/local/bin
+    /usr/local/sbin
+    /usr/local/lib/systemd
+    /usr/local/lib/systemd/user
+)
+path_keys=("${!paths[@]}")
+dir_keys=()
+for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
+if [ -f "$txn/zell-runtime" ]; then
+    for dir in /usr/local/lib /usr/local/share/plebian-os "${zell_dirs[@]}"; do
+        if [ -e "$dir" ] || [ -L "$dir" ]; then
+            [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+            dir_mode="$(stat -c '%a' "$dir")"
+            (( (8#$dir_mode & 8#22) == 0 )) && (( (8#$dir_mode & 8#1) != 0 )) || exit 2
+        fi
+    done
+    for i in "${!zell_paths[@]}"; do
+        paths+=("${zell_paths[$i]}")
+        path_keys+=("zell.$i")
+    done
+    for i in "${!zell_dirs[@]}"; do
+        managed_dirs+=("${zell_dirs[$i]}")
+        dir_keys+=("zell-dir.$i")
+    done
+fi
 new_paths=()
 cleanup_new() {
     local path cleanup_failed=0
@@ -1442,16 +1508,21 @@ cleanup_new() {
 trap cleanup_new EXIT
 # Prepare every old object beside its destination before changing any path.
 for i in "${!paths[@]}"; do
-    [ -f "$txn/$i.present" ] || continue
+    [ -f "$txn/${path_keys[$i]}.present" ] || continue
     dest="${paths[$i]}"
     mkdir -p -- "$(dirname "$dest")"
     new="$(dirname "$dest")/.$(basename "$dest").plebian-os-restore.$$"
-    cp -a -- "$txn/items/$i" "$new"
+    cp -a -- "$txn/items/${path_keys[$i]}" "$new"
     new_paths[$i]="$new"
 done
 for i in "${!paths[@]}"; do
     dest="${paths[$i]}"
-    if [ -f "$txn/$i.present" ]; then
+    if [ -f "$txn/${path_keys[$i]}.present" ]; then
+        # A populated runtime directory cannot be replaced by mv -T. Its old
+        # tree is fully staged above and remains in the recovery snapshot.
+        if [ "$dest" = /usr/local/share/kilix-zell ] && [ -d "$dest" ] && [ ! -L "$dest" ]; then
+            rm -rf -- "$dest"
+        fi
         mv -fT -- "${new_paths[$i]}" "$dest"
         new_paths[$i]=""
     else
@@ -1459,7 +1530,7 @@ for i in "${!paths[@]}"; do
     fi
 done
 for ((i=${#managed_dirs[@]}-1; i>=0; i--)); do
-    [ -f "$txn/dir.$i.present" ] && continue
+    [ -f "$txn/${dir_keys[$i]}.present" ] && continue
     dir="${managed_dirs[$i]}"
     if [ -d "$dir" ] && [ ! -L "$dir" ]; then
         rmdir -- "$dir"
@@ -4429,6 +4500,75 @@ install_model_setup_software() {
     done
 }
 
+# Install the same offline Zell carrier used by provisioning. The outer root
+# snapshot owns the runtime, launcher, helper, pin, archive and global user
+# units. Keep this step independent of other desktop runtime installers.
+install_zell_runtime() {
+    local prov="$PLEBIAN_OS_DIR/provision" file digest
+    local -a elevate=() hashes=()
+    local -a sources=(install-zell-runtime.py zell-runtime.json bundles/zell-0.1.1-x86_64.tar.xz)
+    for file in "${sources[@]}"; do
+        [ -f "$prov/$file" ] && [ ! -L "$prov/$file" ] \
+            || die "Zell carrier is missing or unsafe: $prov/$file"
+        digest="$(sha256sum "$prov/$file")" || die "could not hash Zell carrier: $file"
+        hashes+=("${digest%% *}")
+    done
+    validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
+        || die "Zell installation requires the stack recovery snapshot"
+    log "installing the selected Zell runtime and launcher (needs root)"
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    "${elevate[@]}" bash -s -- "$_STACK_ROOT_TXN_DIR" "$prov" "${hashes[@]}" <<'ROOT_ZELL_INSTALL'
+set -euo pipefail
+umask 022
+txn="$1"; prov="$2"; shift 2
+expected=("$@")
+files=(bin/zell install-zell-runtime.py zell-runtime.json zell-0.1.1-x86_64.tar.xz
+       units/kilix-secrets.service units/kilix-secrets.socket)
+dests=(/usr/local/bin/zell /usr/local/sbin/install-zell-runtime.py
+       /usr/local/share/plebian-os/zell-runtime.json
+       /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+       /usr/local/lib/systemd/user/kilix-secrets.service
+       /usr/local/lib/systemd/user/kilix-secrets.socket)
+modes=(0755 0755 0644 0644 0644 0644)
+case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
+[ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
+[ "$(stat -c '%a' "$txn")" = 700 ] && [ -f "$txn/zell-runtime" ] || exit 2
+[ "${#expected[@]}" = 3 ] || exit 2
+# Validate parents before creating directories or publishing any object. Leaf
+# files are replaced by rename, so a previous launcher/unit symlink is not followed.
+for dir in / /usr /usr/local /usr/local/bin /usr/local/sbin /usr/local/share \
+    /usr/local/share/plebian-os /usr/local/lib /usr/local/lib/systemd /usr/local/lib/systemd/user; do
+    if [ -e "$dir" ] || [ -L "$dir" ]; then
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+        mode="$(stat -c '%a' "$dir")"
+        (( (8#$mode & 8#22) == 0 )) && (( (8#$mode & 8#1) != 0 )) || exit 2
+    fi
+done
+for dest in "${dests[@]}"; do
+    [ ! -e "$dest" ] || [ -f "$dest" ] || [ -L "$dest" ] || exit 2
+done
+stage="$(mktemp -d "$txn/zell-install.XXXXXX")"
+sources=(install-zell-runtime.py zell-runtime.json bundles/zell-0.1.1-x86_64.tar.xz)
+names=(install-zell-runtime.py zell-runtime.json zell-0.1.1-x86_64.tar.xz)
+for i in "${!sources[@]}"; do
+    [[ "${expected[$i]}" =~ ^[0-9a-f]{64}$ ]] || exit 2
+    install -m 0600 -- "$prov/${sources[$i]}" "$stage/${names[$i]}"
+    actual="$(sha256sum "$stage/${names[$i]}")"
+    [ "${actual%% *}" = "${expected[$i]}" ] || exit 2
+done
+# Only the root-owned, hash-bound copies run with privilege. The helper verifies
+# the complete carrier before replacing the app; ancillary files are staged here.
+python3 -I "$stage/install-zell-runtime.py" \
+    --archive "$stage/zell-0.1.1-x86_64.tar.xz" --pin "$stage/zell-runtime.json" \
+    --destination /usr/local/share/kilix-zell --bin-dir "$stage/bin" --unit-dir "$stage/units"
+for i in "${!files[@]}"; do
+    mkdir -p -- "$(dirname "${dests[$i]}")"
+    chmod "${modes[$i]}" -- "$stage/${files[$i]}"
+    mv -fT -- "$stage/${files[$i]}" "${dests[$i]}"
+done
+ROOT_ZELL_INSTALL
+}
+
 install_kilix_needle() {
     env "${stack_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
         "$KILIX_DIR/kilix" app install kilix-needle \
@@ -5466,6 +5606,8 @@ apply_selected_mpv_runtime "$_STACK_TXN_DIR" 0 \
 test_fail_after_boundary mpv-runtime
 refresh_os_dependencies
 test_fail_after_boundary dependencies
+install_zell_runtime
+test_fail_after_boundary zell-runtime
 # Like apt dependencies, this verified software remains available after a
 # later stack rollback; it carries no models, receipts or active selection.
 run_encodec_converter_installer \

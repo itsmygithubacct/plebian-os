@@ -3,10 +3,10 @@
   "version": "0.1.1",
   "architecture": "x86_64",
   "filename": "zell-0.1.1-x86_64.tar.xz",
-  "bytes": 25915172,
-  "sha256": "4dea8cd48b6ee934e2b3231e4eee2fc9ea4b3448a8c1dea9b79eba364aba5276",
+  "bytes": 30376580,
+  "sha256": "fb968436728132f525d8d0320894502d694b3343a378fe32c5740bc339debe3d",
   "source": {
     "repository": "https://github.com/itsmygithubacct/kilix-zell.git",
-    "commit": "ccc741f76ab7d0de93dc6c91b8fa0a02463da34c"
+    "commit": "357c670f48f63a3b8ab280e185e412121657a46d"
   }
 }
