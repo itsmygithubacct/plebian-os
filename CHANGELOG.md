@@ -6,6 +6,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Select the reviewed Zell four-room and theater payload, with native playback,
+  browser hold controls and preservation of the displayed frame after rejected
+  media opens. Wait for queued private-bus activation within its existing
+  deadline while retaining identity and placement checks.
+- Preserve the earlier carrier receipt and reviews under their original source
+  scope; leave the successor receipt empty for independent delta review.
+
 - Attach two independent reviews and the acceptance receipt for RC9 carrier
   `de2ff296`, preserving their exact source scope and unchanged model bytes.
 

@@ -11,8 +11,9 @@
 # Debian 13.7.0 amd64 netinst SHA256SUMS was verified for 0.2.2 with
 # Debian CD key DF9B9C49EAA9298432589D76DA87E80D6294BE9B and is unchanged.
 # Empty PLEBIAN_OS_APT_SNAPSHOT selects live Debian sources.
-# RC9 carrier de2ff296 binds content 6f92910. Its receipt binds two independent
-# reviews of OS 449dd5db and Kilix 82d00389; prior-carrier records remain separate.
+# RC9 carrier de2ff296 binds content 6f92910. The receipt stays empty pending
+# independent delta reviews of the SDK and Zell successor. Prior reviews of
+# OS 449dd5db and Kilix 82d00389 remain archived with their original scope.
 
 PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso
 PLEBIAN_OS_NETINST_SHA256=a7ef94ac2fb9a7fec454552abd629b7cc9d5155c886165a45649f5ce6167e355
@@ -26,7 +27,7 @@ PLEBIAN_OS_INSTALL_WAYDROID=0
 PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=
 PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.3-model-compliance
 PLEBIAN_OS_VOICE_CARRIER_SHA256=de2ff296a946dc09f8b8114ba4db28a6fcb2da549e58fbb256bc386ba4ed7e6d
-PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=43a1180e90aaf9671f0d3bc208af84a0a26631f32257f19763e6d80963816fc6
+PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=
 KILIX_LICENSE_REF=596ada2ab68b9ec441674ff4da2d431559d47378
 PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=6f92910e2dc9f0d831c7a345b318e1d015a2b275
 PLEBIAN_OS_QT_RUNTIME_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/qt-runtime-rc6/qt-runtime-rc6.tar.xz
