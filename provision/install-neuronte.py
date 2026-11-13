@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Install the pinned Neuronte faces the Kilix 95 desktop reads.
+"""Install the pinned Neuronte runtime models, desktop faces and video player.
 
 Kilix 95 draws its desktop faces and flame with Neuronte when it finds a
 Neuronte tree at NEURONTE_HOME or, by default, at
@@ -9,7 +9,7 @@ one it keeps the DejaVu faces and the drawn flame.
 
 The release pins one public Neuronte commit, NEURONTE_REF, and this checkout
 carries neuronte-payload.json: the git blob id, mode and size of every file of
-that commit the desktop opens, plus the C source, Makefile and notices. An
+that commit selected for runtime use, plus C source, Makefile and notices. An
 archive is accepted only when its members are exactly those paths and each
 file's blob id matches, so the same check serves the image's archive and one
 fetched from GitHub. The archive's own digest is not pinned: its bytes depend
@@ -21,7 +21,7 @@ on the git and xz that wrote it.
                   pinned paths, and write a tar of them (ISO build, upgrade).
   verify          Check an archive against the manifest.
   install         As the desktop user: verify, build build/libneuronte.so
-                  in a staging tree, load it and open two weight files, write
+                  in a staging tree, load it and open every packed model, write
                   the install record and swap the tree in.
 
 install refuses a tree it did not write, or one whose files differ from its
@@ -54,23 +54,37 @@ CANONICAL_REPO = 'https://github.com/itsmygithubacct/neuronte.git'
 MAX_FILES = 512
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
-# Two files the installed library must open before the tree is used.
-PROBES = ('weights/neuronte-ui12-v0.nrt', 'weights/neuronte-flame-v0.nrt')
-# Kilix 95 neuronte_face.py / neuronte_flame.py (af691fe, unchanged at
-# 1e59c1e) open these. Small faces
-# are binary files per em up to 32 with a header in font/ui-{em}[-italic].txt;
-# from 33 the scalable ui-large file is used and no header is read.
+# General-image runtime inventory. Training checkpoints, reports, redundant
+# bundle members and native upright faces above 32 remain in the development
+# checkout. The two video JSON files are inference models, not training data.
+SMALL_FACES = {(em, italic) for em in range(1, 33) for italic in (False, True)
+               if not italic or em >= 3}
+RUNTIME_MODELS = {
+    'weights/neuronte-ui%d%s-v0.nrt' % (em, '-italic' if italic else '')
+    for em, italic in SMALL_FACES
+} | {'weights/neuronte-%s' % name for name in (
+    'ui-large-v0.nrt', 'flame-v0.nrt', 'ascii-v0.nrt', 'emoji-v0.nrt',
+    'icon-v1.nrt', 'pointer-v0.nrt', 'video-masks-v0.nrt', 'split-v5.nrt',
+    'video-speed-v1.json', 'video-quality-v1.json')}
+HEADERS = {'font/ui-%d%s.txt' % (em, '-italic' if italic else '')
+           for em, italic in SMALL_FACES}
+RUNTIME_SUPPORT = {
+    'font/ui-tops.json', 'font/octants.txt',
+    'weights/neuronte-pointer-v0.manifest.json',
+    'tools/neuronte-play.py', 'tools/neuronte_video.py',
+    'tools/neuronte_video_helpers.py', 'tools/neuronte-video.md',
+    # Video's portable cells still use geometry from these modules.
+    'train/glyphs.py', 'train/strokes.py',
+}
+PROBES = tuple(sorted(name for name in RUNTIME_MODELS if name.endswith('.nrt')))
 SELECTION = (
-    re.compile(r'weights/neuronte-ui([1-9]|[12][0-9]|3[0-2])(-italic)?-v0\.nrt'),
-    re.compile(r'weights/neuronte-ui-large-v0\.nrt'),
-    re.compile(r'weights/neuronte-flame-v0\.nrt'),
-    re.compile(r'font/ui-([1-9]|[12][0-9]|3[0-2])(-italic)?\.txt'),
-    re.compile(r'train/glyphs\.py'),
     re.compile(r'(src|include)/[^/]+\.[ch]'),
     re.compile(r'Makefile|LICENSE|THIRD_PARTY_NOTICES\.md|PROVENANCE\.md|README\.md'),
 )
-REQUIRED = {'Makefile', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'train/glyphs.py',
-            'include/neuronte.h', *PROBES}
+REQUIRED = RUNTIME_MODELS | HEADERS | RUNTIME_SUPPORT | {
+    'Makefile', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c',
+}
 
 
 class Refusal(Exception):
@@ -96,7 +110,7 @@ def git(*args, cwd=None, check=True):
 
 
 def selected(path):
-    return any(rule.fullmatch(path) for rule in SELECTION)
+    return path in REQUIRED or any(rule.fullmatch(path) for rule in SELECTION)
 
 
 def load_manifest(path, ref):
@@ -164,7 +178,7 @@ def write_manifest(repo_dir, commit, out, repository):
         'repository': repository,
         'commit': commit,
         'tree': tree,
-        'reader': 'Kilix 95 neuronte_face.py and neuronte_flame.py (af691fe; unchanged at 1e59c1e)',
+        'reader': 'Kilix 95 desktop faces and flame; Neuronte runtime assets and video player',
         'license': 'MIT; LICENSE and THIRD_PARTY_NOTICES.md are carried with the files',
         'files': dict(sorted(files.items())),
     }

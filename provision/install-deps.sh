@@ -174,7 +174,7 @@ DEP_GROUPS=(
     # PDF Conversion uses this standard-library venv support with a
     # hash-locked pip install independently of uv. The coordinated 0.1.9
     # release also installs its required, verified uv pin as system tooling.
-    "kilix desktop + app providers (python)|python3-pil python3-numpy python3-xlib python3-websockets python3-venv python3-tk"
+    "kilix desktop + app providers (python)|python3-pil python3-numpy python3-scipy python3-xlib python3-websockets python3-venv python3-tk"
     # Playalong links SDL2 for output and libsndfile for stem decode. Keep the
     # runtime libraries explicit rather than relying on the -dev toolchain.
     # Kilix Amp links libfluidsynth in-process and reads a General MIDI

@@ -5931,6 +5931,11 @@ install_neuronte() {
         --manifest "$manifest" --ref "$NEURONTE_REF" --repo "$NEURONTE_REPO" \
         --destination "$GPU_TERMINAL_SOURCE_HOME/neuronte" --archive "$archive" \
         || die "required Neuronte installation failed"
+    if [ -f "${KILIX95_DIR:-}/main.py" ]; then
+        log "preparing Kilix 95 bytecode and font caches for the desktop user"
+        as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX95_DIR/main.py" --prepare-cache \
+            || warn "Kilix 95 cache preparation failed; the desktop will retry at launch"
+    fi
 }
 
 # The commit the installed Neuronte tree records, or nothing.

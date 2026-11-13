@@ -1332,6 +1332,11 @@ def install_neuronte_for_an_older_updater(closure=None, environ=None, run=subpro
                   '--fetch-failure', 'warn'])
     if result.returncode != 0:
         raise ValueError('Neuronte installation failed (see above)')
+    desktop = Path(environ.get('KILIX95_DIR') or sources / 'kilix-desktops/kilix-95') / 'main.py'
+    if desktop.is_file():
+        result = run([sys.executable, str(desktop), '--prepare-cache'])
+        if result.returncode != 0:
+            print('Kilix 95 cache preparation failed; the desktop will retry at launch', file=sys.stderr)
     return 0
 
 

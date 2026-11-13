@@ -4450,7 +4450,7 @@ install_kilix_llm() {
 # $GPU_TERMINAL_SOURCE_HOME/neuronte: provisioning's install_neuronte, for a
 # machine installed before 0.2.3 or one whose pin moved. The image's archive is
 # used when this machine has the one for this ref; otherwise only the pinned
-# files are fetched (blob-less, about 37 MB) and each is checked against its
+# files are fetched (blob-less, runtime files only) and each is checked against its
 # pinned git blob id. A failed download leaves the installed tree as it is and
 # the next update tries again; a refused or failed install fails the update.
 install_neuronte_update() {
@@ -4472,6 +4472,11 @@ install_neuronte_update() {
         --archive "/usr/local/share/plebian-os/neuronte-$NEURONTE_REF.tar.xz" \
         --fetch-failure warn \
         || die "required Neuronte installation failed"
+    if [ -f "${KILIX95_DIR:-}/main.py" ]; then
+        log "preparing Kilix 95 bytecode and font caches for the desktop user"
+        env "${stack_env[@]}" /usr/bin/python3 "$KILIX95_DIR/main.py" --prepare-cache \
+            || warn "Kilix 95 cache preparation failed; the desktop will retry at launch"
+    fi
 }
 
 # The commit the installed Neuronte tree records, or nothing.
