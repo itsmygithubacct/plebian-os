@@ -6,6 +6,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Attach two independent reviews and the acceptance receipt for RC9 carrier
+  `de2ff296`, preserving their exact source scope and unchanged model bytes.
+
 - Ask for a default desktop on first login, with Kilix 95, IceWM, Kilix TUI
   and zell (RPG Desktop) as the primary choices. Save the answer for later
   sessions and support zell through the normal desktop provider commands.
