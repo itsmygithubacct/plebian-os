@@ -17,7 +17,7 @@ REQUIRED = {'zell-neuronte', 'bin/zell', 'VERSION', 'tools/desktop.py', 'tools/z
             'libexec/kilix-secrets', 'libexec/kilix-secretsd',
             'service/kilix-secrets.service', 'service/kilix-secrets.socket'}
 REQUIRED.update('tools/'+name+'.py' for name in (
-    'zell_os', 'zell_system', 'zell_files', 'zell_schedule', 'zell_devices', 'zell_audio', 'zell_paths', 'zell_agents'))
+    'zell_os', 'zell_system', 'zell_files', 'zell_schedule', 'zell_devices', 'zell_audio', 'zell_paths', 'zell_agents', 'zell_mana'))
 
 
 def unpack(archive, pin_path, stage):
