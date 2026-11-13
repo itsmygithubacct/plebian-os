@@ -278,7 +278,9 @@ https://github.com/user-attachments/assets/4c3f0796-6023-41ad-975e-853ade4125af
      already resolves to an existing command, alias, or function;
    - seeds that same file with an `ask` alias for `kilix ask` (0.2.3 rc5 and
      onward), skipping it with a note when `ask` already resolves to an
-     existing command, alias, or function;
+     existing command, alias, or function.
+     Both `ask what version is kilix?` and `ask "what version is kilix?"`
+     work; ordinary shell quoting still applies to shell operators and wildcards;
    - installs and executes Kilix Voice's read-aloud tools; release 0.1.7 also
      installs the URL/SHA-256-pinned Vosk library and small US-English model,
      preserves their Apache-2.0 license and source provenance, and rejects

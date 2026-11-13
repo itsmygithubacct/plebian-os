@@ -183,7 +183,7 @@ class AskAliasBehaviorTests(unittest.TestCase):
                 aliases.read_text(), f"{ALIAS_COMMENT}\n{ALIAS_LINE}\n"
             )
             probe = subprocess.run(
-                ["bash", "-ic", "command -v ask; ask 'what version is kilix?'"],
+                ["bash", "-ic", "command -v ask; ask 'what version is kilix?'; ask what version is kilix?"],
                 env={
                     **os.environ,
                     "HOME": str(home),
@@ -195,7 +195,7 @@ class AskAliasBehaviorTests(unittest.TestCase):
             )
             self.assertEqual(probe.returncode, 0, probe.stderr)
             self.assertIn("alias ask='kilix ask'", probe.stdout)
-            self.assertIn("ask what version is kilix?", probe.stdout)
+            self.assertEqual(probe.stdout.splitlines().count("ask what version is kilix?"), 2)
 
     def test_reprovision_notes_the_existing_alias_and_keeps_one_line(self):
         with tempfile.TemporaryDirectory() as td:

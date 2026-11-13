@@ -4199,20 +4199,14 @@ selected_desktop_wallpaper_state_dir() {
 }
 
 record_default_desktop() {
-    # Persist the image's desktop choice where every desktop reads and writes
-    # it. Firstboot knew which provider it was provisioning and kept that in
-    # its own environment, so the running system had no record a user could
-    # see or change: choosing another desktop meant editing a file the
-    # installer had written and nothing offered.
-    local provider="${KILIX_DESKTOP_PROVIDER:-auto}"
+    # The provisioner runs without the user's interactive terminal. Ask in the
+    # first desktop pane instead, and preserve any choice already completed.
     [ -x "$KILIX_DIR/kilix" ] || return 0
     if as_user env "${install_env[@]}" "$KILIX_DIR/kilix" \
-            default-desktop set "$provider" >/dev/null 2>&1; then
-        log "desktop    : default recorded as $provider"
+            default-desktop request >/dev/null 2>&1; then
+        log "desktop    : first-login choice requested (saved choices preserved)"
     else
-        # Not fatal: the session still starts with the provisioned provider,
-        # and the desktops can set it later.
-        log "desktop    : could not record the default ($provider)"
+        log "desktop    : could not request the first-login choice"
     fi
 }
 

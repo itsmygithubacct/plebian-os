@@ -1294,6 +1294,9 @@ for i in "${!secrets_dirs[@]}"; do
     managed_dirs+=("${secrets_dirs[$i]}")
     dir_keys+=("secrets-dir.$i")
 done
+# Named keys preserve the numeric layout of pre-notification snapshots.
+paths+=(/usr/local/lib/pleb/notification_center.py /usr/local/lib/pleb/.notification_center.py.new)
+path_keys+=(notifications.0 notifications.1)
 cleanup() {
     rc=$?
     trap - EXIT
@@ -1334,6 +1337,7 @@ for i in "${!paths[@]}"; do
 done
 : >"$txn/zell-runtime"
 : >"$txn/kilix-secrets"
+: >"$txn/pleb-notifications"
 printf '%s\n' "$txn"
 ROOT_SNAPSHOT
 }
@@ -1568,6 +1572,10 @@ if [ -f "$txn/kilix-secrets" ]; then
         managed_dirs+=("${secrets_dirs[$i]}")
         dir_keys+=("secrets-dir.$i")
     done
+fi
+if [ -f "$txn/pleb-notifications" ]; then
+    paths+=(/usr/local/lib/pleb/notification_center.py /usr/local/lib/pleb/.notification_center.py.new)
+    path_keys+=(notifications.0 notifications.1)
 fi
 new_paths=()
 cleanup_new() {
