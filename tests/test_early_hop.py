@@ -15,12 +15,15 @@ import time
 import unittest
 from pathlib import Path
 
-from test_closure_selection import SELECT, ClosureSelectionTests
+import test_closure_selection as closure_tests
+
+SELECT = closure_tests.SELECT
 
 
 OLD_PLEB = "49fc7554a01b30e33fd1a8f12e038906830bc7fe"
 OLD_CLOSURE_BLOB = "67a0e01b11f02cc03b4e42ab8afb8a1eea5c1ed3"
-PLEB_REPO = Path("/home/pleb/gpu_terminal/worktrees/rc9-pleb-hop")
+PLEB_REPO = Path(os.environ.get(
+    "PLEBIAN_OS_PLEB_REPO", str(Path(__file__).resolve().parents[2] / "pleb")))
 PREBUILT_SHA = "bc230142b2bd27f2a4bf1b1b67575f3d397a4ea2cc83f4ac2b912c306a939693"
 
 OLD_DRIVER = textwrap.dedent(
@@ -55,9 +58,66 @@ OLD_DRIVER = textwrap.dedent(
 
 
 class EarlyHopTests(unittest.TestCase):
-    def _helper(self) -> ClosureSelectionTests:
-        return ClosureSelectionTests(
+    def _helper(self) -> closure_tests.ClosureSelectionTests:
+        return closure_tests.ClosureSelectionTests(
             "test_rollback_restores_the_previous_closure_byte_for_byte")
+
+    def test_parent_dying_before_signal_is_armed_stops_the_selector(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            shim = base / "bin"
+            shim.mkdir()
+            ready, release, done = (base / name for name in ("ready", "release", "done"))
+            os.mkfifo(release)
+            wrapper = shim / "python3"
+            # Suspend immediately before the production prctl call. The
+            # original parent stays unreaped, so its /proc start time still
+            # matches even after the selector has been reparented.
+            wrapper.write_text(
+                '#!/bin/bash\nprintf "%s\\n" "$$" >"$TEST_READY"\n'
+                'read -r _ <"$TEST_RELEASE"\nexec /usr/bin/python3 "$@"\n')
+            wrapper.chmod(0o755)
+            env = {"HOME": str(base), "PATH": f"{shim}:/usr/bin:/bin",
+                   "TEST_READY": str(ready), "TEST_RELEASE": str(release),
+                   "TEST_DONE": str(done)}
+            runner = base / "child.sh"
+            runner.write_text('"$@"\nrc=$?\nprintf "%s\\n" "$rc" >"$TEST_DONE"\n')
+            output = base / "selector.log"
+            child = 0
+            with output.open("w") as stream:
+                # This direct parent must not be reaped until the selector
+                # has made its decision. Popen.poll would reap the zombie.
+                parent = subprocess.Popen(
+                    ["bash", str(runner), str(SELECT), "--help"], env=env,
+                    stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertTrue(ready.exists(), output.read_text())
+                    child = int(ready.read_text())
+                    os.kill(parent.pid, signal.SIGKILL)
+                    # waitid observes exit without reaping the parent.
+                    os.waitid(os.P_PID, parent.pid, os.WEXITED | os.WNOWAIT)
+                    status = Path(f"/proc/{parent.pid}/stat").read_text().rsplit(") ", 1)[1]
+                    self.assertEqual(status.split()[0], "Z")
+                    with release.open("w") as writer:
+                        writer.write("continue\n")
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        stat_path = Path(f"/proc/{child}/stat")
+                        try:
+                            state = stat_path.read_text().rsplit(") ", 1)[1].split()[0]
+                        except FileNotFoundError:
+                            break
+                        if state == "Z": break
+                        time.sleep(0.02)
+                    else:
+                        self.fail("orphan selector did not stop")
+                    self.assertNotIn("Usage:", output.read_text())
+                    self.assertNotIn("--rollback", output.read_text())
+                finally:
+                    self._stop_private_group(parent, child)
 
     @staticmethod
     def _tree_bytes(root: Path) -> dict:

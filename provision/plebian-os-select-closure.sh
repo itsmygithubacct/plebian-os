@@ -81,13 +81,21 @@ if [ "${PLEBIAN_OS_SELECT_PARENT_WATCH:-}" != 1 ]; then
     _parent_stat="${_parent_stat##*) }"
     export PLEBIAN_OS_SELECT_PARENT_WATCH=1
     export PLEBIAN_OS_SELECT_PARENT_PID="$PPID"
-    export PLEBIAN_OS_SELECT_PARENT_START="$(awk '{print $20}' <<<"$_parent_stat")"
-    export PLEBIAN_OS_SELECT_PARENT_BOOT="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
-    export BASH
+    PLEBIAN_OS_SELECT_PARENT_START="$(awk '{print $20}' <<<"$_parent_stat")"
+    PLEBIAN_OS_SELECT_PARENT_BOOT="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+    export BASH PLEBIAN_OS_SELECT_PARENT_START PLEBIAN_OS_SELECT_PARENT_BOOT
     exec python3 -c 'import ctypes, os, signal, sys
+# The parent may die before prctl runs and remain visible as a zombie in
+# /proc. Bind the signal only while we still have the recorded parent; a
+# start-time comparison alone cannot distinguish that zombie from a live one.
+parent = int(os.environ["PLEBIAN_OS_SELECT_PARENT_PID"])
+if os.getppid() != parent:
+    raise SystemExit(129)
 libc = ctypes.CDLL(None, use_errno=True)
 if libc.prctl(1, int(signal.SIGTERM), 0, 0, 0) != 0:
     raise SystemExit(1)
+if os.getppid() != parent:
+    raise SystemExit(129)
 os.execv(os.environ["BASH"], [os.environ["BASH"], sys.argv[1], *sys.argv[2:]])
 ' "$0" "$@"
     printf '\033[1;31m[plebian-os] could not arm the selection parent-death stop\033[0m\n' >&2
