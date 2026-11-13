@@ -560,23 +560,25 @@ release upgrade, physical or human acceptance gate. Retain the report and
      `kilix-tts --version`, `kilix-stt --version`, and
      `kilix-voiced --version`, then require `kilix-stt --print` to produce a
      dictation report. Require `kilix-stt --models --json` to pass the
-     `kilix.speech.models/v1` schema gate with all five 0.2.2 models
+     `kilix.speech.models/v1` schema gate with all six selected models
      (`small-en-us`, `lgraph-en-us`, `vibevoice-asr-bitnet`,
-     `whisper-small-en`, and `whistle`), exactly
+     `whisper-small-en`, `whisper-medium-en`, and `whistle`), exactly
      one selected default, truthful runtime-support flags, positive exact byte
      sizes, and the shared explicit install-and-default argv. This listing must
      not open the network or change installed/default state. Require the
      device-free acceptance smoke to synthesize a phrase with real espeak.
      **Include speech-model weights as needed.** `small-en-us` and `whistle`
-     are bundled, so a fresh guest may hold `voice/models/small-en-us`, the
-     matching `voice/models/vosk-model-*` generation, `voice/lib/current`, the
-     content-store copies of those two models, and an install stamp that
-     records the installed libvosk and `model-small-en-us` digests.
-     `lgraph-en-us`, `vibevoice-asr-bitnet`, and `whisper-small-en` stay
+     are bundled in the content store. Fresh provisioning leaves Vosk's
+     active model and library uninstalled; its stamp records
+     `libvosk=skipped` and `model-small-en-us=skipped`.
+     `lgraph-en-us`, `vibevoice-asr-bitnet`, `whisper-small-en`, and
+     `whisper-medium-en` stay
      first-use pulls and must be absent as installed weights. Exercise that
      first-use path on `lgraph-en-us`: require the screen to show model id,
      upstream source URL and host, bytes, licence and licensor before any fetch;
-     decline once and prove no bytes or model directory appeared; then accept
+     use `kilix models install vosk-model-en-us-0.22-lgraph` to display that
+     licence screen. Decline once and prove no bytes or model directory
+     appeared; then accept
      and require a receipt, verified download and atomic install matching that
      model's pinned catalog checksum. Do not download the 1.6 GiB VibeVoice
      weights to satisfy this paragraph. Old 0.2.1 receipts are not read, so accept
@@ -590,14 +592,17 @@ release upgrade, physical or human acceptance gate. Retain the report and
    - on the pristine guest, exercise all five model-management surfaces against
      the same catalog. `kilix stt --models` and the Models tab must show both
      Vosk models, VibeVoice through the selected VibeASR provider, Whisper
-     small.en, and Whistle. Check runtime-support flags against the pinned
+     small.en and medium.en, and Whistle. Check runtime-support flags against the pinned
      catalog contract; support does not imply that model weights are installed.
      `kilix settings --section voice`, built-in WM Settings, and Kilix
      95 Settings must each offer **Install + use** for the selected model. Before
      installing `lgraph-en-us`, make it the pending default, click the terminal
      microphone, require the 124.5 MiB lazy-install confirmation, cancel it, and
-     prove no model directory appeared. Then install it through one settings
-     surface, require checksum verification and coherent Vosk/model defaulting,
+     prove no model directory appeared. Before a covering Vosk receipt
+     exists, an install action must refuse with the catalogue licence command;
+     retain that result. Complete the explicit catalogue licence flow above,
+     then retry **Install + use** through one settings surface. Require checksum
+     verification and coherent Vosk/model defaulting,
      and use the other surfaces to verify the same installed/default state.
      Restore the release default before recording acceptance. Do not download
      the 1.6 GiB VibeVoice weights solely for this check; require the truthful
@@ -631,7 +636,8 @@ release upgrade, physical or human acceptance gate. Retain the report and
      source layout and `~/.local/gpu_terminal/` as the data root in build info,
      session defaults, and final provenance; confirm `external`, `builtin`, and
      both `auto` outcomes seed only Pleb's `data/desktop` state, while launching
-     Kilix-95 standalone still uses its XP wallpaper;
+     Kilix-95 standalone uses its own packaged default wallpaper, independently
+     of Pleb's desktop state;
    - verify the shared data root and its `pleb`, `kilix`, `kilix-95`, and
      `plebian-os` component roots are real, target-user-owned directories with
      mode `0700`; check every persisted category below them, including Pleb's
