@@ -10,8 +10,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   browser hold controls and preservation of the displayed frame after rejected
   media opens. Wait for queued private-bus activation within its existing
   deadline while retaining identity and placement checks.
-- Preserve the earlier carrier receipt and reviews under their original source
-  scope; leave the successor receipt empty for independent delta review.
+- Attach the two independent delta reviews and their receipt for SDK/Zell
+  successor OS `ecb5d279`; preserve earlier receipt and review records
+  verbatim with their original source scope.
 
 - Attach two independent reviews and the acceptance receipt for RC9 carrier
   `de2ff296`, preserving their exact source scope and unchanged model bytes.
