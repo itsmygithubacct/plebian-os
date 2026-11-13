@@ -44,8 +44,12 @@
 #                 be present locally already; do not fetch.
 #   --dry-run     validate, compare, and report; write nothing.
 #   --show        print the release-controlled keys this machine currently has.
-#   --rollback    put the previous closure back (the most recent one this tool
-#                 replaced), atomically.
+#   --rollback    put the previous closure back when this selector wrote that
+#                 recovery record, or when no trusted tag is bound to the
+#                 request. A trusted tag with no selection-pending marker did
+#                 not start a selection: the newest older record is left as it
+#                 is. Clear only the pre-selection marker and keep the
+#                 installed closure. Do not delete recovery records.
 #
 # The release-controlled keys move as one unit or not at all: the complete
 # session/closure pair is rendered and verified by sourcing it before the
@@ -63,6 +67,41 @@
 # Run as the Pleb user; the bounded writes under /etc, /var/lib, and
 # /usr/local/bin elevate through sudo.
 set -euo pipefail
+
+# The published Pleb that starts a hop records `selecting` and then execs this
+# selector. If that parent dies, this process must stop with it. Otherwise a
+# later recovery can observe a live selector, or this process can finish a
+# selection the parent will never record. PR_SET_PDEATHSIG is set in this
+# process and kept across the re-exec.
+if [ "${PLEBIAN_OS_SELECT_PARENT_WATCH:-}" != 1 ]; then
+    command -v python3 >/dev/null 2>&1 \
+        || { printf '\033[1;31m[plebian-os] python3 is required so a selection stops when its parent exits\033[0m\n' >&2; exit 1; }
+    _parent_stat="$(cat "/proc/${PPID}/stat" 2>/dev/null)" \
+        || { printf '\033[1;31m[plebian-os] the selecting parent is not running\033[0m\n' >&2; exit 129; }
+    _parent_stat="${_parent_stat##*) }"
+    export PLEBIAN_OS_SELECT_PARENT_WATCH=1
+    export PLEBIAN_OS_SELECT_PARENT_PID="$PPID"
+    export PLEBIAN_OS_SELECT_PARENT_START="$(awk '{print $20}' <<<"$_parent_stat")"
+    export PLEBIAN_OS_SELECT_PARENT_BOOT="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+    export BASH
+    exec python3 -c 'import ctypes, os, signal, sys
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(1, int(signal.SIGTERM), 0, 0, 0) != 0:
+    raise SystemExit(1)
+os.execv(os.environ["BASH"], [os.environ["BASH"], sys.argv[1], *sys.argv[2:]])
+' "$0" "$@"
+    printf '\033[1;31m[plebian-os] could not arm the selection parent-death stop\033[0m\n' >&2
+    exit 1
+fi
+_parent_stat="$(cat "/proc/${PLEBIAN_OS_SELECT_PARENT_PID}/stat" 2>/dev/null || true)"
+_parent_stat="${_parent_stat##*) }"
+_parent_now="$(awk '{print $20}' <<<"${_parent_stat:-}")"
+if [ "${_parent_now}" != "${PLEBIAN_OS_SELECT_PARENT_START}" ] \
+        || [ "${PLEBIAN_OS_SELECT_PARENT_BOOT}" != "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)" ]; then
+    printf '\033[1;31m[plebian-os] the selecting parent exited before the selection started\033[0m\n' >&2
+    exit 129
+fi
+unset _parent_stat _parent_now
 
 # Keep the installed selector/updater self-contained. Only a stable tag or a
 # numbered RC of the same numeric VERSION is a supported release identity.
@@ -143,6 +182,19 @@ select_test_fail_after() {
         || kill -INT "$$"
     [ "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" != "$1" ] \
         || die "injected closure selection failure after $1"
+}
+
+# Test hook: block after the parent-death stop is armed and before
+# selection-pending exists, so a killed parent is observable in that window.
+arm_selection_hold_before_pending() {
+    local hold="${PLEBIAN_OS_SELECT_TEST_HOLD_BEFORE_PENDING:-}"
+    [ -n "$hold" ] || return 0
+    [ -p "$hold" ] || die "PLEBIAN_OS_SELECT_TEST_HOLD_BEFORE_PENDING must be a fifo"
+    printf '%s\n' "$$" >"$hold.pid" \
+        || die "could not publish the selection pid"
+    exec 8<>"$hold" || die "could not open the selection hold"
+    read -r -u 8 _ || true
+    exec 8<&-
 }
 
 # ── what a release controls ─────────────────────────────────────────────────
@@ -323,6 +375,9 @@ STANDALONE_PLEB_BOOTSTRAP=""
 
 PENDING_SELECTION=""
 SELECT_SIGNALLED=0
+# 1 when --rollback has no selection-pending marker. The trusted tag may
+# restore only the record that tag wrote. 0 keeps an ordinary rollback.
+REQUIRE_OWN_RECORD=0
 
 cleanup_stage() {
     [ -z "$STAGE" ] || rm -rf -- "$STAGE"
@@ -2001,6 +2056,9 @@ write_closure_record() {
         printf 'os_commit=%s\n' "$OS_COMMIT"
         printf 'source=%s\n' "$SOURCE_DIR"
         printf 'at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        if [[ "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'selection_tag=%s\n' "$PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA"
+        fi
         if [ -n "$DEVELOPMENT_COMMIT" ]; then
             printf 'selection_kind=development-commit\n'
             printf 'release_acceptance=not-claimed\n'
@@ -2027,10 +2085,13 @@ rollback_previous_closure() {
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$SELECTOR_DST" "$UPDATER_DST" "$RECOVERY_BASE" \
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
-        >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_ROLLBACK'
+        "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" \
+        "${REQUIRE_OWN_RECORD:-0}" \
+        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record; cat <<'ROOT_ROLLBACK'
 set -euo pipefail
 umask 077
 env_path="$1"; selector_path="$2"; updater_path="$3"; base="$4"; fail_after="$5"
+trusted_tag="${6:-}"; require_own="${7:-0}"
 case "$env_path" in */etc/pleb/session.env) ;; *) exit 2 ;; esac
 case "$selector_path" in */usr/local/bin/plebian-os-select-closure) ;; *) exit 2 ;; esac
 case "$updater_path" in */usr/local/bin/plebian-os-update) ;; *) exit 2 ;; esac
@@ -2051,6 +2112,7 @@ for candidate in "$base"/closure-rollback.*; do
     record="$candidate"                    # timestamped names sort oldest first
 done
 [ -n "$record" ] || exit 4
+refuse_unrelated_recovery_record "$record" "$require_own" "$trusted_tag"
 if [ "$EUID" = 0 ]; then
     [ "$(stat -c '%u' -- "$record")" = 0 ] || exit 2
     record_mode="$(stat -c '%a' -- "$record")"
@@ -2247,6 +2309,7 @@ ROOT_ROLLBACK
         5)
             prev="$(cat "$STAGE/record")"
             die "this machine has left the Debian install snapshot; release $prev predates live security sources and its updater would refuse live Debian indexes. Select a release >= 0.2.2 instead" ;;
+        11) die_unstarted_selection ;;
         *) die "could not restore the previous closure (status $rc); the selected session and installed tools were retained" ;;
     esac
     record="$(cat "$STAGE/record")"
@@ -2268,11 +2331,15 @@ rollback_split_closure() {
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$CLOSURE_ENV" "$SELECTOR_DST" "$UPDATER_DST" \
         "$RECOVERY_BASE" "$SELECTOR_MODE" \
-        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_SPLIT_ROLLBACK'
+        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
+        "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" \
+        "${REQUIRE_OWN_RECORD:-0}" \
+        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record; cat <<'ROOT_SPLIT_ROLLBACK'
 set -euo pipefail
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
 base="$5"; mode="$6"; fail_after="$7"
+trusted_tag="${8:-}"; require_own="${9:-0}"
 [ -d "$base" ] && [ ! -L "$base" ] || exit 4
 record=""
 for candidate in "$base"/closure-rollback.*; do
@@ -2282,6 +2349,7 @@ for candidate in "$base"/closure-rollback.*; do
     record="$candidate"
 done
 [ -n "$record" ] || exit 4
+refuse_unrelated_recovery_record "$record" "$require_own" "$trusted_tag"
 
 # Apply the same live-APT downgrade floor as legacy rollback, reading the
 # saved split pair in configuration order. Never source recovery records.
@@ -2402,6 +2470,7 @@ ROOT_SPLIT_ROLLBACK
                 6) die "recovery release metadata is missing, invalid, or ambiguous; no files were restored" ;;
                 4) die "no split closure to roll back to" ;;
                 9) die "injected split rollback failure; the selected session, closure, and tools were retained" ;;
+                11) die_unstarted_selection ;;
                 *) die "split closure rollback failed with status $rc; the selected bytes were retained" ;;
             esac
         fi
@@ -2557,14 +2626,42 @@ select_closure() {
 }
 
 # ── a rollback restores only what its own selection replaced ───────────────
-# --rollback restores the newest record nobody has restored yet. A caller that
-# was interrupted while selecting (Pleb's `selecting` phase, a Ctrl-C during the
-# component fetch) asks for exactly that rollback, but its selection wrote no
-# record: the newest record then belongs to an EARLIER hop, and restoring it
-# moves the machine back a whole release. So a selection states that it has
-# begun, with the fingerprints of everything it may replace, before it does
-# anything slow; and a rollback asked on behalf of the same tag, finding those
-# fingerprints unchanged, restores nothing because nothing was replaced.
+# --rollback restores the newest record nobody has restored yet. The published
+# client records `selecting` before it execs this selector, and on the next
+# run it always asks for --rollback. Two different requests look alike if the
+# only clue is "there is an older record":
+#
+#   * a completed selection is being undone on purpose (no marker, because
+#     success already removed it; the trusted tag is the tag that wrote the
+#     newest record);
+#   * the new hop died before selection-pending existed (no marker either;
+#     the trusted tag is the new hop, and the newest record belongs to an
+#     earlier one). Restoring that record moves the machine back a release.
+#
+# A selection still publishes selection-pending, with the fingerprints of
+# every file it may replace, before it does anything slow. The same tag with
+# those fingerprints unchanged restores nothing. A marker that does not prove
+# that is spent: the selection got far enough to write its own record, and
+# the ordinary rollback restores that record. No marker plus a trusted tag
+# that did not write the newest record is an unstarted selection: refuse,
+# and do not mark, delete, or overwrite the older record. No trusted tag is
+# a manual rollback of the newest record.
+die_unstarted_selection() {
+    die "refusing rollback: no selection for this trusted tag replaced the closure, so the newest older recovery record was left unchanged and the installed closure was not modified. An unstarted or unprovable selection has nothing to undo; clear only the pre-selection marker and keep the installed closure. Do not delete recovery records."
+}
+
+# Exit 11 before any rollback write when this trusted tag did not write the
+# newest unrestored record. A manual rollback has no trusted tag. A spent
+# marker passes require_own=0 and keeps the ordinary restore.
+refuse_unrelated_recovery_record() {
+    local record="$1" require_own="$2" trusted_tag="$3" record_tag=""
+    [ "$require_own" = 1 ] || return 0
+    [[ "$trusted_tag" =~ ^[0-9a-f]{40}$ ]] || return 0
+    if [ -f "$record/meta" ] && [ ! -L "$record/meta" ]; then
+        record_tag="$(sed -n 's/^selection_tag=\([0-9a-f]\{40\}\)$/\1/p' -- "$record/meta")"
+    fi
+    [ "$record_tag" = "$trusted_tag" ] || return 11
+}
 pending_selection_path() {
     selector_state_home
     printf '%s\n' "$PLEB_STATE_HOME/selection-pending"
@@ -2600,17 +2697,20 @@ end_pending_selection() {
     PENDING_SELECTION=""
 }
 
-# True only when a selection for this same tag began, was interrupted, and left
-# every file it could have replaced exactly as it found it. Any other marker is
-# spent: a selection that did replace the closure wrote its own record, which
-# the ordinary rollback below restores.
-interrupted_selection_changed_nothing() {
+# 0: same tag, files unchanged. The caller exits 0 and restores nothing.
+# 1: no marker. The caller may restore only a record this trusted tag wrote.
+# 2: a marker was present but does not prove the files are unchanged. The
+#    ordinary rollback restores the newest record.
+rollback_selection_disposition() {
     local path recorded
     path="$(pending_selection_path)"
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
     recorded="$(cat -- "$path")"
     rm -f -- "$path"
-    [ "$recorded" = "$(pending_selection_facts)" ]
+    if [ "$recorded" = "$(pending_selection_facts)" ]; then
+        return 0
+    fi
+    return 2
 }
 
 # ── an interrupted update must be recovered before a new selection ─────────
@@ -2751,10 +2851,17 @@ case "$MODE" in
         ;;
     rollback)
         [ -z "$TARGET" ] || die "--rollback takes no release argument"
-        if interrupted_selection_changed_nothing; then
-            log "the interrupted selection had not replaced the closure; the installed closure is unchanged and nothing was restored"
-            exit 0
-        fi
+        disposition=0
+        rollback_selection_disposition || disposition=$?
+        case "$disposition" in
+            0)
+                log "the interrupted selection had not replaced the closure; the installed closure is unchanged and nothing was restored"
+                exit 0
+                ;;
+            1) REQUIRE_OWN_RECORD=1 ;;
+            2) REQUIRE_OWN_RECORD=0 ;;
+            *) die "could not read the interrupted-selection marker" ;;
+        esac
         if split_layout_active; then
             rollback_split_closure
         else
@@ -2766,8 +2873,12 @@ case "$MODE" in
             || die "name the target release, e.g. plebian-os-select-closure 0.1.8 (try --help)"
         [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
             || die "invalid release identifier: $TARGET"
-        [ "$DRY_RUN" = 1 ] || begin_pending_selection
+        if [ "$DRY_RUN" != 1 ]; then
+            arm_selection_hold_before_pending
+            begin_pending_selection
+        fi
         select_closure
+        select_test_fail_after applied
         end_pending_selection
         ;;
 esac
