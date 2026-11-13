@@ -76,8 +76,9 @@ if not blocked:
     sys.stderr.write("holder probe acquired\n")
     raise SystemExit(1)
 ident = os.fstat(fd)
-with open(ready, "w", encoding="ascii") as handle:
+with open(ready + ".tmp", "w", encoding="ascii") as handle:
     handle.write("%s %s\n" % (ident.st_dev, ident.st_ino))
+os.replace(ready + ".tmp", ready)
 while not os.path.exists(release):
     time.sleep(0.02)
 os.close(fd)
