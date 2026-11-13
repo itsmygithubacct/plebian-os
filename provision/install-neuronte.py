@@ -83,7 +83,7 @@ SELECTION = (
 )
 REQUIRED = RUNTIME_MODELS | HEADERS | RUNTIME_SUPPORT | {
     'Makefile', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
-    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c',
+    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c', 'src/video.c',
 }
 
 

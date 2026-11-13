@@ -68,6 +68,7 @@ FILES = {
     'include/neuronte.h': 'int neuronte_open_file(const char *, void **);\nvoid neuronte_close(void *);\n',
     'src/neuronte.c': LIBRARY_C,
     'src/utf8.c': '/* fixture */\n',
+    'src/video.c': '/* fixture */\n',
     'train/glyphs.py': 'UI_TOP = {12: 3}\n',
     'weights/neuronte-ui12-v0.nrt': 'NRT small 12\n',
     'weights/neuronte-ui12-italic-v0.nrt': 'NRT italic 12\n',
@@ -215,7 +216,7 @@ class ReleasePinTests(unittest.TestCase):
             self.assertIn('weights/neuronte-ui%d-italic-v0.nrt' % em, files)
             self.assertIn('font/ui-%d-italic.txt' % em, files)
         for name in ('weights/neuronte-ui-large-v0.nrt', 'weights/neuronte-flame-v0.nrt',
-                     'train/glyphs.py', 'Makefile', 'src/neuronte.c', 'src/utf8.c',
+                     'train/glyphs.py', 'Makefile', 'src/neuronte.c', 'src/utf8.c', 'src/video.c',
                      'include/neuronte.h', 'LICENSE', 'THIRD_PARTY_NOTICES.md'):
             self.assertIn(name, files)
         # Never opened: em 33 and up go to ui-large, which reads no header.
@@ -238,7 +239,7 @@ class ReleasePinTests(unittest.TestCase):
         manifest = json.loads(MANIFEST.read_text())
         for name in ('weights/neuronte-icon-v1.nrt', 'weights/neuronte-video-speed-v1.json',
                      'weights/neuronte-pointer-v0.manifest.json', 'font/ui-tops.json',
-                     'train/strokes.py', 'tools/neuronte-play.py'):
+                     'train/strokes.py', 'tools/neuronte-play.py', 'src/video.c'):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
                 changed = dict(manifest, files=dict(manifest['files']))
                 del changed['files'][name]

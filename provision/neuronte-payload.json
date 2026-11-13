@@ -1,8 +1,8 @@
 {
  "schema": "plebian.neuronte-payload/v1",
  "repository": "https://github.com/itsmygithubacct/neuronte.git",
- "commit": "399f19b6e36fbb84f4e98e266da7933f89bbc0ad",
- "tree": "a8b44ed3969c9b604012c34de6b703b641f765ec",
+ "commit": "f8f432c54386950c9ff17ccc195d21a992baae29",
+ "tree": "6c5f3770d59288a06fbacbd059a0ad008c73f969",
  "reader": "Kilix 95 desktop faces and flame; Neuronte runtime assets and video player",
  "license": "MIT; LICENSE and THIRD_PARTY_NOTICES.md are carried with the files",
  "files": {
@@ -12,9 +12,9 @@
    "bytes": 1072
   },
   "Makefile": {
-   "blob": "14008b9d2a5321d502ae927c513bdf2cd6589709",
+   "blob": "66864563488772aff232e255e14e864dabf2b31c",
    "mode": "100644",
-   "bytes": 21480
+   "bytes": 21531
   },
   "PROVENANCE.md": {
    "blob": "afe5193ba12881f8a862654760c8d2b075a06a12",
@@ -352,9 +352,9 @@
    "bytes": 1835
   },
   "include/neuronte.h": {
-   "blob": "fddf401e4cadf423b152cc8f3493bfe54261b951",
+   "blob": "6ed9a591d98b43d08ca98ac916f8ba38a8aa3e5c",
    "mode": "100644",
-   "bytes": 13986
+   "bytes": 14888
   },
   "src/neuronte.c": {
    "blob": "4079e2a647b4b6fbdfd333e66edd45a13cc8e7cc",
@@ -366,20 +366,25 @@
    "mode": "100644",
    "bytes": 1805
   },
+  "src/video.c": {
+   "blob": "5e3c882c92a443a514b1b9c53d0e18a65db982fb",
+   "mode": "100644",
+   "bytes": 2931
+  },
   "tools/neuronte-play.py": {
-   "blob": "d18713a3731ef2d4290c9f75f40e2b633f24f683",
+   "blob": "6c54a1e4a9705597d5aab14e34348d1112cc7bb0",
    "mode": "100755",
-   "bytes": 33633
+   "bytes": 34092
   },
   "tools/neuronte-video.md": {
-   "blob": "84c090f1bc8179fca0d5afd31bf7427210e0a784",
+   "blob": "d04c7c3791e080b036b6927c21aa98ecf6021f8c",
    "mode": "100644",
-   "bytes": 11511
+   "bytes": 12685
   },
   "tools/neuronte_video.py": {
-   "blob": "b47c14028ac94f0e544777250ceb95d58685d171",
+   "blob": "4c5e47c34c61aa4a95581bac47e0937e3504fe3a",
    "mode": "100644",
-   "bytes": 13156
+   "bytes": 17845
   },
   "tools/neuronte_video_helpers.py": {
    "blob": "d6d1265c4b54a93ef301d823d312750841e9d84b",
