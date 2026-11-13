@@ -259,6 +259,10 @@ DEP_GROUPS=(
     "F101 native codec dependencies|libonnxruntime1.21=1.21.0+dfsg-1 libonnxruntime-dev=1.21.0+dfsg-1 libsamplerate0=0.2.2-4+b2 libsamplerate0-dev=0.2.2-4+b2 libssl3t64=3.5.6-1~deb13u2"
     "disk management|gparted"
     "Zell operating-system stations|upower bluez scrot brightnessctl power-profiles-daemon nftables wtmpdb"
+    # Redshift warms the display colour temperature at night. geoclue (its
+    # Recommends) is not installed, so it needs a location from -l LAT:LON or
+    # ~/.config/redshift.conf.
+    "desktop colour temperature|redshift"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     # Native Wayland applications reuse Kilix's existing X surfaces through a
     # supervised Weston X11 backend. Waydroid itself is a separately pinned

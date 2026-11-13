@@ -468,6 +468,18 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertIn("shellcheck", install_deps_packages())
         self.assertIn("shellcheck", preseed_packages())
 
+    def test_colour_temperature_tool_is_on_both_paths(self):
+        # redshift is a default from 0.2.3 RC9 onward (owner, 2026-11-13). The
+        # updater runs the same install-deps, so upgrades get it too.
+        self.assertIn("redshift", install_deps_packages())
+        self.assertIn("redshift", preseed_packages())
+        plan = subprocess.run(
+            ["bash", str(ROOT / "provision" / "install-deps.sh"), "--dry-run"],
+            check=True, capture_output=True, text=True, timeout=30).stdout
+        installs = [line.split() for line in plan.splitlines()
+                    if "apt-get install " in line]
+        self.assertTrue(any("redshift" in command for command in installs))
+
     def test_process_viewer_is_on_both_paths(self):
         # htop is a default from 0.2.2 RC3 onward (owner, 2026-09-29).
         self.assertIn("htop", install_deps_packages())
