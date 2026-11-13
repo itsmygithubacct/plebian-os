@@ -183,7 +183,7 @@ def write_manifest(repo_dir, commit, out, repository):
         'commit': commit,
         'tree': tree,
         'reader': 'Kilix 95 desktop faces and flame; Neuronte runtime assets and video player',
-        'license': 'MIT; LICENSE and THIRD_PARTY_NOTICES.md are carried with the files',
+        'license': 'MIT renderer and weights; LGPL-2.1-or-later media decoder; see LICENSE, LICENSES and THIRD_PARTY_NOTICES.md',
         'files': dict(sorted(files.items())),
     }
     Path(out).write_text(json.dumps(manifest, indent=1) + '\n')
