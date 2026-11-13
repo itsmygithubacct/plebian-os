@@ -2329,12 +2329,52 @@ finish_native_runtime_transaction() {
 native_runtime_command() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" /usr/local/sbin/plebian-os-native-runtime "$@"
+    # Own session, terminal signals ignored: see the note below.
+    "${elevate[@]}" /usr/bin/setsid --wait /bin/bash -c \
+        'trap "" INT HUP QUIT; exec "$@"' plebian-os-package-step \
+        /usr/local/sbin/plebian-os-native-runtime "$@"
+}
+
+# A Ctrl-C signals every process in the terminal's foreground group, and a
+# dpkg killed while unpacking leaves half-installed packages that no rollback
+# here can repair. Until now apt and dpkg were outside that group only because
+# sudo's default use_pty runs its command on another terminal; with !use_pty,
+# with no terminal, or when the updater already runs as root, the signal reached
+# dpkg directly. So every step that can run apt or dpkg is started in its own
+# session, with the terminal's signals ignored, and is always left to finish.
+# The updater itself still takes the signal: its INT trap runs as soon as the
+# step returns and rolls the stack back. The shield is spelled out at each
+# call (native_runtime_command, refresh_os_dependencies) because it has to run
+# on the root side of sudo, where no function of this script exists.
+
+# An update must not start on, or silently roll back onto, a package database
+# an earlier interruption left half-installed. `dpkg --audit` prints nothing
+# when every package is fully installed.
+package_database_faults() {
+    command -v dpkg >/dev/null 2>&1 || return 0
+    LC_ALL=C dpkg --audit 2>&1 || true
+}
+
+require_consistent_package_database() {
+    local faults
+    faults="$(package_database_faults)"
+    [ -z "$faults" ] && return 0
+    warn "dpkg reports packages that an earlier run left half-installed:"
+    while IFS= read -r line; do warn "  $line"; done <<<"$faults"
+    die "repair the package database first: sudo dpkg --configure -a (then sudo apt-get -f install), and run the update again"
 }
 
 rollback_stack_transaction() {
     local failed=0 kilix_rollback_ready=0
-    warn "stack update failed; restoring the previous coherent installation"
+    case "${_STACK_TXN_EXIT_STATUS:-1}" in
+        130|143|129)
+            warn "update interrupted (status ${_STACK_TXN_EXIT_STATUS}); restoring the previous coherent installation" ;;
+        *)
+            warn "stack update failed; restoring the previous coherent installation" ;;
+    esac
+    if [ -n "$(package_database_faults)" ]; then
+        warn "dpkg reports half-installed packages; after this rollback run: sudo dpkg --configure -a"
+    fi
     rollback_mpv_runtime_transaction || return 1
     rollback_qt_runtime_transaction || return 1
     rollback_native_runtime_transaction || {
@@ -2431,6 +2471,7 @@ stack_transaction_cleanup() {
     if [ "${_STACK_TXN_ACTIVE:-0}" = 1 ] \
         && [ "${_STACK_TXN_COMMITTED:-0}" != 1 ]; then
         [ "$rc" -ne 0 ] || rc=1
+        _STACK_TXN_EXIT_STATUS="$rc"
         rollback_stack_transaction || rollback_ok=0
     fi
     if [ "$rollback_ok" = 1 ] && [ "${_STACK_TXN_RETAIN:-0}" != 1 ]; then
@@ -4419,6 +4460,8 @@ refresh_os_dependencies() {
         "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256" \
         "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=$PLEBIAN_OS_UV_INSTALLER_MAX_BYTES" \
         PLEBIAN_OS_ROOT_SESSION_HOME=/var/lib/plebian-os/session \
+        /usr/bin/setsid --wait /bin/bash -c \
+        'trap "" INT HUP QUIT; exec "$@"' plebian-os-package-step \
         "$helper" --model-converters \
         || die "selected OS dependency closure could not be installed"
 }
@@ -5358,6 +5401,7 @@ fi
 # deployed file is changed. The inherited fd keeps Pleb's nested component
 # transaction under the same serialization lock.
 refuse_amd64_only_stack_inputs
+require_consistent_package_database
 begin_stack_transaction
 
 # Refresh the OS layer itself (provisioner/deps/update helper) first, then pleb.
