@@ -664,9 +664,11 @@ class ShellPathTests(unittest.TestCase):
                               env=self.env(PLEBIAN_OS_PROVISION_LIB_ONLY='1', **extra))
 
     def update(self, body, **extra):
+        # Checkout-check mode skips installed root configuration, so snapshot
+        # paths are derived from this fixture's temporary HOME.
         script = ('set -euo pipefail\nexport PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n'
                   f'PLEB_STATE_HOME={str(self.base / "state")!r}\n'
-                  f'source "{UPDATE}"\n'
+                  f'source "{UPDATE}" --check-source-checkouts\n'
                   f'PLEBIAN_OS_DIR={str(self.os_dir)!r}\n'
                   f'GPU_TERMINAL_SOURCE_HOME={str(self.base / "sources")!r}\n' + body)
         return subprocess.run(['bash', '-c', script], capture_output=True, text=True,
@@ -771,6 +773,7 @@ class ShellPathTests(unittest.TestCase):
         'validate_legacy_kilix_fork_stamp_path', 'validate_shared_settings_snapshot_path',
         'record_stack_transaction_owner', 'record_stack_checkout', 'record_kilix_submodule_tree',
         'snapshot_kilix_engine_generation', 'acquire_voicebox_delivery_lock',
+        'snapshot_kilix_claudex_install', 'restore_kilix_claudex_install',
         'validate_root_transaction_dir', 'begin_kilix_engine_mutation',
         'rollback_mpv_runtime_transaction', 'rollback_qt_runtime_transaction',
         'rollback_native_runtime_transaction', 'deinit_new_kilix_submodules',
