@@ -6,6 +6,13 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Select Debian's current trixie-backports Go package
+  `1.27.4-1~bpo13+1` for the Kilix engine build. The archive no longer
+  serves `1.27.3-1~bpo13+1`, so installs and upgrades stopped at the Go
+  step and restored. Attach independent reviews of OS `0007c491` and
+  their receipt; preserve earlier receipts and review records with
+  their original source scope.
+
 - Isolate the Neuronte rollback fixture from installed host settings
   and unrelated component snapshot operations. Attach independent
   reviews of OS `b226c490` and their receipt; preserve earlier
