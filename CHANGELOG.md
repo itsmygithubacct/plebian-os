@@ -6,6 +6,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Align installed qualification instructions with the existing Vosk
+  catalogue licence route and selected model inventory; correct the
+  standalone wallpaper test for the current packaged artwork. Attach
+  independent reviews of OS `fca36425` and their receipt; preserve
+  earlier receipts and review records with their original scope.
+
 - Preserve the distribution's verified local Go compiler through the Kilix
   engine build, avoiding an unexpected download of an older compiler.
   Attach two independent delta reviews of OS `b72655d6` and their receipt;
