@@ -6,6 +6,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [Unreleased]
 
+- Isolate the Neuronte rollback fixture from installed host settings
+  and unrelated component snapshot operations. Attach independent
+  reviews of OS `b226c490` and their receipt; preserve earlier
+  receipts and review records with their original source scope.
+
 - Align installed qualification instructions with the existing Vosk
   catalogue licence route and selected model inventory; correct the
   standalone wallpaper test for the current packaged artwork. Attach
