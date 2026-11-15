@@ -78,8 +78,7 @@ HEADERS = {'font/ui-%d%s.txt' % (em, '-italic' if italic else '')
 RUNTIME_SUPPORT = {
     'font/ui-tops.json', 'font/octants.txt',
     'weights/neuronte-pointer-v1.manifest.json',
-    'tools/neuronte-play.py', 'tools/neuronte_video.py',
-    'tools/neuronte_video_helpers.py', 'tools/neuronte-video.md',
+    'tools/neuronte-play.py', 'tools/neuronte_video.py', 'tools/neuronte-video.md',
     # Video's portable cells still use geometry from these modules.
     'train/glyphs.py', 'train/strokes.py',
 }
@@ -91,7 +90,7 @@ SELECTION = (
 REQUIRED = RUNTIME_MODELS | HEADERS | RUNTIME_SUPPORT | {
     'Makefile', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
     'LICENSES/FFmpeg-LGPL-2.1-or-later.txt',
-    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c', 'src/video.c',
+    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c', 'src/video.c', 'src/bits.c',
     'include/neuronte_media.h', 'src/media.c',
 }
 

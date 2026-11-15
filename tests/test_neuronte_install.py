@@ -81,6 +81,7 @@ FILES = {
     'src/neuronte.c': LIBRARY_C,
     'src/utf8.c': '/* fixture */\n',
     'src/video.c': '/* fixture */\n',
+    'src/bits.c': '/* fixture */\n',
     'src/media.c': MEDIA_C,
     'include/neuronte_media.h': '/* fixture */\n',
     'train/glyphs.py': 'UI_TOP = {12: 3}\n',
@@ -107,8 +108,7 @@ for name in ('emoji-v1.nrt', 'icon-v2.nrt', 'pointer-v1.nrt',
     FILES['weights/neuronte-' + name] = 'runtime model\n'
 for name in ('font/ui-tops.json', 'font/octants.txt', 'train/strokes.py',
              'weights/neuronte-pointer-v1.manifest.json', 'tools/neuronte-play.py',
-             'tools/neuronte_video.py', 'tools/neuronte_video_helpers.py',
-             'tools/neuronte-video.md'):
+             'tools/neuronte_video.py', 'tools/neuronte-video.md'):
     FILES[name] = 'runtime support\n'
 EXCLUDED = {'weights/neuronte-ui40-v0.nrt', 'weights/neuronte-full-v3.nrt',
             'font/ui-40.txt', 'tests/check.py',
