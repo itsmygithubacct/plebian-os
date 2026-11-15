@@ -931,7 +931,13 @@ if [ "${PLEBIAN_OS_PROVISION_LOG_ACTIVE:-0}" != 1 ] \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" >>"$PROVISION_LOG" 2>/dev/null || true
     # Marked in the environment so a nested invocation does not tee twice.
     export PLEBIAN_OS_PROVISION_LOG_ACTIVE=1
-    exec > >(tee -a -- "$PROVISION_LOG") 2>&1
+    # The tee outlives a stop. A TERM sent to the whole process group used to
+    # kill it with everything else, and the rollback that followed then wrote
+    # into a pipe nobody read: dpkg, removing a package for that rollback, died
+    # of SIGPIPE on its first line of output and left dpkg interrupted. Ignoring
+    # the stop signals keeps the rollback's output (and its dpkg) alive; tee
+    # still ends at end of input, and SIGKILL still ends it.
+    exec > >(trap '' INT TERM HUP; exec tee -a -- "$PROVISION_LOG") 2>&1
     log "provisioning output is also being written to $PROVISION_LOG"
 fi
 

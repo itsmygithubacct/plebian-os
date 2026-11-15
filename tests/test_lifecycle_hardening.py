@@ -732,8 +732,9 @@ test_fail_after_boundary "$boundary"
 
 
 class FirstbootBoundTests(unittest.TestCase):
-    def test_timeout_attempts_fit_inside_one_ordered_start_job(self):
-        self.assertIn("TimeoutStartSec=4h", FIRSTBOOT)
+    def test_bounded_attempts_fit_inside_one_ordered_start_job(self):
+        self.assertIn("TimeoutStartSec=5h45min", FIRSTBOOT)
+        self.assertIn("KillMode=mixed", FIRSTBOOT)
         self.assertNotIn("Restart=", FIRSTBOOT)
         self.assertIn(
             "ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run "
@@ -741,12 +742,13 @@ class FirstbootBoundTests(unittest.TestCase):
             FIRSTBOOT,
         )
         runner = ATTEMPT.read_text()
-        self.assertIn("PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT:-3600", runner)
+        self.assertIn("PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT:-1200", runner)
+        self.assertIn("PLEBIAN_OS_FIRSTBOOT_CEILING:-18000", runner)
         self.assertIn("PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY:-60", runner)
-        self.assertIn("timeout --signal=TERM --kill-after=30s", runner)
-        # Three maximum-length attempts plus the two intervening delays remain
-        # inside the four-hour outer service timeout.
-        self.assertGreater(4 * 3600, 3 * 3600 + 2 * 60)
+        self.assertNotIn("timeout --signal", runner)
+        # The five-hour ceiling covers every attempt and delay; the 35-minute
+        # dpkg-safe stop sequence after it stays inside the outer timeout.
+        self.assertGreater(5 * 3600 + 45 * 60, 18000 + 600 + 900 + 600)
         self.assertIn("ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision",
                       FIRSTBOOT)
         self.assertIn("ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check",
@@ -777,7 +779,8 @@ class FirstbootBoundTests(unittest.TestCase):
                 **os.environ,
                 "PLEBIAN_OS_STATE_DIR": str(root / "state"),
                 "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "3",
-                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_POLL_INTERVAL": "0.2",
                 "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
                 "PLEBIAN_OS_TEMP_SUDOERS": str(root / "temporary-sudoers"),
             }
@@ -812,7 +815,8 @@ class FirstbootBoundTests(unittest.TestCase):
                 **os.environ,
                 "PLEBIAN_OS_STATE_DIR": str(root / "state"),
                 "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "3",
-                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_POLL_INTERVAL": "0.2",
                 "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
                 "PLEBIAN_OS_TEMP_SUDOERS": str(temporary_sudoers),
             }
@@ -830,7 +834,7 @@ class FirstbootBoundTests(unittest.TestCase):
             self.assertFalse(temporary_sudoers.exists())
             self.assertIn("exhausted 3/3", result.stderr)
 
-    def test_retry_runner_enforces_each_attempt_timeout(self):
+    def test_retry_runner_stops_each_stalled_attempt(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             counter = root / "counter"
@@ -846,7 +850,8 @@ class FirstbootBoundTests(unittest.TestCase):
                 **os.environ,
                 "PLEBIAN_OS_STATE_DIR": str(root / "state"),
                 "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "2",
-                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "1",
+                "PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT": "1",
+                "PLEBIAN_OS_FIRSTBOOT_POLL_INTERVAL": "0.2",
                 "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
                 "PLEBIAN_OS_TEMP_SUDOERS": str(root / "temporary-sudoers"),
             }

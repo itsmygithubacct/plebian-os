@@ -22,10 +22,13 @@ Before=apt-daily.service apt-daily-upgrade.service
 # Don't run if provisioning already completed.
 ConditionPathExists=!/var/lib/plebian-os/provisioned
 # First boot depends on network, mirrors, and GitHub. The attempt runner keeps
-# this one start job activating across three bounded one-hour attempts. Keeping
-# one continuous start job matters: Before=display-manager.service then holds
-# LightDM until either provisioning succeeds or every retry is exhausted, so a
-# timeout cannot expose and cache Debian's fallback session between attempts.
+# this one start job activating across up to three attempts. An attempt is
+# stopped only after 20 minutes without progress (no output and no I/O by any
+# of its processes), so a slow but progressing link is not cut off, and all
+# attempts share one five-hour ceiling. Keeping one continuous start job
+# matters: Before=display-manager.service then holds LightDM until either
+# provisioning succeeds or every retry (or the ceiling) is exhausted, so a stop
+# cannot expose and cache Debian's fallback session between attempts.
 
 [Service]
 Type=oneshot
@@ -50,10 +53,18 @@ ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision
 ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned
 ExecStartPost=/usr/local/sbin/plebian-os-firstboot-attempt success
 ExecStartPost=/bin/systemctl disable plebian-os-firstboot.service
-# Three one-hour attempts, two one-minute delays, and bounded TERM cleanup fit
-# inside four hours. The per-attempt timeout lives in the runner; this outer
-# timeout is only a final guard on the complete, continuously ordered job.
-TimeoutStartSec=4h
+# The runner's five-hour ceiling covers every attempt, recovery and retry
+# delay. A stop at the ceiling then waits up to 10 minutes for a running dpkg,
+# gives the provisioner 15 minutes to roll back, and waits up to 10 minutes for
+# dpkg again before SIGKILL: 5h35m in all. This outer timeout is only a final
+# guard on the complete, continuously ordered job, so it sits beyond that.
+TimeoutStartSec=5h45min
+# A stop goes to the runner alone (not to dpkg, apt or the log tee directly);
+# the runner waits for any running dpkg before it signals the attempt and then
+# lets its rollback finish. SIGKILL of everything left is the final bound, after
+# the same 35-minute stop sequence.
+KillMode=mixed
+TimeoutStopSec=40min
 StandardOutput=journal
 StandardError=journal
 
