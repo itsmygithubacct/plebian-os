@@ -65,6 +65,31 @@ class OllamaCarrierWrapperTests(unittest.TestCase):
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn("PLEBIAN_OS_OLLAMA_CARRIER is missing", missing.stderr)
 
+    def test_remaster_resolver_keeps_backslash_space_quote_dollar_and_newline_names(self):
+        names = (
+            "carrier\\archive.tar.xz",
+            "carrier archive.tar.xz",
+            "carrier'\"archive.tar.xz",
+            "carrier$HOME.tar.xz",
+            "carrier\narchive.tar.xz",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for index, filename in enumerate(names):
+                with self.subTest(filename=filename):
+                    carrier = root / filename
+                    carrier.write_bytes(b"carrier")
+                    alias = root / f"alias-{index}.tar.xz"
+                    alias.symlink_to(carrier)
+                    for argument, configured in (
+                        (carrier, None),
+                        (None, carrier),
+                        (alias, carrier),
+                    ):
+                        result = self.run_resolver(argument=argument, configured=configured)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.rstrip("\n"), str(carrier))
+
     def test_building_wrapper_dry_runs_show_the_shared_carrier(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

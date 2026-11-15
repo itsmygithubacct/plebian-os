@@ -381,7 +381,8 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             capture_output=True, check=False,
         )
 
-    def run_real_entry_prefix(self, fixture, *, option="", path=None, follow_install=False):
+    def run_real_entry_prefix(self, fixture, *, option="", path=None, follow_install=False,
+                              environment=None):
         source = self.entry_prefix.replace(
             'SELF_DIR="$(cd "$(dirname "$0")" && pwd)"',
             f"SELF_DIR={shlex.quote(str(fixture['checkout'] / 'provision'))}",
@@ -408,6 +409,8 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         env.pop("PLEBIAN_OS_OLLAMA_CARRIER", None)
         if path is not None:
             env["PATH"] = str(path)
+        if environment is not None:
+            env["PLEBIAN_OS_OLLAMA_CARRIER"] = environment
         return subprocess.run(
             ["/bin/bash", "-c", script, "plebian-os-provision", *(
                 ["--ollama-carrier", option] if option else []
@@ -663,6 +666,56 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             self.assertIn("stage carrier as root:root mode 0644", result.stdout)
             self.assertFalse(fixture["stage_root"].exists())
             self.assertFalse(fixture["marker"].exists())
+
+    def test_real_entry_accepts_awkward_carrier_paths_from_flag_and_environment(self):
+        # GNU sha256sum used to escape '\' and newline in the filename. The pin
+        # check consumes the real script prefix: argv for the flag, the process
+        # environment for PLEBIAN_OS_OLLAMA_CARRIER, then the shell digest.
+        payload = b"pinned carrier\n\\$ \x00'"
+        names = (
+            ("backslash", "carrier\\archive.tar.xz"),
+            ("space", "carrier archive.tar.xz"),
+            ("quotes", "carrier'\"archive.tar.xz"),
+            ("dollar", "carrier$HOME.tar.xz"),
+            ("newline", "carrier\narchive.tar.xz"),
+        )
+        for label, filename in names:
+            for source in ("flag", "environment", "both"):
+                with self.subTest(name=label, source=source), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    fixture = self.make_fixture(root, carrier_payload=payload)
+                    carrier = root / filename
+                    carrier.write_bytes(payload)
+                    no_python_path = self.make_no_python_path(fixture)
+                    option = str(carrier) if source in ("flag", "both") else ""
+                    environment = str(carrier) if source in ("environment", "both") else None
+                    result = self.run_real_entry_prefix(
+                        fixture,
+                        option=option,
+                        environment=environment,
+                        path=no_python_path,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("entry-prefix-complete", result.stdout)
+                    staged = fixture["stage_root"] / "ollama-runtime-carrier.tar.xz"
+                    self.assertEqual(staged.read_bytes(), payload)
+
+    def test_real_entry_still_rejects_a_backslash_path_with_the_wrong_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = b"pinned carrier\n"
+            fixture = self.make_fixture(root, carrier_payload=payload)
+            carrier = root / "carrier\\archive.tar.xz"
+            carrier.write_bytes(b"x" * len(payload))
+            result = self.run_real_entry_prefix(
+                fixture,
+                option=str(carrier),
+                path=self.make_no_python_path(fixture),
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("SHA-256 does not match", result.stderr)
+            self.assertNotIn("entry-prefix-complete", result.stdout)
+            self.assertFalse(fixture["stage_root"].exists())
 
     def test_wrong_hash_carrier_fails_before_staging_or_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
