@@ -621,7 +621,7 @@ KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
 KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
 KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
 KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
-NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte.git}"
+NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte-v2.git}"
 NEURONTE_REF="${NEURONTE_REF:-}"
 PLEB_DESKTOP="${PLEB_DESKTOP:-1}"
 PLEB_WM="${PLEB_WM:-openbox}"
@@ -5467,7 +5467,7 @@ install_neuronte_update() {
     [ -n "$NEURONTE_REF" ] || return 0
     [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
         || die "Neuronte requires an exact NEURONTE_REF commit"
-    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
         || die "Neuronte requires the canonical NEURONTE_REPO"
     local file installer="$PLEBIAN_OS_DIR/provision/install-neuronte.py"
     local manifest="$PLEBIAN_OS_DIR/provision/neuronte-payload.json"

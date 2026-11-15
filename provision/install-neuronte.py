@@ -52,29 +52,33 @@ RECORD_SCHEMA = 'plebian.neuronte-install/v1'
 LIBRARY = 'build/libneuronte.so'
 MEDIA_LIBRARY = 'build/libneuronte-media.so'
 LIBRARIES = {LIBRARY: 'library_sha256', MEDIA_LIBRARY: 'media_library_sha256'}
-CANONICAL_REPO = 'https://github.com/itsmygithubacct/neuronte.git'
+CANONICAL_REPO = 'https://github.com/itsmygithubacct/neuronte-v2.git'
 MAX_FILES = 512
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_BYTES = 256 * 1024 * 1024
-# General-image runtime inventory. Training checkpoints, reports, redundant
-# bundle members and native upright faces above 32 remain in the development
-# checkout. The two video JSON files are inference models, not training data.
+# A download is given up when nothing has arrived for STALL_SECONDS, not after
+# a fixed time: a slow link that is still delivering is left to finish.
+STALL_SECONDS = 300
+DOWNLOAD_CEILING_SECONDS = 6 * 3600
+POLL_SECONDS = 2
+# General-image runtime inventory: the slim Neuronte set, one packed file per
+# job. Training code, reports, earlier generations of a net, native upright
+# faces above 32 and the learned video helpers (bound to an earlier terminal
+# bundle) are not in it.
 SMALL_FACES = {(em, italic) for em in range(1, 33) for italic in (False, True)
                if not italic or em >= 3}
 RUNTIME_MODELS = {
-    'weights/neuronte-ui%d%s-v0.nrt' % (em, '-italic' if italic else '')
+    'weights/neuronte-ui%d%s-v1.nrt' % (em, '-italic' if italic else '')
     for em, italic in SMALL_FACES
 } | {'weights/neuronte-%s' % name for name in (
-    'ui-large-v0.nrt', 'flame-v0.nrt', 'ascii-v0.nrt', 'emoji-v0.nrt',
-    'icon-v1.nrt', 'pointer-v0.nrt', 'video-masks-v0.nrt', 'split-v5.nrt',
-    'video-speed-v1.json', 'video-quality-v1.json')}
+    'ui-large-v0.nrt', 'flame-v1.nrt', 'emoji-v1.nrt', 'icon-v2.nrt',
+    'pointer-v1.nrt', 'video-masks-v0.nrt', 'split-v8.nrt')}
 HEADERS = {'font/ui-%d%s.txt' % (em, '-italic' if italic else '')
            for em, italic in SMALL_FACES}
 RUNTIME_SUPPORT = {
     'font/ui-tops.json', 'font/octants.txt',
-    'weights/neuronte-pointer-v0.manifest.json',
-    'tools/neuronte-play.py', 'tools/neuronte_video.py',
-    'tools/neuronte_video_helpers.py', 'tools/neuronte-video.md',
+    'weights/neuronte-pointer-v1.manifest.json',
+    'tools/neuronte-play.py', 'tools/neuronte_video.py', 'tools/neuronte-video.md',
     # Video's portable cells still use geometry from these modules.
     'train/glyphs.py', 'train/strokes.py',
 }
@@ -86,7 +90,7 @@ SELECTION = (
 REQUIRED = RUNTIME_MODELS | HEADERS | RUNTIME_SUPPORT | {
     'Makefile', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
     'LICENSES/FFmpeg-LGPL-2.1-or-later.txt',
-    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c', 'src/video.c',
+    'include/neuronte.h', 'src/neuronte.c', 'src/utf8.c', 'src/video.c', 'src/bits.c',
     'include/neuronte_media.h', 'src/media.c',
 }
 
@@ -111,6 +115,67 @@ def git(*args, cwd=None, check=True):
     return subprocess.run(['git', '-c', 'advice.detachedHead=false', *args], cwd=cwd,
                           env=env, check=check, stdout=subprocess.PIPE,
                           stderr=subprocess.PIPE, text=True, timeout=1800)
+
+
+def stored_bytes(directory):
+    total = 0
+    for root, _dirs, names in os.walk(directory):
+        for name in names:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+    return total
+
+
+def git_download(*args, cwd, watch):
+    """Run a git command that downloads into `watch`. It is stopped when that
+    directory has not grown for STALL_SECONDS, or at the ceiling."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT='0', GIT_ASKPASS='/bin/false',
+               LC_ALL='C')
+    env.pop('GIT_DIR', None)
+    env.pop('GIT_WORK_TREE', None)
+    command = ['git', '-c', 'advice.detachedHead=false', *args]
+    with tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.DEVNULL,
+                                   stderr=errors, start_new_session=True)
+        started = last_growth = time.monotonic()
+        seen = stored_bytes(watch)
+        reason = None
+        while True:
+            try:
+                process.wait(timeout=POLL_SECONDS)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            size = stored_bytes(watch)
+            if size != seen:
+                seen, last_growth = size, now
+            if now - last_growth > STALL_SECONDS:
+                reason = 'no data for %d seconds' % STALL_SECONDS
+            elif now - started > DOWNLOAD_CEILING_SECONDS:
+                reason = 'not finished after %d seconds' % DOWNLOAD_CEILING_SECONDS
+            if reason:
+                try:
+                    os.killpg(process.pid, 15)
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, 9)
+                    except OSError:
+                        pass
+                    process.wait()
+                break
+        errors.seek(0)
+        detail = errors.read().decode('utf-8', 'replace')
+    if reason:
+        raise subprocess.TimeoutExpired(command, time.monotonic() - started, stderr=reason)
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, command, stderr=detail)
 
 
 def selected(path):
@@ -202,8 +267,8 @@ def fetch_archive(repository, ref, manifest_path, out, compress=False):
         git('config', 'remote.origin.promisor', 'true', cwd=repo)
         git('config', 'remote.origin.partialclonefilter', 'blob:none', cwd=repo)
         try:
-            git('fetch', '-q', '--depth=1', '--filter=blob:none', '--no-tags',
-                'origin', ref, cwd=repo)
+            git_download('fetch', '-q', '--depth=1', '--filter=blob:none', '--no-tags',
+                         'origin', ref, cwd=repo, watch=repo / '.git')
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             detail = getattr(error, 'stderr', '') or ''
             raise FetchUnavailable('could not fetch Neuronte %s from %s: %s'
@@ -215,16 +280,27 @@ def fetch_archive(repository, ref, manifest_path, out, compress=False):
         (repo / '.git' / 'info').mkdir(exist_ok=True)
         git('sparse-checkout', 'set', '--no-cone', *('/' + name for name in names), cwd=repo)
         try:
-            # The checkout fetches exactly the pinned blobs in one batch.
-            git('checkout', '-q', '--detach', actual, cwd=repo)
+            # The checkout fetches exactly the pinned blobs in one batch;
+            # this is the download, and nothing after it uses the network.
+            git_download('checkout', '-q', '--detach', actual, cwd=repo, watch=repo / '.git')
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
             detail = getattr(error, 'stderr', '') or ''
             raise FetchUnavailable('could not download the pinned Neuronte files: %s'
                                    % detail.strip().splitlines()[-1:])
+        # The tar is written from the checked-out files, not by git archive:
+        # in a blob-less clone git archive downloads blobs outside the pinned
+        # paths, one request each. verify_archive checks every blob id below.
         tar_path = Path(temporary) / 'payload.tar'
-        with tar_path.open('wb') as stream:
-            subprocess.run(['git', 'archive', '--format=tar', actual, '--', *names],
-                           cwd=repo, check=True, stdout=stream, timeout=600)
+        with tarfile.open(tar_path, 'w', format=tarfile.GNU_FORMAT) as bundle:
+            for name in names:
+                source = repo.joinpath(*PurePosixPath(name).parts)
+                if source.is_symlink() or not source.is_file():
+                    raise ValueError('the pinned Neuronte file was not checked out: ' + name)
+                info = tarfile.TarInfo(name)
+                info.size = source.stat().st_size
+                info.mode = 0o755 if manifest['files'][name]['mode'] == '100755' else 0o644
+                with source.open('rb') as stream:
+                    bundle.addfile(info, stream)
         data = tar_path.read_bytes()
     if compress:
         data = lzma.compress(data, preset=6)

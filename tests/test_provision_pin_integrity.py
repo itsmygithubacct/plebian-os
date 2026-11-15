@@ -81,7 +81,7 @@ INSTALLED_CLOSURE = {
         "https://github.com/itsmygithubacct/kilix-secrets.git",
     "KILIX_SECRETS_BRANCH": "",
     "KILIX_SECRETS_REF": "9" * 40,
-    "NEURONTE_REPO": "https://github.com/itsmygithubacct/neuronte.git",
+    "NEURONTE_REPO": "https://github.com/itsmygithubacct/neuronte-v2.git",
     "NEURONTE_REF": "b" * 40,
     "PLEBIAN_OS_APT_SNAPSHOT": "20260727T000000Z",
     # 0.2.1 had no managed native-package selection. Re-provision must retain
