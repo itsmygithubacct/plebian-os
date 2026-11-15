@@ -273,6 +273,14 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION
     PLEBIAN_OS_KILIX_GO_SHA256_AMD64
     PLEBIAN_OS_KILIX_GO_SHA256_ARM64
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT
+    PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL
     PLEBIAN_OS_INSTALL_VOICE_MODEL
     KILIX_VOICE_REF
     KILIX_VOICE_LIB_VERSION
@@ -556,6 +564,53 @@ is_neuronte_key() {
         NEURONTE_*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+# The exact Debian Go files a release installs. Debian's backports suite keeps
+# only the current upload, so a Debian Go selection pins the compiler (amd64)
+# and source (all) files by name, size and SHA-256, plus the snapshot.debian.org
+# timestamp and release-mirror base that keep those bytes available after the
+# upload is replaced. Debian Go needs all of them; without Debian Go none may
+# be set. The installer checks the same rules again before it downloads.
+DEBIAN_GO_DEB_KEYS=(
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT
+    PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL
+)
+
+validate_debian_go_files() {
+    local debian="${MANIFEST[PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION]:-}" key missing=()
+    if [ -z "$debian" ]; then
+        for key in "${DEBIAN_GO_DEB_KEYS[@]}"; do
+            [ -z "${MANIFEST[$key]:-}" ] \
+                || closure_reject "$key requires PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION"
+        done
+        return 0
+    fi
+    for key in "${DEBIAN_GO_DEB_KEYS[@]}"; do
+        [ -n "${MANIFEST[$key]:-}" ] || missing+=("$key")
+    done
+    [ "${#missing[@]}" -eq 0 ] \
+        || closure_reject "Debian Go needs exact package file pins and fallback sources — no value for: ${missing[*]}"
+    [ "${MANIFEST[PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE]}" = "golang-1.27-go_${debian}_amd64.deb" ] \
+        || closure_reject "PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE must be golang-1.27-go_${debian}_amd64.deb (got '${MANIFEST[PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE]}')"
+    [ "${MANIFEST[PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE]}" = "golang-1.27-src_${debian}_all.deb" ] \
+        || closure_reject "PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE must be golang-1.27-src_${debian}_all.deb (got '${MANIFEST[PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE]}')"
+    for key in PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES; do
+        require_manifest_format "$key" '^[1-9][0-9]{0,9}$' "an exact byte count"
+    done
+    for key in PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256; do
+        require_manifest_format "$key" '^[0-9a-f]{64}$' "a 64-character lowercase SHA-256"
+    done
+    require_manifest_format PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT \
+        '^[0-9]{8}T[0-9]{6}Z$' "a snapshot.debian.org timestamp holding the pinned files"
+    require_manifest_format PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL \
+        '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~%+-]+)*$' "an https release-mirror base URL without a trailing slash"
 }
 
 # One externally selected inert .deb, never a checkpoint or a native build.
@@ -864,6 +919,7 @@ validate_release_closure() {
         [ -z "${MANIFEST[PLEBIAN_OS_APT_SNAPSHOT]}" ] \
             || closure_reject "Debian Go requires the live backports source"
     fi
+    validate_debian_go_files
 
     value="${MANIFEST[PLEBIAN_OS_INSTALL_UV]:-}"
     case "$value" in

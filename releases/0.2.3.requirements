@@ -11,6 +11,8 @@
 # Debian 13.7.0 amd64 netinst SHA256SUMS was verified for 0.2.2 with
 # Debian CD key DF9B9C49EAA9298432589D76DA87E80D6294BE9B and is unchanged.
 # Empty PLEBIAN_OS_APT_SNAPSHOT selects live Debian sources.
+# The Debian Go 1.27.4-1~bpo13+1 package files are pinned by name, size and
+# SHA-256, with their snapshot.debian.org timestamp and release-mirror base.
 # RC9 carrier de2ff296 binds content 6f92910. The receipt binds independent
 # delta reviews of OS 0007c491 and Pleb 57683ebf. Prior reviews and receipts
 # remain archived with their exact source scope.
@@ -42,3 +44,11 @@ PLEBIAN_OS_MPV_LAUNCHER_REF=fb0a7f036fbe599dcf060d2d389e309c6261ceaf
 PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz
 PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES=20689764
 PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256=47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE=golang-1.27-go_1.27.4-1~bpo13+1_amd64.deb
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES=22655088
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256=76cf0572e0ca5787a802893a27a8fc92098e57d3116c3af7754f27937c1756aa
+PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE=golang-1.27-src_1.27.4-1~bpo13+1_all.deb
+PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES=25295792
+PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256=cc5912625aa0a1c22f41ca929684450c92f5add340c358e24df0b2612b3231d7
+PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT=20261114T023814Z
+PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/debian-go-1.27.4-1-bpo13-1

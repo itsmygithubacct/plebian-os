@@ -384,23 +384,118 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("no Plebian-OS source checkout", result.stderr)
 
+    DEBIAN_GO_FILES = {
+        "PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE": "golang-1.27-go_1.27.3-1~bpo13+1_amd64.deb",
+        "PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES": "22655000",
+        "PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256": "c" * 64,
+        "PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE": "golang-1.27-src_1.27.3-1~bpo13+1_all.deb",
+        "PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES": "25295000",
+        "PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256": "d" * 64,
+        "PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT": "20261110T000000Z",
+        "PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL":
+            "https://github.com/itsmygithubacct/plebian-os/releases/download/debian-go-test",
+    }
+
+    def _debian_go_manifest(self, drop=(), **changes):
+        values = dict(
+            PLEBIAN_OS_APT_SNAPSHOT="",
+            PLEBIAN_OS_KILIX_GO_VERSION="go1.27.3",
+            PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION="1.27.3-1~bpo13+1",
+            PLEBIAN_OS_KILIX_GO_SHA256_AMD64="",
+            PLEBIAN_OS_KILIX_GO_SHA256_ARM64="",
+            **self.DEBIAN_GO_FILES)
+        values.update(changes)
+        for key in drop:
+            values.pop(key)
+        return self._manifest_text(**values)
+
     def test_debian_go_selection_replaces_archive_pins(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
-            manifest = self._manifest_text(
-                PLEBIAN_OS_APT_SNAPSHOT="",
-                PLEBIAN_OS_KILIX_GO_VERSION="go1.27.3",
-                PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION="1.27.3-1~bpo13+1",
-                PLEBIAN_OS_KILIX_GO_SHA256_AMD64="",
-                PLEBIAN_OS_KILIX_GO_SHA256_ARM64="")
-            self._source(base, manifest)
+            self._source(base, self._debian_go_manifest())
             result = self._run(base, "0.1.8", "--offline")
             self.assertEqual(result.returncode, 0, result.stderr)
             after = self._values(env)
             self.assertEqual(after["PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION"],
                              "1.27.3-1~bpo13+1")
             self.assertEqual(after["PLEBIAN_OS_KILIX_GO_SHA256_AMD64"], "")
+            for key, value in self.DEBIAN_GO_FILES.items():
+                self.assertEqual(after[key], value, key)
+
+    def test_release_0_2_3_debian_go_file_pins_are_selectable(self):
+        release = dict(
+            line.split("=", 1)
+            for line in (ROOT / "releases" / "0.2.3.env").read_text().splitlines()
+            if line.startswith("PLEBIAN_OS_KILIX_GO_"))
+        pins = {key: value for key, value in release.items()
+                if key.startswith("PLEBIAN_OS_KILIX_GO_DEB_")}
+        self.assertEqual(sorted(pins), sorted(self.DEBIAN_GO_FILES))
+        requirements = (ROOT / "releases" / "0.2.3.requirements").read_text()
+        for key, value in pins.items():
+            self.assertIn(f"\n{key}={value}\n", requirements)
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            self._source(base, self._manifest_text(PLEBIAN_OS_APT_SNAPSHOT="", **release))
+            result = self._run(base, "0.1.8", "--offline")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            after = self._values(env)
+            for key, value in pins.items():
+                self.assertEqual(after[key], value, key)
+
+    def test_debian_go_without_file_pins_leaves_machine_unchanged(self):
+        for dropped in (tuple(self.DEBIAN_GO_FILES), ("PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT",),
+                        ("PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL",),
+                        ("PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256",)):
+            with self.subTest(dropped=dropped), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base)
+                before = env.read_bytes()
+                self._source(base, self._debian_go_manifest(drop=dropped))
+                result = self._run(base, "0.1.8", "--offline")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Debian Go needs exact package file pins", result.stderr)
+                self.assertEqual(env.read_bytes(), before)
+
+    def test_debian_go_file_pin_defects_leave_machine_unchanged(self):
+        for key, value, message in (
+            ("PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE",
+             "golang-1.27-go_1.27.4-1~bpo13+1_amd64.deb", "must be golang-1.27-go_1.27.3"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE",
+             "golang-1.27-go_1.27.3-1~bpo13+1_arm64.deb", "must be golang-1.27-go_1.27.3"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE",
+             "../golang-1.27-src_1.27.3-1~bpo13+1_all.deb", "must be golang-1.27-src_1.27.3"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES", "0", "exact byte count"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES", "25MB", "exact byte count"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256", "C" * 64, "lowercase SHA-256"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256", "d" * 63, "lowercase SHA-256"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT", "20261110", "snapshot.debian.org timestamp"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL", "http://example.org/go", "https release-mirror"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL", "https://example.org/go/", "https release-mirror"),
+            ("PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL", "https://example.org/go?x=1", "https release-mirror"),
+        ):
+            with self.subTest(key=key, value=value), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base)
+                before = env.read_bytes()
+                self._source(base, self._debian_go_manifest(**{key: value}))
+                result = self._run(base, "0.1.8", "--offline")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
+                self.assertEqual(env.read_bytes(), before)
+
+    def test_debian_go_file_pins_require_debian_go(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            before = env.read_bytes()
+            self._source(base, self._manifest_text(
+                PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT="20261110T000000Z"))
+            result = self._run(base, "0.1.8", "--offline")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("requires PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION", result.stderr)
+            self.assertEqual(env.read_bytes(), before)
 
     def test_debian_go_mismatched_package_leaves_machine_unchanged(self):
         with tempfile.TemporaryDirectory() as td:

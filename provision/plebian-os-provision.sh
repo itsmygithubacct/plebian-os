@@ -118,6 +118,14 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION
     PLEBIAN_OS_KILIX_GO_SHA256_AMD64
     PLEBIAN_OS_KILIX_GO_SHA256_ARM64
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT
+    PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL
     PLEBIAN_OS_INSTALL_VOICE_MODEL
     KILIX_VOICE_REF
     KILIX_VOICE_LIB_VERSION
@@ -429,6 +437,15 @@ KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
 KILIX_GO_DEBIAN_VERSION="${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
 KILIX_GO_SHA256_AMD64="${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
 KILIX_GO_SHA256_ARM64="${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
+# Exact Debian Go package files and their fallback sources; empty without Debian Go.
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE:-}"
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES:-}"
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE="${PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES="${PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256="${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT="${PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT:-}"
+PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL="${PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL:-}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
@@ -1033,10 +1050,11 @@ restore_installed_closure() {
         case " ${candidates[*]} " in *" $key "*) ;; *) continue ;; esac
         if [ "$state" != set ]; then
             [ "$key" != PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION ] || continue
+            [[ "$key" != PLEBIAN_OS_KILIX_GO_DEB_* ]] || continue
             missing+=("$key")
             continue
         fi
-        [ -n "$value" ] || [[ "$key" = PLEBIAN_OS_APT_SNAPSHOT || "$key" = PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION || "$key" = PLEBIAN_OS_KILIX_GO_SHA256_* ]] || continue
+        [ -n "$value" ] || [[ "$key" = PLEBIAN_OS_APT_SNAPSHOT || "$key" = PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION || "$key" = PLEBIAN_OS_KILIX_GO_SHA256_* || "$key" = PLEBIAN_OS_KILIX_GO_DEB_* ]] || continue
         # The machine answered for this key, so /etc/default must not answer for
         # it again below, even where the value matches what this run already had.
         PERSISTED_KEY_RESTORED["$key"]=1
@@ -1495,6 +1513,18 @@ validate_release_inputs() {
             && [[ "$KILIX_GO_DEBIAN_VERSION" == "${KILIX_GO_VERSION#go}-"* ]] \
             && [ -z "$PLEBIAN_OS_APT_SNAPSHOT" ] \
             || die "Debian Go requires matching compiler/package pins and live trixie-backports"
+        [ "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE" = "golang-1.27-go_${KILIX_GO_DEBIAN_VERSION}_amd64.deb" ] \
+            && [ "$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE" = "golang-1.27-src_${KILIX_GO_DEBIAN_VERSION}_all.deb" ] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES" =~ ^[1-9][0-9]{0,9}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES" =~ ^[1-9][0-9]{0,9}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~%+-]+)*$ ]] \
+            || die "release mode requires exact Debian Go package file pins, a snapshot.debian.org timestamp and a release mirror URL"
+    else
+        [ -z "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL" ] \
+            || die "Debian Go package file pins require PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION"
     fi
     if [ "$INSTALL_UV" = 1 ]; then
         [[ "$UV_VERSION_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
@@ -5503,6 +5533,14 @@ write_source_tool_manifest() {
         provenance_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "$KILIX_GO_DEBIAN_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE "$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT "$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL "$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
         provenance_kv GO_VERSION "$go_version"
         provenance_kv PLEBIAN_OS_INSTALL_UV "$INSTALL_UV"
         provenance_kv PLEBIAN_OS_UV_VERSION "$UV_VERSION_PIN"
@@ -6255,7 +6293,16 @@ pinned_go_provenance_ok() {
 
 ensure_go_for_kilix_build() {
     if [ -n "${KILIX_GO_DEBIAN_VERSION:-}" ]; then
-        "$PLEB_DIR/scripts/install-debian-go.sh" "$KILIX_GO_VERSION" "$KILIX_GO_DEBIAN_VERSION" \
+        local -a debian_go_file_env=()
+        local debian_go_key
+        for debian_go_key in "${RELEASE_CONTROLLED_KEYS[@]}"; do
+            [[ "$debian_go_key" == PLEBIAN_OS_KILIX_GO_DEB_* ]] || continue
+            debian_go_file_env+=("$debian_go_key=${!debian_go_key}")
+        done
+        # The pinned files let the installer fetch the exact bytes from
+        # snapshot.debian.org or the release mirror once backports moves on.
+        env "${debian_go_file_env[@]}" \
+            "$PLEB_DIR/scripts/install-debian-go.sh" "$KILIX_GO_VERSION" "$KILIX_GO_DEBIAN_VERSION" \
             || die "Debian Go toolchain install failed"
         install_env+=("PATH=/usr/lib/go-1.27/bin:/usr/local/bin:/usr/bin:/bin" "GOROOT=/usr/lib/go-1.27" "GOENV=off" "GOTOOLCHAIN=local")
         return 0
@@ -6827,7 +6874,7 @@ build_kilix_fork() {
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + (as $TARGET_USER) git -C $KILIX_DIR submodule update --init --recursive"
         if [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then
-            echo "    + ensure Debian Go $KILIX_GO_DEBIAN_VERSION from trixie-backports"
+            echo "    + ensure Debian Go $KILIX_GO_DEBIAN_VERSION from trixie-backports${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:+, else the pinned files from snapshot.debian.org or the release mirror}"
         else
             echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
         fi
@@ -7750,6 +7797,14 @@ install_env=(
     "PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION=$KILIX_GO_DEBIAN_VERSION"
     "PLEBIAN_OS_KILIX_GO_SHA256_AMD64=$KILIX_GO_SHA256_AMD64"
     "PLEBIAN_OS_KILIX_GO_SHA256_ARM64=$KILIX_GO_SHA256_ARM64"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE=$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES=$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256=$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+    "PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT=$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+    "PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL=$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
     "KILIX_DESKTOP_PROVIDER=$KILIX_DESKTOP_PROVIDER"
     "KILIX_DESKTOP_COMMAND=$KILIX_DESKTOP_COMMAND"
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
@@ -8060,6 +8115,14 @@ EOF
     write_session_default PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "$KILIX_GO_DEBIAN_VERSION"
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE "$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT "$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL "$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
     write_session_default PLEB_DESKTOP "$DESKTOP"
     write_session_default PLEB_WM "$PLEB_WM"
     write_session_default KILIX_RUN_ALIASES "$KILIX_RUN_ALIASES"
