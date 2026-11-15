@@ -451,7 +451,7 @@ KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kil
 KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
 KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
 # Neuronte: the desktop faces Kilix 95 reads from $GPU_TERMINAL_SOURCE_HOME/neuronte.
-NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte.git}"
+NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte-v2.git}"
 NEURONTE_REF="${NEURONTE_REF:-}"
 # Plebian-OS layer itself: where the provisioner/update-helper/deps script come
 # from, so `plebian-os-update` can refresh the OS layer (not just pleb/kilix).
@@ -1480,7 +1480,7 @@ validate_release_inputs() {
     if release_requires_neuronte; then
         [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
             || die "release mode requires NEURONTE_REF to be a full 40-character lowercase commit SHA"
-        [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+        [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
             || die "release mode requires the canonical NEURONTE_REPO"
     fi
     for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
@@ -5913,7 +5913,7 @@ install_neuronte() {
     [ -n "$NEURONTE_REF" ] || return 0
     [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
         || die "Neuronte requires an exact NEURONTE_REF commit"
-    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
         || die "Neuronte requires the canonical NEURONTE_REPO"
     local file installer="$PLEBIAN_OS_DIR/provision/install-neuronte.py"
     local manifest="$PLEBIAN_OS_DIR/provision/neuronte-payload.json"

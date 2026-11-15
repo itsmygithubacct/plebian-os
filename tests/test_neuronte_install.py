@@ -84,10 +84,10 @@ FILES = {
     'src/media.c': MEDIA_C,
     'include/neuronte_media.h': '/* fixture */\n',
     'train/glyphs.py': 'UI_TOP = {12: 3}\n',
-    'weights/neuronte-ui12-v0.nrt': 'NRT small 12\n',
-    'weights/neuronte-ui12-italic-v0.nrt': 'NRT italic 12\n',
+    'weights/neuronte-ui12-v1.nrt': 'NRT small 12\n',
+    'weights/neuronte-ui12-italic-v1.nrt': 'NRT italic 12\n',
     'weights/neuronte-ui-large-v0.nrt': 'NRT large\n',
-    'weights/neuronte-flame-v0.nrt': 'NRT flame\n',
+    'weights/neuronte-flame-v1.nrt': 'NRT flame\n',
     'font/ui-12.txt': '# The baseline is row 9.\n',
     'font/ui-12-italic.txt': '# The baseline is row 9.\n',
     # Present in the repository, never opened by the desktop.
@@ -100,14 +100,13 @@ FILES = {
 # and redundant files to prove that selection does not copy a whole directory.
 for em in range(1, 33):
     for suffix in ('', '-italic') if em >= 3 else ('',):
-        FILES.setdefault(f'weights/neuronte-ui{em}{suffix}-v0.nrt', 'NRT face\n')
+        FILES.setdefault(f'weights/neuronte-ui{em}{suffix}-v1.nrt', 'NRT face\n')
         FILES.setdefault(f'font/ui-{em}{suffix}.txt', '# The baseline is row 0.\n')
-for name in ('ascii-v0.nrt', 'emoji-v0.nrt', 'icon-v1.nrt', 'pointer-v0.nrt',
-             'video-masks-v0.nrt', 'split-v5.nrt', 'video-speed-v1.json',
-             'video-quality-v1.json'):
+for name in ('emoji-v1.nrt', 'icon-v2.nrt', 'pointer-v1.nrt',
+             'video-masks-v0.nrt', 'split-v8.nrt'):
     FILES['weights/neuronte-' + name] = 'runtime model\n'
 for name in ('font/ui-tops.json', 'font/octants.txt', 'train/strokes.py',
-             'weights/neuronte-pointer-v0.manifest.json', 'tools/neuronte-play.py',
+             'weights/neuronte-pointer-v1.manifest.json', 'tools/neuronte-play.py',
              'tools/neuronte_video.py', 'tools/neuronte_video_helpers.py',
              'tools/neuronte-video.md'):
     FILES[name] = 'runtime support\n'
@@ -117,6 +116,13 @@ EXCLUDED = {'weights/neuronte-ui40-v0.nrt', 'weights/neuronte-full-v3.nrt',
             'weights/neuronte-emoji-e0-v0.nrt', 'weights/neuronte-accent-v2.nrt',
             'weights/neuronte-split-v4.nrt', 'weights/neuronte-video-speed-v0.json',
             'weights/neuronte-video-quality-v0.json', 'weights/neuronte-ui12-v0.json',
+            # The set this one replaces, and the learned video helpers.
+            'weights/neuronte-ui12-v0.nrt', 'weights/neuronte-ui12-italic-v0.nrt',
+            'weights/neuronte-flame-v0.nrt', 'weights/neuronte-split-v5.nrt',
+            'weights/neuronte-ascii-v0.nrt', 'weights/neuronte-emoji-v0.nrt',
+            'weights/neuronte-icon-v1.nrt', 'weights/neuronte-pointer-v0.nrt',
+            'weights/neuronte-pointer-v0.manifest.json',
+            'weights/neuronte-video-speed-v1.json', 'weights/neuronte-video-quality-v1.json',
             'weights/report.json'}
 for name in EXCLUDED:
     FILES.setdefault(name, 'development-only or redundant\n')
@@ -193,6 +199,73 @@ def tar_with(members):
     return data.getvalue()
 
 
+class DownloadPatienceTests(unittest.TestCase):
+    """A download ends when it stalls, not after a fixed time."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.watch = Path(self.temporary.name)
+        self.saved = neuronte.STALL_SECONDS, neuronte.POLL_SECONDS
+        neuronte.STALL_SECONDS, neuronte.POLL_SECONDS = 1, 0.1
+
+    def tearDown(self):
+        neuronte.STALL_SECONDS, neuronte.POLL_SECONDS = self.saved
+        self.temporary.cleanup()
+
+    def download(self, script):
+        neuronte.git_download('-c', 'alias.fixture=!' + script, 'fixture',
+                              cwd=self.watch, watch=self.watch)
+
+    @unittest.skipUnless(shutil.which('git'), 'needs git')
+    def test_a_download_that_keeps_delivering_outlives_the_stall_limit(self):
+        self.download('for i in 1 2 3 4 5 6; do echo data >> part; sleep 0.4; done')
+        self.assertEqual((self.watch / 'part').read_text().count('data'), 6)
+
+    @unittest.skipUnless(shutil.which('git'), 'needs git')
+    def test_a_silent_download_is_stopped_with_its_children(self):
+        with self.assertRaises(subprocess.TimeoutExpired) as raised:
+            self.download('echo $$ > pid; echo data > part; sleep 60; echo late > late')
+        self.assertIn('no data for 1 seconds', raised.exception.stderr)
+        self.assertFalse((self.watch / 'late').exists())
+        pid = int((self.watch / 'pid').read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+
+    @unittest.skipUnless(shutil.which('git'), 'needs git')
+    def test_a_failed_download_reports_what_git_said(self):
+        with self.assertRaises(subprocess.CalledProcessError) as raised:
+            self.download('echo fatal: fixture refusal >&2; exit 3')
+        self.assertIn('fixture refusal', raised.exception.stderr)
+
+    @unittest.skipUnless(HAVE_TOOLCHAIN, 'needs git')
+    def test_a_stalled_fetch_is_a_fetch_failure(self):
+        base = self.watch / 'case'
+        base.mkdir()
+        fx = Fixture(base)
+        out = base / 'again.tar'
+        hang = base / 'bin'
+        hang.mkdir()
+        # A transport that connects and then says nothing.
+        (hang / 'git-remote-stall').write_text('#!/bin/sh\nsleep 60\n')
+        (hang / 'git-remote-stall').chmod(0o755)
+        code = ('import importlib.util,sys\n'
+                'spec=importlib.util.spec_from_file_location("n",sys.argv[1])\n'
+                'n=importlib.util.module_from_spec(spec);spec.loader.exec_module(n)\n'
+                'n.STALL_SECONDS,n.POLL_SECONDS=1,0.1\n'
+                'sys.exit(n.main(sys.argv[2:]))\n')
+        result = subprocess.run(
+            [sys.executable, '-c', code, str(INSTALLER), 'fetch-archive', '--manifest',
+             str(fx.manifest), '--ref', fx.ref, '--repo', 'stall://nowhere/neuronte.git',
+             '--out', str(out)],
+            env=dict(os.environ, PATH=str(hang) + os.pathsep + os.environ['PATH'],
+                     GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1'),
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('could not fetch Neuronte', result.stderr)
+        self.assertIn('no data for 1 seconds', result.stderr)
+        self.assertFalse(out.exists())
+
+
 class ReleasePinTests(unittest.TestCase):
     """The committed manifest, the release env and the notes name one commit."""
 
@@ -207,7 +280,7 @@ class ReleasePinTests(unittest.TestCase):
         self.assertRegex(ref, r'^[0-9a-f]{40}$')
         self.assertEqual(manifest['commit'], ref)
         self.assertEqual(manifest['repository'], self.env_value('NEURONTE_REPO'))
-        self.assertEqual(manifest['repository'], 'https://github.com/itsmygithubacct/neuronte.git')
+        self.assertEqual(manifest['repository'], 'https://github.com/itsmygithubacct/neuronte-v2.git')
         self.assertNotIn('NEURONTE_BRANCH', RELEASE_ENV.read_text())
         self.assertIn('| `NEURONTE_REF` | `%s` |' % ref, NOTES.read_text())
         # load_manifest is the gate every path uses.
@@ -224,19 +297,20 @@ class ReleasePinTests(unittest.TestCase):
         # Kilix 95 af691fe: weight_path() and _face_path() for every small em,
         # the scalable face, the flame, the UI_TOP table and the build inputs.
         for em in range(1, 33):
-            self.assertIn('weights/neuronte-ui%d-v0.nrt' % em, files)
+            self.assertIn('weights/neuronte-ui%d-v1.nrt' % em, files)
             self.assertIn('font/ui-%d.txt' % em, files)
         for em in range(3, 33):
-            self.assertIn('weights/neuronte-ui%d-italic-v0.nrt' % em, files)
+            self.assertIn('weights/neuronte-ui%d-italic-v1.nrt' % em, files)
             self.assertIn('font/ui-%d-italic.txt' % em, files)
-        for name in ('weights/neuronte-ui-large-v0.nrt', 'weights/neuronte-flame-v0.nrt',
+        for name in ('weights/neuronte-ui-large-v0.nrt', 'weights/neuronte-flame-v1.nrt',
                      'train/glyphs.py', 'Makefile', 'src/neuronte.c', 'src/utf8.c',
                      'include/neuronte.h', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
                      'src/video.c', 'src/media.c', 'include/neuronte_media.h',
                      'LICENSES/FFmpeg-LGPL-2.1-or-later.txt'):
             self.assertIn(name, files)
         # Never opened: em 33 and up go to ui-large, which reads no header.
-        for name in ('weights/neuronte-ui33-v0.nrt', 'font/ui-33.txt', 'font/ui-128.txt'):
+        for name in ('weights/neuronte-ui33-v0.nrt', 'weights/neuronte-ui33-v1.nrt',
+                     'font/ui-33.txt', 'font/ui-128.txt'):
             self.assertNotIn(name, files)
             self.assertFalse(neuronte.selected(name))
         for name in EXCLUDED:
@@ -245,16 +319,16 @@ class ReleasePinTests(unittest.TestCase):
         models = {name for name in files if name.startswith('weights/')
                   and not name.endswith('.manifest.json')}
         self.assertEqual(models, neuronte.RUNTIME_MODELS)
-        self.assertEqual(len(models), 72)
-        self.assertEqual(len(neuronte.PROBES), 70)
+        self.assertEqual(len(models), 69)
+        self.assertEqual(len(neuronte.PROBES), 69)
         self.assertTrue(neuronte.RUNTIME_SUPPORT <= files.keys())
         total = sum(entry['bytes'] for entry in files.values())
         self.assertLess(total, 60 * 1024 * 1024)
 
     def test_manifest_requires_each_runtime_component(self):
         manifest = json.loads(MANIFEST.read_text())
-        for name in ('weights/neuronte-icon-v1.nrt', 'weights/neuronte-video-speed-v1.json',
-                     'weights/neuronte-pointer-v0.manifest.json', 'font/ui-tops.json',
+        for name in ('weights/neuronte-icon-v2.nrt', 'weights/neuronte-split-v8.nrt',
+                     'weights/neuronte-pointer-v1.manifest.json', 'font/ui-tops.json',
                      'train/strokes.py', 'tools/neuronte-play.py', 'src/video.c',
                      'src/media.c', 'include/neuronte_media.h',
                      'LICENSES/FFmpeg-LGPL-2.1-or-later.txt'):
@@ -456,7 +530,7 @@ class PayloadTests(unittest.TestCase):
             return self.fx.destination
 
         def edit(tree):
-            (tree / 'weights/neuronte-ui12-v0.nrt').write_text('edited\n')
+            (tree / 'weights/neuronte-ui12-v1.nrt').write_text('edited\n')
 
         def add(tree):
             (tree / 'weights/mine.nrt').write_text('mine\n')
@@ -834,7 +908,7 @@ class OlderUpdaterTests(unittest.TestCase):
         return self.models.install_neuronte_for_an_older_updater(
             closure=self.closure, environ=environ, run=run)
 
-    def pinned(self, ref=None, repo='https://github.com/itsmygithubacct/neuronte.git'):
+    def pinned(self, ref=None, repo='https://github.com/itsmygithubacct/neuronte-v2.git'):
         return ('PLEBIAN_OS_VERSION=0.2.3\nNEURONTE_REF=%s\nNEURONTE_REPO=%s\n'
                 % (ref or self.ref, repo))
 

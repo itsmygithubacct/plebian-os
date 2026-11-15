@@ -116,7 +116,7 @@ PP_OCR_LICENCE_SOURCE = Path(__file__).resolve().parent / 'bundles' / 'pp-ocrv6-
 # The Neuronte faces (install-neuronte.py), for an updater that predates them.
 NEURONTE_INSTALLER = Path(__file__).resolve().parent / 'install-neuronte.py'
 NEURONTE_MANIFEST = Path(__file__).resolve().parent / 'neuronte-payload.json'
-NEURONTE_REPO = 'https://github.com/itsmygithubacct/neuronte.git'
+NEURONTE_REPO = 'https://github.com/itsmygithubacct/neuronte-v2.git'
 SELECTED_CLOSURE = Path('/etc/pleb/closure.env')
 # The Ollama runtime (plebian-os-provision's install_ollama_runtime_for_update),
 # for an updater that predates its own step.

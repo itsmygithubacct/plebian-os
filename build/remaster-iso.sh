@@ -770,7 +770,7 @@ validate_neuronte_release_root() {
         echo "release mode requires NEURONTE_REF to be a full 40-character lowercase commit SHA" >&2
         exit 1
     }
-    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte.git ] \
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
         || { echo "release mode requires the canonical NEURONTE_REPO" >&2; exit 1; }
 }
 

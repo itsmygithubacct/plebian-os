@@ -820,7 +820,7 @@ validate_release_closure() {
         require_manifest_format NEURONTE_REF '^[0-9a-f]{40}$' \
             "a full 40-character lowercase commit SHA"
         [ "${MANIFEST[NEURONTE_REPO]}" = \
-            https://github.com/itsmygithubacct/neuronte.git ] \
+            https://github.com/itsmygithubacct/neuronte-v2.git ] \
             || closure_reject "NEURONTE_REPO must name the canonical release repository"
     fi
     for key in PLEBIAN_OS_REPO PLEB_REPO KILIX_REPO KILIX95_REPO; do
