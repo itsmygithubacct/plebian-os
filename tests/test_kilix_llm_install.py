@@ -108,9 +108,9 @@ class KilixLlmInstallTests(unittest.TestCase):
         provision, update = PROVISION.read_text(), UPDATE.read_text()
         main = provision[provision.index('"$PLEB_DIR/bin/pleb" install \\\n'):]
         self.assertLess(main.index('install_kilix_needle\n'), main.index('install_kilix_llm\n'))
-        self.assertLess(main.index('install_kilix_llm\n'), main.index('stage-command-model.py'))
+        self.assertLess(main.index('install_kilix_llm\n'), main.index('install-image-models.py'))
         self.assertLess(update.index('    install_kilix_needle\n'), update.index('    install_kilix_llm\n'))
-        self.assertLess(update.index('    install_kilix_llm\n'), update.index('stage-command-model.py'))
+        self.assertLess(update.index('    install_kilix_llm\n'), update.index('install-image-models.py'))
         self.assertIn('    install_kilix_llm\n    test_fail_after_boundary kilix-llm\n', update)
 
 

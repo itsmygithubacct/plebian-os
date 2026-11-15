@@ -79,10 +79,12 @@ class MixedModelDeliveryTests(unittest.TestCase):
         (self.root / 'DEFAULT-MODELS.json').unlink()
         self.assertNotEqual(self.guard().returncode, 0)
 
-    def command_fixture(self):
+    def command_fixture(self, mode='first-use-download'):
         command = {'asset_id': 'lfm2-kilix-commands', 'manifest_digest': 'd'*64,
-                   'sha256': 'e'*64, 'bytes': 1000, 'version': 'v8',
-                   'url': 'https://example.invalid/command.tar.gz'}
+                   'sha256': 'e'*64, 'bytes': 1000, 'version': 'v10',
+                   'url': 'https://example.invalid/command.tar.gz',
+                   'delivery': {'mode': mode, 'on_installation_media': False,
+                                'staged_by_upgrade': False}}
         expected = self.root / 'command-release.json'
         expected.write_text(json.dumps(command))
         (self.root / 'COMMAND-MODEL.json').write_text(json.dumps(command))
@@ -90,11 +92,11 @@ class MixedModelDeliveryTests(unittest.TestCase):
             'artifact_id': command['asset_id'], 'manifest_digest': command['manifest_digest'],
             'archive_sha256': command['sha256'], 'archive_bytes': command['bytes'],
             'version': command['version'], 'source_url': command['url'],
-            'delivery': 'bundled-command-model-archive'}
-        self.env['m_lfm2_kilix_commands_delivery'] = 'bundled-command-model-archive'
+            'delivery': 'first-use-upstream-download'}
+        self.env['m_lfm2_kilix_commands_delivery'] = 'first-use-upstream-download'
         return expected
 
-    def test_command_archive_has_distinct_delivery_and_exact_bindings(self):
+    def test_command_model_is_a_first_use_download_with_exact_bindings(self):
         expected = self.command_fixture()
         result = self.guard(expected)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -106,14 +108,25 @@ class MixedModelDeliveryTests(unittest.TestCase):
                 self.assertNotEqual(self.guard(expected).returncode, 0)
                 entry[key] = value
 
-    def test_command_archive_cannot_be_omitted_or_relabelled(self):
+    def test_command_model_cannot_be_omitted_or_claimed_on_the_media(self):
         expected = self.command_fixture()
         entry = self.carrier['models']['lfm2-kilix-commands']
-        for mode in ('first-use-upstream-download', 'bundled-default-model'):
-            entry['delivery'] = self.env['m_lfm2_kilix_commands_delivery'] = mode
-            self.assertNotEqual(self.guard(expected).returncode, 0)
+        # The retired label is refused outright, and no other label passes.
+        for mode in ('bundled-command-model-archive', 'bundled-default-model', 'image-offline-model'):
+            with self.subTest(mode=mode):
+                entry['delivery'] = self.env['m_lfm2_kilix_commands_delivery'] = mode
+                self.assertNotEqual(self.guard(expected).returncode, 0)
+        entry['delivery'] = self.env['m_lfm2_kilix_commands_delivery'] = 'first-use-upstream-download'
         del self.carrier['models']['lfm2-kilix-commands']
         self.assertNotEqual(self.guard(expected).returncode, 0)
+
+    def test_a_command_pin_that_is_not_a_first_use_download_is_refused(self):
+        for mode in ('bundled-command-model-archive', None):
+            with self.subTest(mode=mode):
+                expected = self.command_fixture(mode)
+                result = self.guard(expected)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('the command model must be a first-use download', result.stderr)
 
     def playalong_fixture(self):
         playalong = {'schema': 'plebian-os.playalong-default-models/v1', 'assets': {

@@ -1,4 +1,5 @@
 """Basic Pitch, Demucs and page OCR are on the image; they, Whisper medium.en and LFM2 install by default."""
+import contextlib
 import hashlib
 import importlib.util
 import io
@@ -6,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import stat
 import tarfile
 import sys
@@ -1091,31 +1093,66 @@ class InstallPolicyTests(unittest.TestCase):
         record = SimpleNamespace(id='lfm2-kilix-commands', digest='e' * 64,
                                  expected_decision='record')
         self.record = record
+        # The current delivery (v10) and the files an installed v9 holds.
+        self.v10_files = {'model.gguf': b'weights', 'runtime/llama-server': b'server',
+                          'notices/LICENSE.txt': b'licence', 'notices/NOTICE.txt': b'v10 notice'}
+        self.authority_texts = {hashlib.sha256(data).hexdigest()
+                                for name, data in self.v10_files.items() if name.startswith('notices/')}
         spec = SimpleNamespace(
             asset_id='lfm2-kilix-commands', archive_sha256='a' * 64, archive_bytes=4,
-            manifest_digest='b' * 64, version='lfm2-kilix-commands-20261104-v8',
-            root='lfm2-kilix-commands-20261104-v8',
+            manifest_digest='b' * 64, version='lfm2-kilix-commands-20261115-v10',
+            root='lfm2-kilix-commands-20261115-v10',
             source_url='https://example.invalid/lfm2.tar.gz',
-            licenses=[SimpleNamespace(record_digest=record.digest)])
+            licenses=[SimpleNamespace(record_digest=record.digest)],
+            files=[SimpleNamespace(path=name, bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
+                   for name, data in self.v10_files.items()])
         self.spec = spec
-        cache = tempfile.TemporaryDirectory()
-        self.addCleanup(cache.cleanup)
-        self.cache = Path(cache.name)
-        payload = b'gguf'
-        (self.cache / ('a' * 64)).write_bytes(payload)
+        apps = tempfile.TemporaryDirectory()
+        self.addCleanup(apps.cleanup)
+        self.apps = Path(apps.name)
+        self.v9_digest = 'f' * 64
+        self.v9 = self.apps / 'assets' / ('lfm2-kilix-commands--' + self.v9_digest)
+        for name, data in self.v10_files.items():
+            if name == 'notices/NOTICE.txt':
+                data = b'v9 notice'
+            (self.v9 / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.v9 / name).write_bytes(data)
         self.pin = {
             'asset_id': spec.asset_id, 'sha256': 'a' * 64, 'bytes': 4,
             'manifest_digest': spec.manifest_digest, 'version': spec.version,
-            'root': spec.root, 'url': spec.source_url, 'weight_version': 'fixture.8'}
-        # The cache file must actually hash to the pin. Rebuild both together.
-        digest = hashlib.sha256(payload).hexdigest()
-        (self.cache / digest).write_bytes(payload)
-        (self.cache / ('a' * 64)).unlink()
-        self.pin['sha256'] = self.spec.archive_sha256 = digest
+            'root': spec.root, 'url': spec.source_url, 'weight_version': 'fixture.9',
+            'local_migration': {'from_version': 'lfm2-kilix-commands-20261106-v9',
+                                'from_manifest_digest': self.v9_digest, 'network': False}}
+        # Manifest digests that a receipt covers; none until a test says so.
+        self.covered_manifests = set()
+        self.supply_error = None
 
         class Store:
             def write(inner, receipt):
                 self.receipts.append(receipt)
+
+        class Texts:
+            """The licence authority's texts: notices it holds are never read from a supplier."""
+            def get(inner, digest, label='text'):
+                if digest not in self.authority_texts:
+                    raise FileNotFoundError(label)
+                return b'text'
+
+        texts = Texts()
+
+        class Supplied:
+            """kilix_content.install.SuppliedFile: no symlink below the root, exact size and digest."""
+            def __init__(inner, path):
+                data = path.read_bytes()
+                inner.bytes, inner.sha256 = len(data), hashlib.sha256(data).hexdigest()
+
+            @classmethod
+            @contextlib.contextmanager
+            def open_beneath(cls, root, relative):
+                path = Path(root) / relative
+                if any(part.is_symlink() for part in (path, *path.parents) if part != Path(root).parent):
+                    raise RuntimeError('could not open supplied file: ' + relative)
+                yield cls(path)
 
         class Licence:
             CoverageRefused = type('CoverageRefused', (Exception,), {})
@@ -1124,8 +1161,8 @@ class InstallPolicyTests(unittest.TestCase):
             def standard_policy_eligible(inner, record):
                 return self.eligible
 
-            def require(inner, *args, **kwargs):
-                if not self.covered:
+            def require(inner, asset, **kwargs):
+                if not self.covered and asset[2] not in self.covered_manifests:
                     raise inner.CoverageRefused()
 
             def capture_agreement(inner, record, typed=None):
@@ -1139,7 +1176,7 @@ class InstallPolicyTests(unittest.TestCase):
                 return {'agreement': agreement, 'typed_through': agreement, **kwargs}
 
             def load_determined_texts(inner, path):
-                return 'texts'
+                return texts
 
             def load_determined_records(inner):
                 return 'records'
@@ -1160,6 +1197,8 @@ class InstallPolicyTests(unittest.TestCase):
 
             def ensure_supplied_asset(inner, spec, **kwargs):
                 self.calls.append(('supplied', spec.asset_id, str(kwargs['supplied'])))
+                if self.supply_error is not None:
+                    raise self.supply_error
 
         api = SimpleNamespace(Installer=Installer, InstallError=type('InstallError', (RuntimeError,), {}))
         lic = Licence()
@@ -1174,7 +1213,10 @@ class InstallPolicyTests(unittest.TestCase):
         defaults = SimpleNamespace(authorize=lambda *args: self.calls.append(('authorize', args[1].asset_id)))
         self.cm = cm
         self.load = patch.object(installer, '_load', return_value=(cm, defaults))
-        self.root = patch.object(installer, '_apps_root', return_value='/apps')
+        self.root = patch.object(installer, '_apps_root', return_value=str(self.apps))
+        self.supplied = patch.object(installer, '_supplied_file', return_value=Supplied)
+        self.supplied.start()
+        self.addCleanup(self.supplied.stop)
         self.digests = patch.object(installer, '_receipt_digests', return_value=('c' * 64, 'd' * 64))
         self.load.start()
         self.root.start()
@@ -1182,44 +1224,150 @@ class InstallPolicyTests(unittest.TestCase):
         self.addCleanup(self.load.stop)
         self.addCleanup(self.root.stop)
         self.addCleanup(self.digests.stop)
-        previous_cache = os.environ.get('KILIX_CONTENT_ARCHIVE_CACHE')
 
-        def restore_cache():
-            if previous_cache is None:
-                os.environ.pop('KILIX_CONTENT_ARCHIVE_CACHE', None)
-            else:
-                os.environ['KILIX_CONTENT_ARCHIVE_CACHE'] = previous_cache
+    def migrate(self):
+        with patch('sys.stdout', new_callable=io.StringIO) as out, \
+                patch('sys.stderr', new_callable=io.StringIO) as err, \
+                patch.object(socket, 'socket', side_effect=AssertionError('network opened')):
+            result = installer.migrate_command_model(Path('/kilix'), self.pin)
+        return result, out.getvalue() + err.getvalue()
 
-        self.addCleanup(restore_cache)
-
-    def test_command_model_records_its_notice_terms_and_reads_the_cache(self):
-        installer.install_command_model(Path('/kilix'), self.pin, self.cache)
-        # A notice record: no typed answer is passed, so none is recorded.
-        self.assertEqual(self.calls[0], ('capture', None, 'lfm2-kilix-commands'))
-        self.assertEqual(self.calls[1][0], 'upstream')
-        self.assertNotIn('supplied', [kind for kind, *_rest in self.calls])
-        self.assertEqual(self.receipts[0]['catalogue_digest'], 'c' * 64)
-        self.assertEqual(os.environ['KILIX_CONTENT_ARCHIVE_CACHE'], str(self.cache))
-
-    def test_terms_that_need_agreement_are_never_answered_by_the_image(self):
-        self.record.expected_decision = 'accept'
-        with self.assertRaisesRegex(ValueError, 'never answers'):
-            installer.install_command_model(Path('/kilix'), self.pin, self.cache)
+    def assertNothingInstalled(self, result, printed):
+        self.assertIs(result, False)
         self.assertEqual(self.receipts, [])
-        self.assertNotIn('capture', [kind for kind, *_rest in self.calls])
-        self.assertNotIn('upstream', [kind for kind, *_rest in self.calls])
+        self.assertNotIn('capture', self.kinds())
+        self.assertNotIn('supplied', self.kinds())
+        self.assertNotIn('upstream', self.kinds())
+        self.assertIn('Kilix Ask uses its grammar and offers the command model download on first use.',
+                      printed)
+
+    def test_v9_with_a_receipt_gets_v10_from_its_files_without_a_download(self):
+        self.covered_manifests = {self.v9_digest}
+        result, printed = self.migrate()
+        self.assertIs(result, True)
+        # A notice record: no typed answer is passed, so none is recorded.
+        self.assertEqual(self.calls, [('capture', None, 'lfm2-kilix-commands'),
+                                      ('supplied', 'lfm2-kilix-commands', str(self.v9))])
+        self.assertEqual(len(self.receipts), 1)
+        self.assertEqual(self.receipts[0]['manifest_digest'], 'b' * 64)
+        self.assertEqual(self.receipts[0]['catalogue_digest'], 'c' * 64)
+        self.assertEqual(self.receipts[0]['release_digest'], 'd' * 64)
+        self.assertIn('without a download', printed)
+        self.assertNotIn('KILIX_CONTENT_ARCHIVE_CACHE', installer.migrate_command_model.__code__.co_consts)
+        # The v9 directory stays for rollback.
+        self.assertEqual((self.v9 / 'model.gguf').read_bytes(), b'weights')
+
+    def test_a_v10_receipt_already_there_is_not_written_again(self):
+        self.covered_manifests = {self.v9_digest, 'b' * 64}
+        result, _printed = self.migrate()
+        self.assertIs(result, True)
+        self.assertEqual(self.kinds(), ['supplied'])
+        self.assertEqual(self.receipts, [])
+
+    def test_v9_without_a_covering_receipt_installs_nothing(self):
+        result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertIn('no receipt covers the installed lfm2-kilix-commands-20261106-v9', printed)
+
+    def test_v9_files_that_differ_or_are_missing_install_nothing(self):
+        self.covered_manifests = {self.v9_digest}
+        model = self.v9 / 'model.gguf'
+        for name, change in (('a changed byte', lambda: model.write_bytes(b'weightz')),
+                             ('a longer file', lambda: model.write_bytes(b'weights!')),
+                             ('a missing file', model.unlink),
+                             ('a symlinked file', lambda: (model.unlink(), model.symlink_to(self.apps / 'elsewhere')))):
+            with self.subTest(case=name):
+                (self.apps / 'elsewhere').write_bytes(b'weights')
+                if model.exists() or model.is_symlink():
+                    model.unlink()
+                model.write_bytes(b'weights')
+                change()
+                result, printed = self.migrate()
+                self.assertNothingInstalled(result, printed)
+                self.assertIn('lfm2-kilix-commands-20261106-v9 cannot supply', printed)
+                self.assertIn('model.gguf', printed)
+
+    def test_a_notice_the_authority_lacks_must_match_in_the_supplied_files(self):
+        self.covered_manifests = {self.v9_digest}
+        self.authority_texts.discard(hashlib.sha256(b'v10 notice').hexdigest())
+        result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertIn('notices/NOTICE.txt differs', printed)
+
+    def test_an_installed_v10_needs_nothing(self):
+        self.cm._verify = lambda *args, **kwargs: 0
+        shutil.rmtree(self.v9)
+        result, printed = self.migrate()
+        self.assertIs(result, True)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.receipts, [])
+        self.assertIn('already verified', printed)
+
+    def test_an_older_delivery_than_v9_is_not_migrated(self):
+        older = self.apps / 'assets' / ('lfm2-kilix-commands--' + '8' * 64)
+        self.v9.rename(older)
+        self.covered_manifests = {'8' * 64}
+        result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertIn('lfm2-kilix-commands-20261106-v9 is not installed for this user', printed)
+
+    def test_a_symlinked_v9_directory_is_not_read(self):
+        moved = self.apps / 'moved'
+        self.v9.rename(moved)
+        self.v9.symlink_to(moved)
+        self.covered_manifests = {self.v9_digest}
+        result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+
+    def test_terms_that_need_agreement_are_never_answered(self):
+        self.covered_manifests = {self.v9_digest}
+        self.record.expected_decision = 'accept'
+        result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertIn('typed agreement', printed)
 
     def test_standard_policy_cannot_cover_the_command_model(self):
+        self.covered_manifests = {self.v9_digest}
         self.eligible = True
         with self.assertRaisesRegex(ValueError, 'custom terms'):
-            installer.install_command_model(Path('/kilix'), self.pin, self.cache)
+            installer.migrate_command_model(Path('/kilix'), self.pin)
         self.assertEqual(self.receipts, [])
-        self.assertNotIn('upstream', [kind for kind, *_rest in self.calls])
+        self.assertNotIn('supplied', self.kinds())
 
-    def test_verified_command_model_does_not_need_the_archive(self):
-        self.cm._verify = lambda *args, **kwargs: 0
-        installer.install_command_model(Path('/kilix'), self.pin, Path('/missing-cache'))
+    def test_a_catalog_that_is_not_the_pin_stops_the_run(self):
+        self.covered_manifests = {self.v9_digest}
+        for key, value in (('manifest_digest', 'e' * 64), ('version', 'other'), ('source_url', 'https://x')):
+            with self.subTest(key=key):
+                original = getattr(self.spec, key)
+                setattr(self.spec, key, value)
+                with self.assertRaisesRegex(ValueError, 'differs from the image pin'):
+                    installer.migrate_command_model(Path('/kilix'), self.pin)
+                setattr(self.spec, key, original)
         self.assertEqual(self.calls, [])
+
+    def test_an_installer_refusal_never_fails_the_run_and_the_next_run_retries(self):
+        self.covered_manifests = {self.v9_digest}
+        self.supply_error = self.cm._api().InstallError('supplied file changed after it was opened')
+        result, printed = self.migrate()
+        self.assertIs(result, False)
+        self.assertIn('could not supply', printed)
+        self.assertIn('on first use', printed)
+        # The receipt it recorded stays; the next run finds it without the files.
+        self.incomplete()
+        self.supply_error = None
+        self.covered_manifests.add('b' * 64)
+        result, printed = self.migrate()
+        self.assertIs(result, True)
+        self.assertEqual(self.kinds(), ['capture', 'supplied', 'supplied'])
+        self.assertIn('is not completely installed', printed)
+
+    def test_the_command_model_step_never_downloads(self):
+        source = (ROOT / 'provision/install-image-models.py').read_text()
+        body = source.split('def migrate_command_model(', 1)[1].split('\ndef ', 1)[0]
+        for word in ('ensure_upstream_asset', 'fetch', 'urlopen', 'KILIX_CONTENT_ARCHIVE_CACHE',
+                     'ask.json', 'select'):
+            self.assertNotIn(word, body)
+        self.assertIn('ensure_supplied_asset(', body)
 
     def test_basic_pitch_uses_the_standard_policy_and_supplied_bytes(self):
         self.eligible = True
@@ -1347,13 +1495,6 @@ class InstallPolicyTests(unittest.TestCase):
         with patch('sys.stderr', new_callable=io.StringIO):
             installer.install_basic_pitch(Path('/kilix'), archive, pin)
         self.assertEqual(self.kinds(), ['authorize', 'supplied'])
-
-    def test_the_command_model_still_stops_on_an_incomplete_install(self):
-        # Unchanged from 0.2.3-rc5's approved installer: only Playalong defaults retry.
-        self.incomplete()
-        with self.assertRaises(self.cm._api().InstallError):
-            installer.install_command_model(Path('/kilix'), self.pin, self.cache)
-        self.assertEqual(self.calls, [])
 
     def test_a_download_runs_only_for_the_pinned_asset(self):
         self.eligible = True
@@ -1483,7 +1624,7 @@ class PlayalongOrderTests(unittest.TestCase):
                 patch.object(installer, 'install_demucs', record('demucs')), \
                 patch.object(installer, 'install_paradee', record('paradee')), \
                 patch.object(installer, 'install_spacy', record('spacy')), \
-                patch.object(installer, 'install_command_model', record('command')), \
+                patch.object(installer, 'migrate_command_model', record('command')), \
                 patch.object(installer, 'install_pp_ocr',
                              lambda kilix, archive, pin, **kwargs: calls.append(
                                  (pin['asset_id'], kwargs.get('offline')))), \
@@ -1513,21 +1654,21 @@ class PlayalongOrderTests(unittest.TestCase):
 
 
 class ImageWiringTests(unittest.TestCase):
-    def test_install_and_upgrade_install_after_staging(self):
+    def test_install_and_upgrade_install_image_models_without_staging_the_command_model(self):
         provision = (ROOT / 'provision/plebian-os-provision.sh').read_text()
         update = (ROOT / 'provision/plebian-os-update.sh').read_text()
         preseed = (ROOT / 'preseed/preseed.cfg').read_text()
         remaster = (ROOT / 'build/remaster-iso.sh').read_text()
-        self.assertLess(provision.index('stage-command-model.py'),
-                        provision.index('install-image-models.py'))
+        # The command model is a first-use download: nothing stages it.
+        for source in (provision, update, preseed, remaster):
+            self.assertNotIn('stage-command-model.py', source)
+            self.assertNotIn('model-archives', source)
         self.assertLess(provision.index('install-default-models.py'),
                         provision.index('install-image-models.py'))
         self.assertIn(
             'as_user env "${install_env[@]}" /usr/bin/python3 \\\n'
             '    "$PLEBIAN_OS_DIR/provision/install-image-models.py" '
             '--kilix "$KILIX_DIR" --offline', provision)
-        self.assertLess(update.index('stage-command-model.py'),
-                        update.index('install-image-models.py'))
         self.assertLess(update.index('install-default-models.py'),
                         update.index('install-image-models.py'))
         self.assertIn(

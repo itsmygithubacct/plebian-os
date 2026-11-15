@@ -241,7 +241,9 @@ above:
 
   A failed download changes nothing, and the next update tries again. LFM2
   is neither staged nor
-  downloaded; Kilix Ask uses its grammar until the user installs LFM2.
+  downloaded; Kilix Ask uses its grammar until the user installs LFM2, and a
+  machine that has delivery v9 keeps it (see **The 0.2.3 Kilix Ask command
+  model** below).
   <!-- LFM2: confirm at final list -->
 - **Debian packages added.** The update installs `redshift`, Tesseract,
   `python3-torch` and the converter dependencies, plus Zell's dependencies:
@@ -283,6 +285,37 @@ Releases before 0.2.3 cannot be a first selection. A Pleb whose VERSION is
 A same-tag reselect interrupted before the selection is pending, such as the
 RC9 → 0.2.3 hop, is recovered as an interrupted reselect. The installed
 closure is left unchanged.
+
+### The 0.2.3 Kilix Ask command model
+
+- **LFM2 is a first-use download from this candidate.** RC5 through RC9 put the
+  command-model archive on the installation media and had every upgrade
+  download and stage it (about 1.36 GB). An upgrade no longer downloads or
+  stages it. Kilix Ask uses its grammar until the model is installed and asks
+  whether to download it on the first interactive `kilix ask` and on the model
+  wizard's Local Workflows / Kilix Ask page. A non-interactive Ask never asks.
+- **A machine that has delivery v9 keeps the model, without a download.** The
+  upgraded catalog selects delivery `lfm2-kilix-commands-20261115-v10`, whose
+  files other than `notices/NOTICE.txt` are byte-identical to v9's. When the
+  desktop user has v9 installed with a receipt that covers it, the desktop-user
+  step installs v10 from those files through the Content installer's
+  supplied-directory path, which verifies every file against the v10 manifest,
+  and records the notice receipt (no agreement is recorded or typed). If
+  anything is missing or differs, nothing is installed and the upgrade
+  continues; Ask then offers the download on first use. A saved Ask selection
+  is left unchanged.
+- **Older deliveries** (v8 and earlier) hold another weight and are not
+  migrated; they get the first-use offer.
+- **What stays on disk.** The v9 directory and its receipt stay, so a rollback
+  selects them as before. An archive an earlier candidate staged under
+  `/usr/local/share/kilix/model-archives/` and its licence documents under
+  `/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/`
+  are not removed: archives there are content-addressed and kept across
+  upgrades and rollback, and the documents belong to the v9 files still on
+  disk. Once the machine no longer needs a rollback to an RC9 image, an
+  administrator may delete the archive
+  (`ea03c42ce0f36d12bca1844c558c0fcaeb442887e55e1e7b76ccb3ed632c3a85`) to free
+  its space; nothing in 0.2.3 reads it.
 
 ## Debian security updates
 
