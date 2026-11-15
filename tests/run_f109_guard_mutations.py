@@ -69,7 +69,7 @@ MUTATIONS = (
     ),
     Mutation(
         "offline tag-object identity",
-        '            || die "release tag v$TARGET object is $tag_object, not trusted object $trusted"',
+        '                || die "release tag $release_tag object is $tag_object, not trusted object $trusted"',
         "            || : # mutation: wrong tag object accepted",
         (CASE + "test_offline_tag_requires_an_exact_trusted_tag_object",),
     ),
