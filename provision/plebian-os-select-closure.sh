@@ -1214,6 +1214,15 @@ prepare_component_ancestry() {
     local repo="${CLOSURE[$repo_key]:-}" resolved shallow
     local -a deepen=()
 
+    # A standalone machine that never selected a closure pins nothing; what its
+    # checkout has is what is installed, and the move is judged from there.
+    if [ -z "$installed" ] && [ "$SELECTOR_MODE" = standalone ] \
+            && [ -z "${BEFORE[PLEBIAN_OS_VERSION]:-}" ] \
+            && git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
+        installed="$(git -C "$dir" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+        [ -z "$installed" ] \
+            || log "$label: no installed $ref_key pin (first selection); comparing from checkout HEAD ${installed:0:12}"
+    fi
     [[ "$installed" =~ ^[0-9a-f]{40}$ ]] \
         || closure_reject "installed $ref_key must be a full 40-character commit before $label ancestry can be checked (got '$installed')"
     [[ "$target" =~ ^[0-9a-f]{40}$ ]] \
@@ -1664,6 +1673,8 @@ installed_tool_fingerprint() {
 
 # Read only literal numeric release metadata; never execute saved configuration.
 # Guarded defaults keep the first value; plain/export assignments replace it.
+# Status 3 means the record parses and assigns the key nowhere (a standalone
+# machine that never selected a release); 2 means missing, invalid or ambiguous.
 record_release_value() {
     local key="$1" file line rhs value="" decoded char quote escaped guarded found=0
     local managed='^if \[ -z "\$\{([A-Za-z_][A-Za-z0-9_]*)\+x\}" \]; then ([A-Za-z_][A-Za-z0-9_]*)=(.*); fi$'
@@ -1721,6 +1732,7 @@ record_release_value() {
             if [ "$guarded" = 0 ] || [ "$found" = 0 ]; then value="$decoded"; found=1; fi
         done <"$record/$file"
     done
+    [ "$found" = 1 ] || return 3
     case "$key" in
         PLEBIAN_OS_RELEASE_MODE) [[ "$value" =~ ^[01]$ ]] || return 2 ;;
         PLEBIAN_OS_VERSION) [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 2 ;;
@@ -2035,10 +2047,25 @@ for i in "${!paths[@]}"; do
         printf '%s\n' 0 >"$record/$key.existed"
     fi
 done
-record_version="$(record_release_value PLEBIAN_OS_VERSION)" || exit 6
-record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || exit 6
-printf 'PLEBIAN_OS_VERSION=%s\nPLEBIAN_OS_RELEASE_MODE=%s\n' \
-    "$record_version" "$record_mode" >"$record/release-metadata.env"
+version_status=0 release_mode_status=0
+record_version="$(record_release_value PLEBIAN_OS_VERSION)" || version_status=$?
+record_mode="$(record_release_value PLEBIAN_OS_RELEASE_MODE)" || release_mode_status=$?
+if [ "$version_status" = 0 ] && [ "$release_mode_status" = 0 ]; then
+    printf 'PLEBIAN_OS_VERSION=%s\nPLEBIAN_OS_RELEASE_MODE=%s\n' \
+        "$record_version" "$record_mode" >"$record/release-metadata.env"
+elif [ "$mode" = standalone ] && [ "$version_status" = 3 ] \
+        && [ "$release_mode_status" = 3 ] \
+        && [ "$(cat -- "$record/closure.existed")" = 0 ]; then
+    # A first standalone selection: no closure.env, and no session.env value
+    # for either key. The record says so. Its rollback restores that unselected
+    # state: closure.env absent again, and session.env byte-for-byte (or absent).
+    # Standalone rollback never reads release metadata; a reader that does
+    # gets status 3 from this file and refuses.
+    printf '%s\n' '# No Plebian-OS release was selected before this record.' \
+        >"$record/release-metadata.env"
+else
+    exit 6
+fi
 cp -- "$stage/meta" "$record/meta"
 cp -- "$stage/closure.env" "$record/selected-closure.env"
 for file in "$record"/*; do sync -f "$file"; done

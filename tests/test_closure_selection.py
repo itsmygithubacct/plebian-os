@@ -13,6 +13,7 @@ import shutil
 import shlex
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -1113,7 +1114,11 @@ class ClosureSelectionTests(unittest.TestCase):
             ('PLEBIAN_OS_VERSION="unknown"', None),
             (r'PLEBIAN_OS_VERSION="0\.2\.2"', None),
             ('# no release metadata', None),
+            ('OTHER_KEY=1', None),
         ]
+        # Only a record that assigns the key nowhere reports status 3, the
+        # first-selection case; everything malformed or ambiguous stays 2.
+        never_assigned = {'# no release metadata', 'OTHER_KEY=1'}
         for line, expected in cases:
             with self.subTest(line=line), tempfile.TemporaryDirectory() as td:
                 record = Path(td)
@@ -1123,7 +1128,8 @@ class ClosureSelectionTests(unittest.TestCase):
                      'record_release_value PLEBIAN_OS_VERSION', "bash", td],
                     capture_output=True, text=True)
                 if expected is None:
-                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.returncode,
+                                     3 if line in never_assigned else 2, result.stderr)
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout.strip(), expected)
@@ -1188,6 +1194,261 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(rolled_back.returncode, 0, rolled_back.stderr)
             self.assertEqual(user_env.read_bytes(), before)
             self.assertFalse(closure.exists())
+
+    # ── a standalone machine that never selected a release ──────────────────
+    # pleb on plain Debian has no closure.env and, at most, a user session.env
+    # with operator choices. The first selection has no release to record; its
+    # rollback must put back exactly that: no closure, the same session bytes.
+    UNSELECTED_SESSIONS = {
+        "absent": None,
+        "operator-only": "# operator choices\nPLEB_RESPAWN=0\nKILIX_DESKTOP_FLAVOR=xp\n",
+    }
+
+    def _unselected_standalone(self, base, session_text):
+        user_env = base / "home/.local/gpu_terminal/pleb/config/session.env"
+        user_env.parent.mkdir(parents=True)
+        (base / "root").mkdir()
+        if session_text is not None:
+            user_env.write_text(session_text)
+            user_env.chmod(0o600)
+        self._source(
+            base, (ROOT / "releases/0.2.2.env").read_text(),
+            version="0.2.2", release="0.2.2", tag="v0.2.2",
+            requirements_text=(ROOT / "releases/0.2.2.requirements").read_text())
+        recovery = base / "home/.local/gpu_terminal/pleb/state/release-hop"
+        env_extra = {
+            "PLEBIAN_OS_SELECTOR_MODE": "standalone",
+            "PLEBIAN_OS_CLOSURE_LAYOUT": "split",
+            "PLEBIAN_OS_SESSION_ENV": str(user_env),
+            "PLEBIAN_OS_CLOSURE_ENV": str(user_env.with_name("closure.env")),
+            "PLEBIAN_OS_RECOVERY_BASE": str(recovery),
+            "PLEBIAN_OS_SELECTOR_DST": "",
+            "PLEBIAN_OS_UPDATER_DST": "",
+        }
+        return user_env, recovery, env_extra
+
+    @staticmethod
+    def _state(path: Path):
+        return path.read_bytes() if path.exists() else None
+
+    def _tag_object(self, base, tag="v0.2.2"):
+        return subprocess.run(
+            ["git", "-C", str(base / "src"), "rev-parse", f"refs/tags/{tag}"],
+            capture_output=True, text=True, check=True).stdout.strip()
+
+    def _select_first(self, base, env_extra, **kwargs):
+        return self._run(base, "0.2.2", "--offline", "--source", str(base / "src"),
+                         env_extra=env_extra, **kwargs)
+
+    def test_first_standalone_selection_records_an_unselected_machine(self):
+        for name, text in self.UNSELECTED_SESSIONS.items():
+            with self.subTest(session=name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                user_env, recovery, env_extra = self._unselected_standalone(base, text)
+                closure = user_env.with_name("closure.env")
+                selected = self._select_first(base, env_extra)
+                self.assertEqual(selected.returncode, 0, selected.stderr)
+                self.assertNotIn("status 6", selected.stderr)
+                self.assertIn("treating 0.2.2 as a first selection", selected.stderr)
+                self.assertEqual(self._values(user_env)["PLEBIAN_OS_VERSION"], "0.2.2")
+                self.assertEqual(closure.stat().st_mode & 0o777, 0o600)
+                if text is not None:
+                    self.assertEqual(self._values(user_env)["KILIX_DESKTOP_FLAVOR"], "xp")
+                    self.assertEqual(user_env.read_text(), text)
+                records = sorted(recovery.glob("closure-rollback.*"))
+                self.assertEqual(len(records), 1)
+                record = records[0]
+                self.assertEqual((record / "closure.existed").read_text(), "0\n")
+                self.assertEqual((record / "session.existed").read_text(),
+                                 "0\n" if text is None else "1\n")
+                self.assertEqual(
+                    (record / "release-metadata.env").read_text(),
+                    "# No Plebian-OS release was selected before this record.\n")
+
+    def test_first_standalone_rollback_returns_to_no_closure(self):
+        # pleb's --rollback and its restore after a failed stack apply both run
+        # the target selector's --rollback with the hop's trusted tag object.
+        for name, text in self.UNSELECTED_SESSIONS.items():
+            for trusted in (False, True):
+                with self.subTest(session=name, trusted_tag=trusted), \
+                        tempfile.TemporaryDirectory() as td:
+                    base = Path(td)
+                    user_env, recovery, env_extra = self._unselected_standalone(base, text)
+                    closure = user_env.with_name("closure.env")
+                    before = (self._state(user_env), self._state(closure))
+                    self.assertEqual(self._select_first(base, env_extra).returncode, 0)
+                    rollback_env = dict(env_extra)
+                    if trusted:
+                        rollback_env["PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA"] = self._tag_object(base)
+                    restored = self._run(base, "--rollback", env_extra=rollback_env)
+                    self.assertEqual(restored.returncode, 0, restored.stderr)
+                    self.assertEqual((self._state(user_env), self._state(closure)), before)
+                    record = sorted(recovery.glob("closure-rollback.*"))[0]
+                    self.assertTrue((record / "restored").is_file())
+                    again = self._run(base, "--rollback", env_extra=env_extra)
+                    self.assertNotEqual(again.returncode, 0)
+                    self.assertIn("no split closure to roll back to", again.stderr)
+                    self.assertEqual((self._state(user_env), self._state(closure)), before)
+
+    def test_failed_first_standalone_apply_restores_no_closure(self):
+        for name, text in self.UNSELECTED_SESSIONS.items():
+            for boundary in ("backup", "stage", "session", "closure"):
+                with self.subTest(session=name, fail_after=boundary), \
+                        tempfile.TemporaryDirectory() as td:
+                    base = Path(td)
+                    user_env, recovery, env_extra = self._unselected_standalone(base, text)
+                    closure = user_env.with_name("closure.env")
+                    before = (self._state(user_env), self._state(closure))
+                    failed = self._select_first(base, env_extra, fail_after=boundary)
+                    self.assertNotEqual(failed.returncode, 0)
+                    self.assertIn("injected split-closure failure", failed.stderr)
+                    self.assertEqual((self._state(user_env), self._state(closure)), before)
+                    self.assertEqual(list(recovery.glob("closure-rollback.*")), [])
+                    retried = self._select_first(base, env_extra)
+                    self.assertEqual(retried.returncode, 0, retried.stderr)
+
+    def test_repeat_standalone_selection_keeps_ordinary_records(self):
+        for name, text in self.UNSELECTED_SESSIONS.items():
+            with self.subTest(session=name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                user_env, recovery, env_extra = self._unselected_standalone(base, text)
+                closure = user_env.with_name("closure.env")
+                unselected = (self._state(user_env), self._state(closure))
+                # Select, roll back to unselected, select again.
+                self.assertEqual(self._select_first(base, env_extra).returncode, 0)
+                first = (self._state(user_env), self._state(closure))
+                self.assertEqual(self._run(base, "--rollback", env_extra=env_extra).returncode, 0)
+                self.assertEqual((self._state(user_env), self._state(closure)), unselected)
+                # Recovery records are named by the second they were written.
+                time.sleep(1.1)
+                again = self._select_first(base, env_extra)
+                self.assertEqual(again.returncode, 0, again.stderr)
+                self.assertEqual((self._state(user_env), self._state(closure)), first)
+                # Selecting once more starts from a selected machine: an
+                # ordinary record carrying the selected release.
+                time.sleep(1.1)
+                reselected = self._select_first(base, env_extra)
+                self.assertEqual(reselected.returncode, 0, reselected.stderr)
+                self.assertIn("closure: 0.2.2 -> 0.2.2 (reselecting the same release",
+                              reselected.stdout)
+                newest = sorted(recovery.glob("closure-rollback.*"))[-1]
+                self.assertEqual((newest / "closure.existed").read_text(), "1\n")
+                self.assertEqual((newest / "release-metadata.env").read_text(),
+                                 "PLEBIAN_OS_VERSION=0.2.2\nPLEBIAN_OS_RELEASE_MODE=1\n")
+                self.assertEqual(self._run(base, "--rollback", env_extra=env_extra).returncode, 0)
+                self.assertEqual((self._state(user_env), self._state(closure)), first)
+                self.assertEqual(self._run(base, "--rollback", env_extra=env_extra).returncode, 0)
+                self.assertEqual((self._state(user_env), self._state(closure)), unselected)
+
+    def test_first_standalone_selection_checks_ancestry_from_unpinned_checkouts(self):
+        # No skip: a never-selected machine has no installed PLEB_REF or
+        # KILIX_REF pin. Its checkouts' HEADs are what is installed.
+        for name, text in self.UNSELECTED_SESSIONS.items():
+            for provider in (True, False):
+                with self.subTest(session=name, kilix95_checkout=provider), \
+                        tempfile.TemporaryDirectory() as td:
+                    base = Path(td)
+                    sources = base / "home/.local/gpu_terminal/sources"
+                    pleb, kilix, kilix95 = (sources / "pleb", sources / "kilix",
+                                            sources / "kilix-desktops/kilix-95")
+                    user_env = base / "home/.local/gpu_terminal/pleb/config/session.env"
+                    user_env.parent.mkdir(parents=True)
+                    (base / "root").mkdir()
+                    if text is not None:
+                        user_env.write_text(text)
+                        user_env.chmod(0o600)
+                    histories = [self._component_history(repo) for repo in (pleb, kilix, kilix95)]
+                    pins = dict(zip(("PLEB_REF", "KILIX_REF", "KILIX95_REF"),
+                                    (h[-1] for h in histories)))
+                    self._source(base, self._manifest_text(**pins))
+                    self._seed_core_public_caches(base, pleb, kilix, kilix95)
+                    for repo, history in zip((pleb, kilix, kilix95), histories):
+                        subprocess.run(["git", "-C", str(repo), "checkout", "-q", "--detach",
+                                        history[0]], check=True)
+                    if not provider:
+                        shutil.rmtree(kilix95)
+                    closure = user_env.with_name("closure.env")
+                    env_extra = {
+                        "PLEBIAN_OS_SELECTOR_MODE": "standalone",
+                        "PLEBIAN_OS_CLOSURE_LAYOUT": "split",
+                        "PLEBIAN_OS_SESSION_ENV": str(user_env),
+                        "PLEBIAN_OS_CLOSURE_ENV": str(closure),
+                        "PLEBIAN_OS_RECOVERY_BASE": str(
+                            base / "home/.local/gpu_terminal/pleb/state/release-hop"),
+                        "PLEBIAN_OS_SELECTOR_DST": "", "PLEBIAN_OS_UPDATER_DST": "",
+                        "PLEBIAN_OS_PLEB_DIR": str(pleb), "PLEBIAN_OS_KILIX_DIR": str(kilix),
+                        "PLEBIAN_OS_KILIX95_DIR": str(kilix95),
+                    }
+                    before = (self._state(user_env), self._state(closure))
+                    selected = self._run(base, "0.1.8", "--offline", "--source", str(base / "src"),
+                                         check_ancestry=True, env_extra=env_extra)
+                    self.assertEqual(selected.returncode, 0, selected.stderr)
+                    for label, history in (("Pleb", histories[0]), ("Kilix", histories[1])):
+                        self.assertIn(f"{label}: no installed", selected.stdout)
+                        self.assertIn(f"component {label}: {history[0][:12]} -> "
+                                      f"{history[-1][:12]} (forward", selected.stdout)
+                    self.assertEqual(self._values(user_env)["PLEB_REF"], pins["PLEB_REF"])
+                    rolled = self._run(base, "--rollback", env_extra=env_extra)
+                    self.assertEqual(rolled.returncode, 0, rolled.stderr)
+                    self.assertEqual((self._state(user_env), self._state(closure)), before)
+
+    def test_image_machine_without_installed_pins_still_refuses_ancestry(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            sources = base / "home/.local/gpu_terminal/sources"
+            repos = (sources / "pleb", sources / "kilix", sources / "kilix-desktops/kilix-95")
+            histories = [self._component_history(repo) for repo in repos]
+            pins = dict(zip(("PLEB_REF", "KILIX_REF", "KILIX95_REF"), (h[-1] for h in histories)))
+            os_head = self._source(base, self._manifest_text(**pins))
+            self._seed_core_public_caches(base, *repos)
+            previous = {**dict(INSTALLED_RELEASE_VALUES), "PLEBIAN_OS_REF": os_head,
+                        **dict(zip(pins, (h[0] for h in histories)))}
+            del previous["PLEB_REF"]
+            session = self._machine(base, release=list(previous.items()))
+            before = session.read_bytes()
+            refused = self._run(base, "0.1.8", "--offline", check_ancestry=True)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("installed PLEB_REF must be a full 40-character commit", refused.stderr)
+            self.assertEqual(session.read_bytes(), before)
+
+    def test_standalone_records_without_a_clear_release_still_refuse(self):
+        # Only "no closure and no release value at all" is a first selection.
+        cases = {
+            "mode-without-version": ("PLEBIAN_OS_RELEASE_MODE=1\n", None),
+            "invalid-version": ("PLEBIAN_OS_VERSION=unknown\n", None),
+            "closure-without-version": ("PLEB_RESPAWN=0\n", "PLEB_REF=" + "1" * 40 + "\n"),
+        }
+        for name, (session_text, closure_text) in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                user_env, recovery, env_extra = self._unselected_standalone(base, session_text)
+                closure = user_env.with_name("closure.env")
+                if closure_text is not None:
+                    closure.write_text(closure_text)
+                    closure.chmod(0o600)
+                before = (self._state(user_env), self._state(closure))
+                refused = self._select_first(base, env_extra)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("could not select the split closure (status 6)", refused.stderr)
+                self.assertEqual((self._state(user_env), self._state(closure)), before)
+
+    def test_image_machine_without_release_metadata_still_refuses(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            release = [(k, v) for k, v in self._release_values("0.2.2")
+                       if k not in ("PLEBIAN_OS_VERSION", "PLEBIAN_OS_RELEASE",
+                                    "PLEBIAN_OS_RELEASE_MODE")]
+            session = self._machine(base, release=release)
+            before = session.read_bytes()
+            self._source(
+                base, (ROOT / "releases/0.2.2.env").read_text(),
+                version="0.2.2", release="0.2.2", tag="v0.2.2",
+                requirements_text=(ROOT / "releases/0.2.2.requirements").read_text())
+            refused = self._run(base, "0.2.2", "--offline")
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("could not select the split closure (status 6)", refused.stderr)
+            self.assertEqual(session.read_bytes(), before)
+            self.assertFalse(session.with_name("closure.env").exists())
 
     def test_selection_adds_a_pin_the_installed_release_never_had(self):
         with tempfile.TemporaryDirectory() as td:
