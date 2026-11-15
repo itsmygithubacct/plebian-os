@@ -678,6 +678,7 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
             ("quotes", "carrier'\"archive.tar.xz"),
             ("dollar", "carrier$HOME.tar.xz"),
             ("newline", "carrier\narchive.tar.xz"),
+            ("trailing-newline", "carrier-archive.tar.xz\n"),
         )
         for label, filename in names:
             for source in ("flag", "environment", "both"):

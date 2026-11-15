@@ -822,9 +822,14 @@ preflight_ollama_carrier() {
             || die "--ollama-carrier is not a regular non-symlink file: $cli_carrier"
         [ -f "$env_carrier" ] && [ ! -L "$env_carrier" ] \
             || die "PLEBIAN_OS_OLLAMA_CARRIER is not a regular non-symlink file: $env_carrier"
-        cli_real="$(readlink -e -- "$cli_carrier")" \
+        # readlink's ordinary newline delimiter cannot survive a name that
+        # itself ends in a newline. NUL-delimited output keeps every byte the
+        # argument or the environment was able to carry.
+        cli_real=""
+        IFS= read -r -d '' cli_real < <(readlink -e -z -- "$cli_carrier") \
             || die "could not resolve --ollama-carrier path: $cli_carrier"
-        env_real="$(readlink -e -- "$env_carrier")" \
+        env_real=""
+        IFS= read -r -d '' env_real < <(readlink -e -z -- "$env_carrier") \
             || die "could not resolve PLEBIAN_OS_OLLAMA_CARRIER path: $env_carrier"
         [ "$cli_real" = "$env_real" ] \
             || die "--ollama-carrier and PLEBIAN_OS_OLLAMA_CARRIER name different files"

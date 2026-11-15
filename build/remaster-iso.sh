@@ -1080,13 +1080,17 @@ SRC_ISO="${1:-}"
 resolve_ollama_carrier() {
     local argument="${1:-}" configured="${PLEBIAN_OS_OLLAMA_CARRIER:-}"
     local argument_real="" configured_real=""
+    # NUL-delimited readlink keeps a name that ends in a newline. Command
+    # substitution would strip those bytes before the file test.
     if [ -n "$argument" ]; then
-        argument_real="$(readlink -f -- "$argument" 2>/dev/null || true)"
+        argument_real=""
+        IFS= read -r -d '' argument_real < <(readlink -f -z -- "$argument" 2>/dev/null) || true
         [ -n "$argument_real" ] && [ -f "$argument_real" ] \
             || { echo "Ollama carrier argument 3 is missing or is not a regular file" >&2; exit 1; }
     fi
     if [ -n "$configured" ]; then
-        configured_real="$(readlink -f -- "$configured" 2>/dev/null || true)"
+        configured_real=""
+        IFS= read -r -d '' configured_real < <(readlink -f -z -- "$configured" 2>/dev/null) || true
         [ -n "$configured_real" ] && [ -f "$configured_real" ] \
             || { echo "PLEBIAN_OS_OLLAMA_CARRIER is missing or is not a regular file" >&2; exit 1; }
     fi
