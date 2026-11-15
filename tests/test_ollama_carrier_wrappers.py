@@ -65,6 +65,57 @@ class OllamaCarrierWrapperTests(unittest.TestCase):
             self.assertNotEqual(missing.returncode, 0)
             self.assertIn("PLEBIAN_OS_OLLAMA_CARRIER is missing", missing.stderr)
 
+    def test_remaster_resolver_keeps_backslash_space_quote_dollar_and_newline_names(self):
+        names = (
+            "carrier\\archive.tar.xz",
+            "carrier archive.tar.xz",
+            "carrier'\"archive.tar.xz",
+            "carrier$HOME.tar.xz",
+            "carrier\narchive.tar.xz",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            for index, filename in enumerate(names):
+                with self.subTest(filename=filename):
+                    carrier = root / filename
+                    carrier.write_bytes(b"carrier")
+                    alias = root / f"alias-{index}.tar.xz"
+                    alias.symlink_to(carrier)
+                    for argument, configured in (
+                        (carrier, None),
+                        (None, carrier),
+                        (alias, carrier),
+                    ):
+                        result = self.run_resolver(argument=argument, configured=configured)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.rstrip("\n"), str(carrier))
+
+            trailing = root / "carrier-archive.tar.xz\n"
+            trailing.write_bytes(b"carrier")
+            alias = root / "alias-trailing.tar.xz"
+            alias.symlink_to(trailing)
+            harness = (
+                "set -euo pipefail\n"
+                + self.resolver
+                + '\nresolve_ollama_carrier "${1:-}"\n'
+                + 'printf "%s" "$OLLAMA_CARRIER"\n'
+            )
+            for argument, configured in (
+                (trailing, None),
+                (None, trailing),
+                (alias, trailing),
+            ):
+                argv = ["bash", "-c", harness, "carrier-resolver-test"]
+                if argument is not None:
+                    argv.append(str(argument))
+                env = os.environ.copy()
+                env.pop("PLEBIAN_OS_OLLAMA_CARRIER", None)
+                if configured is not None:
+                    env["PLEBIAN_OS_OLLAMA_CARRIER"] = str(configured)
+                result = subprocess.run(argv, env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, str(trailing))
+
     def test_building_wrapper_dry_runs_show_the_shared_carrier(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

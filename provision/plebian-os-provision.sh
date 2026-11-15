@@ -690,9 +690,18 @@ ollama_verify_carrier_pins() {
     [ "$actual_bytes" = "$expected_bytes" ] \
         || die "$label size does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 
-    actual_digest_output="$(sha256sum -- "$carrier" 2>/dev/null)" \
+    # Hash the file on stdin. GNU sha256sum prefixes the line with '\' when
+    # the name contains a backslash or a newline, and a split on the first
+    # space then treats that marker as part of the digest. A standalone path
+    # was refused before any change for that reason alone. Spaces, quotes and
+    # '$' stay in the name, which this check does not parse. A NUL cannot
+    # travel in an argument or in the environment, so this interface cannot
+    # name a path that contains one.
+    actual_digest_output="$(sha256sum < "$carrier" 2>/dev/null)" \
         || die "could not calculate $label SHA-256: $carrier"
     actual_digest="${actual_digest_output%% *}"
+    [[ "$actual_digest" =~ ^[0-9a-f]{64}$ ]] \
+        || die "could not read $label SHA-256: $carrier"
     [ "$actual_digest" = "$expected_digest" ] \
         || die "$label SHA-256 does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 }
@@ -813,9 +822,14 @@ preflight_ollama_carrier() {
             || die "--ollama-carrier is not a regular non-symlink file: $cli_carrier"
         [ -f "$env_carrier" ] && [ ! -L "$env_carrier" ] \
             || die "PLEBIAN_OS_OLLAMA_CARRIER is not a regular non-symlink file: $env_carrier"
-        cli_real="$(readlink -e -- "$cli_carrier")" \
+        # readlink's ordinary newline delimiter cannot survive a name that
+        # itself ends in a newline. NUL-delimited output keeps every byte the
+        # argument or the environment was able to carry.
+        cli_real=""
+        IFS= read -r -d '' cli_real < <(readlink -e -z -- "$cli_carrier") \
             || die "could not resolve --ollama-carrier path: $cli_carrier"
-        env_real="$(readlink -e -- "$env_carrier")" \
+        env_real=""
+        IFS= read -r -d '' env_real < <(readlink -e -z -- "$env_carrier") \
             || die "could not resolve PLEBIAN_OS_OLLAMA_CARRIER path: $env_carrier"
         [ "$cli_real" = "$env_real" ] \
             || die "--ollama-carrier and PLEBIAN_OS_OLLAMA_CARRIER name different files"
