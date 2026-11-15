@@ -1349,9 +1349,12 @@ prepare_component_ancestry_checks() {
             KILIX_SECRETS_REPO kilix-secrets
     fi
     if release_requires_neuronte; then
-        # Commits and trees only: the history carries every weight trained.
+        # Commits and trees only. The cache is named for the repository: a
+        # machine that selected an earlier closure keeps a "neuronte" cache
+        # whose origin is the full Neuronte repository, and a cache is never
+        # repointed.
         prepare_component_target_only \
-            "Neuronte" NEURONTE_REF NEURONTE_REPO neuronte blob:none
+            "Neuronte" NEURONTE_REF NEURONTE_REPO neuronte-v2 blob:none
     fi
 }
 

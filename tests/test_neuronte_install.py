@@ -676,7 +676,40 @@ class HookTests(unittest.TestCase):
         text = SELECT.read_text()
         self.assertIn('release_requires_neuronte() {\n    [ "$TARGET" = 0.2.3 ]\n}', text)
         self.assertIn('closure_reject "NEURONTE_REPO must name the canonical release repository"', text)
-        self.assertIn('"Neuronte" NEURONTE_REF NEURONTE_REPO neuronte blob:none', text)
+        self.assertIn('"Neuronte" NEURONTE_REF NEURONTE_REPO neuronte-v2 blob:none', text)
+
+    @unittest.skipUnless(shutil.which('git'), 'needs git')
+    def test_an_earlier_closure_s_neuronte_cache_does_not_block_selection(self):
+        """A machine that selected RC9 has a cache named neuronte whose origin
+        is the full repository. The slim set uses its own cache beside it."""
+        text = SELECT.read_text()
+        function = re.search(r'^component_public_cache\(\) \{\n.*?^\}\n', text, re.M | re.S).group(0)
+        cache_name = re.search(r'"Neuronte" NEURONTE_REF NEURONTE_REPO (\S+) blob:none', text).group(1)
+        new = re.findall(r'^NEURONTE_REPO=(.*)$', RELEASE_ENV.read_text(), re.M)[0]
+        old = 'https://github.com/itsmygithubacct/neuronte.git'
+        self.assertNotEqual(new, old)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'components'
+            root.mkdir()
+            git('init', '--bare', '--quiet', str(root / 'neuronte.git'), cwd=root)
+            git('remote', 'add', 'origin', old, cwd=root / 'neuronte.git')
+            script = ('closure_reject() { echo "rejected: $*" >&2; exit 9; }\n' + function
+                      + 'component_public_cache Neuronte "$1" "$2" blob:none\n')
+            env = dict(os.environ, PLEBIAN_OS_COMPONENT_CACHE_HOME=str(root),
+                       GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1')
+            chosen = subprocess.run(['bash', '-c', script, 'bash', new, cache_name], env=env,
+                                    capture_output=True, text=True)
+            self.assertEqual(chosen.returncode, 0, chosen.stderr)
+            cache = Path(chosen.stdout.strip())
+            self.assertEqual(cache, root / (cache_name + '.git'))
+            self.assertEqual(git('config', '--get', 'remote.origin.url', cwd=cache), new)
+            # The earlier cache is untouched, so the earlier closure still selects.
+            self.assertEqual(git('config', '--get', 'remote.origin.url', cwd=root / 'neuronte.git'), old)
+            # What this guards against: the new repository under the old name.
+            blocked = subprocess.run(['bash', '-c', script, 'bash', new, 'neuronte'], env=env,
+                                     capture_output=True, text=True)
+            self.assertEqual(blocked.returncode, 9)
+            self.assertIn('public-ref cache origin', blocked.stderr)
         self.assertIn('NEURONTE_REF) label="Neuronte" ;;', text)
         self.assertIn('git -C "$cache" config remote.origin.partialclonefilter "$filter"', text)
         self.assertIn('"${filter_args[@]}" origin', text)
