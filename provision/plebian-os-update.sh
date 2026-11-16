@@ -47,13 +47,49 @@ valid_release_tag() {
 }
 
 
-log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
+# The terminal is not the record. A Ctrl-C kills a `tee` in the same foreground
+# group and drops whatever that pipe had not flushed. Every line is appended
+# here first, then written to the terminal. `_UPDATE_LOG_FD` is empty until
+# open_updater_log runs.
+_update_record() {
+    [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' now)" "$*" \
+        >&"$_UPDATE_LOG_FD" 2>/dev/null || true
+}
+log()  { _update_record "$*"; printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
+warn() { _update_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 # `exit` does not trigger the ERR trap, so a die() -- the convention at 152 call
 # sites here -- would otherwise reach the EXIT-trap cleanup with no record of
 # what went wrong, and the retained failure-reason would read "<not captured>".
 # The message die() is already printing IS the diagnosis; keep it.
-die()  { _STACK_FAIL_COMMAND="die: $*"; printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+die()  { _STACK_FAIL_COMMAND="die: $*"; _update_record "$*"; printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Own log for this updater. A test may name PLEBIAN_OS_UPDATE_LOG; otherwise a
+# real run uses the private Pleb state directory. Library-only loads stay quiet
+# unless a test asked for the file.
+open_updater_log() {
+    local path dir old_umask
+    if [ -n "${PLEBIAN_OS_UPDATE_LOG:-}" ]; then
+        path="$PLEBIAN_OS_UPDATE_LOG"
+    elif [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        return 0
+    else
+        [ -n "${PLEB_STATE_HOME:-}" ] || return 0
+        path="${PLEB_STATE_HOME}/update.log"
+    fi
+    case "$path" in
+        *[$'\n\r']*) return 0 ;;
+    esac
+    dir="$(dirname -- "$path")"
+    mkdir -p -- "$dir" 2>/dev/null || return 0
+    old_umask="$(umask)"
+    umask 077
+    exec {_UPDATE_LOG_FD}>>"$path" || { umask "$old_umask"; return 0; }
+    umask "$old_umask"
+    [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
+    export PLEBIAN_OS_UPDATE_LOG_FD="$_UPDATE_LOG_FD"
+    return 0
+}
 
 require_unprivileged_updater() {
     [ "${1:-$EUID}" -ne 0 ] \
@@ -497,6 +533,7 @@ GPU_TERMINAL_SETTINGS_FILE="${GPU_TERMINAL_SETTINGS_FILE:-$GPU_TERMINAL_HOME/set
 PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
 PLEB_CONFIG_HOME="${PLEB_CONFIG_HOME:-$PLEB_STORAGE_HOME/config}"
 PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
+open_updater_log
 PLEB_CACHE_HOME="${PLEB_CACHE_HOME:-$PLEB_STORAGE_HOME/cache}"
 PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
 PLEB_DATA_HOME="${PLEB_DATA_HOME:-$PLEB_STORAGE_HOME/data}"
@@ -2494,9 +2531,254 @@ native_runtime_command() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
     # Own session, terminal signals ignored: see the note below.
+    run_package_step_in_its_own_session \
     "${elevate[@]}" /usr/bin/setsid --wait /bin/bash -c \
         'trap "" INT HUP QUIT; exec "$@"' plebian-os-package-step \
         /usr/local/sbin/plebian-os-native-runtime "$@"
+}
+
+# Bash does not run its INT trap until the foreground command returns, and a
+# shielded apt/dpkg step can run for a long time. This process is that
+# foreground command: it says the update was interrupted as soon as the signal
+# arrives, writes that line to the updater log first, then waits until the
+# shielded step finishes so dpkg is not killed. The command is sys.argv[1:].
+# PLEBIAN_OS_PACKAGE_STEP_IGNORE_SIGNAL=1 returns the child's own status, which
+# a rollback removal needs so a second Ctrl-C is not reported as a failed remove.
+run_package_step_in_its_own_session() {
+    if [ "${PLEBIAN_OS_PACKAGE_STEP_IGNORE_SIGNAL:-0}" = 1 ]; then
+        "$@"
+        return $?
+    fi
+    /usr/bin/python3 -I -c '
+import os, signal, subprocess, sys, time
+signalled = []
+def note(number, frame):
+    signalled.append(number)
+signal.signal(signal.SIGINT, note)
+signal.signal(signal.SIGTERM, note)
+signal.signal(signal.SIGHUP, note)
+child = subprocess.Popen(sys.argv[1:])
+status = 1
+while True:
+    try:
+        status = child.wait()
+        break
+    except KeyboardInterrupt:
+        signalled.append(signal.SIGINT)
+if signalled:
+    number = signalled[0]
+    codes = {int(signal.SIGINT): 130, int(signal.SIGTERM): 143, int(signal.SIGHUP): 129}
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    record = stamp + " interrupted; rolling back\n"
+    fd = os.environ.get("PLEBIAN_OS_UPDATE_LOG_FD", "")
+    if fd.isdigit():
+        try:
+            os.write(int(fd), record.encode())
+        except OSError:
+            pass
+    try:
+        os.write(2, b"interrupted; rolling back\n")
+    except OSError:
+        pass
+    raise SystemExit(codes.get(number, 130))
+if status < 0:
+    status = 128 + (-status)
+raise SystemExit(status)
+' "$@"
+}
+
+# The phrase for status 130, 143, and 129. A shielded step may already have
+# printed it; saying it again when this trap runs is the path for every other
+# foreground command, which cannot be interrupted until it returns.
+acknowledge_update_interrupt() {
+    local status="$1"
+    _STACK_TXN_EXIT_STATUS="$status"
+    trap '' INT TERM HUP
+    case "$status" in
+        130|143|129) ;;
+        *) status=1 ;;
+    esac
+    if [ "${_UPDATE_INTERRUPT_SAID:-0}" != 1 ]; then
+        _UPDATE_INTERRUPT_SAID=1
+        warn "interrupted; rolling back"
+    fi
+    exit "$status"
+}
+
+# Apt packages this transaction newly installs. The baseline is every package
+# installed when the transaction opens. Each later package step records only
+# the names that appeared during that step, so a package the operator installs
+# between steps is not this transaction's. Rollback removes the recorded names
+# in reverse order, and only when apt would remove nothing else. Debian
+# upgrades are not names that newly appear, so they stay. A missing dpkg-query
+# records nothing and removes nothing.
+_package_name_is_safe() {
+    [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]*$ ]]
+}
+
+_installed_package_names() {
+    dpkg-query -W -f '${Package}\t${db:Status-Status}\n' 2>/dev/null \
+        | awk -F '\t' '$2 == "installed" { print $1 }' \
+        | LC_ALL=C sort -u
+}
+
+_mark_package_additions_untracked() {
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    : >"$_STACK_TXN_DIR/apt-additions-untracked" 2>/dev/null || true
+    return 0
+}
+
+record_transaction_package_baseline() {
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    if ! command -v dpkg-query >/dev/null 2>&1; then
+        _mark_package_additions_untracked
+        return 0
+    fi
+    if ! _installed_package_names >"$_STACK_TXN_DIR/apt-installed-before"; then
+        rm -f -- "$_STACK_TXN_DIR/apt-installed-before"
+        _mark_package_additions_untracked
+    fi
+    return 0
+}
+
+begin_package_addition_window() {
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    [ ! -e "$_STACK_TXN_DIR/apt-additions-untracked" ] || return 0
+    command -v dpkg-query >/dev/null 2>&1 || return 0
+    rm -f -- "$_STACK_TXN_DIR/apt-window-open"
+    if _installed_package_names >"$_STACK_TXN_DIR/apt-window-before"; then
+        : >"$_STACK_TXN_DIR/apt-window-open" || return 0
+    else
+        rm -f -- "$_STACK_TXN_DIR/apt-window-before"
+        _mark_package_additions_untracked
+    fi
+    return 0
+}
+
+end_package_addition_window() {
+    local now name
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    [ -f "$_STACK_TXN_DIR/apt-window-open" ] || return 0
+    rm -f -- "$_STACK_TXN_DIR/apt-window-open"
+    [ ! -e "$_STACK_TXN_DIR/apt-additions-untracked" ] || return 0
+    [ -f "$_STACK_TXN_DIR/apt-window-before" ] || return 0
+    if ! command -v dpkg-query >/dev/null 2>&1; then
+        _mark_package_additions_untracked
+        return 0
+    fi
+    now="$(mktemp "${TMPDIR:-/tmp}/plebian-os-apt-now.XXXXXX")" || {
+        _mark_package_additions_untracked
+        return 0
+    }
+    if ! _installed_package_names >"$now"; then
+        rm -f -- "$now"
+        _mark_package_additions_untracked
+        return 0
+    fi
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        _package_name_is_safe "$name" || continue
+        if [ -f "$_STACK_TXN_DIR/apt-installed-before" ] \
+            && grep -Fxq -- "$name" "$_STACK_TXN_DIR/apt-installed-before"; then
+            continue
+        fi
+        if [ -f "$_STACK_TXN_DIR/apt-additions" ] \
+            && grep -Fxq -- "$name" "$_STACK_TXN_DIR/apt-additions"; then
+            continue
+        fi
+        printf '%s\n' "$name" >>"$_STACK_TXN_DIR/apt-additions"
+    done < <(LC_ALL=C comm -13 "$_STACK_TXN_DIR/apt-window-before" "$now")
+    rm -f -- "$now" "$_STACK_TXN_DIR/apt-window-before"
+    return 0
+}
+
+_apt_simulated_removals() {
+    local pkg="$1" sim status=0
+    sim="$(LC_ALL=C apt-get -s remove -y --no-install-recommends "$pkg" 2>&1)" && status=0 || status=$?
+    printf '%s\n' "$sim" | sed -n 's/^Remv \([^ ]\{1,\}\) \[.*/\1/p'
+    return "$status"
+}
+
+_drop_recorded_addition() {
+    local name="$1" next
+    [ -f "$_STACK_TXN_DIR/apt-still" ] || return 0
+    next="$(mktemp "${TMPDIR:-/tmp}/plebian-os-apt-still.XXXXXX")" || return 0
+    grep -Fxv -- "$name" "$_STACK_TXN_DIR/apt-still" >"$next" || true
+    mv -f -- "$next" "$_STACK_TXN_DIR/apt-still"
+    return 0
+}
+
+remove_transaction_package_additions() {
+    local -a packages=() elevate=()
+    local i pkg removals sim_ok extra other removed="" uid state short
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    end_package_addition_window || true
+    if [ -e "$_STACK_TXN_DIR/apt-additions-untracked" ]; then
+        warn "package additions were not tracked; leaving installed packages in place"
+        return 0
+    fi
+    [ -f "$_STACK_TXN_DIR/apt-additions" ] || return 0
+    [ -f "$_STACK_TXN_DIR/apt-installed-before" ] || {
+        warn "package additions were not tracked; leaving installed packages in place"
+        return 0
+    }
+    if ! command -v dpkg-query >/dev/null 2>&1 || ! command -v apt-get >/dev/null 2>&1; then
+        warn "package additions were not tracked; leaving installed packages in place"
+        return 0
+    fi
+    cp -f -- "$_STACK_TXN_DIR/apt-additions" "$_STACK_TXN_DIR/apt-still" || {
+        warn "package additions could not be read; leaving installed packages in place"
+        return 0
+    }
+    mapfile -t packages < "$_STACK_TXN_DIR/apt-additions"
+    [ "${#packages[@]}" -gt 0 ] || return 0
+    # A second Ctrl-C must not kill the shell, or turn a finished remove into
+    # status 130, while these packages are being taken back.
+    trap '' INT TERM HUP
+    export PLEBIAN_OS_PACKAGE_STEP_IGNORE_SIGNAL=1
+    uid="$(id -u 2>/dev/null || true)"
+    [ "$uid" = 0 ] || elevate=(sudo)
+    for ((i=${#packages[@]}-1; i>=0; i--)); do
+        pkg="${packages[$i]}"
+        [ -n "$pkg" ] || continue
+        _package_name_is_safe "$pkg" || continue
+        grep -Fxq -- "$pkg" "$_STACK_TXN_DIR/apt-still" || continue
+        grep -Fxq -- "$pkg" "$_STACK_TXN_DIR/apt-installed-before" && continue
+        state="$(dpkg-query -W -f '${db:Status-Status}' -- "$pkg" 2>/dev/null || true)"
+        [ "$state" = installed ] || continue
+        removals="$(_apt_simulated_removals "$pkg")" && sim_ok=0 || sim_ok=$?
+        if [ "$sim_ok" -ne 0 ]; then
+            warn "keeping $pkg: removing it is not safe; it is still installed"
+            continue
+        fi
+        printf '%s\n' "$removals" | sed 's/:.*//' | grep -Fxq -- "$pkg" || {
+            warn "keeping $pkg: apt would not remove it; it is still installed"
+            continue
+        }
+        extra=""
+        while IFS= read -r other; do
+            short="${other%%:*}"
+            [ -n "$short" ] || continue
+            grep -Fxq -- "$short" "$_STACK_TXN_DIR/apt-additions" && continue
+            extra="${extra:+$extra, }$short"
+        done <<<"$removals"
+        if [ -n "$extra" ]; then
+            warn "keeping $pkg: removing it would also remove $extra, which this update did not install"
+            continue
+        fi
+        if ! "${elevate[@]}" apt-get remove -y --no-install-recommends "$pkg"; then
+            warn "keeping $pkg: apt remove failed; it is still installed"
+            continue
+        fi
+        while IFS= read -r other; do
+            short="${other%%:*}"
+            [ -n "$short" ] || continue
+            _drop_recorded_addition "$short"
+        done <<<"$removals"
+        removed="${removed:+$removed }$pkg"
+    done
+    [ -z "$removed" ] || log "removed packages this update had installed: $removed"
+    return 0
 }
 
 # A Ctrl-C signals every process in the terminal's foreground group, and a
@@ -2506,10 +2788,12 @@ native_runtime_command() {
 # with no terminal, or when the updater already runs as root, the signal reached
 # dpkg directly. So every step that can run apt or dpkg is started in its own
 # session, with the terminal's signals ignored, and is always left to finish.
-# The updater itself still takes the signal: its INT trap runs as soon as the
-# step returns and rolls the stack back. The shield is spelled out at each
-# call (native_runtime_command, refresh_os_dependencies) because it has to run
-# on the root side of sudo, where no function of this script exists.
+# The updater itself still takes the signal. run_package_step_in_its_own_session
+# says "interrupted; rolling back" immediately and records it, then waits for
+# the shielded step. The INT trap runs when that step returns and rolls the
+# stack back. The shield is spelled out at each call (native_runtime_command,
+# refresh_os_dependencies) because it has to run on the root side of sudo,
+# where no function of this script exists.
 
 # An update must not start on, or silently roll back onto, a package database
 # an earlier interruption left half-installed. `dpkg --audit` prints nothing
@@ -2530,9 +2814,14 @@ require_consistent_package_database() {
 
 rollback_stack_transaction() {
     local failed=0 kilix_rollback_ready=0
+    # Close a package window a die() skipped, then remove only this
+    # transaction's new packages. A removal that is not safe is reported and
+    # kept; it does not fail the stack rollback. No transaction directory means
+    # there is nothing to remove.
+    remove_transaction_package_additions || true
     case "${_STACK_TXN_EXIT_STATUS:-1}" in
         130|143|129)
-            warn "update interrupted (status ${_STACK_TXN_EXIT_STATUS}); restoring the previous coherent installation" ;;
+            warn "interrupted; rolling back" ;;
         *)
             warn "stack update failed; restoring the previous coherent installation" ;;
     esac
@@ -2955,10 +3244,11 @@ begin_stack_transaction() {
         || die "could not create stack rollback state"
     chmod 0700 "$_STACK_TXN_DIR"
     trap stack_transaction_cleanup EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    trap 'exit 129' HUP
+    trap 'acknowledge_update_interrupt 130' INT
+    trap 'acknowledge_update_interrupt 143' TERM
+    trap 'acknowledge_update_interrupt 129' HUP
     trap 'exit 141' PIPE
+    record_transaction_package_baseline
     record_stack_transaction_owner "$_STACK_TXN_DIR" \
         || die "could not record the stack transaction owner"
     # Renamed into place at commit, so marking the commit needs no free space.
@@ -4583,11 +4873,12 @@ reconcile_legacy_remote_login() {
 
 # Apply the dependency policy shipped by the selected target. The selector
 # installs the target updater before this command starts, and the OS-layer
-# refresh deploys the matching dependency helper before it is invoked here. Apt package
-# additions are permitted rollback residue; the two system uv binaries are
-# included in the root snapshot because they are directly selected on PATH.
-# Debian package upgrades pulled in by live sources are residue as well; apt
-# source changes happen only after commit.
+# refresh deploys the matching dependency helper before it is invoked here.
+# Packages this transaction newly installs are removed on rollback when apt can
+# remove them without taking anything else. Packages already installed,
+# packages the operator installs between steps, and Debian upgrades stay. The
+# two system uv binaries are included in the root snapshot because they are
+# directly selected on PATH. Apt source changes happen only after commit.
 install_model_setup_software() {
     local helper
     local -a elevate=()
@@ -4622,8 +4913,9 @@ install_model_setup_software() {
 # verification, or a failed install, fails the update. The stack snapshot
 # restores the installer and the manifest; the runtime generation, launcher,
 # unit, PATH client, account, retained carrier and receipt stay installed after
-# a rollback, like the Ollama converter beside them and the apt packages: they
-# are the bytes 0.2.2 and every 0.2.3 candidate pin.
+# a rollback, like the Ollama converter beside them. Apt packages this
+# transaction newly installed are removed when that is safe. The bytes that
+# stay are the ones 0.2.2 and every 0.2.3 candidate pin.
 OLLAMA_RUNTIME_UNAVAILABLE=75
 
 install_ollama_runtime_update() {
@@ -5521,6 +5813,7 @@ refresh_os_dependencies() {
     fi
     [ "$(id -u)" = 0 ] || elevate=(sudo)
     log "reconciling the selected OS dependency closure (needs root)"
+    run_package_step_in_its_own_session \
     "${elevate[@]}" env \
         "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE" \
         "PLEBIAN_OS_INSTALL_UV=$PLEBIAN_OS_INSTALL_UV" \
@@ -5588,9 +5881,9 @@ refresh_os_dependencies() {
 # is one such grep, and misses the second line.
 #
 # Only on the success path. An update that fails after refresh_os_dependencies
-# and before this step rolls back the OS layer and the checkouts but keeps the
-# packages it installed ("Apt package additions are permitted rollback
-# residue"), and with them any enablement link a postinst wrote; nothing on the
+# rolls back the OS layer and the checkouts, and removes apt packages this
+# transaction newly installed when that removal is safe. A package apt would
+# not remove by itself is kept, enablement link included, and nothing on the
 # rollback path re-checks the card. The next update that completes, or a
 # reprovision, runs this step and clears it. Running the rule from the rollback
 # path itself was not done: it would source a provisioner the rollback has just
@@ -6504,22 +6797,33 @@ test_fail_after_boundary qt-runtime
 apply_selected_mpv_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected mpv runtime could not be installed/verified"
 test_fail_after_boundary mpv-runtime
+begin_package_addition_window
 refresh_os_dependencies
+end_package_addition_window
 test_fail_after_boundary dependencies
 install_kilix_secrets_update
 test_fail_after_boundary kilix-secrets
 install_zell_runtime
 test_fail_after_boundary zell-runtime
-# Like apt dependencies, this verified software remains available after a
-# later stack rollback; it carries no models, receipts or active selection.
+# This verified software remains available after a later stack rollback; it
+# carries no models, receipts or active selection. Apt packages the installer
+# newly adds are tracked with the other package steps.
+begin_package_addition_window
 run_encodec_converter_installer \
     || die "required EnCodec converter installation failed"
+end_package_addition_window
+begin_package_addition_window
 install_model_setup_software
+end_package_addition_window
 test_fail_after_boundary model-setup-software
+begin_package_addition_window
 install_ollama_runtime_update
+end_package_addition_window
 test_fail_after_boundary ollama-runtime
+begin_package_addition_window
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected native runtime could not be prepared/applied"
+end_package_addition_window
 test_fail_after_boundary native-runtime
 
 log "updating pleb   ($PLEB_DIR)"
@@ -6531,11 +6835,15 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     # The freshly updated Pleb may learn about a submodule that the pre-update
     # Kilix commit does not have yet. Defer only this build until the immediately
     # following component update advances Kilix to its pinned broker commit.
+    begin_package_addition_window
     env "${stack_env[@]}" PLEB_DEFER_PTY_BROKER=1 \
         "$PLEB_DIR/bin/pleb" install
+    end_package_addition_window
     test_fail_after_boundary pleb-install
     log "updating kilix, submodules, fork engine, and optional desktop provider"
+    begin_package_addition_window
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart
+    end_package_addition_window
     test_fail_after_boundary component-update
     install_kilix_needle
     test_fail_after_boundary needle

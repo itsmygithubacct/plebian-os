@@ -92,17 +92,35 @@ class PackageStepShieldTests(unittest.TestCase):
         self.assertEqual(rc, 130)
         self.assertFalse(self.finished.exists())
 
-    def test_shielded_helper_finishes_and_the_updater_trap_still_fires(self):
+    def _shielded_native(self) -> str:
+        helper = closure.shell_function(UPDATE_NAME, "run_package_step_in_its_own_session")
         native = closure.shell_function(UPDATE_NAME, "native_runtime_command")
         native = native.replace("/usr/local/sbin/plebian-os-native-runtime", '"$HELPER"')
         native = native.replace("/usr/bin/sudo", "/usr/bin/env")
-        script = (native + '\ntrap "echo TRAPPED; exit 130" INT\n'
+        return helper + "\n" + native
+
+    def test_shielded_helper_finishes_and_the_updater_trap_still_fires(self):
+        script = (self._shielded_native() + '\ntrap "echo TRAPPED; exit 130" INT\n'
                   'native_runtime_command status\necho RETURNED\nexit 0\n')
         rc, output = press_ctrl_c(script, self.env, self.started)
         self.assertEqual(self.finished.read_text(), "finished\n", output)
         self.assertEqual(rc, 130, output)
         self.assertIn("TRAPPED", output)
+        self.assertIn("interrupted; rolling back", output)
         self.assertNotIn("RETURNED", output)
+
+    def test_interrupt_line_is_in_the_updater_log_when_the_terminal_is_gone(self):
+        log = self.base / "update.log"
+        quoted = str(log).replace("'", "'\\''")
+        script = (self._shielded_native() + "\n"
+                  f"exec {{_UPDATE_LOG_FD}}>>'{quoted}'\n"
+                  'export PLEBIAN_OS_UPDATE_LOG_FD="$_UPDATE_LOG_FD"\n'
+                  'exec 2>/dev/null\n'
+                  'native_runtime_command status\n')
+        rc, _output = press_ctrl_c(script, self.env, self.started)
+        self.assertEqual(self.finished.read_text(), "finished\n")
+        self.assertEqual(rc, 130)
+        self.assertIn("interrupted; rolling back", log.read_text())
 
     def test_update_refuses_a_half_installed_package_database(self):
         bin_dir = self.base / "bin"
@@ -140,10 +158,11 @@ class PackageStepShieldTests(unittest.TestCase):
         head = body[:body.index("rollback_mpv_runtime_transaction")]
         program = "\n".join((
             'warn() { printf "%s\\n" "$*"; }', "package_database_faults() { :; }",
+            "remove_transaction_package_additions() { :; }",
             "rollback_mpv_runtime_transaction() { return 1; }",
             head + "    return 0\n}", "rollback_stack_transaction"))
-        for status, expected in (("130", "update interrupted (status 130)"),
-                                 ("143", "update interrupted (status 143)"),
+        for status, expected in (("130", "interrupted; rolling back"),
+                                 ("143", "interrupted; rolling back"),
                                  ("1", "stack update failed")):
             with self.subTest(status=status):
                 result = subprocess.run(
