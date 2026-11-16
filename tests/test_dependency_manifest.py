@@ -239,6 +239,61 @@ def qualification_packages():
     return additive_packages("QUAL_GROUPS")
 
 
+def _release_pins() -> dict[str, str]:
+    pins = {}
+    for line in (ROOT / "releases" / "0.2.3.env").read_text().splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        pins[key] = value
+    return pins
+
+
+def _git_show(repo: str, rev: str, path: str) -> str | None:
+    """Return a file at a local commit. None when that commit is not present."""
+    kind = subprocess.run(
+        ["git", "-C", repo, "cat-file", "-t", rev],
+        capture_output=True, text=True,
+    )
+    if kind.returncode != 0 or kind.stdout.strip() != "commit":
+        return None
+    shown = subprocess.run(
+        ["git", "-C", repo, "show", f"{rev}:{path}"],
+        capture_output=True, text=True,
+    )
+    if shown.returncode != 0:
+        raise AssertionError(f"could not read {rev}:{path} from {repo}: {shown.stderr}")
+    return shown.stdout
+
+
+def _pleb_runtime_packages(text: str) -> list[str]:
+    chunk = text[text.index("ensure_system_deps()"):]
+    body = chunk[chunk.index("deps=(") + len("deps=("):]
+    depth = 1
+    end = None
+    for index, char in enumerate(body):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end is None:
+        raise AssertionError("pleb deps array did not close")
+    names = []
+    for line in body[:end].splitlines():
+        names.extend(line.split("#", 1)[0].split())
+    return names
+
+
+def _kilix_debian_packages(text: str) -> list[str]:
+    chunk = text[text.index("debian_install()"):]
+    rest = chunk[chunk.index('local pkgs="') + len('local pkgs="'):]
+    body = rest[:rest.index('"')].replace("\\", " ")
+    return [token for token in body.split() if token != "$jack_dev"]
+
+
 class DependencyManifestTests(unittest.TestCase):
     def test_capture_has_a_video_session_manager_on_both_install_paths(self):
         for packages in (preseed_packages(), install_deps_packages()):
@@ -821,6 +876,20 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertEqual(missing, [])
         # The dependency fixture is the gap, not a second copy of DEP_GROUPS.
         self.assertTrue(dependencies.isdisjoint(closure))
+        # The hand copies are the package lists at the release pins. Skip when
+        # the repos are unset so the default suite stays offline. A missing
+        # object is also a skip: this check does not fetch.
+        pleb_repo = os.environ.get("PLEBIAN_OS_PLEB_REPO", "")
+        kilix_repo = os.environ.get("PLEBIAN_OS_KILIX_REPO", "")
+        if not pleb_repo or not kilix_repo:
+            return
+        pins = _release_pins()
+        pleb_text = _git_show(pleb_repo, pins["PLEB_REF"], "lib/install.sh")
+        kilix_text = _git_show(kilix_repo, pins["KILIX_REF"], "scripts/install-build-deps.sh")
+        if pleb_text is None or kilix_text is None:
+            return
+        self.assertEqual(_pleb_runtime_packages(pleb_text), pleb)
+        self.assertEqual(_kilix_debian_packages(kilix_text), kilix)
 
 
 if __name__ == "__main__":
