@@ -828,19 +828,27 @@ An installed RC of the same version hops to its final without a bootstrap
 driver. RC9's Pleb already accepts `--release-tag`, and its closure has no
 `PLEBIAN_OS_RELEASE_TAG` because selectors before 0.2.3 did not write one.
 Pass the published RC ISO, its manifest, the published RC tag object, and the
-staged final tag object. The guest runner reads the installed RC: from the
-closure when the selector wrote one, or from build-info when a fresh image
-has no `closure.env` and those bytes equal the RC ISO. An upgraded image
+staged final tag object. `--source-sha256sums` must list the manifest; the
+host checks `--from-release-manifest` against that line before the guest
+sees the file. The guest runner reads the installed RC: from the closure
+when the selector wrote one, or from build-info when a fresh image has no
+`closure.env` and those bytes equal the RC ISO. On that fresh image,
+`pleb update --show` resolves `PLEBIAN_OS_REF` from `session.env`, which
+stores the commit, while build-info stores the RC tag. The build-info
+`PLEBIAN_OS_COMMIT` peels the tag so the two compare. An upgraded image
 guest still has its predecessor ISO's build-info. That hash must be the
 single `build-info.env` named by `--predecessor-sha256sums` (the published
 0.2.2 `SHA256SUMS` for the 0.2.2 disks). Any other build-info fails. The
 guest shell-sources the closure and requires its Neuronte, Go, and satellite
 keys to match `pleb update --show` and the RC manifest. After the hop the
 closure's tag object must equal `--release-tag-object`. Rollback must restore
-the session, closure, settings, the selector and updater, and every
-component checkout HEAD, not only the closure file. A standalone guest has
-no selector or updater, and those paths must stay absent. The hop then runs
-again and those paths must match the post-hop record. The host's post-reboot
+the session, closure, settings, the selector and updater, `release-hop/active`,
+the engine generation, and every component checkout HEAD. A fresh image has
+no closure file, and the byte comparison is not recorded for that absence.
+A standalone guest has no selector or updater, and those paths must stay
+absent. When an image recovery record contains `selection_tag=`, that object
+must equal `--from-release-tag-object`. The hop then runs again and those
+paths must match the post-hop record. The host's post-reboot
 version check cannot tell the installed RC from the final, because both
 report 0.2.3. The tag pin in the guest reboot verifier, and the
 `PLEBIAN_OS_RELEASE_TAG` line in `show-after-reboot.txt`, carry that

@@ -29,9 +29,13 @@ A same-version hop is accepted only as --from X.Y.Z --target X.Y.Z
 installed CLI. The guest reads the installed RC from the closure, shell-sourced,
 and checks it against pleb update --show and the published RC manifest. An
 image guest with no closure.env is accepted only when its build-info bytes
-equal the source ISO. Rollback must restore session, closure, settings, the
-image selector and updater, and every component checkout HEAD, then the hop
-runs again and those same paths must match the post-hop record. No bootstrap
+equal the source ISO. Release-mode show resolves PLEBIAN_OS_REF from
+session.env, which stores the commit, while that build-info stores the RC
+tag; the commit in the build-info peels the tag. Rollback compares session,
+closure, settings, the selector and updater, release-hop/active, the engine
+generation, and every component checkout HEAD. A fresh image has no closure
+to compare byte for byte, so that check is not recorded. The hop then runs
+again and those same paths must match the post-hop record. No bootstrap
 driver is accepted. The guest must start on the accepted previous release.
 DIR must be outside $HOME. Image guests require the build-info options,
 including --predecessor-build-info-sha256 for an upgraded install. The
@@ -413,6 +417,27 @@ load_closure_identity() {
     printf '%s\n' "$shell_value"
 }
 
+# RC9 writes selection_tag= into recovery meta when the trusted object is known.
+# Absent meta is not a failure. A recorded tag must equal the published object.
+assert_recorded_selection_tag() {
+    local root="$1" expected="$2" meta tag found=0
+    for meta in "$root"/closure-rollback.*/meta; do
+        [ -f "$meta" ] && [ ! -L "$meta" ] || continue
+        grep -q '^selection_tag=' "$meta" || continue
+        tag="$(sed -n 's/^selection_tag=\([0-9a-f]\{40\}\)$/\1/p' -- "$meta")"
+        if [ "$tag" != "$expected" ]; then
+            printf '%s\n' "recovery meta selection_tag does not match the published RC tag object: $meta" >&2
+            return 1
+        fi
+        found=1
+    done
+    if [ "$found" -eq 1 ]; then
+        printf 'matched\n'
+    else
+        printf 'absent\n'
+    fi
+}
+
 # An image installed from the RC ISO has build-info and no closure.env.
 assert_fresh_iso_identity() {
     local build_info="$1" from_tag="$2" expected_commit="$3" expected_object="$4"
@@ -479,6 +504,19 @@ assert_pre_hop_manifest() {
         printf '%s\n' "published manifest has no PLEBIAN_OS_REF" >&2
         return 1
     }
+    # A fresh ISO's build-info stores the tag. Release-mode session.env stores
+    # the commit, and show resolves that. Peel the tag through PLEBIAN_OS_COMMIT.
+    if [ "$ref" = "$from_tag" ]; then
+        commit="$(closure_shell_value "$closure" PLEBIAN_OS_COMMIT)" || {
+            printf '%s\n' "tag-named install record has no PLEBIAN_OS_COMMIT" >&2
+            return 1
+        }
+        if [ "$commit" != "$expected_commit" ]; then
+            printf '%s\n' "install record commit is $commit, expected $expected_commit" >&2
+            return 1
+        fi
+        ref="$commit"
+    fi
     if [ "$show_ref" != "$ref" ]; then
         printf '%s\n' "show-before PLEBIAN_OS_REF is $show_ref, installed record is $ref" >&2
         return 1
@@ -664,6 +702,9 @@ assert_release_snapshot_restored() {
                     actual="$(git -C "$path" rev-parse --verify 'HEAD^{commit}')" || return 1
                 fi
                 ;;
+            engine)
+                actual="$(bound_engine_fingerprint | sha256sum | awk '{print $1}')" || return 1
+                ;;
             *) printf '%s\n' "$label did not restore $path" >&2; return 1 ;;
         esac
         if [ "$actual" != "$expected" ]; then
@@ -681,6 +722,10 @@ record_release_snapshot() {
         /usr/local/bin/plebian-os-select-closure /usr/local/bin/plebian-os-update; do
         printf 'fingerprint\t%s\t%s\n' "$path" "$(path_fingerprint "$path")" >>"$manifest"
     done
+    printf 'fingerprint\t%s\t%s\n' "$release_state" \
+        "$(path_fingerprint "$release_state")" >>"$manifest"
+    printf 'engine\t%s\t%s\n' "$engine_build" \
+        "$(bound_engine_fingerprint | sha256sum | awk '{print $1}')" >>"$manifest"
     if [ "$shape" = image ]; then
         printf 'head\t%s\t%s\n' "$os_dir" \
             "$(git -C "$os_dir" rev-parse --verify 'HEAD^{commit}')" >>"$manifest"
@@ -1014,6 +1059,12 @@ if [ "$same_version" = 1 ]; then
     else
         die "same-version finalization requires the installed closure, or an image build-info that matches the source ISO"
     fi
+    if [ "$shape" = image ]; then
+        selection_tag_state="$(assert_recorded_selection_tag /var/lib/plebian-os "$from_release_tag_object")" \
+            || die "installed recovery meta selection_tag does not match --from-release-tag-object"
+        must "recovery-meta-selection-tag-matches-published-rc-object" "$selection_tag_state" \
+            test "$selection_tag_state" = matched -o "$selection_tag_state" = absent
+    fi
 else
     must "target-differs-from-installed-release" "$current -> $target" test "$current" != "$target"
 fi
@@ -1239,15 +1290,15 @@ if [ "$same_version" = 1 ]; then
     if [ "$closure_pre_hop_absent" != 1 ]; then
         must "rollback-restores-rc-closure-keys" "$closure_env" \
             closure_keys_match "$report/closure.pre-hop" "$closure_env"
-    else
-        must "rollback-restores-absent-closure" "$closure_env" test ! -e "$closure_env"
-        printf 'absent\n' >"$report/closure.pre-hop"
-        printf 'absent\n' >"$report/closure.absence-proof"
-        closure_env="$report/closure.absence-proof"
-    fi
-    must "rollback-restores-rc-closure-bytes" "$closure_env" \
+        must "rollback-restores-rc-closure-bytes" "$closure_env" \
         cmp -s "$report/closure.pre-hop" "$closure_env"
     set +e
+    else
+        # The closure path is absent. Comparing two harness-written "absent"
+        # files cannot fail, so that check is not recorded.
+        must "rollback-restores-absent-closure" "$closure_env" test ! -e "$closure_env"
+        set +e
+    fi
     closure_env="$closure_env_live"
     "${hop_command[@]}" update --to "$target" "${release_args[@]}" --yes --no-restart \
         >"$report/restoring-hop.stdout" 2>"$report/restoring-hop.stderr"

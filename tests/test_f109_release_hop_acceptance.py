@@ -100,6 +100,19 @@ PLEB_DIR="$PLEB_ROOT"
             '"rollback-restores-pre-hop-state"',
             '"restoring-hop-restores-post-hop-state"',
             "$label did not restore",
+            '    for path in "$session_env" "$closure_env" "$settings_file" \\\n'
+            '        /usr/local/bin/plebian-os-select-closure /usr/local/bin/plebian-os-update; do',
+            '    printf \'head\\t%s\\t%s\\n\' "$pleb_dir" \\\n'
+            '        "$(git -C "$pleb_dir" rev-parse --verify \'HEAD^{commit}\')" >>"$manifest"\n',
+            '        printf \'head\\t%s\\t%s\\n\' "$os_dir" \\\n'
+            '            "$(git -C "$os_dir" rev-parse --verify \'HEAD^{commit}\')" >>"$manifest"\n',
+            '        assert_release_snapshot_restored rollback "$report/release-snapshot.pre-hop"',
+            '        assert_release_snapshot_restored "restoring hop" "$report/release-snapshot.post-hop"',
+            '    if [ "$show_ref" != "$ref" ]; then',
+            '        must "installed-closure-matches-published-rc-manifest" "$from_release_manifest" \\\n'
+            '            assert_pre_hop_manifest "$closure_env"',
+            'printf \'fingerprint\\t%s\\t%s\\n\' "$release_state"',
+            'printf \'engine\\t%s\\t%s\\n\' "$engine_build"',
             "assert_pre_hop_release_identity",
             "assert_post_hop_release_identity",
             "closure_keys_match",
@@ -514,6 +527,9 @@ write_reboot_verifier "$report/verify.sh"
             "--predecessor-sha256sums",
             "--from-release-manifest",
             "published_build_info_sha256",
+            "published_named_sha256",
+            "release manifest checksum mismatch",
+            'die "source ISO tag object does not match --from-release-tag-object"',
             "PLEBIAN_OS_RELEASE_TAG=$release_tag",
             "installed-closure",
             "source_iso_names_installed_rc",
@@ -917,6 +933,16 @@ write_reboot_verifier "$report/verify.sh"
                 capture_output=True, text=True, check=False,
             )
             self.assertNotEqual(missing.returncode, 0)
+            sums.write_text(
+                f"{predecessor}  plebian-os-0.2.2-build-info.env\n"
+                f"{'c' * 64}  other-build-info.env\n"
+            )
+            several = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", helper +
+                 '\npublished_build_info_sha256 "$1"', "bash", str(sums)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(several.returncode, 0)
 
     def test_rollback_refuses_a_partial_machine_restore(self):
         helper = "\n".join(
@@ -1088,6 +1114,179 @@ write_reboot_verifier "$report/verify.sh"
             drifted = check()
             self.assertNotEqual(drifted.returncode, 0)
             self.assertIn("PLEB_REF", drifted.stderr)
+            show.write_text(show.read_text().replace("e" * 40, pleb))
+            show.write_text(show.read_text().replace(commit, "f" * 40, 1))
+            show_ref = check()
+            self.assertNotEqual(show_ref.returncode, 0)
+            self.assertIn("show-before PLEBIAN_OS_REF", show_ref.stderr)
+            closure.write_text(
+                closure.read_text() + f"NEURONTE_REF={'9' * 40}\n"
+            )
+            manifest.write_text(
+                "PLEBIAN_OS_REF=v0.2.3-rc9\n"
+                f"PLEB_REF={pleb}\n"
+                "NEURONTE_REPO=https://example.invalid/neuronte.git\n"
+            )
+            show.write_text(
+                f"  PLEBIAN_OS_REF={commit}  [/etc/pleb/closure.env]\n"
+                f"  PLEB_REF={pleb}  [/etc/pleb/closure.env]\n"
+                f"  NEURONTE_REF={'9' * 40}  [/etc/pleb/closure.env]\n"
+                "  NEURONTE_REPO=https://example.invalid/neuronte.git  [/etc/pleb/closure.env]\n"
+            )
+            omitted = check()
+            self.assertNotEqual(omitted.returncode, 0)
+            self.assertIn("NEURONTE_REF", omitted.stderr)
+
+    def test_fresh_iso_show_resolves_the_commit_not_the_tag(self):
+        helper = "\n".join(
+            self._bash_function(RUNNER.read_text(), name)
+            for name in (
+                "closure_shell_value", "show_resolved_value",
+                "release_manifest_keys", "assert_pre_hop_manifest",
+            )
+        )
+        commit = "3199b8ec564b119073a8b08d3c312539ec0e38eb"
+        pleb = "57683ebf8ac88ccbf7f160c4f7c6e0cc25936488"
+        neuronte = "4134bf909594cf5c774f49677405fd1e22c4e2e4"
+        repo = "https://github.com/itsmygithubacct/neuronte.git"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            build_info = root / "build-info.env"
+            manifest = root / "manifest.env"
+            show = root / "show-before.txt"
+            build_info.write_text(
+                "PLEBIAN_OS_VERSION=0.2.3\n"
+                "PLEBIAN_OS_REF=v0.2.3-rc9\n"
+                f"PLEBIAN_OS_COMMIT={commit}\n"
+                f"PLEB_REF={pleb}\n"
+                f"NEURONTE_REF={neuronte}\n"
+                f"NEURONTE_REPO={repo}\n"
+            )
+            manifest.write_text(
+                "PLEBIAN_OS_REF=v0.2.3-rc9\n"
+                f"PLEB_REF={pleb}\n"
+                f"NEURONTE_REF={neuronte}\n"
+                f"NEURONTE_REPO={repo}\n"
+            )
+            show.write_text(
+                f"  PLEBIAN_OS_REF={commit}  [/etc/pleb/session.env]\n"
+                f"  PLEB_REF={pleb}  [/etc/pleb/session.env]\n"
+                f"  NEURONTE_REF={neuronte}  [/etc/pleb/session.env]\n"
+                f"  NEURONTE_REPO={repo}  [/etc/pleb/session.env]\n"
+            )
+
+            def check(show_path=show):
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", helper +
+                     '\nassert_pre_hop_manifest "$1" "$2" "$3" v0.2.3-rc9 "$4"',
+                     "bash", str(build_info), str(show_path), str(manifest), commit],
+                    capture_output=True, text=True, check=False,
+                )
+
+            fresh = check()
+            self.assertEqual(fresh.returncode, 0, fresh.stderr)
+            tagged = root / "show-tag.txt"
+            tagged.write_text(show.read_text().replace(commit, "v0.2.3-rc9", 1))
+            wrong = check(tagged)
+            self.assertNotEqual(wrong.returncode, 0)
+            self.assertIn("show-before PLEBIAN_OS_REF", wrong.stderr)
+
+    def test_iso_recorded_tag_and_object_are_required(self):
+        helper = self._bash_function(HOST_RUNNER.read_text(), "source_iso_names_installed_rc")
+        good = "a" * 40
+        with tempfile.TemporaryDirectory() as td:
+            info = Path(td) / "build-info.env"
+
+            def check(text, tag="v0.2.3-rc9"):
+                info.write_text(text)
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", helper +
+                     '\nsource_iso_names_installed_rc "$1" "$2"',
+                     "bash", str(info), tag],
+                    capture_output=True, text=True, check=False,
+                )
+
+            matched = check(
+                "PLEBIAN_OS_REF=v0.2.3-rc9\n"
+                "PLEBIAN_OS_RELEASE_TAG=v0.2.3-rc9\n"
+                f"PLEBIAN_OS_RELEASE_TAG_OBJECT={good}\n"
+            )
+            self.assertEqual(matched.returncode, 0, matched.stderr)
+            self.assertEqual(matched.stdout.strip(), good)
+            wrong_tag = check(
+                "PLEBIAN_OS_REF=v0.2.3-rc9\n"
+                "PLEBIAN_OS_RELEASE_TAG=v0.2.3-rc8\n"
+                f"PLEBIAN_OS_RELEASE_TAG_OBJECT={good}\n"
+            )
+            self.assertNotEqual(wrong_tag.returncode, 0)
+            bare_object = check(
+                "PLEBIAN_OS_REF=v0.2.3-rc9\n"
+                "PLEBIAN_OS_RELEASE_TAG=v0.2.3-rc9\n"
+                "PLEBIAN_OS_RELEASE_TAG_OBJECT=not-a-sha\n"
+            )
+            self.assertNotEqual(bare_object.returncode, 0)
+
+    def test_release_manifest_is_bound_to_source_checksums(self):
+        helper = self._bash_function(HOST_RUNNER.read_text(), "published_named_sha256")
+        manifest_hash = "c4d7d269" + "a" * 56
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sums = root / "SHA256SUMS"
+            manifest = root / "plebian-os-0.2.3-rc9.env"
+            manifest.write_text("PLEBIAN_OS_REF=v0.2.3-rc9\n")
+            actual = subprocess.check_output(["sha256sum", str(manifest)], text=True).split()[0]
+            sums.write_text(
+                f"{manifest_hash}  plebian-os-0.2.3-rc9.env\n"
+                f"{'b' * 64}  plebian-os-0.2.3-rc9-amd64.iso\n"
+            )
+            listed = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", helper +
+                 '\npublished_named_sha256 "$1" "$2"',
+                 "bash", str(sums), manifest.name],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            self.assertEqual(listed.stdout.strip(), manifest_hash)
+            self.assertNotEqual(actual, manifest_hash)
+            sums.write_text(
+                f"{manifest_hash}  plebian-os-0.2.3-rc9.env\n"
+                f"{'d' * 64}  plebian-os-0.2.3-rc9.env\n"
+            )
+            doubled = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", helper +
+                 '\npublished_named_sha256 "$1" "$2"',
+                 "bash", str(sums), manifest.name],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(doubled.returncode, 0)
+
+    def test_recovery_meta_selection_tag_must_match_when_present(self):
+        helper = self._bash_function(RUNNER.read_text(), "assert_recorded_selection_tag")
+        expected = "532d238f65c4bc1dc82a817bab01a467e287ba16"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def check():
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", helper +
+                     '\nassert_recorded_selection_tag "$1" "$2"',
+                     "bash", str(root), expected],
+                    capture_output=True, text=True, check=False,
+                )
+
+            absent = check()
+            self.assertEqual(absent.returncode, 0, absent.stderr)
+            self.assertEqual(absent.stdout.strip(), "absent")
+            record = root / "closure-rollback.20261113T000000Z.abcd" 
+            record.mkdir()
+            (record / "meta").write_text(f"from=0.2.2\nto=0.2.3\nselection_tag={expected}\n")
+            matched = check()
+            self.assertEqual(matched.returncode, 0, matched.stderr)
+            self.assertEqual(matched.stdout.strip(), "matched")
+            (record / "meta").write_text("selection_tag=" + "f" * 40 + "\n")
+            forged = check()
+            self.assertNotEqual(forged.returncode, 0)
+            self.assertIn("selection_tag", forged.stderr)
 
 
 if __name__ == "__main__":

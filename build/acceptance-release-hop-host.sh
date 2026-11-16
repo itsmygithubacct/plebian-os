@@ -35,11 +35,14 @@ A same-version hop is accepted only as --from X.Y.Z --target X.Y.Z
 --predecessor-sha256sums FILE --from-release-manifest FILE. That lane uses
 the installed CLI, so a bootstrap driver is refused. FILE is the published RC
 ISO. The guest reads the installed RC from its closure (or, when an image
-has no closure.env, from build-info that must equal this ISO). An upgraded
-image guest is accepted only when its build-info hash is the single
-build-info.env named by --predecessor-sha256sums. The host version check
-after reboot cannot tell this RC from the final; the guest verifier pins the
-final tag and --release-tag-object.
+has no closure.env, from build-info that must equal this ISO). Show resolves
+the commit stored in session.env; the build-info tag is peeled through
+PLEBIAN_OS_COMMIT. --from-release-manifest must hash to its line in
+--source-sha256sums. An upgraded image guest is accepted only when its
+build-info hash is the single build-info.env named by
+--predecessor-sha256sums. The host version check after reboot cannot tell
+this RC from the final; the guest verifier pins the final tag and
+--release-tag-object.
 DIR must be new or empty. A passing run always executes and verifies 2/2 lanes.
 EOF
 }
@@ -246,6 +249,26 @@ published_build_info_sha256() {
     printf '%s\n' "$hash"
 }
 
+# Exactly one checksum line whose basename is $2. Prints the lowercase hash.
+published_named_sha256() {
+    local file="$1" wanted="$2" line matches=0 hash="" name=""
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    [ -n "$wanted" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        if [[ "$line" =~ ^([0-9A-Fa-f]{64})[[:space:]]+\*?(.+)$ ]]; then
+            name="${BASH_REMATCH[2]}"
+            name="${name#./}"
+            name="${name##*/}"
+            if [ "$name" = "$wanted" ]; then
+                hash="${BASH_REMATCH[1],,}"
+                matches=$((matches + 1))
+            fi
+        fi
+    done <"$file"
+    [ "$matches" -ne 1 ] && return 1
+    printf '%s\n' "$hash"
+}
+
 # The published RC ISO either records the release-identity keys or, as RC9's
 # ISO does, names the RC in PLEBIAN_OS_REF. A stable final ISO matches neither.
 # Prints the tag object when the ISO records one, or nothing for an RC9-style
@@ -289,6 +312,12 @@ if [ "$same_version" = 1 ]; then
     fi
     predecessor_build_info_sha256="$(published_build_info_sha256 "$predecessor_sha256sums")" \
         || die "predecessor checksum file must name exactly one build-info.env"
+    manifest_sha256="$(published_named_sha256 "$source_sha256sums" \
+        "$(basename -- "$from_release_manifest")")" \
+        || die "source checksum file must name the release manifest exactly once"
+    actual_manifest_sha256="$(sha256sum -- "$from_release_manifest" | awk '{print $1}')"
+    [ "$actual_manifest_sha256" = "$manifest_sha256" ] \
+        || die "release manifest checksum mismatch: $actual_manifest_sha256/$manifest_sha256"
 fi
 for fixture_ref in "$from_os_ref" "$from_pleb_ref" "$from_kilix_ref" "$from_kilix95_ref"; do
     [[ "$fixture_ref" =~ ^[0-9a-f]{40}$ ]] \
