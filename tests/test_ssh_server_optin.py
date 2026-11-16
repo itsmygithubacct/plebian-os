@@ -12,6 +12,7 @@ import io
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -24,6 +25,59 @@ ROOT = Path(__file__).resolve().parents[1]
 HELPER = ROOT / "provision" / "plebian-os-ssh-server"
 PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 UPDATE = ROOT / "provision" / "plebian-os-update.sh"
+DEPS = ROOT / "provision" / "install-deps.sh"
+
+# One table of `apt-config dump --no-empty --format '%f%N%v%n'` lines, fed to
+# both the shared prepare_release_apt_config and this helper. Some lines are
+# shapes apt-config itself never prints; the rules must agree on them anyway.
+PROXY_TABLE = [
+    b"Acquire::http::Proxy\thttp://proxy.example:3128",
+    b"Acquire::https::Proxy\thttps://proxy.example:3129/",
+    b"Acquire::ftp::Proxy\tsocks5h://127.0.0.1:1080",
+    b"Acquire::http::Proxy\thttp://p.example/a-b_c.d~e:f/g?h#i@j!k$l&m(n)o*p+q,r=s%20t",
+    b"Acquire::http::Proxy\tDIRECT",
+    b"Acquire::http::Proxy\tdirect",
+    b"Acquire::http::Proxy\tDIRECT ",
+    b"Acquire::http::Proxy\thttp://proxy.example:123456",
+    b"Acquire::http::Proxy\thttp://user:secret@proxy.example:3128",
+    b"Acquire::http::Proxy\thttp://",
+    b"Acquire::http::Proxy\tsocks5://proxy.example",
+    b"Acquire::http::Proxy\tftp://proxy.example",
+    b"Acquire::http::Proxy\tHTTP://proxy.example",
+    b"Acquire::http::Proxy\thttp://proxy.example\\x",
+    b"Acquire::ftp::Proxy\thttp://evil.example; DPkg::Pre-Invoke {touch /tmp/pwned}",
+    b"Acquire::http::Proxy\thttp://evil.example\";Dir::Etc::main \"/etc/apt/apt.conf",
+    b"Acquire::http::Proxy\thttp://evil.example'",
+    b"Acquire::http::Proxy\thttp://evil.example{",
+    b"Acquire::http::Proxy\thttp://evil.example}",
+    b"Acquire::http::Proxy\thttp://a.example\tb",
+    b"Acquire::http::Proxy\thttp://a.example\r",
+    b"Acquire::http::Proxy\thttp://a.example\x0bb",
+    b"Acquire::http::Proxy\thttp://a.example\x0cb",
+    b"Acquire::http::Proxy\thttp://caf\xc3\xa9.example",
+    b"Acquire::http::Proxy\thttp://bad\xff.example",
+    b"Acquire::http::Proxy::deb.debian.org\tDIRECT",
+    b"Acquire::https::Proxy::security.debian.org\thttp://proxy.example:3128",
+    b"Acquire::ftp::Proxy::mirror-1.example\thttp://mirror.example",
+    b"Acquire::http::Proxy::bad_host\tDIRECT",
+    b"Acquire::http::Proxy::\tDIRECT",
+    b"Acquire::http::Proxy::a::b\tDIRECT",
+    b"Acquire::http::Proxy::a::Proxy::b\tDIRECT",
+    b"Acquire::http::Proxy::h\xffst\tDIRECT",
+    b"Acquire::http::Proxy::good.example\thttp://evil.example; x",
+    b"Acquire::http::Proxy-Auto-Detect\t/usr/local/bin/autodetect",
+    b"Acquire::http::ProxyAutoDetect\t/usr/local/bin/autodetect",
+    b"Acquire::https::Proxy-Auto-Detect\t/usr/local/bin/autodetect",
+    b"Acquire::http::Proxyx\thttp://proxy.example",
+    b"Acquire::HTTP::Proxy\thttp://proxy.example",
+    b"Acquire::socks::Proxy\tsocks5h://proxy.example",
+    b"APT::Sources::With::\t/tmp/higher.deb",
+    b"DPkg::Pre-Invoke::\ttouch /tmp/pwned",
+    b"Dir::Etc::main\t/etc/apt/apt.conf",
+    b"Acquire::http::Proxy",
+    b"",
+    b"Acquire::http::Proxy\thttp://last.example:3128",  # no newline after it
+]
 
 
 def load_helper():
@@ -95,6 +149,8 @@ class FakeSystem:
             "Inst openssh-server (1:10.0p1-7+deb13u4 Debian-Security:13/stable-security [amd64])\n"
             "Conf openssh-server (1:10.0p1-7+deb13u4 Debian-Security:13/stable-security [amd64])\n")
         self.calls = []
+        self.apt_config_dump = ""   # what `apt-config dump` prints
+        self.apt_config_envs = []
         self.sources_seen = []
         self.apt_configs = []
 
@@ -118,10 +174,13 @@ class FakeSystem:
             return self.socket_active
         return self.generated.get(unit) == "active" and unit not in self.masked
 
-    def run(self, argv, *, check=False, env=None):
+    def run(self, argv, *, check=False, env=None, errors=None):
         argv = list(argv)
         self.calls.append(argv)
         name = argv[0]
+        if name == "apt-config":
+            self.apt_config_envs.append(dict(env or {}))
+            return Result(0, self.apt_config_dump)
         if name == "dpkg-query":
             if self.half:
                 return Result(0, self.half + " ")
@@ -236,6 +295,196 @@ class FakeSystem:
     def changes(self):
         return [c for c in self.calls if c[0] == "systemctl" and c[1] in
                 ("enable", "disable", "mask", "unmask")]
+
+
+class ProxyTests(unittest.TestCase):
+    """The operator's apt proxy reaches the helper's private apt.conf by the
+    same rules as the shared prepare_release_apt_config."""
+
+    def setUp(self):
+        self.h = load_helper()
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
+
+    def shared(self, dump):
+        """Run install-deps.sh's prepare_release_apt_config with apt-config
+        replaced by one that prints `dump`; return (proxy lines, dropped keys)."""
+        bindir = self.tmp / "bin"
+        bindir.mkdir(exist_ok=True)
+        (self.tmp / "dump").write_bytes(dump)
+        fake = bindir / "apt-config"
+        fake.write_text('#!/bin/sh\n[ -z "${APT_CONFIG+set}" ] || echo "$APT_CONFIG" >> "$SAW"\n'
+                        'cat "$DUMP"\n')
+        fake.chmod(0o755)
+        (self.tmp / "fn.sh").write_text(shell_function(DEPS.read_text(), "prepare_release_apt_config"))
+        dest, apt = self.tmp / "dest", self.tmp / "etc-apt"
+        subprocess.run(["rm", "-rf", str(dest)])
+        dest.mkdir()
+        apt.mkdir(exist_ok=True)
+        result = subprocess.run(
+            ["bash", "-c", '. "$FN"; prepare_release_apt_config "$DEST" lifetime "" trixie "$APTDIR"'],
+            env={"PATH": f"{bindir}:/usr/bin:/bin", "FN": str(self.tmp / "fn.sh"), "DEST": str(dest),
+                 "APTDIR": str(apt), "DUMP": str(self.tmp / "dump"), "SAW": str(self.tmp / "saw"),
+                 "APT_CONFIG": "/tmp/evil-apt.conf", "LC_ALL": "C"},
+            capture_output=True, timeout=60)
+        self.assertFalse((self.tmp / "saw").exists(), "apt-config ran with APT_CONFIG")
+        conf = (dest / "apt.conf").read_bytes().decode("utf-8", "surrogateescape")
+        lines = [line + "\n" for line in conf.splitlines() if "::Proxy" in line]
+        dropped = re.findall(r"dropping proxy setting (.*)", result.stderr.decode("utf-8", "surrogateescape"))
+        return lines, dropped
+
+    def helper(self, dump):
+        system = FakeSystem()
+        system.apt_config_dump = dump.decode("utf-8", "surrogateescape")
+        err = io.StringIO()
+        with mock.patch.object(self.h, "run", system.run), redirect_stderr(err), \
+                mock.patch.dict(os.environ, {"APT_CONFIG": "/tmp/evil-apt.conf"}):
+            lines = self.h.operator_proxies()
+        self.assertEqual(system.calls, [["apt-config", "dump", "--no-empty", "--format", "%f%N%v%n"]])
+        self.assertNotIn("APT_CONFIG", system.apt_config_envs[0])
+        return lines, re.findall(r"dropping proxy setting (.*)", err.getvalue())
+
+    def test_the_helper_and_the_shared_function_copy_the_same_proxies(self):
+        dump = b"\n".join(PROXY_TABLE)
+        shared, helper = self.shared(dump), self.helper(dump)
+        self.assertEqual(helper, shared)
+        lines, dropped = helper
+        self.assertEqual(lines, [
+            'Acquire::http::Proxy "http://proxy.example:3128";\n',
+            'Acquire::https::Proxy "https://proxy.example:3129/";\n',
+            'Acquire::ftp::Proxy "socks5h://127.0.0.1:1080";\n',
+            'Acquire::http::Proxy "http://p.example/a-b_c.d~e:f/g?h#i@j!k$l&m(n)o*p+q,r=s%20t";\n',
+            'Acquire::http::Proxy "DIRECT";\n',
+            'Acquire::http::Proxy::deb.debian.org "DIRECT";\n',
+            'Acquire::https::Proxy::security.debian.org "http://proxy.example:3128";\n',
+            'Acquire::ftp::Proxy::mirror-1.example "http://mirror.example";\n',
+            'Acquire::http::Proxy "http://last.example:3128";\n',
+        ])
+        self.assertIn("Acquire::http::Proxy::bad_host", dropped)
+        self.assertIn("Acquire::ftp::Proxy", dropped)
+        for word in ("Auto-Detect", "AutoDetect", "Proxyx", "HTTP", "socks::", "Sources", "Pre-Invoke", "Dir::"):
+            self.assertFalse(any(word in line for line in lines), word)
+            self.assertFalse(any(word in key for key in dropped), word)
+
+    def test_each_row_alone_agrees(self):
+        for row in PROXY_TABLE:
+            with self.subTest(row):
+                self.assertEqual(self.helper(row), self.shared(row))
+
+    def test_a_missing_apt_config_means_no_proxy(self):
+        with mock.patch.object(self.h, "run", side_effect=FileNotFoundError("apt-config")):
+            self.assertEqual(self.h.operator_proxies(), [])
+
+    def test_the_private_apt_conf_carries_the_proxies(self):
+        keyring = self.tmp / "keyring.gpg"
+        keyring.write_text("")
+        system = FakeSystem()
+        system.apt_config_dump = ("Acquire::http::Proxy\thttp://proxy.example:3128\n"
+                                  "Acquire::http::Proxy-Auto-Detect\t/bin/autodetect\n"
+                                  "Acquire::ftp::Proxy\thttp://e.example; DPkg::Pre-Invoke {x}\n")
+        with mock.patch.object(self.h, "run", system.run), \
+                mock.patch.object(self.h, "KEYRING", str(keyring)), \
+                mock.patch.object(self.h, "WORK_PARENT", str(self.tmp / "work")), \
+                redirect_stderr(io.StringIO()):
+            work = self.h.prepare_apt_work("trixie")
+        conf = (work / "apt.conf").read_text()
+        self.assertEqual(conf, 'Dir::Etc::main "/dev/null";\n'
+                               f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n'
+                               'Acquire::http::Proxy "http://proxy.example:3128";\n')
+
+
+class RealAptProxyTests(unittest.TestCase):
+    """Real apt-config and apt-get in a private mount namespace, with a
+    hostile /etc/apt: debian-installer's proxy reaches the helper's apt.conf,
+    an auto-detect program never runs, an injected value is dropped, and
+    Debian's package is still chosen over APT::Sources::With."""
+
+    def test_operator_proxy_reaches_the_helper_and_nothing_else_does(self):
+        for tool in ("apt-get", "apt-config", "dpkg-deb", "unshare"):
+            if shutil.which(tool) is None:
+                self.skipTest(f"{tool} is required")
+        if subprocess.run(["unshare", "-rm", "true"], capture_output=True).returncode != 0:
+            self.skipTest("unshare -rm is not available")
+        sys.path.insert(0, str(ROOT / "tests"))
+        self.addCleanup(sys.path.remove, str(ROOT / "tests"))
+        from test_release_apt_isolation import _deb, _packages
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            debs = tmp / "debs"
+            debs.mkdir()
+            _deb(debs / "libdep-sim_1.0_all.deb", "libdep-sim", "1.0", "all")
+            _deb(debs / "libdep-sim_9.0_all.deb", "libdep-sim", "9.0", "all")
+            debian = tmp / "debian"
+            _packages(debian, [debs / "libdep-sim_1.0_all.deb"])
+            higher = debs / "libdep-sim_9.0_all.deb"
+            ran, prehook, inject = tmp / "autodetect-ran", tmp / "prehook", tmp / "inject"
+            autodetect = tmp / "autodetect"
+            autodetect.write_text(f"#!/bin/sh\necho RAN >> {ran}\n")
+            autodetect.chmod(0o755)
+            hostile = tmp / "hostile-apt"
+            (hostile / "apt.conf.d").mkdir(parents=True)
+            (hostile / "sources.list.d").mkdir()
+            (hostile / "sources.list").write_text("")
+            # What debian-installer writes for a proxy answer, plus hostile keys.
+            (hostile / "apt.conf").write_text(
+                'Acquire::http::Proxy "http://proxy.example:3128";\n'
+                f'Acquire::ftp::Proxy "http://evil.example; DPkg::Pre-Invoke {{touch {inject}}}";\n'
+                f'Acquire::http::Proxy-Auto-Detect "{autodetect}";\n'
+                f'Acquire::http::ProxyAutoDetect "{autodetect}";\n'
+                f'APT::Sources::With {{ "{higher}"; }};\n'
+                f'DPkg::Pre-Invoke {{ "touch {prehook}"; }};\n')
+            (hostile / "apt.conf.d" / "99proxy").write_bytes(
+                b'Acquire::https::Proxy "http://parts.example:8080";\n'
+                b'Acquire::ftp::Proxy::mirror.example "http://caf\xff.example";\n'
+                + f'APT::Sources::With {{ "{higher}"; }};\n'.encode())
+            evil_config = tmp / "evil-apt.conf"
+            evil_config.write_text('Acquire::http::Proxy "http://from-apt-config.example:3128";\n')
+            keyring = tmp / "keyring.gpg"
+            keyring.write_text("")
+            probe = tmp / "probe.py"
+            probe.write_text(
+                "import importlib.machinery, importlib.util, json, pathlib, subprocess, sys\n"
+                "subprocess.run(['mount', '--bind', sys.argv[2], '/etc/apt'], check=True)\n"
+                "loader = importlib.machinery.SourceFileLoader('h', sys.argv[1])\n"
+                "h = importlib.util.module_from_spec(importlib.util.spec_from_loader('h', loader))\n"
+                "loader.exec_module(h)\n"
+                "h.KEYRING, h.WORK_PARENT = sys.argv[3], sys.argv[4]\n"
+                "work = h.prepare_apt_work('trixie')\n"
+                "conf = (work / 'apt.conf').read_text()\n"
+                "# Stand a local repository in for Debian's network sources.\n"
+                "for f in (work / 'sources.list.d').iterdir(): f.unlink()\n"
+                "(work / 'sources.list.d' / 'local.list').write_text(f'deb [trusted=yes] file://{sys.argv[5]} ./\\n')\n"
+                "with open(work / 'apt.conf', 'a') as s: s.write('APT::Sandbox::User \"root\";\\n')\n"
+                "opts, env = h.apt_options(work), h.apt_env(work)\n"
+                "up = h.run(['apt-get', *opts, 'update'], env=env)\n"
+                "plan = h.run(['apt-get', '-s', *opts, 'install', 'libdep-sim'], env=env)\n"
+                "print(json.dumps({'conf': conf, 'update': up.returncode, 'plan': plan.stdout,\n"
+                "                  'plan_rc': plan.returncode, 'err': up.stderr + plan.stderr}))\n")
+            result = subprocess.run(
+                ["unshare", "-rm", sys.executable, str(probe), str(HELPER), str(hostile),
+                 str(keyring), str(tmp / "work"), str(debian)],
+                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C",
+                     "APT_CONFIG": str(evil_config)},
+                capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            import json
+            report = json.loads(result.stdout.splitlines()[-1])
+            conf = report["conf"]
+            self.assertIn('Acquire::http::Proxy "http://proxy.example:3128";\n', conf)
+            self.assertIn('Acquire::https::Proxy "http://parts.example:8080";\n', conf)
+            for word in ("from-apt-config", "evil.example", "Pre-Invoke", "Auto-Detect", "AutoDetect", str(autodetect),
+                         "Sources::With", str(higher)):
+                self.assertNotIn(word, conf)
+            self.assertIn("dropping proxy setting Acquire::ftp::Proxy\n", result.stderr)
+            self.assertIn("dropping proxy setting Acquire::ftp::Proxy::mirror.example", result.stderr)
+            self.assertNotIn("caf", conf)
+            self.assertEqual(report["update"], 0, report["err"])
+            self.assertEqual(report["plan_rc"], 0, report["err"])
+            self.assertIn("Inst libdep-sim (1.0", report["plan"])
+            self.assertNotIn("9.0", report["plan"])
+            self.assertFalse(ran.exists(), "the proxy auto-detect program ran")
+            self.assertFalse(prehook.exists())
+            self.assertFalse(inject.exists())
 
 
 class HelperTests(unittest.TestCase):
