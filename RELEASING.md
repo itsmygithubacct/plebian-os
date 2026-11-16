@@ -827,19 +827,35 @@ not qualify either image or standalone guests, reboot, rollback or user data.
 An installed RC of the same version hops to its final without a bootstrap
 driver. RC9's Pleb already accepts `--release-tag`, and its closure has no
 `PLEBIAN_OS_RELEASE_TAG` because selectors before 0.2.3 did not write one.
-Pass the published RC ISO. The controller reads the installed RC from the
-closure (the tag, or the RC commit when the tag is absent) and does not
-require the image guest's build-info to equal that ISO: a guest that reached
-the RC by upgrading still has the build-info of the ISO it was installed
-from. After the hop the closure's tag object must be the staged final tag
-object, and rollback must restore every pre-hop closure key byte for byte.
+Pass the published RC ISO, its manifest, the published RC tag object, and the
+staged final tag object. The guest runner reads the installed RC: from the
+closure when the selector wrote one, or from build-info when a fresh image
+has no `closure.env` and those bytes equal the RC ISO. An upgraded image
+guest still has its predecessor ISO's build-info. That hash must be the
+single `build-info.env` named by `--predecessor-sha256sums` (the published
+0.2.2 `SHA256SUMS` for the 0.2.2 disks). Any other build-info fails. The
+guest shell-sources the closure and requires its Neuronte, Go, and satellite
+keys to match `pleb update --show` and the RC manifest. After the hop the
+closure's tag object must equal `--release-tag-object`. Rollback must restore
+the session, closure, settings, the selector and updater, and every
+component checkout HEAD, not only the closure file. A standalone guest has
+no selector or updater, and those paths must stay absent. The hop then runs
+again and those paths must match the post-hop record. The host's post-reboot
+version check cannot tell the installed RC from the final, because both
+report 0.2.3. The tag pin in the guest reboot verifier, and the
+`PLEBIAN_OS_RELEASE_TAG` line in `show-after-reboot.txt`, carry that
+distinction.
 
 ```sh
 build/acceptance-release-hop-host.sh \
   --from 0.2.3 --target 0.2.3 \
   --release-tag v0.2.3 --from-release-tag v0.2.3-rc9 \
+  --from-release-tag-object 532d238f65c4bc1dc82a817bab01a467e287ba16 \
+  --release-tag-object <staged-v0.2.3-tag-object> \
   --source-iso plebian-os-0.2.3-rc9-amd64.iso \
   --source-sha256sums SHA256SUMS \
+  --predecessor-sha256sums <published-0.2.2-SHA256SUMS> \
+  --from-release-manifest plebian-os-0.2.3-rc9.env \
   --image-guest releaseci@<image-host> \
   --standalone-guest releaseci@<standalone-host> \
   --known-hosts <qualification-known-hosts> \
