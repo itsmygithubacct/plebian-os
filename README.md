@@ -46,7 +46,14 @@ In brief:
   is remembered. By the owner's 2026-11-07 determination its custom terms,
   including the commercial-use limitation, are a notice, as with a Debian
   non-free package: they are shipped with the model, and installation records a
-  notice receipt that claims no agreement. The terms are not waived. See the
+  notice receipt that claims no agreement. The terms are not waived. A machine
+  that already has delivery `lfm2-kilix-commands-20261106-v9` installed keeps the
+  model: the upgrade installs v10 from those files with no download. That step
+  runs unattended and shows nothing; it records the same notice receipt only
+  where the v9 receipt covers it, and prints where the installed terms are. If
+  anything is missing or differs, or the disk, receipt store or installer
+  refuses, nothing is installed and the upgrade continues
+  (see [UPGRADING.md](UPGRADING.md)). See the
   [command-model selection](releases/0.2.3-command-model.json).
   <!-- LFM2: confirm at final list -->
 - **Help** uses **kilix-qwen-sft1-2b**. Ask everyday questions about using

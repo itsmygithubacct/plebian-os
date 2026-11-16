@@ -283,6 +283,10 @@ try:
         command = json.loads(Path(sys.argv[3]).read_bytes())
         if json.loads((root / 'COMMAND-MODEL.json').read_bytes()) != command:
             raise ValueError('command archive differs from the release inventory')
+        # The Kilix Ask command model is a first-use download (0.2.3): no
+        # carrier may describe it as being on the media.
+        if (command.get('delivery') or {}).get('mode') != 'first-use-download':
+            raise ValueError('the command model must be a first-use download')
     # Kilix Playalong's defaults that upgrades download (not in the image).
     online = {}
     if sys.argv[4]:
@@ -306,7 +310,7 @@ try:
         asset = entry['artifact_id']
         bundled = asset in bundle['assets']
         is_command = command is not None and asset == command['asset_id']
-        mode = ('bundled-command-model-archive' if is_command else
+        mode = ('first-use-upstream-download' if is_command else
                 'bundled-default-model' if bundled else
                 'playalong-default-upstream-download' if asset in online else
                 'image-offline-model' if asset in image else
@@ -469,7 +473,7 @@ validate_voice_compliance_carrier() {
                 || { carrier_refuse "$model licence text $digest is missing or altered"; return 1; }
         done
         case "${cv[${prefix}delivery]}" in
-            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|bundled-command-model-archive|image-offline-model) ;;
+            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|image-offline-model) ;;
             *) carrier_refuse "$model delivery mode is unsupported"; return 1 ;;
         esac
         host="${cv[${prefix}source_url]#https://}"; host="${host%%/*}"
@@ -1131,12 +1135,12 @@ DEFAULT_MODELS_BUNDLE="${PLEBIAN_OS_DEFAULT_MODELS_BUNDLE:-}"
 }
 validate_default_model_release_closure
 python3 "$HERE/provision/install-default-models.py" --verify-only --archive "$DEFAULT_MODELS_BUNDLE"
-COMMAND_MODEL_BUNDLE="${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}"
-[ -n "$COMMAND_MODEL_BUNDLE" ] || {
-    echo "PLEBIAN_OS_COMMAND_MODEL_BUNDLE must name the release's command model archive" >&2
+# The Kilix Ask command model (LFM2) is a first-use download from 0.2.3: the
+# image does not carry its archive, so the build neither needs nor copies one.
+[ -z "${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}" ] || {
+    echo "PLEBIAN_OS_COMMAND_MODEL_BUNDLE is retired: the command model is a first-use download and is not put on the image" >&2
     exit 1
 }
-python3 "$HERE/provision/stage-command-model.py" --verify-only --archive "$COMMAND_MODEL_BUNDLE"
 python3 "$HERE/provision/install-image-models.py" --verify-only \
     --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz"
 # Demucs htdemucs_6s ships in the image with Meta's MIT text beside it (owner
@@ -1180,8 +1184,6 @@ if [ -n "$PP_OCR_REC_MODEL_BUNDLE" ]; then
         --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
         --pp-ocrv6-small-rec "$PP_OCR_REC_MODEL_BUNDLE"
 fi
-COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
-    "$HERE/provision/command-model.json")"
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
@@ -1517,7 +1519,6 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_SOURCE_ISO "$(basename "$SRC_ISO")"
         manifest_kv PLEBIAN_OS_SOURCE_ISO_SHA256 "$iso_sha"
         manifest_kv PLEBIAN_OS_PRESEED_SHA256 "$preseed_sha"
-        manifest_kv PLEBIAN_OS_COMMAND_MODEL_ARCHIVE_SHA256 "${COMMAND_MODEL_SHA256:-}"
         manifest_kv PLEBIAN_OS_INSTALLER_SPLASH_SHA256 "$splash_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_SHA256 "$banner_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_DARK_SHA256 "$banner_dark_sha"
@@ -2385,8 +2386,6 @@ elif release_requires_neuronte; then
     exit 1
 fi
 
-mkdir -p "$EXTRACT/plebian-os/model-archives"
-install -m 0644 "$COMMAND_MODEL_BUNDLE" "$EXTRACT/plebian-os/model-archives/$COMMAND_MODEL_SHA256"
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"

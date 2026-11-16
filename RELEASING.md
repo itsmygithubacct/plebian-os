@@ -40,6 +40,13 @@ argument 3. If both forms are set, they must resolve to the same file. The
 existing size and SHA-256 pins in `releases/0.2.2.env` are the byte acceptance
 check; no carrier download is performed.
 
+From 0.2.3 the Kilix Ask command model (LFM2) is a first-use download and is
+not put on the media. `PLEBIAN_OS_COMMAND_MODEL_BUNDLE` is retired: the
+remaster refuses it when set, so a build cannot silently omit an archive its
+operator meant to ship. The release still publishes the delivery's archive as a
+kilix-needle release asset, at the URL `provision/command-model.json` pins,
+before the image is released, because first use downloads it from there.
+
 For 0.2.2 and later releases, remastering selects the carrier pins from
 `releases/<VERSION>.env` and checks its declared version before accepting the
 archive. The media carries that exact manifest as `ollama-release.env` for

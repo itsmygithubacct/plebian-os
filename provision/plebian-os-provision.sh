@@ -8630,10 +8630,9 @@ as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
 install_kilix_needle
 install_kilix_claudex
 install_kilix_llm
-if [ "$DRY_RUN" != 1 ]; then
-    /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/stage-command-model.py" --offline \
-        || die "required offline command model staging failed"
-fi
+# The Kilix Ask command model (LFM2) is not on the installation media and a
+# fresh install does not stage or install it: Kilix Ask uses its grammar and
+# offers the download on first use and in the model wizard.
 as_user env "${install_env[@]}" /usr/bin/python3 \
     "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
     || die "required offline default model installation failed"

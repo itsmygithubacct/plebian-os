@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Install Kilix Playalong's default models and the staged LFM2 command model.
+"""Install Kilix Playalong's default models and keep an installed LFM2 command model.
 
 Playalong's defaults are Basic Pitch, Demucs htdemucs_6s and Whisper medium.en
 (owner decision, 2026-11-08). They use the standard distribution policy and
@@ -38,13 +38,27 @@ image. They install whether or not Playalong's models were declined. A fresh
 install takes them from the image; an online run without the archives
 downloads the same files from the pinned revisions.
 
-LFM2 is the pinned command-model archive. By the owner's 2026-11-07
-determination its published custom terms, including the commercial-use
-limitation, are a notice. Installation records a notice receipt for them on
-this machine, which claims no agreement. It does not waive those terms, does
-not use the standard-policy receipt, does not put a receipt in the image, and
-never answers terms that need a typed agreement. An existing model selection
-is left unchanged.
+LFM2, the Kilix Ask command model (command-model.json), is a first-use
+download from 0.2.3: the image does not carry it and no upgrade downloads it.
+Kilix Ask uses its grammar until it is installed and offers the download on
+the first interactive `kilix ask` and in the model wizard. A machine that has
+delivery v9 installed, with a receipt that covers it, keeps the model: this
+step installs the current delivery from the v9 files, without a download,
+through the Content installer's supplied-directory path, which verifies every
+file against the current manifest. Anything missing or different, a partial
+current directory, too little space, a refusing receipt store or installer, or
+a Kilix catalog that selects another delivery installs nothing, leaves no
+receipt this run wrote, and the machine gets the first-use offer; it never
+fails the run. An
+older delivery than v9 is not migrated, because its weight is not the current
+one. By the owner's 2026-11-07 determination LFM2's published custom terms,
+including the commercial-use limitation, are a notice. The migration runs
+unattended and shows nothing; where the v9 receipt covers the same licence
+record it records a notice receipt for them on this machine, which claims no
+agreement, and prints where the installed terms are. It does
+not waive those terms, does not use the standard-policy receipt, does not put a
+receipt in the image, and never answers terms that need a typed agreement. An
+existing Ask selection is left unchanged, and so is the v9 directory.
 """
 import argparse
 import hashlib
@@ -53,6 +67,7 @@ import json
 import os
 import re
 from pathlib import Path
+import shutil
 import stat
 import sys
 import subprocess
@@ -67,7 +82,6 @@ BASIC_PITCH_FILES = (
     'notices/NOTICE-basic-pitch.txt',
 )
 SHARED_BASIC_PITCH = Path('/usr/local/share/plebian-os')
-COMMAND_CACHE = Path('/usr/local/share/kilix/model-archives')
 DEMUCS_WEIGHTS = 'models/5c90dfd2-34c22ccb.th'
 DEMUCS_LICENCE = 'notices/LICENSE-mit.txt'
 DEMUCS_FILES = (DEMUCS_WEIGHTS, DEMUCS_LICENCE)
@@ -235,14 +249,25 @@ def validate_playalong_inventory(inventory, basic_pin, demucs_pin):
 
 
 def validate_command_pin(pin):
-    if (pin.get('schema') != 'plebian-os.command-model-archive/v1'
+    delivery = pin.get('delivery')
+    migration = pin.get('local_migration')
+    if (pin.get('schema') != 'plebian-os.command-model-archive/v2'
             or pin.get('asset_id') != 'lfm2-kilix-commands'
             or not _hex64(pin.get('sha256')) or not _hex64(pin.get('manifest_digest'))
             or type(pin.get('bytes')) is not int or pin['bytes'] <= 0
             or not isinstance(pin.get('version'), str) or not pin['version']
             or not isinstance(pin.get('root'), str) or not pin['root']
             or not isinstance(pin.get('url'), str) or not pin['url'].startswith('https://')
-            or not isinstance(pin.get('weight_version'), str) or not pin['weight_version']):
+            or not isinstance(pin.get('weight_version'), str) or not pin['weight_version']
+            or not isinstance(delivery, dict) or delivery.get('mode') != 'first-use-download'
+            or delivery.get('on_installation_media') is not False
+            or delivery.get('staged_by_upgrade') is not False
+            or delivery.get('absent_backend') != 'grammar'
+            or not isinstance(migration, dict) or migration.get('network') is not False
+            or not _hex64(migration.get('from_manifest_digest'))
+            or migration['from_manifest_digest'] == pin['manifest_digest']
+            or not isinstance(migration.get('from_version'), str)
+            or not re.fullmatch(r'[a-zA-Z0-9._-]+', migration['from_version'])):
         raise ValueError('invalid command model pin')
 
 
@@ -1106,46 +1131,173 @@ def playalong_declined(kilix):
         return f'whether this machine declined them cannot be read ({error})'
 
 
-def _command_cache(cache_dir, pin):
-    path = Path(cache_dir) / pin['sha256']
+COMMAND_FIRST_USE = ('Kilix Ask uses its grammar and offers the command model download '
+                     'on first use.')
+
+
+def _supplied_file():
+    from kilix_content.install import SuppliedFile
+    return SuppliedFile
+
+
+def _command_installed(cm, asset_id):
+    """_installed, where a receipt without its files reads as "not installed".
+
+    A migration that wrote the receipt and then could not finish leaves exactly
+    that; the next run tries again and never fails the upgrade on it.
+    """
     try:
-        stream = _open_regular(path)
-    except FileNotFoundError as error:
-        raise ValueError('the installation media did not supply the command model archive') from error
-    except OSError as error:
-        raise ValueError('could not read the staged command model archive') from error
-    with stream:
-        if (os.fstat(stream.fileno()).st_size != pin['bytes']
-                or hashlib.file_digest(stream, 'sha256').hexdigest() != pin['sha256']):
-            raise ValueError('command model archive size or checksum mismatch')
-    return path
+        return _installed(cm, asset_id)
+    except cm._api().InstallError as error:
+        print(f'{asset_id} is not completely installed ({error}).', file=sys.stderr)
+        return False
 
 
-def install_command_model(kilix, pin, cache_dir):
-    """Install LFM2 from the staged archive and record its notice terms."""
-    cm, _defaults = _load(kilix)
-    if _installed(cm, pin['asset_id']):
-        print('Command model already verified; no archive install needed.')
+def _not_migrated(reason, then=COMMAND_FIRST_USE):
+    print('Command model not installed: ' + reason + '. ' + then)
+    return False
+
+
+# Room the installer needs beside the current delivery's installed bytes: it
+# stages the tree in the assets directory and renames it into place.
+COMMAND_STAGE_MARGIN = 64 * 1024 * 1024
+
+
+def _earlier_delivery_differs(spec, earlier, texts):
+    """Why the files under `earlier` cannot supply `spec`, or None.
+
+    The same files the installer's supplied-directory path reads, checked the
+    same way, so that a delivery that cannot supply this one is found before
+    any receipt is written: every file except the notices the licence
+    authority holds, by size and digest, through a descriptor that follows no
+    symlink below `earlier`. The installer checks them all again.
+    """
+    supplied = _supplied_file()
+    for item in spec.files:
+        if item.path.startswith('notices/'):
+            try:
+                texts.get(item.sha256, label=item.path)
+                continue
+            except FileNotFoundError:
+                pass
+        try:
+            with supplied.open_beneath(str(earlier), item.path) as handle:
+                if handle.bytes != item.bytes or handle.sha256 != item.sha256:
+                    return item.path + ' differs from the current delivery'
+        except (OSError, RuntimeError) as error:
+            return f'{item.path} cannot be read ({error})'
+    return None
+
+
+def _catalog_differs(spec, pin):
+    """The fields in which the pinned Kilix catalog's asset differs from the pin."""
+    return [name for name, have, want in (
+        ('asset id', spec.asset_id, pin['asset_id']), ('version', spec.version, pin['version']),
+        ('root', spec.root, pin['root']), ('archive digest', spec.archive_sha256, pin['sha256']),
+        ('archive size', spec.archive_bytes, pin['bytes']),
+        ('manifest', spec.manifest_digest, pin['manifest_digest']), ('url', spec.source_url, pin['url']),
+    ) if have != want]
+
+
+def _withdraw_receipts(written, cm, asset_id):
+    """Remove the receipts this run wrote, when the delivery they cover is not installed.
+
+    A receipt without its model would make the next first use skip the notice
+    screen, so a migration that could not finish takes back exactly what it
+    wrote: a file is removed only while it still holds the bytes this run
+    wrote, and nothing is removed when another process has meanwhile
+    installed the delivery.
+    """
+    if not written:
         return
-    _command_cache(cache_dir, pin)
-    api, lic, spec, records, store = _catalog_spec(cm, pin['asset_id'])
-    if (spec.asset_id != pin['asset_id'] or spec.archive_sha256 != pin['sha256']
-            or spec.archive_bytes != pin['bytes'] or spec.manifest_digest != pin['manifest_digest']
-            or spec.version != pin['version'] or spec.root != pin['root']
-            or spec.source_url != pin['url']):
-        raise ValueError('command model catalog differs from the image pin')
+    try:
+        if _command_installed(cm, asset_id):
+            return
+    except (OSError, RuntimeError):
+        pass
+    for path, content in written:
+        try:
+            if path.read_bytes() == content:
+                path.unlink()
+                print('Command model: withdrew the receipt this run wrote: ' + path.name)
+        except OSError as error:
+            print(f'Command model: could not withdraw the receipt {path} ({error}); '
+                  'it records a notice only, and Kilix reads a receipt without its files '
+                  'as not installed.', file=sys.stderr)
+
+
+def migrate_command_model(kilix, pin):
+    """Install the current LFM2 delivery from an installed v9, without a download.
+
+    Returns True when the current delivery is installed afterwards. Nothing in
+    this machine's state fails the run: a catalog that does not select the
+    pinned delivery, a machine without v9, a v9 receipt or file that does not
+    supply the current delivery, a partial current directory, too little space,
+    or a receipt store or installer that refuses, installs nothing, leaves no
+    receipt this run wrote, and keeps the first-use offer.
+    """
+    cm, _defaults = _load(kilix)
+    stops = (OSError, RuntimeError, ValueError)
+    try:
+        # The licence authority is reached through Content, so _api comes first;
+        # a Content or licence component that cannot be loaded is a SetupError
+        # (a RuntimeError) and stops only this step.
+        cm._api()
+        stops += (cm._license().LicenseError,)
+        return _migrate_command_model(cm, pin)
+    except Exception as error:
+        if not isinstance(error, stops):
+            raise
+        return _not_migrated(f'the migration stopped ({type(error).__name__}: {error})')
+
+
+def _migrate_command_model(cm, pin):
+    migration = pin['local_migration']
+    api, lic = cm._api(), cm._license()
+    spec = cm._verified_catalog(api).require_asset(pin['asset_id'])
+    differs = _catalog_differs(spec, pin)
+    if differs:
+        # Nothing is installed from a catalog the image does not pin. The
+        # release guard refuses such an image at build time; on a checkout that
+        # still names another Kilix, the migration stays out of the way. Only
+        # the catalog has been read: the licence records, the receipt store
+        # (which ReceiptStore.shared() creates) and the v9 files are not opened.
+        return _not_migrated(
+            f"the pinned Kilix catalog selects {spec.version}, not {pin['version']} "
+            f"({', '.join(differs)} differ); nothing was installed, and no receipt "
+            "store, receipt or model file was opened or written",
+            then='Kilix Ask keeps whatever that Kilix provides.')
+    records, store = lic.load_determined_records(), lic.ReceiptStore.shared()
+    if _command_installed(cm, pin['asset_id']):
+        print('Command model already verified: ' + pin['version'])
+        return True
+    earlier = Path(_apps_root()) / 'assets' / (spec.asset_id + '--' + migration['from_manifest_digest'])
+    if earlier.is_symlink() or not earlier.is_dir():
+        return _not_migrated(migration['from_version'] + ' is not installed for this user')
     pending = []
     seen = set()
     for item in spec.licenses:
         record = cm._record(records, item.record_digest)
         if lic.standard_policy_eligible(record):
-            raise ValueError('command model must keep its published custom terms')
+            return _not_migrated('its licence record is no longer the published custom terms')
         if record.digest not in seen:
             seen.add(record.digest)
             pending.append(record)
+    for record in pending:
+        try:
+            lic.require(lic.AssetRef(spec.asset_id, record.digest, migration['from_manifest_digest']),
+                        records=records, store=store)
+        except lic.CoverageRefused:
+            return _not_migrated('no receipt covers the installed ' + migration['from_version'])
+    installer = api.Installer(_apps_root())
+    destination = Path(installer.asset_destination(spec))
     catalogue_digest, release_digest = _receipt_digests()
     with tempfile.TemporaryDirectory(prefix='plebian-command-model-texts-') as scratch:
         texts = lic.load_determined_texts(Path(scratch) / 'texts')
+        problem = _earlier_delivery_differs(spec, earlier, texts)
+        if problem is not None:
+            return _not_migrated(f"{migration['from_version']} cannot supply {pin['version']}: {problem}")
+        uncovered = []
         for record in pending:
             try:
                 lic.require(lic.AssetRef(spec.asset_id, record.digest, spec.manifest_digest),
@@ -1153,27 +1305,46 @@ def install_command_model(kilix, pin, cache_dir):
             except lic.CoverageRefused:
                 # Owner determination 2026-11-07 (Debian style): LFM2's terms,
                 # including the commercial-use limitation, are a notice. They are
-                # shipped with the model under the documents path, not waived, and
-                # the receipt records that notice and claims no agreement. Terms
-                # that need a typed agreement are never answered here: the image
-                # install stops instead.
+                # shipped with the model, not waived, and the receipt records that
+                # notice and claims no agreement, as the RC9 image install and
+                # Kilix's non-interactive path record it. Terms that need a typed
+                # agreement are never answered here: the machine keeps the
+                # first-use offer instead, where the user answers them.
                 if record.expected_decision != 'record':
-                    raise ValueError('command model terms need a typed agreement; '
-                                     'the image never answers one')
+                    return _not_migrated('its terms need a typed agreement, which an upgrade never answers')
+                uncovered.append(record)
+        # Before any receipt: the installer refuses to replace a directory it
+        # did not verify, and a full disk would fail the copy after the receipt.
+        if os.path.lexists(destination):
+            return _not_migrated(f'{destination} holds files that are not a verified {pin["version"]}, '
+                                 'and the installer does not replace them')
+        free = shutil.disk_usage(destination.parent).free
+        if free < pin['installed_bytes'] + COMMAND_STAGE_MARGIN:
+            return _not_migrated(f'{destination.parent} has {free} bytes free and {pin["version"]} '
+                                 f'needs {pin["installed_bytes"]} plus room to stage')
+        written = []
+        try:
+            for record in uncovered:
                 print('Command model: recording the published notice terms for ' + record.id)
                 agreement = lic.capture_agreement(record)
-                store.write(lic.receipt_from_agreement(
+                path = Path(store.write(lic.receipt_from_agreement(
                     record, agreement, manifest_digest=spec.manifest_digest,
-                    catalogue_digest=catalogue_digest, release_digest=release_digest))
-        # The content installer copies this environment when it is constructed.
-        # Point it at the archive just checked so it cannot fall through to a download.
-        os.environ['KILIX_CONTENT_ARCHIVE_CACHE'] = str(Path(cache_dir))
-        installer = api.Installer(_apps_root())
-        installer.ensure_upstream_asset(
-            spec, store=store, records=records, notices=texts, report=print)
-    print('Command model installed: ' + pin['weight_version'])
-    print('Licence documents: /usr/local/share/doc/plebian-os/models/'
-          + pin['version'] + '/notices')
+                    catalogue_digest=catalogue_digest, release_digest=release_digest)))
+                written.append((path, path.read_bytes()))
+            installer.ensure_supplied_asset(
+                spec, supplied=earlier, store=store, records=records, notices=texts, report=print)
+        except BaseException as error:
+            # Every failure after a receipt was written takes it back, including
+            # one this step does not expect (which then propagates).
+            _withdraw_receipts(written, cm, pin['asset_id'])
+            if not isinstance(error, (OSError, RuntimeError, lic.LicenseError)):
+                raise
+            return _not_migrated(f"{migration['from_version']} could not supply {pin['version']} ({error})")
+    print('Command model installed from ' + migration['from_version'] + ' without a download: '
+          + pin['version'] + ' (' + pin['weight_version'] + '). Its licence terms are in '
+          + str(destination / 'notices') + '; they are recorded as a notice, as for '
+          + migration['from_version'] + ', and no agreement is recorded.')
+    return True
 
 
 def main(argv=None):
@@ -1182,7 +1353,6 @@ def main(argv=None):
     parser.add_argument('--basic-pitch', type=Path)
     parser.add_argument('--demucs', type=Path,
                         help='the Demucs image archive (default: the copy the image installed, if any)')
-    parser.add_argument('--command-cache', type=Path, default=COMMAND_CACHE)
     parser.add_argument('--offline', action='store_true')
     parser.add_argument('--verify-only', action='store_true')
     parser.add_argument('--paradee', type=Path,
@@ -1285,7 +1455,8 @@ def main(argv=None):
     if args.kilix is None:
         parser.error('--kilix is required')
     # --offline is the fresh-install call: it downloads nothing. Basic Pitch,
-    # Demucs, Paradee, en_core_web_sm, page OCR and the command model come from the image.
+    # Demucs, Paradee, en_core_web_sm and page OCR come from the image. The
+    # command model never comes from the image or a download here.
     if args.offline and not archive.is_file():
         raise ValueError('the installation media did not supply the Basic Pitch model')
     declined = playalong_declined(args.kilix)
@@ -1296,7 +1467,7 @@ def main(argv=None):
         print("Playalong's default models skipped: " + declined)
     install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin, offline=args.offline)
     install_spacy(args.kilix, resolve_spacy(args.spacy), spacy_pin, offline=args.offline)
-    install_command_model(args.kilix, command_pin, args.command_cache)
+    migrate_command_model(args.kilix, command_pin)
     for asset_id, pin in pp_ocr_pins.items():
         install_pp_ocr(args.kilix, resolve_pp_ocr(pp_ocr_archives[asset_id], asset_id), pin,
                        offline=args.offline)

@@ -7407,19 +7407,19 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     test_fail_after_boundary claudex
     install_kilix_llm
     test_fail_after_boundary kilix-llm
-    # The OS update stages the shared command archive with its admin context.
-    # The following image-model install records local licence coverage for the
-    # desktop user. It does not rewrite an existing Ask selection, and old
-    # archives survive rollback. It also installs Kilix Playalong's missing
-    # default models unless the machine declined them, downloading Whisper
-    # medium.en (and Demucs, when the image did not supply it) from their pinned
-    # sources; a failed download does not fail the update.
+    # The Kilix Ask command model (LFM2) is a first-use download: the update
+    # neither downloads nor stages it. The desktop user's image-model step
+    # below installs the current delivery from an installed v9 without a
+    # download, when v9 and its receipt are there; otherwise Kilix Ask offers
+    # the download on first use. It does not rewrite an existing Ask
+    # selection, and an earlier delivery's directory, any archive an earlier
+    # release staged, and its licence documents stay for rollback. That step
+    # also installs Kilix Playalong's missing default models unless the machine
+    # declined them, downloading Whisper medium.en (and Demucs, when the image
+    # did not supply it) from their pinned sources; a failed download does not
+    # fail the update.
     command_model_elevate=()
     [ "$(id -u)" = 0 ] || command_model_elevate=(sudo)
-    "${command_model_elevate[@]}" /usr/bin/python3 \
-        "$PLEBIAN_OS_DIR/provision/stage-command-model.py" \
-        || die "required command model staging failed"
-    test_fail_after_boundary command-model
     env "${stack_env[@]}" /usr/bin/python3 \
         "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" \
         || die "required default model installation failed"

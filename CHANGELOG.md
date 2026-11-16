@@ -60,6 +60,28 @@ entries below run newest first, from the final back through RC1.
   `default-models-0221` tag instead of the `v0.2.3-rc1` prerelease. Same
   bytes and SHA-256.
 
+- Make Kilix Ask's LFM2 command model a first-use download. The image no
+  longer carries the command-model archive (the remaster neither needs nor
+  copies it, and the preseed no longer copies `model-archives`), and neither a
+  fresh install nor an upgrade downloads, stages or installs it. Kilix Ask
+  uses its grammar until the model is installed and offers the download on
+  the first interactive `kilix ask` and on the model wizard's Local
+  Workflows / Kilix Ask page. The pin moves to delivery
+  `lfm2-kilix-commands-20261115-v10` (same weight `20261106.9` and runtime
+  build; ten duplicate runtime libraries omitted; new modified-model notice
+  `ad951c96`). A machine with delivery v9 installed and covered gets v10 from
+  those files in the desktop-user upgrade step, with no download and a notice
+  receipt that claims no agreement. That step runs unattended, shows nothing,
+  and prints where the installed terms are. Anything missing or different, a
+  partial v10 directory, a full disk, a refusing receipt store or installer,
+  or a Kilix whose catalog selects another delivery installs nothing, leaves
+  no receipt behind and never fails the upgrade. `stage-command-model.py` stays, as a
+  step that changes nothing, because an earlier candidate's updater still
+  runs it. The compliance carrier describes LFM2 as
+  `first-use-upstream-download`; the validator refuses the retired
+  `bundled-command-model-archive` mode and a set
+  `PLEBIAN_OS_COMMAND_MODEL_BUNDLE`.
+
 - Select Debian's current trixie-backports Go package
   `1.27.4-1~bpo13+1` for the Kilix engine build. The archive no longer
   serves `1.27.3-1~bpo13+1`, so installs and upgrades stopped at the Go
