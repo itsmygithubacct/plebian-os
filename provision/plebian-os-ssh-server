@@ -68,6 +68,12 @@ STARTER_PASSWORD = "plebian"
 # Sockets systemd-ssh-generator (systemd 256+) binds once sshd is installed.
 GENERATED_SOCKETS = ("sshd-vsock.socket", "sshd-unix-local.socket", "sshd-unix-export.socket")
 GENERATED_SOCKET_RE = re.compile(r"^sshd-[a-z0-9-]{1,40}\.socket$")
+# Units this helper may mask and later unmask: the generator's sockets, and
+# ssh.service/ssh.socket while openssh-server is only half installed.
+MASKABLE_RE = re.compile(r"^(ssh\.service|ssh\.socket|sshd-[a-z0-9-]{1,40}\.socket)$")
+# dpkg's current-state letter (second of ${db:Status-Abbrev}) for a package
+# that is neither fully installed (i) nor absent (n, or c for config files).
+HALF_STATES = "HUFWt"
 LOCAL_BRIDGES = ("docker", "veth", "br-", "virbr", "lxcbr", "lxdbr", "podman", "cni")
 ACTIONS = ("enable", "disable", "status", "help")
 ACCOUNT_RE = re.compile(r"^[a-z][-a-z0-9_]{0,31}$")
@@ -230,9 +236,30 @@ def take_lock():
 
 # ---- state ------------------------------------------------------------------
 
-def package_installed():
+def package_state():
+    """dpkg's state for openssh-server, two letters ("ii", "iU", "iF", "rc",
+    ...), or "" when dpkg has no record of it."""
     result = run(["dpkg-query", "-W", "-f=${db:Status-Abbrev}", PACKAGE])
-    return result.returncode == 0 and result.stdout.startswith("ii")
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()[:2]
+
+
+def package_installed():
+    return package_state() == "ii"
+
+
+def package_half_installed(state=None):
+    """Unpacked but not configured, half-configured, awaiting triggers...: a
+    later `dpkg --configure -a` would run the postinst, which starts sshd."""
+    state = package_state() if state is None else state
+    return len(state) == 2 and state[1] in HALF_STATES
+
+
+def package_present(state=None):
+    """Installed or half installed: anything but not-installed or config-files."""
+    state = package_state() if state is None else state
+    return len(state) == 2 and state[1] not in "nc"
 
 
 def unit_state(verb, unit):
@@ -609,6 +636,21 @@ def report_on(headline="SSH server: ON", detail=""):
     say("This helper does not do that for you.")
 
 
+def half_installed_note(dpkg_state):
+    """What the next package repair will do with a half-installed server."""
+    say("")
+    if unit_state("is-enabled", SERVICE) == "masked":
+        say(f"{PACKAGE} is only half installed (dpkg state {dpkg_state}). ssh.service and")
+        say("ssh.socket are masked, so the next package repair (`sudo dpkg --configure -a`,")
+        say("which the updater asks for) finishes the install without starting SSH.")
+        say(f"To turn SSH on:  sudo {PROG} enable")
+        say(f"To remove it:    sudo apt-get purge {PACKAGE}")
+    else:
+        say(f"WARNING: {PACKAGE} is only half installed (dpkg state {dpkg_state}) and")
+        say("ssh.service is not masked: the next package repair (`sudo dpkg --configure -a`)")
+        say(f"will start SSH. Run  sudo {PROG} disable  first.")
+
+
 def report_final(failed):
     """The last thing every enable/disable run prints: the state read back
     from systemd and the socket table, never the state the run intended."""
@@ -621,6 +663,9 @@ def report_final(failed):
     else:
         say("")
         say("SSH server: OFF" + (" -- nothing accepts SSH logins" if failed else ""))
+    dpkg_state = package_state()
+    if package_half_installed(dpkg_state):
+        half_installed_note(dpkg_state)
     return state
 
 
@@ -633,7 +678,7 @@ def read_mask_record():
         return []
     except OSError as error:
         raise Failed(f"cannot read {MASK_RECORD}: {error}")
-    return [line for line in text.splitlines() if GENERATED_SOCKET_RE.fullmatch(line)]
+    return [line for line in text.splitlines() if MASKABLE_RE.fullmatch(line)]
 
 
 def write_mask_record(units):
@@ -654,9 +699,10 @@ def masked_by_link(unit):
     return link.is_symlink() and os.readlink(link) == "/dev/null"
 
 
-def unmask_generated_sockets():
-    """Undo only the masks `disable` added, so the generator's sockets are back
-    to the Debian/systemd default (bound again at the next boot)."""
+def unmask_recorded():
+    """Undo only the masks this helper added (the generator's sockets, and
+    ssh.service/ssh.socket held while the package was half installed), so they
+    are back to the Debian/systemd default (bound again at the next boot)."""
     recorded = read_mask_record()
     for unit in recorded:
         if masked_by_link(unit):
@@ -667,8 +713,11 @@ def unmask_generated_sockets():
 
 # ---- actions ------------------------------------------------------------------
 
-def turn_off():
-    """Stop and disable everything that accepts SSH logins. Returns problems."""
+def turn_off(hold=False):
+    """Stop and disable everything that accepts SSH logins. With `hold` (the
+    package is half installed) also mask ssh.service and ssh.socket, so the
+    postinst a later `dpkg --configure -a` runs cannot start them (its
+    deb-systemd-helper unmask leaves masks it did not make). Returns problems."""
     problems = []
     for unit in (SOCKET, SERVICE):
         result = run(["systemctl", "disable", "--now", unit])
@@ -676,7 +725,7 @@ def turn_off():
             problems.append(f"{unit}: {(result.stderr or result.stdout).strip()}")
     recorded = read_mask_record()
     added = []
-    for unit in generated_sockets():
+    for unit in ((SERVICE, SOCKET) if hold else ()) + tuple(generated_sockets()):
         if unit_state("is-enabled", unit) == "masked":
             continue  # already masked (by an earlier disable, or the owner)
         result = run(["systemctl", "mask", "--now", unit])
@@ -700,7 +749,7 @@ def cmd_enable():
             say(f"{PACKAGE} is already installed.")
         if not any(SSH_DIR.glob("ssh_host_*_key")):
             run(["ssh-keygen", "-A"], check=True)
-        unmask_generated_sockets()
+        unmask_recorded()
         # ssh.service checks the configuration itself (ExecStartPre=sshd -t)
         # once its runtime directory exists, so a bad configuration fails here.
         result = run(["systemctl", "enable", "--now", SERVICE])
@@ -715,8 +764,9 @@ def cmd_enable():
         # Debian's postinst enables and starts ssh.service during the install,
         # so a failure after that point can leave it on. Unless it was on
         # before this run, put it back off; report_final then says what is true.
-        if not was_on and package_installed():
-            problems = turn_off()
+        dpkg_state = package_state()
+        if not was_on and package_present(dpkg_state):
+            problems = turn_off(hold=package_half_installed(dpkg_state))
             audit("enable failed; could not turn SSH off again: " + "; ".join(problems)
                   if problems else "enable failed; turned SSH off again")
         raise
@@ -727,16 +777,23 @@ def cmd_enable():
 
 def cmd_disable():
     audit("disable")
-    if not package_installed() and not State().on:
+    dpkg_state = package_state()
+    if not package_present(dpkg_state) and not State().on:
         say("SSH server: OFF (openssh-server is not installed). Nothing to change.")
         return 0
-    problems = turn_off()
+    half = package_half_installed(dpkg_state)
+    problems = turn_off(hold=half)
     state = State()
     if problems or state.on:
         raise Failed("SSH could not be turned off completely: "
                      + ("; ".join(problems) or state.describe()))
-    audit("disabled: ssh.service, ssh.socket and the generator's sockets are off")
+    audit("disabled: ssh.service, ssh.socket and the generator's sockets are off"
+          + (f" (package half installed, dpkg state {dpkg_state}: ssh.service and ssh.socket masked)"
+             if half else ""))
     say("SSH server: OFF")
+    if half:
+        half_installed_note(dpkg_state)
+        return 0
     say("")
     say("New SSH logins are refused. Sessions that are already open keep running")
     say("until they end. openssh-server and its host keys stay installed, so the")
@@ -746,11 +803,12 @@ def cmd_disable():
 
 
 def cmd_status():
-    if not package_installed():
+    dpkg_state = package_state()
+    state = State()
+    if not package_present(dpkg_state) and not state.on:
         say("SSH server: OFF (openssh-server is not installed)")
         say(f"Turn it on with:  sudo {PROG} enable")
         return 0
-    state = State()
     if state.fully_on:
         report_on()
         if state.extra:
@@ -760,6 +818,8 @@ def cmd_status():
             say("SSH server: ON, partly (" + state.describe() + ")")
         else:
             say("SSH server: OFF")
+        if package_half_installed(dpkg_state):
+            half_installed_note(dpkg_state)
         say(f"Turn it on with:  sudo {PROG} enable")
         say(f"Turn it off with: sudo {PROG} disable")
     return 0

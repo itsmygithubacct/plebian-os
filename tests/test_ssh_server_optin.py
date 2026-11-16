@@ -68,8 +68,13 @@ class FakeSystem:
 
     def __init__(self, installed=False, plan=None, update_rc=0, install_rc=0,
                  enable_rc=0, postinst_ran=True, start_fails=False, stuck=False,
-                 disable_rc=0, generated=None, etc=None, stray_sshd=False):
+                 disable_rc=0, generated=None, etc=None, stray_sshd=False,
+                 half=None, install_stops=None):
         self.installed = installed
+        # dpkg state other than "ii"/absent, e.g. "iU" (unpacked) or "iF"
+        # (half-configured); install_stops sets it when apt fails part way.
+        self.half = half
+        self.install_stops = install_stops
         self.enabled = False
         self.active = False
         self.socket_enabled = False
@@ -96,7 +101,7 @@ class FakeSystem:
     def _is_enabled(self, unit):
         if unit in self.masked:
             return "masked"
-        if not self.installed:
+        if not (self.installed or self.half):
             return "not-found"
         if unit == "ssh.service":
             return "enabled" if self.enabled else "disabled"
@@ -118,6 +123,8 @@ class FakeSystem:
         self.calls.append(argv)
         name = argv[0]
         if name == "dpkg-query":
+            if self.half:
+                return Result(0, self.half + " ")
             return Result(0 if self.installed else 1, "ii " if self.installed else "")
         if name == "systemctl":
             verb, unit = argv[1], argv[-1]
@@ -197,7 +204,14 @@ class FakeSystem:
         if "update" in argv:
             return self.update_rc
         if "install" in argv:
+            if self.install_stops:
+                # dpkg failed between unpack and configure: unit files exist,
+                # nothing was started.
+                self.half = self.install_stops
+                self.generated.setdefault("sshd-unix-local.socket", "inactive")
+                return self.install_rc or 100
             if self.install_rc == 0 or self.postinst_ran:
+                self.half = None
                 # Debian's postinst enables and starts ssh.service; a failing
                 # trigger or Post-Invoke hook can still fail apt afterwards.
                 self.installed = True
@@ -205,6 +219,16 @@ class FakeSystem:
                 self.generated.setdefault("sshd-unix-local.socket", "inactive")
             return self.install_rc
         return 0
+
+    def configure_pending(self):
+        """What `dpkg --configure -a` does: the postinst enables and starts
+        ssh.service, which a mask stops (deb-systemd-invoke ... || true)."""
+        if not self.half:
+            return
+        self.half = None
+        self.installed = True
+        if "ssh.service" not in self.masked:
+            self.enabled = self.active = True
 
     def commands(self, name):
         return [c for c in self.calls if c[0] == name]
@@ -513,6 +537,70 @@ class HelperTests(unittest.TestCase):
         self.assertIn("SSH server: OFF", out)
         self.assertIn("failed:", Path(self.patches["LOG_PATH"]).read_text())
 
+    # -- R2-N1: a half-installed openssh-server -------------------------------
+    def test_install_stopping_between_unpack_and_configure_holds_ssh_off(self):
+        system = FakeSystem(installed=False, install_stops="iU")
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        for unit in ("ssh.service", "ssh.socket", *GENERATED):
+            self.assertIn(["systemctl", "mask", "--now", unit], system.calls)
+        self.assertIn("SSH server: OFF -- nothing accepts SSH logins", out)
+        self.assertIn("only half installed (dpkg state iU)", out)
+        self.assertIn("finishes the install without starting SSH", out)
+        record = Path(self.patches["MASK_RECORD"]).read_text().split()
+        self.assertEqual(record[:2], ["ssh.service", "ssh.socket"])
+        # The next package repair finishes the install; SSH stays off.
+        system.configure_pending()
+        self.assertFalse(system.active)
+        self.assertEqual(system._is_enabled("ssh.service"), "masked")
+        # enable afterwards undoes exactly those masks and turns SSH on.
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 0, err)
+        unmasked = [c[2] for c in system.changes() if c[1] == "unmask"]
+        self.assertEqual(unmasked[:2], ["ssh.service", "ssh.socket"])
+        self.assertTrue(system.enabled and system.active)
+        self.assertFalse(Path(self.patches["MASK_RECORD"]).exists())
+
+    def test_without_the_hold_the_next_repair_would_start_ssh(self):
+        # The model itself: an unmasked half-installed server comes up on configure.
+        system = FakeSystem(half="iU")
+        system.configure_pending()
+        self.assertTrue(system.active)
+
+    def test_disable_acts_on_every_half_installed_state(self):
+        for dpkg_state in ("iU", "iF", "iH", "iW", "it"):
+            with self.subTest(dpkg_state):
+                Path(self.patches["MASK_RECORD"]).unlink(missing_ok=True)
+                for link in self.etc.iterdir():
+                    link.unlink()
+                system = FakeSystem(half=dpkg_state)
+                if dpkg_state == "iF":  # a half-configured postinst may have started it
+                    system.enabled = system.active = True
+                rc, out, err = self.invoke(["disable"], system)
+                self.assertEqual(rc, 0, err)
+                self.assertNotIn("Nothing to change", out)
+                self.assertIn(["systemctl", "mask", "--now", "ssh.service"], system.calls)
+                self.assertIn(["systemctl", "mask", "--now", "ssh.socket"], system.calls)
+                self.assertFalse(system.active)
+                self.assertIn(f"only half installed (dpkg state {dpkg_state})", out)
+                system.configure_pending()
+                self.assertFalse(system.active, dpkg_state)
+
+    def test_status_warns_when_a_half_installed_server_is_not_held(self):
+        system = FakeSystem(half="iU")
+        rc, out, _ = self.invoke(["status"], system, root=False)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("not installed)", out)
+        self.assertIn("WARNING: openssh-server is only half installed (dpkg state iU)", out)
+        self.assertIn("will start SSH. Run  sudo plebian-os-ssh-server disable  first.", out)
+
+    def test_a_fully_installed_server_is_never_masked_by_disable(self):
+        system = FakeSystem(installed=True)
+        system.enabled = system.active = True
+        self.assertEqual(self.invoke(["disable"], system)[0], 0)
+        self.assertNotIn(["systemctl", "mask", "--now", "ssh.service"], system.calls)
+        self.assertNotIn(["systemctl", "mask", "--now", "ssh.socket"], system.calls)
+
     # -- B1: the public 0.2.0 starter password ---------------------------------
     def test_enable_refuses_while_any_account_has_the_starter_password(self):
         self.write_shadow("pleb:" + crypt_hash("plebian") + ":19000:0:99999:7:::",
@@ -575,6 +663,36 @@ class HelperTests(unittest.TestCase):
             self.assertEqual(system.changes(), [], label)
             self.write_shadow()
 
+    def test_a_crypt_error_refuses_rather_than_skipping_the_account(self):
+        for error in (ValueError("embedded null byte"), TypeError("bad argument")):
+            with self.subTest(type(error).__name__):
+                def crypt(word, setting, error=error):
+                    raise error
+                system = FakeSystem(installed=False)
+                with mock.patch.object(self.h, "load_crypt", lambda: crypt):
+                    rc, out, err = self.invoke(["enable"], system)
+                self.assertEqual(rc, 2)
+                self.assertIn("cannot check the password of 'alice'", err)
+                self.assertEqual(system.commands("apt-get"), [])
+                self.assertEqual(system.changes(), [])
+
+    def test_a_missing_libcrypt_refuses(self):
+        system = FakeSystem(installed=False)
+        with mock.patch.object(self.h.ctypes, "CDLL", side_effect=OSError("libcrypt.so.1: cannot open")):
+            rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 2)
+        self.assertIn("cannot check account passwords (libcrypt", err)
+        self.assertEqual(system.commands("apt-get"), [])
+
+    def test_a_shadow_file_that_is_not_utf8_refuses(self):
+        self.shadow.write_bytes(self.shadow.read_bytes() + b"pl\xffeb:" + crypt_hash("plebian").encode()
+                                + b":19000:0:99999:7:::\n")
+        system = FakeSystem(installed=False)
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 2)
+        self.assertIn("cannot read", err)
+        self.assertEqual(system.commands("apt-get"), [])
+
     def test_disable_never_needs_the_password_check(self):
         self.shadow.unlink()
         system = FakeSystem(installed=True)
@@ -603,6 +721,36 @@ class HelperTests(unittest.TestCase):
         self.assertIn("could not be turned off completely", err)
         self.assertIn("running: ssh.service", err)
         self.assertIn("SSH server: ON -- this run reported an error", out)
+
+    def test_a_generator_socket_alone_counts_as_on(self):
+        system = FakeSystem(installed=True, generated={"sshd-vsock.socket": "active"})
+        rc, out, _ = self.invoke(["status"], system, root=False)
+        self.assertIn("SSH server: ON, partly (listening (systemd-ssh-generator): sshd-vsock.socket)", out)
+        system.disable_rc = 1  # cannot mask it: disable must not claim OFF
+        rc, out, err = self.invoke(["disable"], system)
+        self.assertEqual(rc, 1)
+        self.assertIn("SSH server: ON -- this run reported an error", out)
+
+    def test_disable_acts_when_the_package_is_gone_but_sshd_still_listens(self):
+        system = FakeSystem(installed=False, stray_sshd=True)
+        rc, out, err = self.invoke(["disable"], system)
+        self.assertEqual(rc, 1)
+        self.assertNotIn("Nothing to change", out)
+        self.assertIn(["systemctl", "disable", "--now", "ssh.service"], system.calls)
+        self.assertIn("sshd listening on 0.0.0.0:22", err)
+        self.assertIn("SSH server: ON -- this run reported an error", out)
+        rc, out, _ = self.invoke(["status"], system, root=True)
+        self.assertNotIn("not installed", out)
+        self.assertIn("SSH server: ON, partly (sshd listening on 0.0.0.0:22)", out)
+
+    def test_an_os_error_after_the_postinst_still_turns_ssh_off(self):
+        system = FakeSystem(installed=False)
+        with mock.patch.object(self.h, "unmask_recorded", side_effect=PermissionError(13, "denied")):
+            rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        self.assertFalse(system.enabled or system.active)
+        self.assertIn("SSH server: OFF -- nothing accepts SSH logins", out)
+        self.assertIn("enable failed; turned SSH off again", Path(self.patches["LOG_PATH"]).read_text())
 
     def test_an_sshd_listening_outside_systemd_counts_as_on(self):
         system = FakeSystem(installed=True, stray_sshd=True)
