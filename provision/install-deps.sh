@@ -95,18 +95,22 @@ validate_release_apt_provenance() {
 # it and nothing is fetched while classifying. Any other file, including a
 # signed third-party repository, stays where the operator put it and is not
 # consulted. A private package-list cache keeps a higher version from that
-# repository from becoming a candidate, and the real dpkg status is what apt
-# reads, so a package already installed from the operator source is not removed
-# or downgraded. $1 is an absolute directory this function fills. $2 is install
-# or lifetime. $3 is the install snapshot id, empty outside that phase. $4 is
-# the codename. $5 is the operator apt directory, the one that contains
-# sources.list. On success, $1/indexes lists the release indexes. On failure,
-# $1/failure names the provenance refusal and the function returns 1.
+# repository from becoming a candidate. Hiding that source is not enough to
+# keep an installed package: the install itself has to refuse removals, because
+# apt would otherwise remove a package whose dependency only the hidden source
+# can satisfy. The private apt.conf points Dir::Etc::Parts at an empty
+# directory, so an apt.conf.d snippet cannot add a package either. $1 is an
+# absolute directory this function fills. $2 is install or lifetime. $3 is the
+# install snapshot id, empty outside that phase. $4 is the codename. $5 is the
+# operator apt directory, the one that contains sources.list. On success,
+# $1/indexes lists the release indexes. On failure, $1/failure names the
+# provenance refusal and the function returns 1.
 prepare_release_apt_config() {
     local dest="$1" phase="$2" snapshot="$3" codename="$4" apt_dir="$5"
     local work="" reason_file="" file="" base="" rel="" staged=""
     local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
     local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
+    local main_ok=0 snapshot_only=0 trust_disabled=0
     case "$dest" in
         /*) ;;
         *) return 1 ;;
@@ -137,7 +141,7 @@ prepare_release_apt_config() {
     esac
     reason_file="$dest/failure"
     mkdir -p -- "$dest/sources.list.d" "$dest/lists/partial" "$dest/archives/partial" \
-        "$dest/cache" "$dest/preferences.d" || {
+        "$dest/cache" "$dest/preferences.d" "$dest/apt.conf.d" || {
         rm -rf -- "$work"
         printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
         return 1
@@ -146,6 +150,23 @@ prepare_release_apt_config() {
     : >"$dest/preferences"
     : >"$dest/extended_states"
     : >"$dest/indexes"
+    # Command-line -o Dir::Etc::parts is applied after apt has already read
+    # apt.conf.d. APT_CONFIG is the main file, and a Dir::Etc::Parts assignment
+    # there is applied before those snippets are read. Point it at an empty
+    # directory and the operator's snippets, including APT::Sources::With, are
+    # not part of this configuration.
+    printf '%s\n' \
+        "Dir::Etc::Parts \"$dest/apt.conf.d\";" \
+        'APT::Get::AllowUnauthenticated "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowWeakRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'Acquire::Check-Valid-Until "true";' \
+        >"$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
     : >"$work/files"
     : >"$work/accepted.idx"
     : >"$work/all.idx"
@@ -188,7 +209,13 @@ prepare_release_apt_config() {
                 return 1 ;;
         esac
         rm -rf -- "$work/one"
-        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" || {
+        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" \
+            "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        printf '%s\n' "Dir::Etc::Parts \"$work/one/apt.conf.d\";" >"$work/one/apt.conf" || {
             rm -rf -- "$work"
             printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
             return 1
@@ -218,8 +245,23 @@ prepare_release_apt_config() {
             list_arg="$work/one/empty.list"
             parts_arg="$work/one/parts"
         fi
+        # mktemp is mode 0700. Classification runs apt-get, and a root
+        # caller fetches as the unprivileged _apt user, which cannot
+        # traverse 0700. These files are Debian source lines only.
+        chmod 0755 -- "$work" "$work/one" "$work/one/parts" "$work/one/lists" \
+            "$work/one/lists/partial" "$work/one/cache" "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        chmod 0644 -- "$staged" "$work/one/apt.conf" "$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
         apt_rc=0
-        uris="$(apt-get update --print-uris \
+        uris="$(env -u APT_CONFIG APT_CONFIG="$work/one/apt.conf" \
+            apt-get update --print-uris \
             -o "Dir::Etc::SourceList=$list_arg" \
             -o "Dir::Etc::SourceParts=$parts_arg" \
             -o "Dir::State::lists=$work/one/lists" \
@@ -298,6 +340,36 @@ prepare_release_apt_config() {
             log "operator apt source $file is left unchanged and is not used to install release packages"
             continue
         fi
+        # trusted=yes, allow-insecure, allow-weak, and allow-downgrade-to-insecure
+        # turn signature checks off. check-valid-until=no and check-date=no turn
+        # replay protection off. The install snapshot's own source is the one
+        # exception: its Release files are already expired, so the provisioner
+        # sets Check-Valid-Until: no on snapshot.debian.org and nowhere else.
+        trust_disabled=0
+        if grep -Eiq -e '(^|[^[:alnum:]_-])trusted[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-weak[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-downgrade-to-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            trust_disabled=1
+        elif grep -Eiq -e '(^|[^[:alnum:]_-])check-valid-until[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])check-date[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            snapshot_only=1
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] || continue
+                read -r site release _ <<<"$line"
+                case "$site" in
+                    http://snapshot.debian.org/*|https://snapshot.debian.org/*) ;;
+                    *) snapshot_only=0 ;;
+                esac
+            done <"$work/one/sorted"
+            [ "$snapshot_only" = 1 ] || trust_disabled=1
+        fi
+        if [ "$trust_disabled" = 1 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
         if [ "$file" = "$apt_dir/sources.list" ]; then
             if ! cp -a -- "$staged" "$dest/sources.list"; then
                 rm -rf -- "$work"
@@ -361,15 +433,71 @@ prepare_release_apt_config() {
         rm -rf -- "$work"
         return 1
     fi
+    # Security alone must not pass. The accepted set has to include the
+    # codename's main suite, from the Debian archive in the lifetime phase and
+    # from the install snapshot in the install phase. A mixed file that was
+    # excluded can otherwise leave only trixie-security behind.
+    main_ok=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        read -r site release _ <<<"$line"
+        [ "$release" = "$codename" ] || continue
+        case "$phase" in
+            install)
+                [ "$site" = "https://snapshot.debian.org/archive/debian/$snapshot" ] && main_ok=1
+                ;;
+            lifetime)
+                case "$site" in
+                    http://deb.debian.org/debian|https://deb.debian.org/debian|http://deb.debian.org/debian/|https://deb.debian.org/debian/)
+                        main_ok=1 ;;
+                    http://snapshot.debian.org/archive/debian/*|https://snapshot.debian.org/archive/debian/*)
+                        main_ok=1 ;;
+                esac
+                ;;
+        esac
+    done <"$dest/indexes"
+    if [ "$main_ok" != 1 ]; then
+        printf 'release apt provenance is missing the %s main archive\n' "$codename" >"$reason_file"
+        rm -rf -- "$work"
+        return 1
+    fi
+    # The finished directory is handed to root apt. _apt must be able to
+    # traverse it. Nothing in it is secret.
+    chmod 0755 -- "$dest" "$dest/sources.list.d" "$dest/lists" "$dest/lists/partial" \
+        "$dest/archives" "$dest/archives/partial" "$dest/cache" "$dest/preferences.d" \
+        "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod 0644 -- "$dest/sources.list" "$dest/preferences" "$dest/extended_states" \
+        "$dest/indexes" "$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    for file in "$dest/sources.list.d"/*; do
+        if [ ! -f "$file" ] || [ -L "$file" ]; then
+            continue
+        fi
+        chmod 0644 -- "$file" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done
     rm -rf -- "$work"
     return 0
 }
 
 # apt-get for a configuration prepare_release_apt_config built. The operator's
-# sources, pins, and list cache are not on this command line.
+# sources, pins, list cache, and apt.conf snippets are not on this command.
+# APT_CONFIG replaces the main apt.conf; the private file points
+# Dir::Etc::Parts at an empty directory so apt.conf.d is not read.
 release_apt_get() {
     local config="$1"
     shift
+    env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
     apt-get \
         -o "Dir::Etc::SourceList=$config/sources.list" \
         -o "Dir::Etc::SourceParts=$config/sources.list.d" \
@@ -691,30 +819,43 @@ fi
 
 # Release installs consult only the private Debian configuration. A development
 # run keeps the previous system apt command, including whatever the operator
-# configured.
+# configured. The updater passes the configuration it already prepared so every
+# later install, and the final provenance record, use that same directory.
 RELEASE_APT_CONFIG=""
+RELEASE_APT_CONFIG_OWNED=0
 cleanup_release_apt_config() {
+    [ "$RELEASE_APT_CONFIG_OWNED" = 1 ] || return 0
     [ -n "$RELEASE_APT_CONFIG" ] || return 0
     rm -rf -- "$RELEASE_APT_CONFIG"
 }
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
-    release_codename="${PLEBIAN_OS_APT_CODENAME:-}"
-    release_phase="${APT_PROVENANCE_PHASE:-lifetime}"
-    case "$release_phase" in
-        install|lifetime) ;;
-        *) die "unknown apt provenance phase" ;;
-    esac
-    if [ -z "$release_codename" ]; then
-        # shellcheck disable=SC1091
-        release_codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
-    fi
-    RELEASE_APT_CONFIG="$(mktemp -d)" || die "could not prepare the release apt configuration"
-    trap cleanup_release_apt_config EXIT
-    if ! prepare_release_apt_config "$RELEASE_APT_CONFIG" "$release_phase" \
-            "${PLEBIAN_OS_APT_SNAPSHOT:-}" "$release_codename" \
-            "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
-        release_reason="$(cat -- "$RELEASE_APT_CONFIG/failure" 2>/dev/null || true)"
-        die "${release_reason:-could not prepare the release apt configuration}"
+    if [ -n "${PLEBIAN_OS_RELEASE_APT_CONFIG:-}" ]; then
+        RELEASE_APT_CONFIG="$PLEBIAN_OS_RELEASE_APT_CONFIG"
+        if [ ! -d "$RELEASE_APT_CONFIG" ] || [ -L "$RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$RELEASE_APT_CONFIG/apt.conf" ] \
+                || [ ! -f "$RELEASE_APT_CONFIG/indexes" ]; then
+            die "release apt configuration is missing; refusing the system apt configuration"
+        fi
+    else
+        release_codename="${PLEBIAN_OS_APT_CODENAME:-}"
+        release_phase="${APT_PROVENANCE_PHASE:-lifetime}"
+        case "$release_phase" in
+            install|lifetime) ;;
+            *) die "unknown apt provenance phase" ;;
+        esac
+        if [ -z "$release_codename" ]; then
+            # shellcheck disable=SC1091
+            release_codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
+        fi
+        RELEASE_APT_CONFIG="$(mktemp -d)" || die "could not prepare the release apt configuration"
+        RELEASE_APT_CONFIG_OWNED=1
+        trap cleanup_release_apt_config EXIT
+        if ! prepare_release_apt_config "$RELEASE_APT_CONFIG" "$release_phase" \
+                "${PLEBIAN_OS_APT_SNAPSHOT:-}" "$release_codename" \
+                "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
+            release_reason="$(cat -- "$RELEASE_APT_CONFIG/failure" 2>/dev/null || true)"
+            die "${release_reason:-could not prepare the release apt configuration}"
+        fi
     fi
 fi
 
@@ -728,9 +869,45 @@ deps_apt() {
 
 deps_apt_plan() {
     if [ -n "$RELEASE_APT_CONFIG" ]; then
-        echo "    + apt-get -o Dir::Etc::SourceList=$RELEASE_APT_CONFIG/sources.list -o Dir::Etc::SourceParts=$RELEASE_APT_CONFIG/sources.list.d $*"
+        echo "    + APT_CONFIG=$RELEASE_APT_CONFIG/apt.conf apt-get -o Dir::Etc::SourceList=$RELEASE_APT_CONFIG/sources.list -o Dir::Etc::SourceParts=$RELEASE_APT_CONFIG/sources.list.d $*"
     else
         echo "    + apt-get $*"
+    fi
+}
+
+# Release installs never remove a package. A hidden operator source can make
+# apt plan Remv for a package whose dependency only that source can upgrade.
+# Simulate first, name those packages, and leave them installed.
+release_install() {
+    local plan="" removals="" plan_rc=0
+    if [ -n "$RELEASE_APT_CONFIG" ]; then
+        # Simulate without --no-remove so a planned Remv is visible and can
+        # be named. The install itself still passes --no-remove.
+        plan="$(deps_apt -s -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "$@")" || plan_rc=$?
+        removals="$(printf '%s\n' "$plan" | sed -n 's/^Remv \([^ ]\{1,\}\).*/\1/p')"
+        if [ -n "$removals" ]; then
+            warn "installing release packages would remove: $(printf '%s\n' "$removals" | tr '\n' ' ')"
+            warn "those packages stay installed; the release packages were not changed"
+            return 1
+        fi
+        if [ "$plan_rc" != 0 ]; then
+            warn "could not plan the release package install"
+            [ -z "$plan" ] || printf '%s\n' "$plan" >&2
+            return 1
+        fi
+        deps_apt -o DPkg::Lock::Timeout=600 install -y --no-install-recommends --no-remove "$@"
+        return $?
+    fi
+    deps_apt -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "$@"
+}
+
+plan_install() {
+    if [ -n "$RELEASE_APT_CONFIG" ]; then
+        # shellcheck disable=SC2086,SC2048  # deliberate package-list splitting
+        deps_apt_plan install -y --no-install-recommends --no-remove $*
+    else
+        # shellcheck disable=SC2086,SC2048  # deliberate package-list splitting
+        deps_apt_plan install -y --no-install-recommends $*
     fi
 }
 
@@ -755,15 +932,15 @@ for entry in "${DEP_GROUPS[@]}"; do
     done
     log "installing group: $name"
     if [ "$DRY_RUN" = 1 ]; then
-        # shellcheck disable=SC2086
-        deps_apt_plan install -y --no-install-recommends ${request[*]}
+        # shellcheck disable=SC2086,SC2048
+        plan_install ${request[*]}
         for floor in "${floors[@]}"; do
             echo "    + require ${floor%%=*} >= ${floor#*=}"
         done
         continue
     fi
     # Wait for the dpkg lock rather than fail while unattended-upgrades holds it.
-    if ! deps_apt -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "${request[@]}"; then
+    if ! release_install "${request[@]}"; then
         warn "GROUP FAILED: $name"
         warn "    packages: $pkgs"
         failed+=("$name")
@@ -800,11 +977,11 @@ install_package_group() {
     log "$heading: $name"
     if [ "$DRY_RUN" = 1 ]; then
         # shellcheck disable=SC2086  # deliberate package-list splitting
-        deps_apt_plan install -y --no-install-recommends $pkgs
+        plan_install $pkgs
         return 0
     fi
     # shellcheck disable=SC2086  # deliberate package-list splitting
-    if ! deps_apt install -y --no-install-recommends $pkgs; then
+    if ! release_install $pkgs; then
         warn "GROUP FAILED: $name"
         warn "    packages: $pkgs"
         failed+=("$name")
@@ -818,11 +995,11 @@ if [ "$QUALIFICATION" -eq 1 ]; then
         log "installing group: $name"
         if [ "$DRY_RUN" = 1 ]; then
             # shellcheck disable=SC2086  # deliberate package-list splitting
-            deps_apt_plan install -y --no-install-recommends $pkgs
+            plan_install $pkgs
             continue
         fi
         # shellcheck disable=SC2086  # deliberate package-list splitting
-        if ! deps_apt -o DPkg::Lock::Timeout=600 install -y --no-install-recommends $pkgs; then
+        if ! release_install $pkgs; then
             warn "GROUP FAILED: $name"
             warn "    packages: $pkgs"
             failed+=("$name")

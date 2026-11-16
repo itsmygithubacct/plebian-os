@@ -485,6 +485,9 @@ PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-}"           # default after target user is kn
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file below if empty
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
+# Held from configure_apt_snapshot through cleanup. install-deps reuses it,
+# Qt and mpv inherit it, and the final record copies its indexes.
+PROVISION_RELEASE_APT_CONFIG=""
 # Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
 # shellcheck disable=SC2034
 PLEBIAN_OS_APT_SNAPSHOT_EXPLICIT="${PLEBIAN_OS_APT_SNAPSHOT+1}"
@@ -1226,6 +1229,17 @@ rollback_mpv_runtime_transaction() {
 }
 
 mpv_runtime_command() {
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${PROVISION_RELEASE_APT_CONFIG:-}" ] || [ -L "$PROVISION_RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$PROVISION_RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        env PLEBIAN_OS_RELEASE_MODE=1 \
+            "PLEBIAN_OS_RELEASE_APT_CONFIG=$PROVISION_RELEASE_APT_CONFIG" \
+            /usr/local/sbin/plebian-os-mpv-runtime "$@"
+        return $?
+    fi
     /usr/local/sbin/plebian-os-mpv-runtime "$@"
 }
 
@@ -1274,6 +1288,17 @@ rollback_qt_runtime_transaction() {
 }
 
 qt_runtime_command() {
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${PROVISION_RELEASE_APT_CONFIG:-}" ] || [ -L "$PROVISION_RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$PROVISION_RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        env PLEBIAN_OS_RELEASE_MODE=1 \
+            "PLEBIAN_OS_RELEASE_APT_CONFIG=$PROVISION_RELEASE_APT_CONFIG" \
+            /usr/local/sbin/plebian-os-qt-runtime "$@"
+        return $?
+    fi
     /usr/local/sbin/plebian-os-qt-runtime "$@"
 }
 
@@ -2506,6 +2531,11 @@ cleanup() {
         elif [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
                 && [ "$PROVISION_ROOT_TRANSACTION_COMMITTED" != 1 ]; then
             rollback_provision_root_transaction || cleanup_failed=1
+        fi
+        # After rollback: Qt and mpv restore still need this directory.
+        if [ -n "${PROVISION_RELEASE_APT_CONFIG:-}" ]; then
+            rm -rf -- "$PROVISION_RELEASE_APT_CONFIG"
+            PROVISION_RELEASE_APT_CONFIG=""
         fi
         if [ -n "${PROVISION_LOCK_FD:-}" ]; then
             flock -u "$PROVISION_LOCK_FD" 2>/dev/null || true
@@ -5431,6 +5461,7 @@ prepare_release_apt_config() {
     local work="" reason_file="" file="" base="" rel="" staged=""
     local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
     local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
+    local main_ok=0 snapshot_only=0 trust_disabled=0
     case "$dest" in
         /*) ;;
         *) return 1 ;;
@@ -5461,7 +5492,7 @@ prepare_release_apt_config() {
     esac
     reason_file="$dest/failure"
     mkdir -p -- "$dest/sources.list.d" "$dest/lists/partial" "$dest/archives/partial" \
-        "$dest/cache" "$dest/preferences.d" || {
+        "$dest/cache" "$dest/preferences.d" "$dest/apt.conf.d" || {
         rm -rf -- "$work"
         printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
         return 1
@@ -5470,6 +5501,23 @@ prepare_release_apt_config() {
     : >"$dest/preferences"
     : >"$dest/extended_states"
     : >"$dest/indexes"
+    # Command-line -o Dir::Etc::parts is applied after apt has already read
+    # apt.conf.d. APT_CONFIG is the main file, and a Dir::Etc::Parts assignment
+    # there is applied before those snippets are read. Point it at an empty
+    # directory and the operator's snippets, including APT::Sources::With, are
+    # not part of this configuration.
+    printf '%s\n' \
+        "Dir::Etc::Parts \"$dest/apt.conf.d\";" \
+        'APT::Get::AllowUnauthenticated "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowWeakRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'Acquire::Check-Valid-Until "true";' \
+        >"$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
     : >"$work/files"
     : >"$work/accepted.idx"
     : >"$work/all.idx"
@@ -5512,7 +5560,13 @@ prepare_release_apt_config() {
                 return 1 ;;
         esac
         rm -rf -- "$work/one"
-        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" || {
+        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" \
+            "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        printf '%s\n' "Dir::Etc::Parts \"$work/one/apt.conf.d\";" >"$work/one/apt.conf" || {
             rm -rf -- "$work"
             printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
             return 1
@@ -5542,8 +5596,23 @@ prepare_release_apt_config() {
             list_arg="$work/one/empty.list"
             parts_arg="$work/one/parts"
         fi
+        # mktemp is mode 0700. Classification runs apt-get, and a root
+        # caller fetches as the unprivileged _apt user, which cannot
+        # traverse 0700. These files are Debian source lines only.
+        chmod 0755 -- "$work" "$work/one" "$work/one/parts" "$work/one/lists" \
+            "$work/one/lists/partial" "$work/one/cache" "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        chmod 0644 -- "$staged" "$work/one/apt.conf" "$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
         apt_rc=0
-        uris="$(apt-get update --print-uris \
+        uris="$(env -u APT_CONFIG APT_CONFIG="$work/one/apt.conf" \
+            apt-get update --print-uris \
             -o "Dir::Etc::SourceList=$list_arg" \
             -o "Dir::Etc::SourceParts=$parts_arg" \
             -o "Dir::State::lists=$work/one/lists" \
@@ -5622,6 +5691,36 @@ prepare_release_apt_config() {
             log "operator apt source $file is left unchanged and is not used to install release packages"
             continue
         fi
+        # trusted=yes, allow-insecure, allow-weak, and allow-downgrade-to-insecure
+        # turn signature checks off. check-valid-until=no and check-date=no turn
+        # replay protection off. The install snapshot's own source is the one
+        # exception: its Release files are already expired, so the provisioner
+        # sets Check-Valid-Until: no on snapshot.debian.org and nowhere else.
+        trust_disabled=0
+        if grep -Eiq -e '(^|[^[:alnum:]_-])trusted[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-weak[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-downgrade-to-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            trust_disabled=1
+        elif grep -Eiq -e '(^|[^[:alnum:]_-])check-valid-until[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])check-date[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            snapshot_only=1
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] || continue
+                read -r site release _ <<<"$line"
+                case "$site" in
+                    http://snapshot.debian.org/*|https://snapshot.debian.org/*) ;;
+                    *) snapshot_only=0 ;;
+                esac
+            done <"$work/one/sorted"
+            [ "$snapshot_only" = 1 ] || trust_disabled=1
+        fi
+        if [ "$trust_disabled" = 1 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
         if [ "$file" = "$apt_dir/sources.list" ]; then
             if ! cp -a -- "$staged" "$dest/sources.list"; then
                 rm -rf -- "$work"
@@ -5685,6 +5784,59 @@ prepare_release_apt_config() {
         rm -rf -- "$work"
         return 1
     fi
+    # Security alone must not pass. The accepted set has to include the
+    # codename's main suite, from the Debian archive in the lifetime phase and
+    # from the install snapshot in the install phase. A mixed file that was
+    # excluded can otherwise leave only trixie-security behind.
+    main_ok=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        read -r site release _ <<<"$line"
+        [ "$release" = "$codename" ] || continue
+        case "$phase" in
+            install)
+                [ "$site" = "https://snapshot.debian.org/archive/debian/$snapshot" ] && main_ok=1
+                ;;
+            lifetime)
+                case "$site" in
+                    http://deb.debian.org/debian|https://deb.debian.org/debian|http://deb.debian.org/debian/|https://deb.debian.org/debian/)
+                        main_ok=1 ;;
+                    http://snapshot.debian.org/archive/debian/*|https://snapshot.debian.org/archive/debian/*)
+                        main_ok=1 ;;
+                esac
+                ;;
+        esac
+    done <"$dest/indexes"
+    if [ "$main_ok" != 1 ]; then
+        printf 'release apt provenance is missing the %s main archive\n' "$codename" >"$reason_file"
+        rm -rf -- "$work"
+        return 1
+    fi
+    # The finished directory is handed to root apt. _apt must be able to
+    # traverse it. Nothing in it is secret.
+    chmod 0755 -- "$dest" "$dest/sources.list.d" "$dest/lists" "$dest/lists/partial" \
+        "$dest/archives" "$dest/archives/partial" "$dest/cache" "$dest/preferences.d" \
+        "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod 0644 -- "$dest/sources.list" "$dest/preferences" "$dest/extended_states" \
+        "$dest/indexes" "$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    for file in "$dest/sources.list.d"/*; do
+        if [ ! -f "$file" ] || [ -L "$file" ]; then
+            continue
+        fi
+        chmod 0644 -- "$file" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done
     rm -rf -- "$work"
     return 0
 }
@@ -5694,6 +5846,7 @@ prepare_release_apt_config() {
 release_apt_get() {
     local config="$1"
     shift
+    env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
     apt-get \
         -o "Dir::Etc::SourceList=$config/sources.list" \
         -o "Dir::Etc::SourceParts=$config/sources.list.d" \
@@ -5968,24 +6121,17 @@ write_source_tool_manifest() {
     } > "$versions_tmp"
 
     if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
-        local release_apt="" reason=""
-        release_apt="$(mktemp -d "$state/.release-apt.XXXXXX")" || {
+        # The indexes this install actually used. Preparing again would
+        # classify the apt directory as it is now, which can differ.
+        if [ -z "${PROVISION_RELEASE_APT_CONFIG:-}" ] || [ -L "$PROVISION_RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$PROVISION_RELEASE_APT_CONFIG/indexes" ]; then
             rm -f "$versions_tmp" "$sources_tmp"
-            die "could not prepare the release apt configuration"
-        }
-        if ! prepare_release_apt_config "$release_apt" "$APT_PROVENANCE_PHASE" \
-                "$PLEBIAN_OS_APT_SNAPSHOT" "$(_apt_codename)" "$APT_ETC_ROOT/apt"; then
-            reason="$(cat -- "$release_apt/failure" 2>/dev/null || true)"
-            rm -rf -- "$release_apt"
-            rm -f "$versions_tmp" "$sources_tmp"
-            die "${reason:-could not record final apt source indexes}"
+            die "release apt configuration is missing; refusing to record system apt indexes"
         fi
-        cp -a -- "$release_apt/indexes" "$sources_tmp" || {
-            rm -rf -- "$release_apt"
+        cp -a -- "$PROVISION_RELEASE_APT_CONFIG/indexes" "$sources_tmp" || {
             rm -f "$versions_tmp" "$sources_tmp"
             die "could not record final apt source indexes"
         }
-        rm -rf -- "$release_apt"
     else
         apt-get indextargets \
             --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
@@ -7977,10 +8123,26 @@ for cand in \
 done
 [ -n "$DEPS_SCRIPT" ] || die "dependency installer not found (plebian-os-install-deps / install-deps.sh)"
 configure_apt_snapshot
+# One private configuration for this release install, prepared after the
+# snapshot or live sources are in place. install-deps reuses the directory
+# instead of building a second one, and Qt and mpv inherit it.
+if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] && [ "$DRY_RUN" != 1 ]; then
+    PROVISION_RELEASE_APT_CONFIG="$(mktemp -d)" || die "could not prepare the release apt configuration"
+    if ! prepare_release_apt_config "$PROVISION_RELEASE_APT_CONFIG" "$APT_PROVENANCE_PHASE" \
+            "$PLEBIAN_OS_APT_SNAPSHOT" "$(_apt_codename)" "${APT_ETC_ROOT:-/etc}/apt"; then
+        release_apt_reason="$(cat -- "$PROVISION_RELEASE_APT_CONFIG/failure" 2>/dev/null || true)"
+        rm -rf -- "$PROVISION_RELEASE_APT_CONFIG"
+        PROVISION_RELEASE_APT_CONFIG=""
+        die "${release_apt_reason:-could not prepare the release apt configuration}"
+    fi
+fi
 # install-deps is a child process, so the release apt phase has to be exported
 # before it starts. APT_ETC_ROOT is set at startup; the default matches that.
 export PLEBIAN_OS_RELEASE_MODE APT_PROVENANCE_PHASE PLEBIAN_OS_APT_SNAPSHOT
 export PLEBIAN_OS_APT_SOURCES_ROOT="${APT_ETC_ROOT:-/etc}/apt"
+if [ -n "$PROVISION_RELEASE_APT_CONFIG" ]; then
+    export PLEBIAN_OS_RELEASE_APT_CONFIG="$PROVISION_RELEASE_APT_CONFIG"
+fi
 log "installing runtime dependencies via $DEPS_SCRIPT"
 export PLEBIAN_OS_UV_VERSION="$UV_VERSION_PIN"
 export PLEBIAN_OS_UV_INSTALLER_SHA256="$UV_INSTALLER_SHA256"

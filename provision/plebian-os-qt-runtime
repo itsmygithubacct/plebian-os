@@ -23,6 +23,44 @@ PACKAGES = {"libqt5gui5t64": "5.15.15", "libqt6gui6": "6.8.2"}
 ARM_DEV_PACKAGE = "qt6-base-dev"
 
 
+def apt_run(argv, **kwargs):
+    """Run apt-get. Release mode uses the private Debian configuration.
+
+    Outside release mode the command and environment are unchanged. In
+    release mode a missing configuration is a failure, not a fall back to
+    the operator's sources, pins, or apt.conf.d snippets.
+    """
+    if os.environ.get("PLEBIAN_OS_RELEASE_MODE") != "1":
+        return subprocess.run(argv, **kwargs)
+    config = os.environ.get("PLEBIAN_OS_RELEASE_APT_CONFIG", "")
+    conf = os.path.join(config, "apt.conf") if config else ""
+    if (not config or os.path.islink(config) or not os.path.isdir(config)
+            or os.path.islink(conf) or not os.path.isfile(conf)):
+        raise SystemExit(
+            "plebian-os-qt-runtime: release apt configuration is missing; "
+            "refusing the system apt configuration")
+    options = [
+        "-o", f"Dir::Etc::SourceList={config}/sources.list",
+        "-o", f"Dir::Etc::SourceParts={config}/sources.list.d",
+        "-o", f"Dir::State::lists={config}/lists",
+        "-o", "Dir::State::status=" + os.environ.get("PLEBIAN_OS_DPKG_STATUS", "/var/lib/dpkg/status"),
+        "-o", "Dir::State::extended_states=" + os.environ.get(
+            "PLEBIAN_OS_APT_EXTENDED_STATES", "/var/lib/apt/extended_states"),
+        "-o", f"Dir::Cache={config}/cache",
+        "-o", f"Dir::Cache::archives={config}/archives",
+        "-o", f"Dir::Cache::pkgcache={config}/cache/pkgcache.bin",
+        "-o", f"Dir::Cache::srcpkgcache={config}/cache/srcpkgcache.bin",
+        "-o", f"Dir::Etc::Preferences={config}/preferences",
+        "-o", f"Dir::Etc::PreferencesParts={config}/preferences.d",
+    ]
+    argv = [argv[0], *options, *argv[1:]]
+    env = dict(kwargs.get("env") or os.environ)
+    env.pop("APT_CONFIG", None)
+    env["APT_CONFIG"] = conf
+    kwargs["env"] = env
+    return subprocess.run(argv, **kwargs)
+
+
 def native_architecture():
     architecture = subprocess.check_output(
         ['/usr/bin/dpkg', '--print-architecture'], text=True).strip()
@@ -113,7 +151,7 @@ def snapshot(directory):
             archive = directory / cached.name
             shutil.copyfile(cached, archive)
         else:
-            subprocess.run(["/usr/bin/apt-get", "download", f"{name}={version}"], cwd=directory, check=True)
+            apt_run(["/usr/bin/apt-get", "download", f"{name}={version}"], cwd=directory, check=True)
             matches = list(directory.glob(f"{name}_*.deb"))
             if len(matches) != 1:
                 raise ValueError(f"the prior Qt package archive is unavailable: {name}")
@@ -179,8 +217,8 @@ def restore(directory):
         if installed:
             subprocess.run(["/usr/bin/dpkg", "--remove", *installed], check=True)
     if archives:
-        subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
-                        "--allow-downgrades", "install", *archives], check=True)
+        apt_run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
+                 "--allow-downgrades", "install", *archives], check=True)
     if "installed" in prior and "qt_planned_new" in prior:
         before = set(prior.get("present", prior["installed"]))
         current = present_packages()
@@ -191,13 +229,13 @@ def restore(directory):
             # Simulate first and permit removal only of packages absent from the
             # original rootfs. A dependent baseline package is never removed.
             command = ["/usr/bin/apt-get", "--simulate", "purge", *added]
-            plan = subprocess.run(command, check=True, capture_output=True, text=True,
-                                  env={**os.environ, "LC_ALL": "C"}).stdout
+            plan = apt_run(command, check=True, capture_output=True, text=True,
+                           env={**os.environ, "LC_ALL": "C"}).stdout
             removed = {line.split()[1].split(":")[0] for line in plan.splitlines()
                        if line.startswith(("Remv ", "Purg "))}
             if not removed or removed - {item.split(":")[0] for item in added}:
                 raise ValueError("Qt dependency rollback would remove a preexisting package")
-            subprocess.run(["/usr/bin/apt-get", "--yes", "purge", *added], check=True)
+            apt_run(["/usr/bin/apt-get", "--yes", "purge", *added], check=True)
         if any(item.split(":")[0] in planned for item in present_packages() - before):
             raise ValueError("Qt dependency rollback left a new Qt package installed")
     for path in (PREFERENCE, STATE / "RUNTIME.json", HOOK):
@@ -420,7 +458,7 @@ def main(argv=None):
     try:
         atomic_write(PREFERENCE, preferences(records))
         if snapshot_record is not None:
-            simulation = subprocess.run(
+            simulation = apt_run(
                 ["/usr/bin/apt-get", "--simulate", "--no-install-recommends", "--no-remove",
                  "install", *archives], check=True, capture_output=True, text=True,
                  env={**os.environ, "LC_ALL": "C"}).stdout
@@ -442,8 +480,8 @@ def main(argv=None):
                     planned.add(name)
             snapshot_record["qt_planned_new"] = sorted(planned)
             atomic_write(snapshot_dir / "SNAPSHOT.json", json.dumps(snapshot_record, indent=2) + "\n")
-        subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
-                        "install", *archives], check=True)
+        apt_run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
+                 "install", *archives], check=True)
         if snapshot_record is not None:
             actual = installed_packages() - baseline
             if {item.split(":")[0] for item in actual} - planned - selected:
@@ -462,8 +500,8 @@ def main(argv=None):
                 atomic_write(STATE / "RUNTIME.json", old_state)
                 previous = [str(cache / f"{r['Package']}_{r['Version']}_{r['Architecture']}.deb")
                             for r in old_records]
-                subprocess.run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
-                                "--allow-downgrades", "install", *previous], check=True)
+                apt_run(["/usr/bin/apt-get", "--yes", "--no-install-recommends", "--no-remove",
+                         "--allow-downgrades", "install", *previous], check=True)
                 verify(old_records)
             else:
                 (STATE / "RUNTIME.json").unlink(missing_ok=True)
