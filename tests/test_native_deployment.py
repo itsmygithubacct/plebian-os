@@ -48,6 +48,7 @@ SOURCES = {
     'waydroid-closure.env': 'provision/waydroid-closure.env',
     'waydroid-closure.sha256': 'provision/waydroid-closure.sha256',
     'ollama-release.env': 'releases/' + (ROOT / 'VERSION').read_text().strip() + '.env',
+    'plebian-os-ssh-server': 'provision/plebian-os-ssh-server',
 }
 
 

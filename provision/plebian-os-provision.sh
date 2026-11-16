@@ -1942,6 +1942,8 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
     /usr/local/sbin/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
+    /usr/local/sbin/plebian-os-ssh-server
+    /var/lib/plebian-os/ssh-server-offer
     /usr/local/bin/pleb-session
     /usr/local/bin/pleb-lock
     /usr/local/lib/pleb/displays.py
@@ -4260,6 +4262,76 @@ record_default_desktop() {
     fi
 }
 
+# SSH server opt-in (0.2.3). A fresh installation has no SSH server. The owner
+# is asked once, at the first desktop login, whether to turn one on: Kilix's
+# first-login chooser asks when this root-owned record names the account, and
+# the answer defaults to No. Only a fresh interactive installation gets the
+# record. An automated (preseeded) installation, a re-provision of a machine
+# that finished first boot, a shell-only session, and a machine that already
+# has openssh-server are never asked; the updater never runs this.
+# "Yes" runs `sudo plebian-os-ssh-server enable` in that terminal.
+SSH_SERVER_HELPER=/usr/local/sbin/plebian-os-ssh-server
+SSH_SERVER_OFFER=/var/lib/plebian-os/ssh-server-offer
+IDENTITY_PROFILE_NAME=""
+
+install_ssh_server_helper() {
+    local src="$PLEBIAN_OS_DIR/provision/plebian-os-ssh-server"
+    log "installing SSH server helper -> $SSH_SERVER_HELPER (SSH stays off)"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -o root -g root -m 0755 $src $SSH_SERVER_HELPER"
+        return 0
+    fi
+    [ -f "$src" ] && [ ! -L "$src" ] \
+        || die "pinned Plebian-OS checkout has no SSH server helper"
+    /usr/bin/python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$src" \
+        || die "SSH server helper does not parse: $src"
+    install -o root -g root -m 0755 "$src" "$SSH_SERVER_HELPER" \
+        || die "could not install $SSH_SERVER_HELPER"
+}
+
+ssh_server_offer_skip_reason() {
+    if machine_already_provisioned; then
+        echo "this machine already finished first boot"
+    elif [ "$IDENTITY_PROFILE_NAME" != interactive-v1 ]; then
+        echo "not an interactive installation"
+    elif [ "$DESKTOP" != 1 ]; then
+        echo "no desktop session to ask in"
+    elif dpkg-query -W -f='${db:Status-Abbrev}' openssh-server 2>/dev/null | grep -q '^ii'; then
+        echo "openssh-server is already installed"
+    elif [ "$DRY_RUN" != 1 ] && [ ! -x "$SSH_SERVER_HELPER" ]; then
+        echo "the SSH server helper is missing"
+    fi
+}
+
+record_ssh_server_offer() {
+    local reason tmp
+    # Not in a command substitution: has_fresh_identity_profile sets the
+    # profile name and must be able to stop the run on a damaged record. A
+    # legacy machine has no record and so no profile name.
+    IDENTITY_PROFILE_NAME=""
+    has_fresh_identity_profile || true
+    reason="$(ssh_server_offer_skip_reason)"
+    if [ -n "$reason" ]; then
+        log "ssh server : no first-login question ($reason)"
+        return 0
+    fi
+    [[ "$TARGET_USER" =~ ^[a-z][-a-z0-9_]{0,31}$ ]] \
+        || die "unsafe target user for the SSH server question: $TARGET_USER"
+    log "ssh server : first-login question requested for $TARGET_USER (default: no)"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $SSH_SERVER_OFFER (ssh-server-offer/v1 $TARGET_USER, root 0644)"
+        return 0
+    fi
+    [ -d "${SSH_SERVER_OFFER%/*}" ] || install -d -m 0755 "${SSH_SERVER_OFFER%/*}" \
+        || die "could not create ${SSH_SERVER_OFFER%/*}"
+    tmp="$(mktemp "${SSH_SERVER_OFFER%/*}/.ssh-server-offer.XXXXXX")" \
+        || die "could not stage the SSH server question"
+    printf 'ssh-server-offer/v1 %s\n' "$TARGET_USER" >"$tmp" \
+        && chmod 0644 "$tmp" \
+        && mv -fT "$tmp" "$SSH_SERVER_OFFER" \
+        || { rm -f "$tmp"; die "could not record the SSH server question"; }
+}
+
 seed_selected_desktop_wallpaper_state() {
     local state_dir
     state_dir="$(selected_desktop_wallpaper_state_dir)" || {
@@ -5651,7 +5723,7 @@ has_fresh_identity_profile() {
     IFS= read -r profile < "$IDENTITY_PROFILE_RECORD" \
         || die "identity-profile record is empty"
     case "$profile" in
-        interactive-v1|automated-v1) return 0 ;;
+        interactive-v1|automated-v1) IDENTITY_PROFILE_NAME="$profile"; return 0 ;;
         *) die "unknown identity-profile record: $profile" ;;
     esac
 }
@@ -7876,6 +7948,7 @@ else
         || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
 fi
 ensure_plebian_os_checkout
+install_ssh_server_helper
 
 # Stage the fixed, root-owned first-use helper from the exact Plebian-OS
 # checkout. This runs on a fresh amd64 install even when INSTALL_WAYDROID=0.
@@ -8126,6 +8199,7 @@ build_kilix_fork
 seed_selected_desktop_wallpaper_state
 record_default_desktop
 prepare_kilix95_caches
+record_ssh_server_offer
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
 # With no other desktop task installed, Pleb is the only /usr/share/xsessions
