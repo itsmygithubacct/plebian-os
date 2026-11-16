@@ -257,8 +257,14 @@ above:
     removed.
   - A proxy set in `apt.conf` or `apt.conf.d` (`Acquire::http`, `https` or
     `ftp` `::Proxy`, including a per-host `DIRECT`) is carried after its value
-    is checked. A `Proxy-Auto-Detect` program is never run for release
-    packages.
+    is checked, including an authenticated proxy
+    (`http://user:pass@host:port/`, as the Debian installer writes it). Proxy
+    values are never printed. A `Proxy-Auto-Detect` program is never run for
+    release packages.
+  - In release mode, an install or update that cannot reach the Debian archive
+    stops with "could not reach the Debian archive; check the network
+    connection and the apt proxy" instead of continuing on stale package
+    lists.
   - Plebian-OS's own Qt runtime pin is kept by its exact file name. In release
     mode the Qt runtime is verified after the dependency step, and a failed
     check stops the step.

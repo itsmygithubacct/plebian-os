@@ -46,7 +46,11 @@ entries below run newest first, from the final back through RC1.
   `apt.conf.d` snippets do not apply to release packages, and
   operator-installed packages are never removed. A proxy set in apt.conf
   (`Acquire::http`, `https` or `ftp` `::Proxy`, including per-host `DIRECT`)
-  is carried after validation; a `Proxy-Auto-Detect` program is never run.
+  is carried after validation, including an authenticated proxy, and is
+  never printed; a `Proxy-Auto-Detect` program is never run. With the Debian
+  archive unreachable, a release install or update stops instead of
+  continuing on stale package lists, and turning SSH on stops if any Debian
+  source cannot be read.
   Plebian-OS's own Qt runtime pin is kept by exact file name, and in release
   mode the Qt runtime is verified after the dependency step, which stops if
   the check fails. In release mode, Pleb and Kilix refuse a missing package

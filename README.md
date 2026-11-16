@@ -92,8 +92,10 @@ In brief:
   Debian-only apt configuration. Operator apt sources such as NVIDIA CUDA, and
   their pins, `/etc/apt/apt.conf` and `apt.conf.d` snippets, do not apply to
   release packages, and packages installed from them are never removed. A
-  proxy set in apt.conf is carried after its value is checked; a
-  `Proxy-Auto-Detect` program is never run. Plebian-OS's own Qt pin is kept,
+  proxy set in apt.conf, including an authenticated one, is carried after its
+  value is checked and is never printed; a `Proxy-Auto-Detect` program is
+  never run. If the Debian archive cannot be reached, a release install or
+  update stops instead of using stale package lists. Plebian-OS's own Qt pin is kept,
   and the Qt runtime is verified after the dependency step. In release mode,
   Pleb and Kilix refuse a missing package by name instead of using the system
   apt (a held package counts as installed); the message says what to do
