@@ -33,6 +33,17 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+# Same values as provision/plebian-os-paths.sh. Fixed; not taken from the environment.
+# Guest commands below concatenate these so the machine runs the installed paths.
+PLEBIAN_OS_SBINDIR = "/usr/sbin"
+PLEBIAN_OS_BINDIR = "/usr/bin"
+PLEBIAN_OS_LIBEXECDIR = "/usr/libexec/plebian-os"
+PLEBIAN_OS_LIBDIR = "/usr/lib/plebian-os"
+PLEBIAN_OS_DATADIR = "/usr/share/plebian-os"
+PLEBIAN_OS_NOTICEDIR = "/usr/share/plebian-os/notices"
+PLEBIAN_OS_PAYLOADDIR = "/var/lib/plebian-os/payloads"
+PLEBIAN_OS_UNITDIR = "/usr/lib/systemd/system"
+
 # Preview drivers also load this script by filename from another directory.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from qemu_runtime import cleanup_empty_runtime, prepare_qmp
@@ -1389,23 +1400,23 @@ def verify_catalog_builds(cfg: Config, askpass: str) -> None:
 def verify_update_rollback(cfg: Config, askpass: str) -> None:
     """Induce a real OS-layer update failure and prove byte-exact rollback."""
     managed_paths = (
-        "/usr/local/sbin/plebian-os-provision",
-        "/usr/local/sbin/plebian-os-install-deps",
-        "/usr/local/sbin/plebian-os-install-ollama-converter",
-        "/usr/local/sbin/plebian-os-install-diarization-converter",
-        "/usr/local/sbin/plebian-os-install-encodec-converter",
-        "/usr/local/sbin/plebian-os-install-kilix-vulkan-tts",
-        "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
-        "/usr/local/sbin/plebian-os-passwd",
-        "/usr/local/bin/plebian-os-update",
-        "/etc/systemd/system/plebian-os-firstboot.service",
-        "/usr/local/sbin/plebian-os-firstboot-attempt",
-        "/usr/local/share/plebian-os/VERSION",
-        "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
-        "/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
-        "/usr/local/share/doc/plebian-os/COPYING.GPL-2",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-provision",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-install-deps",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-install-ollama-converter",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-install-diarization-converter",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-install-encodec-converter",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-install-kilix-vulkan-tts",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-install-kilix-ollama-runtime",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-passwd",
+        PLEBIAN_OS_BINDIR + "/plebian-os-update",
+        PLEBIAN_OS_UNITDIR + "/plebian-os-firstboot.service",
+        PLEBIAN_OS_SBINDIR + "/plebian-os-firstboot-attempt",
+        PLEBIAN_OS_DATADIR + "/VERSION",
+        PLEBIAN_OS_DATADIR + "/wallpapers/plebian-os.png",
+        PLEBIAN_OS_NOTICEDIR + "/installer/ATTRIBUTION.md",
+        PLEBIAN_OS_NOTICEDIR + "/COPYING.GPL-2",
         "/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf",
-        "/usr/local/bin/plebian-os-select-closure",
+        PLEBIAN_OS_BINDIR + "/plebian-os-select-closure",
         "/etc/pleb/session.env",
         "/var/lib/plebian-os/packages.list",
         "/var/lib/plebian-os/versions.env",
@@ -1437,7 +1448,7 @@ snapshot_acceptance_update() {{
 }}
 snapshot_acceptance_update >"$before"
 set +e
-PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER=os-layer timeout 900 /usr/local/bin/plebian-os-update --revalidate-current >"$update_log" 2>&1
+PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER=os-layer timeout 900 {PLEBIAN_OS_BINDIR}/plebian-os-update --revalidate-current >"$update_log" 2>&1
 update_rc=$?
 set -e
 if [ "$update_rc" -eq 0 ] || [ "$update_rc" -eq 124 ] \
@@ -1492,7 +1503,7 @@ def verify_successful_update(cfg: Config, askpass: str) -> None:
         die("whole-stack update/restart verification FAILED:\n" + detail)
     # Validate the selected candidate before its public release tag exists.
     # Default latest-release discovery is a separate adjacent-upgrade check.
-    command = "timeout 3500 /usr/local/bin/plebian-os-update --restart --revalidate-current"
+    command = f"timeout 3500 {PLEBIAN_OS_BINDIR}/plebian-os-update --restart --revalidate-current"
     result = ssh(cfg, command, askpass, timeout=3600)
     ok = result is not None and result.returncode == 0
     if result is None:
@@ -1879,7 +1890,7 @@ def source_provenance_command(values: dict[str, str], path: str = "/var/lib/pleb
 
 def live_debian_security_source_command(
     apt_root: str = "/etc/apt",
-    provisioner: str = "/usr/local/sbin/plebian-os-provision",
+    provisioner: str = PLEBIAN_OS_SBINDIR + "/plebian-os-provision",
 ) -> str:
     """Check active security package indexes, independent of source layout.
 
@@ -1944,7 +1955,7 @@ def neuronte_contract(ref: str) -> str:
         "assert neuronte_flame.image(32) is not None, 'no flame'\n")
     return (
         '. /etc/pleb/session.env 2>/dev/null; '
-        f'test -f /usr/local/share/plebian-os/neuronte-{ref}.tar.xz && '
+        f'test -f {PLEBIAN_OS_PAYLOADDIR}/neuronte-{ref}.tar.xz && '
         'root="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}/neuronte" && '
         'cd "$KILIX95_DIR" && env -u NEURONTE_HOME -u NEURONTE_LIB PYTHONDONTWRITEBYTECODE=1 '
         f'python3 -c {shlex.quote(probe)} "$root" {shlex.quote(ref)}'
@@ -2057,8 +2068,8 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
         for key, value in build_values.items()
     )
     selector_contract = (
-        'test -x /usr/local/bin/plebian-os-select-closure && '
-        'selected="$(timeout 30 /usr/local/bin/plebian-os-select-closure --show)" && '
+        f'test -x {PLEBIAN_OS_BINDIR}/plebian-os-select-closure && '
+        f'selected="$(timeout 30 {PLEBIAN_OS_BINDIR}/plebian-os-select-closure --show)" && '
         f'printf \'%s\\n\' "$selected" | grep -Fqx '
         f'{shlex.quote("  PLEBIAN_OS_VERSION=" + expected_version)} && '
         f'printf \'%s\\n\' "$selected" | grep -Fqx '
@@ -2072,7 +2083,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
             )
     if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?", expected_version):
         provision_version = (
-            'test "$(/usr/local/sbin/plebian-os-provision --version)" = '
+            f'test "$({PLEBIAN_OS_SBINDIR}/plebian-os-provision --version)" = '
             + shlex.quote("plebian-os-provision " + expected_version)
         )
         component_versions = (
@@ -2089,7 +2100,7 @@ def verify_provisioning(cfg: Config, askpass: str) -> None:
             )
     else:
         provision_version = (
-            "/usr/local/sbin/plebian-os-provision --version | "
+            f"{PLEBIAN_OS_SBINDIR}/plebian-os-provision --version | "
             "grep -Eq '^plebian-os-provision [0-9]+\\.[0-9]+\\.[0-9]+$'"
         )
         component_versions = (
@@ -2242,7 +2253,7 @@ if default is not None:
     # the enumeration failed -- is a failed check, never a quiet pass.
     audio_holdoff = (
         "bash -c 'export PLEBIAN_OS_PROVISION_LIB_ONLY=1; "
-        ". /usr/local/sbin/plebian-os-provision >/dev/null 2>&1 || exit 2; "
+        f". {PLEBIAN_OS_SBINDIR}/plebian-os-provision >/dev/null 2>&1 || exit 2; "
         "held=$(enabled_audio_holding_user_units) || exit 2; "
         'test -z "$held" || { echo "$held" >&2; exit 1; }\''
     )
@@ -2288,12 +2299,12 @@ if default is not None:
         ("transcript disk budget", _transcript_acceptance_command()),
         ("visible kilix chrome", visible_kilix_chrome),
         ("lightdm pleb default", "grep -q user-session=pleb /etc/lightdm/lightdm.conf.d/50-plebian-os.conf"),
-        ("update helper",        "test -x /usr/local/bin/plebian-os-update"),
+        ("update helper",        f"test -x {PLEBIAN_OS_BINDIR}/plebian-os-update"),
         ("closure selector",     selector_contract),
         (
             "optional Ollama converter installer",
-            "test -x /usr/local/sbin/plebian-os-install-ollama-converter && "
-            "timeout 30 /usr/local/sbin/plebian-os-install-ollama-converter "
+            f"test -x {PLEBIAN_OS_SBINDIR}/plebian-os-install-ollama-converter && "
+            f"timeout 30 {PLEBIAN_OS_SBINDIR}/plebian-os-install-ollama-converter "
             "--dry-run | grep -Fqx '  sha256: "
             "8759ab3d3a92d86ba3ba24fab7e6adde08eaf2f941e6c79118373e4f41e0af8c'",
         ),
@@ -2309,28 +2320,28 @@ if default is not None:
         ),
         (
             "optional diarization converter installer",
-            "test -x /usr/local/sbin/plebian-os-install-diarization-converter && "
-            "timeout 30 /usr/local/sbin/plebian-os-install-diarization-converter "
+            f"test -x {PLEBIAN_OS_SBINDIR}/plebian-os-install-diarization-converter && "
+            f"timeout 30 {PLEBIAN_OS_SBINDIR}/plebian-os-install-diarization-converter "
             "--dry-run | grep -Fqx 'Optional software only; no model weights or licence receipts.'",
         ),
         (
             "optional Kilix Vulkan TTS installer",
-            "test -x /usr/local/sbin/plebian-os-install-kilix-vulkan-tts && "
-            "timeout 30 /usr/local/sbin/plebian-os-install-kilix-vulkan-tts "
+            f"test -x {PLEBIAN_OS_SBINDIR}/plebian-os-install-kilix-vulkan-tts && "
+            f"timeout 30 {PLEBIAN_OS_SBINDIR}/plebian-os-install-kilix-vulkan-tts "
             "--dry-run | grep -Fqx '  worker source sha256: "
             "e8c7ecd2d2458962666fdc560b40f5ed754e3e7c126400dd1f914a4bb50dc964'",
         ),
         (
             "Ollama runtime installer dry-run",
-            "test -x /usr/local/sbin/plebian-os-install-kilix-ollama-runtime && "
-            "plan=\"$(timeout 30 /usr/local/sbin/plebian-os-install-kilix-ollama-runtime "
+            f"test -x {PLEBIAN_OS_SBINDIR}/plebian-os-install-kilix-ollama-runtime && "
+            f"plan=\"$(timeout 30 {PLEBIAN_OS_SBINDIR}/plebian-os-install-kilix-ollama-runtime "
             "--dry-run)\" && printf '%s\\n' \"$plan\" | grep -Fqx "
             "'Plebian OS Ollama CPU + Vulkan runtime (offline carrier; no model weights)'",
         ),
         (
             "Ollama runtime service",
-            "test -x /usr/local/sbin/plebian-os-install-kilix-ollama-runtime && "
-            "timeout 30 /usr/local/sbin/plebian-os-install-kilix-ollama-runtime "
+            f"test -x {PLEBIAN_OS_SBINDIR}/plebian-os-install-kilix-ollama-runtime && "
+            f"timeout 30 {PLEBIAN_OS_SBINDIR}/plebian-os-install-kilix-ollama-runtime "
             "--verify && test -r /var/lib/plebian-os/ollama-runtime-carrier.receipt && "
             "grep -Fqx 'model_weights_carried=false' "
             "/var/lib/plebian-os/ollama-runtime-carrier.receipt && "
@@ -2388,9 +2399,9 @@ if default is not None:
         ("temporary sudo gone",  "test ! -e /etc/sudoers.d/plebian-os-provision"),
     ]
     if os.environ.get("PLEBIAN_OS_MPV_URL"):
-        checks.append(("selected terminal player", "sudo -n /usr/local/sbin/plebian-os-mpv-runtime --verify"))
+        checks.append(("selected terminal player", f"sudo -n {PLEBIAN_OS_SBINDIR}/plebian-os-mpv-runtime --verify"))
     if os.environ.get("PLEBIAN_OS_QT_RUNTIME_URL"):
-        checks.append(("selected Qt runtime", "/usr/local/sbin/plebian-os-qt-runtime --verify"))
+        checks.append(("selected Qt runtime", f"{PLEBIAN_OS_SBINDIR}/plebian-os-qt-runtime --verify"))
     neuronte_ref = os.environ.get("NEURONTE_REF", "")
     if neuronte_ref:
         checks.append(("Neuronte faces", neuronte_contract(neuronte_ref)))
