@@ -81,6 +81,16 @@ PLEB_DIR="$PLEB_ROOT"
             '"starting-kilix-ref-is-exact"',
             '"installed-$component-ref-matches-target"',
             '"image-build-info-matches-published-fixture"',
+            '"image-build-info-is-install-predecessor"',
+            '"installed-release-identity-is-from-release-tag"',
+            '"selected-release-tag-object-is-staged"',
+            '"rollback-restores-rc-closure-keys"',
+            '"rollback-restores-rc-closure-bytes"',
+            "update --rollback --yes --no-restart",
+            "--from-release-tag",
+            "assert_pre_hop_release_identity",
+            "assert_post_hop_release_identity",
+            "closure_keys_match",
             '"dry-run-preserves-engine-generation"',
             '"failure-restores-engine-generation"',
             '"declared-sentinel-corpus-is-complete"',
@@ -487,6 +497,10 @@ write_reboot_verifier "$report/verify.sh"
             "sudo -n systemctl reboot",
             "sha256sum -c SHA256SUMS",
             '"total": 2',
+            "--from-release-tag",
+            "installed-closure",
+            "source_iso_names_installed_rc",
+            "same-version finalization uses the installed release CLI",
         ):
             self.assertIn(token, source)
 
@@ -501,10 +515,294 @@ write_reboot_verifier "$report/verify.sh"
 
     def test_release_procedure_invokes_two_vm_controller(self):
         text = RELEASING.read_text()
-        self.assertEqual(text.count("acceptance-release-hop-host.sh"), 1)
+        self.assertEqual(text.count("acceptance-release-hop-host.sh"), 2)
         self.assertIn("--from <previous-x.y.z> --target <x.y.z>", text)
+        self.assertIn("--from 0.2.3 --target 0.2.3", text)
+        self.assertIn("--release-tag v0.2.3 --from-release-tag v0.2.3-rc9", text)
         self.assertIn("requires 2/2 distinct VM machine", text)
         self.assertIn("both 2/2 guest evidence sets", text)
+
+    def _run_runner(self, runner, extra):
+        return subprocess.run(
+            [str(runner), *extra], capture_output=True, text=True, check=False,
+        )
+
+    def test_same_version_finalization_accepts_rc_to_its_stable_final(self):
+        commit = "a" * 40
+        for runner in (RUNNER, HOST_RUNNER):
+            with self.subTest(runner=runner.name):
+                extra = ["--from", "0.2.3", "--target", "0.2.3",
+                         "--release-tag", "v0.2.3", "--from-release-tag", "v0.2.3-rc9"]
+                if runner is RUNNER:
+                    extra = ["--shape", "standalone", "--disposable-vm", *extra,
+                             "--expected-release-commit", commit, "--report", "/tmp/f109-unused"]
+                result = self._run_runner(runner, extra)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("must differ", result.stderr)
+                self.assertNotIn("same-version hop requires", result.stderr)
+                self.assertNotIn("only valid when --from equals --target", result.stderr)
+                if runner is RUNNER:
+                    self.assertIn("starting Pleb and Kilix refs", result.stderr)
+                else:
+                    self.assertIn("guest destinations", result.stderr)
+
+    def test_plain_same_version_hop_is_refused(self):
+        cases = (
+            ["--from", "0.2.3", "--target", "0.2.3"],
+            ["--from", "0.2.3", "--target", "0.2.3", "--release-tag", "v0.2.3"],
+            ["--from", "0.2.3", "--target", "0.2.3", "--from-release-tag", "v0.2.3-rc9"],
+        )
+        for runner in (RUNNER, HOST_RUNNER):
+            for extra in cases:
+                with self.subTest(runner=runner.name, extra=extra):
+                    args = list(extra)
+                    if runner is RUNNER:
+                        args = ["--shape", "standalone", "--disposable-vm", *args,
+                                "--report", "/tmp/f109-unused"]
+                    result = self._run_runner(runner, args)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("same-version hop requires", result.stderr)
+
+    def test_wrong_from_release_tag_is_refused(self):
+        bad_tags = ("v0.2.3-rc0", "v0.2.3-rc01", "v0.2.3", "v0.2.2-rc9", "v0.2.3-rc")
+        for runner in (RUNNER, HOST_RUNNER):
+            for tag in bad_tags:
+                with self.subTest(runner=runner.name, tag=tag):
+                    extra = ["--from", "0.2.3", "--target", "0.2.3",
+                             "--release-tag", "v0.2.3", "--from-release-tag", tag]
+                    if runner is RUNNER:
+                        extra = ["--shape", "standalone", "--disposable-vm", *extra,
+                                 "--expected-release-commit", "a" * 40,
+                                 "--report", "/tmp/f109-unused"]
+                    result = self._run_runner(runner, extra)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("--from-release-tag must name the installed RC", result.stderr)
+
+    def test_rc_to_rc_same_version_hop_is_refused(self):
+        for runner in (RUNNER, HOST_RUNNER):
+            extra = ["--from", "0.2.3", "--target", "0.2.3",
+                     "--release-tag", "v0.2.3-rc9", "--from-release-tag", "v0.2.3-rc8"]
+            if runner is RUNNER:
+                extra = ["--shape", "standalone", "--disposable-vm", *extra,
+                         "--report", "/tmp/f109-unused"]
+            result = self._run_runner(runner, extra)
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("same-version hop requires", result.stderr)
+
+    def test_same_version_finalization_refuses_a_bootstrap_driver(self):
+        for runner in (RUNNER, HOST_RUNNER):
+            extra = ["--from", "0.2.3", "--target", "0.2.3",
+                     "--release-tag", "v0.2.3", "--from-release-tag", "v0.2.3-rc9",
+                     "--bootstrap-driver", "/var/tmp/rc9-driver/bin/pleb-release-hop",
+                     "--bootstrap-driver-ref", "b" * 40]
+            if runner is RUNNER:
+                extra = ["--shape", "standalone", "--disposable-vm", *extra,
+                         "--expected-release-commit", "c" * 40,
+                         "--report", "/tmp/f109-unused"]
+            result = self._run_runner(runner, extra)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("omit the bootstrap driver", result.stderr)
+
+    def test_different_version_hop_rejects_from_release_tag(self):
+        for runner in (RUNNER, HOST_RUNNER):
+            extra = ["--from", "0.2.2", "--target", "0.2.3",
+                     "--release-tag", "v0.2.3-rc9", "--from-release-tag", "v0.2.2-rc1"]
+            if runner is RUNNER:
+                extra = ["--shape", "standalone", "--disposable-vm", *extra,
+                         "--report", "/tmp/f109-unused"]
+            result = self._run_runner(runner, extra)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("only valid when --from equals --target", result.stderr)
+
+    def _bash_function(self, source, name):
+        body = source[source.index(name + "() {"):]
+        return body[:body.index("\n}\n") + 3]
+
+    def test_pre_hop_identity_accepts_recorded_and_unrecorded_rc9(self):
+        helper = "\n".join(
+            self._bash_function(RUNNER.read_text(), name)
+            for name in ("closure_key", "assert_pre_hop_release_identity")
+        )
+        commit = "a" * 40
+        rc_object = "b" * 40
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            unrecorded = root / "unrecorded.env"
+            unrecorded.write_text(
+                f"PLEBIAN_OS_VERSION=0.2.3\nPLEBIAN_OS_REF={commit}\nPLEB_REF={'c' * 40}\n"
+            )
+            recorded = root / "recorded.env"
+            recorded.write_text(
+                "PLEBIAN_OS_VERSION=0.2.3\n"
+                f"PLEBIAN_OS_REF={commit}\n"
+                "PLEBIAN_OS_RELEASE_TAG=v0.2.3-rc9\n"
+                f"PLEBIAN_OS_RELEASE_TAG_OBJECT={rc_object}\n"
+            )
+            object_only = root / "object.env"
+            object_only.write_text(
+                f"PLEBIAN_OS_VERSION=0.2.3\nPLEBIAN_OS_REF={commit}\n"
+                f"PLEBIAN_OS_RELEASE_TAG_OBJECT={rc_object}\n"
+            )
+
+            def check(path, tag, expected_object=""):
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", helper +
+                     '\nassert_pre_hop_release_identity "$1" "$2" "$3" "$4"',
+                     "bash", str(path), tag, commit, expected_object],
+                    capture_output=True, text=True, check=False,
+                )
+
+            self.assertEqual(check(unrecorded, "v0.2.3-rc9").returncode, 0)
+            self.assertEqual(check(recorded, "v0.2.3-rc9", rc_object).returncode, 0)
+            self.assertEqual(check(object_only, "v0.2.3-rc9", rc_object).returncode, 0)
+            wrong = check(recorded, "v0.2.3-rc8", rc_object)
+            self.assertNotEqual(wrong.returncode, 0)
+            self.assertIn("expected v0.2.3-rc8", wrong.stderr)
+            wrong_object = check(recorded, "v0.2.3-rc9", "d" * 40)
+            self.assertNotEqual(wrong_object.returncode, 0)
+            self.assertIn("installed tag object", wrong_object.stderr)
+            moved = check(unrecorded, "v0.2.3-rc9")
+            unrecorded.write_text(unrecorded.read_text().replace(commit, "e" * 40))
+            drifted = check(unrecorded, "v0.2.3-rc9")
+            self.assertEqual(moved.returncode, 0)
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("unrecorded closure commit", drifted.stderr)
+
+    def test_post_hop_refuses_a_tag_object_mismatch(self):
+        helper = "\n".join(
+            self._bash_function(RUNNER.read_text(), name)
+            for name in ("closure_key", "assert_post_hop_release_identity")
+        )
+        final_object = "f" * 40
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            closure = root / "closure.env"
+            closure.write_text(
+                "PLEBIAN_OS_VERSION=0.2.3\n"
+                f"PLEBIAN_OS_REF={'1' * 40}\n"
+                "PLEBIAN_OS_RELEASE_TAG=v0.2.3\n"
+                f"PLEBIAN_OS_RELEASE_TAG_OBJECT={final_object}\n"
+            )
+            active = root / "active"
+            active.write_text(
+                "0.2.3\n" + ("2" * 40) + f"\n{final_object}\n" + ("3" * 64) + "\nv0.2.3\n"
+            )
+
+            def check():
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", helper +
+                     '\nassert_post_hop_release_identity "$1" "$2" v0.2.3',
+                     "bash", str(closure), str(active)],
+                    capture_output=True, text=True, check=False,
+                )
+
+            self.assertEqual(check().returncode, 0, check().stderr)
+            active.write_text(active.read_text().replace(final_object, "4" * 40))
+            mismatch = check()
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("tag-object mismatch", mismatch.stderr)
+            active.write_text(active.read_text().replace("4" * 40, final_object))
+            closure.write_text(closure.read_text().replace(final_object, "5" * 40))
+            mismatch = check()
+            self.assertNotEqual(mismatch.returncode, 0)
+            self.assertIn("tag-object mismatch", mismatch.stderr)
+
+    def test_rollback_refuses_a_closure_mismatch(self):
+        helper = self._bash_function(RUNNER.read_text(), "closure_keys_match")
+        before_text = (
+            "PLEBIAN_OS_VERSION=0.2.3\n"
+            f"PLEBIAN_OS_REF={'a' * 40}\n"
+            "PLEB_REF=" + "b" * 40 + "\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            before = root / "before.env"
+            after = root / "after.env"
+            before.write_text(before_text)
+            after.write_text(before_text)
+
+            def check():
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", helper +
+                     '\nclosure_keys_match "$1" "$2"',
+                     "bash", str(before), str(after)],
+                    capture_output=True, text=True, check=False,
+                )
+
+            self.assertEqual(check().returncode, 0, check().stderr)
+            after.write_text(
+                before_text + "PLEBIAN_OS_RELEASE_TAG=v0.2.3\n"
+                f"PLEBIAN_OS_RELEASE_TAG_OBJECT={'c' * 40}\n"
+            )
+            added = check()
+            self.assertNotEqual(added.returncode, 0)
+            self.assertIn("PLEBIAN_OS_RELEASE_TAG_OBJECT", added.stderr)
+            after.write_text(before_text.replace("b" * 40, "d" * 40))
+            changed = check()
+            self.assertNotEqual(changed.returncode, 0)
+            self.assertIn("changed PLEB_REF", changed.stderr)
+
+    def test_source_iso_names_the_installed_rc_or_refuses(self):
+        helper = self._bash_function(HOST_RUNNER.read_text(), "source_iso_names_installed_rc")
+        rc_object = "e" * 40
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+
+            def check(text, tag="v0.2.3-rc9"):
+                path = root / "build-info.env"
+                path.write_text(text)
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", helper +
+                     '\nsource_iso_names_installed_rc "$1" "$2"',
+                     "bash", str(path), tag],
+                    capture_output=True, text=True, check=False,
+                )
+
+            rc9 = check(
+                "PLEBIAN_OS_VERSION=0.2.3\nPLEBIAN_OS_REF=v0.2.3-rc9\n"
+                f"PLEBIAN_OS_COMMIT={'a' * 40}\n"
+            )
+            self.assertEqual(rc9.returncode, 0, rc9.stderr)
+            self.assertEqual(rc9.stdout, "")
+            recorded = check(
+                "PLEBIAN_OS_VERSION=0.2.3\nPLEBIAN_OS_REF=v0.2.3-rc9\n"
+                "PLEBIAN_OS_RELEASE_TAG=v0.2.3-rc9\n"
+                f"PLEBIAN_OS_RELEASE_TAG_OBJECT={rc_object}\n"
+            )
+            self.assertEqual(recorded.returncode, 0, recorded.stderr)
+            self.assertEqual(recorded.stdout.strip(), rc_object)
+            final = check("PLEBIAN_OS_VERSION=0.2.3\nPLEBIAN_OS_REF=v0.2.3\n")
+            self.assertNotEqual(final.returncode, 0)
+            other_rc = check(
+                "PLEBIAN_OS_VERSION=0.2.3\nPLEBIAN_OS_REF=v0.2.3-rc8\n",
+                "v0.2.3-rc9",
+            )
+            self.assertNotEqual(other_rc.returncode, 0)
+
+    def test_image_binding_uses_the_closure_for_an_upgraded_guest(self):
+        helper = self._bash_function(HOST_RUNNER.read_text(), "image_identity_binding")
+        iso_hash = "1" * 64
+        older_hash = "2" * 64
+
+        def binding(same_version, installed, source):
+            return subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", helper +
+                 '\nimage_identity_binding "$1" "$2" "$3"',
+                 "bash", same_version, installed, source],
+                capture_output=True, text=True, check=False,
+            )
+
+        upgraded = binding("1", older_hash, iso_hash)
+        self.assertEqual(upgraded.returncode, 0, upgraded.stderr)
+        self.assertEqual(upgraded.stdout.strip(), "installed-closure")
+        fresh = binding("1", iso_hash, iso_hash)
+        self.assertEqual(fresh.returncode, 0, fresh.stderr)
+        self.assertEqual(fresh.stdout.strip(), "source-iso")
+        ordinary = binding("0", iso_hash, iso_hash)
+        self.assertEqual(ordinary.returncode, 0, ordinary.stderr)
+        self.assertEqual(ordinary.stdout.strip(), "source-iso")
+        rejected = binding("0", older_hash, iso_hash)
+        self.assertNotEqual(rejected.returncode, 0)
 
 
 if __name__ == "__main__":
