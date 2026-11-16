@@ -1,6 +1,6 @@
 {
   "schema": "plebian-os.help-model-selection/v1",
-  "release_target": "0.2.3-rc1",
+  "release_target": "0.2.3",
   "default_model": "kilix-qwen-sft1-2b",
   "model_release": "https://github.com/itsmygithubacct/kilix-help-llm/releases/tag/kilix-qwen-sft1-2b",
   "source_pins": {

@@ -1,13 +1,14 @@
 # Native package transaction contract
 
-Implementation work in progress. The five fixed helper files now have media
-copy, updater staging/deployment, root snapshot/restore and checkout-bootstrap
-wiring. The draft also transports the five exact native fields through release
-selection, image metadata, firstboot, re-provision, updater and final provenance,
-and invokes the package operation inside both enclosing OS transactions.
-Private tests do not prove an installed OS deployment. Independent review of
-the new outer integration and final media/upgrade qualification remain open.
-No final artifact URL, checksum or source selection is supplied by these files.
+The five fixed helper files have media copy, updater staging/deployment, root
+snapshot/restore and checkout-bootstrap wiring. The five exact native fields
+travel through release selection, image metadata, firstboot, re-provision,
+updater and final provenance, and the package operation runs inside both
+enclosing OS transactions. These files supply no artifact URL, checksum or
+source selection. A release supplies them in its `releases/<version>.env`;
+0.2.3 selects the kilix-encodec package published as `native-deb-rc5`. A
+release's notes record the installed-image and upgrade qualification of that
+selection.
 
 ## Exact release selection
 
@@ -21,8 +22,8 @@ zeros). Colons in a path or query are not treated as authority ports. Invalid
 ports refuse before selection changes configuration or recovery records.
 Hashes/source commits are complete lowercase identities and archives are at
 most8MiB. Named manifests cannot fill omitted fields from ambient variables.
-The held F120 component-root policy is unchanged. Final release pins remain
-outside this implementation draft.
+The held F120 component-root policy is unchanged. The values a release uses
+are in its `releases/<version>.env`; 0.2.3 pins them in `releases/0.2.3.env`.
 
 The unprivileged updater downloads into its private enclosing transaction;
 the root provisioner uses its root-private transaction. Both use fixed curl,

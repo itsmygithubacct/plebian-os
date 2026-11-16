@@ -246,13 +246,13 @@ first provisioning run, so it stays an unconditional absence check: the
 allowance for a model the machine already carried belongs to
 `plebian-os-provision.sh`'s re-provision path and never to a build.
 
-The rc1 Kilix and content pins carry the first-use flow and the covering
-receipt gate. The builder still installs read-aloud only and must ship no model
-weights or Vosk library. First-use acquisition belongs to the installed user's
-accepted action, not image construction. The current notes record that no VM
-or ISO has yet exercised this flow and that required qualification and artifact
-acceptance remain open. A supplied `--from DIR` installation records
-acceptance, but does not establish the provenance of the supplied files.
+The 0.2.3 Kilix and content pins carry the first-use flow and the covering
+receipt gate. The builder still installs read-aloud only and must ship no
+dictation weights or Vosk library. First-use acquisition belongs to the
+installed user's accepted action, not image construction. The release notes
+record which installed images exercised this flow. A supplied `--from DIR`
+installation records acceptance, but does not establish the provenance of the
+supplied files.
 
 Fresh guests default all coordinated checkouts to siblings under
 `~/.local/gpu_terminal/sources/` and all runtime state to siblings under
