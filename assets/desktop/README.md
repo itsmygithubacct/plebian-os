@@ -19,7 +19,7 @@ SHA-256: 60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 Keep release versions out of the bitmap. The remaster installs it at:
 
 ```text
-/usr/local/share/plebian-os/wallpapers/plebian-os.png
+/usr/share/plebian-os/wallpapers/plebian-os.png
 ```
 
 The provisioner writes that path only into Pleb's persisted desktop state:

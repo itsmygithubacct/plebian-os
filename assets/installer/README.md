@@ -10,8 +10,8 @@ GPL-2.0-or-later terms. The complete license text is included at
 
 The remaster, bootstrap provisioner, and transactional updater preserve that
 relative link by installing the notices at
-`/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md` and
-`/usr/local/share/doc/plebian-os/COPYING.GPL-2`. Their exact hashes are recorded
+`/usr/share/plebian-os/notices/installer/ATTRIBUTION.md` and
+`/usr/share/plebian-os/notices/COPYING.GPL-2`. Their exact hashes are recorded
 in `/etc/plebian-os/build-info.env` for release acceptance.
 
 ## Source and runtime map
