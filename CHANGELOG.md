@@ -4,7 +4,7 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.2.3] — YYYY-MM-DD
+## [0.2.3] — 2026-11-16
 
 Final release. See [releases/0.2.3-notes.md](releases/0.2.3-notes.md) for
 install and upgrade instructions (including `pleb update --to 0.2.3` for
