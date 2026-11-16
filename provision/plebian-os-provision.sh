@@ -38,6 +38,16 @@ if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_S
     exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
 fi
 
+# Waydroid cleanup names. Assigned before the first die so an inherited
+# environment cannot choose a path for rm. Release removes a path only after
+# this run records it.
+WAYDROID_PRIVATE_STAGE=""
+WAYDROID_PUBLISH_TEMPS=""
+WAYDROID_RECORDED_PRIVATE_STAGE=""
+WAYDROID_RECORDED_STAGE_PARENT=""
+WAYDROID_RECORDED_PUBLISH_TEMPS=""
+WAYDROID_RECORDED_PUBLISH_DIR=""
+
 # ── what a release closure controls ──────────────────────────────────────────
 # This list is plebian-os-select-closure.sh's RELEASE_CONTROLLED_KEYS, which
 # UPGRADING.md defines: "the coordinated version/release mode, the four source
@@ -603,18 +613,68 @@ warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
 # Drop a private Waydroid stage and any unpublished destination temps. Safe to
 # call more than once. die and cleanup both use it so a failed first boot does
 # not leave a temp that makes the transaction rmdir return 70.
+#
+# Only a path this run recorded is removed. The record is cleared at startup,
+# so a name inherited from the environment is not a record.
+waydroid_remove_recorded_publish_temp() {
+    local path="$1" base parent recorded
+    [ -n "$path" ] || return 0
+    case "$path" in
+        *$'\n'*|*$'\r'*) return 0 ;;
+    esac
+    recorded="${WAYDROID_RECORDED_PUBLISH_TEMPS:-}"
+    case $'\n'"$recorded"$'\n' in
+        *$'\n'"$path"$'\n'*) ;;
+        *) return 0 ;;
+    esac
+    parent="${path%/*}"
+    [ -n "${WAYDROID_RECORDED_PUBLISH_DIR:-}" ] || return 0
+    [ "$parent" = "$WAYDROID_RECORDED_PUBLISH_DIR" ] || return 0
+    base="${path##*/}"
+    case "$base" in
+        ".plebian-os-waydroid-setup.plebian-os-new.$$"|\
+        ".waydroid-closure.env.plebian-os-new.$$"|\
+        ".waydroid-closure.sha256.plebian-os-new.$$")
+            ;;
+        *) return 0 ;;
+    esac
+    [ -f "$path" ] && [ ! -L "$path" ] || return 0
+    rm -f -- "$path" || true
+}
+
+waydroid_remove_recorded_private_stage() {
+    local stage="${WAYDROID_PRIVATE_STAGE:-}" base parent
+    [ -n "$stage" ] || return 0
+    [ "$stage" = "${WAYDROID_RECORDED_PRIVATE_STAGE:-}" ] || return 0
+    case "$stage" in
+        *$'\n'*|*$'\r'*) return 0 ;;
+    esac
+    base="${stage##*/}"
+    parent="${stage%/*}"
+    [[ "$base" =~ ^plebian-os-waydroid\.[A-Za-z0-9]{6}$ ]] || return 0
+    [ -n "${WAYDROID_RECORDED_STAGE_PARENT:-}" ] || return 0
+    [ "$parent" = "$WAYDROID_RECORDED_STAGE_PARENT" ] || return 0
+    [ "$stage" = "$parent/$base" ] || return 0
+    [ -d "$stage" ] && [ ! -L "$stage" ] || return 0
+    rm -rf -- "$stage" || true
+}
+
 waydroid_release_private_stage() {
     local path
     if [ -n "${WAYDROID_PUBLISH_TEMPS:-}" ]; then
         while IFS= read -r path; do
-            [ -z "$path" ] || rm -f -- "$path" || true
+            [ -z "$path" ] || waydroid_remove_recorded_publish_temp "$path"
         done <<<"$WAYDROID_PUBLISH_TEMPS"
-        WAYDROID_PUBLISH_TEMPS=""
     fi
+    WAYDROID_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_DIR=""
     if [ -n "${WAYDROID_PRIVATE_STAGE:-}" ]; then
-        rm -rf -- "$WAYDROID_PRIVATE_STAGE" || true
-        WAYDROID_PRIVATE_STAGE=""
+        waydroid_remove_recorded_private_stage
     fi
+    WAYDROID_PRIVATE_STAGE=""
+    WAYDROID_RECORDED_PRIVATE_STAGE=""
+    WAYDROID_RECORDED_STAGE_PARENT=""
 }
 
 die() {
@@ -6856,7 +6916,7 @@ stage_waydroid_first_use_helper() {
     local machine install_dir waydroid_root setup closure pin_source actual pinned
     local parent dest name owner mode links stage_parent expected_owner
     local staged_setup staged_closure staged_pin pin
-    local setup_new closure_new pin_new err
+    local setup_new closure_new pin_new err stage_base
     machine="$(uname -m)"
     case "$machine" in
         x86_64|amd64) ;;
@@ -7009,8 +7069,20 @@ stage_waydroid_first_use_helper() {
             || die "Waydroid private-stage parent is not mode 0700: $stage_parent"
     fi
     WAYDROID_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_DIR=""
     WAYDROID_PRIVATE_STAGE="$(mktemp -d "$stage_parent/plebian-os-waydroid.XXXXXX")" \
         || die "could not create the Waydroid private stage"
+    stage_base="${WAYDROID_PRIVATE_STAGE##*/}"
+    if [[ ! "$stage_base" =~ ^plebian-os-waydroid\.[A-Za-z0-9]{6}$ ]] \
+            || [ "$WAYDROID_PRIVATE_STAGE" != "$stage_parent/$stage_base" ] \
+            || [ -L "$WAYDROID_PRIVATE_STAGE" ] \
+            || [ ! -d "$WAYDROID_PRIVATE_STAGE" ]; then
+        WAYDROID_PRIVATE_STAGE=""
+        die "could not create the Waydroid private stage"
+    fi
+    WAYDROID_RECORDED_STAGE_PARENT="$stage_parent"
+    WAYDROID_RECORDED_PRIVATE_STAGE="$WAYDROID_PRIVATE_STAGE"
     chmod 0700 -- "$WAYDROID_PRIVATE_STAGE" \
         || die "could not restrict the Waydroid private stage"
     expected_owner="$(id -u)"
@@ -7089,6 +7161,8 @@ stage_waydroid_first_use_helper() {
     closure_new="$install_dir/.waydroid-closure.env.plebian-os-new.$$"
     pin_new="$install_dir/.waydroid-closure.sha256.plebian-os-new.$$"
     WAYDROID_PUBLISH_TEMPS="$setup_new"$'\n'"$closure_new"$'\n'"$pin_new"
+    WAYDROID_RECORDED_PUBLISH_TEMPS="$WAYDROID_PUBLISH_TEMPS"
+    WAYDROID_RECORDED_PUBLISH_DIR="$install_dir"
     if ! err="$(waydroid_copy_owned_source "$staged_setup" "$setup_new" 0 1048576 2>&1)"; then
         die "${err:-could not publish the Waydroid setup file}"
     fi
@@ -7113,6 +7187,8 @@ stage_waydroid_first_use_helper() {
     mv -fT -- "$pin_new" "$install_dir/waydroid-closure.sha256" \
         || die "could not publish the Waydroid closure pin"
     WAYDROID_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_DIR=""
 
     cmp -s -- "$staged_setup" "$install_dir/plebian-os-waydroid-setup" \
         || die "staged Waydroid helper bytes differ from the private stage"
