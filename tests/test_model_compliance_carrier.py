@@ -417,14 +417,18 @@ def command_installer_gaps(installer: str) -> list[str]:
     tree = ast.parse(installer)
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
     migrate = functions.get("migrate_command_model")
-    if migrate is None:
+    body = functions.get("_migrate_command_model")
+    if migrate is None or body is None or not any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "_migrate_command_model" for node in ast.walk(migrate)):
         return ["the image installer has no command model migration"]
-    attributes = {node.attr for node in ast.walk(migrate) if isinstance(node, ast.Attribute)}
+    walked = [*ast.walk(migrate), *ast.walk(body)]
+    attributes = {node.attr for node in walked if isinstance(node, ast.Attribute)}
     if "ensure_supplied_asset" not in attributes:
         gaps.append("the command model migration does not install from the supplied files")
     if attributes & {"ensure_upstream_asset", "ensure_asset", "urlopen"}:
         gaps.append("the command model migration can download")
-    names = {node.id for node in ast.walk(migrate) if isinstance(node, ast.Name)}
+    names = {node.id for node in walked if isinstance(node, ast.Name)}
     if "fetch_default" in names or "_command_cache" in names:
         gaps.append("the command model migration can download")
     main = functions.get("main")
@@ -976,7 +980,8 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                                           "lic.capture_agreement(record, typed='yes')"),
                         installer.replace("if record.expected_decision != 'record':", "if False:"),
                         installer.replace("installer.ensure_supplied_asset(", "installer.ensure_upstream_asset("),
-                        installer.replace("    migrate_command_model(args.kilix, command_pin)\n", "")):
+                        installer.replace("    migrate_command_model(args.kilix, command_pin)\n", ""),
+                        installer.replace("return _migrate_command_model(cm, pin)", "return False")):
             self.assertNotEqual(planted, installer)
             self.assertTrue(command_installer_gaps(planted))
         # The download is digest-verified and receipt-gated at the pinned refs.

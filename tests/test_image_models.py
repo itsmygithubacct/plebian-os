@@ -1109,7 +1109,12 @@ class InstallPolicyTests(unittest.TestCase):
         self.spec = spec
         apps = tempfile.TemporaryDirectory()
         self.addCleanup(apps.cleanup)
-        self.apps = Path(apps.name)
+        # Resolved: SuppliedFile refuses a symlink anywhere above the root, and
+        # TMPDIR may itself lie under one.
+        self.apps = Path(apps.name).resolve()
+        self.receipt_dir = self.apps / 'receipts'
+        self.receipt_dir.mkdir()
+        self.store_error = None
         self.v9_digest = 'f' * 64
         self.v9 = self.apps / 'assets' / ('lfm2-kilix-commands--' + self.v9_digest)
         for name, data in self.v10_files.items():
@@ -1121,6 +1126,7 @@ class InstallPolicyTests(unittest.TestCase):
             'asset_id': spec.asset_id, 'sha256': 'a' * 64, 'bytes': 4,
             'manifest_digest': spec.manifest_digest, 'version': spec.version,
             'root': spec.root, 'url': spec.source_url, 'weight_version': 'fixture.9',
+            'installed_bytes': sum(len(data) for data in self.v10_files.values()),
             'local_migration': {'from_version': 'lfm2-kilix-commands-20261106-v9',
                                 'from_manifest_digest': self.v9_digest, 'network': False}}
         # Manifest digests that a receipt covers; none until a test says so.
@@ -1129,7 +1135,12 @@ class InstallPolicyTests(unittest.TestCase):
 
         class Store:
             def write(inner, receipt):
+                if self.store_error is not None:
+                    raise self.store_error
                 self.receipts.append(receipt)
+                path = self.receipt_dir / f'{len(self.receipts)}.json'
+                path.write_text(json.dumps(receipt))
+                return path
 
         class Texts:
             """The licence authority's texts: notices it holds are never read from a supplier."""
@@ -1155,7 +1166,8 @@ class InstallPolicyTests(unittest.TestCase):
                 yield cls(path)
 
         class Licence:
-            CoverageRefused = type('CoverageRefused', (Exception,), {})
+            LicenseError = type('LicenseError', (Exception,), {})
+            CoverageRefused = type('CoverageRefused', (LicenseError,), {})
             AssetRef = staticmethod(lambda *args: args)
 
             def standard_policy_eligible(inner, record):
@@ -1189,6 +1201,9 @@ class InstallPolicyTests(unittest.TestCase):
         class Installer:
             def __init__(inner, root):
                 inner.root = root
+
+            def asset_destination(inner, spec):
+                return os.path.join(inner.root, 'assets', spec.asset_id + '--' + spec.manifest_digest)
 
             def ensure_upstream_asset(inner, spec, **kwargs):
                 self.calls.append(('upstream', spec.asset_id, kwargs.get('supplied', None)))
@@ -1329,21 +1344,124 @@ class InstallPolicyTests(unittest.TestCase):
     def test_standard_policy_cannot_cover_the_command_model(self):
         self.covered_manifests = {self.v9_digest}
         self.eligible = True
-        with self.assertRaisesRegex(ValueError, 'custom terms'):
-            installer.migrate_command_model(Path('/kilix'), self.pin)
-        self.assertEqual(self.receipts, [])
-        self.assertNotIn('supplied', self.kinds())
+        result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertIn('no longer the published custom terms', printed)
 
-    def test_a_catalog_that_is_not_the_pin_stops_the_run(self):
-        self.covered_manifests = {self.v9_digest}
-        for key, value in (('manifest_digest', 'e' * 64), ('version', 'other'), ('source_url', 'https://x')):
+    def test_a_catalog_that_is_not_the_pin_is_skipped_and_nothing_is_read(self):
+        """An RC9 Kilix (catalog v9) under these pins: no install, no receipt, no failure."""
+        self.covered_manifests = {self.v9_digest, 'b' * 64}
+        rc9 = (('manifest_digest', self.v9_digest), ('version', 'lfm2-kilix-commands-20261106-v9'),
+               ('root', 'lfm2-kilix-commands-20261106-v9'), ('archive_sha256', '9' * 64),
+               ('archive_bytes', 5), ('source_url', 'https://x'), ('asset_id', 'other'))
+        opened = []
+        real = installer._earlier_delivery_differs
+        for key, value in rc9:
             with self.subTest(key=key):
                 original = getattr(self.spec, key)
                 setattr(self.spec, key, value)
-                with self.assertRaisesRegex(ValueError, 'differs from the image pin'):
-                    installer.migrate_command_model(Path('/kilix'), self.pin)
+                with patch.object(installer, '_earlier_delivery_differs',
+                                  side_effect=lambda *a: opened.append(a) or real(*a)), \
+                        patch.object(installer, '_command_installed',
+                                     side_effect=AssertionError('installed state read')):
+                    result, printed = self.migrate()
                 setattr(self.spec, key, original)
+                self.assertIs(result, False)
+                self.assertIn('the pinned Kilix catalog selects', printed)
+                self.assertIn('nothing was read or written', printed)
         self.assertEqual(self.calls, [])
+        self.assertEqual(self.receipts, [])
+        self.assertEqual(opened, [])
+        self.assertEqual(sorted(self.receipt_dir.iterdir()), [])
+
+    def test_a_full_or_unwritable_receipt_store_never_fails_the_run(self):
+        for error in (OSError(28, 'No space left on device'), PermissionError(13, 'Permission denied')):
+            with self.subTest(error=error):
+                self.covered_manifests = {self.v9_digest}
+                self.calls.clear()
+                self.store_error = error
+                result, printed = self.migrate()
+                self.assertIs(result, False)
+                self.assertEqual(self.receipts, [])
+                self.assertNotIn('supplied', self.kinds())
+                self.assertIn('could not supply', printed)
+                self.assertIn('on first use', printed)
+
+    def test_a_receipt_store_that_cannot_be_opened_never_fails_the_run(self):
+        self.covered_manifests = {self.v9_digest}
+        def refuse():
+            raise PermissionError(13, 'Permission denied', '/var/lib/kilix-license')
+        with patch.object(self.cm._license().ReceiptStore, 'shared', staticmethod(refuse)):
+            result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertIn('PermissionError', printed)
+
+    def test_a_licence_error_never_fails_the_run(self):
+        self.covered_manifests = {self.v9_digest}
+        lic = self.cm._license()
+        with patch.object(type(lic), 'capture_agreement',
+                          side_effect=lic.LicenseError('the record was edited by hand')):
+            result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+
+    def test_a_partial_v10_directory_is_left_and_no_receipt_is_written(self):
+        self.covered_manifests = {self.v9_digest}
+        partial = self.apps / 'assets' / ('lfm2-kilix-commands--' + 'b' * 64)
+        partial.mkdir()
+        (partial / 'model.gguf').write_bytes(b'wei')
+        result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertIn('the installer does not replace them', printed)
+        self.assertEqual((partial / 'model.gguf').read_bytes(), b'wei')
+
+    def test_too_little_space_writes_no_receipt(self):
+        self.covered_manifests = {self.v9_digest}
+        usage = SimpleNamespace(total=10 ** 9, used=10 ** 9, free=self.pin['installed_bytes'])
+        with patch.object(installer.shutil, 'disk_usage', return_value=usage) as probed:
+            result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        probed.assert_called_once_with(self.apps / 'assets')
+        self.assertIn('bytes free', printed)
+
+    def test_a_failed_install_withdraws_the_receipt_this_run_wrote(self):
+        for error in (self.cm._api().InstallError('supplied file changed after it was opened'),
+                      OSError(28, 'No space left on device')):
+            with self.subTest(error=error):
+                self.covered_manifests = {self.v9_digest}
+                self.receipts.clear()
+                self.calls.clear()
+                self.supply_error = error
+                result, printed = self.migrate()
+                self.assertIs(result, False)
+                self.assertEqual(self.kinds(), ['capture', 'supplied'])
+                self.assertEqual(len(self.receipts), 1)
+                self.assertEqual(sorted(self.receipt_dir.iterdir()), [])
+                self.assertIn('withdrew the receipt this run wrote', printed)
+                self.assertIn('on first use', printed)
+
+    def test_a_receipt_another_process_replaced_is_not_withdrawn(self):
+        self.covered_manifests = {self.v9_digest}
+        def install(spec, **kwargs):
+            self.calls.append(('supplied', spec.asset_id, str(kwargs['supplied'])))
+            (self.receipt_dir / '1.json').write_text('{"another": "process"}')
+            raise self.cm._api().InstallError('interrupted')
+        with patch.object(self.cm._api().Installer, 'ensure_supplied_asset',
+                          lambda inner, spec, **kwargs: install(spec, **kwargs)):
+            result, _printed = self.migrate()
+        self.assertIs(result, False)
+        self.assertEqual((self.receipt_dir / '1.json').read_text(), '{"another": "process"}')
+
+    def test_a_delivery_another_process_installed_keeps_its_receipt(self):
+        self.covered_manifests = {self.v9_digest}
+        def install(spec, **kwargs):
+            self.calls.append(('supplied', spec.asset_id, str(kwargs['supplied'])))
+            self.cm._verify = lambda *args, **kwargs: 0
+            raise self.cm._api().InstallError('interrupted')
+        with patch.object(self.cm._api().Installer, 'ensure_supplied_asset',
+                          lambda inner, spec, **kwargs: install(spec, **kwargs)):
+            result, _printed = self.migrate()
+        self.assertIs(result, False)
+        self.assertEqual(len(list(self.receipt_dir.iterdir())), 1)
 
     def test_an_installer_refusal_never_fails_the_run_and_the_next_run_retries(self):
         self.covered_manifests = {self.v9_digest}
@@ -1352,20 +1470,35 @@ class InstallPolicyTests(unittest.TestCase):
         self.assertIs(result, False)
         self.assertIn('could not supply', printed)
         self.assertIn('on first use', printed)
-        # The receipt it recorded stays; the next run finds it without the files.
-        self.incomplete()
         self.supply_error = None
-        self.covered_manifests.add('b' * 64)
         result, printed = self.migrate()
         self.assertIs(result, True)
-        self.assertEqual(self.kinds(), ['capture', 'supplied', 'supplied'])
+        self.assertEqual(self.kinds(), ['capture', 'supplied', 'capture', 'supplied'])
+
+    def test_a_receipt_left_without_its_files_reads_as_not_installed(self):
+        # An earlier run that could not withdraw its receipt, or Kilix's own
+        # interactive path after a failed download, leaves exactly this.
+        self.covered_manifests = {self.v9_digest, 'b' * 64}
+        self.incomplete()
+        result, printed = self.migrate()
+        self.assertIs(result, True)
+        self.assertEqual(self.kinds(), ['supplied'])
         self.assertIn('is not completely installed', printed)
+
+    def test_success_names_the_installed_terms_and_claims_no_agreement(self):
+        self.covered_manifests = {self.v9_digest}
+        result, printed = self.migrate()
+        self.assertIs(result, True)
+        self.assertIn(str(self.apps / 'assets' / ('lfm2-kilix-commands--' + 'b' * 64) / 'notices'), printed)
+        self.assertIn('no agreement is recorded', printed)
 
     def test_the_command_model_step_never_downloads(self):
         source = (ROOT / 'provision/install-image-models.py').read_text()
-        body = source.split('def migrate_command_model(', 1)[1].split('\ndef ', 1)[0]
+        body = ''.join(source.split('def ' + name + '(', 1)[1].split('\ndef ', 1)[0]
+                       for name in ('migrate_command_model', '_migrate_command_model',
+                                    '_withdraw_receipts', '_earlier_delivery_differs'))
         for word in ('ensure_upstream_asset', 'fetch', 'urlopen', 'KILIX_CONTENT_ARCHIVE_CACHE',
-                     'ask.json', 'select'):
+                     'ask.json', '.select(', 'select=', 'selection ='):
             self.assertNotIn(word, body)
         self.assertIn('ensure_supplied_asset(', body)
 
