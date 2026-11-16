@@ -767,7 +767,7 @@ record_release_snapshot() {
     local manifest="$1" path
     : >"$manifest"
     for path in "$session_env" "$closure_env" "$settings_file" \
-        /usr/local/bin/plebian-os-select-closure /usr/local/bin/plebian-os-update; do
+        /usr/bin/plebian-os-select-closure /usr/bin/plebian-os-update; do
         printf 'fingerprint\t%s\t%s\n' "$path" "$(path_fingerprint "$path")" >>"$manifest"
     done
     printf 'fingerprint\t%s\t%s\n' "$release_state" \
@@ -1028,14 +1028,14 @@ must "session-env-exists" "$session_env" test -f "$session_env"
 if [ "$shape" = standalone ]; then
     must "standalone-has-no-system-session" "/etc/pleb/session.env" test ! -e /etc/pleb/session.env
     must "standalone-has-no-os-source" "$source_home/plebian-os" test ! -e "$source_home/plebian-os"
-    must "standalone-has-no-os-updater" "/usr/local/bin/plebian-os-update" test ! -e /usr/local/bin/plebian-os-update
-    must "standalone-has-no-os-selector" "/usr/local/bin/plebian-os-select-closure" test ! -e /usr/local/bin/plebian-os-select-closure
+    must "standalone-has-no-os-updater" "/usr/bin/plebian-os-update" test ! -e /usr/bin/plebian-os-update
+    must "standalone-has-no-os-selector" "/usr/bin/plebian-os-select-closure" test ! -e /usr/bin/plebian-os-select-closure
 else
     os_dir="$source_home/plebian-os"
     kilix95_dir="$source_home/kilix-desktops/kilix-95"
     must "image-has-system-session" "/etc/pleb/session.env" test -f /etc/pleb/session.env
-    must "image-has-os-updater" "/usr/local/bin/plebian-os-update" test -x /usr/local/bin/plebian-os-update
-    must "image-has-os-selector" "/usr/local/bin/plebian-os-select-closure" test -x /usr/local/bin/plebian-os-select-closure
+    must "image-has-os-updater" "/usr/bin/plebian-os-update" test -x /usr/bin/plebian-os-update
+    must "image-has-os-selector" "/usr/bin/plebian-os-select-closure" test -x /usr/bin/plebian-os-select-closure
     must "image-has-installed-build-info" "/etc/plebian-os/build-info.env" \
         test -f /etc/plebian-os/build-info.env
     installed_build_info_sha256="$(sha256sum /etc/plebian-os/build-info.env | awk '{print $1}')"
@@ -1206,8 +1206,8 @@ home_manifest "$report/home-before.tsv"
 
 if [ "$shape" = image ]; then
     printf 'Image checkout policy: proving refusal, then checksummed operator move-aside per UPGRADING.md.\n'
-    selector_before="$(path_fingerprint /usr/local/bin/plebian-os-select-closure)"
-    updater_before="$(path_fingerprint /usr/local/bin/plebian-os-update)"
+    selector_before="$(path_fingerprint /usr/bin/plebian-os-select-closure)"
+    updater_before="$(path_fingerprint /usr/bin/plebian-os-update)"
     git_snapshot "$os_dir" os-before-dirty-refusal
     git_snapshot "$kilix95_dir" kilix95-before-dirty-refusal
     set +e
@@ -1241,8 +1241,8 @@ if [ "$shape" = image ]; then
                 must "dirty-refusal-preserves-engine" "$engine_build" \
                     test "$(bound_engine_fingerprint)" = "$engine_before"
                 continue ;;
-            selector) path=/usr/local/bin/plebian-os-select-closure; expected="$selector_before" ;;
-            updater) path=/usr/local/bin/plebian-os-update; expected="$updater_before" ;;
+            selector) path=/usr/bin/plebian-os-select-closure; expected="$selector_before" ;;
+            updater) path=/usr/bin/plebian-os-update; expected="$updater_before" ;;
         esac
         must "dirty-refusal-preserves-$item" "$path" test "$(path_fingerprint "$path")" = "$expected"
     done
@@ -1424,7 +1424,7 @@ record_check "preservation-manifests-verify" pass \
 if [ "$shape" = standalone ]; then
     must "standalone-still-has-no-system-session" "/etc/pleb/session.env" test ! -e /etc/pleb/session.env
     must "standalone-still-has-no-os-source" "$source_home/plebian-os" test ! -e "$source_home/plebian-os"
-    must "standalone-still-has-no-os-updater" "/usr/local/bin/plebian-os-update" test ! -e /usr/local/bin/plebian-os-update
+    must "standalone-still-has-no-os-updater" "/usr/bin/plebian-os-update" test ! -e /usr/bin/plebian-os-update
 fi
 
 
