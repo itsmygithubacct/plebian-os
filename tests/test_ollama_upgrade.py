@@ -396,7 +396,9 @@ class UpdaterStepTests(unittest.TestCase):
         main = text[text.rindex("\nbegin_stack_transaction\n"):]
         # Called once, from the main sequence only.
         self.assertEqual(text.count("\ninstall_ollama_runtime_update\n"), 1)
-        step = main.index("\ninstall_ollama_runtime_update\ntest_fail_after_boundary ollama-runtime\n")
+        step = main.index("\ninstall_ollama_runtime_update\n")
+        boundary = main.index("\ntest_fail_after_boundary ollama-runtime\n")
+        self.assertLess(step, boundary)
         self.assertLess(main.index("\nrefresh_os_dependencies\n"), step)
         self.assertLess(main.index("\nself_update_os_layer\n"), step)
         self.assertLess(main.index("\ninstall_model_setup_software\n"), step)
