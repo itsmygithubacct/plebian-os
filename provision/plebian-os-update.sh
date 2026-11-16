@@ -32,9 +32,20 @@
 # the interrupted update had already committed, cleared what it left).
 #
 # Run as the Pleb user; `pleb install` elevates via sudo where it needs root.
-# Deployed to the target as /usr/local/bin/plebian-os-update and offered by
+# Deployed to the target as $PLEBIAN_OS_BINDIR/plebian-os-update and offered by
 # desktop providers as a clickable stack update action.
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 
 # Keep the installed selector/updater self-contained. Only a stable tag or a
 # numbered RC of the same numeric VERSION is a supported release identity.
@@ -141,27 +152,27 @@ fi
 # The helper owns its temporary source pool for this invocation and cleans it.
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
     && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
-         || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
+         || [ -e $PLEBIAN_OS_DATADIR/source-carrier/manifest.json ]; }; then
     _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
-    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=/usr/local/sbin/plebian-os-source-carrier
+    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=$PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
     [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
     exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
 fi
 
 # The deployed provisioner, which reconciles apt sources after a committed update.
-PROVISION_HELPER_DST=/usr/local/sbin/plebian-os-provision
-DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
+PROVISION_HELPER_DST=$PLEBIAN_OS_SBINDIR/plebian-os-provision
+DESKTOP_WALLPAPER_DST=$PLEBIAN_OS_DATADIR/wallpapers/plebian-os.png
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 # shellcheck disable=SC2034
 LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
 # These notice constants are also an exact staged-script contract consumed by
 # stage_and_validate_os_layer; they are deliberately not expanded at runtime.
 # shellcheck disable=SC2034
-INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
+INSTALLER_ATTRIBUTION_DST=$PLEBIAN_OS_NOTICEDIR/installer/ATTRIBUTION.md
 # shellcheck disable=SC2034
 INSTALLER_ATTRIBUTION_SHA256=5f5996a32c0a92debe2fef972463d28d53495e6e64af78e0e14aa4a109196ce9
 # shellcheck disable=SC2034
-GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
+GPL2_LICENSE_DST=$PLEBIAN_OS_NOTICEDIR/COPYING.GPL-2
 # shellcheck disable=SC2034
 GPL2_LICENSE_SHA256=8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643
 _DEPLOYED_DESKTOP_WALLPAPER_SHA256="$DESKTOP_WALLPAPER_SHA256"
@@ -406,7 +417,7 @@ seed_desktop_wallpaper_after_commit() {
         warn "stack committed; run plebian-os-update as the desktop user to seed its wallpaper"
         return 0
     fi
-    for dir in / /usr /usr/local /usr/local/share; do
+    for dir in / /usr /usr/share; do
         [ -d "$dir" ] && [ ! -L "$dir" ] || {
             warn "installed desktop wallpaper has an unsafe fixed ancestor: $dir"
             return 1
@@ -418,8 +429,8 @@ seed_desktop_wallpaper_after_commit() {
             return 1
         }
     done
-    for dir in /usr/local/share/plebian-os \
-        /usr/local/share/plebian-os/wallpapers; do
+    for dir in $PLEBIAN_OS_DATADIR \
+        $PLEBIAN_OS_DATADIR/wallpapers; do
         [ -d "$dir" ] && [ ! -L "$dir" ] || {
             warn "installed desktop wallpaper has an unsafe parent directory"
             return 1
@@ -482,7 +493,7 @@ root_config_safe_to_source() {
 # The optional selector argument supports isolated fixture callers.
 # shellcheck disable=SC2120
 selected_release_environment_keys() {
-    local selector="${1:-/usr/local/bin/plebian-os-select-closure}"
+    local selector="${1:-$PLEBIAN_OS_BINDIR/plebian-os-select-closure}"
     local output keys
     [ -x "$selector" ] || {
         warn "target closure selector is not executable: $selector"
@@ -1193,6 +1204,17 @@ begin_root_stack_snapshot() {
     [ "$(id -u)" = 0 ] || elevate=(sudo)
     "${elevate[@]}" bash -s <<'ROOT_SNAPSHOT'
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 umask 077
 base=/var/lib/plebian-os
 mkdir -p -- "$base"
@@ -1201,35 +1223,35 @@ mode="$(stat -c '%a' "$base")"
 (( (8#$mode & 8#22) == 0 )) || exit 2
 txn="$(mktemp -d "$base/update-rollback.XXXXXX")"
 paths=(
-    /usr/local/sbin/plebian-os-provision
-    /usr/local/sbin/plebian-os-install-deps
-    /usr/local/sbin/plebian-os-native-runtime
-    /usr/local/sbin/plebian-os-source-carrier
-    /usr/local/sbin/plebian-os-qt-runtime
-    /usr/local/sbin/plebian-os-mpv-runtime
-    /usr/local/libexec/plebian-os/native_package.py
-    /usr/local/libexec/plebian-os/native_state.py
-    /usr/local/libexec/plebian-os/native_process.py
-    /usr/local/libexec/plebian-os/native_runtime.py
-    /usr/local/sbin/plebian-os-install-ollama-converter
-    /usr/local/sbin/plebian-os-install-diarization-converter
-    /usr/local/sbin/plebian-os-install-encodec-converter
-    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
-    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
-    /usr/local/sbin/plebian-os-passwd
+    $PLEBIAN_OS_SBINDIR/plebian-os-provision
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-deps
+    $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
+    $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime
+    $PLEBIAN_OS_LIBEXECDIR/native_package.py
+    $PLEBIAN_OS_LIBEXECDIR/native_state.py
+    $PLEBIAN_OS_LIBEXECDIR/native_process.py
+    $PLEBIAN_OS_LIBEXECDIR/native_runtime.py
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /etc/systemd/logind.conf.d/50-plebian-lid.conf
     /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
-    /usr/local/bin/plebian-os-update
-    /usr/local/bin/plebian-os-select-closure
-    /usr/local/bin/plebian-os-nvidia-driver
-    /etc/systemd/system/plebian-os-firstboot.service
-    /usr/local/sbin/plebian-os-firstboot-attempt
-    /usr/local/share/plebian-os/VERSION
-    /usr/local/share/plebian-os/ollama-release.env
-    /usr/local/share/plebian-os/wallpapers/plebian-os.png
-    /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
-    /usr/local/share/doc/plebian-os/COPYING.GPL-2
+    $PLEBIAN_OS_BINDIR/plebian-os-update
+    $PLEBIAN_OS_BINDIR/plebian-os-select-closure
+    $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver
+    $PLEBIAN_OS_UNITDIR/plebian-os-firstboot.service
+    $PLEBIAN_OS_SBINDIR/plebian-os-firstboot-attempt
+    $PLEBIAN_OS_DATADIR/VERSION
+    $PLEBIAN_OS_DATADIR/ollama-release.env
+    $PLEBIAN_OS_DATADIR/wallpapers/plebian-os.png
+    $PLEBIAN_OS_NOTICEDIR/installer/ATTRIBUTION.md
+    $PLEBIAN_OS_NOTICEDIR/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/pleb-session
     /usr/local/bin/pleb-lock
@@ -1303,13 +1325,13 @@ managed_dirs=(
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
     /etc/systemd/user
-    /usr/local/libexec
-    /usr/local/libexec/plebian-os
-    /usr/local/share/plebian-os
-    /usr/local/share/plebian-os/wallpapers
+    $PLEBIAN_OS_PAYLOADDIR
+    $PLEBIAN_OS_LIBEXECDIR
+    $PLEBIAN_OS_DATADIR
+    $PLEBIAN_OS_DATADIR/wallpapers
     /usr/local/share/doc
-    /usr/local/share/doc/plebian-os
-    /usr/local/share/doc/plebian-os/installer
+    $PLEBIAN_OS_NOTICEDIR
+    $PLEBIAN_OS_NOTICEDIR/installer
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/ssh/sshd_config.d
@@ -1328,8 +1350,8 @@ zell_paths=(
     /usr/local/bin/zell
     /usr/local/share/kilix-zell
     /usr/local/sbin/install-zell-runtime.py
-    /usr/local/share/plebian-os/zell-runtime.json
-    /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+    $PLEBIAN_OS_DATADIR/zell-runtime.json
+    $PLEBIAN_OS_PAYLOADDIR/zell-0.1.1-x86_64.tar.xz
     /usr/local/lib/systemd/user/kilix-secrets.service
     /usr/local/lib/systemd/user/kilix-secrets.socket
 )
@@ -1386,7 +1408,7 @@ done
 # Named keys preserve the numeric layout of pre-notification snapshots.
 paths+=(/usr/local/lib/pleb/notification_center.py /usr/local/lib/pleb/.notification_center.py.new)
 path_keys+=(notifications.0 notifications.1)
-paths+=(/usr/local/sbin/plebian-os-ssh-server)
+paths+=($PLEBIAN_OS_SBINDIR/plebian-os-ssh-server)
 path_keys+=(ssh-server.0)
 cleanup() {
     rc=$?
@@ -1396,8 +1418,9 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir "$txn/items"
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /etc/systemd \
-    /var /var/lib /var/lib/plebian-os; do
+for dir in / /usr "$PLEBIAN_OS_BINDIR" "$PLEBIAN_OS_SBINDIR" /usr/libexec /usr/share \
+    /usr/lib /usr/lib/systemd "$PLEBIAN_OS_UNITDIR" /usr/local /usr/local/share \
+    /etc /etc/lightdm /etc/systemd /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
     dir_mode="$(stat -c '%a' "$dir")"
@@ -1448,13 +1471,25 @@ restore_root_stack_snapshot() {
     [ "$(id -u)" = 0 ] || elevate=(sudo)
     "${elevate[@]}" bash -s -- "$root_txn" <<'ROOT_RESTORE'
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 txn="$1"
 case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
 [ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
 mode="$(stat -c '%a' "$txn")"
 (( (8#$mode & 8#077) == 0 )) || exit 2
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /etc/systemd \
-    /var /var/lib /var/lib/plebian-os; do
+for dir in / /usr "$PLEBIAN_OS_BINDIR" "$PLEBIAN_OS_SBINDIR" /usr/libexec /usr/share \
+    /usr/lib /usr/lib/systemd "$PLEBIAN_OS_UNITDIR" /usr/local /usr/local/share \
+    /etc /etc/lightdm /etc/systemd /var /var/lib /var/lib/plebian-os; do
     [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] \
         || exit 2
     dir_mode="$(stat -c '%a' "$dir")"
@@ -1467,35 +1502,35 @@ if [ -e /etc/ssh ] || [ -L /etc/ssh ]; then
     (( (8#$ssh_mode & 8#22) == 0 )) || exit 2
 fi
 paths=(
-    /usr/local/sbin/plebian-os-provision
-    /usr/local/sbin/plebian-os-install-deps
-    /usr/local/sbin/plebian-os-native-runtime
-    /usr/local/sbin/plebian-os-source-carrier
-    /usr/local/sbin/plebian-os-qt-runtime
-    /usr/local/sbin/plebian-os-mpv-runtime
-    /usr/local/libexec/plebian-os/native_package.py
-    /usr/local/libexec/plebian-os/native_state.py
-    /usr/local/libexec/plebian-os/native_process.py
-    /usr/local/libexec/plebian-os/native_runtime.py
-    /usr/local/sbin/plebian-os-install-ollama-converter
-    /usr/local/sbin/plebian-os-install-diarization-converter
-    /usr/local/sbin/plebian-os-install-encodec-converter
-    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
-    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
-    /usr/local/sbin/plebian-os-passwd
+    $PLEBIAN_OS_SBINDIR/plebian-os-provision
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-deps
+    $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
+    $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime
+    $PLEBIAN_OS_LIBEXECDIR/native_package.py
+    $PLEBIAN_OS_LIBEXECDIR/native_state.py
+    $PLEBIAN_OS_LIBEXECDIR/native_process.py
+    $PLEBIAN_OS_LIBEXECDIR/native_runtime.py
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-passwd
     /etc/ssh/sshd_config.d/50-plebian-os-legacy-default.conf
     /etc/systemd/logind.conf.d/50-plebian-lid.conf
     /etc/systemd/logind.conf.d/.50-plebian-lid.conf.stage
-    /usr/local/bin/plebian-os-update
-    /usr/local/bin/plebian-os-select-closure
-    /usr/local/bin/plebian-os-nvidia-driver
-    /etc/systemd/system/plebian-os-firstboot.service
-    /usr/local/sbin/plebian-os-firstboot-attempt
-    /usr/local/share/plebian-os/VERSION
-    /usr/local/share/plebian-os/ollama-release.env
-    /usr/local/share/plebian-os/wallpapers/plebian-os.png
-    /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
-    /usr/local/share/doc/plebian-os/COPYING.GPL-2
+    $PLEBIAN_OS_BINDIR/plebian-os-update
+    $PLEBIAN_OS_BINDIR/plebian-os-select-closure
+    $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver
+    $PLEBIAN_OS_UNITDIR/plebian-os-firstboot.service
+    $PLEBIAN_OS_SBINDIR/plebian-os-firstboot-attempt
+    $PLEBIAN_OS_DATADIR/VERSION
+    $PLEBIAN_OS_DATADIR/ollama-release.env
+    $PLEBIAN_OS_DATADIR/wallpapers/plebian-os.png
+    $PLEBIAN_OS_NOTICEDIR/installer/ATTRIBUTION.md
+    $PLEBIAN_OS_NOTICEDIR/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
     /usr/local/bin/pleb-session
     /usr/local/bin/pleb-lock
@@ -1569,13 +1604,13 @@ managed_dirs=(
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
     /etc/systemd/user
-    /usr/local/libexec
-    /usr/local/libexec/plebian-os
-    /usr/local/share/plebian-os
-    /usr/local/share/plebian-os/wallpapers
+    $PLEBIAN_OS_PAYLOADDIR
+    $PLEBIAN_OS_LIBEXECDIR
+    $PLEBIAN_OS_DATADIR
+    $PLEBIAN_OS_DATADIR/wallpapers
     /usr/local/share/doc
-    /usr/local/share/doc/plebian-os
-    /usr/local/share/doc/plebian-os/installer
+    $PLEBIAN_OS_NOTICEDIR
+    $PLEBIAN_OS_NOTICEDIR/installer
     /usr/local/share/doc/pleb
     /etc/lightdm/lightdm-gtk-greeter.conf.d
     /etc/ssh/sshd_config.d
@@ -1594,8 +1629,8 @@ zell_paths=(
     /usr/local/bin/zell
     /usr/local/share/kilix-zell
     /usr/local/sbin/install-zell-runtime.py
-    /usr/local/share/plebian-os/zell-runtime.json
-    /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+    $PLEBIAN_OS_DATADIR/zell-runtime.json
+    $PLEBIAN_OS_PAYLOADDIR/zell-0.1.1-x86_64.tar.xz
     /usr/local/lib/systemd/user/kilix-secrets.service
     /usr/local/lib/systemd/user/kilix-secrets.socket
 )
@@ -1632,7 +1667,7 @@ path_keys=("${!paths[@]}")
 dir_keys=()
 for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
 if [ -f "$txn/zell-runtime" ]; then
-    for dir in /usr/local/lib /usr/local/share/plebian-os "${zell_dirs[@]}"; do
+    for dir in /usr/local/lib "$PLEBIAN_OS_DATADIR" "$PLEBIAN_OS_PAYLOADDIR" "${zell_dirs[@]}"; do
         if [ -e "$dir" ] || [ -L "$dir" ]; then
             [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
             dir_mode="$(stat -c '%a' "$dir")"
@@ -1671,7 +1706,7 @@ if [ -f "$txn/pleb-notifications" ]; then
 fi
 # A snapshot from before 0.2.3's SSH server helper never recorded it.
 if [ -f "$txn/ssh-server-helper" ]; then
-    paths+=(/usr/local/sbin/plebian-os-ssh-server)
+    paths+=($PLEBIAN_OS_SBINDIR/plebian-os-ssh-server)
     path_keys+=(ssh-server.0)
 fi
 new_paths=()
@@ -2431,7 +2466,7 @@ mpv_runtime_command() {
             prefix+=("PLEBIAN_OS_APT_EXTENDED_STATES=$PLEBIAN_OS_APT_EXTENDED_STATES")
         fi
     fi
-    "${elevate[@]}" "${prefix[@]}" /usr/local/sbin/plebian-os-mpv-runtime "$@"
+    "${elevate[@]}" "${prefix[@]}" $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime "$@"
 }
 
 mpv_runtime_snapshot_probe() {
@@ -2509,7 +2544,7 @@ qt_runtime_command() {
             prefix+=("PLEBIAN_OS_APT_EXTENDED_STATES=$PLEBIAN_OS_APT_EXTENDED_STATES")
         fi
     fi
-    "${elevate[@]}" "${prefix[@]}" /usr/local/sbin/plebian-os-qt-runtime "$@"
+    "${elevate[@]}" "${prefix[@]}" $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime "$@"
 }
 
 qt_runtime_snapshot_probe() {
@@ -2606,7 +2641,7 @@ rollback_native_runtime_transaction() {
     [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
     native_runtime_command rollback "$NATIVE_TRANSACTION_TOKEN" --allow-unpublished || {
         warn "native recovery refused for attempted token $NATIVE_TRANSACTION_TOKEN; this token may have no journal"
-        warn "retain deployed helpers and native/outer recovery state; inspect /usr/local/sbin/plebian-os-native-runtime status as root for the active owner"
+        warn "retain deployed helpers and native/outer recovery state; inspect $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime status as root for the active owner"
         return 1
     }
     NATIVE_TRANSACTION_STARTED=0
@@ -2634,7 +2669,7 @@ native_runtime_command() {
     run_package_step_in_its_own_session \
     "${elevate[@]}" /usr/bin/setsid --wait /bin/bash -c \
         'trap "" INT HUP QUIT; exec "$@"' plebian-os-package-step \
-        /usr/local/sbin/plebian-os-native-runtime "$@"
+        $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime "$@"
 }
 
 # Bash does not run its INT trap until the foreground command returns, and a
@@ -3289,7 +3324,7 @@ note_legacy_stack_leftovers() {
                 if [ -n "$native" ]; then
                     printf 'blocks-updates: no, unless its native transaction %s is still active\n' "$native"
                     printf '  (plebian-os-update then stops with "native transaction already active";\n'
-                    printf '  inspect /usr/local/sbin/plebian-os-native-runtime status as root)\n'
+                    printf '  inspect $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime status as root)\n'
                 else
                     printf 'blocks-updates: no\n'
                 fi
@@ -4122,8 +4157,8 @@ release_is_newer() {
 # closure and the deployed handoff tools must still be its bytes.
 local_candidate_matches_selected_closure() {
     local version="$1" tag manifest key line value
-    local selector="${PLEBIAN_OS_INSTALLED_SELECTOR:-/usr/local/bin/plebian-os-select-closure}"
-    local updater="${PLEBIAN_OS_INSTALLED_UPDATER:-/usr/local/bin/plebian-os-update}"
+    local selector="${PLEBIAN_OS_INSTALLED_SELECTOR:-$PLEBIAN_OS_BINDIR/plebian-os-select-closure}"
+    local updater="${PLEBIAN_OS_INSTALLED_UPDATER:-$PLEBIAN_OS_BINDIR/plebian-os-update}"
     local temp tag_object tag_commit
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG=""
     _PLEBIAN_OS_LOCAL_CANDIDATE_TAG_OBJECT=""
@@ -4300,7 +4335,7 @@ select_latest_release_if_needed() {
     _RELEASE_HOP_FROM="$PLEBIAN_OS_VERSION"
     _RELEASE_HOP_TO="$latest"
     trap 'warn_release_hop_split_state $?' EXIT
-    [ -x /usr/local/bin/plebian-os-update ] \
+    [ -x $PLEBIAN_OS_BINDIR/plebian-os-update ] \
         || die "target release $latest did not deploy an executable updater"
     [ "$restart_arg" != --restart ] || relaunch_args+=(--restart)
     release_keys="$(selected_release_environment_keys)" \
@@ -4319,7 +4354,7 @@ select_latest_release_if_needed() {
     relaunch_env+=("PLEBIAN_OS_RELEASE_HOP_FROM=$PLEBIAN_OS_VERSION")
     # Replacing this process is the transaction boundary.
     # shellcheck disable=SC2093
-    exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update "${relaunch_args[@]}"
+    exec "${relaunch_env[@]}" $PLEBIAN_OS_BINDIR/plebian-os-update "${relaunch_args[@]}"
     die "could not relaunch the $latest updater"
 }
 
@@ -4470,9 +4505,9 @@ for name in sys.argv[1:]:
 PY
     if ! grep -q '^\[Unit\]$' "$stage/plebian-os-firstboot.service" \
         || ! grep -q '^\[Service\]$' "$stage/plebian-os-firstboot.service" \
-        || ! grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "$stage/plebian-os-firstboot.service" \
+        || ! grep -q "^ExecStart=$PLEBIAN_OS_SBINDIR/plebian-os-firstboot-attempt run $PLEBIAN_OS_SBINDIR/plebian-os-provision$" "$stage/plebian-os-firstboot.service" \
         || ! grep -q '^ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision$' "$stage/plebian-os-firstboot.service" \
-        || ! grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "$stage/plebian-os-firstboot.service"; then
+        || ! grep -q "^ExecCondition=$PLEBIAN_OS_SBINDIR/plebian-os-firstboot-attempt check$" "$stage/plebian-os-firstboot.service"; then
         die "staged firstboot unit is missing required lifecycle directives"
     fi
     if command -v systemd-analyze >/dev/null 2>&1; then
@@ -4561,7 +4596,7 @@ lines = {line.strip() for line in text.splitlines()
          if line.strip() and not line.lstrip().startswith("#")}
 if lines != {
     "[greeter]",
-    "background=/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+    "background=/usr/share/plebian-os/wallpapers/plebian-os.png",
     "user-background=false",
 } or "Debian" in text:
     raise SystemExit(1)
@@ -4597,6 +4632,17 @@ deploy_staged_os_layer() {
     fi
     "${root_command[@]}" bash -s -- "$stage" "${expected_hashes[@]}" <<'ROOT_DEPLOY'
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 stage="$1"
 shift
 expected_hashes=("$@")
@@ -4645,37 +4691,37 @@ names=(
     plebian-os-ssh-server
 )
 dests=(
-    /usr/local/sbin/plebian-os-provision
-    /usr/local/sbin/plebian-os-install-deps
-    /usr/local/sbin/plebian-os-passwd
-    /usr/local/bin/plebian-os-update
-    /etc/systemd/system/plebian-os-firstboot.service
-    /usr/local/sbin/plebian-os-firstboot-attempt
-    /usr/local/share/plebian-os/VERSION
-    /usr/local/share/plebian-os/wallpapers/plebian-os.png
-    /usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
-    /usr/local/share/doc/plebian-os/COPYING.GPL-2
+    $PLEBIAN_OS_SBINDIR/plebian-os-provision
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-deps
+    $PLEBIAN_OS_SBINDIR/plebian-os-passwd
+    $PLEBIAN_OS_BINDIR/plebian-os-update
+    $PLEBIAN_OS_UNITDIR/plebian-os-firstboot.service
+    $PLEBIAN_OS_SBINDIR/plebian-os-firstboot-attempt
+    $PLEBIAN_OS_DATADIR/VERSION
+    $PLEBIAN_OS_DATADIR/wallpapers/plebian-os.png
+    $PLEBIAN_OS_NOTICEDIR/installer/ATTRIBUTION.md
+    $PLEBIAN_OS_NOTICEDIR/COPYING.GPL-2
     /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
-    /usr/local/bin/plebian-os-select-closure
-    /usr/local/sbin/plebian-os-install-ollama-converter
-    /usr/local/sbin/plebian-os-install-diarization-converter
-    /usr/local/sbin/plebian-os-install-encodec-converter
-    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
-    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
-    /usr/local/sbin/plebian-os-native-runtime
-    /usr/local/sbin/plebian-os-source-carrier
-    /usr/local/libexec/plebian-os/native_package.py
-    /usr/local/libexec/plebian-os/native_state.py
-    /usr/local/libexec/plebian-os/native_process.py
-    /usr/local/libexec/plebian-os/native_runtime.py
-    /usr/local/sbin/plebian-os-qt-runtime
-    /usr/local/sbin/plebian-os-mpv-runtime
-    /usr/local/bin/plebian-os-nvidia-driver
+    $PLEBIAN_OS_BINDIR/plebian-os-select-closure
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
+    $PLEBIAN_OS_LIBEXECDIR/native_package.py
+    $PLEBIAN_OS_LIBEXECDIR/native_state.py
+    $PLEBIAN_OS_LIBEXECDIR/native_process.py
+    $PLEBIAN_OS_LIBEXECDIR/native_runtime.py
+    $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime
+    $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver
     /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
-    /usr/local/share/plebian-os/ollama-release.env
-    /usr/local/sbin/plebian-os-ssh-server
+    $PLEBIAN_OS_DATADIR/ollama-release.env
+    $PLEBIAN_OS_SBINDIR/plebian-os-ssh-server
 )
 modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644 0644 0755)
 max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65 65536 131072)
@@ -4734,7 +4780,8 @@ trap rollback ERR INT TERM HUP PIPE
 
 # Distribution assets live below fixed root-owned directories. Reject any
 # symlink or user-writable fixed ancestor before root stages bytes beneath it.
-for dir in / /usr /usr/local /usr/local/share /etc /etc/lightdm /usr/lib; do
+for dir in / /usr "$PLEBIAN_OS_BINDIR" "$PLEBIAN_OS_SBINDIR" /usr/libexec /usr/share \
+    /usr/lib /usr/lib/systemd "$PLEBIAN_OS_UNITDIR" /etc /etc/lightdm; do
     if [ ! -d "$dir" ] || [ -L "$dir" ]; then
         printf 'plebian-os-update: unsafe distribution asset destination ancestor: %s\n' "$dir" >&2
         false
@@ -4752,13 +4799,11 @@ done
 for dir in \
     /usr/lib/plebian-os \
     /usr/lib/plebian-os/waydroid \
-    /usr/local/libexec \
-    /usr/local/libexec/plebian-os \
-    /usr/local/share/plebian-os \
-    /usr/local/share/plebian-os/wallpapers \
-    /usr/local/share/doc \
-    /usr/local/share/doc/plebian-os \
-    /usr/local/share/doc/plebian-os/installer \
+    $PLEBIAN_OS_LIBEXECDIR \
+    $PLEBIAN_OS_DATADIR \
+    $PLEBIAN_OS_DATADIR/wallpapers \
+    $PLEBIAN_OS_NOTICEDIR \
+    $PLEBIAN_OS_NOTICEDIR/installer \
     /etc/lightdm/lightdm-gtk-greeter.conf.d; do
     if [ -L "$dir" ]; then
         printf 'plebian-os-update: unsafe distribution asset destination symlink: %s\n' "$dir" >&2
@@ -4872,8 +4917,8 @@ PY
 # Validate service and other data formats separately.
 grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^\[Service\]$' "${new_paths[4]}" \
-    && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
-    && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
+    && grep -q "^ExecStart=$PLEBIAN_OS_SBINDIR/plebian-os-firstboot-attempt run $PLEBIAN_OS_SBINDIR/plebian-os-provision$" "${new_paths[4]}" \
+    && grep -q "^ExecCondition=$PLEBIAN_OS_SBINDIR/plebian-os-firstboot-attempt check$" "${new_paths[4]}"
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "${new_paths[6]}"
 # The manifest is the final member of the fixed deployment set. Validate its
 # inert data here; never execute a caller-supplied helper with root privileges.
@@ -4946,7 +4991,7 @@ lines = {line.strip() for line in text.splitlines()
          if line.strip() and not line.lstrip().startswith("#")}
 if lines != {
     "[greeter]",
-    "background=/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+    "background=/usr/share/plebian-os/wallpapers/plebian-os.png",
     "user-background=false",
 } or "Debian" in text:
     raise SystemExit(1)
@@ -5059,7 +5104,7 @@ reconcile_legacy_remote_login() {
         *) return 0 ;;
     esac
 
-    local helper=/usr/local/sbin/plebian-os-passwd
+    local helper=$PLEBIAN_OS_SBINDIR/plebian-os-passwd
     local identity_record=/etc/plebian-os/identity-profile
     local installed_user_record=/etc/plebian-os/installed-user
     local metadata profile user entry
@@ -5145,8 +5190,8 @@ install_model_setup_software() {
     local helper
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    for helper in /usr/local/sbin/plebian-os-install-ollama-converter \
-                  /usr/local/sbin/plebian-os-install-diarization-converter; do
+    for helper in $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter \
+                  $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter; do
         if [ "${DRY_RUN:-0}" = 1 ]; then
             log "would install model conversion software with $helper (no model weights)"
             continue
@@ -5347,14 +5392,25 @@ install_zell_runtime() {
     [ "$(id -u)" = 0 ] || elevate=(sudo)
     "${elevate[@]}" bash -s -- "$_STACK_ROOT_TXN_DIR" "$prov" "${hashes[@]}" <<'ROOT_ZELL_INSTALL'
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 umask 022
 txn="$1"; prov="$2"; shift 2
 expected=("$@")
 files=(bin/zell install-zell-runtime.py zell-runtime.json zell-0.1.1-x86_64.tar.xz
        units/kilix-secrets.service units/kilix-secrets.socket)
 dests=(/usr/local/bin/zell /usr/local/sbin/install-zell-runtime.py
-       /usr/local/share/plebian-os/zell-runtime.json
-       /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+       $PLEBIAN_OS_DATADIR/zell-runtime.json
+       $PLEBIAN_OS_PAYLOADDIR/zell-0.1.1-x86_64.tar.xz
        /usr/local/lib/systemd/user/kilix-secrets.service
        /usr/local/lib/systemd/user/kilix-secrets.socket)
 modes=(0755 0755 0644 0644 0644 0644)
@@ -5364,8 +5420,9 @@ case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
 [ "${#expected[@]}" = 3 ] || exit 2
 # Validate parents before creating directories or publishing any object. Leaf
 # files are replaced by rename, so a previous launcher/unit symlink is not followed.
-for dir in / /usr /usr/local /usr/local/bin /usr/local/sbin /usr/local/share \
-    /usr/local/share/plebian-os /usr/local/lib /usr/local/lib/systemd /usr/local/lib/systemd/user; do
+for dir in / /usr /usr/share /usr/local /usr/local/bin /usr/local/sbin /usr/local/share \
+    "$PLEBIAN_OS_DATADIR" /var /var/lib /var/lib/plebian-os "$PLEBIAN_OS_PAYLOADDIR" \
+    /usr/local/lib /usr/local/lib/systemd /usr/local/lib/systemd/user; do
     if [ -e "$dir" ] || [ -L "$dir" ]; then
         [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
         mode="$(stat -c '%a' "$dir")"
@@ -6045,7 +6102,7 @@ install_neuronte_update() {
     env "${stack_env[@]}" /usr/bin/python3 "$installer" install \
         --manifest "$manifest" --ref "$NEURONTE_REF" --repo "$NEURONTE_REPO" \
         --destination "$GPU_TERMINAL_SOURCE_HOME/neuronte" \
-        --archive "/usr/local/share/plebian-os/neuronte-$NEURONTE_REF.tar.xz" \
+        --archive "$PLEBIAN_OS_PAYLOADDIR/neuronte-$NEURONTE_REF.tar.xz" \
         --fetch-failure warn \
         || die "required Neuronte installation failed"
     # Kilix 95's caches are prepared once, by prepare_kilix95_caches_update,
@@ -6064,11 +6121,11 @@ print(commit if re.fullmatch("[0-9a-f]{40}", str(commit)) else "")' "$record" 2>
 run_encodec_converter_installer() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" /usr/local/sbin/plebian-os-install-encodec-converter
+    "${elevate[@]}" $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
 }
 
 refresh_os_dependencies() {
-    local helper=/usr/local/sbin/plebian-os-install-deps
+    local helper=$PLEBIAN_OS_SBINDIR/plebian-os-install-deps
     local -a elevate=()
     if [ ! -x "$helper" ] || [ -L "$helper" ]; then
         die "selected OS dependency helper is missing or unsafe: $helper"
@@ -6095,7 +6152,7 @@ refresh_os_dependencies() {
         # The state directory is root-only. The updater is unprivileged, so
         # this verify has to be elevated or every release update fails here
         # and rolls back. The same elevate array already ran install-deps.
-        if ! "${elevate[@]}" /usr/local/sbin/plebian-os-qt-runtime --verify; then
+        if ! "${elevate[@]}" $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime --verify; then
             die "Plebian Qt runtime verification failed after the release dependency install"
         fi
     fi
@@ -6197,7 +6254,7 @@ refresh_release_qt_pin() {
 # "plebian-os-provision starting" banner to /var/log/plebian-os-provision.log
 # and tee this step into it. Current provisioners also skip that in library-only
 # mode; the variable is what stops an OLD installed one from doing it.
-AUDIO_HOLDOFF_PROVISIONER=/usr/local/sbin/plebian-os-provision
+AUDIO_HOLDOFF_PROVISIONER=$PLEBIAN_OS_SBINDIR/plebian-os-provision
 
 audio_holdoff_provisioner_is_safe() {
     local path="$1" test_mode="$2" owner mode dir
