@@ -5523,6 +5523,9 @@ refresh_os_dependencies() {
     log "reconciling the selected OS dependency closure (needs root)"
     "${elevate[@]}" env \
         "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE" \
+        "APT_PROVENANCE_PHASE=lifetime" \
+        "PLEBIAN_OS_APT_SNAPSHOT=${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+        "PLEBIAN_OS_APT_SOURCES_ROOT=${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}" \
         "PLEBIAN_OS_INSTALL_UV=$PLEBIAN_OS_INSTALL_UV" \
         "PLEBIAN_OS_UV_VERSION=$PLEBIAN_OS_UV_VERSION" \
         "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256" \
@@ -5962,6 +5965,304 @@ validate_release_apt_provenance() {
     return 0
 }
 
+# Release apt operations use a private configuration. A source file is copied
+# into it only when every index that file contributes passes
+# validate_release_apt_provenance for this phase. Indexes come from
+# `apt-get update --print-uris` on that file alone, against an empty list
+# cache, so a target counts whether or not this machine has already downloaded
+# it and nothing is fetched while classifying. Any other file, including a
+# signed third-party repository, stays where the operator put it and is not
+# consulted. A private package-list cache keeps a higher version from that
+# repository from becoming a candidate, and the real dpkg status is what apt
+# reads, so a package already installed from the operator source is not removed
+# or downgraded. $1 is an absolute directory this function fills. $2 is install
+# or lifetime. $3 is the install snapshot id, empty outside that phase. $4 is
+# the codename. $5 is the operator apt directory, the one that contains
+# sources.list. On success, $1/indexes lists the release indexes. On failure,
+# $1/failure names the provenance refusal and the function returns 1.
+prepare_release_apt_config() {
+    local dest="$1" phase="$2" snapshot="$3" codename="$4" apt_dir="$5"
+    local work="" reason_file="" file="" base="" rel="" staged=""
+    local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
+    local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
+    case "$dest" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "$apt_dir" in
+        /*) ;;
+        *) printf '%s\n' "apt source directory must be absolute" >"$dest/failure"
+           return 1 ;;
+    esac
+    case "$phase" in
+        install|lifetime) ;;
+        *) printf '%s\n' "unknown apt provenance phase" >"$dest/failure"
+           return 1 ;;
+    esac
+    [ -d "$dest" ] && [ ! -L "$dest" ] || return 1
+    case "$dest/" in
+        "$apt_dir"/*)
+            printf '%s\n' "release apt configuration must stay outside the operator apt directory" >"$dest/failure"
+            return 1 ;;
+    esac
+    work="$(mktemp -d)" || {
+        printf '%s\n' "could not stage the release apt configuration" >"$dest/failure"
+        return 1
+    }
+    case "$work" in
+        /*) ;;
+        *) work="$PWD/$work" ;;
+    esac
+    reason_file="$dest/failure"
+    mkdir -p -- "$dest/sources.list.d" "$dest/lists/partial" "$dest/archives/partial" \
+        "$dest/cache" "$dest/preferences.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    : >"$dest/sources.list"
+    : >"$dest/preferences"
+    : >"$dest/extended_states"
+    : >"$dest/indexes"
+    : >"$work/files"
+    : >"$work/accepted.idx"
+    : >"$work/all.idx"
+    if [ -f "$apt_dir/sources.list" ] && [ ! -L "$apt_dir/sources.list" ]; then
+        printf '%s\n' "$apt_dir/sources.list" >>"$work/files"
+    fi
+    if [ -d "$apt_dir/sources.list.d" ] && [ ! -L "$apt_dir/sources.list.d" ]; then
+        for file in "$apt_dir/sources.list.d"/*; do
+            if [ ! -f "$file" ] || [ -L "$file" ]; then
+                continue
+            fi
+            base="${file##*/}"
+            case "$base" in
+                .*|*~|*.disabled|*.dpkg-old|*.dpkg-new|*.dpkg-dist|*.dpkg-bak) continue ;;
+                *.list|*.sources) ;;
+                *) continue ;;
+            esac
+            printf '%s\n' "$file" >>"$work/files"
+        done
+    fi
+    LC_ALL=C sort -o "$work/files.sorted" "$work/files" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    while IFS= read -r file || [ -n "$file" ]; do
+        [ -n "$file" ] || continue
+        case "$file" in
+            "$apt_dir/sources.list"|"$apt_dir"/sources.list.d/*) ;;
+            *)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rel="${file#"$apt_dir"/}"
+        case "$rel" in
+            *'..'*|*$'\n'*)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rm -rf -- "$work/one"
+        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            staged="$work/one/sources.list"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$staged"
+            parts_arg="$work/one/parts"
+        else
+            base="${file##*/}"
+            staged="$work/one/parts/$base"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$work/one/empty.list"
+            parts_arg="$work/one/parts"
+        fi
+        apt_rc=0
+        uris="$(apt-get update --print-uris \
+            -o "Dir::Etc::SourceList=$list_arg" \
+            -o "Dir::Etc::SourceParts=$parts_arg" \
+            -o "Dir::State::lists=$work/one/lists" \
+            -o "Dir::Cache=$work/one/cache" \
+            -o "Dir::Cache::archives=$work/one/cache" \
+            2>"$work/one/err")" || apt_rc=$?
+        if [ "$apt_rc" != 0 ]; then
+            saw_failure=1
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        printf '%s\n' "$uris" >"$work/one/uris" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/idx"
+        parsed=0
+        bad_line=0
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] || continue
+            case "$line" in
+                \'*) ;;
+                *://*) bad_line=1; continue ;;
+                *) continue ;;
+            esac
+            uri="${line#\'}"
+            uri="${uri%%\'*}"
+            case "$uri" in
+                *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+            esac
+            case "$uri" in
+                *'/dists/'*)
+                    site="${uri%%/dists/*}"
+                    release="${uri#*/dists/}"
+                    release="${release%%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    case "$release" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s %s main amd64\n' "$site" "$release" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+                *)
+                    site="${uri%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s flat main amd64\n' "$site" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+            esac
+        done <"$work/one/uris"
+        if [ "$bad_line" = 1 ] || [ "$parsed" = 0 ]; then
+            if [ "$bad_line" = 1 ]; then
+                saw_failure=1
+                log "operator apt source $file is left unchanged and is not used to install release packages"
+            fi
+            continue
+        fi
+        LC_ALL=C sort -u -o "$work/one/sorted" "$work/one/idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        cat -- "$work/one/sorted" >>"$work/all.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        vrc=0
+        validate_release_apt_provenance "$work/one/sorted" "$phase" "$snapshot" "$codename" >/dev/null 2>&1 || vrc=$?
+        if [ "$vrc" != 0 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            if ! cp -a -- "$staged" "$dest/sources.list"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        else
+            if [ -e "$dest/sources.list.d/$base" ]; then
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1
+            fi
+            if ! cp -a -- "$staged" "$dest/sources.list.d/$base"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        fi
+        cat -- "$work/one/sorted" >>"$work/accepted.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done <"$work/files.sorted"
+    LC_ALL=C sort -u -o "$dest/indexes" "$work/accepted.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    LC_ALL=C sort -u -o "$work/all.sorted" "$work/all.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    rc=0
+    if [ ! -s "$dest/indexes" ]; then
+        rc=2
+    elif ! validate_release_apt_provenance "$dest/indexes" "$phase" "$snapshot" "$codename" >/dev/null 2>&1; then
+        rc=1
+    fi
+    if [ "$rc" != 0 ]; then
+        if [ -s "$work/all.sorted" ]; then
+            validate_release_apt_provenance "$work/all.sorted" "$phase" "$snapshot" "$codename" >/dev/null || rc=$?
+        elif [ "$saw_failure" = 1 ]; then
+            printf '%s\n' "could not list the configured apt indexes" >"$reason_file"
+            rm -rf -- "$work"
+            return 1
+        else
+            rc=2
+        fi
+        if [ "$rc" = 0 ]; then
+            rc=2
+        fi
+        if [ "$rc" = 2 ]; then
+            printf '%s\n' "release apt index provenance is empty" >"$reason_file"
+        elif [ "$phase" = install ]; then
+            printf '%s\n' "release install closure resolved from an index other than snapshot $snapshot" >"$reason_file"
+        else
+            printf '%s\n' "release apt provenance contains an index outside the Debian archive" >"$reason_file"
+        fi
+        rm -rf -- "$work"
+        return 1
+    fi
+    rm -rf -- "$work"
+    return 0
+}
+
+# apt-get for a configuration prepare_release_apt_config built. The operator's
+# sources, pins, and list cache are not on this command line.
+release_apt_get() {
+    local config="$1"
+    shift
+    apt-get \
+        -o "Dir::Etc::SourceList=$config/sources.list" \
+        -o "Dir::Etc::SourceParts=$config/sources.list.d" \
+        -o "Dir::State::lists=$config/lists" \
+        -o "Dir::State::status=${PLEBIAN_OS_DPKG_STATUS:-/var/lib/dpkg/status}" \
+        -o "Dir::State::extended_states=${PLEBIAN_OS_APT_EXTENDED_STATES:-/var/lib/apt/extended_states}" \
+        -o "Dir::Cache=$config/cache" \
+        -o "Dir::Cache::archives=$config/archives" \
+        -o "Dir::Cache::pkgcache=$config/cache/pkgcache.bin" \
+        -o "Dir::Cache::srcpkgcache=$config/cache/srcpkgcache.bin" \
+        -o "Dir::Etc::Preferences=$config/preferences" \
+        -o "Dir::Etc::PreferencesParts=$config/preferences.d" \
+        "$@"
+}
+
 # A machine being updated already has a recorded install closure, so its apt
 # indexes are held to the lifetime phase: the official Debian archive only.
 require_lifetime_release_apt_provenance() {
@@ -5993,23 +6294,24 @@ require_lifetime_release_apt_provenance() {
 }
 
 # The lifetime gate above runs again when the final provenance is written, at
-# the very end of the update. Check the configured sources before the release
-# hop and the stack transaction too, so a third-party repository is refused up
-# front rather than after the whole stack has been rebuilt and rolled back.
+# the very end of the update. Check the release apt configuration before the
+# release hop and the stack transaction too. An operator source that is not
+# copied into that configuration does not block the update; a release set that
+# is empty or itself outside the Debian archive still refuses up front.
 # (Only the update lock and private storage directories exist by then.)
 preflight_release_apt_provenance() {
-    local listing rc=0
+    local config="" reason="" rc=0
     [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
-    listing="$(mktemp)" || die "could not list the configured apt indexes"
-    apt-get indextargets \
-        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
-        | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u >"$listing" || rc=$?
-    if [ "$rc" != 0 ]; then
-        rm -f -- "$listing"
-        die "could not list the configured apt indexes"
+    config="$(mktemp -d)" || die "could not prepare the release apt configuration"
+    if ! prepare_release_apt_config "$config" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+            "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
+            "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
+        reason="$(cat -- "$config/failure" 2>/dev/null || true)"
+        rm -rf -- "$config"
+        die "${reason:-could not prepare the release apt configuration}"
     fi
-    ( require_lifetime_release_apt_provenance "$listing" ) || rc=$?
-    rm -f -- "$listing"
+    ( require_lifetime_release_apt_provenance "$config/indexes" ) || rc=$?
+    rm -rf -- "$config"
     [ "$rc" = 0 ] || exit "$rc"
 }
 
@@ -6204,11 +6506,28 @@ stage_final_provenance() {
         provenance_kv KERNEL_VERSION "$(uname -srmo 2>/dev/null || true)"
     } >"$stage/versions.env"
 
-    apt-get indextargets \
-        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
-        | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u \
-        >"$stage/apt-sources.list" \
-        || die "could not record final apt source indexes"
+    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
+        local release_apt="" reason=""
+        release_apt="$(mktemp -d)" || die "could not prepare the release apt configuration"
+        if ! prepare_release_apt_config "$release_apt" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+                "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
+                "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
+            reason="$(cat -- "$release_apt/failure" 2>/dev/null || true)"
+            rm -rf -- "$release_apt"
+            die "${reason:-could not record final apt source indexes}"
+        fi
+        cp -a -- "$release_apt/indexes" "$stage/apt-sources.list" || {
+            rm -rf -- "$release_apt"
+            die "could not record final apt source indexes"
+        }
+        rm -rf -- "$release_apt"
+    else
+        apt-get indextargets \
+            --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
+            | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u \
+            >"$stage/apt-sources.list" \
+            || die "could not record final apt source indexes"
+    fi
 
     if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
         require_lifetime_release_apt_provenance "$stage/apt-sources.list"
