@@ -85,11 +85,18 @@ class ElevatedOwnershipTests(unittest.TestCase):
     def transaction(self, mode="standalone", **extra):
         source = SELECT.read_text()
         body = source.split("<<'ROOT_SPLIT_APPLY'\n", 1)[1].split("\nROOT_SPLIT_APPLY\n", 1)[0]
-        # The elevated transaction receives this exact metadata reader from
-        # the parent through declare -f, before the here-document body.
-        reader = re.search(r"(?ms)^record_release_value\(\) \{.*?^\}", source)
-        self.assertIsNotNone(reader)
-        body = reader.group(0) + "\n" + body
+        # The elevated transaction receives these exact functions (the
+        # metadata reader and the recovery-record stamp) from the parent
+        # through declare -f, before the here-document body.
+        passed = re.search(r"declare -f ([A-Za-z_ ]+); cat <<'ROOT_SPLIT_APPLY'", source)
+        self.assertIsNotNone(passed)
+        self.assertIn("record_release_value", passed.group(1).split())
+        functions = []
+        for name in passed.group(1).split():
+            function = re.search(rf"(?ms)^{name}\(\) \{{.*?^\}}", source)
+            self.assertIsNotNone(function, name)
+            functions.append(function.group(0))
+        body = "\n".join(functions) + "\n" + body
         done = subprocess.run(self.command + [PRIVATE_CASE],
                               input=json.dumps({"body": body, "mode": mode, **extra}),
                               capture_output=True, text=True, timeout=15)
