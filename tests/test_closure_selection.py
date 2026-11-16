@@ -2584,5 +2584,152 @@ class ClosureSelectionContractTests(unittest.TestCase):
         self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
 
 
+FAKE_RM = r"""#!/bin/bash
+/bin/rm "$@"; rc=$?
+if [ -e "$ARM_FILE" ]; then
+    for a in "$@"; do
+        case "$a" in
+            */selection-pending) /bin/rm -f "$ARM_FILE"; kill -TERM "$PPID" ;;
+        esac
+    done
+fi
+exit $rc
+"""
+
+
+class SelectionAttemptWindowTests(unittest.TestCase):
+    """A finished cross-version selection must still roll back when a signal
+    lands while selection-pending is removed."""
+
+    def _helper(self):
+        return ClosureSelectionTests(
+            "test_rollback_restores_the_previous_closure_byte_for_byte")
+
+    def _window(self, layout, signal_in_window):
+        helper = self._helper()
+        base = Path(self._td.name)
+        env_path = helper._machine(base)
+        helper._source(base)
+        before_session = env_path.read_bytes()
+        closure = base / "root/etc/pleb/closure.env"
+        before_closure = closure.read_bytes() if closure.exists() else None
+        shim = base / "shim"
+        shim.mkdir()
+        (shim / "rm").write_text(FAKE_RM)
+        (shim / "rm").chmod(0o755)
+        arm = base / "arm"
+        if signal_in_window:
+            arm.write_text("1\n")
+        extra = {"PATH": f"{shim}:{os.environ['PATH']}", "ARM_FILE": str(arm)}
+        if layout:
+            extra["PLEBIAN_OS_CLOSURE_LAYOUT"] = layout
+        selected = helper._run(base, "0.1.8", "--offline", env_extra=extra)
+        state = base / "home/.local/gpu_terminal/pleb/state"
+        attempt = state / "selection-attempt"
+        pending = state / "selection-pending"
+        tag = subprocess.run(
+            ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.1.8"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        facts = {
+            "select_rc": selected.returncode,
+            "select_err": (selected.stdout + selected.stderr)[-500:],
+            "selection_changed_closure": (
+                env_path.read_bytes() != before_session
+                or (closure.exists() and closure.read_bytes() != before_closure)),
+            "attempt_left": attempt.exists(),
+            "pending_left": pending.exists(),
+        }
+        if signal_in_window:
+            rollback_env = {"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag}
+            if layout:
+                rollback_env["PLEBIAN_OS_CLOSURE_LAYOUT"] = layout
+            rolled = helper._run(base, "--rollback", env_extra=rollback_env)
+            facts["rollback_rc"] = rolled.returncode
+            facts["rollback_tail"] = (rolled.stdout + rolled.stderr)[-500:]
+            facts["session_restored"] = env_path.read_bytes() == before_session
+            facts["closure_restored"] = (
+                (not closure.exists()) if before_closure is None
+                else closure.read_bytes() == before_closure)
+        return facts
+
+    def test_a_signal_while_removing_pending_still_rolls_the_closure_back(self):
+        for layout in (None, "split"):
+            with self.subTest(layout=layout):
+                self._td = tempfile.TemporaryDirectory()
+                self.addCleanup(self._td.cleanup)
+                facts = self._window(layout, True)
+                self.assertTrue(facts["selection_changed_closure"], facts)
+                self.assertTrue(facts["session_restored"], facts)
+                self.assertTrue(facts["closure_restored"], facts)
+                self.assertFalse(facts["attempt_left"], facts)
+
+    def test_selection_without_that_signal_commits(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        facts = self._window(None, False)
+        self.assertEqual(facts["select_rc"], 0, facts)
+        self.assertTrue(facts["selection_changed_closure"], facts)
+        self.assertFalse(facts["attempt_left"], facts)
+        self.assertFalse(facts["pending_left"], facts)
+
+    def test_a_recorded_match_is_not_an_interrupted_reselect_after_the_version_moves(self):
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            helper._machine(base)
+            helper._source(base)
+            selected = helper._run(base, "0.1.8", "--offline")
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            tag = subprocess.run(
+                ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.1.8"],
+                capture_output=True, text=True, check=True).stdout.strip()
+            changed = False
+            for path in (base / "root/etc/pleb/closure.env",
+                         base / "root/etc/pleb/session.env"):
+                if not path.is_file():
+                    continue
+                text = path.read_text()
+                for old, new in (
+                        ("PLEBIAN_OS_VERSION='0.1.8'", "PLEBIAN_OS_VERSION='0.1.7'"),
+                        ("PLEBIAN_OS_VERSION=0.1.8", "PLEBIAN_OS_VERSION=0.1.7")):
+                    if old in text:
+                        path.write_text(text.replace(old, new, 1))
+                        changed = True
+                        break
+                if changed:
+                    break
+            self.assertTrue(changed, "installed version was not 0.1.8")
+            attempt = base / "home/.local/gpu_terminal/pleb/state/selection-attempt"
+            attempt.parent.mkdir(parents=True, exist_ok=True)
+            attempt.write_text(
+                f"format=1\ntag={tag}\ntarget=0.1.8\ninstalled=0.1.8\n")
+            rolled = helper._run(
+                base, "--rollback",
+                env_extra={"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag})
+            combined = rolled.stdout + rolled.stderr
+            self.assertNotIn("interrupted reselect", combined)
+            self.assertFalse(attempt.exists())
+
+    def test_a_failure_before_pending_removes_the_attempt(self):
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            helper._machine(base)
+            helper._source(base)
+            hold = base / "hold"
+            hold.write_text("not-a-fifo\n")
+            result = helper._run(
+                base, "0.1.8", "--offline",
+                env_extra={"PLEBIAN_OS_SELECT_TEST_HOLD_BEFORE_PENDING": str(hold)})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "PLEBIAN_OS_SELECT_TEST_HOLD_BEFORE_PENDING must be a fifo",
+                result.stderr)
+            attempt = base / "home/.local/gpu_terminal/pleb/state/selection-attempt"
+            self.assertFalse(
+                attempt.exists(),
+                attempt.read_text() if attempt.exists() else "")
+
+
 if __name__ == "__main__":
     unittest.main()

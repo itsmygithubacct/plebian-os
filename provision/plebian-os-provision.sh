@@ -1291,7 +1291,7 @@ native_download_archive() {
 }
 
 apply_selected_native_runtime() {
-    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual
+    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual rc=0
     [ -n "$version" ] || version="$PLEBIAN_OS_VERSION"
     validate_native_release_closure "$version" "$PLEBIAN_OS_RELEASE_MODE" || return 1
     [ -n "$PLEBIAN_OS_NATIVE_DEB_URL" ] || return 0
@@ -1320,11 +1320,22 @@ apply_selected_native_runtime() {
     # Dependency preparation is separate from the native package journal.
     # Legacy offers select no custom archives; byte-pinned installed runtimes
     # refuse replacement before any dependency download or mutation.
+    # The download above is not a package step. A script that records package
+    # windows opens one only around the command that can install packages, and
+    # closes it on both results. The provisioner does not record those windows.
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
     native_runtime_command install-dependencies \
         --artifact "$stage" --sha256 "$PLEBIAN_OS_NATIVE_DEB_SHA256" \
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
-        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || return 1
+        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
+    rc=0
     NATIVE_TRANSACTION_TOKEN="$(/usr/bin/python3 -I -B -c 'import secrets; print(secrets.token_hex(16))')" \
         || return 1
     [[ "$NATIVE_TRANSACTION_TOKEN" =~ ^[0-9a-f]{32}$ ]] || return 1
@@ -1338,7 +1349,14 @@ apply_selected_native_runtime() {
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
         --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" >/dev/null || return 1
-    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN"
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
+    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
 }
 
 rollback_native_runtime_transaction() {

@@ -68,7 +68,7 @@ die()  { _STACK_FAIL_COMMAND="die: $*"; _update_record "$*"; printf '\033[1;31m[
 # real run uses the private Pleb state directory. Library-only loads stay quiet
 # unless a test asked for the file.
 open_updater_log() {
-    local path dir old_umask
+    local path dir old_umask bytes
     if [ -n "${PLEBIAN_OS_UPDATE_LOG:-}" ]; then
         path="$PLEBIAN_OS_UPDATE_LOG"
     elif [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
@@ -80,13 +80,102 @@ open_updater_log() {
     case "$path" in
         *[$'\n\r']*) return 0 ;;
     esac
+    # Append would follow a symlink and would keep a pre-existing mode.
+    if [ -L "$path" ] || [ -L "$path.1" ]; then
+        printf '%s\n' "updater log path is a symlink; not writing it" >&2
+        return 0
+    fi
+    if [ -e "$path" ] && [ ! -f "$path" ]; then
+        return 0
+    fi
     dir="$(dirname -- "$path")"
     mkdir -p -- "$dir" 2>/dev/null || return 0
+    # One older generation, so a long-lived machine does not grow this file
+    # without a bound. The check is the file we are about to append to.
+    if [ -f "$path" ]; then
+        bytes="$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+        if [ "${bytes:-0}" -gt 1048576 ]; then
+            mv -f -- "$path" "$path.1" 2>/dev/null || return 0
+        fi
+    fi
     old_umask="$(umask)"
     umask 077
     exec {_UPDATE_LOG_FD}>>"$path" || { umask "$old_umask"; return 0; }
     umask "$old_umask"
     [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
+    chmod 0600 -- "$path" 2>/dev/null || true
+    # FD_CLOEXEC belongs to this process. A child that calls fcntl changes
+    # only its own copy, so stop this shell just long enough to set the flag
+    # on the log descriptor. Children then do not inherit it.
+    /usr/bin/python3 -I -c 'import ctypes, os, sys
+libc = ctypes.CDLL(None, use_errno=True)
+libc.ptrace.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+libc.ptrace.restype = ctypes.c_long
+names = ("r15","r14","r13","r12","rbp","rbx","r11","r10","r9","r8","rax","rcx","rdx","rsi","rdi","orig_rax","rip","cs","eflags","rsp","ss","fs_base","gs_base","ds","es","fs","gs")
+Regs = type("Regs", (ctypes.Structure,), {"_fields_": [(n, ctypes.c_ulonglong) for n in names]})
+def pt(req, pid, data=None):
+    datap = ctypes.cast(data, ctypes.c_void_p) if data is not None else None
+    ctypes.set_errno(0)
+    result = libc.ptrace(req, pid, None, datap)
+    if result == -1 and ctypes.get_errno():
+        raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+    return result
+if os.uname().machine != "x86_64":
+    raise SystemExit(0)
+pid = os.getppid()
+fd = int(sys.argv[1])
+attached = False
+saved = None
+try:
+    pt(16, pid)
+    attached = True
+    os.waitpid(pid, 0)
+    regs = Regs()
+    pt(12, pid, ctypes.byref(regs))
+    saved = Regs.from_buffer_copy(regs)
+    found = None
+    maps = open("/proc/%d/maps" % pid)
+    for line in maps:
+        parts = line.split()
+        if "r-xp" not in parts[1]:
+            continue
+        start_s, end_s = parts[0].split("-")
+        start, end = int(start_s, 16), int(end_s, 16)
+        if end - start > 2000000:
+            continue
+        mem = open("/proc/%d/mem" % pid, "rb")
+        mem.seek(start)
+        blob = mem.read(end - start)
+        mem.close()
+        at = blob.find(b"\x0f\x05")
+        if at != -1:
+            found = start + at
+            break
+    maps.close()
+    if found is None:
+        raise OSError("no syscall instruction")
+    regs.rip = found
+    regs.rax = 72
+    regs.rdi = fd
+    regs.rsi = 2
+    regs.rdx = 1
+    pt(13, pid, ctypes.byref(regs))
+    pt(9, pid)
+    os.waitpid(pid, 0)
+    pt(13, pid, ctypes.byref(saved))
+    saved = None
+finally:
+    if saved is not None:
+        try:
+            pt(13, pid, ctypes.byref(saved))
+        except OSError:
+            pass
+    if attached:
+        try:
+            pt(17, pid)
+        except OSError:
+            pass
+' "$_UPDATE_LOG_FD" 2>/dev/null || true
     export PLEBIAN_OS_UPDATE_LOG_FD="$_UPDATE_LOG_FD"
     return 0
 }
@@ -2460,7 +2549,7 @@ native_download_archive() {
 }
 
 apply_selected_native_runtime() {
-    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual
+    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual rc=0
     [ -n "$version" ] || version="$PLEBIAN_OS_VERSION"
     validate_native_release_closure "$version" "$PLEBIAN_OS_RELEASE_MODE" || return 1
     [ -n "$PLEBIAN_OS_NATIVE_DEB_URL" ] || return 0
@@ -2489,11 +2578,22 @@ apply_selected_native_runtime() {
     # Dependency preparation is separate from the native package journal.
     # Legacy offers select no custom archives; byte-pinned installed runtimes
     # refuse replacement before any dependency download or mutation.
+    # The download above is not a package step. A script that records package
+    # windows opens one only around the command that can install packages, and
+    # closes it on both results. The provisioner does not record those windows.
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
     native_runtime_command install-dependencies \
         --artifact "$stage" --sha256 "$PLEBIAN_OS_NATIVE_DEB_SHA256" \
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
-        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || return 1
+        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
+    rc=0
     NATIVE_TRANSACTION_TOKEN="$(/usr/bin/python3 -I -B -c 'import secrets; print(secrets.token_hex(16))')" \
         || return 1
     [[ "$NATIVE_TRANSACTION_TOKEN" =~ ^[0-9a-f]{32}$ ]] || return 1
@@ -2507,7 +2607,14 @@ apply_selected_native_runtime() {
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
         --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" >/dev/null || return 1
-    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN"
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
+    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
 }
 
 rollback_native_runtime_transaction() {
@@ -2615,11 +2722,18 @@ acknowledge_update_interrupt() {
 
 # Apt packages this transaction newly installs. The baseline is every package
 # installed when the transaction opens. Each later package step records only
-# the names that appeared during that step, so a package the operator installs
-# between steps is not this transaction's. Rollback removes the recorded names
-# in reverse order, and only when apt would remove nothing else. Debian
-# upgrades are not names that newly appear, so they stay. A missing dpkg-query
-# records nothing and removes nothing.
+# the names that appeared while its window was open, so a package the operator
+# installs between steps is not this transaction's. pleb install and pleb
+# update also build software, and their windows cover the whole step, so a
+# package installed during those steps is recorded with them. The native
+# runtime window covers only the commands that install packages. Rollback
+# removes the recorded names in reverse order, and only when apt would remove
+# nothing else. If this transaction also removed a package that was already
+# installed, the new packages are kept, because rollback does not reinstall
+# what it removed. Debian upgrades are not names that newly appear, so they
+# stay. A missing dpkg-query records nothing and removes nothing. A window is
+# closed only by the process that opened it; recovery in another process
+# marks that window untracked and removes nothing.
 _package_name_is_safe() {
     [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]*$ ]]
 }
@@ -2649,13 +2763,39 @@ record_transaction_package_baseline() {
     return 0
 }
 
+# pid, start ticks and boot id of the process that opened the window. Another
+# process, including --recover-interrupted after a kill or a reboot, does not
+# match and must not treat packages installed since then as this update's.
+_package_window_identity() {
+    local start boot
+    start="$(process_start_ticks "$$")" || return 1
+    boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" || return 1
+    printf 'pid=%s\nstart=%s\nboot=%s\n' "$$" "$start" "$boot"
+}
+
+_package_window_owner_matches() {
+    local pid start boot now
+    [ -f "$_STACK_TXN_DIR/apt-window-open" ] || return 1
+    pid="$(sed -n 's/^pid=\([0-9]\+\)$/\1/p' "$_STACK_TXN_DIR/apt-window-open")"
+    start="$(sed -n 's/^start=\([0-9]\+\)$/\1/p' "$_STACK_TXN_DIR/apt-window-open")"
+    boot="$(sed -n 's/^boot=\(.*\)$/\1/p' "$_STACK_TXN_DIR/apt-window-open")"
+    [ -n "$pid" ] && [ -n "$start" ] && [ "$pid" = "$$" ] || return 1
+    [ "$boot" = "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" ] || return 1
+    now="$(process_start_ticks "$pid")" || return 1
+    [ "$now" = "$start" ]
+}
+
 begin_package_addition_window() {
     [ -n "${_STACK_TXN_DIR:-}" ] || return 0
     [ ! -e "$_STACK_TXN_DIR/apt-additions-untracked" ] || return 0
     command -v dpkg-query >/dev/null 2>&1 || return 0
     rm -f -- "$_STACK_TXN_DIR/apt-window-open"
     if _installed_package_names >"$_STACK_TXN_DIR/apt-window-before"; then
-        : >"$_STACK_TXN_DIR/apt-window-open" || return 0
+        _package_window_identity >"$_STACK_TXN_DIR/apt-window-open" || {
+            rm -f -- "$_STACK_TXN_DIR/apt-window-before" "$_STACK_TXN_DIR/apt-window-open"
+            _mark_package_additions_untracked
+            return 0
+        }
     else
         rm -f -- "$_STACK_TXN_DIR/apt-window-before"
         _mark_package_additions_untracked
@@ -2667,6 +2807,12 @@ end_package_addition_window() {
     local now name
     [ -n "${_STACK_TXN_DIR:-}" ] || return 0
     [ -f "$_STACK_TXN_DIR/apt-window-open" ] || return 0
+    if ! _package_window_owner_matches; then
+        rm -f -- "$_STACK_TXN_DIR/apt-window-open" "$_STACK_TXN_DIR/apt-window-before"
+        _mark_package_additions_untracked
+        warn "package window was left open by another process; leaving installed packages in place"
+        return 0
+    fi
     rm -f -- "$_STACK_TXN_DIR/apt-window-open"
     [ ! -e "$_STACK_TXN_DIR/apt-additions-untracked" ] || return 0
     [ -f "$_STACK_TXN_DIR/apt-window-before" ] || return 0
@@ -2700,9 +2846,53 @@ end_package_addition_window() {
     return 0
 }
 
+_transaction_removed_baseline_names() {
+    local name state removed=""
+    [ -f "$_STACK_TXN_DIR/apt-installed-before" ] || return 0
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        _package_name_is_safe "$name" || continue
+        state="$(dpkg-query -W -f '${db:Status-Status}' -- "$name" 2>/dev/null || true)"
+        [ "$state" = installed ] && continue
+        removed="${removed:+$removed }$name"
+    done <"$_STACK_TXN_DIR/apt-installed-before"
+    printf '%s\n' "$removed"
+}
+
+_prepare_removal_apt_config() {
+    local config codename
+    config="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-removal-apt.XXXXXX")" || return 1
+    codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
+    if ! prepare_release_apt_config "$config" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+            "$codename" "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
+        rm -rf -- "$config"
+        return 1
+    fi
+    declare -f release_apt_get >"$config/release-apt-get.fn" || {
+        rm -rf -- "$config"
+        return 1
+    }
+    _REMOVAL_APT_CONFIG="$config"
+    return 0
+}
+
+# The child is a new session and sources release_apt_get from a file. sudo
+# would drop a shell function, and a direct apt-get would consult the
+# operator's sources.
+_run_release_apt() {
+    local config="$1"
+    shift
+    [ -f "$config/release-apt-get.fn" ] || return 1
+    "${_REMOVAL_ELEVATE[@]}" /usr/bin/setsid --wait /bin/bash -c \
+        'trap "" INT HUP QUIT; . "$1"; shift; release_apt_get "$@"' \
+        plebian-os-removal \
+        "$config/release-apt-get.fn" \
+        "$config" "$@"
+}
+
 _apt_simulated_removals() {
     local pkg="$1" sim status=0
-    sim="$(LC_ALL=C apt-get -s remove -y --no-install-recommends "$pkg" 2>&1)" && status=0 || status=$?
+    sim="$(_run_release_apt "$_REMOVAL_APT_CONFIG" -s remove -y --no-install-recommends "$pkg" 2>&1)" && status=0 || status=$?
     printf '%s\n' "$sim" | sed -n 's/^Remv \([^ ]\{1,\}\) \[.*/\1/p'
     return "$status"
 }
@@ -2717,8 +2907,9 @@ _drop_recorded_addition() {
 }
 
 remove_transaction_package_additions() {
-    local -a packages=() elevate=()
+    local -a packages=()
     local i pkg removals sim_ok extra other removed="" uid state short
+    local removed_names config=""
     [ -n "${_STACK_TXN_DIR:-}" ] || return 0
     end_package_addition_window || true
     if [ -e "$_STACK_TXN_DIR/apt-additions-untracked" ]; then
@@ -2734,18 +2925,29 @@ remove_transaction_package_additions() {
         warn "package additions were not tracked; leaving installed packages in place"
         return 0
     fi
+    removed_names="$(_transaction_removed_baseline_names)"
+    if [ -n "$removed_names" ]; then
+        warn "keeping packages this update installed: the update also removed $removed_names, and rollback does not reinstall removed packages"
+        return 0
+    fi
     cp -f -- "$_STACK_TXN_DIR/apt-additions" "$_STACK_TXN_DIR/apt-still" || {
         warn "package additions could not be read; leaving installed packages in place"
         return 0
     }
     mapfile -t packages < "$_STACK_TXN_DIR/apt-additions"
     [ "${#packages[@]}" -gt 0 ] || return 0
+    _prepare_removal_apt_config || {
+        warn "keeping packages this update installed: the release apt configuration could not be prepared"
+        return 0
+    }
+    config="$_REMOVAL_APT_CONFIG"
     # A second Ctrl-C must not kill the shell, or turn a finished remove into
     # status 130, while these packages are being taken back.
     trap '' INT TERM HUP
     export PLEBIAN_OS_PACKAGE_STEP_IGNORE_SIGNAL=1
-    uid="$(id -u 2>/dev/null || true)"
-    [ "$uid" = 0 ] || elevate=(sudo)
+    uid="$(/usr/bin/id -u 2>/dev/null || true)"
+    _REMOVAL_ELEVATE=()
+    [ "$uid" = 0 ] || _REMOVAL_ELEVATE=(/usr/bin/sudo)
     for ((i=${#packages[@]}-1; i>=0; i--)); do
         pkg="${packages[$i]}"
         [ -n "$pkg" ] || continue
@@ -2774,7 +2976,7 @@ remove_transaction_package_additions() {
             warn "keeping $pkg: removing it would also remove $extra, which this update did not install"
             continue
         fi
-        if ! "${elevate[@]}" apt-get remove -y --no-install-recommends "$pkg"; then
+        if ! _run_release_apt "$config" remove -y --no-install-recommends "$pkg"; then
             warn "keeping $pkg: apt remove failed; it is still installed"
             continue
         fi
@@ -2785,6 +2987,7 @@ remove_transaction_package_additions() {
         done <<<"$removals"
         removed="${removed:+$removed }$pkg"
     done
+    rm -rf -- "$config"
     [ -z "$removed" ] || log "removed packages this update had installed: $removed"
     return 0
 }
@@ -2820,18 +3023,31 @@ require_consistent_package_database() {
     die "repair the package database first: sudo dpkg --configure -a (then sudo apt-get -f install), and run the update again"
 }
 
+_announce_stack_rollback() {
+    [ "${_STACK_ROLLBACK_SAID:-0}" = 1 ] && return 0
+    _STACK_ROLLBACK_SAID=1
+    case "${_STACK_TXN_EXIT_STATUS:-1}" in
+        130|143|129)
+            warn "interrupted; rolling back" ;;
+        *)
+            warn "stack update failed; restoring the previous coherent installation" ;;
+    esac
+}
+
 rollback_stack_transaction() {
     local failed=0 kilix_rollback_ready=0
+    # Say why before any package command, so a sudo prompt or apt's own output
+    # is not the first thing the operator sees. The case below says it again
+    # only when this announcement did not run.
+    _announce_stack_rollback
     # Close a package window a die() skipped, then remove only this
     # transaction's new packages. A removal that is not safe is reported and
     # kept; it does not fail the stack rollback. No transaction directory means
     # there is nothing to remove.
     remove_transaction_package_additions || true
     case "${_STACK_TXN_EXIT_STATUS:-1}" in
-        130|143|129)
-            warn "interrupted; rolling back" ;;
         *)
-            warn "stack update failed; restoring the previous coherent installation" ;;
+            _announce_stack_rollback ;;
     esac
     if [ -n "$(package_database_faults)" ]; then
         warn "dpkg reports half-installed packages; after this rollback run: sudo dpkg --configure -a"
@@ -7180,10 +7396,8 @@ begin_package_addition_window
 install_ollama_runtime_update
 end_package_addition_window
 test_fail_after_boundary ollama-runtime
-begin_package_addition_window
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected native runtime could not be prepared/applied"
-end_package_addition_window
 test_fail_after_boundary native-runtime
 
 log "updating pleb   ($PLEB_DIR)"
