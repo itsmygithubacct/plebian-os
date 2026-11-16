@@ -658,7 +658,7 @@ release upgrade, physical or human acceptance gate. Retain the report and
      contention; inject a failure after a same-source promotion and verify the
      exact prior `current`, `previous`, and stamp are restored while failed
      and otherwise unreferenced generations are safely collected;
-   - verify `/usr/local/share/plebian-os/wallpapers/plebian-os.png` is
+   - verify `/usr/share/plebian-os/wallpapers/plebian-os.png` is
      `root:root`, mode `0644`, and has the expected tracked/build-info SHA-256;
    - verify `/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf` is
      `root:root`, mode `0644`, matches the build-info SHA-256, selects that
@@ -695,8 +695,8 @@ release upgrade, physical or human acceptance gate. Retain the report and
      override, attribution, license, scripts, Pleb recovery guide (or removes
      newly introduced files/directories), and state;
    - verify the installed
-     `/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md` and
-     `/usr/local/share/doc/plebian-os/COPYING.GPL-2` are `root:root`, mode
+     `/usr/share/plebian-os/notices/installer/ATTRIBUTION.md` and
+     `/usr/share/plebian-os/notices/COPYING.GPL-2` are `root:root`, mode
      `0644`, match their expected hashes, and retain the attribution's working
      relative `../COPYING.GPL-2` reference.
 

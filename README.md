@@ -306,7 +306,7 @@ https://github.com/user-attachments/assets/4c3f0796-6023-41ad-975e-853ade4125af
    - selects that same branded asset for the LightDM GTK greeter and disables
      per-user greeter backgrounds, including before firstboot succeeds;
    - validates and installs the artwork attribution and GPL version 2 text under
-     `/usr/local/share/doc/plebian-os/`, preserving their relative link;
+     `/usr/share/plebian-os/notices/`, preserving their relative link;
    - installs Pleb's update recovery guide under
      `/usr/local/share/doc/pleb/` so Kilix-95 can open it from Help;
    - pins Pleb as the default session (and, with `--kiosk`, enables autologin);
@@ -578,7 +578,7 @@ or `--reuse-iso` is required to trust an existing artifact.
 | `build/remaster-iso.sh` | inject the preseed + provisioner into a trixie netinst ISO |
 | `build/brand-installer.py` | validate artwork, brand BIOS/UEFI text, and refresh Debian's existing media-check entries |
 | `assets/installer/` | editable logo, installer-ready artwork, provenance, and licensing |
-| `assets/desktop/` | matching desktop wallpaper, installed at `/usr/local/share/plebian-os/wallpapers/plebian-os.png` |
+| `assets/desktop/` | matching desktop wallpaper, installed at `/usr/share/plebian-os/wallpapers/plebian-os.png` |
 | `build/make-usb.sh` | build the ISO and flash it to a USB stick (with safety guards) |
 | `build/acceptance-vm.sh` | automated VirtualBox release gate: clean candidate binding, instrumented install, lifecycle checks, checksummed report |
 | `build/acceptance-release-iso.sh` | validate the exact strict ISO closure and prepare operator-driven BIOS and EFI installs |
