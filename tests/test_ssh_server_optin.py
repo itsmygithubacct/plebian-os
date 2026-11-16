@@ -123,8 +123,11 @@ class FakeSystem:
     def __init__(self, installed=False, plan=None, update_rc=0, install_rc=0,
                  enable_rc=0, postinst_ran=True, start_fails=False, stuck=False,
                  disable_rc=0, generated=None, etc=None, stray_sshd=False,
-                 half=None, install_stops=None):
+                 half=None, install_stops=None, unreachable=False):
         self.installed = installed
+        # Debian cannot be reached: like real apt, update only warns (exit 0)
+        # unless --error-on=any is given, and the plan then finds no candidate.
+        self.unreachable = unreachable
         # dpkg state other than "ii"/absent, e.g. "iU" (unpacked) or "iF"
         # (half-configured); install_stops sets it when apt fails part way.
         self.half = half
@@ -232,6 +235,8 @@ class FakeSystem:
             return Result(0, rows + 'LISTEN 0 4096 127.0.0.1:631 0.0.0.0:* users:(("cupsd",pid=9,fd=7))\n')
         if name == "apt-get" and "-s" in argv:
             self._record_sources(argv, env)
+            if self.unreachable:
+                return Result(100, "", "E: Package 'openssh-server' has no installation candidate\n")
             return Result(0, self.plan)
         if name == "/usr/sbin/sshd":
             return Result(0, "port 22\npermitrootlogin without-password\n")
@@ -261,6 +266,8 @@ class FakeSystem:
         self.calls.append(argv)
         self._record_sources(argv, env)
         if "update" in argv:
+            if self.unreachable:
+                return 100 if "--error-on=any" in argv else 0
             return self.update_rc
         if "install" in argv:
             if self.install_stops:
@@ -428,6 +435,7 @@ class RealAptProxyTests(unittest.TestCase):
             # What debian-installer writes for a proxy answer, plus hostile keys.
             (hostile / "apt.conf").write_text(
                 'Acquire::http::Proxy "http://proxy.example:3128";\n'
+                'Acquire::http::Proxy::127.0.0.1 "DIRECT";\n'
                 f'Acquire::ftp::Proxy "http://evil.example; DPkg::Pre-Invoke {{touch {inject}}}";\n'
                 f'Acquire::http::Proxy-Auto-Detect "{autodetect}";\n'
                 f'Acquire::http::ProxyAutoDetect "{autodetect}";\n'
@@ -456,10 +464,17 @@ class RealAptProxyTests(unittest.TestCase):
                 "(work / 'sources.list.d' / 'local.list').write_text(f'deb [trusted=yes] file://{sys.argv[5]} ./\\n')\n"
                 "with open(work / 'apt.conf', 'a') as s: s.write('APT::Sandbox::User \"root\";\\n')\n"
                 "opts, env = h.apt_options(work), h.apt_env(work)\n"
-                "up = h.run(['apt-get', *opts, 'update'], env=env)\n"
+                "up = h.run(['apt-get', *opts, *h.APT_UPDATE], env=env)\n"
                 "plan = h.run(['apt-get', '-s', *opts, 'install', 'libdep-sim'], env=env)\n"
+                "# A source nothing listens on: plain update only warns, the helper's fails.\n"
+                "(work / 'sources.list.d' / 'down.list').write_text('deb [trusted=yes] http://127.0.0.1:9/debian trixie main\\n')\n"
+                "fast = ['-o', 'Acquire::Retries=0']  # after the helper's Retries=3\n"
+                "plain = h.run(['apt-get', *opts, *fast, 'update'], env=env)\n"
+                "down = h.run(['apt-get', *opts, *fast, *h.APT_UPDATE], env=env)\n"
                 "print(json.dumps({'conf': conf, 'update': up.returncode, 'plan': plan.stdout,\n"
-                "                  'plan_rc': plan.returncode, 'err': up.stderr + plan.stderr}))\n")
+                "                  'plan_rc': plan.returncode, 'err': up.stderr + plan.stderr,\n"
+                "                  'plain_down': plain.returncode, 'down': down.returncode,\n"
+                "                  'down_err': down.stdout + down.stderr}))\n")
             result = subprocess.run(
                 ["unshare", "-rm", sys.executable, str(probe), str(HELPER), str(hostile),
                  str(keyring), str(tmp / "work"), str(debian)],
@@ -472,6 +487,7 @@ class RealAptProxyTests(unittest.TestCase):
             conf = report["conf"]
             self.assertIn('Acquire::http::Proxy "http://proxy.example:3128";\n', conf)
             self.assertIn('Acquire::https::Proxy "http://parts.example:8080";\n', conf)
+            self.assertIn('Acquire::http::Proxy::127.0.0.1 "DIRECT";\n', conf)
             for word in ("from-apt-config", "evil.example", "Pre-Invoke", "Auto-Detect", "AutoDetect", str(autodetect),
                          "Sources::With", str(higher)):
                 self.assertNotIn(word, conf)
@@ -482,6 +498,9 @@ class RealAptProxyTests(unittest.TestCase):
             self.assertEqual(report["plan_rc"], 0, report["err"])
             self.assertIn("Inst libdep-sim (1.0", report["plan"])
             self.assertNotIn("9.0", report["plan"])
+            self.assertEqual(report["plain_down"], 0, "apt-get update now fails on fetch errors by itself")
+            self.assertEqual(report["down"], 100, report["down_err"])
+            self.assertIn("127.0.0.1:9", report["down_err"])
             self.assertFalse(ran.exists(), "the proxy auto-detect program ran")
             self.assertFalse(prehook.exists())
             self.assertFalse(inject.exists())
@@ -701,6 +720,19 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(rc, 2)
         self.assertIn("not Debian", err)
         self.assertFalse(any(c[:2] == ["systemctl", "enable"] for c in system.calls))
+
+    def test_unreachable_debian_gives_the_network_hint(self):
+        system = FakeSystem(installed=False, unreachable=True)
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        self.assertIn("could not read the Debian package lists", err)
+        self.assertIn("Check the network connection, and the proxy setting", err)
+        self.assertNotIn("installation candidate", err)
+        update = system.commands("apt-get")[0]
+        self.assertEqual(update[-2:], ["update", "--error-on=any"])
+        self.assertEqual(len(system.commands("apt-get")), 1)  # no plan, no install
+        self.assertEqual(system.changes(), [])
+        self.assertTrue(out.rstrip().endswith("SSH server: OFF -- nothing accepts SSH logins"), out)
 
     def test_failed_package_list_download_changes_nothing(self):
         system = FakeSystem(installed=False, update_rc=100)

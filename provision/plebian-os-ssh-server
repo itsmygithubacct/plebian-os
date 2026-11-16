@@ -535,6 +535,14 @@ def prepare_apt_work(codename):
     return work
 
 
+# Without --error-on=any, apt-get update exits 0 when a source cannot be
+# fetched (it only warns), and the failure would surface later as "no
+# installation candidate". trixie's apt (3.0) has the option.
+APT_UPDATE = ("update", "--error-on=any")
+NETWORK_HINT = ("could not read the Debian package lists (apt's messages above say why). "
+                "Check the network connection, and the proxy setting if this computer "
+                "uses one (Acquire::http::Proxy in /etc/apt/apt.conf)")
+
 INST_RE = re.compile(r"^(Inst|Conf|Remv|Purg) (\S+)")
 
 
@@ -568,9 +576,9 @@ def install_package():
         options = apt_options(work)
         env = apt_env(work)
         say(f"Reading the Debian package lists for {codename} (deb.debian.org, security.debian.org)...")
-        status = run_shielded(["apt-get", *options, "update"], env=env)
+        status = run_shielded(["apt-get", *options, *APT_UPDATE], env=env)
         if status != 0:
-            raise Failed("could not read the Debian package lists; check the network connection")
+            raise Failed(NETWORK_HINT)
         installs = check_plan(options, env)
         say(f"Installing from Debian: {', '.join(installs) if installs else PACKAGE}")
         status = run_shielded(["apt-get", *options, *DPKG_OPTIONS, "-y", "--no-remove",
