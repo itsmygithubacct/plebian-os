@@ -1305,6 +1305,8 @@ done
 # Named keys preserve the numeric layout of pre-notification snapshots.
 paths+=(/usr/local/lib/pleb/notification_center.py /usr/local/lib/pleb/.notification_center.py.new)
 path_keys+=(notifications.0 notifications.1)
+paths+=(/usr/local/sbin/plebian-os-ssh-server)
+path_keys+=(ssh-server.0)
 cleanup() {
     rc=$?
     trap - EXIT
@@ -1346,6 +1348,7 @@ done
 : >"$txn/zell-runtime"
 : >"$txn/kilix-secrets"
 : >"$txn/pleb-notifications"
+: >"$txn/ssh-server-helper"
 printf '%s\n' "$txn"
 ROOT_SNAPSHOT
 }
@@ -1584,6 +1587,11 @@ fi
 if [ -f "$txn/pleb-notifications" ]; then
     paths+=(/usr/local/lib/pleb/notification_center.py /usr/local/lib/pleb/.notification_center.py.new)
     path_keys+=(notifications.0 notifications.1)
+fi
+# A snapshot from before 0.2.3's SSH server helper never recorded it.
+if [ -f "$txn/ssh-server-helper" ]; then
+    paths+=(/usr/local/sbin/plebian-os-ssh-server)
+    path_keys+=(ssh-server.0)
 fi
 new_paths=()
 cleanup_new() {
@@ -3812,6 +3820,7 @@ stage_and_validate_os_layer() {
         "$prov/lightdm-gtk-greeter.conf"
         "$prov/plebian-os-select-closure.sh"
         "$prov/plebian-os-nvidia-driver"
+        "$prov/plebian-os-ssh-server"
     )
     for file in "${required[@]}"; do
         [ -f "$file" ] || die "OS-layer checkout is incomplete; required file missing: $file"
@@ -3850,6 +3859,8 @@ stage_and_validate_os_layer() {
         install -m 0644 "$prov/$file" "$stage/$file"
     done
     install -m 0755 "$prov/plebian-os-passwd" "$stage/plebian-os-passwd"
+    [ ! -L "$prov/plebian-os-ssh-server" ] || die "unsafe SSH server helper symlink"
+    install -m 0755 "$prov/plebian-os-ssh-server" "$stage/plebian-os-ssh-server"
     install -m 0755 "$prov/plebian-os-update.sh" "$stage/plebian-os-update"
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
     install -m 0755 "$prov/plebian-os-firstboot-attempt" "$stage/plebian-os-firstboot-attempt"
@@ -3906,6 +3917,7 @@ stage_and_validate_os_layer() {
         bash -n "$file" || die "staged OS-layer shell validation failed: $file"
     done
     python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-source-carrier" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
+        "$stage/plebian-os-ssh-server" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-diarization-converter" \
         "$stage/plebian-os-install-encodec-converter" \
@@ -4093,6 +4105,7 @@ names=(
     waydroid-closure.env
     waydroid-closure.sha256
     ollama-release.env
+    plebian-os-ssh-server
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -4125,9 +4138,10 @@ dests=(
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
     /usr/local/share/plebian-os/ollama-release.env
+    /usr/local/sbin/plebian-os-ssh-server
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65 65536)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644 0644 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65 65536 131072)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -4479,6 +4493,7 @@ self_update_os_layer() {
         waydroid-closure.env
         waydroid-closure.sha256
         ollama-release.env
+        plebian-os-ssh-server
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
