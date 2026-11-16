@@ -96,9 +96,9 @@ In brief:
   `Proxy-Auto-Detect` program is never run. Plebian-OS's own Qt pin is kept,
   and the Qt runtime is verified after the dependency step. In release mode,
   Pleb and Kilix refuse a missing package by name instead of using the system
-  apt (a held package counts as installed); the message says to run
-  `pleb update`, or `plebian-os-update --recover-interrupted`, or to report
-  it.
+  apt (a held package counts as installed); the message says what to do
+  ("run 'plebian-os-update --revalidate-current' to reinstall this release's
+  packages; if it is still missing, report it").
 - Machines on a 0.2.3 release candidate move to the final once with
   `pleb update --to 0.2.3`; see [UPGRADING.md](UPGRADING.md).
 
