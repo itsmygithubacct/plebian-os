@@ -1237,10 +1237,17 @@ def migrate_command_model(kilix, pin):
     receipt this run wrote, and keeps the first-use offer.
     """
     cm, _defaults = _load(kilix)
-    lic = cm._license()
+    stops = (OSError, RuntimeError, ValueError)
     try:
+        # The licence authority is reached through Content, so _api comes first;
+        # a Content or licence component that cannot be loaded is a SetupError
+        # (a RuntimeError) and stops only this step.
+        cm._api()
+        stops += (cm._license().LicenseError,)
         return _migrate_command_model(cm, pin)
-    except (OSError, RuntimeError, ValueError, lic.LicenseError) as error:
+    except Exception as error:
+        if not isinstance(error, stops):
+            raise
         return _not_migrated(f'the migration stopped ({type(error).__name__}: {error})')
 
 

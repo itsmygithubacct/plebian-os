@@ -1218,7 +1218,7 @@ class InstallPolicyTests(unittest.TestCase):
         api = SimpleNamespace(Installer=Installer, InstallError=type('InstallError', (RuntimeError,), {}))
         lic = Licence()
         catalog = SimpleNamespace(require_asset=lambda name: spec)
-        setup = type('SetupError', (Exception,), {})
+        setup = type('SetupError', (RuntimeError,), {})  # as kilix config.content_models
         cm = SimpleNamespace(
             _api=lambda: api, _license=lambda: lic,
             _verified_catalog=lambda api: catalog,
@@ -1395,6 +1395,25 @@ class InstallPolicyTests(unittest.TestCase):
             result, printed = self.migrate()
         self.assertNothingInstalled(result, printed)
         self.assertIn('PermissionError', printed)
+
+    def test_a_content_component_that_cannot_be_loaded_never_fails_the_run(self):
+        self.covered_manifests = {self.v9_digest}
+        order = []
+        setup = self.cm.SetupError
+        api = self.cm._api
+
+        def content():
+            order.append('api')
+            return api()
+
+        def licence():
+            order.append('license')
+            raise setup('update the pinned Content component for model setup')
+        with patch.object(self.cm, '_api', content), patch.object(self.cm, '_license', licence):
+            result, printed = self.migrate()
+        self.assertNothingInstalled(result, printed)
+        self.assertEqual(order[:2], ['api', 'license'])
+        self.assertIn('SetupError', printed)
 
     def test_a_licence_error_never_fails_the_run(self):
         self.covered_manifests = {self.v9_digest}
