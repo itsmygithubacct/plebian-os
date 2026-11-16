@@ -62,6 +62,8 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_REPO
     PLEBIAN_OS_BRANCH
     PLEBIAN_OS_REF
+    PLEBIAN_OS_RELEASE_TAG
+    PLEBIAN_OS_RELEASE_TAG_OBJECT
     PLEB_REPO
     PLEB_BRANCH
     PLEB_REF
@@ -475,6 +477,10 @@ NEURONTE_REF="${NEURONTE_REF:-}"
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
 PLEBIAN_OS_BRANCH="${PLEBIAN_OS_BRANCH:-}"     # empty = repo default
 PLEBIAN_OS_REF="${PLEBIAN_OS_REF:-}"           # optional exact commit/tag
+# The exact release tag (v<x.y.z> or v<x.y.z>-rcN) and tag object an image was
+# built from, or that the last closure selection resolved. Empty when unknown.
+PLEBIAN_OS_RELEASE_TAG="${PLEBIAN_OS_RELEASE_TAG:-}"
+PLEBIAN_OS_RELEASE_TAG_OBJECT="${PLEBIAN_OS_RELEASE_TAG_OBJECT:-}"
 PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-}"           # default after target user is known
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file below if empty
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
@@ -1071,6 +1077,9 @@ restore_installed_closure() {
         if [ "$state" != set ]; then
             [ "$key" != PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION ] || continue
             [[ "$key" != PLEBIAN_OS_KILIX_GO_DEB_* ]] || continue
+            # A machine installed or selected before 0.2.3 records no release
+            # tag. Empty is the honest value: it is not a pin to default.
+            [[ "$key" != PLEBIAN_OS_RELEASE_TAG* ]] || continue
             missing+=("$key")
             continue
         fi
@@ -1475,6 +1484,21 @@ validate_native_release_closure() {
     done
 }
 
+# The recorded release identity is both values or neither: a stable tag or a
+# numbered candidate of this VERSION, and a full tag-object SHA.
+validate_release_identity() {
+    local version="${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" tag="$PLEBIAN_OS_RELEASE_TAG" suffix
+    if [ -z "$tag" ] && [ -z "$PLEBIAN_OS_RELEASE_TAG_OBJECT" ]; then
+        return 0
+    fi
+    [[ "$PLEBIAN_OS_RELEASE_TAG_OBJECT" =~ ^[0-9a-f]{40}$ ]] \
+        || die "PLEBIAN_OS_RELEASE_TAG_OBJECT must be a full 40-character lowercase object SHA beside PLEBIAN_OS_RELEASE_TAG"
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ -n "$tag" ] && [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]] \
+        || die "PLEBIAN_OS_RELEASE_TAG must be v$version or v$version-rcN (got '$tag')"
+}
+
 validate_release_inputs() {
     validate_mpv_release_closure || return 1
     validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" "${PLEBIAN_OS_RELEASE_MODE:-0}" || return 1
@@ -1486,6 +1510,7 @@ validate_release_inputs() {
         [[ "${!key}" =~ ^[0-9a-fA-F]{40}$ ]] \
             || die "release mode requires $key to be a full 40-character commit SHA"
     done
+    validate_release_identity
     if release_requires_f120_roots; then
         for key in KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF \
             KILIX_ICEWM_REF KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF; do
@@ -8446,6 +8471,8 @@ EOF
     write_session_default PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
     write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
     write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
+    write_session_default PLEBIAN_OS_RELEASE_TAG "$PLEBIAN_OS_RELEASE_TAG"
+    write_session_default PLEBIAN_OS_RELEASE_TAG_OBJECT "$PLEBIAN_OS_RELEASE_TAG_OBJECT"
     write_session_default PLEBIAN_OS_DIR "$PLEBIAN_OS_DIR"
     write_session_default PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
     write_session_default PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"

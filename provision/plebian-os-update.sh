@@ -3238,7 +3238,8 @@ PLEBIAN_OS_NATIVE_DEB_SHA256 PLEBIAN_OS_NATIVE_DEB_URL
 PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES
 PLEBIAN_OS_MPV_URL PLEBIAN_OS_MPV_SHA256 PLEBIAN_OS_MPV_BYTES PLEBIAN_OS_MPV_VERSION PLEBIAN_OS_MPV_SOURCE_REF PLEBIAN_OS_MPV_LAUNCHER_REF
 PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_REF PLEBIAN_OS_RELEASE
-PLEBIAN_OS_RELEASE_MODE PLEBIAN_OS_REPO PLEBIAN_OS_SESSION_HOME
+PLEBIAN_OS_RELEASE_MODE PLEBIAN_OS_RELEASE_TAG PLEBIAN_OS_RELEASE_TAG_OBJECT
+PLEBIAN_OS_REPO PLEBIAN_OS_SESSION_HOME
 PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_UV_INSTALLER_MAX_BYTES
 PLEBIAN_OS_UV_INSTALLER_SHA256 PLEBIAN_OS_UV_VERSION PLEBIAN_OS_VERSION
 PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 PLEB_AUTO_LOCK PLEB_BG PLEB_BRANCH
@@ -3581,6 +3582,20 @@ latest_published_release() {
     printf '%s\n' "$latest"
 }
 
+# The exact candidate tag the selected closure records, or nothing. Selectors
+# from 0.2.3 on record PLEBIAN_OS_RELEASE_TAG and its tag object; a closure
+# written earlier records neither and is judged by PLEBIAN_OS_VERSION alone.
+recorded_release_candidate_tag() {
+    local version="$1" tag="${PLEBIAN_OS_RELEASE_TAG:-}"
+    local object="${PLEBIAN_OS_RELEASE_TAG_OBJECT:-}"
+    [ -n "$tag" ] || return 0
+    if ! valid_release_tag "$version" "$tag" || [[ ! "$object" =~ ^[0-9a-f]{40}$ ]]; then
+        warn "ignoring recorded release tag '$tag': it does not identify a tag object of release $version"
+        return 0
+    fi
+    [ "$tag" = "v$version" ] || printf '%s\n' "$tag"
+}
+
 release_is_newer() {
     local candidate="$1" installed="$2" highest
     [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
@@ -3644,6 +3659,9 @@ local_candidate_matches_selected_closure() {
         # manifest, not a manifest pin. Its exact equality to version was
         # already required above.
         [ "$key" != PLEBIAN_OS_RELEASE ] || continue
+        # The selection records the tag it resolved and that tag's object; a
+        # manifest never pins either. The tag binding was checked above.
+        case "$key" in PLEBIAN_OS_RELEASE_TAG|PLEBIAN_OS_RELEASE_TAG_OBJECT) continue ;; esac
         value="${!key-}"
         # Closure selection resolves pins before writing the root-owned
         # session file. For the OS candidate, the selected value is therefore
@@ -3703,7 +3721,7 @@ warn_release_hop_split_state() {
 }
 
 select_latest_release_if_needed() {
-    local latest target_commit stage selector rc release_keys key
+    local latest target_commit stage selector rc release_keys key candidate_tag
     local -a relaunch_args=() relaunch_env=(env)
     [ "$select_latest_release" = 1 ] || {
         log "explicitly revalidating selected release $PLEBIAN_OS_VERSION"
@@ -3712,11 +3730,15 @@ select_latest_release_if_needed() {
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not a release version; use --revalidate-current only for recovery"
     latest="$(latest_published_release)"
-    if [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
+    candidate_tag="$(recorded_release_candidate_tag "$PLEBIAN_OS_VERSION")"
+    if [ "$latest" = "$PLEBIAN_OS_VERSION" ] && [ -n "$candidate_tag" ]; then
+        # Same VERSION, but the closure records a candidate and the final is
+        # published: select it through the final's own selector below.
+        log "release candidate $candidate_tag is selected and final release v$latest is published"
+    elif [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
         log "Plebian-OS $PLEBIAN_OS_VERSION is the latest published release"
         return 0
-    fi
-    if ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
+    elif ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
         if [ "$restart_arg" = --restart ] \
             && local_candidate_matches_selected_closure "$PLEBIAN_OS_VERSION"; then
             log "unpublished candidate v$PLEBIAN_OS_VERSION matches the selected release closure; continuing update"
@@ -3725,7 +3747,11 @@ select_latest_release_if_needed() {
         die "published release $latest is not newer than selected release $PLEBIAN_OS_VERSION; refusing an implicit downgrade"
     fi
 
-    log "new published release found: $PLEBIAN_OS_VERSION -> $latest"
+    if [ -n "$candidate_tag" ] && [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
+        log "new published release found: $candidate_tag -> v$latest"
+    else
+        log "new published release found: $PLEBIAN_OS_VERSION -> $latest"
+    fi
     ensure_os_source_checkout_for_selection
     git -C "$PLEBIAN_OS_DIR" fetch --force origin "refs/tags/v$latest" \
         || die "could not fetch target release tag v$latest"

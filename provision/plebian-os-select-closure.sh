@@ -217,6 +217,8 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_REPO
     PLEBIAN_OS_BRANCH
     PLEBIAN_OS_REF
+    PLEBIAN_OS_RELEASE_TAG
+    PLEBIAN_OS_RELEASE_TAG_OBJECT
     PLEB_REPO
     PLEB_BRANCH
     PLEB_REF
@@ -290,6 +292,15 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_VOICE_MODEL_SHA256
     PLEBIAN_OS_INSTALL_WAYDROID
     PLEBIAN_OS_WAYDROID_CLOSURE_SHA256
+)
+
+# The exact tag a selection resolved: v<x.y.z> or v<x.y.z>-rcN and its tag
+# object. The selector records them; a manifest never pins them. They let Pleb
+# and the updater tell a candidate from the final of the same VERSION. A
+# development-commit selection records both empty.
+SELECTION_IDENTITY_KEYS=(
+    PLEBIAN_OS_RELEASE_TAG
+    PLEBIAN_OS_RELEASE_TAG_OBJECT
 )
 
 # Release-controlled too, but consumed only while building the image: the
@@ -383,6 +394,7 @@ declare -A COMPONENT_DIRECTION=()
 
 TARGET=""
 RELEASE_TAG=""
+RELEASE_TAG_OBJECT=""
 DEVELOPMENT_COMMIT=""
 SOURCE_DIR=""
 OFFLINE=0
@@ -787,6 +799,10 @@ validate_release_closure() {
         || closure_reject "PLEBIAN_OS_VERSION is '${MANIFEST[PLEBIAN_OS_VERSION]:-unset}', not $TARGET"
     [ "$SOURCE_VERSION" = "$TARGET" ] \
         || closure_reject "the release commit's VERSION reads '$SOURCE_VERSION', not $TARGET"
+    for key in "${SELECTION_IDENTITY_KEYS[@]}"; do
+        [ -z "${MANIFEST[$key]+x}" ] \
+            || closure_reject "$key is recorded by the selection, not pinned by a release manifest"
+    done
     validate_release_requirements
 
     for key in "${REQUIRED_VALUE_KEYS[@]}"; do
@@ -1018,6 +1034,13 @@ build_selected_closure() {
     CLOSURE[PLEBIAN_OS_RELEASE]="$TARGET"
     CLOSURE[PLEBIAN_OS_VERSION]="$TARGET"
     CLOSURE[PLEBIAN_OS_REF]="$OS_COMMIT"
+    if [ -n "$DEVELOPMENT_COMMIT" ]; then
+        CLOSURE[PLEBIAN_OS_RELEASE_TAG]=""
+        CLOSURE[PLEBIAN_OS_RELEASE_TAG_OBJECT]=""
+    else
+        CLOSURE[PLEBIAN_OS_RELEASE_TAG]="${RELEASE_TAG:-v$TARGET}"
+        CLOSURE[PLEBIAN_OS_RELEASE_TAG_OBJECT]="$RELEASE_TAG_OBJECT"
+    fi
     for key in "${REQUIRED_EMPTY_KEYS[@]}"; do
         if is_f120_root_key "$key" && ! release_requires_f120_roots; then
             continue
@@ -1114,6 +1137,9 @@ resolve_closure_source() {
         fi
         OS_COMMIT="$(git -C "$SOURCE_DIR" rev-parse --verify "$tag_ref^{commit}" 2>/dev/null)" \
             || die "release tag $release_tag did not resolve to a commit"
+        [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] \
+            || die "release tag $release_tag did not resolve to a full object SHA"
+        RELEASE_TAG_OBJECT="$tag_object"
     fi
     # Only the object store is read. HEAD and the working tree stay put, so the
     # updater still finds the clean pinned checkout it insists on.
@@ -1678,6 +1704,9 @@ announce_closure_move() {
     pinned_by="releases/$RELEASE_MANIFEST_STEM.env@${OS_COMMIT:0:12}"
     if [ -z "$installed" ]; then
         warn "closure: this machine records no PLEBIAN_OS_VERSION; treating $TARGET as a first selection"
+    elif [ "$installed" = "$TARGET" ] && [ -n "${BEFORE[PLEBIAN_OS_RELEASE_TAG]:-}" ] \
+            && [ "${BEFORE[PLEBIAN_OS_RELEASE_TAG]}" != "${CLOSURE[PLEBIAN_OS_RELEASE_TAG]}" ]; then
+        log "closure: ${BEFORE[PLEBIAN_OS_RELEASE_TAG]} -> ${CLOSURE[PLEBIAN_OS_RELEASE_TAG]:-development commit} (same VERSION $TARGET, pinned by $pinned_by)"
     elif [ "$installed" = "$TARGET" ]; then
         log "closure: $installed -> $TARGET (reselecting the same release, pinned by $pinned_by)"
     elif version_is_older "$TARGET" "$installed"; then
