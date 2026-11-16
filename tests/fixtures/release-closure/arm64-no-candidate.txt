@@ -1,0 +1,5 @@
+# DEP_GROUPS names with no trixie arm64 candidate (seat B, real arm64 indexes).
+# They are not in the pleb or Kilix release lists. This host has no arm64 apt
+# lists, so the names are a committed fixture rather than a new fetch.
+libquadmath0
+mbrola

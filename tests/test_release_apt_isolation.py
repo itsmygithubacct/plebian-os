@@ -590,6 +590,7 @@ def _config(path: Path, sources: dict[str, str]) -> None:
     (path / "sources.list").write_text(sources.pop("sources.list", ""))
     (path / "preferences").write_text("")
     (path / "apt.conf").write_text(
+        'Dir::Etc::main "/dev/null";\n'
         f'Dir::Etc::Parts "{path / "apt.conf.d"}";\n'
         'APT::Get::AllowUnauthenticated "false";\n'
         'Acquire::AllowInsecureRepositories "false";\n'
@@ -815,64 +816,148 @@ class ReleaseAptCandidateTests(unittest.TestCase):
             self.assertNotIn("Candidate: 2.0", result.stdout)
 
     def test_sources_with_does_not_supply_a_release_package(self):
+        """Operator apt.conf and apt.conf.d do not reach a prepared release apt.
+
+        The configuration comes from prepare_release_apt_config. A bind-mounted
+        /etc/apt holds Sources::With, the trust overrides, and a Pre-Invoke.
+        Dir::Etc::main /dev/null and the empty Parts directory drop both files.
+        Operator hooks stay out; the owned Qt pin is a preferences file and is
+        covered by its own test.
+        """
         if shutil.which("dpkg-deb") is None:
             self.skipTest("dpkg-deb is required")
-        arch = subprocess.run(
-            ["dpkg", "--print-architecture"], text=True, capture_output=True, check=True,
-        ).stdout.strip()
+        if shutil.which("unshare") is None:
+            self.skipTest("unshare is not available")
+        probe = subprocess.run(["unshare", "-rm", "true"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("unshare -rm is not available")
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             debs = tmp / "debs"
             debs.mkdir()
-            _deb(debs / "release-pkg_1.0.deb", "release-pkg", "1.0", arch)
-            _deb(debs / "release-pkg_9.0.deb", "release-pkg", "9.0", arch)
+            _deb(debs / "libdep-sim_1.0_all.deb", "libdep-sim", "1.0", "all")
+            _deb(debs / "libdep-sim_9.0_all.deb", "libdep-sim", "9.0", "all")
             debian = tmp / "debian"
-            _packages(debian, [debs / "release-pkg_1.0.deb"])
-            config = tmp / "config"
-            _config(config, {"sources.list": f"deb [trusted=yes] file://{debian} ./\n"})
-            hostile = tmp / "hostile.conf"
-            hostile.write_text(
-                'APT::Sources::With { "' + str(debs / "release-pkg_9.0.deb") + '"; };\n'
-                'DPkg::Post-Invoke { "echo HOSTHOOK"; };\n'
+            _packages(debian, [debs / "libdep-sim_1.0_all.deb"])
+            suite = codename()
+            apt = write_apt(tmp, {"debian.sources": debian_sources(suite)})
+            dest = tmp / "dest"
+            dest.mkdir()
+            prepared = self._run(
+                tmp,
+                f"dest={str(dest)!r}\n"
+                f"prepare_release_apt_config \"$dest\" lifetime '' {suite!r} {str(apt)!r}\n"
+                "printf 'CONF<<\\n'\n"
+                "cat -- \"$dest/apt.conf\"\n"
+                "printf '\\n>>CONF\\n'\n",
+                tmp / "status-unused", tmp / "extended-unused",
             )
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            kept = dest
+            conf = prepared.stdout.split("CONF<<\n", 1)[1].split(">>CONF", 1)[0]
+            self.assertIn('Dir::Etc::main "/dev/null";', conf)
+            self.assertIn("Dir::Etc::Parts ", conf)
+            # The user namespace cannot setuid to _apt. This is test-only;
+            # the prepared file still has the function's main and Parts lines.
+            (kept / "apt.conf").write_text(
+                (kept / "apt.conf").read_text() + 'APT::Sandbox::User "root";\n')
+            # The candidate under test is the local Debian 1.0. The prepared
+            # file keeps the apt.conf the function wrote.
+            for copied in (kept / "sources.list.d").glob("*"):
+                if copied.is_file():
+                    copied.unlink()
+            (kept / "sources.list").write_text(
+                f"deb [trusted=yes] file://{debian} ./\n")
+            hostile = tmp / "hostile-apt"
+            (hostile / "apt.conf.d").mkdir(parents=True)
+            (hostile / "sources.list.d").mkdir()
+            higher = str(debs / "libdep-sim_9.0_all.deb")
+            prehook = tmp / "prehook"
+            parts_hook = tmp / "parts-hook"
+            main_text = (
+                f'APT::Sources::With {{ "{higher}"; }};\n'
+                'APT::Get::AllowUnauthenticated "true";\n'
+                'Acquire::AllowInsecureRepositories "true";\n'
+                f'DPkg::Pre-Invoke {{ "touch {prehook}"; }};\n'
+                'Dir::Bin::dpkg "/no/such/dpkg-from-main";\n'
+            )
+            (hostile / "apt.conf").write_text(main_text)
+            (hostile / "apt.conf.d" / "99operator.conf").write_text(
+                f'APT::Sources::With {{ "{higher}"; }};\n'
+                'APT::Get::AllowUnauthenticated "true";\n'
+                'Acquire::AllowInsecureRepositories "true";\n'
+                f'DPkg::Pre-Invoke {{ "touch {parts_hook}"; }};\n'
+                'Dir::Bin::dpkg "/no/such/dpkg-from-parts";\n'
+            )
+            (hostile / "sources.list").write_text(
+                f"deb [trusted=yes] file://{debian} ./\n")
             status = tmp / "status"
             status.write_text("")
             extended = tmp / "extended"
             extended.write_text("")
-            direct = subprocess.run(
-                [
-                    "apt-get", "-s",
-                    "-o", f"Dir::Etc::SourceList={config / 'sources.list'}",
-                    "-o", f"Dir::Etc::SourceParts={config / 'sources.list.d'}",
-                    "-o", f"Dir::State::lists={config / 'lists'}",
-                    "-o", f"Dir::State::status={status}",
-                    "-o", f"Dir::Cache={config / 'cache'}",
-                    "install", "release-pkg",
-                ],
-                env={**os.environ, "APT_CONFIG": str(hostile), "DEBIAN_FRONTEND": "noninteractive"},
+            out = tmp / "out"
+            out.mkdir()
+            script = tmp / "probe.sh"
+            script.write_text(
+                "#!/bin/bash\n"
+                "set -u\n"
+                'mount --bind "$HOSTILE" /etc/apt || { echo MOUNT_FAILED >&2; exit 97; }\n'
+                'mkdir -p "$EMPTY_PLEB"\n'
+                'mount --bind "$EMPTY_PLEB" /etc/pleb || { echo MOUNT_PLEB_FAILED >&2; exit 97; }\n'
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                'export PLEBIAN_OS_DPKG_STATUS="$STATUS"\n'
+                'export PLEBIAN_OS_APT_EXTENDED_STATES="$EXTENDED"\n'
+                'export PLEB_STATE_HOME="$STATE"\n'
+                'export DEBIAN_FRONTEND=noninteractive\n'
+                'source "$UPDATE"\n'
+                "set +e\n"
+                'release_apt_get "$DEST" update >"$OUT/update.txt" 2>"$OUT/update.err"\n'
+                "update_rc=$?\n"
+                'plan="$(release_apt_get "$DEST" -s install libdep-sim 2>"$OUT/plan.err")"\n'
+                "plan_rc=$?\n"
+                "set -e\n"
+                'printf "%s\\n" "$plan" >"$OUT/plan.txt"\n'
+                'printf "UPDATE_RC=%s\\nPLAN_RC=%s\\n" "$update_rc" "$plan_rc" >"$OUT/rc"\n'
+                'env -u APT_CONFIG APT_CONFIG="$DEST/apt.conf" apt-config dump '
+                "APT::Get::AllowUnauthenticated Acquire::AllowInsecureRepositories "
+                'DPkg::Pre-Invoke Dir::Bin::dpkg >"$OUT/dump.txt" 2>"$OUT/dump.err"\n'
+            )
+            script.chmod(0o755)
+            ran = subprocess.run(
+                ["unshare", "-rm", "bash", str(script)],
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOSTILE": str(hostile),
+                    "STATUS": str(status),
+                    "EXTENDED": str(extended),
+                    "STATE": str(tmp / "state"),
+                    "UPDATE": str(UPDATE),
+                    "DEST": str(kept),
+                    "OUT": str(out),
+                    "EMPTY_PLEB": str(tmp / "empty-pleb"),
+                    "HOME": str(tmp / "home"),
+                    "LC_ALL": "C",
+                },
                 text=True, capture_output=True, check=False,
             )
-            self.assertEqual(direct.returncode, 0, direct.stderr)
-            self.assertIn("Inst release-pkg (9.0", direct.stdout)
-            wrapped = self._run(
-                tmp,
-                f"config={str(config)!r}\n"
-                "release_apt_get \"$config\" update\n"
-                "release_apt_get \"$config\" -s install release-pkg\n",
-                status, extended,
-            )
-            self.assertEqual(wrapped.returncode, 0, wrapped.stderr)
-            self.assertNotIn("(9.0", wrapped.stdout)
-            self.assertIn("1.0", wrapped.stdout)
-            dumped = subprocess.run(
-                ["bash", "-c",
-                 'env -u APT_CONFIG APT_CONFIG="$1" apt-config dump DPkg::Post-Invoke',
-                 "dump", str(config / "apt.conf")],
-                text=True, capture_output=True, check=False,
-            )
-            self.assertEqual(dumped.returncode, 0, dumped.stderr)
-            self.assertNotIn("HOSTHOOK", dumped.stdout)
-            self.assertNotIn("qt-runtime", dumped.stdout)
+            self.assertEqual(ran.returncode, 0, ran.stderr + ran.stdout)
+            plan = (out / "plan.txt").read_text()
+            dump = (out / "dump.txt").read_text()
+            rc_text = (out / "rc").read_text()
+            self.assertIn("UPDATE_RC=0", rc_text, (out / "update.err").read_text())
+            self.assertIn("PLAN_RC=0", rc_text, (out / "plan.err").read_text() + plan)
+            self.assertIn("Inst libdep-sim (1.0", plan)
+            self.assertNotIn("(9.0", plan)
+            self.assertIn('APT::Get::AllowUnauthenticated "false";', dump)
+            self.assertIn('Acquire::AllowInsecureRepositories "false";', dump)
+            self.assertNotIn("/no/such/dpkg-from-main", dump)
+            self.assertNotIn("/no/such/dpkg-from-parts", dump)
+            self.assertNotIn("PREHOOK", dump)
+            self.assertNotIn("touch", dump)
+            self.assertNotIn("plebian-os-qt-runtime --verify", dump)
+            self.assertFalse(prehook.exists(), plan)
+            self.assertFalse(parts_hook.exists(), plan)
+            self.assertEqual(list((kept / "apt.conf.d").iterdir()), [])
 
     def test_a_debian_upgrade_does_not_remove_an_operator_package(self):
         if shutil.which("dpkg-deb") is None:
@@ -945,6 +1030,477 @@ class ReleaseAptCandidateTests(unittest.TestCase):
             self.assertEqual(status.read_text().count("Package: cuda-x"), 1)
 
 
+class ReleaseAptGuardTests(unittest.TestCase):
+    """The seat's surviving mutants have to fail against the real functions."""
+
+    def _prepare(self, apt: Path, dest: Path) -> subprocess.CompletedProcess:
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            f"PLEB_STATE_HOME={str(dest.parent / 'state')!r}\n"
+            f"source {str(UPDATE)!r}\n"
+            f"prepare_release_apt_config {str(dest)!r} lifetime '' {codename()!r} {str(apt)!r} || true\n"
+            "printf 'CONF<<\\n'\n"
+            "cat -- \"$1/apt.conf\"\n"
+            "printf '\\n>>CONF\\n'\n"
+        )
+        # $1 is not set. Write the conf path into the script instead.
+        script = script.replace('cat -- "$1/apt.conf"', f"cat -- {str(dest / 'apt.conf')!r}")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
+        env.update({
+            "HOME": str(dest.parent / "home"),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        })
+        return subprocess.run(
+            ["bash", "-c", script], env=env, text=True, capture_output=True, check=False,
+        )
+
+    def test_only_the_root_owned_qt_pin_is_copied(self):
+        if shutil.which("unshare") is None:
+            self.skipTest("unshare is not available")
+        probe = subprocess.run(["unshare", "-rm", "true"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("unshare -rm is not available")
+        if os.geteuid() == 0:
+            self.skipTest("the user-owned rejection runs as a non-root user")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            owned = tmp / "owned-apt"
+            (owned / "preferences.d").mkdir(parents=True)
+            (owned / "sources.list.d").mkdir()
+            (owned / "sources.list").write_text("")
+            pin = owned / "preferences.d" / "plebian-os-qt-runtime"
+            pin.write_text("Package: libqt\nPin: version *+plebian*\nPin-Priority: 1001\n")
+            pin.chmod(0o644)
+            (owned / "preferences.d" / "operator-pin").write_text(
+                "Package: *\nPin-Priority: 1001\n")
+            dest = tmp / "user-dest"
+            dest.mkdir()
+            user_prepare = self._prepare(owned, dest)
+            self.assertEqual(user_prepare.returncode, 0, user_prepare.stderr)
+            self.assertFalse((dest / "preferences.d" / "plebian-os-qt-runtime").exists())
+            self.assertFalse((dest / "preferences.d" / "operator-pin").exists())
+            self.assertIn('Dir::Etc::main "/dev/null";', (dest / "apt.conf").read_text())
+
+            debs = tmp / "debs"
+            debs.mkdir()
+            _deb(debs / "libqt_1.0+plebian_all.deb", "libqt", "1.0+plebian", "all")
+            _deb(debs / "libqt_1.1_all.deb", "libqt", "1.1", "all")
+            _deb(debs / "app_1.0_all.deb", "app", "1.0", "all")
+            _deb(debs / "app_2.0_all.deb", "app", "2.0", "all", "libqt (>= 1.1)")
+            debian = tmp / "debian"
+            _packages(debian, [debs / "libqt_1.1_all.deb", debs / "app_2.0_all.deb"])
+            status = tmp / "status"
+            status.write_text(
+                "Package: libqt\nStatus: install ok installed\nPriority: optional\n"
+                "Section: misc\nInstalled-Size: 1\n"
+                "Maintainer: Plebian OS <release@example.invalid>\n"
+                "Architecture: all\nVersion: 1.0+plebian\nDescription: fixture\n\n"
+                "Package: app\nStatus: install ok installed\nPriority: optional\n"
+                "Section: misc\nInstalled-Size: 1\n"
+                "Maintainer: Plebian OS <release@example.invalid>\n"
+                "Architecture: all\nVersion: 1.0\nDescription: fixture\n\n"
+            )
+            extended = tmp / "extended"
+            extended.write_text("")
+            script = tmp / "pin.sh"
+            script.write_text(r"""#!/bin/bash
+set -u
+mkdir -p "$EMPTY_PLEB"
+mount --bind "$EMPTY_PLEB" /etc/pleb || { echo MOUNT_PLEB_FAILED >&2; exit 97; }
+export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
+export PLEB_STATE_HOME="$STATE"
+export PLEBIAN_OS_DPKG_STATUS="$STATUS"
+export PLEBIAN_OS_APT_EXTENDED_STATES="$EXTENDED"
+export DEBIAN_FRONTEND=noninteractive
+source "$UPDATE"
+write_pin() {
+  local apt="$1" mode="$2" kind="$3"
+  mkdir -p "$apt/preferences.d" "$apt/sources.list.d"
+  : >"$apt/sources.list"
+  case "$kind" in
+    file)
+      printf '%s\n' 'Package: libqt' 'Pin: version *+plebian*' 'Pin-Priority: 1001' \
+        >"$apt/preferences.d/plebian-os-qt-runtime"
+      chmod "$mode" "$apt/preferences.d/plebian-os-qt-runtime"
+      ;;
+    link)
+      printf '%s\n' 'Package: libqt' >"$apt/real-pin"
+      ln -s "$apt/real-pin" "$apt/preferences.d/plebian-os-qt-runtime"
+      ;;
+  esac
+  printf '%s\n' 'Package: *' 'Pin-Priority: 1001' >"$apt/preferences.d/operator-pin"
+  chmod 644 "$apt/preferences.d/operator-pin"
+}
+try_copy() {
+  local label="$1" apt="$2" dest="$3"
+  mkdir -p "$dest"
+  prepare_release_apt_config "$dest" lifetime "" "$CODENAME" "$apt" || true
+  if [ -f "$dest/preferences.d/plebian-os-qt-runtime" ] && [ ! -L "$dest/preferences.d/plebian-os-qt-runtime" ]; then
+    printf '%s copied\n' "$label"
+  else
+    printf '%s absent\n' "$label"
+  fi
+  if [ -e "$dest/preferences.d/operator-pin" ]; then
+    printf '%s operator\n' "$label"
+  fi
+  if [ -n "$(find "$dest/apt.conf.d" -type f -print -quit 2>/dev/null)" ]; then
+    printf '%s hook\n' "$label"
+  fi
+}
+try_copy good "$GOOD" "$GOOD_DEST" 644 file
+try_copy writable "$WRITABLE" "$WRITABLE_DEST" 666 file
+try_copy groupwrite "$GROUP" "$GROUP_DEST" 664 file
+try_copy symlink "$LINK" "$LINK_DEST" 644 link
+chmod -R a+rX "$GOOD_DEST"
+printf '%s\n' 'APT::Sandbox::User "root";' >>"$GOOD_DEST/apt.conf"
+: >"$GOOD_DEST/sources.list.d/.keep" || true
+find "$GOOD_DEST/sources.list.d" -type f ! -name .keep -delete
+printf '%s\n' "deb [trusted=yes] file://$DEBIAN ./" >"$GOOD_DEST/sources.list"
+set +e
+release_apt_get "$GOOD_DEST" update >"$OUT/update.txt" 2>"$OUT/update.err"
+update_rc=$?
+plan="$(release_apt_get "$GOOD_DEST" -s install app 2>"$OUT/plan.err")"
+plan_rc=$?
+set -e
+printf '%s\n' "$plan" >"$OUT/plan.txt"
+printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
+""")
+            # The heredoc above is a template; fill the try_copy calls properly.
+            text = script.read_text()
+            text = text.replace(
+                'try_copy good "$GOOD" "$GOOD_DEST" 644 file\n'
+                'try_copy writable "$WRITABLE" "$WRITABLE_DEST" 666 file\n'
+                'try_copy groupwrite "$GROUP" "$GROUP_DEST" 664 file\n'
+                'try_copy symlink "$LINK" "$LINK_DEST" 644 link\n',
+                'write_pin "$GOOD" 644 file; try_copy good "$GOOD" "$GOOD_DEST"\n'
+                'write_pin "$WRITABLE" 666 file; try_copy writable "$WRITABLE" "$WRITABLE_DEST"\n'
+                'write_pin "$GROUP" 664 file; try_copy groupwrite "$GROUP" "$GROUP_DEST"\n'
+                'write_pin "$LINK" 644 link; try_copy symlink "$LINK" "$LINK_DEST"\n',
+            )
+            script.write_text(text)
+            script.chmod(0o755)
+            out = tmp / "out"
+            out.mkdir()
+            env = {
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": str(tmp / "home"),
+                "LC_ALL": "C",
+                "UPDATE": str(UPDATE),
+                "EMPTY_PLEB": str(tmp / "empty-pleb"),
+                "STATE": str(tmp / "state"),
+                "STATUS": str(status),
+                "EXTENDED": str(extended),
+                "CODENAME": codename(),
+                "DEBIAN": str(debian),
+                "OUT": str(out),
+                "GOOD": str(tmp / "good"),
+                "GOOD_DEST": str(tmp / "good-dest"),
+                "WRITABLE": str(tmp / "writable"),
+                "WRITABLE_DEST": str(tmp / "writable-dest"),
+                "GROUP": str(tmp / "group"),
+                "GROUP_DEST": str(tmp / "group-dest"),
+                "LINK": str(tmp / "link"),
+                "LINK_DEST": str(tmp / "link-dest"),
+            }
+            ran = subprocess.run(
+                ["unshare", "-rm", "bash", str(script)],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            detail = ran.stdout + ran.stderr
+            self.assertEqual(ran.returncode, 0, detail)
+            self.assertIn("good copied", detail)
+            self.assertNotIn("good operator", detail)
+            self.assertNotIn("good hook", detail)
+            self.assertIn("writable absent", detail)
+            self.assertIn("groupwrite absent", detail)
+            self.assertIn("symlink absent", detail)
+            plan = (out / "plan.txt").read_text()
+            rc_text = (out / "rc").read_text()
+            self.assertIn("UPDATE_RC=0", rc_text, (out / "update.err").read_text())
+            self.assertNotIn("Inst libqt [1.0+plebian] (1.1)", plan, plan)
+            self.assertNotEqual(
+                rc_text.split("PLAN_RC=", 1)[1].splitlines()[0], "0", plan)
+
+            bare = tmp / "bare"
+            _config(bare, {"sources.list": f"deb [trusted=yes] file://{debian} ./\n"})
+            (bare / "preferences").write_text("")
+            options = _release_options()
+            option_text = "\n".join(f'  -o "{option}" \\' for option in options)
+            control = self._run_release(
+                tmp, bare, status, extended,
+                "release_apt_get \"$config\" update\n"
+                "release_apt_get \"$config\" -s install app\n",
+            )
+            self.assertEqual(control.returncode, 0, control.stderr)
+            inst = [line for line in control.stdout.splitlines() if line.startswith("Inst libqt ")]
+            self.assertTrue(inst, control.stdout)
+            self.assertIn("1.0+plebian", inst[0])
+            self.assertIn("(1.1 ", inst[0])
+
+    def _run_release(self, tmp, config, status, extended, body):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
+        env.update({
+            "HOME": str(tmp / "home"),
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PLEBIAN_OS_DPKG_STATUS": str(status),
+            "PLEBIAN_OS_APT_EXTENDED_STATES": str(extended),
+            "DEBIAN_FRONTEND": "noninteractive",
+        })
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            f"PLEB_STATE_HOME={str(tmp / 'state')!r}\n"
+            f"source {str(UPDATE)!r}\n"
+            f"config={str(config)!r}\n"
+            + body
+        )
+        return subprocess.run(
+            ["bash", "-c", script], env=env, text=True, capture_output=True, check=False,
+        )
+
+    def test_helper_apt_run_uses_the_private_config_and_refuses_without_it(self):
+        import importlib.machinery
+        import importlib.util
+        from unittest import mock
+
+        def load(name):
+            path = ROOT / "provision" / name
+            loader = importlib.machinery.SourceFileLoader(name.replace("-", "_"), str(path))
+            spec = importlib.util.spec_from_loader(loader.name, loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)
+            return module
+
+        with tempfile.TemporaryDirectory() as td:
+            config = Path(td) / "config"
+            _config(config, {})
+            for name in ("plebian-os-qt-runtime", "plebian-os-mpv-runtime"):
+                module = load(name)
+                recorded = {}
+
+                def fake_run(argv, **kwargs):
+                    recorded["argv"] = list(argv)
+                    recorded["env"] = kwargs.get("env")
+                    completed = subprocess.CompletedProcess(argv, 0, "", "")
+                    return completed
+
+                with mock.patch.object(module.subprocess, "run", fake_run):
+                    with mock.patch.dict(os.environ, {
+                        "PLEBIAN_OS_RELEASE_MODE": "1",
+                        "PLEBIAN_OS_RELEASE_APT_CONFIG": str(config),
+                    }, clear=False):
+                        module.apt_run(["/usr/bin/apt-get", "install", "libdep-sim"])
+                self.assertIn(f"Dir::Etc::SourceList={config}/sources.list", recorded["argv"])
+                self.assertEqual(recorded["env"]["APT_CONFIG"], str(config / "apt.conf"))
+                recorded.clear()
+                with mock.patch.object(module.subprocess, "run", fake_run):
+                    with mock.patch.dict(os.environ, {"PLEBIAN_OS_RELEASE_MODE": "0"}, clear=False):
+                        os.environ.pop("PLEBIAN_OS_RELEASE_APT_CONFIG", None)
+                        module.apt_run(["/usr/bin/apt-get", "install", "libdep-sim"])
+                self.assertEqual(recorded["argv"], ["/usr/bin/apt-get", "install", "libdep-sim"])
+                self.assertNotIn("Dir::Etc::SourceList", " ".join(recorded["argv"]))
+                called = []
+
+                def refuse_run(*args, **kwargs):
+                    called.append(args)
+                    raise AssertionError("system apt was called")
+
+                with mock.patch.object(module.subprocess, "run", refuse_run):
+                    with mock.patch.dict(os.environ, {"PLEBIAN_OS_RELEASE_MODE": "1"}, clear=False):
+                        os.environ.pop("PLEBIAN_OS_RELEASE_APT_CONFIG", None)
+                        with self.assertRaises(SystemExit) as raised:
+                            module.apt_run(["/usr/bin/apt-get", "install", "libdep-sim"])
+                self.assertIn("refusing the system apt configuration", str(raised.exception))
+                self.assertEqual(called, [])
+
+    def test_install_deps_refuses_a_missing_release_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            record = tmp / "apt-record"
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            apt = bindir / "apt-get"
+            apt.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> {record!s}\nexit 0\n")
+            apt.chmod(0o755)
+            missing = tmp / "missing"
+            missing.mkdir()
+            sources = tmp / "apt"
+            (sources / "sources.list.d").mkdir(parents=True)
+            (sources / "sources.list").write_text("")
+            env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
+            env.update({
+                "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '/usr/bin:/bin')}",
+                "HOME": str(tmp / "home"),
+                "DRY_RUN": "1",
+                "PLEBIAN_OS_RELEASE_MODE": "1",
+                "PLEBIAN_OS_RELEASE_APT_CONFIG": str(missing),
+                "PLEBIAN_OS_APT_SOURCES_ROOT": str(sources),
+                "PLEBIAN_OS_INSTALL_UV": "0",
+                "LC_ALL": "C",
+            })
+            result = subprocess.run(
+                ["bash", str(DEPS), "--dry-run"],
+                env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("release apt configuration is missing", result.stderr)
+            self.assertIn("refusing the system apt configuration", result.stderr)
+            self.assertFalse(record.exists(), result.stdout)
+            self.assertNotIn("+ apt-get", result.stdout)
+
+    def test_operator_proxies_are_copied_and_hostile_values_are_dropped(self):
+        """Validated proxies reach the private apt.conf. Nothing else does.
+
+        A proxy in apt.conf, one in apt.conf.d, and a per-host DIRECT are
+        copied. A proxy auto-detect program is not run. A value that carries
+        a Pre-Invoke payload is dropped. Debian's package is still chosen
+        over a higher third-party version.
+        """
+        if shutil.which("dpkg-deb") is None:
+            self.skipTest("dpkg-deb is required")
+        if shutil.which("unshare") is None:
+            self.skipTest("unshare is not available")
+        probe = subprocess.run(["unshare", "-rm", "true"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("unshare -rm is not available")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            debs = tmp / "debs"
+            debs.mkdir()
+            _deb(debs / "libdep-sim_1.0_all.deb", "libdep-sim", "1.0", "all")
+            _deb(debs / "libdep-sim_9.0_all.deb", "libdep-sim", "9.0", "all")
+            debian = tmp / "debian"
+            _packages(debian, [debs / "libdep-sim_1.0_all.deb"])
+            suite = codename()
+            apt = write_apt(tmp, {"debian.sources": debian_sources(suite)})
+            ran_marker = tmp / "autodetect-ran"
+            script_path = tmp / "autodetect"
+            script_path.write_text(f"#!/bin/sh\necho RAN >> {ran_marker}\n")
+            script_path.chmod(0o755)
+            prehook = tmp / "prehook"
+            parts_hook = tmp / "parts-hook"
+            inject_hook = tmp / "inject-hook"
+            higher = str(debs / "libdep-sim_9.0_all.deb")
+            hostile = tmp / "hostile-apt"
+            (hostile / "apt.conf.d").mkdir(parents=True)
+            (hostile / "sources.list.d").mkdir()
+            (hostile / "sources.list").write_text("")
+            (hostile / "apt.conf").write_text(
+                'Acquire::http::Proxy "http://proxy.example:3128";\n'
+                'Acquire::ftp::Proxy "http://evil.example; DPkg::Pre-Invoke {touch '
+                f'{inject_hook}' + '}";\n'
+                f'Acquire::http::Proxy-Auto-Detect "{script_path}";\n'
+                f'Acquire::http::ProxyAutoDetect "{script_path}";\n'
+                'Acquire::http::Proxy::bad_host "DIRECT";\n'
+                f'APT::Sources::With {{ "{higher}"; }};\n'
+                'APT::Get::AllowUnauthenticated "true";\n'
+                'Acquire::AllowInsecureRepositories "true";\n'
+                f'DPkg::Pre-Invoke {{ "touch {prehook}"; }};\n'
+                'Dir::Bin::dpkg "/no/such/dpkg-from-main";\n'
+            )
+            (hostile / "apt.conf.d" / "99proxy.conf").write_text(
+                'Acquire::https::Proxy "http://parts.example:8080";\n'
+                'Acquire::http::Proxy::deb.debian.org "DIRECT";\n'
+                'Acquire::ftp::Proxy::mirror.example "http://mirror.example"; '
+                f'DPkg::Pre-Invoke {{ "touch {inject_hook}"; }};\n'
+                f'APT::Sources::With {{ "{higher}"; }};\n'
+                f'DPkg::Pre-Invoke {{ "touch {parts_hook}"; }};\n'
+                'Dir::Bin::dpkg "/no/such/dpkg-from-parts";\n'
+            )
+            dest = tmp / "dest"
+            dest.mkdir()
+            status = tmp / "status"
+            status.write_text("")
+            extended = tmp / "extended"
+            extended.write_text("")
+            out = tmp / "out"
+            out.mkdir()
+            probe_sh = tmp / "probe.sh"
+            probe_sh.write_text(
+                "#!/bin/bash\n"
+                "set -u\n"
+                'mount --bind "$HOSTILE" /etc/apt || { echo MOUNT_FAILED >&2; exit 97; }\n'
+                'mkdir -p "$EMPTY_PLEB"\n'
+                'mount --bind "$EMPTY_PLEB" /etc/pleb || { echo MOUNT_PLEB_FAILED >&2; exit 97; }\n'
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                'export PLEBIAN_OS_DPKG_STATUS="$STATUS"\n'
+                'export PLEBIAN_OS_APT_EXTENDED_STATES="$EXTENDED"\n'
+                'export PLEB_STATE_HOME="$STATE"\n'
+                "export DEBIAN_FRONTEND=noninteractive\n"
+                'source "$UPDATE"\n'
+                'mkdir -p "$DEST"\n'
+                'prepare_release_apt_config "$DEST" lifetime "" "$CODENAME" "$APT" '
+                '>"$OUT/prepare.txt" 2>"$OUT/prepare.err"\n'
+                'prep_rc=$?\n'
+                'printf "PREP_RC=%s\\n" "$prep_rc" >"$OUT/prep"\n'
+                '[ "$prep_rc" = 0 ] || exit 0\n'
+                'printf "%s\\n" \'APT::Sandbox::User "root";\' >>"$DEST/apt.conf"\n'
+                'find "$DEST/sources.list.d" -type f -delete\n'
+                'printf "%s\\n" "deb [trusted=yes] file://$DEBIAN ./" >"$DEST/sources.list"\n'
+                "set +e\n"
+                'release_apt_get "$DEST" update >"$OUT/update.txt" 2>"$OUT/update.err"\n'
+                "update_rc=$?\n"
+                'plan="$(release_apt_get "$DEST" -s install libdep-sim 2>"$OUT/plan.err")"\n'
+                "plan_rc=$?\n"
+                "set -e\n"
+                'printf "%s\\n" "$plan" >"$OUT/plan.txt"\n'
+                'printf "UPDATE_RC=%s\\nPLAN_RC=%s\\n" "$update_rc" "$plan_rc" >"$OUT/rc"\n'
+            )
+            probe_sh.chmod(0o755)
+            ran = subprocess.run(
+                ["unshare", "-rm", "bash", str(probe_sh)],
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOSTILE": str(hostile),
+                    "STATUS": str(status),
+                    "EXTENDED": str(extended),
+                    "STATE": str(tmp / "state"),
+                    "UPDATE": str(UPDATE),
+                    "DEST": str(dest),
+                    "APT": str(apt),
+                    "OUT": str(out),
+                    "EMPTY_PLEB": str(tmp / "empty-pleb"),
+                    "DEBIAN": str(debian),
+                    "CODENAME": suite,
+                    "HOME": str(tmp / "home"),
+                    "LC_ALL": "C",
+                },
+                text=True, capture_output=True, check=False, timeout=90,
+            )
+            detail = ran.stdout + ran.stderr
+            prep_err = (out / "prepare.err").read_text() if (out / "prepare.err").exists() else ""
+            self.assertEqual(ran.returncode, 0, detail + prep_err)
+            self.assertIn("PREP_RC=0", (out / "prep").read_text(), prep_err)
+            conf = (dest / "apt.conf").read_text()
+            self.assertIn('Acquire::http::Proxy "http://proxy.example:3128";', conf)
+            self.assertIn('Acquire::https::Proxy "http://parts.example:8080";', conf)
+            self.assertIn('Acquire::http::Proxy::deb.debian.org "DIRECT";', conf)
+            self.assertIn('Acquire::ftp::Proxy::mirror.example "http://mirror.example";', conf)
+            self.assertNotIn("evil.example", conf)
+            self.assertNotIn("Pre-Invoke", conf)
+            self.assertNotIn("Proxy-Auto-Detect", conf)
+            self.assertNotIn("ProxyAutoDetect", conf)
+            self.assertNotIn(str(script_path), conf)
+            self.assertNotIn("bad_host", conf)
+            self.assertNotIn("Sources::With", conf)
+            self.assertNotIn("/no/such/dpkg", conf)
+            self.assertIn('APT::Get::AllowUnauthenticated "false";', conf)
+            self.assertNotIn('AllowUnauthenticated "true"', conf)
+            self.assertIn("dropping proxy setting Acquire::ftp::Proxy", prep_err)
+            self.assertIn("dropping proxy setting Acquire::http::Proxy::bad_host", prep_err)
+            self.assertFalse(ran_marker.exists(), detail)
+            self.assertFalse(prehook.exists(), detail)
+            self.assertFalse(parts_hook.exists(), detail)
+            self.assertFalse(inject_hook.exists(), detail)
+            self.assertEqual(list((dest / "apt.conf.d").iterdir()), [])
+            plan = (out / "plan.txt").read_text()
+            rc_text = (out / "rc").read_text()
+            self.assertIn("UPDATE_RC=0", rc_text, (out / "update.err").read_text())
+            self.assertIn("PLAN_RC=0", rc_text, (out / "plan.err").read_text() + plan)
+            self.assertIn("Inst libdep-sim (1.0", plan)
+            self.assertNotIn("(9.0", plan)
+
 class ReleaseAptRouteTests(unittest.TestCase):
     """A new release-path apt command has to go through the private configuration.
 
@@ -983,10 +1539,12 @@ class ReleaseAptRouteTests(unittest.TestCase):
 
     def test_helpers_keep_their_own_private_configuration(self):
         ssh = (ROOT / "provision" / "plebian-os-ssh-server").read_text()
+        self.assertIn('Dir::Etc::main "/dev/null";', ssh)
         self.assertIn('Dir::Etc::Parts "', ssh)
         self.assertIn('env["APT_CONFIG"]', ssh)
         self.assertIn("Dir::Etc::SourceList=/dev/null", ssh)
         firstboot = (ROOT / "provision" / "plebian-os-firstboot-attempt").read_text()
+        self.assertIn('Dir::Etc::main "/dev/null";', firstboot)
         self.assertIn("APT_CONFIG=", firstboot)
         self.assertIn("Dir::Etc::SourceList=/dev/null", firstboot)
         command = firstboot[firstboot.index("apt-get -y -f install"):]
@@ -1046,6 +1604,28 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertIn(
             '"PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"', install)
         self.assertIn('"PLEBIAN_OS_MANAGED_INSTALL=1"', install)
+        for name in ("qt_runtime_command", "mpv_runtime_command"):
+            body = shell_function(updater, name)
+            self.assertIn(
+                'prefix=(env "PLEBIAN_OS_RELEASE_MODE=1" '
+                '"PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG")',
+                body)
+            self.assertIn("refusing the system apt configuration", body)
+        refresh = shell_function(updater, "refresh_os_dependencies")
+        self.assertIn(
+            '${PLEBIAN_OS_RELEASE_APT_CONFIG:+"PLEBIAN_OS_RELEASE_APT_CONFIG=$PLEBIAN_OS_RELEASE_APT_CONFIG"}',
+            refresh)
+        self.assertIn("/usr/local/sbin/plebian-os-qt-runtime --verify", refresh)
+        prepared = shell_function(updater, "prepare_release_apt_config")
+        self.assertIn('Dir::Etc::main "/dev/null";', prepared)
+        self.assertIn('Dir::Etc::Parts \\"$dest/apt.conf.d\\"', prepared)
+        self.assertIn("preferences.d/plebian-os-qt-runtime", prepared)
+        self.assertNotIn("apt.conf.d/*", prepared)
+        self.assertNotIn("93plebian-os-qt-runtime", prepared)
+        self.assertIn("apt-config dump", prepared)
+        self.assertIn("dropping proxy setting", prepared)
+        self.assertNotIn("Proxy-Auto-Detect", prepared)
+        self.assertNotIn("ProxyAutoDetect", prepared)
 
     @staticmethod
     def _reason(name: str, text: str) -> str | None:

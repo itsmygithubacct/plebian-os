@@ -98,8 +98,13 @@ validate_release_apt_provenance() {
 # repository from becoming a candidate. Hiding that source is not enough to
 # keep an installed package: the install itself has to refuse removals, because
 # apt would otherwise remove a package whose dependency only the hidden source
-# can satisfy. The private apt.conf points Dir::Etc::Parts at an empty
-# directory, so an apt.conf.d snippet cannot add a package either. $1 is an
+# can satisfy. The private apt.conf sets Dir::Etc::main to /dev/null and
+# points Dir::Etc::Parts at an empty directory, so the operator apt.conf and
+# an apt.conf.d snippet cannot add a package either. Validated
+# Acquire::{http,https,ftp}::Proxy values, including a per-host DIRECT, are
+# copied into that file. A proxy auto-detect program is not. A copied proxy
+# cannot forge a package, because the signed Release check still applies.
+# $1 is an
 # absolute directory this function fills. $2 is install or lifetime. $3 is the
 # install snapshot id, empty outside that phase. $4 is the codename. $5 is the
 # operator apt directory, the one that contains sources.list. On success,
@@ -111,6 +116,8 @@ prepare_release_apt_config() {
     local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
     local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
     local main_ok=0 snapshot_only=0 trust_disabled=0
+    local qt_pin="" qt_owner="" qt_mode=""
+    local proxy_line="" proxy_key="" proxy_value="" proxy_host="" proxy_ok=0
     case "$dest" in
         /*) ;;
         *) return 1 ;;
@@ -150,12 +157,14 @@ prepare_release_apt_config() {
     : >"$dest/preferences"
     : >"$dest/extended_states"
     : >"$dest/indexes"
-    # Command-line -o Dir::Etc::parts is applied after apt has already read
-    # apt.conf.d. APT_CONFIG is the main file, and a Dir::Etc::Parts assignment
-    # there is applied before those snippets are read. Point it at an empty
-    # directory and the operator's snippets, including APT::Sources::With, are
-    # not part of this configuration.
+    # Apt's default Dir::Etc::main is /etc/apt/apt.conf even when APT_CONFIG
+    # names this file, and a command-line -o Dir::Etc::parts is applied after
+    # apt.conf.d has already been read. Set both in this file: main is
+    # /dev/null, and Parts is an empty directory, so the operator apt.conf and
+    # apt.conf.d snippets, including APT::Sources::With, are not part of this
+    # configuration. Validated proxy values are appended afterwards.
     printf '%s\n' \
+        'Dir::Etc::main "/dev/null";' \
         "Dir::Etc::Parts \"$dest/apt.conf.d\";" \
         'APT::Get::AllowUnauthenticated "false";' \
         'Acquire::AllowInsecureRepositories "false";' \
@@ -167,6 +176,84 @@ prepare_release_apt_config() {
         printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
         return 1
     }
+    # apt-config dump only parses the operator configuration. Copy string
+    # values of Acquire::{http,https,ftp}::Proxy and a per-host form whose
+    # host matches [A-Za-z0-9.-]+. The value must be DIRECT or an http://,
+    # https://, or socks5h:// URL. Quotes, semicolons, braces, and whitespace
+    # are dropped. Any other key, including a proxy auto-detect program, is
+    # left out. A copied proxy cannot forge a package: the signed Release
+    # check still applies.
+    while IFS= read -r proxy_line || [ -n "$proxy_line" ]; do
+        [ -n "$proxy_line" ] || continue
+        case "$proxy_line" in
+            *$'\t'*) ;;
+            *) continue ;;
+        esac
+        proxy_key="${proxy_line%%$'\t'*}"
+        proxy_value="${proxy_line#*$'\t'}"
+        case "$proxy_key" in
+            Acquire::http::Proxy|Acquire::https::Proxy|Acquire::ftp::Proxy)
+                ;;
+            Acquire::http::Proxy::*|Acquire::https::Proxy::*|Acquire::ftp::Proxy::*)
+                proxy_host="${proxy_key#*::Proxy::}"
+                case "$proxy_host" in
+                    ''|*::*|*[!A-Za-z0-9.-]*)
+                        printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+                        continue
+                        ;;
+                esac
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        proxy_ok=0
+        case "$proxy_value" in
+            *"'"*|*'\"'*|*';'*|*'{'*|*'}'*|*[[:space:]]*)
+                ;;
+            DIRECT)
+                proxy_ok=1
+                ;;
+            *)
+                if [[ "$proxy_value" =~ ^(http|https|socks5h)://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?$ ]]; then
+                    proxy_ok=1
+                fi
+                ;;
+        esac
+        if [ "$proxy_ok" -ne 1 ]; then
+            printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+            continue
+        fi
+        printf '%s "%s";\n' "$proxy_key" "$proxy_value" >>"$dest/apt.conf" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done < <(LC_ALL=C env -u APT_CONFIG apt-config dump --no-empty --format '%f%N%v%n' 2>/dev/null || true)
+    # The Plebian Qt pin is part of the release closure. Copy that one
+    # root-owned file when it is a regular file and not group- or
+    # world-writable. Operator pins stay where they are.
+    qt_pin="$apt_dir/preferences.d/plebian-os-qt-runtime"
+    if [ -f "$qt_pin" ] && [ ! -L "$qt_pin" ]; then
+        qt_owner="$(stat -c '%u' -- "$qt_pin" 2>/dev/null || true)"
+        qt_mode="$(stat -c '%a' -- "$qt_pin" 2>/dev/null || true)"
+        case "$qt_mode" in
+            ''|*[!0-9]*) qt_mode="" ;;
+        esac
+        if [ "$qt_owner" = 0 ] && [ -n "$qt_mode" ] \
+                && [ $(( 8#$qt_mode & 022 )) -eq 0 ]; then
+            cp -- "$qt_pin" "$dest/preferences.d/plebian-os-qt-runtime" || {
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            }
+            chmod 0644 -- "$dest/preferences.d/plebian-os-qt-runtime" || {
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            }
+        fi
+    fi
     : >"$work/files"
     : >"$work/accepted.idx"
     : >"$work/all.idx"
@@ -215,7 +302,10 @@ prepare_release_apt_config() {
             printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
             return 1
         }
-        printf '%s\n' "Dir::Etc::Parts \"$work/one/apt.conf.d\";" >"$work/one/apt.conf" || {
+        printf '%s\n' \
+            'Dir::Etc::main "/dev/null";' \
+            "Dir::Etc::Parts \"$work/one/apt.conf.d\";" \
+            >"$work/one/apt.conf" || {
             rm -rf -- "$work"
             printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
             return 1
@@ -492,8 +582,10 @@ prepare_release_apt_config() {
 
 # apt-get for a configuration prepare_release_apt_config built. The operator's
 # sources, pins, list cache, and apt.conf snippets are not on this command.
-# APT_CONFIG replaces the main apt.conf; the private file points
-# Dir::Etc::Parts at an empty directory so apt.conf.d is not read.
+# The private apt.conf sets Dir::Etc::main to /dev/null, because APT_CONFIG
+# does not replace apt's default main file, and points Dir::Etc::Parts at an
+# empty directory so apt.conf.d is not read. Validated Acquire proxy values
+# from the operator configuration are the only settings copied into that file.
 release_apt_get() {
     local config="$1"
     shift
