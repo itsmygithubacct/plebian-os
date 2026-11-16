@@ -11,6 +11,13 @@ install and upgrade instructions (including `pleb update --to 0.2.3` for
 release-candidate machines), known issues and the 0.2.4 deferrals. The
 entries below run newest first, from the final back through RC1.
 
+- `--rollback` restores the last selection even when two selections land
+  in one second (a release candidate and its final, back to back) or the
+  clock was set back. It could restore the record from the selection before,
+  which removed `/etc/pleb/closure.env`. A new recovery record is named at
+  least one second after every existing one; when two records an earlier
+  selector wrote share the newest second, rollback refuses and restores
+  nothing.
 - Speak the whole Paradee utterance. Synthesis no longer stops silently at
   510 phonemes; it runs across bounded sentence and word windows (Kilix
   `fdb02036`, with a shared adaptive speech-timing estimator).
