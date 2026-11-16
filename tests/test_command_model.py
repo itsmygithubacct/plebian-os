@@ -147,13 +147,27 @@ class CommandModelRecordTests(unittest.TestCase):
         self.assertEqual(rollback['manifest_digest'], V9_MANIFEST)
         self.assertIn('retained', rollback['mechanism'])
 
-    def test_quality_and_source_pins_still_owed_are_marked_pending(self):
-        self.assertIs(RELEASE['quality']['cpu']['pending'], False)
-        self.assertEqual(RELEASE['quality']['cpu']['development']['admitted_outcome_correct'], 1345)
-        self.assertTrue(RELEASE['quality']['release_seats']['pending'])
+    def test_quality_and_source_pins_are_the_final_selection(self):
+        quality = RELEASE['quality']
+        self.assertEqual(RELEASE['release_target'], '0.2.3')
+        self.assertIs(quality['cpu']['pending'], False)
+        self.assertEqual(quality['cpu']['development']['admitted_outcome_correct'], 1345)
+        for suite in ('development', 'fresh160', 'probes', 'operational32', 'expand8'):
+            with self.subTest(suite=suite):
+                self.assertEqual(quality['cpu'][suite]['wrong_actions_admitted'], 0)
+        self.assertEqual(quality['grammar']['kilix_needle'], RELEASE['source_pins']['kilix-needle'])
+        self.assertEqual(quality['release_seats']['outcome'],
+                         "reviewed by independent seats; outcome in the release session's final list")
+        self.assertNotIn('PENDING', json.dumps(RELEASE))
         for name, value in RELEASE['source_pins'].items():
             with self.subTest(pin=name):
-                self.assertTrue(value == 'PENDING' or len(value) == 40, value)
+                self.assertRegex(value, '^[0-9a-f]{40}$')
+        self.assertRegex(RELEASE['manifest']['catalog_sha256'], '^[0-9a-f]{64}$')
+        pins = dict(line.split('=', 1) for line in (ROOT / 'releases/0.2.3.env').read_text().splitlines()
+                    if line and not line.startswith('#') and '=' in line)
+        self.assertEqual(RELEASE['source_pins']['kilix-content'], pins['PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF'])
+        self.assertEqual(RELEASE['manifest']['revision'], pins['PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF'])
+        self.assertEqual(RELEASE['source_pins']['kilix-license'], pins['KILIX_LICENSE_REF'])
 
     def test_nothing_in_the_tree_still_stages_or_copies_the_archive(self):
         provision = (ROOT / 'provision/plebian-os-provision.sh').read_text()

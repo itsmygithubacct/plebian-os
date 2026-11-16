@@ -13,9 +13,9 @@
 # Empty PLEBIAN_OS_APT_SNAPSHOT selects live Debian sources.
 # The Debian Go 1.27.4-1~bpo13+1 package files are pinned by name, size and
 # SHA-256, with their snapshot.debian.org timestamp and release-mirror base.
-# RC9 carrier de2ff296 binds content 6f92910. The receipt binds independent
-# delta reviews of OS 0007c491 and Pleb 57683ebf. Prior reviews and receipts
-# remain archived with their exact source scope.
+# Carrier bb5b55fd binds content 030c149 and licence fea4626. It has no
+# seats yet, so the receipt is empty. Prior reviews and receipts remain
+# archived with their exact source scope.
 
 PLEBIAN_OS_NETINST_URL=https://cdimage.debian.org/debian-cd/13.7.0/amd64/iso-cd/debian-13.7.0-amd64-netinst.iso
 PLEBIAN_OS_NETINST_SHA256=a7ef94ac2fb9a7fec454552abd629b7cc9d5155c886165a45649f5ce6167e355
@@ -28,10 +28,10 @@ PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=71225
 PLEBIAN_OS_INSTALL_WAYDROID=0
 PLEBIAN_OS_WAYDROID_CLOSURE_SHA256=
 PLEBIAN_OS_VOICE_CARRIER_DIR=releases/0.2.3-model-compliance
-PLEBIAN_OS_VOICE_CARRIER_SHA256=de2ff296a946dc09f8b8114ba4db28a6fcb2da549e58fbb256bc386ba4ed7e6d
-PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=2971f04022e7a1acf6c3454504f7f5c74934cda464c4f750b1add7ae8e77e9b8
-KILIX_LICENSE_REF=596ada2ab68b9ec441674ff4da2d431559d47378
-PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=6f92910e2dc9f0d831c7a345b318e1d015a2b275
+PLEBIAN_OS_VOICE_CARRIER_SHA256=bb5b55fdea44d028d5fea8ed106ad97df6231f390012629eab0093e2d7729284
+PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256=
+KILIX_LICENSE_REF=fea4626fd6f6525ed1dfa0d53696b026dd3d1403
+PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=030c149d1f34cff3ac7101b94337f0aa8d4d7f99
 PLEBIAN_OS_QT_RUNTIME_URL=https://github.com/itsmygithubacct/plebian-os/releases/download/qt-runtime-rc6/qt-runtime-rc6.tar.xz
 PLEBIAN_OS_QT_RUNTIME_SHA256=623b5f2669fbf42679694ca5c8d3f841536a1f2bc449d66166f057650c8f4ad1
 PLEBIAN_OS_QT_RUNTIME_BYTES=6708392
