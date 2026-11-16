@@ -182,7 +182,14 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
             self.assertEqual(sizes[index], '131072')
             self.assertIn(paths[index], array(body(text, 'ROOT_SNAPSHOT'), 'paths'))
             self.assertIn(paths[index], array(body(text, 'ROOT_RESTORE'), 'paths'))
-            self.assertIn(paths[index], provision_paths)
+            # The updater still publishes the old locations. The provisioner
+            # names the new ones through the path block, which array() does
+            # not expand.
+            provision_directory = (
+                '$PLEBIAN_OS_SBINDIR/' if name == NATIVE[0]
+                else '$PLEBIAN_OS_LIBEXECDIR/'
+            )
+            self.assertIn(provision_directory + name, provision_paths)
             validation = deploy[deploy.index('# Re-validate the root-owned copies,'):]
             validation = validation[:validation.index('# Nothing becomes destination-readable')]
             self.assertIn('"${new_paths[' + str(index) + ']}"', validation)
@@ -193,12 +200,12 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
 
     def test_media_copy_uses_only_fixed_files_and_private_target(self):
         text = (ROOT / 'preseed/preseed.cfg').read_text()
-        start = text.index('    mkdir -p /target/usr/local/libexec/plebian-os;')
+        start = text.index('    mkdir -p /target/usr/libexec/plebian-os;')
         end = text.index('    cp /cdrom/plebian-os/plebian-os-update.sh', start)
         copied = self.base / 'media'
         copied.mkdir()
         target = self.base / 'target'
-        (target / 'usr/local/sbin').mkdir(parents=True)
+        (target / 'usr/sbin').mkdir(parents=True)
         for name in (*NATIVE, 'plebian-os-qt-runtime', 'plebian-os-mpv-runtime'):
             shutil.copy2(ROOT / 'provision' / name, copied / name)
         snippet = text[start:end].replace('\\\n', '\n')
@@ -209,7 +216,7 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
                                 env={'PATH': '/usr/bin:/bin', 'HOME': str(self.base)})
         self.assertEqual(result.returncode, 0, result.stderr.decode())
         for name in NATIVE:
-            path = target / ('usr/local/sbin' if name == NATIVE[0] else 'usr/local/libexec/plebian-os') / name
+            path = target / ('usr/sbin' if name == NATIVE[0] else 'usr/libexec/plebian-os') / name
             self.assertEqual(path.read_bytes(), (ROOT / 'provision' / name).read_bytes())
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755 if name == NATIVE[0] else 0o644)
         wrapper = (ROOT / 'provision/plebian-os-native-runtime').read_text()
@@ -233,11 +240,11 @@ class BootstrapNativeHelpersTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.root = self.base / 'root'
-        self.entry = self.root / 'usr/local/sbin'
+        self.entry = self.root / 'usr/sbin'
         self.entry.mkdir(parents=True)
-        for path in (self.root, self.root / 'usr', self.root / 'usr/local', self.entry):
+        for path in (self.root, self.root / 'usr', self.entry):
             path.chmod(0o755)
-        self.modules = self.root / 'usr/local/libexec/plebian-os'
+        self.modules = self.root / 'usr/libexec/plebian-os'
         self.source = self.base / 'source'
         self.source.mkdir()
         for name in (*NATIVE, 'plebian-os-qt-runtime', 'plebian-os-mpv-runtime'):

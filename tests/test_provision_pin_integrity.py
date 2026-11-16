@@ -193,7 +193,7 @@ def session_env_text(values: dict[str, str]) -> str:
 class ReleaseControlledClassificationTests(unittest.TestCase):
     """One classification, declared in two places that cannot read each other.
 
-    plebian-os-provision is installed as a single file in /usr/local/sbin (the
+    plebian-os-provision is installed as a single file in /usr/sbin (the
     preseed's late_command and the updater's OS layer copy exactly that file,
     with no sibling to source), and UPGRADING.md has the operator run the
     selector as a standalone file extracted straight out of the target release's

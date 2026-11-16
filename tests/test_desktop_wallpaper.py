@@ -30,7 +30,7 @@ def wallpaper_destination_ancestors_are_root_owned() -> bool:
     behaviour under test is unreachable — so skip rather than report a failure
     that says nothing about the code.
     """
-    for path in ("/", "/usr", "/usr/local", "/usr/local/share"):
+    for path in ("/", "/usr", "/usr/share"):
         try:
             info = os.stat(path, follow_symlinks=False)
         except OSError:
@@ -44,7 +44,7 @@ def wallpaper_destination_ancestors_are_root_owned() -> bool:
 
 REQUIRES_ROOT_OWNED_USR_LOCAL = unittest.skipUnless(
     wallpaper_destination_ancestors_are_root_owned(),
-    "/usr/local ancestry is not root-owned here, so the provisioner refuses "
+    "/usr/share ancestry is not root-owned here, so the provisioner refuses "
     "before reaching the behaviour under test",
 )
 
@@ -119,7 +119,7 @@ seed_desktop_wallpaper_state "$DESKTOP_DIR" "$WALLPAPER"
             "TEST_PLEB_STORAGE": str(data.parent),
             "TEST_PLEB_DATA": str(data),
             "DESKTOP_DIR": str(desktop),
-            "WALLPAPER": "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+            "WALLPAPER": "/usr/share/plebian-os/wallpapers/plebian-os.png",
             "DESKTOP_ENABLED": "1" if enabled else "0",
             "TEST_DRY_RUN": "1" if dry_run else "0",
         }
@@ -378,7 +378,7 @@ fi
             self.assertEqual(
                 json.loads(state_path.read_text()),
                 {
-                    "wall_image": "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+                    "wall_image": "/usr/share/plebian-os/wallpapers/plebian-os.png",
                     "wall_mode": "stretch",
                     "wall_custom": True,
                 },
@@ -539,7 +539,7 @@ fi
         self.assertGreaterEqual(
             update.count("for dir in / /usr /usr/local /usr/local/share"), 4
         )
-        self.assertIn("for path in / /usr /usr/local /usr/local/share; do", provision)
+        self.assertIn("for path in / /usr /usr/share; do", provision)
         self.assertIn("(8#$mode & 8#1) != 0", provision)
         self.assertIn("(8#$mode & 8#1) == 0", update)
 
@@ -626,17 +626,19 @@ desktop_wallpaper_matches_expected_hash \
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
-        destination = "/usr/local/share/plebian-os/wallpapers/plebian-os.png"
+        installed = "/usr/share/plebian-os/wallpapers/plebian-os.png"
+        # The updater still deploys the previous location until that branch moves.
+        retained = "/usr/local/share/plebian-os/wallpapers/plebian-os.png"
 
         self.assertIn('assets/desktop/plebian-os.png', remaster)
         self.assertIn("PLEBIAN_OS_DESKTOP_WALLPAPER_SHA256", remaster)
         self.assertIn("desktop-wallpaper.png", remaster)
-        self.assertIn(destination, preseed)
+        self.assertIn(installed, preseed)
         self.assertIn('assets/desktop/plebian-os.png', update)
         self.assertIn("desktop-wallpaper.png", update)
         self.assertIn('wallpaper_actual" = "$wallpaper_expected', update)
         self.assertIn('wallpaper_actual" = "$wallpaper_update_expected', update)
-        self.assertGreaterEqual(update.count(destination), 3)
+        self.assertGreaterEqual(update.count(retained), 3)
         self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
         for source, installed in (
             (

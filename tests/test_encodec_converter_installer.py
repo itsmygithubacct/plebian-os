@@ -141,7 +141,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         installed = self.destination / "installed-helper"
         calls = self.destination / "calls"
         # Redirect absolute deployment paths only inside this real shell block.
-        block = block.replace("/usr/local/sbin/" + HELPER.name, str(installed))
+        block = block.replace("$PLEBIAN_OS_SBINDIR/" + HELPER.name, str(installed))
         helper.write_text("#!/bin/sh\necho invoked >> " + shlex.quote(str(calls)) + "\nexit 0\n")
         helper.chmod(0o755)
         prelude = ('set -eu\nlog() { :; }\ndie() { echo "$*" >&2; exit 1; }\n'
@@ -173,7 +173,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         end = source.index('# Ship only the small source-closure installer', start)
         # The Ollama install is defined with the library functions and stubbed here.
         sequence = source[start:end].replace(
-            '/usr/local/sbin/' + HELPER.name, str(root / 'installed-helper'))
+            '$PLEBIAN_OS_SBINDIR/' + HELPER.name, str(root / 'installed-helper'))
         stubs = ''.join(name + '() { :; }\n' for name in (
             'install_ollama_runtime_from_carrier',
             'normalize_accounts_service_package_directory', 'install_no_beep_defaults',

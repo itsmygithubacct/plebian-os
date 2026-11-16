@@ -737,8 +737,8 @@ class FirstbootBoundTests(unittest.TestCase):
         self.assertIn("KillMode=mixed", FIRSTBOOT)
         self.assertNotIn("Restart=", FIRSTBOOT)
         self.assertIn(
-            "ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run "
-            "/usr/local/sbin/plebian-os-provision",
+            "ExecStart=/usr/sbin/plebian-os-firstboot-attempt run "
+            "/usr/sbin/plebian-os-provision",
             FIRSTBOOT,
         )
         runner = ATTEMPT.read_text()
@@ -751,12 +751,12 @@ class FirstbootBoundTests(unittest.TestCase):
         self.assertGreater(5 * 3600 + 45 * 60, 18000 + 600 + 900 + 600)
         self.assertIn("ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision",
                       FIRSTBOOT)
-        self.assertIn("ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check",
+        self.assertIn("ExecCondition=/usr/sbin/plebian-os-firstboot-attempt check",
                       FIRSTBOOT)
         marker = FIRSTBOOT.index(
             "ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned")
         clear = FIRSTBOOT.index(
-            "ExecStartPost=/usr/local/sbin/plebian-os-firstboot-attempt success")
+            "ExecStartPost=/usr/sbin/plebian-os-firstboot-attempt success")
         self.assertLess(marker, clear, "attempt state must not clear before the success marker")
 
     def test_firstboot_holds_daily_apt_jobs(self):

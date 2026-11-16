@@ -240,8 +240,12 @@ if rollback_native_runtime_transaction; then exit 99; fi
                 self.assertIn('active token ' + '6' * 32, result.stderr)
                 self.assertIn('attempted token ' + '7' * 32, result.stderr)
                 self.assertIn('this token may have no journal', result.stderr)
-                self.assertIn('/usr/local/sbin/plebian-os-native-runtime status as root',
-                              result.stderr)
+                diagnostic = (
+                    '/usr/sbin/plebian-os-native-runtime status as root'
+                    if source.endswith('plebian-os-provision.sh')
+                    else '/usr/local/sbin/plebian-os-native-runtime status as root'
+                )
+                self.assertIn(diagnostic, result.stderr)
                 self.assertNotIn('recovery token ' + '7' * 32, result.stderr)
 
     def test_updater_helper_dispatch_uses_fixed_identity_and_elevation_tools(self):

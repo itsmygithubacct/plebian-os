@@ -34,14 +34,14 @@ class HelperShipsAsAnOptionalTool(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             media, target = Path(td) / "media", Path(td) / "target"
             (media / "plebian-os").mkdir(parents=True)
-            (target / "usr/local/bin").mkdir(parents=True)
+            (target / "usr/bin").mkdir(parents=True)
             script = "\n".join(media_commands + target_commands)
             script = script.replace("/cdrom/", '"$EXTRACT"/').replace(
                 "/target/", '"$TARGET"/')
             subprocess.run(["bash", "-euc", script], check=True,
                            env={**os.environ, "HERE": str(ROOT),
                                 "EXTRACT": str(media), "TARGET": str(target)})
-            installed = target / "usr/local/bin" / name
+            installed = target / "usr/bin" / name
             self.assertEqual(installed.read_bytes(), HELPER.read_bytes())
             self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
 
@@ -56,7 +56,7 @@ class HelperShipsAsAnOptionalTool(unittest.TestCase):
 
     def test_provisioner_installs_it_onto_path(self):
         text = PROVISION.read_text()
-        self.assertIn("/usr/local/bin/plebian-os-nvidia-driver", text)
+        self.assertIn("$PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver", text)
         self.assertIn('install -m 0755 "$NVIDIA_SRC"', text)
 
     def test_provisioner_never_runs_it(self):

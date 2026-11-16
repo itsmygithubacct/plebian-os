@@ -197,8 +197,8 @@ class PrepareCachePlacementTests(unittest.TestCase):
     def test_first_boot_holds_the_greeter_until_provisioning_is_done(self):
         unit = FIRSTBOOT.read_text()
         self.assertIn('Before=display-manager.service', unit)
-        self.assertIn('ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run '
-                      '/usr/local/sbin/plebian-os-provision', unit)
+        self.assertIn('ExecStart=/usr/sbin/plebian-os-firstboot-attempt run '
+                      '/usr/sbin/plebian-os-provision', unit)
 
 
 if __name__ == '__main__':

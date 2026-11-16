@@ -63,16 +63,18 @@ class Fixture:
         self.tmp = Path(tempfile.mkdtemp())
         tc.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
         self.root = self.tmp / "root"
-        for d in ("usr/local/share/plebian-os", "usr/local/sbin", "usr/bin", "etc/pleb",
-                  "var/lib/plebian-os"):
-            (self.root / d).mkdir(parents=True, exist_ok=True)
-        self.share = self.root / "usr/local/share/plebian-os"
+        for d in ("usr/share/plebian-os", "usr/sbin", "usr/bin", "etc/pleb",
+                  "var/lib/plebian-os", "var/lib/plebian-os/payloads"):
+            path = self.root / d
+            path.mkdir(parents=True, exist_ok=True)
+            path.chmod(0o755)
+        self.share = self.root / "usr/share/plebian-os"
         self.state = self.root / "var/lib/plebian-os"
-        self.archive = self.share / "ollama-runtime-carrier.tar.xz"
+        self.archive = self.state / "payloads" / "ollama-runtime-carrier.tar.xz"
         self.receipt = self.state / "ollama-runtime-carrier.receipt"
         self.manifest = self.share / "ollama-release.env"
-        self.prov = self.root / "usr/local/sbin/plebian-os-provision"
-        self.installer = self.root / "usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        self.prov = self.root / "usr/sbin/plebian-os-provision"
+        self.installer = self.root / "usr/sbin/plebian-os-install-kilix-ollama-runtime"
         self.calls = self.tmp / "calls"
         self.verify_ok = self.tmp / "verify-ok"
         self.served = self.tmp / "served"

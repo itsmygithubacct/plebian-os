@@ -1860,7 +1860,7 @@ class ImageWiringTests(unittest.TestCase):
         self.assertIn('test_fail_after_boundary image-models', update)
         self.assertIn(
             'cp /cdrom/plebian-os/basic-pitch-icassp-2022-onnx.tar.xz '
-            '/target/usr/local/share/plebian-os/basic-pitch-icassp-2022-onnx.tar.xz',
+            '/target/var/lib/plebian-os/payloads/basic-pitch-icassp-2022-onnx.tar.xz',
             preseed)
         self.assertIn(
             'install -m 0644 "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz"',
@@ -1874,10 +1874,10 @@ class ImageWiringTests(unittest.TestCase):
         remaster = (ROOT / 'build/remaster-iso.sh').read_text()
         self.assertIn(
             'cp /cdrom/plebian-os/demucs-htdemucs-6s.tar '
-            '/target/usr/local/share/plebian-os/demucs-htdemucs-6s.tar', preseed)
-        self.assertIn('chmod 0644 /target/usr/local/share/plebian-os/demucs-htdemucs-6s.tar', preseed)
+            '/target/var/lib/plebian-os/payloads/demucs-htdemucs-6s.tar', preseed)
+        self.assertIn('chmod 0644 /target/var/lib/plebian-os/payloads/demucs-htdemucs-6s.tar', preseed)
         self.assertEqual(installer.SHARED_BASIC_PITCH / _demucs_pin()['filename'],
-                         Path('/usr/local/share/plebian-os/demucs-htdemucs-6s.tar'))
+                         Path('/var/lib/plebian-os/payloads/demucs-htdemucs-6s.tar'))
         staged = remaster.index('install -m 0644 "$DEMUCS_MODEL_BUNDLE" '
                                 '"$EXTRACT/plebian-os/demucs-htdemucs-6s.tar"')
         # A supplied archive is checked early; a built one comes from the pinned
@@ -1903,11 +1903,11 @@ class ImageWiringTests(unittest.TestCase):
                                    ('pp-ocrv6-small-rec', 'PP_OCR_REC_MODEL_BUNDLE')):
             with self.subTest(asset=asset_id):
                 self.assertEqual(installer.SHARED_BASIC_PITCH / _pp_ocr_pin(asset_id)['filename'],
-                                 Path(f'/usr/local/share/plebian-os/{asset_id}.tar'))
+                                 Path(f'/var/lib/plebian-os/payloads/{asset_id}.tar'))
                 self.assertIn(
-                    f'cp /cdrom/plebian-os/{asset_id}.tar /target/usr/local/share/plebian-os/{asset_id}.tar',
+                    f'cp /cdrom/plebian-os/{asset_id}.tar /target/var/lib/plebian-os/payloads/{asset_id}.tar',
                     preseed)
-                self.assertIn(f'chmod 0644 /target/usr/local/share/plebian-os/{asset_id}.tar', preseed)
+                self.assertIn(f'chmod 0644 /target/var/lib/plebian-os/payloads/{asset_id}.tar', preseed)
                 # A supplied archive is checked early; a built one is checked
                 # again before staging.
                 self.assertIn(f'{variable}="${{PLEBIAN_OS_{variable}:-}}"', remaster)
@@ -1924,16 +1924,16 @@ class ImageWiringTests(unittest.TestCase):
         provision = (ROOT / 'provision/plebian-os-provision.sh').read_text()
         self.assertIn(
             'cp /cdrom/plebian-os/paradee-8m-v1.2.tar '
-            '/target/usr/local/share/plebian-os/paradee-8m-v1.2.tar', preseed)
+            '/target/var/lib/plebian-os/payloads/paradee-8m-v1.2.tar', preseed)
         self.assertIn(
             'tar -x -C /target/usr/lib/kilix/paradee -f /cdrom/plebian-os/paradee-8m-v1.2.tar '
             'onnx/paradee_int8.onnx config.json notices/LICENSE-apache-2.0.txt', preseed)
         self.assertIn(
             'cp /cdrom/plebian-os/en-core-web-sm-3.8.0.tar '
-            '/target/usr/local/share/plebian-os/en-core-web-sm-3.8.0.tar', preseed)
+            '/target/var/lib/plebian-os/payloads/en-core-web-sm-3.8.0.tar', preseed)
         self.assertIn(
             'cp -a /cdrom/plebian-os/paradee-wheels/. '
-            '/target/usr/local/share/plebian-os/paradee-wheels/', preseed)
+            '/target/var/lib/plebian-os/payloads/paradee-wheels/', preseed)
         self.assertIn('--verify-paradee-wheels "$WORK/paradee-wheels"', remaster)
         self.assertIn('"$EXTRACT/plebian-os/paradee-wheels/"', remaster)
         download = remaster.index('_bounded_download "$paradee_onnx_bytes" 1800 "$WORK/paradee_int8.onnx"')
@@ -1971,7 +1971,7 @@ class ImageWiringTests(unittest.TestCase):
         self.assertIn('espeak-ng source size or checksum mismatch', remaster)
         self.assertIn(
             'cp /cdrom/plebian-os/espeak-ng-1.52.0.tar.gz '
-            '/target/usr/local/share/doc/plebian-os/espeak-ng/espeak-ng-1.52.0.tar.gz', preseed)
+            '/target/usr/share/plebian-os/notices/espeak-ng/espeak-ng-1.52.0.tar.gz', preseed)
         self.assertIn('espeakng-loader-0.2.4-LICENSE', preseed)
         self.assertIn('espeakng-loader-0.2.4-build.sh', preseed)
 

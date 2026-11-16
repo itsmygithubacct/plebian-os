@@ -13,8 +13,8 @@ UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 PRESEED = ROOT / "preseed" / "preseed.cfg"
 REMASTER = ROOT / "build" / "remaster-iso.sh"
 DESTINATION = "/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf"
-WALLPAPER = "/usr/local/share/plebian-os/wallpapers/plebian-os.png"
-CONFIG_SHA256 = "985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560"
+WALLPAPER = "/usr/share/plebian-os/wallpapers/plebian-os.png"
+CONFIG_SHA256 = "4c888bb55fbd2e0d8ae60f8cca06bb606879fb3168168174156d0952a931564b"
 
 
 class LightdmGreeterBrandingTests(unittest.TestCase):

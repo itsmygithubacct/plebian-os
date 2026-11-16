@@ -647,8 +647,8 @@ class HookTests(unittest.TestCase):
     def test_installer_copies_the_archive_into_the_target(self):
         late = PRESEED.read_text().split('d-i preseed/late_command string', 1)[1]
         self.assertIn('for neuronte in /cdrom/plebian-os/neuronte-*.tar.xz; do', late)
-        self.assertIn('cp "$neuronte" "/target/usr/local/share/plebian-os/${neuronte##*/}" || exit 1', late)
-        self.assertIn('chmod 0644 "/target/usr/local/share/plebian-os/${neuronte##*/}"', late)
+        self.assertIn('cp "$neuronte" "/target/var/lib/plebian-os/payloads/${neuronte##*/}" || exit 1', late)
+        self.assertIn('chmod 0644 "/target/var/lib/plebian-os/payloads/${neuronte##*/}"', late)
 
     def test_first_boot_installs_after_the_models_and_fails_closed(self):
         text = PROVISION.read_text()
@@ -658,7 +658,7 @@ class HookTests(unittest.TestCase):
         self.assertIn('--archive "$archive"', body)
         self.assertIn('|| die "required Neuronte installation failed"', body)
         self.assertNotIn('--fetch-failure', body)
-        self.assertIn('NEURONTE_IMAGE_ARCHIVE_DIR=/usr/local/share/plebian-os', text)
+        self.assertIn('NEURONTE_IMAGE_ARCHIVE_DIR=$PLEBIAN_OS_PAYLOADDIR', text)
 
     def test_update_installs_after_the_image_models_and_tolerates_only_downloads(self):
         text = UPDATE.read_text()
@@ -727,7 +727,7 @@ class HookTests(unittest.TestCase):
             sys.path.remove(str(VM_BUILDER.parent))
             sys.modules.pop(spec.name, None)
         command = builder.neuronte_contract('c' * 40)
-        self.assertIn('/usr/local/share/plebian-os/neuronte-' + 'c' * 40 + '.tar.xz', command)
+        self.assertIn('/var/lib/plebian-os/payloads/neuronte-' + 'c' * 40 + '.tar.xz', command)
         self.assertIn('cd "$KILIX95_DIR"', command)
         self.assertIn('neuronte_face._library()', command)
         self.assertIn('neuronte_flame.image(32)', command)
@@ -954,7 +954,7 @@ class OlderUpdaterTests(unittest.TestCase):
         self.assertEqual(argv[argv.index('--manifest') + 1], str(MANIFEST))
         self.assertEqual(argv[argv.index('--destination') + 1], str(sources / 'neuronte'))
         self.assertEqual(argv[argv.index('--archive') + 1],
-                         '/usr/local/share/plebian-os/neuronte-%s.tar.xz' % self.ref)
+                         '/var/lib/plebian-os/payloads/neuronte-%s.tar.xz' % self.ref)
         self.assertEqual(argv[argv.index('--fetch-failure') + 1], 'warn')
 
     def test_older_updater_also_prepares_the_installed_desktop(self):
