@@ -1,0 +1,7 @@
+# Not part of the source package: third-party model payloads and the
+# per-release model compliance records. No binary package is built from them
+# and they stay in the repository, where their own notices travel with them.
+tar-ignore = ".git"
+tar-ignore = "__pycache__"
+tar-ignore = "provision/bundles"
+tar-ignore = "*-model-compliance*"

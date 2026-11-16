@@ -1,0 +1,40 @@
+# What each binary package installs: PACKAGE MODE SOURCE DESTINATION.
+# debian/rules installs exactly these rows and nothing else.
+# tests/test_debian_packaging.py holds this list equal to the set of files
+# plebian-os-update deploys, so the packages and the updater cannot drift.
+# @VERSION@ is the content of the top-level VERSION file.
+
+plebian-os-release   0644 VERSION                                             /usr/share/plebian-os/VERSION
+plebian-os-release   0644 releases/@VERSION@.env                              /usr/share/plebian-os/ollama-release.env
+
+plebian-os-tools     0755 provision/plebian-os-update.sh                      /usr/bin/plebian-os-update
+plebian-os-tools     0755 provision/plebian-os-select-closure.sh              /usr/bin/plebian-os-select-closure
+plebian-os-tools     0755 provision/plebian-os-nvidia-driver                  /usr/bin/plebian-os-nvidia-driver
+plebian-os-tools     0755 provision/install-deps.sh                           /usr/sbin/plebian-os-install-deps
+plebian-os-tools     0755 provision/plebian-os-passwd                         /usr/sbin/plebian-os-passwd
+plebian-os-tools     0755 provision/plebian-os-ssh-server                     /usr/sbin/plebian-os-ssh-server
+plebian-os-tools     0755 provision/plebian-os-source-carrier                 /usr/sbin/plebian-os-source-carrier
+plebian-os-tools     0755 provision/plebian-os-native-runtime                 /usr/sbin/plebian-os-native-runtime
+plebian-os-tools     0755 provision/plebian-os-qt-runtime                     /usr/sbin/plebian-os-qt-runtime
+plebian-os-tools     0755 provision/plebian-os-mpv-runtime                    /usr/sbin/plebian-os-mpv-runtime
+plebian-os-tools     0755 provision/plebian-os-install-ollama-converter       /usr/sbin/plebian-os-install-ollama-converter
+plebian-os-tools     0755 provision/plebian-os-install-diarization-converter  /usr/sbin/plebian-os-install-diarization-converter
+plebian-os-tools     0755 provision/plebian-os-install-encodec-converter      /usr/sbin/plebian-os-install-encodec-converter
+plebian-os-tools     0755 provision/plebian-os-install-kilix-vulkan-tts       /usr/sbin/plebian-os-install-kilix-vulkan-tts
+plebian-os-tools     0755 provision/plebian-os-install-kilix-ollama-runtime   /usr/sbin/plebian-os-install-kilix-ollama-runtime
+plebian-os-tools     0644 provision/native_package.py                         /usr/libexec/plebian-os/native_package.py
+plebian-os-tools     0644 provision/native_state.py                           /usr/libexec/plebian-os/native_state.py
+plebian-os-tools     0644 provision/native_process.py                         /usr/libexec/plebian-os/native_process.py
+plebian-os-tools     0644 provision/native_runtime.py                         /usr/libexec/plebian-os/native_runtime.py
+plebian-os-tools     0755 provision/plebian-os-waydroid-setup                 /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
+plebian-os-tools     0644 provision/waydroid-closure.env                      /usr/lib/plebian-os/waydroid/waydroid-closure.env
+plebian-os-tools     0644 provision/waydroid-closure.sha256                   /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
+
+plebian-os-firstboot 0755 provision/plebian-os-provision.sh                   /usr/sbin/plebian-os-provision
+plebian-os-firstboot 0755 provision/plebian-os-firstboot-attempt              /usr/sbin/plebian-os-firstboot-attempt
+plebian-os-firstboot 0644 provision/plebian-os-firstboot.service              /usr/lib/systemd/system/plebian-os-firstboot.service
+
+plebian-desktop-base 0644 assets/desktop/plebian-os.png                       /usr/share/plebian-os/wallpapers/plebian-os.png
+plebian-desktop-base 0644 assets/installer/ATTRIBUTION.md                     /usr/share/plebian-os/notices/installer/ATTRIBUTION.md
+plebian-desktop-base 0644 assets/COPYING.GPL-2                                /usr/share/plebian-os/notices/COPYING.GPL-2
+plebian-desktop-base 0644 provision/lightdm-gtk-greeter.conf                  /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf

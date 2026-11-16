@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+# Every installed file is a row of debian/install-map.
+VERSION := $(shell cat VERSION)
+
+%:
+	dh $@
+
+override_dh_auto_install:
+	set -e; sed -e '/^#/d' -e '/^$$/d' -e 's/@VERSION@/$(VERSION)/' debian/install-map | \
+	while read -r package mode source destination; do \
+	    install -D -m "$$mode" "$$source" "debian/$$package$$destination"; \
+	done
+
+# First boot is enabled by the installer for a fresh machine. Installing or
+# upgrading the package must never start provisioning on a running system.
+override_dh_installsystemd:
+	dh_installsystemd --no-enable --no-start
+
+# dh_fixperms makes everything under usr/libexec executable. The modules there
+# are imported, not run, and the updater installs them 0644; keep one mode.
+override_dh_fixperms:
+	dh_fixperms --exclude usr/libexec/plebian-os

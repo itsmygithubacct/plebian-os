@@ -1,0 +1,39 @@
+Source: plebian-os
+Section: admin
+Priority: optional
+Maintainer: itsmygithubacct <itsmygithubacct@users.noreply.github.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/itsmygithubacct/plebian-os
+Vcs-Git: https://github.com/itsmygithubacct/plebian-os.git
+Vcs-Browser: https://github.com/itsmygithubacct/plebian-os
+
+Package: plebian-os-release
+Architecture: all
+Depends: ${misc:Depends}
+Description: Plebian-OS release identity
+ The installed Plebian-OS version and the release manifest that pins the
+ runtime components of that release.
+
+Package: plebian-os-tools
+Architecture: all
+Depends: plebian-os-release (= ${binary:Version}), python3, ${misc:Depends}
+Description: Plebian-OS administration tools
+ The release updater and its closure selector, and the root helpers that
+ install and verify the optional runtimes of a Plebian-OS release.
+
+Package: plebian-os-firstboot
+Architecture: all
+Depends: plebian-os-tools (= ${binary:Version}), ${misc:Depends}
+Description: Plebian-OS first-boot provisioning
+ The provisioner that turns a fresh Debian installation into Plebian-OS and
+ the systemd unit that runs it once. Installing this package does not enable
+ the unit: the installer does that for a new machine.
+
+Package: plebian-desktop-base
+Architecture: all
+Depends: ${misc:Depends}
+Description: Plebian-OS desktop artwork and login defaults
+ The Plebian-OS wallpaper, the login greeter settings that use it, and the
+ attribution and licence notices for the artwork.
