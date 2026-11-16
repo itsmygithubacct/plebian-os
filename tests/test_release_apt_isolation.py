@@ -1501,6 +1501,223 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
             self.assertIn("Inst libdep-sim (1.0", plan)
             self.assertNotIn("(9.0", plan)
 
+    def test_authenticated_proxy_userinfo_is_carried_and_not_logged(self):
+        """debian-installer's user:pass form is copied. A quote or semicolon is not.
+
+        Percent-encoding is the password form that stays. The warning names
+        the key. No credential is printed. A carried userinfo makes apt.conf
+        mode 0600.
+        """
+        if shutil.which("unshare") is None:
+            self.skipTest("unshare is not available")
+        probe = subprocess.run(["unshare", "-rm", "true"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("unshare -rm is not available")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            suite = codename()
+            apt = write_apt(tmp, {"debian.sources": debian_sources(suite)})
+            hostile = tmp / "hostile-apt"
+            (hostile / "apt.conf.d").mkdir(parents=True)
+            (hostile / "sources.list.d").mkdir()
+            (hostile / "sources.list").write_text("")
+            (hostile / "apt.conf").write_text(
+                'Acquire::http::Proxy "http://alice:s3cret-token@proxy.example:3128/";\n'
+                'Acquire::https::Proxy "http://bob:p%40ss-token@proxy.example:3128/";\n'
+                'Acquire::http::Proxy::deb.debian.org "http://dave:s3cret;semi@proxy.example/";\n'
+            )
+            quote_dump = tmp / "quote.dump"
+            quote_dump.write_bytes(
+                b'Acquire::ftp::Proxy\thttp://carol:s3cret"quote@proxy.example/\n'
+            )
+            stubbin = tmp / "stubbin"
+            stubbin.mkdir()
+            stub = stubbin / "apt-config"
+            stub.write_text('#!/bin/sh\ncat "$QUOTE_DUMP"\n')
+            stub.chmod(0o755)
+            dest = tmp / "dest"
+            dest2 = tmp / "dest2"
+            dest.mkdir()
+            dest2.mkdir()
+            out = tmp / "out"
+            out.mkdir()
+            probe_sh = tmp / "probe.sh"
+            probe_sh.write_text(
+                "#!/bin/bash\n"
+                "set -u\n"
+                'mount --bind "$HOSTILE" /etc/apt || { echo MOUNT_FAILED >&2; exit 97; }\n'
+                'mkdir -p "$EMPTY_PLEB"\n'
+                'mount --bind "$EMPTY_PLEB" /etc/pleb || { echo MOUNT_PLEB_FAILED >&2; exit 97; }\n'
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                'export PLEB_STATE_HOME="$STATE"\n'
+                "export DEBIAN_FRONTEND=noninteractive\n"
+                'source "$UPDATE"\n'
+                'prepare_release_apt_config "$DEST" lifetime "" "$CODENAME" "$APT" '
+                '>"$OUT/prepare.txt" 2>"$OUT/prepare.err"\n'
+                'printf "PREP_RC=%s\\n" "$?" >"$OUT/prep"\n'
+                'stat -c %a "$DEST/apt.conf" >"$OUT/mode"\n'
+                'export PATH="$STUBBIN:$PATH"\n'
+                'export QUOTE_DUMP\n'
+                'prepare_release_apt_config "$DEST2" lifetime "" "$CODENAME" "$APT" '
+                '>"$OUT/quote.txt" 2>"$OUT/quote.err"\n'
+                'printf "QUOTE_RC=%s\\n" "$?" >"$OUT/quote.rc"\n'
+                'stat -c %a "$DEST2/apt.conf" >"$OUT/quote.mode"\n'
+            )
+            probe_sh.chmod(0o755)
+            ran = subprocess.run(
+                ["unshare", "-rm", "bash", str(probe_sh)],
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOSTILE": str(hostile),
+                    "EMPTY_PLEB": str(tmp / "empty-pleb"),
+                    "STATE": str(tmp / "state"),
+                    "UPDATE": str(UPDATE),
+                    "DEST": str(dest),
+                    "DEST2": str(dest2),
+                    "APT": str(apt),
+                    "OUT": str(out),
+                    "CODENAME": suite,
+                    "STUBBIN": str(stubbin),
+                    "QUOTE_DUMP": str(quote_dump),
+                    "HOME": str(tmp / "home"),
+                    "LC_ALL": "C",
+                },
+                text=True, capture_output=True, check=False, timeout=90,
+            )
+            detail = ran.stdout + ran.stderr
+            prep_out = (out / "prepare.txt").read_text() if (out / "prepare.txt").exists() else ""
+            prep_err = (out / "prepare.err").read_text() if (out / "prepare.err").exists() else ""
+            quote_out = (out / "quote.txt").read_text() if (out / "quote.txt").exists() else ""
+            quote_err = (out / "quote.err").read_text() if (out / "quote.err").exists() else ""
+            logged = detail + prep_out + prep_err + quote_out + quote_err
+            self.assertEqual(ran.returncode, 0, logged)
+            self.assertIn("PREP_RC=0", (out / "prep").read_text(), prep_err)
+            self.assertIn("QUOTE_RC=0", (out / "quote.rc").read_text(), quote_err)
+            conf = (dest / "apt.conf").read_text()
+            self.assertIn(
+                'Acquire::http::Proxy "http://alice:s3cret-token@proxy.example:3128/";',
+                conf)
+            self.assertIn(
+                'Acquire::https::Proxy "http://bob:p%40ss-token@proxy.example:3128/";',
+                conf)
+            self.assertNotIn("s3cret;semi", conf)
+            self.assertNotIn('s3cret"quote', conf)
+            self.assertIn("dropping proxy setting Acquire::http::Proxy::deb.debian.org", prep_err)
+            self.assertIn("dropping proxy setting Acquire::ftp::Proxy", quote_err)
+            self.assertNotIn("s3cret", logged)
+            self.assertNotIn("p%40ss-token", logged)
+            self.assertEqual((out / "mode").read_text().strip(), "600")
+            self.assertEqual((out / "quote.mode").read_text().strip(), "644")
+            quoted = (dest2 / "apt.conf").read_text()
+            self.assertNotIn("carol", quoted)
+            self.assertNotIn("s3cret", quoted)
+
+    def test_an_unreachable_debian_archive_is_reported(self):
+        """A release update that cannot fetch Debian says so, and names no proxy value.
+
+        apt-get update without --error-on=any exits 0 when the fetch fails.
+        install-deps and the updater both pass that flag and refuse.
+        """
+        if shutil.which("unshare") is None:
+            self.skipTest("unshare is not available")
+        probe = subprocess.run(["unshare", "-rm", "true"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("unshare -rm is not available")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            suite = codename()
+            apt = write_apt(tmp, {"debian.sources": debian_sources(suite)})
+            hostile = tmp / "hostile-apt"
+            (hostile / "apt.conf.d").mkdir(parents=True)
+            (hostile / "sources.list.d").mkdir()
+            (hostile / "sources.list").write_text("")
+            (hostile / "apt.conf").write_text(
+                'Acquire::https::Proxy "http://alice:s3cret-token@127.0.0.1:9";\n'
+                'Acquire::http::Proxy "http://alice:s3cret-token@127.0.0.1:9";\n'
+            )
+            dest = tmp / "dest"
+            dest.mkdir()
+            status = tmp / "status"
+            status.write_text("")
+            extended = tmp / "extended"
+            extended.write_text("")
+            out = tmp / "out"
+            out.mkdir()
+            probe_sh = tmp / "probe.sh"
+            probe_sh.write_text(
+                "#!/bin/bash\n"
+                "set -u\n"
+                'mount --bind "$HOSTILE" /etc/apt || { echo MOUNT_FAILED >&2; exit 97; }\n'
+                'mkdir -p "$EMPTY_PLEB"\n'
+                'mount --bind "$EMPTY_PLEB" /etc/pleb || { echo MOUNT_PLEB_FAILED >&2; exit 97; }\n'
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                'export PLEB_STATE_HOME="$STATE"\n'
+                'export PLEBIAN_OS_DPKG_STATUS="$STATUS"\n'
+                'export PLEBIAN_OS_APT_EXTENDED_STATES="$EXTENDED"\n'
+                "export DEBIAN_FRONTEND=noninteractive\n"
+                "export PLEBIAN_OS_RELEASE_MODE=1\n"
+                'source "$UPDATE"\n'
+                'prepare_release_apt_config "$DEST" lifetime "" "$CODENAME" "$APT" '
+                '>"$OUT/prepare.txt" 2>"$OUT/prepare.err"\n'
+                'printf "PREP_RC=%s\\n" "$?" >"$OUT/prep"\n'
+                'stat -c %a "$DEST/apt.conf" >"$OUT/mode"\n'
+                'printf "%s\\n" \'APT::Sandbox::User "root";\' >>"$DEST/apt.conf"\n'
+                "export RELEASE_APT_CONFIG=\"$DEST\"\n"
+                "set +e\n"
+                'env PLEBIAN_OS_RELEASE_MODE=1 PLEBIAN_OS_RELEASE_APT_CONFIG="$DEST" '
+                'PLEBIAN_OS_DPKG_STATUS="$STATUS" PLEBIAN_OS_APT_EXTENDED_STATES="$EXTENDED" '
+                'PLEBIAN_OS_APT_SOURCES_ROOT="$APT" DEBIAN_FRONTEND=noninteractive '
+                'bash "$DEPS" >"$OUT/deps.txt" 2>"$OUT/deps.err"\n'
+                'printf "DEPS_RC=%s\\n" "$?" >"$OUT/deps.rc"\n'
+                '( warm_release_apt_indexes >"$OUT/warm.txt" 2>"$OUT/warm.err" )\n'
+                'printf "WARM_RC=%s\\n" "$?" >"$OUT/warm.rc"\n'
+            )
+            probe_sh.chmod(0o755)
+            ran = subprocess.run(
+                ["unshare", "-rm", "bash", str(probe_sh)],
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOSTILE": str(hostile),
+                    "EMPTY_PLEB": str(tmp / "empty-pleb"),
+                    "STATE": str(tmp / "state"),
+                    "STATUS": str(status),
+                    "EXTENDED": str(extended),
+                    "UPDATE": str(UPDATE),
+                    "DEPS": str(DEPS),
+                    "DEST": str(dest),
+                    "APT": str(apt),
+                    "OUT": str(out),
+                    "CODENAME": suite,
+                    "HOME": str(tmp / "home"),
+                    "LC_ALL": "C",
+                },
+                text=True, capture_output=True, check=False, timeout=120,
+            )
+            detail = ran.stdout + ran.stderr
+            prep_err = (out / "prepare.err").read_text() if (out / "prepare.err").exists() else ""
+            deps_out = (out / "deps.txt").read_text() if (out / "deps.txt").exists() else ""
+            deps_err = (out / "deps.err").read_text() if (out / "deps.err").exists() else ""
+            warm_out = (out / "warm.txt").read_text() if (out / "warm.txt").exists() else ""
+            warm_err = (out / "warm.err").read_text() if (out / "warm.err").exists() else ""
+            logged = "\n".join((detail, prep_err, deps_out, deps_err, warm_out, warm_err))
+            self.assertEqual(ran.returncode, 0, logged)
+            self.assertIn("PREP_RC=0", (out / "prep").read_text(), prep_err)
+            self.assertEqual((out / "mode").read_text().strip(), "600", prep_err)
+            phrase = "could not reach the Debian archive; check the network connection and the apt proxy"
+            for name, text, rc_name in (
+                ("deps", deps_err, "deps.rc"),
+                ("warm", warm_err, "warm.rc"),
+            ):
+                rc = (out / rc_name).read_text()
+                self.assertNotIn("=0", rc, name + "\n" + logged)
+                self.assertIn(phrase, text, name + "\n" + logged)
+                self.assertTrue(
+                    "Failed to fetch" in text or "Unable to connect" in text or "Could not connect" in text,
+                    name + "\n" + logged)
+            self.assertNotIn("s3cret-token", logged)
+            self.assertNotIn("s3cret", prep_err)
+
+
 class ReleaseAptRouteTests(unittest.TestCase):
     """A new release-path apt command has to go through the private configuration.
 
@@ -1626,6 +1843,19 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertIn("dropping proxy setting", prepared)
         self.assertNotIn("Proxy-Auto-Detect", prepared)
         self.assertNotIn("ProxyAutoDetect", prepared)
+        self.assertIn("([A-Za-z0-9._~%!$&()*+,=:-]+@)?", prepared)
+        self.assertIn("--error-on=any", shell_function(updater, "warm_release_apt_indexes"))
+        self.assertIn(
+            "could not reach the Debian archive; check the network connection and the apt proxy",
+            shell_function(updater, "warm_release_apt_indexes"))
+        deps = (ROOT / "provision" / "install-deps.sh").read_text()
+        self.assertIn("--error-on=any", deps)
+        self.assertIn(
+            "could not reach the Debian archive; check the network connection and the apt proxy",
+            deps)
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertNotIn('release_apt_get "$PROVISION_RELEASE_APT_CONFIG" update', provision)
+        self.assertNotIn("release_apt_get \"$RELEASE_APT_CONFIG\" update", provision)
 
     @staticmethod
     def _reason(name: str, text: str) -> str | None:

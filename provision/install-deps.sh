@@ -101,8 +101,9 @@ validate_release_apt_provenance() {
 # can satisfy. The private apt.conf sets Dir::Etc::main to /dev/null and
 # points Dir::Etc::Parts at an empty directory, so the operator apt.conf and
 # an apt.conf.d snippet cannot add a package either. Validated
-# Acquire::{http,https,ftp}::Proxy values, including a per-host DIRECT, are
-# copied into that file. A proxy auto-detect program is not. A copied proxy
+# Acquire::{http,https,ftp}::Proxy values, including a per-host DIRECT and an
+# optional userinfo, are copied into that file. A value with userinfo makes
+# the file mode 0600. A proxy auto-detect program is not. A copied proxy
 # cannot forge a package, because the signed Release check still applies.
 # $1 is an
 # absolute directory this function fills. $2 is install or lifetime. $3 is the
@@ -118,6 +119,7 @@ prepare_release_apt_config() {
     local main_ok=0 snapshot_only=0 trust_disabled=0
     local qt_pin="" qt_owner="" qt_mode=""
     local proxy_line="" proxy_key="" proxy_value="" proxy_host="" proxy_ok=0
+    local proxy_userinfo=0 proxy_mode=0644
     case "$dest" in
         /*) ;;
         *) return 1 ;;
@@ -179,10 +181,12 @@ prepare_release_apt_config() {
     # apt-config dump only parses the operator configuration. Copy string
     # values of Acquire::{http,https,ftp}::Proxy and a per-host form whose
     # host matches [A-Za-z0-9.-]+. The value must be DIRECT or an http://,
-    # https://, or socks5h:// URL. Quotes, semicolons, braces, and whitespace
-    # are dropped. Any other key, including a proxy auto-detect program, is
-    # left out. A copied proxy cannot forge a package: the signed Release
-    # check still applies.
+    # https://, or socks5h:// URL, with an optional userinfo
+    # [A-Za-z0-9._~%!$&()*+,=:-]+@ before the host. Quotes, semicolons,
+    # braces, backslashes, and whitespace are dropped. The warning names the
+    # key and never prints the value. Any other key, including a proxy
+    # auto-detect program, is left out. A copied proxy cannot forge a
+    # package: the signed Release check still applies.
     while IFS= read -r proxy_line || [ -n "$proxy_line" ]; do
         [ -n "$proxy_line" ] || continue
         case "$proxy_line" in
@@ -209,14 +213,19 @@ prepare_release_apt_config() {
         esac
         proxy_ok=0
         case "$proxy_value" in
-            *"'"*|*'\"'*|*';'*|*'{'*|*'}'*|*[[:space:]]*)
+            *"'"*|*'\"'*|*'"'*|*';'*|*'{'*|*'}'*|*[[:space:]]*|*\\*)
                 ;;
             DIRECT)
                 proxy_ok=1
                 ;;
             *)
-                if [[ "$proxy_value" =~ ^(http|https|socks5h)://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?$ ]]; then
+                if [[ "$proxy_value" =~ ^(http|https|socks5h)://([A-Za-z0-9._~%!$&()*+,=:-]+@)?[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?$ ]]; then
                     proxy_ok=1
+                    # Group 2 is the optional userinfo, including its @. A
+                    # later @ in the path is not a credential.
+                    if [ -n "${BASH_REMATCH[2]:-}" ]; then
+                        proxy_userinfo=1
+                    fi
                 fi
                 ;;
         esac
@@ -552,7 +561,12 @@ prepare_release_apt_config() {
         return 1
     fi
     # The finished directory is handed to root apt. _apt must be able to
-    # traverse it. Nothing in it is secret.
+    # traverse it. apt.conf is mode 0600 when a copied proxy contains
+    # userinfo, because that value is a credential. The other files stay
+    # mode 0644.
+    if [ "$proxy_userinfo" = 1 ]; then
+        proxy_mode=0600
+    fi
     chmod 0755 -- "$dest" "$dest/sources.list.d" "$dest/lists" "$dest/lists/partial" \
         "$dest/archives" "$dest/archives/partial" "$dest/cache" "$dest/preferences.d" \
         "$dest/apt.conf.d" || {
@@ -561,7 +575,12 @@ prepare_release_apt_config() {
         return 1
     }
     chmod 0644 -- "$dest/sources.list" "$dest/preferences" "$dest/extended_states" \
-        "$dest/indexes" "$dest/apt.conf" || {
+        "$dest/indexes" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod "$proxy_mode" -- "$dest/apt.conf" || {
         rm -rf -- "$work"
         printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
         return 1
@@ -586,6 +605,8 @@ prepare_release_apt_config() {
 # does not replace apt's default main file, and points Dir::Etc::Parts at an
 # empty directory so apt.conf.d is not read. Validated Acquire proxy values
 # from the operator configuration are the only settings copied into that file.
+# A copied value that contains userinfo is a credential, so that file is then
+# mode 0600.
 release_apt_get() {
     local config="$1"
     shift
@@ -1006,6 +1027,11 @@ plan_install() {
 export DEBIAN_FRONTEND=noninteractive
 if [ "$DRY_RUN" = 1 ]; then
     deps_apt_plan update -y
+elif [ -n "$RELEASE_APT_CONFIG" ]; then
+    # apt-get update exits 0 when a fetch fails. --error-on=any makes that
+    # failure visible. The message names no proxy value.
+    deps_apt -o DPkg::Lock::Timeout=600 update -y --error-on=any \
+        || die "could not reach the Debian archive; check the network connection and the apt proxy"
 else
     deps_apt -o DPkg::Lock::Timeout=600 update -y || warn "apt-get update failed (continuing; installs may still work)"
 fi
