@@ -1803,6 +1803,14 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
         uid gets EACCES. Namespace root, which is what elevation is inside
         this user namespace, verifies the same directory. The helper is the
         provision script, copied only so that uid can execute it.
+
+        The copy runs from its installed path, /usr/local/sbin, bind-mounted
+        from the test's own directory. The unprivileged uid then reaches it
+        through directories it can traverse, wherever TMPDIR is: under a
+        private 0700 TMPDIR it could not open a copy left in the temporary
+        directory, and Python exited 2 before the helper ran. The fixture
+        files, the pin, the state directory and the dpkg-query stub are
+        reached the same way, through their mount targets.
         """
         if shutil.which("unshare") is None or shutil.which("setpriv") is None:
             self.skipTest("unshare and setpriv are required")
@@ -1834,12 +1842,18 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
             self.skipTest("dpkg-query is required")
         if not Path("/etc/apt/preferences.d/plebian-os-qt-runtime").exists():
             self.skipTest("the Qt preference path is not present to mount over")
+        if not Path("/usr/local/sbin").is_dir():
+            self.skipTest("/usr/local/sbin is not present to mount over")
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             os.chmod(tmp, 0o755)
-            helper = tmp / "plebian-os-qt-runtime"
-            helper.write_bytes((ROOT / "provision" / "plebian-os-qt-runtime").read_bytes())
-            helper.chmod(0o755)
+            sbin = tmp / "sbin"
+            sbin.mkdir()
+            sbin.chmod(0o755)
+            (sbin / "plebian-os-qt-runtime").write_bytes(
+                (ROOT / "provision" / "plebian-os-qt-runtime").read_bytes())
+            (sbin / "plebian-os-qt-runtime").chmod(0o755)
+            helper = Path("/usr/local/sbin/plebian-os-qt-runtime")
             records = []
             mounts = []
             for name, qt in packages.items():
@@ -1905,6 +1919,9 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
             lines = [
                 "#!/bin/bash",
                 "set -u",
+                "cd / || exit 97",
+                f"mount --bind {shlex.quote(str(sbin))} /usr/local/sbin"
+                " || { echo MOUNT_SBIN >&2; exit 97; }",
                 f"mount --bind {shlex.quote(str(state))} /var/lib/plebian-os/qt-runtime"
                 " || { echo MOUNT_STATE >&2; exit 97; }",
                 f"mount --bind {shlex.quote(str(pin))} /etc/apt/preferences.d/plebian-os-qt-runtime"
@@ -1933,18 +1950,26 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
                 ["unshare", "--map-auto", "--map-root-user", "-m", "bash", str(script)],
                 text=True, capture_output=True, check=False, timeout=60,
             )
-            detail = ran.stdout + ran.stderr
+            def read(name):
+                path = tmp / name
+                return path.read_text() if path.exists() else ""
+            detail = (ran.stdout + ran.stderr + "\nuser.err: " + read("user.err")
+                      + "\nelev.err: " + read("elev.err"))
             self.assertEqual(ran.returncode, 0, detail)
             self.assertIn("elev_rc=0", ran.stdout, detail)
             self.assertIn("user_rc=1", ran.stdout, detail)
             self.assertIn(
                 "Plebian-OS selected Qt runtime verified",
-                (tmp / "elev.out").read_text(),
+                read("elev.out"),
             )
-            user_err = (tmp / "user.err").read_text()
+            user_err = read("user.err")
+            # The helper itself ran and reported the state directory, through
+            # its own error path, not the interpreter failing to open it.
+            self.assertIn("plebian-os-qt-runtime: ", user_err)
             self.assertIn("Permission denied", user_err)
             self.assertIn("/var/lib/plebian-os/qt-runtime/RUNTIME.json", user_err)
-            self.assertNotIn("verified", (tmp / "user.out").read_text())
+            self.assertNotIn("can't open file", user_err)
+            self.assertNotIn("verified", read("user.out"))
 
     def test_the_private_qt_pin_is_copied_again_after_it_changes(self):
         """A Qt hop rewrites the operator pin. The private copy follows it.
