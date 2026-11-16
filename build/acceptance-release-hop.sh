@@ -22,6 +22,11 @@ usage: acceptance-release-hop.sh --shape image|standalone --from X.Y.Z \
 
 Optional --bootstrap-driver PATH --bootstrap-driver-ref SHA uses an explicit
 legacy migration driver without replacing the installed CLI before the hop.
+A same-version hop is accepted only as --from X.Y.Z --target X.Y.Z
+--release-tag vX.Y.Z --from-release-tag vX.Y.Z-rcN
+--expected-release-commit SHA. It uses the installed CLI, checks the
+installed release tag or the RC commit in the closure, and rolls the final
+back to that closure before hopping again. No bootstrap driver is accepted.
 The guest must start on the accepted previous release. DIR must be outside
 $HOME. Image guests require all three final options. The command refuses
 non-VM hosts, a dirty source checkout, or a starting closure mismatch.
@@ -37,6 +42,10 @@ shape=""
 from=""
 target=""
 release_tag=""
+from_release_tag=""
+from_release_tag_object=""
+expected_release_commit=""
+same_version=0
 bootstrap_driver=""
 bootstrap_driver_ref=""
 report=""
@@ -62,6 +71,9 @@ while [ "$#" -gt 0 ]; do
         --bootstrap-driver) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver" ] || die "--bootstrap-driver needs one path"; bootstrap_driver="$2"; shift 2 ;;
         --bootstrap-driver-ref) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver_ref" ] || die "--bootstrap-driver-ref needs one SHA"; bootstrap_driver_ref="$2"; shift 2 ;;
         --release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$release_tag" ] || die "--release-tag needs one nonempty tag"; release_tag="$2"; shift 2 ;;
+        --from-release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$from_release_tag" ] || die "--from-release-tag needs one nonempty tag"; from_release_tag="$2"; shift 2 ;;
+        --from-release-tag-object) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$from_release_tag_object" ] || die "--from-release-tag-object needs one value"; from_release_tag_object="$2"; shift 2 ;;
+        --expected-release-commit) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$expected_release_commit" ] || die "--expected-release-commit needs one value"; expected_release_commit="$2"; shift 2 ;;
         --from-pleb-ref) [ "$#" -ge 2 ] || die "--from-pleb-ref needs a value"; from_pleb_ref="$2"; shift 2 ;;
         --from-kilix-ref) [ "$#" -ge 2 ] || die "--from-kilix-ref needs a value"; from_kilix_ref="$2"; shift 2 ;;
         --from-os-ref) [ "$#" -ge 2 ] || die "--from-os-ref needs a value"; from_os_ref="$2"; shift 2 ;;
@@ -88,7 +100,25 @@ if [ -n "$release_tag" ] && [ "$release_tag" != "v$target" ]; then
     [ "$rc_number" != "$release_tag" ] && [[ "$rc_number" =~ ^[1-9][0-9]*$ ]] \
         || die "--release-tag must be the exact target stable or numbered RC tag"
 fi
-[ "$from" != "$target" ] || die "--from and --target must differ"
+if [ "$from" = "$target" ]; then
+    [ "$release_tag" = "v$target" ] && [ -n "$from_release_tag" ] \
+        || die "a same-version hop requires --release-tag v$target and --from-release-tag v$target-rcN"
+    from_rc="${from_release_tag#"v$target-rc"}"
+    [ "$from_rc" != "$from_release_tag" ] && [[ "$from_rc" =~ ^[1-9][0-9]*$ ]] \
+        || die "--from-release-tag must name the installed RC as v$target-rcN"
+    [[ "$expected_release_commit" =~ ^[0-9a-f]{40}$ ]] \
+        || die "same-version finalization requires --expected-release-commit"
+    if [ -n "$from_release_tag_object" ]; then
+        [[ "$from_release_tag_object" =~ ^[0-9a-f]{40}$ ]] \
+            || die "--from-release-tag-object must be a full lowercase SHA"
+    fi
+    [ -z "$bootstrap_driver$bootstrap_driver_ref" ] \
+        || die "same-version finalization uses the installed release CLI; omit the bootstrap driver"
+    same_version=1
+else
+    [ -z "$from_release_tag$from_release_tag_object$expected_release_commit" ] \
+        || die "--from-release-tag is only valid when --from equals --target"
+fi
 if [ -n "$bootstrap_driver$bootstrap_driver_ref" ]; then
     [[ "$bootstrap_driver" =~ ^/[A-Za-z0-9_./-]+$ ]] \
         && [[ "$bootstrap_driver_ref" =~ ^[0-9a-f]{40}$ ]] \
@@ -106,6 +136,10 @@ if [ "$shape" = image ]; then
 else
     [ -z "$from_os_ref$from_kilix95_ref$expected_build_info_sha256" ] \
         || die "standalone shape does not accept image-only starting-fixture options"
+fi
+if [ "$same_version" = 1 ] && [ "$shape" = image ] \
+    && [ "$from_os_ref" != "$expected_release_commit" ]; then
+    die "--from-os-ref and --expected-release-commit disagree"
 fi
 [ -n "$report" ] || die "--report is required"
 command -v git >/dev/null 2>&1 || die "git is required"
@@ -257,6 +291,155 @@ bound_engine_fingerprint() {
     done
 }
 
+# Print one closure value. Returns 2 when the key is absent and 1 when the
+# file or the key is malformed.
+closure_key() {
+    local file="$1" key="$2" count value
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    count="$(awk -F= -v wanted="$key" '$1 == wanted { count++ } END { print count + 0 }' "$file")"
+    if [ "$count" -eq 0 ]; then
+        return 2
+    fi
+    [ "$count" -eq 1 ] || return 1
+    value="$(awk -F= -v wanted="$key" '$1 == wanted { sub(/^[^=]*=/, ""); print }' "$file")"
+    printf '%s\n' "$value"
+}
+
+# Before a same-version hop, the installed closure must name --from-release-tag.
+# A recorded closure matches that tag (and its object, when one was published
+# in the source ISO). RC9's selector wrote neither key, so the installed
+# PLEBIAN_OS_REF commit is that tag's identity.
+assert_pre_hop_release_identity() {
+    local closure="$1" from_tag="$2" expected_commit="$3" expected_object="${4:-}"
+    local tag="" object="" ref="" tag_rc=0 object_rc=0 ref_rc=0
+    [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || {
+            printf '%s\n' "expected release commit is not a full SHA" >&2
+            return 1
+        }
+    tag="$(closure_key "$closure" PLEBIAN_OS_RELEASE_TAG)" || tag_rc=$?
+    object="$(closure_key "$closure" PLEBIAN_OS_RELEASE_TAG_OBJECT)" || object_rc=$?
+    ref="$(closure_key "$closure" PLEBIAN_OS_REF)" || ref_rc=$?
+    if [ "$tag_rc" -ne 0 ] && [ "$tag_rc" -ne 2 ]; then
+        printf '%s\n' "installed PLEBIAN_OS_RELEASE_TAG is malformed" >&2
+        return 1
+    fi
+    if [ "$object_rc" -ne 0 ] && [ "$object_rc" -ne 2 ]; then
+        printf '%s\n' "installed PLEBIAN_OS_RELEASE_TAG_OBJECT is malformed" >&2
+        return 1
+    fi
+    if [ "$tag_rc" -eq 0 ]; then
+        if [ "$tag" != "$from_tag" ]; then
+            printf '%s\n' "installed release tag is $tag, expected $from_tag" >&2
+            return 1
+        fi
+        if [[ ! "$object" =~ ^[0-9a-f]{40}$ ]]; then
+            printf '%s\n' "installed release tag has no tag object" >&2
+            return 1
+        fi
+        if [ -n "$expected_object" ] && [ "$object" != "$expected_object" ]; then
+            printf '%s\n' "installed tag object is $object, expected $expected_object" >&2
+            return 1
+        fi
+    elif [ "$object_rc" -eq 0 ]; then
+        if [ -z "$expected_object" ]; then
+            printf '%s\n' "installed tag object cannot be checked without the published object" >&2
+            return 1
+        fi
+        if [ "$object" != "$expected_object" ]; then
+            printf '%s\n' "installed tag object is $object, expected $expected_object" >&2
+            return 1
+        fi
+    else
+        if [ "$ref_rc" -ne 0 ]; then
+            printf '%s\n' "unrecorded closure has no PLEBIAN_OS_REF" >&2
+            return 1
+        fi
+        if [ "$ref" != "$expected_commit" ]; then
+            printf '%s\n' "unrecorded closure commit is $ref, expected $expected_commit" >&2
+            return 1
+        fi
+    fi
+    if [ "$ref_rc" -eq 0 ] && [ "$ref" != "$expected_commit" ]; then
+        printf '%s\n' "installed PLEBIAN_OS_REF is $ref, expected $expected_commit" >&2
+        return 1
+    fi
+}
+
+# After the hop, the closure tag is the stable final and its object is the
+# object staged in the release-hop active record (line 3; the tag is line 5).
+assert_post_hop_release_identity() {
+    local closure="$1" active="$2" target_tag="$3"
+    local tag="" object="" staged_object="" staged_tag="" tag_rc=0 object_rc=0
+    tag="$(closure_key "$closure" PLEBIAN_OS_RELEASE_TAG)" || tag_rc=$?
+    object="$(closure_key "$closure" PLEBIAN_OS_RELEASE_TAG_OBJECT)" || object_rc=$?
+    if [ "$tag_rc" -ne 0 ] || [ "$object_rc" -ne 0 ]; then
+        printf '%s\n' "selected closure does not record a release tag and tag object" >&2
+        return 1
+    fi
+    if [ "$tag" != "$target_tag" ]; then
+        printf '%s\n' "selected release tag is $tag, expected $target_tag" >&2
+        return 1
+    fi
+    if [[ ! "$object" =~ ^[0-9a-f]{40}$ ]]; then
+        printf '%s\n' "selected tag object is not a full SHA" >&2
+        return 1
+    fi
+    if [ ! -f "$active" ] || [ -L "$active" ]; then
+        printf '%s\n' "staged release-hop state is missing" >&2
+        return 1
+    fi
+    staged_object="$(sed -n '3p' "$active")"
+    staged_tag="$(sed -n '5p' "$active")"
+    if [ "$staged_tag" != "$target_tag" ]; then
+        printf '%s\n' "staged release tag is $staged_tag, expected $target_tag" >&2
+        return 1
+    fi
+    if [ "$object" != "$staged_object" ]; then
+        printf '%s\n' "tag-object mismatch: closure $object, staged $staged_object" >&2
+        return 1
+    fi
+}
+
+# Every closure key, including the release tag object, byte for byte.
+closure_keys_match() {
+    python3 - "$1" "$2" <<'PY'
+import sys
+from pathlib import Path
+
+def load(path):
+    found = {}
+    text = Path(path).read_bytes()
+    if b"\0" in text:
+        raise SystemExit("closure is not text")
+    for line_no, line in enumerate(text.decode().splitlines(), 1):
+        if line == "" or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise SystemExit("malformed closure line %s" % line_no)
+        name, value = line.split("=", 1)
+        if name == "" or name in found:
+            raise SystemExit("duplicate or empty closure key on line %s" % line_no)
+        found[name] = value
+    return found
+
+before = load(sys.argv[1])
+after = load(sys.argv[2])
+if before != after:
+    only_before = sorted(set(before) - set(after))
+    only_after = sorted(set(after) - set(before))
+    changed = sorted(key for key in set(before) & set(after) if before[key] != after[key])
+    detail = []
+    if only_before:
+        detail.append("missing " + ",".join(only_before))
+    if only_after:
+        detail.append("unexpected " + ",".join(only_after))
+    if changed:
+        detail.append("changed " + ",".join(changed))
+    sys.stderr.write("closure mismatch: " + "; ".join(detail) + "\n")
+    raise SystemExit(1)
+PY
+}
+
 verify_installed_target_ref() {
     local component="$1" checkout_dir="$2" selected_ref="$3" installed_ref
     [[ "$selected_ref" =~ ^[0-9a-f]{40}$ ]] \
@@ -279,6 +462,10 @@ write_reboot_verifier() {
         printf 'test "$(%q update --show)" = %q\n' "$pleb_bin" "$(cat "$report/show-after.txt")"
         if [ -n "${release_tag:-}" ]; then
             printf 'test "$(sed -n 5p %q)" = %q\n' "$release_state" "$release_tag"
+            if [ "${same_version:-0}" = 1 ]; then
+                printf 'test "$(sed -n 3p %q)" = %q\n' "$release_state" \
+                    "$(sed -n '3p' "$release_state")"
+            fi
             printf 'test "$(sha256sum -- %q | cut -d " " -f 1)" = %q\n' \
                 "$release_state" "$(sha256sum -- "$release_state" | cut -d ' ' -f 1)"
         fi
@@ -466,9 +653,16 @@ else
     must "image-has-installed-build-info" "/etc/plebian-os/build-info.env" \
         test -f /etc/plebian-os/build-info.env
     installed_build_info_sha256="$(sha256sum /etc/plebian-os/build-info.env | awk '{print $1}')"
-    must "image-build-info-matches-published-fixture" \
-        "$installed_build_info_sha256/$expected_build_info_sha256" \
-        test "$installed_build_info_sha256" = "$expected_build_info_sha256"
+    if [ "$same_version" = 1 ] && [ "$installed_build_info_sha256" != "$expected_build_info_sha256" ]; then
+        # An upgrade to the RC leaves the install ISO's build-info in place.
+        # The closure record, not those bytes, is the installed RC identity.
+        record_check "image-build-info-is-install-predecessor" pass \
+            "installed $installed_build_info_sha256; source ISO $expected_build_info_sha256; identity is the installed closure"
+    else
+        must "image-build-info-matches-published-fixture" \
+            "$installed_build_info_sha256/$expected_build_info_sha256" \
+            test "$installed_build_info_sha256" = "$expected_build_info_sha256"
+    fi
     must "image-os-checkout-exists" "$os_dir" test -d "$os_dir/.git"
     must "image-kilix95-checkout-exists" "$kilix95_dir" test -d "$kilix95_dir/.git"
     os_start_head="$(git -C "$os_dir" rev-parse --verify 'HEAD^{commit}')"
@@ -501,7 +695,14 @@ current="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-befor
 [[ "$current" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
     || die "could not resolve the installed release from pleb update --show"
 must "starting-release-is-exact" "$current/$from" test "$current" = "$from"
-must "target-differs-from-installed-release" "$current -> $target" test "$current" != "$target"
+if [ "$same_version" = 1 ]; then
+    must "installed-release-identity-is-from-release-tag" "$from_release_tag" \
+        assert_pre_hop_release_identity "$closure_env" "$from_release_tag" \
+        "$expected_release_commit" "$from_release_tag_object"
+    cp -p -- "$closure_env" "$report/closure.pre-hop"
+else
+    must "target-differs-from-installed-release" "$current -> $target" test "$current" != "$target"
+fi
 
 session_before="$(path_fingerprint "$session_env")"
 closure_before="$(path_fingerprint "$closure_env")"
@@ -670,6 +871,10 @@ must "failure-restores-kilix-head" "1/1" cmp -s "$report/kilix-before-failure.he
 must "failure-restores-kilix-status" "1/1" cmp -s "$report/kilix-before-failure.status" "$report/kilix-after-failure.status"
 must "failure-restores-session-env" "$session_env" test "$(path_fingerprint "$session_env")" = "$session_before"
 must "failure-restores-closure-env" "$closure_env" test "$(path_fingerprint "$closure_env")" = "$closure_before"
+if [ "$same_version" = 1 ]; then
+    must "failure-restores-closure-keys" "$closure_env" \
+        closure_keys_match "$report/closure.pre-hop" "$closure_env"
+fi
 must "failure-restores-settings" "$settings_file" \
     test "$(path_fingerprint "$settings_file")" = "$settings_before"
 must "failure-restores-engine-generation" "$engine_build" \
@@ -692,6 +897,43 @@ if [ -n "${release_tag:-}" ]; then
     must "selected-release-tag-is-exact" "$release_tag" \
         test "$(sed -n '5p' "$release_state")" = "$release_tag"
     cp -- "$release_state" "$report/release-hop-active.after"
+fi
+rollback_commands=0
+restoring_hops=0
+if [ "$same_version" = 1 ]; then
+    must "selected-release-tag-object-is-staged" "$release_tag" \
+        assert_post_hop_release_identity "$closure_env" "$release_state" "$release_tag"
+    cp -p -- "$closure_env" "$report/closure.post-hop"
+    set +e
+    "$pleb_bin" update --rollback --yes --no-restart \
+        >"$report/rollback.stdout" 2>"$report/rollback.stderr"
+    rollback_rc=$?
+    set -e
+    printf '%s\n' "$rollback_rc" >"$report/rollback.exit"
+    rollback_commands=1
+    must "rollback-from-final-succeeds" "pleb update --rollback; exit=$rollback_rc" \
+        test "$rollback_rc" -eq 0
+    must "rollback-restores-rc-closure-keys" "$closure_env" \
+        closure_keys_match "$report/closure.pre-hop" "$closure_env"
+    must "rollback-restores-rc-closure-bytes" "$closure_env" \
+        cmp -s "$report/closure.pre-hop" "$closure_env"
+    set +e
+    "${hop_command[@]}" update --to "$target" "${release_args[@]}" --yes --no-restart \
+        >"$report/restoring-hop.stdout" 2>"$report/restoring-hop.stderr"
+    restoring_rc=$?
+    set -e
+    printf '%s\n' "$restoring_rc" >"$report/restoring-hop.exit"
+    restoring_hops=1
+    must "restoring-hop-succeeds" "pleb update --to $target; exit=$restoring_rc" \
+        test "$restoring_rc" -eq 0
+    "$pleb_bin" update --show >"$report/show-after.txt" 2>"$report/show-after.stderr"
+    selected="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-after.txt" | head -n 1)"
+    must "restoring-hop-release-is-target" "$selected/$target" test "$selected" = "$target"
+    must "restoring-hop-tag-is-exact" "$release_tag" \
+        test "$(sed -n '5p' "$release_state")" = "$release_tag"
+    cp -- "$release_state" "$report/release-hop-active.after"
+    must "restoring-hop-tag-object-is-staged" "$release_tag" \
+        assert_post_hop_release_identity "$closure_env" "$release_state" "$release_tag"
 fi
 target_components=(pleb kilix)
 if [ "$shape" = image ]; then target_components+=(os kilix95); fi
@@ -764,10 +1006,18 @@ diff -u "$report/home-before.tsv" "$report/home-after-success.tsv" \
     >"$report/home-success.diff" || true
 git_snapshot "$pleb_dir" pleb-after-success
 git_snapshot "$kilix_dir" kilix-after-success
-record_check "evidence-artifacts-written" pass "home manifests 4/4; failure/success hop logs 2/2"
+if [ "$same_version" = 1 ]; then
+    record_check "evidence-artifacts-written" pass \
+        "home manifests 4/4; failure/success hop logs 2/2; rollback and restoring hop logs 2/2"
+else
+    record_check "evidence-artifacts-written" pass "home manifests 4/4; failure/success hop logs 2/2"
+fi
 
 export F109_REPORT_SHAPE="$shape" F109_REPORT_TARGET="$target"
-export F109_REPORT_TAG="$release_tag" F109_REPORT_DRIVER_REF="$bootstrap_driver_ref" F109_REPORT_ENTRYPOINT="$hop_entrypoint_mode"
+export F109_REPORT_TAG="$release_tag" F109_REPORT_FROM_TAG="$from_release_tag"
+export F109_REPORT_DRIVER_REF="$bootstrap_driver_ref" F109_REPORT_ENTRYPOINT="$hop_entrypoint_mode"
+export F109_REPORT_ROLLBACK_COMMANDS="${rollback_commands:-0}"
+export F109_REPORT_RESTORING_HOPS="${restoring_hops:-0}"
 export F109_REPORT_CURRENT="$current" F109_REPORT_VIRT="$virt"
 export F109_REPORT_FROM_PLEB_REF="$from_pleb_ref"
 export F109_REPORT_FROM_KILIX_REF="$from_kilix_ref"
@@ -803,12 +1053,15 @@ report = {
         "from": os.environ["F109_REPORT_CURRENT"],
         "to": os.environ["F109_REPORT_TARGET"],
         "release_tag": os.environ["F109_REPORT_TAG"] or None,
+        "from_release_tag": os.environ["F109_REPORT_FROM_TAG"] or None,
         "entrypoint_mode": os.environ["F109_REPORT_ENTRYPOINT"],
         "bootstrap_driver_ref": os.environ["F109_REPORT_DRIVER_REF"] or None,
         "dry_run_commands": 1,
         "dry_run_command_denominator": 1,
         "successful_hop_commands": 1,
         "successful_hop_command_denominator": 1,
+        "rollback_from_final_commands": int(os.environ["F109_REPORT_ROLLBACK_COMMANDS"]),
+        "restoring_hop_commands": int(os.environ["F109_REPORT_RESTORING_HOPS"]),
         "dirty_preflight_refusal_commands": int(os.environ["F109_REPORT_SHAPE"] == "image"),
     },
     "starting_fixture": {

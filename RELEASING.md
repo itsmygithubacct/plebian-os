@@ -824,6 +824,28 @@ commit. A successful bootstrap lane qualifies that migration route only, not
 an unavailable capability of the old installed CLI. Source fixture tests do
 not qualify either image or standalone guests, reboot, rollback or user data.
 
+An installed RC of the same version hops to its final without a bootstrap
+driver. RC9's Pleb already accepts `--release-tag`, and its closure has no
+`PLEBIAN_OS_RELEASE_TAG` because selectors before 0.2.3 did not write one.
+Pass the published RC ISO. The controller reads the installed RC from the
+closure (the tag, or the RC commit when the tag is absent) and does not
+require the image guest's build-info to equal that ISO: a guest that reached
+the RC by upgrading still has the build-info of the ISO it was installed
+from. After the hop the closure's tag object must be the staged final tag
+object, and rollback must restore every pre-hop closure key byte for byte.
+
+```sh
+build/acceptance-release-hop-host.sh \
+  --from 0.2.3 --target 0.2.3 \
+  --release-tag v0.2.3 --from-release-tag v0.2.3-rc9 \
+  --source-iso plebian-os-0.2.3-rc9-amd64.iso \
+  --source-sha256sums SHA256SUMS \
+  --image-guest releaseci@<image-host> \
+  --standalone-guest releaseci@<standalone-host> \
+  --known-hosts <qualification-known-hosts> \
+  --report <host-evidence-directory>
+```
+
 ### Release identity: candidates and their final
 
 From 0.2.3, a selection records the exact release tag and tag object it

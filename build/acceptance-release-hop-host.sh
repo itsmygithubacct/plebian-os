@@ -16,7 +16,8 @@ GUEST_RUNNER="$HERE/acceptance-release-hop.sh"
 
 usage() {
     cat <<'EOF'
-usage: acceptance-release-hop-host.sh --from X.Y.Z --target X.Y.Z [--release-tag vX.Y.Z-rcN] \
+usage: acceptance-release-hop-host.sh --from X.Y.Z --target X.Y.Z [--release-tag vX.Y.Z|vX.Y.Z-rcN] \
+       [--from-release-tag vX.Y.Z-rcN] \
        --source-iso FILE --source-sha256sums FILE \
        --image-guest USER@HOST [--image-port PORT] \
        --standalone-guest USER@HOST [--standalone-port PORT] \
@@ -26,6 +27,11 @@ Both guests must already be disposable VMs reachable with public-key SSH and
 non-interactive sudo. The image guest must have been installed from FILE; the
 standalone guest must contain the exact Pleb and Kilix refs embedded in FILE.
 Optional --bootstrap-driver PATH --bootstrap-driver-ref SHA selects an explicitly recorded legacy migration route.
+A same-version hop is accepted only as --from X.Y.Z --target X.Y.Z
+--release-tag vX.Y.Z --from-release-tag vX.Y.Z-rcN. That lane uses the
+installed CLI, so a bootstrap driver is refused. FILE is the published RC ISO.
+The installed RC is read from the guest closure. An image guest whose
+build-info is still an older ISO's is accepted when that closure matches.
 DIR must be new or empty. A passing run always executes and verifies 2/2 lanes.
 EOF
 }
@@ -38,6 +44,10 @@ die() {
 from=""
 target=""
 release_tag=""
+from_release_tag=""
+from_release_tag_object=""
+same_version=0
+image_build_info_binding=""
 bootstrap_driver=""
 bootstrap_driver_ref=""
 source_iso=""
@@ -57,6 +67,7 @@ while [ "$#" -gt 0 ]; do
         --bootstrap-driver) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver" ] || die "--bootstrap-driver needs one path"; bootstrap_driver="$2"; shift 2 ;;
         --bootstrap-driver-ref) [ "$#" -ge 2 ] && [ -z "$bootstrap_driver_ref" ] || die "--bootstrap-driver-ref needs one SHA"; bootstrap_driver_ref="$2"; shift 2 ;;
         --release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$release_tag" ] || die "--release-tag needs one nonempty tag"; release_tag="$2"; shift 2 ;;
+        --from-release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$from_release_tag" ] || die "--from-release-tag needs one nonempty tag"; from_release_tag="$2"; shift 2 ;;
         --source-iso) [ "$#" -ge 2 ] || die "--source-iso needs a value"; source_iso="$2"; shift 2 ;;
         --source-sha256sums) [ "$#" -ge 2 ] || die "--source-sha256sums needs a value"; source_sha256sums="$2"; shift 2 ;;
         --image-guest) [ "$#" -ge 2 ] || die "--image-guest needs a value"; image_guest="$2"; shift 2 ;;
@@ -78,7 +89,19 @@ if [ -n "$release_tag" ] && [ "$release_tag" != "v$target" ]; then
     [ "$rc_number" != "$release_tag" ] && [[ "$rc_number" =~ ^[1-9][0-9]*$ ]] \
         || die "--release-tag must be the exact target stable or numbered RC tag"
 fi
-[ "$from" != "$target" ] || die "--from and --target must differ"
+if [ "$from" = "$target" ]; then
+    [ "$release_tag" = "v$target" ] && [ -n "$from_release_tag" ] \
+        || die "a same-version hop requires --release-tag v$target and --from-release-tag v$target-rcN"
+    from_rc="${from_release_tag#"v$target-rc"}"
+    [ "$from_rc" != "$from_release_tag" ] && [[ "$from_rc" =~ ^[1-9][0-9]*$ ]] \
+        || die "--from-release-tag must name the installed RC as v$target-rcN"
+    [ -z "$bootstrap_driver$bootstrap_driver_ref" ] \
+        || die "same-version finalization uses the installed release CLI; omit the bootstrap driver"
+    same_version=1
+else
+    [ -z "$from_release_tag" ] \
+        || die "--from-release-tag is only valid when --from equals --target"
+fi
 if [ -n "$bootstrap_driver$bootstrap_driver_ref" ]; then
     [[ "$bootstrap_driver" =~ ^/[A-Za-z0-9_./-]+$ ]] \
         && [[ "$bootstrap_driver_ref" =~ ^[0-9a-f]{40}$ ]] \
@@ -156,6 +179,48 @@ build_info_value() {
     printf '%s\n' "$value"
 }
 
+# Same-version finalization binds an upgraded guest by its closure. A guest
+# installed from this ISO still has matching build-info and uses that binding.
+image_identity_binding() {
+    local same_version="$1" installed="$2" source="$3"
+    if [ "$same_version" = 1 ] && [ "$installed" != "$source" ]; then
+        printf '%s\n' installed-closure
+        return 0
+    fi
+    if [ "$installed" != "$source" ]; then
+        return 1
+    fi
+    printf '%s\n' source-iso
+}
+
+# The published RC ISO either records the release-identity keys or, as RC9's
+# ISO does, names the RC in PLEBIAN_OS_REF. A stable final ISO matches neither.
+# Prints the tag object when the ISO records one, or nothing for an RC9-style
+# build-info. Returns 1 when the ISO is not that installed RC.
+source_iso_names_installed_rc() {
+    local file="$1" from_tag="$2"
+    local tag_count object_count tag="" object="" ref=""
+    tag_count="$(awk -F= -v wanted=PLEBIAN_OS_RELEASE_TAG '$1 == wanted { count++ } END { print count + 0 }' "$file")"
+    object_count="$(awk -F= -v wanted=PLEBIAN_OS_RELEASE_TAG_OBJECT '$1 == wanted { count++ } END { print count + 0 }' "$file")"
+    [ "$tag_count" -le 1 ] && [ "$object_count" -le 1 ] || return 1
+    if [ "$tag_count" -eq 1 ]; then
+        tag="$(awk -F= -v wanted=PLEBIAN_OS_RELEASE_TAG '$1 == wanted { sub(/^[^=]*=/, ""); print }' "$file")"
+    fi
+    if [ "$object_count" -eq 1 ]; then
+        object="$(awk -F= -v wanted=PLEBIAN_OS_RELEASE_TAG_OBJECT '$1 == wanted { sub(/^[^=]*=/, ""); print }' "$file")"
+    fi
+    ref="$(awk -F= -v wanted=PLEBIAN_OS_REF '$1 == wanted { count++ } END { print count + 0 }' "$file")"
+    [ "$ref" -eq 1 ] || return 1
+    ref="$(awk -F= -v wanted=PLEBIAN_OS_REF '$1 == wanted { sub(/^[^=]*=/, ""); print }' "$file")"
+    if [ -n "$tag" ] || [ -n "$object" ]; then
+        [ "$tag" = "$from_tag" ] || return 1
+        [[ "$object" =~ ^[0-9a-f]{40}$ ]] || return 1
+        printf '%s\n' "$object"
+        return 0
+    fi
+    [ "$ref" = "$from_tag" ] || return 1
+}
+
 source_version="$(build_info_value PLEBIAN_OS_VERSION "$source_build_info")"
 from_os_ref="$(build_info_value PLEBIAN_OS_COMMIT "$source_build_info")"
 from_pleb_ref="$(build_info_value PLEB_REF "$source_build_info")"
@@ -163,6 +228,10 @@ from_kilix_ref="$(build_info_value KILIX_REF "$source_build_info")"
 from_kilix95_ref="$(build_info_value KILIX95_REF "$source_build_info")"
 [ "$source_version" = "$from" ] \
     || die "source ISO version is $source_version, expected --from $from"
+if [ "$same_version" = 1 ]; then
+    from_release_tag_object="$(source_iso_names_installed_rc "$source_build_info" "$from_release_tag")" \
+        || die "source ISO does not name installed RC $from_release_tag"
+fi
 for fixture_ref in "$from_os_ref" "$from_pleb_ref" "$from_kilix_ref" "$from_kilix95_ref"; do
     [[ "$fixture_ref" =~ ^[0-9a-f]{40}$ ]] \
         || die "source ISO contains a non-commit starting ref: $fixture_ref"
@@ -216,7 +285,8 @@ done
 installed_build_info_sha256="$(remote_exec "$image_guest" "$image_port" \
     "sha256sum /etc/plebian-os/build-info.env | cut -d' ' -f1")" \
     || die "could not hash the image guest's installed build information"
-[ "$installed_build_info_sha256" = "$source_build_info_sha256" ] \
+image_build_info_binding="$(image_identity_binding "$same_version" \
+    "$installed_build_info_sha256" "$source_build_info_sha256")" \
     || die "image guest is not bound to the source ISO build information"
 
 declare -A lane_runner_rc=()
@@ -268,6 +338,10 @@ run_lane() {
 
     remote_command="bash -s -- --shape $shape --from $from --target $target --from-pleb-ref $from_pleb_ref --from-kilix-ref $from_kilix_ref --report $remote_report --disposable-vm"
     [ -z "$release_tag" ] || remote_command+=" --release-tag $release_tag"
+    if [ "$same_version" = 1 ]; then
+        remote_command+=" --from-release-tag $from_release_tag --expected-release-commit $from_os_ref"
+        [ -z "$from_release_tag_object" ] || remote_command+=" --from-release-tag-object $from_release_tag_object"
+    fi
     [ -z "$bootstrap_driver" ] || remote_command+=" --bootstrap-driver $bootstrap_driver --bootstrap-driver-ref $bootstrap_driver_ref"
     if [ "$shape" = image ]; then
         remote_command+=" --from-os-ref $from_os_ref --from-kilix95-ref $from_kilix95_ref --expected-build-info-sha256 $source_build_info_sha256"
@@ -367,7 +441,9 @@ overall_status=fail
 if [ "$lane_pass" -eq 2 ]; then overall_status=pass; fi
 
 export F109_HOST_FROM="$from" F109_HOST_TARGET="$target"
-export F109_HOST_TAG="$release_tag" F109_HOST_DRIVER_REF="$bootstrap_driver_ref"
+export F109_HOST_TAG="$release_tag" F109_HOST_FROM_TAG="$from_release_tag"
+export F109_HOST_DRIVER_REF="$bootstrap_driver_ref"
+export F109_HOST_BUILD_INFO_BINDING="$image_build_info_binding"
 export F109_HOST_STATUS="$overall_status" F109_HOST_LANE_PASS="$lane_pass"
 export F109_HOST_ISO_SHA256="$actual_iso_sha256"
 export F109_HOST_BUILD_INFO_SHA256="$source_build_info_sha256"
@@ -410,11 +486,13 @@ report = {
         "from": os.environ["F109_HOST_FROM"],
         "to": os.environ["F109_HOST_TARGET"],
         "release_tag": os.environ["F109_HOST_TAG"] or None,
+        "from_release_tag": os.environ["F109_HOST_FROM_TAG"] or None,
         "bootstrap_driver_ref": os.environ["F109_HOST_DRIVER_REF"] or None,
     },
     "starting_fixture": {
         "published_iso_sha256": os.environ["F109_HOST_ISO_SHA256"],
         "build_info_sha256": os.environ["F109_HOST_BUILD_INFO_SHA256"],
+        "image_build_info_binding": os.environ["F109_HOST_BUILD_INFO_BINDING"] or None,
         "plebian_os_ref": os.environ["F109_HOST_OS_REF"],
         "pleb_ref": os.environ["F109_HOST_PLEB_REF"],
         "kilix_ref": os.environ["F109_HOST_KILIX_REF"],
