@@ -71,7 +71,9 @@ class OptionalProvenance(unittest.TestCase):
         source = SCRIPTS[0].read_text()
         main = source[source.index('\nensure_plebian_os_checkout\n'):]
         self.assertNotIn('\ninstall_waydroid_application\n', main)
-        self.assertIn('WAYDROID_INSTALL_DIR=/usr/lib/plebian-os/waydroid', main)
+        self.assertIn('\nstage_waydroid_first_use_helper\n', main)
+        helper = source[source.index('\nstage_waydroid_first_use_helper() {'):]
+        self.assertIn('install_dir=/usr/lib/plebian-os/waydroid', helper)
 
 
 class FirstUseRollback(unittest.TestCase):
