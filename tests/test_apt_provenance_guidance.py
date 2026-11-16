@@ -64,6 +64,7 @@ class AptProvenanceGuidanceTests(unittest.TestCase):
         env.update({
             "HOME": str(tmp / "home"),
             "PATH": path,
+            "TMPDIR": str(tmp),
             "PLEBIAN_OS_APT_SOURCES_ROOT": str(tmp / "apt"),
             "PLEBIAN_OS_RELEASE_MODE": release_mode,
             "PLEBIAN_OS_APT_SNAPSHOT": "",

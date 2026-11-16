@@ -62,7 +62,23 @@ warn() { _update_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >
 # sites here -- would otherwise reach the EXIT-trap cleanup with no record of
 # what went wrong, and the retained failure-reason would read "<not captured>".
 # The message die() is already printing IS the diagnosis; keep it.
-die()  { _STACK_FAIL_COMMAND="die: $*"; _update_record "$*"; printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+discard_release_apt_config() {
+    [ -n "${RELEASE_APT_CONFIG:-}" ] || return 0
+    rm -rf -- "$RELEASE_APT_CONFIG"
+    RELEASE_APT_CONFIG=""
+}
+die()  {
+    # Rollback still has to remove packages through this configuration.
+    # The transaction cleanup discards it after that rollback. A failure
+    # before the transaction starts discards it here.
+    if [ "${_STACK_TXN_ACTIVE:-0}" != 1 ]; then
+        discard_release_apt_config
+    fi
+    _STACK_FAIL_COMMAND="die: $*"
+    _update_record "$*"
+    printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2
+    exit 1
+}
 
 # Own log for this updater. A test may name PLEBIAN_OS_UPDATE_LOG; otherwise a
 # real run uses the private Pleb state directory. Library-only loads stay quiet
@@ -533,7 +549,11 @@ GPU_TERMINAL_SETTINGS_FILE="${GPU_TERMINAL_SETTINGS_FILE:-$GPU_TERMINAL_HOME/set
 PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
 PLEB_CONFIG_HOME="${PLEB_CONFIG_HOME:-$PLEB_STORAGE_HOME/config}"
 PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
-open_updater_log
+# --check-source-checkouts must not create the data tree. The log lives under
+# PLEB_STATE_HOME, which is inside GPU_TERMINAL_HOME.
+if [ "$check_source_checkouts" != 1 ]; then
+    open_updater_log
+fi
 PLEB_CACHE_HOME="${PLEB_CACHE_HOME:-$PLEB_STORAGE_HOME/cache}"
 PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
 PLEB_DATA_HOME="${PLEB_DATA_HOME:-$PLEB_STORAGE_HOME/data}"
@@ -719,6 +739,11 @@ PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"
 [ -n "$PLEBIAN_OS_VERSION" ] || PLEBIAN_OS_VERSION="$(cat "$PLEBIAN_OS_DIR/VERSION" 2>/dev/null || echo unknown)"
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
+# Held from the release preflight until the process exits. Every release apt
+# install uses this directory, and the final provenance record copies its
+# indexes, so the record cannot claim Debian-only while a step used another
+# configuration.
+RELEASE_APT_CONFIG=""
 PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}"
 PLEBIAN_OS_INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
 PLEBIAN_OS_UV_VERSION="${PLEBIAN_OS_UV_VERSION:-}"
@@ -2370,9 +2395,24 @@ rollback_mpv_runtime_transaction() {
 }
 
 mpv_runtime_command() {
-    local -a elevate=()
+    local -a elevate=() prefix=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" /usr/local/sbin/plebian-os-mpv-runtime "$@"
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${RELEASE_APT_CONFIG:-}" ] || [ ! -d "$RELEASE_APT_CONFIG" ] \
+                || [ -L "$RELEASE_APT_CONFIG" ] || [ ! -f "$RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        # sudo does not forward arbitrary environment variables.
+        prefix=(env "PLEBIAN_OS_RELEASE_MODE=1" "PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG")
+        if [ -n "${PLEBIAN_OS_DPKG_STATUS:-}" ]; then
+            prefix+=("PLEBIAN_OS_DPKG_STATUS=$PLEBIAN_OS_DPKG_STATUS")
+        fi
+        if [ -n "${PLEBIAN_OS_APT_EXTENDED_STATES:-}" ]; then
+            prefix+=("PLEBIAN_OS_APT_EXTENDED_STATES=$PLEBIAN_OS_APT_EXTENDED_STATES")
+        fi
+    fi
+    "${elevate[@]}" "${prefix[@]}" /usr/local/sbin/plebian-os-mpv-runtime "$@"
 }
 
 mpv_runtime_snapshot_probe() {
@@ -2433,9 +2473,24 @@ rollback_qt_runtime_transaction() {
 }
 
 qt_runtime_command() {
-    local -a elevate=()
+    local -a elevate=() prefix=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" /usr/local/sbin/plebian-os-qt-runtime "$@"
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${RELEASE_APT_CONFIG:-}" ] || [ ! -d "$RELEASE_APT_CONFIG" ] \
+                || [ -L "$RELEASE_APT_CONFIG" ] || [ ! -f "$RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        # sudo does not forward arbitrary environment variables.
+        prefix=(env "PLEBIAN_OS_RELEASE_MODE=1" "PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG")
+        if [ -n "${PLEBIAN_OS_DPKG_STATUS:-}" ]; then
+            prefix+=("PLEBIAN_OS_DPKG_STATUS=$PLEBIAN_OS_DPKG_STATUS")
+        fi
+        if [ -n "${PLEBIAN_OS_APT_EXTENDED_STATES:-}" ]; then
+            prefix+=("PLEBIAN_OS_APT_EXTENDED_STATES=$PLEBIAN_OS_APT_EXTENDED_STATES")
+        fi
+    fi
+    "${elevate[@]}" "${prefix[@]}" /usr/local/sbin/plebian-os-qt-runtime "$@"
 }
 
 qt_runtime_snapshot_probe() {
@@ -2965,6 +3020,7 @@ stack_transaction_cleanup() {
         [ "$rollback_ok" = 1 ] || rc=70
     fi
     release_kilix_transaction_lock
+    discard_release_apt_config
     exit "$rc"
 }
 
@@ -5864,6 +5920,7 @@ refresh_os_dependencies() {
         "PLEBIAN_OS_UV_VERSION=$PLEBIAN_OS_UV_VERSION" \
         "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256" \
         "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=$PLEBIAN_OS_UV_INSTALLER_MAX_BYTES" \
+        ${PLEBIAN_OS_RELEASE_APT_CONFIG:+"PLEBIAN_OS_RELEASE_APT_CONFIG=$PLEBIAN_OS_RELEASE_APT_CONFIG"} \
         PLEBIAN_OS_ROOT_SESSION_HOME=/var/lib/plebian-os/session \
         /usr/bin/setsid --wait /bin/bash -c \
         'trap "" INT HUP QUIT; exec "$@"' plebian-os-package-step \
@@ -6319,6 +6376,7 @@ prepare_release_apt_config() {
     local work="" reason_file="" file="" base="" rel="" staged=""
     local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
     local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
+    local main_ok=0 snapshot_only=0 trust_disabled=0
     case "$dest" in
         /*) ;;
         *) return 1 ;;
@@ -6349,7 +6407,7 @@ prepare_release_apt_config() {
     esac
     reason_file="$dest/failure"
     mkdir -p -- "$dest/sources.list.d" "$dest/lists/partial" "$dest/archives/partial" \
-        "$dest/cache" "$dest/preferences.d" || {
+        "$dest/cache" "$dest/preferences.d" "$dest/apt.conf.d" || {
         rm -rf -- "$work"
         printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
         return 1
@@ -6358,6 +6416,23 @@ prepare_release_apt_config() {
     : >"$dest/preferences"
     : >"$dest/extended_states"
     : >"$dest/indexes"
+    # Command-line -o Dir::Etc::parts is applied after apt has already read
+    # apt.conf.d. APT_CONFIG is the main file, and a Dir::Etc::Parts assignment
+    # there is applied before those snippets are read. Point it at an empty
+    # directory and the operator's snippets, including APT::Sources::With, are
+    # not part of this configuration.
+    printf '%s\n' \
+        "Dir::Etc::Parts \"$dest/apt.conf.d\";" \
+        'APT::Get::AllowUnauthenticated "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowWeakRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'Acquire::Check-Valid-Until "true";' \
+        >"$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
     : >"$work/files"
     : >"$work/accepted.idx"
     : >"$work/all.idx"
@@ -6400,7 +6475,13 @@ prepare_release_apt_config() {
                 return 1 ;;
         esac
         rm -rf -- "$work/one"
-        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" || {
+        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" \
+            "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        printf '%s\n' "Dir::Etc::Parts \"$work/one/apt.conf.d\";" >"$work/one/apt.conf" || {
             rm -rf -- "$work"
             printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
             return 1
@@ -6430,8 +6511,23 @@ prepare_release_apt_config() {
             list_arg="$work/one/empty.list"
             parts_arg="$work/one/parts"
         fi
+        # mktemp is mode 0700. Classification runs apt-get, and a root
+        # caller fetches as the unprivileged _apt user, which cannot
+        # traverse 0700. These files are Debian source lines only.
+        chmod 0755 -- "$work" "$work/one" "$work/one/parts" "$work/one/lists" \
+            "$work/one/lists/partial" "$work/one/cache" "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        chmod 0644 -- "$staged" "$work/one/apt.conf" "$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
         apt_rc=0
-        uris="$(apt-get update --print-uris \
+        uris="$(env -u APT_CONFIG APT_CONFIG="$work/one/apt.conf" \
+            apt-get update --print-uris \
             -o "Dir::Etc::SourceList=$list_arg" \
             -o "Dir::Etc::SourceParts=$parts_arg" \
             -o "Dir::State::lists=$work/one/lists" \
@@ -6510,6 +6606,36 @@ prepare_release_apt_config() {
             log "operator apt source $file is left unchanged and is not used to install release packages"
             continue
         fi
+        # trusted=yes, allow-insecure, allow-weak, and allow-downgrade-to-insecure
+        # turn signature checks off. check-valid-until=no and check-date=no turn
+        # replay protection off. The install snapshot's own source is the one
+        # exception: its Release files are already expired, so the provisioner
+        # sets Check-Valid-Until: no on snapshot.debian.org and nowhere else.
+        trust_disabled=0
+        if grep -Eiq -e '(^|[^[:alnum:]_-])trusted[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-weak[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-downgrade-to-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            trust_disabled=1
+        elif grep -Eiq -e '(^|[^[:alnum:]_-])check-valid-until[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])check-date[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            snapshot_only=1
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] || continue
+                read -r site release _ <<<"$line"
+                case "$site" in
+                    http://snapshot.debian.org/*|https://snapshot.debian.org/*) ;;
+                    *) snapshot_only=0 ;;
+                esac
+            done <"$work/one/sorted"
+            [ "$snapshot_only" = 1 ] || trust_disabled=1
+        fi
+        if [ "$trust_disabled" = 1 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
         if [ "$file" = "$apt_dir/sources.list" ]; then
             if ! cp -a -- "$staged" "$dest/sources.list"; then
                 rm -rf -- "$work"
@@ -6573,6 +6699,59 @@ prepare_release_apt_config() {
         rm -rf -- "$work"
         return 1
     fi
+    # Security alone must not pass. The accepted set has to include the
+    # codename's main suite, from the Debian archive in the lifetime phase and
+    # from the install snapshot in the install phase. A mixed file that was
+    # excluded can otherwise leave only trixie-security behind.
+    main_ok=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        read -r site release _ <<<"$line"
+        [ "$release" = "$codename" ] || continue
+        case "$phase" in
+            install)
+                [ "$site" = "https://snapshot.debian.org/archive/debian/$snapshot" ] && main_ok=1
+                ;;
+            lifetime)
+                case "$site" in
+                    http://deb.debian.org/debian|https://deb.debian.org/debian|http://deb.debian.org/debian/|https://deb.debian.org/debian/)
+                        main_ok=1 ;;
+                    http://snapshot.debian.org/archive/debian/*|https://snapshot.debian.org/archive/debian/*)
+                        main_ok=1 ;;
+                esac
+                ;;
+        esac
+    done <"$dest/indexes"
+    if [ "$main_ok" != 1 ]; then
+        printf 'release apt provenance is missing the %s main archive\n' "$codename" >"$reason_file"
+        rm -rf -- "$work"
+        return 1
+    fi
+    # The finished directory is handed to root apt. _apt must be able to
+    # traverse it. Nothing in it is secret.
+    chmod 0755 -- "$dest" "$dest/sources.list.d" "$dest/lists" "$dest/lists/partial" \
+        "$dest/archives" "$dest/archives/partial" "$dest/cache" "$dest/preferences.d" \
+        "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod 0644 -- "$dest/sources.list" "$dest/preferences" "$dest/extended_states" \
+        "$dest/indexes" "$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    for file in "$dest/sources.list.d"/*; do
+        if [ ! -f "$file" ] || [ -L "$file" ]; then
+            continue
+        fi
+        chmod 0644 -- "$file" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done
     rm -rf -- "$work"
     return 0
 }
@@ -6582,6 +6761,7 @@ prepare_release_apt_config() {
 release_apt_get() {
     local config="$1"
     shift
+    env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
     apt-get \
         -o "Dir::Etc::SourceList=$config/sources.list" \
         -o "Dir::Etc::SourceParts=$config/sources.list.d" \
@@ -6600,29 +6780,16 @@ release_apt_get() {
 # A machine being updated already has a recorded install closure, so its apt
 # indexes are held to the lifetime phase: the official Debian archive only.
 require_lifetime_release_apt_provenance() {
-    local rc=0 refused line site host file
+    local rc=0 refused
     refused="$(validate_release_apt_provenance "$1" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
         "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
         2>&1 >/dev/null)" || rc=$?
     [ "$rc" != 2 ] || die "release apt index provenance is empty"
     if [ "$rc" != 0 ]; then
         [ -z "$refused" ] || printf '%s\n' "$refused" >&2
-        # There is deliberately no override: a release records Debian-only
-        # package provenance. Say which file to set aside, and for how long.
-        while IFS= read -r line; do
-            site="${line#*: }"
-            site="${site%% *}"
-            host="${site#*://}"
-            host="${host%/}"
-            [ -n "$host" ] || continue
-            while IFS= read -r file; do
-                warn "apt source $site is configured in $file"
-            done < <(grep -rlF -- "$host" "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}/sources.list" \
-                "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}/sources.list.d" 2>/dev/null | LC_ALL=C sort -u)
-        done <<<"$refused"
-        warn "release updates install only from the Debian archive; disable each source above for this run"
-        warn "(rename the file so it no longer ends in .list/.sources, or add 'Enabled: no' to a .sources file),"
-        warn "rerun plebian-os-update, then re-enable the source afterwards"
+        # Operator sources are left in place. There is no rename step: a file
+        # that is outside the archive is simply not copied into the release
+        # configuration, and a release set that itself fails the gate refuses.
         die "release apt provenance contains an index outside the Debian archive"
     fi
 }
@@ -6633,20 +6800,51 @@ require_lifetime_release_apt_provenance() {
 # copied into that configuration does not block the update; a release set that
 # is empty or itself outside the Debian archive still refuses up front.
 # (Only the update lock and private storage directories exist by then.)
-preflight_release_apt_provenance() {
-    local config="" reason="" rc=0
-    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
-    config="$(mktemp -d)" || die "could not prepare the release apt configuration"
-    if ! prepare_release_apt_config "$config" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+# Prepare the private configuration once and keep it until the update exits.
+# Later installs, rollbacks, and the final provenance record all use this
+# directory. Re-reading the operator tree at the end would be a different
+# configuration from the one that installed the packages.
+ensure_release_apt_config() {
+    local reason=""
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
+    if [ -n "${RELEASE_APT_CONFIG:-}" ] && [ -d "$RELEASE_APT_CONFIG" ] \
+            && [ ! -L "$RELEASE_APT_CONFIG" ] \
+            && [ -f "$RELEASE_APT_CONFIG/apt.conf" ] \
+            && [ -f "$RELEASE_APT_CONFIG/indexes" ]; then
+        export PLEBIAN_OS_RELEASE_APT_CONFIG="$RELEASE_APT_CONFIG"
+        return 0
+    fi
+    RELEASE_APT_CONFIG="$(mktemp -d)" || return 1
+    export PLEBIAN_OS_RELEASE_APT_CONFIG="$RELEASE_APT_CONFIG"
+    if ! prepare_release_apt_config "$RELEASE_APT_CONFIG" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
             "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
             "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
-        reason="$(cat -- "$config/failure" 2>/dev/null || true)"
-        rm -rf -- "$config"
-        die "${reason:-could not prepare the release apt configuration}"
+        reason="$(cat -- "$RELEASE_APT_CONFIG/failure" 2>/dev/null || true)"
+        discard_release_apt_config
+        printf '%s\n' "${reason:-could not prepare the release apt configuration}" >&2
+        return 1
     fi
-    ( require_lifetime_release_apt_provenance "$config/indexes" ) || rc=$?
-    rm -rf -- "$config"
-    [ "$rc" = 0 ] || exit "$rc"
+}
+
+preflight_release_apt_provenance() {
+    local rc=0
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    ensure_release_apt_config || die "could not prepare the release apt configuration"
+    ( require_lifetime_release_apt_provenance "$RELEASE_APT_CONFIG/indexes" ) || rc=$?
+    if [ "$rc" != 0 ]; then
+        discard_release_apt_config
+        exit "$rc"
+    fi
+}
+
+# Fill the private list cache before the stack transaction. A failure here
+# refuses the update before anything is installed. Qt, mpv, and install-deps
+# then resolve dependencies from these lists, not from the operator cache.
+warm_release_apt_indexes() {
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    ensure_release_apt_config || die "could not prepare the release apt configuration"
+    release_apt_get "$RELEASE_APT_CONFIG" update \
+        || die "could not read the Debian package lists for the release apt configuration"
 }
 
 # Build the same final source/tool manifest as the provisioner, but only after
@@ -6841,20 +7039,15 @@ stage_final_provenance() {
     } >"$stage/versions.env"
 
     if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
-        local release_apt="" reason=""
-        release_apt="$(mktemp -d)" || die "could not prepare the release apt configuration"
-        if ! prepare_release_apt_config "$release_apt" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
-                "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
-                "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
-            reason="$(cat -- "$release_apt/failure" 2>/dev/null || true)"
-            rm -rf -- "$release_apt"
-            die "${reason:-could not record final apt source indexes}"
+        # Record the indexes this update actually used. Do not prepare a
+        # second configuration from the operator tree, and do not fall back
+        # to the system list cache.
+        if [ -z "${RELEASE_APT_CONFIG:-}" ] || [ -L "$RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$RELEASE_APT_CONFIG/indexes" ]; then
+            die "release apt configuration is missing; refusing to record system apt indexes"
         fi
-        cp -a -- "$release_apt/indexes" "$stage/apt-sources.list" || {
-            rm -rf -- "$release_apt"
-            die "could not record final apt source indexes"
-        }
-        rm -rf -- "$release_apt"
+        cp -a -- "$RELEASE_APT_CONFIG/indexes" "$stage/apt-sources.list" \
+            || die "could not record final apt source indexes"
     else
         apt-get indextargets \
             --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
@@ -7100,12 +7293,15 @@ fi
 # Before the release hop below: that already changes the selected closure.
 if [ "$recover_interrupted" = 1 ]; then
     recover_interrupted_stack_transaction
-    exit $?
+    rc=$?
+    discard_release_apt_config
+    exit "$rc"
 fi
 note_legacy_stack_leftovers
 refuse_interrupted_stack_transaction
 refuse_per_user_source_layout
 preflight_release_apt_provenance
+warm_release_apt_indexes
 select_latest_release_if_needed
 validate_mpv_release_closure || die "invalid mpv closure"
 validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" "$PLEBIAN_OS_RELEASE_MODE" || die "invalid Qt runtime closure"
@@ -7285,5 +7481,11 @@ if [ "$restart_arg" = --no-restart ]; then
         notify_system_voice_update_complete || warn "stack updated, but the system voice notice could not be recorded"
     fi
     log "restart the session to load the changes when ready:  sudo systemctl restart lightdm"
+fi
+# Inlined so a test that executes this tail without the function still
+# releases the directory, and so set -u is safe when it was never created.
+if [ -n "${RELEASE_APT_CONFIG:-}" ]; then
+    rm -rf -- "$RELEASE_APT_CONFIG"
+    RELEASE_APT_CONFIG=""
 fi
 exit "$apt_reconcile_rc"

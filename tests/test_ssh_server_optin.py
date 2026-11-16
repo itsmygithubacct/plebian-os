@@ -64,8 +64,9 @@ class FakeSystem:
             "Conf openssh-server (1:10.0p1-7+deb13u4 Debian-Security:13/stable-security [amd64])\n")
         self.calls = []
         self.sources_seen = []
+        self.apt_configs = []
 
-    def run(self, argv, *, check=False):
+    def run(self, argv, *, check=False, env=None):
         argv = list(argv)
         self.calls.append(argv)
         name = argv[0]
@@ -89,7 +90,7 @@ class FakeSystem:
                 self.enabled = self.active = False
                 return Result(0)
         if name == "apt-get" and "-s" in argv:
-            self._record_sources(argv)
+            self._record_sources(argv, env)
             return Result(0, self.plan)
         if name == "/usr/sbin/sshd":
             return Result(0, "port 22\npermitrootlogin without-password\n")
@@ -103,16 +104,18 @@ class FakeSystem:
             return Result(0, f"256 SHA256:{kind}fingerprintvalue root@plebian ({kind})\n")
         return Result(0)
 
-    def _record_sources(self, argv):
+    def _record_sources(self, argv, env=None):
+        if argv and argv[0] == "apt-get" and env and env.get("APT_CONFIG"):
+            self.apt_configs.append(Path(env["APT_CONFIG"]).read_text())
         for i, word in enumerate(argv):
             if word.startswith("Dir::Etc::SourceParts="):
                 parts = Path(word.split("=", 1)[1])
                 self.sources_seen.append({p.name: p.read_text() for p in parts.iterdir()})
 
-    def run_shielded(self, argv):
+    def run_shielded(self, argv, *, env=None):
         argv = list(argv)
         self.calls.append(argv)
-        self._record_sources(argv)
+        self._record_sources(argv, env)
         if "update" in argv:
             return self.update_rc
         if "install" in argv:
@@ -229,6 +232,11 @@ class HelperTests(unittest.TestCase):
         apt = [c for c in system.calls if c[0] == "apt-get"]
         verbs = [next(w for w in ("update", "install") if w in c) for c in apt]
         self.assertEqual(verbs, ["update", "install", "install"])  # update, plan, install
+        self.assertEqual(len(system.apt_configs), len(apt))
+        for conf in system.apt_configs:
+            self.assertIn('Dir::Etc::Parts "', conf)
+            self.assertNotIn("Sources::With", conf)
+            self.assertNotIn("AllowUnauthenticated", conf)
         for command in apt:
             self.assertIn("Dir::Etc::SourceList=/dev/null", command)
             self.assertIn("APT::Get::AllowUnauthenticated=false", command)

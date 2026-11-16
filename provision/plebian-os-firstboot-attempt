@@ -305,11 +305,46 @@ recover_package_state() {
         --force-confdef --force-confold --configure -a
     [ "$stop_status" -eq 0 ] || return 0
     say "firstboot: dpkg --configure -a exited $status; running a bounded apt-get -f install"
+    # One apt-get, still -f install, against a Debian-only source list.
+    # Host apt.conf.d cannot add a package: APT_CONFIG points Parts at an
+    # empty directory. The system list cache stays, so already-fetched
+    # Debian indexes remain usable. Do not pass --no-remove; fixing a
+    # half-installed database is allowed to remove a broken package.
+    apt_work="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-firstboot-apt.XXXXXX")" || {
+        say "firstboot: could not prepare a Debian-only apt configuration"
+        return 1
+    }
+    mkdir -p "$apt_work/sources.list.d" "$apt_work/apt.conf.d" "$apt_work/preferences.d" \
+        || { rm -rf "$apt_work"; return 1; }
+    apt_codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
+    cat >"$apt_work/sources.list.d/debian.sources" <<EOF
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: $apt_codename $apt_codename-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://security.debian.org/debian-security
+Suites: $apt_codename-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+    printf '%s\n' "Dir::Etc::Parts \"$apt_work/apt.conf.d\";" >"$apt_work/apt.conf"
+    : >"$apt_work/preferences"
+    chmod 0755 "$apt_work" "$apt_work/sources.list.d" "$apt_work/apt.conf.d" "$apt_work/preferences.d"
+    chmod 0644 "$apt_work/apt.conf" "$apt_work/preferences" "$apt_work/sources.list.d/debian.sources"
     supervise 'apt-get -f install' "$stall_limit" "$recovery_deadline" \
-        env DEBIAN_FRONTEND=noninteractive apt-get -y -f install \
+        env -u APT_CONFIG DEBIAN_FRONTEND=noninteractive APT_CONFIG="$apt_work/apt.conf" \
+        apt-get -y -f install \
+        -o Dir::Etc::SourceList=/dev/null \
+        -o "Dir::Etc::SourceParts=$apt_work/sources.list.d" \
+        -o "Dir::Etc::Preferences=$apt_work/preferences" \
+        -o "Dir::Etc::PreferencesParts=$apt_work/preferences.d" \
         -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 \
         -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 \
         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+    rm -rf "$apt_work"
     [ "$stop_status" -eq 0 ] || return 0
     say "firstboot: apt-get -f install exited $status"
     faults="$(package_state_faults)"

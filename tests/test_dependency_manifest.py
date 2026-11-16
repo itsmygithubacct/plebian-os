@@ -442,7 +442,12 @@ class DependencyManifestTests(unittest.TestCase):
                    "PLEBIAN_OS_APT_SOURCES_ROOT": str(apt),
                    "PLEBIAN_OS_APT_CODENAME": suite}
             result = subprocess.run(
-                ["bash", "-euc", "log() { :; }\ndie() { exit 1; }\n" +
+                ["bash", "-euc",
+                 "log() { :; }\n"
+                 "die() { exit 1; }\n"
+                 # The extracted function calls the shield. The shield is not
+                 # part of that function; run its command in this shell.
+                 "run_package_step_in_its_own_session() { \"$@\"; }\n" +
                  function + "\nrefresh_os_dependencies"],
                 env=env, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)

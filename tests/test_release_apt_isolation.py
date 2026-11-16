@@ -328,7 +328,8 @@ class ReleaseAptIsolationTests(unittest.TestCase):
                 env=env, text=True, capture_output=True, check=False,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            plans = [line for line in result.stdout.splitlines() if "+ apt-get" in line]
+            plans = [line for line in result.stdout.splitlines()
+                     if line.strip().startswith("+") and "apt-get" in line]
             self.assertTrue(plans)
             self.assertTrue(any(" update -y" in line for line in plans))
             self.assertTrue(any("bubblewrap" in line for line in plans))
@@ -364,21 +365,181 @@ class ReleaseAptIsolationTests(unittest.TestCase):
             self.assertIn("    + apt-get install -y --no-install-recommends ", result.stdout)
             self.assertNotIn("Dir::Etc::SourceList=", result.stdout)
 
+    def test_security_only_accepted_set_is_missing_the_main_archive(self):
+        suite = codename()
+        mixed = (
+            f"deb https://deb.debian.org/debian {suite} main\n"
+            "deb [signed-by=/usr/share/keyrings/cuda-archive-keyring.gpg] "
+            "https://developer.download.nvidia.com/compute/cuda/repos/debian13/x86_64/ /\n"
+        )
+        security = (
+            "Types: deb\n"
+            "URIs: https://security.debian.org/debian-security\n"
+            f"Suites: {suite}-security\n"
+            "Components: main\n"
+            "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            apt = write_apt(tmp, {
+                "debian.list": mixed,
+                "security.sources": security,
+            })
+            rc, failure, indexes, _copied, stderr = self._prepare(
+                apt, "lifetime", "", require_lifetime=False,
+            )
+            self.assertEqual(rc, 1, stderr)
+            self.assertEqual(
+                failure, f"release apt provenance is missing the {suite} main archive",
+            )
+            self.assertNotIn("release apt index provenance is empty", failure)
+            self.assertNotIn("outside the Debian archive", failure)
+            self.assertIn(f"{suite}-security", indexes)
+            self.assertNotIn(f" {suite} main", indexes)
 
-def _deb(path: Path, name: str, version: str, arch: str) -> None:
+    def test_trusted_yes_on_a_debian_url_is_not_admitted(self):
+        suite = codename()
+        trusted = (
+            f"deb [trusted=yes check-valid-until=no] "
+            f"http://deb.debian.org/debian {suite} main\n"
+        )
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            apt = write_apt(tmp, {"trusted.list": trusted})
+            before = (apt / "sources.list.d" / "trusted.list").read_bytes()
+            rc, failure, _indexes, copied, stderr = self._prepare(
+                apt, "lifetime", "", require_lifetime=False,
+            )
+            self.assertNotEqual(rc, 0, stderr)
+            self.assertEqual(copied, [])
+            self.assertNotIn("trusted.list", copied)
+            self.assertEqual((apt / "sources.list.d" / "trusted.list").read_bytes(), before)
+            self.assertTrue(failure, stderr)
+
+    def test_a_symlink_to_a_valid_debian_source_is_not_admitted(self):
+        suite = codename()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            outside = tmp / "real.sources"
+            outside.write_text(debian_sources(suite))
+            apt = write_apt(tmp, {})
+            link = apt / "sources.list.d" / "linked.sources"
+            link.symlink_to(outside)
+            rc, failure, _indexes, copied, stderr = self._prepare(
+                apt, "lifetime", "", require_lifetime=False,
+            )
+            self.assertNotEqual(rc, 0, stderr)
+            self.assertEqual(copied, [])
+            self.assertNotIn("linked.sources", copied)
+            self.assertTrue(link.is_symlink())
+            self.assertEqual(failure, "release apt index provenance is empty")
+
+    def test_a_configuration_inside_the_operator_apt_directory_is_refused(self):
+        suite = codename()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            apt = write_apt(tmp, {"debian.sources": debian_sources(suite)})
+            dest = apt / "private"
+            dest.mkdir()
+            script = (
+                "set -euo pipefail\n"
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                f"PLEB_STATE_HOME={str(tmp / 'state')!r}\n"
+                f"source {str(UPDATE)!r}\n"
+                f"dest={str(dest)!r}\n"
+                "rc=0\n"
+                "prepare_release_apt_config "
+                f"\"$dest\" lifetime '' {suite!r} {str(apt)!r} || rc=$?\n"
+                "printf 'RC=%s\\n' \"$rc\"\n"
+                "printf 'FAIL=%s\\n' \"$(cat -- \"$dest/failure\" 2>/dev/null || true)\"\n"
+            )
+            result = subprocess.run(
+                ["bash", "-c", script],
+                env={"PATH": "/usr/bin:/bin", "HOME": str(tmp / "home"),
+                     "PLEB_STATE_HOME": str(tmp / "state")},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("RC=1", result.stdout)
+            self.assertIn(
+                "release apt configuration must stay outside the operator apt directory",
+                result.stdout,
+            )
+
+    def test_an_unparseable_uri_line_is_not_copied(self):
+        suite = codename()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            bindir = tmp / "bin"
+            bindir.mkdir()
+            (bindir / "apt-get").write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"'http://deb.debian.org/debian/dists/{suite}/InRelease' file 1\"\n"
+                "printf '%s\\n' '://'\n"
+                "exit 0\n"
+            )
+            (bindir / "apt-get").chmod(0o755)
+            apt = write_apt(tmp, {"debian.sources": debian_sources(suite)})
+            env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
+            env.update({
+                "HOME": str(tmp / "home"),
+                "PATH": f"{bindir}:/usr/bin:/bin",
+                "PLEBIAN_OS_APT_SOURCES_ROOT": str(apt),
+            })
+            script = (
+                "set -euo pipefail\n"
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                f"PLEB_STATE_HOME={str(tmp / 'state')!r}\n"
+                f"source {str(UPDATE)!r}\n"
+                "dest=$(mktemp -d)\n"
+                "rc=0\n"
+                "prepare_release_apt_config "
+                f"\"$dest\" lifetime '' {suite!r} {str(apt)!r} || rc=$?\n"
+                "printf 'RC=%s\\n' \"$rc\"\n"
+                "printf 'FAIL=%s\\n' \"$(cat -- \"$dest/failure\" 2>/dev/null || true)\"\n"
+                "printf '%s\\n' 'COPIED<<'\n"
+                "for copied in \"$dest/sources.list.d\"/*; do\n"
+                "  [ -f \"$copied\" ] || continue\n"
+                "  printf '%s\\n' \"${copied##*/}\"\n"
+                "done\n"
+                "printf '%s\\n' '>>COPIED'\n"
+                "rm -rf -- \"$dest\"\n"
+            )
+            result = subprocess.run(
+                ["bash", "-c", script], env=env, text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            copied = result.stdout.split("COPIED<<\n", 1)[1].split(">>COPIED", 1)[0]
+            self.assertNotIn("debian.sources", copied)
+            self.assertIn("RC=1", result.stdout)
+
+    def test_classification_uses_an_empty_private_list_directory(self):
+        body = shell_function((ROOT / "provision" / "install-deps.sh").read_text(),
+                              "prepare_release_apt_config")
+        self.assertIn('-o "Dir::State::lists=$work/one/lists"', body)
+        self.assertNotIn("/var/lib/apt/lists", body)
+        # apt 3.0.4 prints the same URIs for an empty private lists directory
+        # and for /var/lib/apt/lists. The source assertion is what fails if
+        # classification is pointed at the operator cache.
+
+
+def _deb(path: Path, name: str, version: str, arch: str, depends: str = "") -> None:
     root = path.parent / "build" / f"{name}_{version}"
     debian = root / "DEBIAN"
     debian.mkdir(parents=True)
     os.chmod(debian, 0o755)
-    (debian / "control").write_text(
+    control = (
         f"Package: {name}\n"
         f"Version: {version}\n"
         f"Architecture: {arch}\n"
         "Maintainer: Plebian OS <release@example.invalid>\n"
         "Section: misc\n"
         "Priority: optional\n"
-        "Description: fixture\n"
     )
+    if depends:
+        control += f"Depends: {depends}\n"
+    control += "Description: fixture\n"
+    (debian / "control").write_text(control)
     os.chmod(debian / "control", 0o644)
     subprocess.run(
         ["dpkg-deb", "--build", str(root), str(path)],
@@ -395,10 +556,11 @@ def _packages(repo: Path, debs: list[Path]) -> None:
             target.write_bytes(deb.read_bytes())
         data = target.read_bytes()
         info = subprocess.run(
-            ["dpkg-deb", "-f", str(target), "Package", "Version", "Architecture"],
+            ["dpkg-deb", "-f", str(target), "Package", "Version", "Architecture", "Depends"],
             check=True, text=True, capture_output=True,
         ).stdout.splitlines()
         fields = dict(line.split(": ", 1) for line in info)
+        depends = f"Depends: {fields['Depends']}\n" if "Depends" in fields else ""
         stanzas.append(
             f"Package: {fields['Package']}\n"
             f"Version: {fields['Version']}\n"
@@ -412,6 +574,7 @@ def _packages(repo: Path, debs: list[Path]) -> None:
             f"SHA256: {hashlib.sha256(data).hexdigest()}\n"
             "Section: misc\n"
             "Priority: optional\n"
+            f"{depends}"
             "Description: fixture\n"
         )
     (repo / "Packages").write_text("\n".join(stanzas) + "\n")
@@ -423,10 +586,23 @@ def _config(path: Path, sources: dict[str, str]) -> None:
     (path / "archives" / "partial").mkdir(parents=True)
     (path / "cache").mkdir()
     (path / "preferences.d").mkdir()
+    (path / "apt.conf.d").mkdir()
     (path / "sources.list").write_text(sources.pop("sources.list", ""))
     (path / "preferences").write_text("")
+    (path / "apt.conf").write_text(
+        f'Dir::Etc::Parts "{path / "apt.conf.d"}";\n'
+        'APT::Get::AllowUnauthenticated "false";\n'
+        'Acquire::AllowInsecureRepositories "false";\n'
+        'Acquire::AllowWeakRepositories "false";\n'
+        'Acquire::AllowDowngradeToInsecureRepositories "false";\n'
+        'Acquire::Check-Valid-Until "true";\n'
+    )
     for name, text in sources.items():
         (path / "sources.list.d" / name).write_text(text)
+    for directory in (path, path / "sources.list.d", path / "lists", path / "lists" / "partial",
+                      path / "archives", path / "archives" / "partial", path / "cache",
+                      path / "preferences.d", path / "apt.conf.d"):
+        directory.chmod(0o755)
 
 
 def _release_options() -> list[str]:
@@ -592,6 +768,298 @@ class ReleaseAptCandidateTests(unittest.TestCase):
             self.assertIn("0 to remove", install.stdout)
             self.assertNotIn("operator-pkg", install.stdout)
             self.assertEqual(installed.read_bytes(), before_status)
+
+    def test_a_preferences_directory_pin_is_consulted(self):
+        if shutil.which("dpkg-deb") is None or shutil.which("apt-cache") is None:
+            self.skipTest("dpkg-deb and apt-cache are required")
+        arch = subprocess.run(
+            ["dpkg", "--print-architecture"], text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        options = _release_options()
+        self.assertIn("Dir::Etc::PreferencesParts=$config/preferences.d", options)
+        option_text = "\n".join(f'  -o "{option}" \\' for option in options)
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            debs = tmp / "debs"
+            debs.mkdir()
+            _deb(debs / "release-pkg_1.0.deb", "release-pkg", "1.0", arch)
+            _deb(debs / "release-pkg_2.0.deb", "release-pkg", "2.0", arch)
+            low = tmp / "low"
+            high = tmp / "high"
+            _packages(low, [debs / "release-pkg_1.0.deb"])
+            _packages(high, [debs / "release-pkg_2.0.deb"])
+            config = tmp / "config"
+            _config(config, {
+                "sources.list": f"deb [trusted=yes] file://{high} ./\n",
+                "low.list": f"deb [trusted=yes] file://{low} ./\n",
+            })
+            (config / "preferences").write_text("")
+            (config / "preferences.d" / "pin").write_text(
+                "Package: release-pkg\nPin: version 1.0\nPin-Priority: 1001\n"
+            )
+            status = tmp / "status"
+            status.write_text("")
+            extended = tmp / "extended"
+            extended.write_text("")
+            result = self._run(
+                tmp,
+                f"config={str(config)!r}\n"
+                "release_apt_get \"$config\" update\n"
+                "apt-cache \\\n"
+                f"{option_text}\n"
+                "  policy release-pkg\n",
+                status, extended,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Candidate: 1.0", result.stdout)
+            self.assertNotIn("Candidate: 2.0", result.stdout)
+
+    def test_sources_with_does_not_supply_a_release_package(self):
+        if shutil.which("dpkg-deb") is None:
+            self.skipTest("dpkg-deb is required")
+        arch = subprocess.run(
+            ["dpkg", "--print-architecture"], text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            debs = tmp / "debs"
+            debs.mkdir()
+            _deb(debs / "release-pkg_1.0.deb", "release-pkg", "1.0", arch)
+            _deb(debs / "release-pkg_9.0.deb", "release-pkg", "9.0", arch)
+            debian = tmp / "debian"
+            _packages(debian, [debs / "release-pkg_1.0.deb"])
+            config = tmp / "config"
+            _config(config, {"sources.list": f"deb [trusted=yes] file://{debian} ./\n"})
+            hostile = tmp / "hostile.conf"
+            hostile.write_text(
+                'APT::Sources::With { "' + str(debs / "release-pkg_9.0.deb") + '"; };\n'
+                'DPkg::Post-Invoke { "echo HOSTHOOK"; };\n'
+            )
+            status = tmp / "status"
+            status.write_text("")
+            extended = tmp / "extended"
+            extended.write_text("")
+            direct = subprocess.run(
+                [
+                    "apt-get", "-s",
+                    "-o", f"Dir::Etc::SourceList={config / 'sources.list'}",
+                    "-o", f"Dir::Etc::SourceParts={config / 'sources.list.d'}",
+                    "-o", f"Dir::State::lists={config / 'lists'}",
+                    "-o", f"Dir::State::status={status}",
+                    "-o", f"Dir::Cache={config / 'cache'}",
+                    "install", "release-pkg",
+                ],
+                env={**os.environ, "APT_CONFIG": str(hostile), "DEBIAN_FRONTEND": "noninteractive"},
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(direct.returncode, 0, direct.stderr)
+            self.assertIn("Inst release-pkg (9.0", direct.stdout)
+            wrapped = self._run(
+                tmp,
+                f"config={str(config)!r}\n"
+                "release_apt_get \"$config\" update\n"
+                "release_apt_get \"$config\" -s install release-pkg\n",
+                status, extended,
+            )
+            self.assertEqual(wrapped.returncode, 0, wrapped.stderr)
+            self.assertNotIn("(9.0", wrapped.stdout)
+            self.assertIn("1.0", wrapped.stdout)
+            dumped = subprocess.run(
+                ["bash", "-c",
+                 'env -u APT_CONFIG APT_CONFIG="$1" apt-config dump DPkg::Post-Invoke',
+                 "dump", str(config / "apt.conf")],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(dumped.returncode, 0, dumped.stderr)
+            self.assertNotIn("HOSTHOOK", dumped.stdout)
+            self.assertNotIn("qt-runtime", dumped.stdout)
+
+    def test_a_debian_upgrade_does_not_remove_an_operator_package(self):
+        if shutil.which("dpkg-deb") is None:
+            self.skipTest("dpkg-deb is required")
+        arch = subprocess.run(
+            ["dpkg", "--print-architecture"], text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            debs = tmp / "debs"
+            debs.mkdir()
+            _deb(debs / "libdep-sim_1.0_all.deb", "libdep-sim", "1.0", "all")
+            _deb(debs / "libdep-sim_2.0_all.deb", "libdep-sim", "2.0", "all")
+            _deb(debs / "cuda-x_1.0_all.deb", "cuda-x", "1.0", "all", "libdep-sim (= 1.0)")
+            _deb(debs / "release-pkg_1.0_all.deb", "release-pkg", "1.0", "all",
+                 "libdep-sim (>= 2.0)")
+            debian = tmp / "debian"
+            _packages(debian, [debs / "libdep-sim_2.0_all.deb", debs / "release-pkg_1.0_all.deb"])
+            config = tmp / "config"
+            _config(config, {"sources.list": f"deb [trusted=yes] file://{debian} ./\n"})
+            status = tmp / "status"
+            status.write_text(
+                "Package: libdep-sim\n"
+                "Status: install ok installed\n"
+                "Priority: optional\n"
+                "Section: misc\n"
+                "Installed-Size: 1\n"
+                "Maintainer: Plebian OS <release@example.invalid>\n"
+                "Architecture: all\n"
+                "Version: 1.0\n"
+                "Description: fixture\n"
+                "\n"
+                "Package: cuda-x\n"
+                "Status: install ok installed\n"
+                "Priority: optional\n"
+                "Section: misc\n"
+                "Installed-Size: 1\n"
+                "Maintainer: Plebian OS <release@example.invalid>\n"
+                "Architecture: all\n"
+                "Version: 1.0\n"
+                "Depends: libdep-sim (= 1.0)\n"
+                "Description: fixture\n"
+                "\n"
+            )
+            extended = tmp / "extended"
+            extended.write_text("")
+            install_log = tmp / "install.log"
+            body = shell_function(DEPS.read_text(), "release_install")
+            getter = shell_function(DEPS.read_text(), "release_apt_get")
+            script = (
+                "set -euo pipefail\n"
+                + getter + "\n" + body + "\n"
+                "warn() { printf 'WARN %s\\n' \"$*\" >&2; }\n"
+                f"RELEASE_APT_CONFIG={str(config)!r}\n"
+                "deps_apt() {\n"
+                "  case \" $* \" in\n"
+                "    *' -s '*) ;;\n"
+                f"    *) printf '%s\\n' \"$*\" >> {str(install_log)!r} ;;\n"
+                "  esac\n"
+                "  release_apt_get \"$RELEASE_APT_CONFIG\" \"$@\"\n"
+                "}\n"
+                "release_apt_get \"$RELEASE_APT_CONFIG\" update\n"
+                "release_install release-pkg\n"
+            )
+            result = self._run(tmp, script, status, extended)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("cuda-x", result.stderr)
+            self.assertIn("those packages stay installed", result.stderr)
+            self.assertFalse(install_log.exists(), result.stderr)
+            self.assertEqual(status.read_text().count("Package: cuda-x"), 1)
+
+
+class ReleaseAptRouteTests(unittest.TestCase):
+    """A new release-path apt command has to go through the private configuration.
+
+    Image build scripts are not on the guest release path. pleb and kilix
+    live in other repositories; the updater invokes them, and those apt
+    calls are recorded in STATE.md rather than routed here.
+    """
+
+    SCOPE = (
+        "install-deps.sh",
+        "plebian-os-update.sh",
+        "plebian-os-provision.sh",
+        "plebian-os-firstboot-attempt",
+        "plebian-os-qt-runtime",
+        "plebian-os-mpv-runtime",
+        "plebian-os-ssh-server",
+        "plebian-os-waydroid-setup",
+        "plebian-os-nvidia-driver",
+    )
+
+    def test_every_release_path_apt_call_is_classified(self):
+        unclassified = []
+        seen = []
+        for name in self.SCOPE:
+            path = ROOT / "provision" / name
+            self.assertTrue(path.is_file(), name)
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if "apt-get" not in line and "aptitude" not in line:
+                    continue
+                why = self._reason(name, line.strip())
+                seen.append((name, number, why))
+                if why is None:
+                    unclassified.append(f"{name}:{number}: {line.strip()}")
+        self.assertFalse(unclassified, "\n".join(unclassified))
+        self.assertGreaterEqual(len(seen), 20)
+
+    def test_helpers_keep_their_own_private_configuration(self):
+        ssh = (ROOT / "provision" / "plebian-os-ssh-server").read_text()
+        self.assertIn('Dir::Etc::Parts "', ssh)
+        self.assertIn('env["APT_CONFIG"]', ssh)
+        self.assertIn("Dir::Etc::SourceList=/dev/null", ssh)
+        firstboot = (ROOT / "provision" / "plebian-os-firstboot-attempt").read_text()
+        self.assertIn("APT_CONFIG=", firstboot)
+        self.assertIn("Dir::Etc::SourceList=/dev/null", firstboot)
+        command = firstboot[firstboot.index("apt-get -y -f install"):]
+        command = command[:command.index("rm -rf")]
+        self.assertNotIn("--no-remove", command)
+        qt = (ROOT / "provision" / "plebian-os-qt-runtime").read_text()
+        mpv = (ROOT / "provision" / "plebian-os-mpv-runtime").read_text()
+        self.assertNotIn('subprocess.run(["/usr/bin/apt-get"', qt)
+        self.assertNotIn("subprocess.run(['/usr/bin/apt-get'", mpv)
+        updater = (ROOT / "provision" / "plebian-os-update.sh").read_text()
+        self.assertIn("PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG", updater)
+        self.assertNotIn("build/lib.sh", updater)
+        self.assertNotIn("build_vm_image.py", updater)
+        removal = updater[updater.index("\nremove_transaction_package_additions() {\n"):]
+        removal = removal[:removal.index("\n}\n")]
+        self.assertNotIn("release_apt_get", removal)
+        self.assertIn("apt-get remove -y --no-install-recommends", removal)
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertIn('export PLEBIAN_OS_RELEASE_APT_CONFIG="$PROVISION_RELEASE_APT_CONFIG"', provision)
+        self.assertIn('cp -a -- "$PROVISION_RELEASE_APT_CONFIG/indexes"', provision)
+        self.assertNotIn('release_apt="$(mktemp -d "$state/.release-apt.XXXXXX")"', provision)
+
+    @staticmethod
+    def _reason(name: str, text: str) -> str | None:
+        if text.startswith("#"):
+            return "comment"
+        if name == "plebian-os-waydroid-setup":
+            return "staged during provision and update, not executed on the release path"
+        if name == "plebian-os-nvidia-driver":
+            return "operator-facing helper, not called by release install, update, or first boot"
+        if name in ("plebian-os-qt-runtime", "plebian-os-mpv-runtime"):
+            if "apt_run(" in text or text.startswith("print(") or "Run apt-get" in text:
+                return "release mode routes this through the private configuration"
+            if (text.startswith('"""') or text.startswith("command = ")
+                    or text.startswith('["/usr/bin/apt-get"')
+                    or text.startswith("['/usr/bin/apt-get'")):
+                return "argument list passed to apt_run"
+            return None
+        if name == "plebian-os-ssh-server":
+            if "apt-get" in text:
+                return "own Debian-only configuration, not release_apt_get"
+            return None
+        if name == "plebian-os-firstboot-attempt":
+            if "apt-get -y -f install" in text:
+                return "one Debian-only recovery install"
+            if text.startswith("say ") or "apt-get -f install" in text or "One apt-get" in text:
+                return "recovery message, not a second apt command"
+            return None
+        if "print-uris" in text:
+            return "classification uses the private list directory"
+        if text == "apt-get \\" or text.endswith("apt-get \\"):
+            return "release_apt_get"
+        if 'apt-get "$@"' in text:
+            return "non-release deps_apt falls through to system apt"
+        if text.startswith("echo "):
+            return "dry-run text"
+        if "deps_apt " in text and "warn" in text:
+            return "install-deps update goes through deps_apt"
+        if "indextargets" in text:
+            return "non-install query; release mode does not use this branch"
+        if "apt-get update -y" in text or "apt-get update against" in text or text.startswith("echo "):
+            return "provisioner list refresh after operator sources were renamed aside"
+        if "apt-get -s remove" in text:
+            return "owned by interrupts R2; still system apt until that worker routes it"
+        if "apt-get remove " in text:
+            return "owned by interrupts R2; still system apt until that worker routes it"
+        if "command -v" in text and "apt-get" in text:
+            return "presence check"
+        if "apt-get -f install" in text and ("die " in text or text.startswith("die ")):
+            return "guidance text, not a command"
+        if "Classification runs apt-get" in text:
+            return "comment"
+        return None
 
 
 if __name__ == "__main__":
