@@ -10,6 +10,7 @@ import pty
 import re
 import select
 import shlex
+import signal
 import subprocess
 import tempfile
 import time
@@ -224,8 +225,8 @@ class PackageStepShieldTests(unittest.TestCase):
         self.assertEqual(victim.stat().st_mode & 0o777, 0o644)
         self.assertEqual(rotated.read_text(), "plain\n")
 
-    def test_the_log_fd_is_not_inherited_by_a_child(self):
-        path = self.base / "cloexec.log"
+    def test_the_log_fd_is_inherited_by_a_child(self):
+        path = self.base / "inherited.log"
         script = (
             "set -euo pipefail\n"
             "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
@@ -240,8 +241,54 @@ class PackageStepShieldTests(unittest.TestCase):
             ["/bin/bash", "-c", script], text=True, capture_output=True,
             env={"PATH": "/usr/bin:/bin", "HOME": str(self.base), "LANG": "C"})
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("seen=ABSENT", result.stdout)
-        self.assertNotIn("seen=VISIBLE", result.stdout)
+        self.assertIn("seen=VISIBLE", result.stdout)
+        self.assertNotIn("seen=ABSENT", result.stdout)
+
+    def test_a_group_sigint_puts_the_helper_line_in_the_log(self):
+        log = self.base / "update.log"
+        started = self.base / "step-started"
+        finished = self.base / "step-finished"
+        script = "\n".join((
+            "set -euo pipefail",
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1",
+            f"export PLEBIAN_OS_UPDATE_LOG={shlex.quote(str(log))}",
+            f". {shlex.quote(str(UPDATE))}",
+            "rollback() {",
+            '    warn "ROLLBACK status=${_STACK_TXN_EXIT_STATUS:-?}"',
+            '    [ "${_STACK_TXN_EXIT_STATUS:-1}" = 130 ] && warn "interrupted; rolling back"',
+            "}",
+            "trap rollback EXIT",
+            "trap 'acknowledge_update_interrupt 130' INT",
+            "run_package_step_in_its_own_session /usr/bin/setsid --wait /bin/bash -c \\",
+            f"    'trap \"\" INT HUP QUIT; : >{shlex.quote(str(started))}; sleep 1.5; echo finished >{shlex.quote(str(finished))}'",
+            "echo RETURNED",
+        ))
+        proc = subprocess.Popen(
+            ["/bin/bash", "-c", script], start_new_session=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(self.base), "LANG": "C"})
+        deadline = time.monotonic() + 10
+        while not started.exists() and time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.02)
+        self.assertTrue(started.exists(), "the shielded step did not start")
+        os.killpg(proc.pid, signal.SIGINT)
+        try:
+            output, _ = proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            output, _ = proc.communicate()
+            self.fail("updater did not return after the group signal: " + output)
+        self.assertEqual(proc.returncode, 130, output)
+        self.assertTrue(finished.is_file(), output)
+        self.assertNotIn("RETURNED", output)
+        self.assertIn("interrupted; rolling back", output)
+        lines = [line for line in log.read_text().splitlines() if line]
+        interrupts = [line for line in lines if "interrupted; rolling back" in line]
+        self.assertEqual(len(lines), 4, lines)
+        self.assertEqual(len(interrupts), 3, lines)
+        self.assertTrue(any("ROLLBACK status=130" in line for line in lines), lines)
 
     def test_a_log_over_the_bound_rotates(self):
         path = self.base / "big.log"

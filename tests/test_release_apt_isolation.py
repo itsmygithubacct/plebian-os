@@ -1002,8 +1002,16 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertNotIn("build_vm_image.py", updater)
         removal = updater[updater.index("\nremove_transaction_package_additions() {\n"):]
         removal = removal[:removal.index("\n}\n")]
-        self.assertNotIn("release_apt_get", removal)
-        self.assertIn("apt-get remove -y --no-install-recommends", removal)
+        self.assertNotIn("apt-get remove", removal)
+        self.assertNotIn("apt-get -s", removal)
+        self.assertIn("command -v apt-get", removal)
+        self.assertNotIn("release-apt-get.fn", removal)
+        self.assertIn("_run_release_apt", removal)
+        runner_at = updater.index("\n_run_release_apt() {\n")
+        runner = updater[runner_at:updater.index("\n}\n", runner_at)]
+        self.assertIn("release_apt_get", runner)
+        self.assertIn("mktemp -d", runner)
+        self.assertNotIn("release-apt-get.fn", runner)
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn('export PLEBIAN_OS_RELEASE_APT_CONFIG="$PROVISION_RELEASE_APT_CONFIG"', provision)
         self.assertIn('cp -a -- "$PROVISION_RELEASE_APT_CONFIG/indexes"', provision)
@@ -1049,10 +1057,8 @@ class ReleaseAptRouteTests(unittest.TestCase):
             return "non-install query; release mode does not use this branch"
         if "apt-get update -y" in text or "apt-get update against" in text or text.startswith("echo "):
             return "provisioner list refresh after operator sources were renamed aside"
-        if "apt-get -s remove" in text:
-            return "owned by interrupts R2; still system apt until that worker routes it"
-        if "apt-get remove " in text:
-            return "owned by interrupts R2; still system apt until that worker routes it"
+        if "apt-get -s remove" in text or "apt-get remove " in text:
+            return None
         if "command -v" in text and "apt-get" in text:
             return "presence check"
         if "apt-get -f install" in text and ("die " in text or text.startswith("die ")):

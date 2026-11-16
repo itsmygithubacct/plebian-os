@@ -425,8 +425,42 @@ class PackageAdditionRollbackTests(unittest.TestCase):
         run = text.index("_run_release_apt() {")
         runner = text[run:text.index("\n}\n", run)]
         self.assertIn("plebian-os-removal", runner)
-        self.assertIn('release_apt_get "$@"', runner)
+        self.assertIn('release_apt_get "$config" "$@"', runner)
+        self.assertIn("mktemp -d /tmp/plebian-os-removal-apt.XXXXXX", runner)
+        self.assertNotIn("release-apt-get.fn", runner)
         self.assertNotIn("plebian-os-package-step", runner)
+
+    def test_a_swapped_user_owned_removal_config_does_not_run(self):
+        self.db.write_text("newpkg\n")
+        (self.txn / "apt-installed-before").write_text("")
+        (self.txn / "apt-additions").write_text("newpkg\n")
+        decoy = self.base / "decoy-removal"
+        decoy.mkdir()
+        (decoy / "release-apt-get.fn").write_text(
+            'release_apt_get() { echo "INJECTED code ran"; }\n')
+        (decoy / "apt.conf").write_text(
+            'DPkg::Pre-Invoke {"echo PREINVOKE";};\n')
+        result = self.run_body(
+            """
+            if declare -F _prepare_removal_apt_config >/dev/null 2>&1; then
+                _prepare_removal_apt_config || true
+            fi
+            if [ -n "${_REMOVAL_APT_CONFIG:-}" ] && [ -d "$_REMOVAL_APT_CONFIG" ]; then
+                printf '%s\\n' 'release_apt_get() { echo "INJECTED code ran"; }' \
+                    >"$_REMOVAL_APT_CONFIG/release-apt-get.fn"
+                printf '%s\\n' 'DPkg::Pre-Invoke {"echo PREINVOKE";};' \
+                    >>"$_REMOVAL_APT_CONFIG/apt.conf"
+            fi
+            remove_transaction_package_additions
+            echo survived
+            """)
+        combined = result.stdout + result.stderr + "\n".join(self.apt_commands())
+        self.assertNotIn("INJECTED", combined)
+        self.assertNotIn("PREINVOKE", combined)
+        self.assertIn("survived", result.stdout, result.stderr)
+        self.assertEqual(self.removes(), ["newpkg"], result.stderr)
+        self.assertEqual(self.packages(), [])
+        self.assert_private_source_list()
 
 
 if __name__ == "__main__":

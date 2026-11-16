@@ -2710,6 +2710,28 @@ class SelectionAttemptWindowTests(unittest.TestCase):
             self.assertNotIn("interrupted reselect", combined)
             self.assertFalse(attempt.exists())
 
+    def test_a_different_recorded_version_is_not_an_interrupted_reselect(self):
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            helper._machine(base)
+            helper._source(base)
+            selected = helper._run(base, "0.1.8", "--offline")
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            tag = subprocess.run(
+                ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.1.8"],
+                capture_output=True, text=True, check=True).stdout.strip()
+            attempt = base / "home/.local/gpu_terminal/pleb/state/selection-attempt"
+            attempt.parent.mkdir(parents=True, exist_ok=True)
+            attempt.write_text(
+                f"format=1\ntag={tag}\ntarget=0.1.8\ninstalled=0.1.7\n")
+            rolled = helper._run(
+                base, "--rollback",
+                env_extra={"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag})
+            combined = rolled.stdout + rolled.stderr
+            self.assertNotIn("interrupted reselect", combined)
+            self.assertFalse(attempt.exists())
+
     def test_a_failure_before_pending_removes_the_attempt(self):
         helper = self._helper()
         with tempfile.TemporaryDirectory() as td:

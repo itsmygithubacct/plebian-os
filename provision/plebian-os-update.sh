@@ -120,78 +120,8 @@ open_updater_log() {
     umask "$old_umask"
     [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
     chmod 0600 -- "$path" 2>/dev/null || true
-    # FD_CLOEXEC belongs to this process. A child that calls fcntl changes
-    # only its own copy, so stop this shell just long enough to set the flag
-    # on the log descriptor. Children then do not inherit it.
-    /usr/bin/python3 -I -c 'import ctypes, os, sys
-libc = ctypes.CDLL(None, use_errno=True)
-libc.ptrace.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
-libc.ptrace.restype = ctypes.c_long
-names = ("r15","r14","r13","r12","rbp","rbx","r11","r10","r9","r8","rax","rcx","rdx","rsi","rdi","orig_rax","rip","cs","eflags","rsp","ss","fs_base","gs_base","ds","es","fs","gs")
-Regs = type("Regs", (ctypes.Structure,), {"_fields_": [(n, ctypes.c_ulonglong) for n in names]})
-def pt(req, pid, data=None):
-    datap = ctypes.cast(data, ctypes.c_void_p) if data is not None else None
-    ctypes.set_errno(0)
-    result = libc.ptrace(req, pid, None, datap)
-    if result == -1 and ctypes.get_errno():
-        raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
-    return result
-if os.uname().machine != "x86_64":
-    raise SystemExit(0)
-pid = os.getppid()
-fd = int(sys.argv[1])
-attached = False
-saved = None
-try:
-    pt(16, pid)
-    attached = True
-    os.waitpid(pid, 0)
-    regs = Regs()
-    pt(12, pid, ctypes.byref(regs))
-    saved = Regs.from_buffer_copy(regs)
-    found = None
-    maps = open("/proc/%d/maps" % pid)
-    for line in maps:
-        parts = line.split()
-        if "r-xp" not in parts[1]:
-            continue
-        start_s, end_s = parts[0].split("-")
-        start, end = int(start_s, 16), int(end_s, 16)
-        if end - start > 2000000:
-            continue
-        mem = open("/proc/%d/mem" % pid, "rb")
-        mem.seek(start)
-        blob = mem.read(end - start)
-        mem.close()
-        at = blob.find(b"\x0f\x05")
-        if at != -1:
-            found = start + at
-            break
-    maps.close()
-    if found is None:
-        raise OSError("no syscall instruction")
-    regs.rip = found
-    regs.rax = 72
-    regs.rdi = fd
-    regs.rsi = 2
-    regs.rdx = 1
-    pt(13, pid, ctypes.byref(regs))
-    pt(9, pid)
-    os.waitpid(pid, 0)
-    pt(13, pid, ctypes.byref(saved))
-    saved = None
-finally:
-    if saved is not None:
-        try:
-            pt(13, pid, ctypes.byref(saved))
-        except OSError:
-            pass
-    if attached:
-        try:
-            pt(17, pid)
-        except OSError:
-            pass
-' "$_UPDATE_LOG_FD" 2>/dev/null || true
+    # The package-step helper is a child of this shell. It writes the
+    # interrupt line here, so the descriptor stays inheritable.
     export PLEBIAN_OS_UPDATE_LOG_FD="$_UPDATE_LOG_FD"
     return 0
 }
@@ -2902,52 +2832,76 @@ end_package_addition_window() {
 }
 
 _transaction_removed_baseline_names() {
-    local name state removed=""
+    local name state pkg removed="" listing
+    local -A state_of=()
     [ -f "$_STACK_TXN_DIR/apt-installed-before" ] || return 0
+    # One listing. A query per baseline name is thousands of processes.
+    if listing="$(dpkg-query -W -f '${Package}\t${db:Status-Status}\n' 2>/dev/null)"; then
+        while IFS=$'\t' read -r pkg state; do
+            [ -n "$pkg" ] || continue
+            state_of["$pkg"]="$state"
+        done <<<"$listing"
+    else
+        # A failed listing is the same as a failed per-name query: unknown
+        # status counts as gone, and the caller keeps the new packages.
+        while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            _package_name_is_safe "$name" || continue
+            removed="${removed:+$removed }$name"
+        done <"$_STACK_TXN_DIR/apt-installed-before"
+        printf '%s\n' "$removed"
+        return 0
+    fi
     while IFS= read -r name; do
         [ -n "$name" ] || continue
         _package_name_is_safe "$name" || continue
-        state="$(dpkg-query -W -f '${db:Status-Status}' -- "$name" 2>/dev/null || true)"
-        [ "$state" = installed ] && continue
+        [ "${state_of[$name]:-}" = installed ] && continue
         removed="${removed:+$removed }$name"
     done <"$_STACK_TXN_DIR/apt-installed-before"
     printf '%s\n' "$removed"
 }
 
-_prepare_removal_apt_config() {
-    local config codename
-    config="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-removal-apt.XXXXXX")" || return 1
-    codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
-    if ! prepare_release_apt_config "$config" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
-            "$codename" "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
-        rm -rf -- "$config"
-        return 1
-    fi
-    declare -f release_apt_get >"$config/release-apt-get.fn" || {
-        rm -rf -- "$config"
-        return 1
-    }
-    _REMOVAL_APT_CONFIG="$config"
-    return 0
-}
-
-# The child is a new session and sources release_apt_get from a file. sudo
-# would drop a shell function, and a direct apt-get would consult the
-# operator's sources.
+# The child is a new session. It builds the release apt configuration in its
+# own mktemp directory, which is root-owned when this step is elevated, and
+# removes it before returning. The function text is an argument. A file the
+# caller can rewrite is not sourced, and apt does not read a configuration
+# from a directory the caller created.
 _run_release_apt() {
-    local config="$1"
-    shift
-    [ -f "$config/release-apt-get.fn" ] || return 1
+    local fn sources snapshot codename
+    fn="$(declare -f _update_record
+        declare -f log
+        declare -f validate_release_apt_provenance
+        declare -f prepare_release_apt_config
+        declare -f release_apt_get)"
+    sources="${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"
+    snapshot="${PLEBIAN_OS_APT_SNAPSHOT:-}"
+    codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
     "${_REMOVAL_ELEVATE[@]}" /usr/bin/setsid --wait /bin/bash -c \
-        'trap "" INT HUP QUIT; . "$1"; shift; release_apt_get "$@"' \
+        'trap "" INT HUP QUIT
+         eval "$1" || exit 1
+         shift
+         sources="$1"
+         shift
+         snapshot="$1"
+         shift
+         codename="$1"
+         shift
+         config="$(mktemp -d /tmp/plebian-os-removal-apt.XXXXXX)" || exit 1
+         trap "rm -rf -- \"\$config\"" EXIT
+         prepare_release_apt_config "$config" lifetime "$snapshot" "$codename" "$sources" || exit 1
+         release_apt_get "$config" "$@"
+        ' \
         plebian-os-removal \
-        "$config/release-apt-get.fn" \
-        "$config" "$@"
+        "$fn" \
+        "$sources" \
+        "$snapshot" \
+        "$codename" \
+        "$@"
 }
 
 _apt_simulated_removals() {
     local pkg="$1" sim status=0
-    sim="$(_run_release_apt "$_REMOVAL_APT_CONFIG" -s remove -y --no-install-recommends "$pkg" 2>&1)" && status=0 || status=$?
+    sim="$(_run_release_apt -s remove -y --no-install-recommends "$pkg" 2>&1)" && status=0 || status=$?
     printf '%s\n' "$sim" | sed -n 's/^Remv \([^ ]\{1,\}\) \[.*/\1/p'
     return "$status"
 }
@@ -2964,7 +2918,7 @@ _drop_recorded_addition() {
 remove_transaction_package_additions() {
     local -a packages=()
     local i pkg removals sim_ok extra other removed="" uid state short
-    local removed_names config=""
+    local removed_names
     [ -n "${_STACK_TXN_DIR:-}" ] || return 0
     end_package_addition_window || true
     if [ -e "$_STACK_TXN_DIR/apt-additions-untracked" ]; then
@@ -2991,11 +2945,6 @@ remove_transaction_package_additions() {
     }
     mapfile -t packages < "$_STACK_TXN_DIR/apt-additions"
     [ "${#packages[@]}" -gt 0 ] || return 0
-    _prepare_removal_apt_config || {
-        warn "keeping packages this update installed: the release apt configuration could not be prepared"
-        return 0
-    }
-    config="$_REMOVAL_APT_CONFIG"
     # A second Ctrl-C must not kill the shell, or turn a finished remove into
     # status 130, while these packages are being taken back.
     trap '' INT TERM HUP
@@ -3031,7 +2980,7 @@ remove_transaction_package_additions() {
             warn "keeping $pkg: removing it would also remove $extra, which this update did not install"
             continue
         fi
-        if ! _run_release_apt "$config" remove -y --no-install-recommends "$pkg"; then
+        if ! _run_release_apt remove -y --no-install-recommends "$pkg"; then
             warn "keeping $pkg: apt remove failed; it is still installed"
             continue
         fi
@@ -3042,7 +2991,6 @@ remove_transaction_package_additions() {
         done <<<"$removals"
         removed="${removed:+$removed }$pkg"
     done
-    rm -rf -- "$config"
     [ -z "$removed" ] || log "removed packages this update had installed: $removed"
     return 0
 }
