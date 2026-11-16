@@ -461,22 +461,30 @@ def apt_env(work):
 # apt.conf, so without this a proxy debian-installer wrote to /etc/apt/apt.conf
 # would be lost. Keys: Acquire::{http,https,ftp}::Proxy and their per-host
 # form with a host of [A-Za-z0-9.-]+. Value: DIRECT, or an http://, https://
-# or socks5h:// URL with no quotes, semicolons, braces or whitespace. Anything
+# or socks5h:// URL, with an optional userinfo [A-Za-z0-9._~%!$&()*+,=:-]+@
+# before the host, and no quotes, semicolons, braces, backslashes or
+# whitespace. A dropped setting is reported by its key, never its value. The
+# private apt.conf is mode 0600 when a copied value has userinfo. Anything
 # else, including a proxy auto-detect program, is left out (apt-config dump
 # only parses, it runs nothing). A proxy cannot forge a package: the signed
 # Release check still applies.
 PROXY_KEYS = ("Acquire::http::Proxy", "Acquire::https::Proxy", "Acquire::ftp::Proxy")
 PROXY_HOST_BAD_RE = re.compile(r"[^A-Za-z0-9.-]", re.ASCII)
-PROXY_VALUE_BAD = set("'\";{}") | set(" \t\n\v\f\r")
+PROXY_VALUE_BAD = set("'\";{}\\") | set(" \t\n\v\f\r")
+# Group 2 is the optional userinfo with its @; an @ later, in the path, is
+# not a credential.
 PROXY_URL_RE = re.compile(
-    r"(http|https|socks5h)://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?",
+    r"(http|https|socks5h)://([A-Za-z0-9._~%!$&()*+,=:-]+@)?[A-Za-z0-9.-]+(:[0-9]{1,5})?"
+    r"(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?",
     re.ASCII)
 
 
 def proxy_lines(dump):
-    """apt.conf lines for the validated proxies in `apt-config dump --no-empty
-    --format '%f%N%v%n'` output, in order; dropped keys are reported."""
+    """(apt.conf lines, carries userinfo) for the validated proxies in
+    `apt-config dump --no-empty --format '%f%N%v%n'` output, in order. Dropped
+    keys are reported; values never are."""
     lines = []
+    userinfo = False
     for line in dump.split("\n"):
         if not line or "\t" not in line:
             continue
@@ -488,17 +496,21 @@ def proxy_lines(dump):
             if not host or "::" in host or PROXY_HOST_BAD_RE.search(host):
                 sys.stderr.write(f"{PROG}: dropping proxy setting {key}\n")
                 continue
+        match = None
         if PROXY_VALUE_BAD.intersection(value):
             ok = False
         elif value == "DIRECT":
             ok = True
         else:
-            ok = PROXY_URL_RE.fullmatch(value) is not None
+            match = PROXY_URL_RE.fullmatch(value)
+            ok = match is not None
         if not ok:
             sys.stderr.write(f"{PROG}: dropping proxy setting {key}\n")
             continue
+        if match and match.group(2):
+            userinfo = True
         lines.append(f'{key} "{value}";\n')
-    return lines
+    return lines, userinfo
 
 
 def operator_proxies():
@@ -511,7 +523,7 @@ def operator_proxies():
         result = run(["apt-config", "dump", "--no-empty", "--format", "%f%N%v%n"],
                      env=env, errors="surrogateescape")
     except OSError:
-        return []  # as the shell's `|| true`: no operator proxy
+        return [], False  # as the shell's `|| true`: no operator proxy
     return proxy_lines(result.stdout or "")
 
 
@@ -521,17 +533,23 @@ def prepare_apt_work(codename):
     os.makedirs(WORK_PARENT, mode=0o755, exist_ok=True)
     work = pathlib.Path(tempfile.mkdtemp(prefix=".ssh-server-apt.", dir=WORK_PARENT))
     # apt downloads as its unprivileged _apt user, which must reach lists/partial
-    # (apt hands that directory to _apt itself). Nothing here is secret.
+    # (apt hands that directory to _apt itself). Only apt.conf can hold a
+    # secret (a proxy password), and it is 0600 then.
     work.chmod(0o755)
     (work / "sources.list.d").mkdir(mode=0o755)
     (work / "apt.conf.d").mkdir(mode=0o755)
     (work / "lists" / "partial").mkdir(mode=0o755, parents=True)
     (work / "sources.list.d" / "debian.sources").write_text(debian_sources(codename))
-    (work / "apt.conf").write_text(
-        'Dir::Etc::main "/dev/null";\n'
-        f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n'
-        + "".join(operator_proxies())
-    )
+    proxies, userinfo = operator_proxies()
+    # Created 0600, so a proxy password is never readable by others, even
+    # briefly; apt reads it as root and hands its methods the configuration.
+    conf = work / "apt.conf"
+    fd = os.open(conf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        stream.write('Dir::Etc::main "/dev/null";\n'
+                     f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n'
+                     + "".join(proxies))
+    os.chmod(conf, 0o600 if userinfo else 0o644)
     return work
 
 
