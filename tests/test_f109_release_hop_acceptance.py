@@ -113,6 +113,10 @@ PLEB_DIR="$PLEB_ROOT"
             '            assert_pre_hop_manifest "$closure_env"',
             'printf \'fingerprint\\t%s\\t%s\\n\' "$release_state"',
             'printf \'engine\\t%s\\t%s\\n\' "$engine_build"',
+            '            engine)\n'
+            '                actual="$(bound_engine_fingerprint | sha256sum | awk \'{print $1}\')" || return 1',
+            '        selection_tag_state="$(assert_recorded_selection_tag /var/lib/plebian-os "$from_release_tag_object")" \\\n',
+            "not-verified unreadable",
             "assert_pre_hop_release_identity",
             "assert_post_hop_release_identity",
             "closure_keys_match",
@@ -529,6 +533,8 @@ write_reboot_verifier "$report/verify.sh"
             "published_build_info_sha256",
             "published_named_sha256",
             "release manifest checksum mismatch",
+            "source checksum file must name the release manifest exactly once",
+            '[ "$actual_manifest_sha256" = "$manifest_sha256" ]',
             'die "source ISO tag object does not match --from-release-tag-object"',
             "PLEBIAN_OS_RELEASE_TAG=$release_tag",
             "installed-closure",
@@ -1260,6 +1266,73 @@ write_reboot_verifier "$report/verify.sh"
             )
             self.assertNotEqual(doubled.returncode, 0)
 
+    def test_manifest_hash_comparison_uses_the_checksum_file(self):
+        source = HOST_RUNNER.read_text()
+        start = source.index('    manifest_sha256="$(published_named_sha256')
+        end = source.index("release manifest checksum mismatch:", start)
+        snippet = source[start:source.index("\n", end) + 1]
+        self.assertIn('[ "$actual_manifest_sha256" = "$manifest_sha256" ]', snippet)
+        self.assertIn(
+            'die "source checksum file must name the release manifest exactly once"',
+            snippet,
+        )
+        lookup = self._bash_function(source, "published_named_sha256")
+        script = (
+            'die() { printf "%s\\n" "$*" >&2; exit 1; }\n'
+            + lookup
+            + "\nsource_sha256sums=$1\nfrom_release_manifest=$2\n"
+            + snippet
+        )
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = root / "plebian-os-0.2.3-rc9.env"
+            manifest.write_text("PLEBIAN_OS_REF=v0.2.3-rc9\n")
+            actual = subprocess.check_output(
+                ["sha256sum", str(manifest)], text=True).split()[0]
+            sums = root / "SHA256SUMS"
+
+            def check(text):
+                sums.write_text(text)
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", script,
+                     "bash", str(sums), str(manifest)],
+                    capture_output=True, text=True, check=False,
+                )
+
+            bound = check(f"{actual}  plebian-os-0.2.3-rc9.env\n")
+            self.assertEqual(bound.returncode, 0, bound.stderr)
+            mismatched = check(f"{'ab' * 32}  plebian-os-0.2.3-rc9.env\n")
+            self.assertNotEqual(mismatched.returncode, 0)
+            self.assertIn("release manifest checksum mismatch", mismatched.stderr)
+            omitted = check(f"{actual}  plebian-os-0.2.3-rc9-amd64.iso\n")
+            self.assertNotEqual(omitted.returncode, 0)
+            self.assertIn("exactly once", omitted.stderr)
+
+    def test_snapshot_engine_entry_rejects_a_different_generation(self):
+        helper = self._bash_function(RUNNER.read_text(), "assert_release_snapshot_restored")
+        live = hashlib.sha256(b"live-engine\n").hexdigest()
+        other = hashlib.sha256(b"other-engine\n").hexdigest()
+        script = (
+            'bound_engine_fingerprint() { printf "%s\\n" live-engine; }\n'
+            + helper
+            + '\nassert_release_snapshot_restored rollback "$1"\n'
+        )
+        with tempfile.TemporaryDirectory() as td:
+            manifest = Path(td) / "snapshot"
+
+            def check(expected):
+                manifest.write_text(f"engine\t/engine/build\t{expected}\n")
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", script, "bash", str(manifest)],
+                    capture_output=True, text=True, check=False,
+                )
+
+            same = check(live)
+            self.assertEqual(same.returncode, 0, same.stderr)
+            drifted = check(other)
+            self.assertNotEqual(drifted.returncode, 0)
+            self.assertIn("did not restore", drifted.stderr)
+
     def test_recovery_meta_selection_tag_must_match_when_present(self):
         helper = self._bash_function(RUNNER.read_text(), "assert_recorded_selection_tag")
         expected = "532d238f65c4bc1dc82a817bab01a467e287ba16"
@@ -1287,6 +1360,108 @@ write_reboot_verifier "$report/verify.sh"
             forged = check()
             self.assertNotEqual(forged.returncode, 0)
             self.assertIn("selection_tag", forged.stderr)
+            record.chmod(0)
+            try:
+                hidden = check()
+            finally:
+                record.chmod(0o700)
+            self.assertEqual(hidden.returncode, 0, hidden.stderr)
+            self.assertEqual(hidden.stdout.strip(), "unreadable")
+
+    def test_selection_tag_sudo_read_and_unreadable_are_distinct(self):
+        source = RUNNER.read_text()
+        helper = "\n".join(
+            self._bash_function(source, name)
+            for name in (
+                "die", "record_check", "must",
+                "assert_recorded_selection_tag", "record_selection_tag_check",
+            )
+        )
+        expected = "532d238f65c4bc1dc82a817bab01a467e287ba16"
+        wrong = "f" * 40
+        script = helper + """
+check_total=0
+check_pass=0
+report=$1
+root=$2
+expected=$3
+checks=$report/checks.tsv
+: >"$checks"
+set +e
+state=$(assert_recorded_selection_tag "$root" "$expected" 2>"$report/selection.stderr")
+rc=$?
+set -e
+printf '%s\\n' "$rc"
+printf '%s\\n' "$state"
+if [ "$rc" -ne 0 ]; then
+    cat "$report/selection.stderr" >&2
+    exit "$rc"
+fi
+record_selection_tag_check "$state"
+printf '%s\\n' "$check_pass/$check_total"
+cat "$checks"
+"""
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report = root / "report"
+            report.mkdir()
+            recovery = root / "recovery"
+            recovery.mkdir()
+            record = recovery / "closure-rollback.seat"
+            record.mkdir()
+            meta = record / "meta"
+            readable = root / "readable-meta"
+            bindir = root / "bin"
+            bindir.mkdir()
+            sudo_bin = bindir / "sudo"
+            sudo_bin.write_text(
+                "#!/bin/sh\n"
+                '[ "$1" = "-n" ] || exit 1\n'
+                "shift\n"
+                'if [ "${SUDO_MODE:-fail}" = fail ]; then exit 1; fi\n'
+                'if [ "$1" = test ]; then exit 0; fi\n'
+                'if [ "$1" = cat ]; then cat -- "$SELECTION_TAG_META"; exit $?; fi\n'
+                "exit 1\n"
+            )
+            sudo_bin.chmod(0o755)
+            base_env = dict(os.environ)
+            base_env["PATH"] = f"{bindir}:{base_env['PATH']}"
+            base_env["SELECTION_TAG_META"] = str(readable)
+
+            def run(mode):
+                env = dict(base_env)
+                env["SUDO_MODE"] = mode
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c", script,
+                     "bash", str(report), str(recovery), expected],
+                    capture_output=True, text=True, check=False, env=env,
+                )
+
+            meta.write_text(f"selection_tag={expected}\n")
+            readable.write_text(meta.read_text())
+            direct = run("fail")
+            self.assertEqual(direct.returncode, 0, direct.stderr)
+            self.assertEqual(direct.stdout.splitlines()[0], "0")
+            self.assertEqual(direct.stdout.splitlines()[1], "matched")
+            self.assertIn("\tpass\t", direct.stdout)
+
+            meta.write_text(f"selection_tag={wrong}\n")
+            readable.write_text(meta.read_text())
+            record.chmod(0)
+            try:
+                forged = run("read")
+                hidden = run("fail")
+            finally:
+                record.chmod(0o700)
+            self.assertNotEqual(forged.returncode, 0)
+            self.assertIn("selection_tag", forged.stderr)
+            self.assertEqual(hidden.returncode, 0, hidden.stderr)
+            self.assertEqual(hidden.stdout.splitlines()[:3], ["0", "unreadable", "0/1"])
+            self.assertIn(
+                "recovery-meta-selection-tag-matches-published-rc-object\tnot-verified\tunreadable",
+                hidden.stdout,
+            )
+            self.assertNotIn("\tpass\t", hidden.stdout)
 
 
 if __name__ == "__main__":

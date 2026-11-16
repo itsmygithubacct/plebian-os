@@ -846,8 +846,10 @@ the session, closure, settings, the selector and updater, `release-hop/active`,
 the engine generation, and every component checkout HEAD. A fresh image has
 no closure file, and the byte comparison is not recorded for that absence.
 A standalone guest has no selector or updater, and those paths must stay
-absent. When an image recovery record contains `selection_tag=`, that object
-must equal `--from-release-tag-object`. The hop then runs again and those
+absent. Image recovery records are root-only and are read with `sudo -n`.
+A `selection_tag=` line must equal `--from-release-tag-object`. A record that
+still cannot be read is recorded as unreadable with status not-verified and
+is not a pass. The hop then runs again and those
 paths must match the post-hop record. The host's post-reboot
 version check cannot tell the installed RC from the final, because both
 report 0.2.3. The tag pin in the guest reboot verifier, and the
