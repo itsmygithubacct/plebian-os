@@ -76,7 +76,25 @@ In brief:
   renderer, Basic Pitch, Demucs and PDF Conversion's page OCR models, plus the
   nine-model default bundle.
 - The first desktop login asks which desktop to use, and then whether to turn
-  on an SSH server (off unless you choose it).
+  on an SSH server (off unless you choose it). Later,
+  `sudo plebian-os-ssh-server enable`, `disable` and `status` change and
+  report it:
+  - enable refuses while any account still has the 0.2.0 starter password,
+    names those accounts, and says to change them (`passwd`, or
+    `sudo passwd NAME`);
+  - every run ends by printing the real state, as `status` does;
+  - a failed enable turns SSH off again;
+  - a half-installed openssh-server is held off, so a later
+    `dpkg --configure -a` does not start it;
+  - disable also masks the extra sockets systemd binds for SSH;
+  - Kilix 95's Start ▸ System ▸ Remote login (SSH) asks before sudo.
+- Release installs and updates install release packages through a private,
+  Debian-only apt configuration. Operator apt sources such as NVIDIA CUDA, and
+  their pins and `apt.conf.d` snippets, do not apply to release packages, and
+  packages installed from them are never removed. In release mode, Pleb and
+  Kilix refuse a missing package by name instead of using the system apt; run
+  `plebian-os-update --revalidate-current` and report the package if the
+  refusal repeats.
 - Machines on a 0.2.3 release candidate move to the final once with
   `pleb update --to 0.2.3`; see [UPGRADING.md](UPGRADING.md).
 
@@ -335,12 +353,19 @@ target dependency policy, including any required uv pin, and rewrites
 `packages.list`, `versions.env`, and `apt-sources.list` only after the completed
 stack validates. A failure after the OS/dependency refresh, Pleb refresh,
 install, component update, or provenance write restores that previous coherent
-stack. Apt package additions may remain installed but inactive. Debian package
-upgrades are never rolled back. When a machine still uses its install snapshot,
+stack. Packages that appeared during a package step are removed on rollback
+when that removes nothing else; packages installed outside those steps,
+packages already installed, and Debian package upgrades are kept. An
+interrupted update prints `interrupted; rolling back` and records it in the
+updater's `update.log`; see [UPGRADING.md](UPGRADING.md) for the details.
+When a machine still uses its install snapshot,
 the update moves it to live Debian sources only after the stack has committed.
 Fresh 0.2.2 installations already use live sources. The OS-layer stage is also
 bound to pre-sudo SHA-256 values and revalidated as root before any destination is
-replaced; success is reported only after the entire outer transaction commits.
+replaced. Those values are computed from the desktop user's own checkout, so
+they do not protect the stage from another process running as that user during
+the update; building and verifying the stage as root is a 0.2.4 follow-up.
+Success is reported only after the entire outer transaction commits.
 Pass `--restart` to restart the graphical session after a successful update.
 Firstboot and manual reprovisioning hold the same target-user Pleb state lock,
 so their checkout, engine, and provider mutations cannot race a direct update.
@@ -353,8 +378,9 @@ signal restores the previous files, links, modes, and absences. If an
 unexpected path makes automatic restoration unsafe, the command exits 70 and
 retains the private `/var/lib/plebian-os/provision-rollback.*` tree for manual
 inspection rather than deleting the unexpected data.
-Downloaded git objects, package-manager additions, and a newly installed Go
-toolchain are intentionally not removed by either rollback; they are additive
+Downloaded git objects, a newly installed Go toolchain, provisioning's
+package-manager additions, and the package additions an update keeps (above)
+are intentionally not removed by either rollback; they are additive
 and not selected by the restored runtime. Provisioning checkout/build and user
 data changes are likewise resumable rather than destructively rewound. During
 an update, a checkout created by the failed run is moved into the reported
