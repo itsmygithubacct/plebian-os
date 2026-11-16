@@ -668,8 +668,10 @@ afterwards. `--rollback` restores the newest record not yet restored, by its
 `<timestamp>` (UTC, to the second). A selection names its record at least one
 second after every existing record, so two selections within one second still
 roll back in order; the time it actually ran is `at=` in the record's `meta`. If
-two unrestored records left by a selector before 0.2.3 share the newest second,
-`--rollback` refuses and restores nothing. Keep `$SEL` until the upgrade has
+two unrestored records share the newest second (written by a selector before
+0.2.3, or by two selector runs at once), or a `closure-rollback.*` entry has no
+second in its name, `--rollback` refuses and restores nothing; select the release
+you want explicitly instead (`pleb update --to <version>`). Keep `$SEL` until the upgrade has
 succeeded as an independent recovery entrypoint, then `rm -f "$SEL"`.
 
 Do not assemble pins from several releases or run a bare privileged provisioner

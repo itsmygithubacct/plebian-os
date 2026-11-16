@@ -1903,7 +1903,7 @@ newest_recovery_record() {
 }
 
 die_unordered_recovery_records() {
-    die "refusing rollback: cannot tell which recovery record is newest under $RECOVERY_BASE. Two unrestored closure-rollback records share the newest second (a selector before 0.2.3 named two selections made in one second that way), or one has no second in its name. Nothing was restored or marked, and the selected closure is still installed. Compare from=, to= and at= in each record's meta to find the last selection; do not delete recovery records."
+    die "refusing rollback: cannot tell which recovery record is newest under $RECOVERY_BASE. Two unrestored closure-rollback records share the newest second (written by a selector before 0.2.3, or by two selector runs at once), or a closure-rollback entry has no second in its name. Nothing was restored or marked, and the selected closure is still installed. To change releases, select the one you want explicitly with 'pleb update --to <version>'. Do not delete recovery records."
 }
 
 apply_selected_closure() {
