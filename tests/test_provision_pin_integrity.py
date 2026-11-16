@@ -48,6 +48,8 @@ INSTALLED_CLOSURE = {
     "PLEBIAN_OS_REPO": "https://github.com/itsmygithubacct/plebian-os.git",
     "PLEBIAN_OS_BRANCH": "",
     "PLEBIAN_OS_REF": "1" * 40,
+    "PLEBIAN_OS_RELEASE_TAG": "v0.2.1-rc1",
+    "PLEBIAN_OS_RELEASE_TAG_OBJECT": "e" * 40,
     "PLEB_REPO": "https://github.com/itsmygithubacct/pleb.git",
     "PLEB_BRANCH": "",
     "PLEB_REF": "2" * 40,

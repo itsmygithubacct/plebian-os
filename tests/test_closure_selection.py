@@ -1557,7 +1557,9 @@ class ClosureSelectionTests(unittest.TestCase):
             after = self._values(env)
             self.assertEqual(after["KILIX_VOICE_REF"],
                              "eda9ca90eed677fa4fca383e7b8ad2fc85e54b0e")
-            self.assertIn("closure adds 7 key(s) this release introduces", result.stdout)
+            # Seven are the release's new pins; two are the selection's
+            # recorded tag and tag object.
+            self.assertIn("closure adds 9 key(s) this release introduces", result.stdout)
 
     # ── operator-controlled keys survive ────────────────────────────────────
     def test_operator_controlled_choices_survive_selection(self):
@@ -1577,6 +1579,8 @@ class ClosureSelectionTests(unittest.TestCase):
                 "PLEBIAN_OS_INSTALL_UV",
                 "PLEBIAN_OS_UV_VERSION",
                 "PLEBIAN_OS_UV_INSTALLER_SHA256",
+                "PLEBIAN_OS_RELEASE_TAG",
+                "PLEBIAN_OS_RELEASE_TAG_OBJECT",
             }
             kept_before = [line for line in before_lines
                            if not any(f"${{{n}+x}}" in line for n in release_names)]

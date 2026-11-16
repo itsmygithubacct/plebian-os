@@ -835,6 +835,28 @@ firstboot_source_ref() {
     fi
 }
 
+# The release tag this image is built from and its tag object, as
+# "<tag> <object>", for the installed closure to record. Only a release build
+# whose PLEBIAN_OS_REF is a stable or numbered candidate tag of its own VERSION
+# has one; release_preflight has already bound that tag to HEAD. Any other build
+# prints nothing and the installed machine records no tag.
+firstboot_release_identity() {
+    local tag="${PLEBIAN_OS_REF:-}" version="${PLEBIAN_OS_VERSION:-}" suffix object
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 0
+    if [ "$tag" != "v$version" ]; then
+        suffix="${tag#"v$version-rc"}"
+        [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]] || return 0
+    fi
+    object="$(git -C "$HERE" rev-parse --verify --quiet "refs/tags/$tag" 2>/dev/null)" \
+        && [[ "$object" =~ ^[0-9a-f]{40}$ ]] \
+        || { echo "release tag $tag does not resolve to a local tag object" >&2; return 1; }
+    [ "$(git -C "$HERE" rev-parse --verify "$object^{commit}" 2>/dev/null)" \
+        = "$(git -C "$HERE" rev-parse HEAD 2>/dev/null)" ] \
+        || { echo "release tag $tag does not name the checked-out commit" >&2; return 1; }
+    printf '%s %s\n' "$tag" "$object"
+}
+
 # Run before fetch_netinst or mkdir: a release build must verify its immutable
 # closure and checkout before it causes any cache/output filesystem changes.
 # Every ref in the closure is fetched from its remote by the *installed*
@@ -1555,6 +1577,8 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_REPO "${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
         manifest_kv PLEBIAN_OS_BRANCH "${PLEBIAN_OS_BRANCH:-}"
         manifest_kv PLEBIAN_OS_REF "${PLEBIAN_OS_REF:-}"
+        manifest_kv PLEBIAN_OS_RELEASE_TAG "${BUILD_RELEASE_TAG:-}"
+        manifest_kv PLEBIAN_OS_RELEASE_TAG_OBJECT "${BUILD_RELEASE_TAG_OBJECT:-}"
         manifest_kv PLEBIAN_OS_DIR "${PLEBIAN_OS_DIR:-}"
         manifest_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_STORAGE_HOME:-}"
         manifest_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_SESSION_HOME:-}"
@@ -1710,6 +1734,10 @@ write_firstboot_env() {
         # Installed release updates pin the resolved build commit. Build-info
         # separately retains the human release tag as artifact metadata.
         env_kv PLEBIAN_OS_REF "$runtime_os_ref"
+        # The exact tag and tag object, so a candidate image can later tell
+        # its published final apart from itself (same VERSION).
+        env_kv PLEBIAN_OS_RELEASE_TAG "${BUILD_RELEASE_TAG:-}"
+        env_kv PLEBIAN_OS_RELEASE_TAG_OBJECT "${BUILD_RELEASE_TAG_OBJECT:-}"
         env_kv PLEBIAN_OS_DIR "${PLEBIAN_OS_DIR:-}"
         env_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_STORAGE_HOME:-}"
         env_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_SESSION_HOME:-}"
@@ -1820,6 +1848,14 @@ write_firstboot_env() {
 }
 
 release_mode_check
+
+# The exact tag and tag object this image is built from, or none. Build-info
+# and the firstboot environment both record them; the installed closure keeps
+# them so a candidate can later tell its published final apart from itself.
+BUILD_RELEASE_IDENTITY="$(firstboot_release_identity)" || exit 1
+BUILD_RELEASE_TAG="${BUILD_RELEASE_IDENTITY%% *}"
+BUILD_RELEASE_TAG_OBJECT=""
+[ -z "$BUILD_RELEASE_IDENTITY" ] || BUILD_RELEASE_TAG_OBJECT="${BUILD_RELEASE_IDENTITY#* }"
 
 mkdir -p "$PLEBIAN_OS_BUILD_HOME" "$(dirname "$OUT_ISO")"
 WORK="$(mktemp -d "$PLEBIAN_OS_BUILD_HOME/remaster.XXXXXX")"
