@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 import unittest
 
+from test_package_addition_rollback import APT, DPKG
+
 ROOT = Path(__file__).resolve().parents[1]
 UPDATE_PATH = ROOT / "provision" / "plebian-os-update.sh"
 ROOT_TXN = "/var/lib/plebian-os/update-rollback.Fixture1"
@@ -517,6 +519,76 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertLess(text.index("\nrefuse_interrupted_stack_transaction\n", main),
                         text.index("\nselect_latest_release_if_needed\n", main))
         self.assertIn("--recover-interrupted) recover_interrupted=1 ;;", text)
+
+    def test_recover_does_not_remove_packages_from_a_foreign_window(self):
+        bin_ = self.tmp / "bin"
+        bin_.mkdir()
+        (bin_ / "dpkg-query").write_text(DPKG)
+        (bin_ / "apt-get").write_text(APT)
+        (bin_ / "id").write_text("#!/bin/sh\nprintf '0\\n'\n")
+        (bin_ / "sudo").write_text("#!/bin/sh\nexec \"$@\"\n")
+        for path in bin_.iterdir():
+            path.chmod(0o755)
+        db = self.tmp / "packages"
+        db.write_text("bash\nstepdep\noperator-tool\n")
+        aptlog = self.tmp / "apt.log"
+        codename = "trixie"
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if line.startswith("VERSION_CODENAME="):
+                codename = line.split("=", 1)[1].strip().strip('"')
+        apt = self.tmp / "apt"
+        apt.mkdir()
+        (apt / "sources.list").write_text(
+            f"deb https://deb.debian.org/debian {codename} main\n")
+        updater = self.tmp / "updater.sh"
+        text = UPDATE_PATH.read_text()
+        text = text.replace("/usr/bin/id", str(bin_ / "id"))
+        text = text.replace("/usr/bin/sudo", str(bin_ / "sudo"))
+        updater.write_text(text)
+        orphan = self.orphan(
+            root_transaction=ROOT_TXN + "\n", active="",
+            apt_installed_before="bash\n",
+            apt_window_before="bash\n",
+            apt_window_open="")
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            f"PLEB_STATE_HOME={str(self.state)!r}\n"
+            f"source {str(updater)!r}\n"
+            f"PLEB_STATE_HOME={str(self.state)!r}\n"
+            + STUBS
+            + "rollback_stack_transaction() {\n"
+            + "    remove_transaction_package_additions\n"
+            + "    echo \"rollback dir=$_STACK_TXN_DIR\" >>\"$LOG\"\n"
+            + "}\n"
+            + "recover_interrupted_stack_transaction\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
+        env.update({
+            "HOME": str(self.tmp / "home"),
+            "LOG": str(self.log),
+            "PATH": f"{bin_}:/usr/bin:/bin",
+            "TMPDIR": str(self.tmp),
+            "PKGDB": str(db),
+            "APT_LOG": str(aptlog),
+            "APT_CODENAME": codename,
+            "PLEBIAN_OS_APT_SOURCES_ROOT": str(apt),
+            "PLEBIAN_OS_INSTALLED_VERSIONS": str(self.tmp / "no-versions.env"),
+        })
+        result = subprocess.run(
+            ["bash", "-c", script], env=env, text=True,
+            capture_output=True, check=False, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("another process", result.stderr)
+        self.assertIn("package additions were not tracked", result.stderr)
+        self.assertEqual(db.read_text().splitlines(),
+                         ["bash", "stepdep", "operator-tool"])
+        self.assertFalse(orphan.exists())
+        if aptlog.exists():
+            removed = [
+                line.split()[-1] for line in aptlog.read_text().splitlines()
+                if "remove" in line.split() and "-s" not in line.split()]
+            self.assertNotIn("operator-tool", removed)
+            self.assertNotIn("stepdep", removed)
 
 
 if __name__ == "__main__":

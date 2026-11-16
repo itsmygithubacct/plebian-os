@@ -9,6 +9,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import subprocess
 import tempfile
 import time
@@ -154,13 +155,17 @@ class PackageStepShieldTests(unittest.TestCase):
         self.assertIn("\nrequire_consistent_package_database\nbegin_stack_transaction\n", source)
 
     def test_rollback_names_an_interrupt_as_an_interrupt(self):
+        announce = closure.shell_function(UPDATE_NAME, "_announce_stack_rollback")
         body = closure.shell_function(UPDATE_NAME, "rollback_stack_transaction")
         head = body[:body.index("rollback_mpv_runtime_transaction")]
+        self.assertLess(
+            head.index("_announce_stack_rollback"),
+            head.index("remove_transaction_package_additions"))
         program = "\n".join((
             'warn() { printf "%s\\n" "$*"; }', "package_database_faults() { :; }",
             "remove_transaction_package_additions() { :; }",
             "rollback_mpv_runtime_transaction() { return 1; }",
-            head + "    return 0\n}", "rollback_stack_transaction"))
+            announce, head + "    return 0\n}", "rollback_stack_transaction"))
         for status, expected in (("130", "interrupted; rolling back"),
                                  ("143", "interrupted; rolling back"),
                                  ("1", "stack update failed")):
@@ -170,6 +175,98 @@ class PackageStepShieldTests(unittest.TestCase):
                     env={"PATH": "/usr/bin:/bin", "_STACK_TXN_EXIT_STATUS": status})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(result.stdout.startswith(expected), result.stdout)
+
+    def _open_log(self, path: Path, prelude: str = ""):
+        script = (
+            "set -euo pipefail\n"
+            + prelude
+            + "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            + f"export PLEBIAN_OS_UPDATE_LOG={shlex.quote(str(path))}\n"
+            + f". {shlex.quote(str(UPDATE))}\n"
+            + "printf 'fd=%s\\n' \"${PLEBIAN_OS_UPDATE_LOG_FD:-}\"\n"
+        )
+        return subprocess.run(
+            ["/bin/bash", "-c", script], text=True, capture_output=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(self.base), "LANG": "C"})
+
+    def test_a_new_log_is_mode_0600_even_when_chmod_fails(self):
+        path = self.base / "fresh.log"
+        result = self._open_log(path, "umask 000\nchmod() { return 1; }\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_an_existing_log_is_tightened_to_0600(self):
+        path = self.base / "existing.log"
+        path.write_text("keep\n")
+        path.chmod(0o644)
+        result = self._open_log(path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertIn("keep", path.read_text())
+
+    def test_a_symlink_log_is_left_alone(self):
+        victim = self.base / "victim"
+        victim.write_text("secret\n")
+        victim.chmod(0o644)
+        link = self.base / "linked.log"
+        link.symlink_to(victim)
+        result = self._open_log(link)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("symlink", result.stderr)
+        self.assertEqual(victim.read_text(), "secret\n")
+        self.assertEqual(victim.stat().st_mode & 0o777, 0o644)
+        rotated = self.base / "rotated.log"
+        rotated.write_text("plain\n")
+        (self.base / "rotated.log.1").symlink_to(victim)
+        again = self._open_log(rotated)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(victim.read_text(), "secret\n")
+        self.assertEqual(victim.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(rotated.read_text(), "plain\n")
+
+    def test_the_log_fd_is_not_inherited_by_a_child(self):
+        path = self.base / "cloexec.log"
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            f"export PLEBIAN_OS_UPDATE_LOG={shlex.quote(str(path))}\n"
+            f". {shlex.quote(str(UPDATE))}\n"
+            'fd="${PLEBIAN_OS_UPDATE_LOG_FD:-}"\n'
+            '[ -n "$fd" ] || exit 2\n'
+            'seen="$(/bin/bash -c \'if [ -e "/proc/self/fd/$1" ]; then echo VISIBLE; else echo ABSENT; fi\' bash "$fd")"\n'
+            'printf "named=%s seen=%s\\n" "$fd" "$seen"\n'
+        )
+        result = subprocess.run(
+            ["/bin/bash", "-c", script], text=True, capture_output=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(self.base), "LANG": "C"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("seen=ABSENT", result.stdout)
+        self.assertNotIn("seen=VISIBLE", result.stdout)
+
+    def test_a_log_over_the_bound_rotates(self):
+        path = self.base / "big.log"
+        path.write_bytes(b"z" * (1048576 + 1))
+        result = self._open_log(path)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        previous = Path(str(path) + ".1")
+        self.assertTrue(previous.is_file())
+        self.assertEqual(previous.stat().st_size, 1048576 + 1)
+        self.assertLess(path.stat().st_size, 1048576)
+
+    def test_log_writes_through_the_updater_log(self):
+        path = self.base / "record.log"
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            f"export PLEBIAN_OS_UPDATE_LOG={shlex.quote(str(path))}\n"
+            f". {shlex.quote(str(UPDATE))}\n"
+            "log 'phrase-for-the-updater-log'\n"
+        )
+        result = subprocess.run(
+            ["/bin/bash", "-c", script], text=True, capture_output=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(self.base), "LANG": "C"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("phrase-for-the-updater-log", path.read_text())
 
 
 if __name__ == "__main__":

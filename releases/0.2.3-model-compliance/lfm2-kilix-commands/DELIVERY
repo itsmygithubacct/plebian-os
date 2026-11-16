@@ -1,10 +1,19 @@
-mode: bundled-command-model-archive
-Installation media includes this model in a separately checksummed command-model archive.
-Provisioning stages it offline; upgrades acquire the pinned archive in their admin context.
-Original licence documents are available under /usr/local/share/doc/plebian-os/models/.
-Provisioning and upgrades install it and record a notice receipt for the exact licence record and member manifest.
+mode: first-use-upstream-download
+This model's weights are not present in the image, and neither provisioning nor upgrades download them.
+Kilix Ask uses its grammar until the model is installed.
+The first interactive `kilix ask` that reaches the command route, and the Kilix model wizard's
+Local Workflows / Kilix Ask page, ask whether to download it. A non-interactive Ask never asks
+and never downloads. Declining keeps the grammar and is remembered as the saved Ask selection.
+An accepted download comes from github.com and is verified against the pinned digests before installation.
+No install route downloads it until a kilix-license receipt covers it:
+the first-use offer shows the licence texts and records a notice receipt for the exact licence record and member manifest.
 By the owner's 2026-11-07 determination its custom terms, including the commercial-use limitation, are a notice:
-they are shipped and not waived, and no agreement is recorded.
-Terms that need a typed agreement are never answered by the image.
-Content verifies every member before use; explicit model choices and older versions are retained.
+they are shipped with the model under its notices/ directory and not waived, and no agreement is recorded.
+Terms that need a typed agreement are never answered by Plebian-OS.
+A machine that has delivery lfm2-kilix-commands-20261106-v9 installed, with a receipt that covers it, keeps the model:
+the upgrade installs this delivery from those files without a download, and Content verifies every
+member against the manifest. If anything is missing or differs, nothing is installed.
+That step runs unattended and shows nothing: it records the same notice receipt only where the v9 receipt
+covers the same licence record, prints where the installed terms are, and withdraws that receipt if the install fails.
+Explicit Ask selections and earlier deliveries are retained.
 Artifact provenance: github.com.

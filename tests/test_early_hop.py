@@ -400,7 +400,7 @@ class EarlyHopTests(unittest.TestCase):
                        / "selection-attempt")
             self.assertEqual(
                 attempt.read_text(),
-                f"format=1\ntag={tag}\ntarget=0.1.8\n")
+                f"format=1\ntag={tag}\ntarget=0.1.8\ninstalled=0.1.8\n")
             self.assertEqual(env_path.read_bytes(), installed)
             self.assertEqual(closure.read_bytes(), closure_bytes)
 

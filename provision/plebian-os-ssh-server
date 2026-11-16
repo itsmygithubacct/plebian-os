@@ -147,10 +147,14 @@ def child_signal_defaults():
         signal.signal(number, signal.SIG_DFL)
 
 
-def run(argv, *, check=False):
-    """Run a fixed command with the clean environment, capturing output."""
-    result = subprocess.run(list(argv), env=CLEAN_ENV, stdin=subprocess.DEVNULL,
-                            capture_output=True, text=True,
+def run(argv, *, check=False, env=None):
+    """Run a fixed command with the clean environment, capturing output.
+
+    Apt calls pass env so APT_CONFIG names this helper's own apt.conf.
+    Everything else keeps CLEAN_ENV, which has no APT_CONFIG at all.
+    """
+    result = subprocess.run(list(argv), env=CLEAN_ENV if env is None else env,
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             preexec_fn=child_signal_defaults)
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
@@ -158,7 +162,7 @@ def run(argv, *, check=False):
     return result
 
 
-def run_shielded(argv):
+def run_shielded(argv, *, env=None):
     """Run an apt step whose dpkg must never be cut off half way.
 
     The child gets its own session, so the terminal's Ctrl-C or hang-up never
@@ -169,7 +173,8 @@ def run_shielded(argv):
     for number in SHIELDED_SIGNALS:
         previous[number] = signal.signal(number, signal.SIG_IGN)
     try:
-        child = subprocess.Popen(list(argv), env=CLEAN_ENV, stdin=subprocess.DEVNULL,
+        child = subprocess.Popen(list(argv), env=CLEAN_ENV if env is None else env,
+                                 stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True, errors="replace",
                                  start_new_session=True,
@@ -409,6 +414,18 @@ def apt_options(work):
     )
 
 
+def apt_env(work):
+    """CLEAN_ENV plus this helper's apt.conf.
+
+    Dir::Etc::Parts in that file is applied before apt.conf.d is read, so a
+    host snippet such as APT::Sources::With cannot add a package. The
+    caller's APT_CONFIG is not in CLEAN_ENV.
+    """
+    env = dict(CLEAN_ENV)
+    env["APT_CONFIG"] = str(work / "apt.conf")
+    return env
+
+
 def prepare_apt_work(codename):
     if not os.path.isfile(KEYRING):
         raise Failed(f"the Debian archive keyring is missing ({KEYRING})")
@@ -418,19 +435,21 @@ def prepare_apt_work(codename):
     # (apt hands that directory to _apt itself). Nothing here is secret.
     work.chmod(0o755)
     (work / "sources.list.d").mkdir(mode=0o755)
+    (work / "apt.conf.d").mkdir(mode=0o755)
     (work / "lists" / "partial").mkdir(mode=0o755, parents=True)
     (work / "sources.list.d" / "debian.sources").write_text(debian_sources(codename))
+    (work / "apt.conf").write_text(f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n')
     return work
 
 
 INST_RE = re.compile(r"^(Inst|Conf|Remv|Purg) (\S+)")
 
 
-def check_plan(options):
+def check_plan(options, env):
     """Simulate first: refuse a plan that would remove anything or install a
     package from anywhere but the Debian sources above (apt cannot see any
     other source, so that would mean apt itself was misconfigured)."""
-    result = run(["apt-get", "-s", *options, "--no-remove", "install", PACKAGE])
+    result = run(["apt-get", "-s", *options, "--no-remove", "install", PACKAGE], env=env)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise Failed(f"apt could not plan the install: {detail}")
@@ -454,14 +473,15 @@ def install_package():
     work = prepare_apt_work(codename)
     try:
         options = apt_options(work)
+        env = apt_env(work)
         say(f"Reading the Debian package lists for {codename} (deb.debian.org, security.debian.org)...")
-        status = run_shielded(["apt-get", *options, "update"])
+        status = run_shielded(["apt-get", *options, "update"], env=env)
         if status != 0:
             raise Failed("could not read the Debian package lists; check the network connection")
-        installs = check_plan(options)
+        installs = check_plan(options, env)
         say(f"Installing from Debian: {', '.join(installs) if installs else PACKAGE}")
         status = run_shielded(["apt-get", *options, *DPKG_OPTIONS, "-y", "--no-remove",
-                               "install", PACKAGE])
+                               "install", PACKAGE], env=env)
         if status != 0:
             raise Failed(f"apt-get install {PACKAGE} exited with status {status}")
     finally:

@@ -1,14 +1,14 @@
 Plebian-OS 0.2.3 conveyance notice for lfm2-kilix-commands.
 This file is written by Plebian-OS. It is not an upstream NOTICE file.
-Plebian-OS distributes these model bytes in a verified archive on installation media.
+Plebian-OS does not distribute these model bytes.
 
-Artifact: lfm2-kilix-commands (provider kilix-needle, version lfm2-kilix-commands-20261106-v9)
-Source: https://github.com/itsmygithubacct/kilix-needle/releases/download/lfm2-kilix-commands-20261106-v9/lfm2-kilix-commands-20261106-v9.tar.gz
+Artifact: lfm2-kilix-commands (provider kilix-needle, version lfm2-kilix-commands-20261115-v10)
+Source: https://github.com/itsmygithubacct/kilix-needle/releases/download/lfm2-kilix-commands-20261115-v10/lfm2-kilix-commands-20261115-v10.tar.gz
 Upstream host: github.com
-Download size: 1362204317 bytes
-Archive sha256: ea03c42ce0f36d12bca1844c558c0fcaeb442887e55e1e7b76ccb3ed632c3a85
-Installed member manifest digest: ef701ec2c8fb6a46bbe733d51a6be498e325bb60d3b45ec8938f0ed0ba1aef50
+Download size: 1346876805 bytes
+Archive sha256: b9bff58b8d296cf557b721407553d15451a9856ecb8fa1bc09c908c6b0760187
+Installed member manifest digest: 2600fd7a91d85669d489777c33db8e548abfe25b6c3a8659afcd4c274d26dc2c
 Licence(s): lfm-open-license-1.0
 Licensor(s): Liquid AI, Inc.; ggml and bundled runtime contributors
-Licence, advisory and attribution texts: licence-texts/4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c.txt, licence-texts/571c0295ffbb60b79627a8956e2990826448eee7678b8d9a1e37c82bbf779f4c.txt, licence-texts/65e4cd26f6f63d2ad45c64df2a6876bc33b17c4af5272c90bd44dd072b0e6601.txt
+Licence, advisory and attribution texts: licence-texts/4d28ca14dedc0b3d0fcc2b3339f0e79931faa33874f3d24f522183a8fc70068c.txt, licence-texts/571c0295ffbb60b79627a8956e2990826448eee7678b8d9a1e37c82bbf779f4c.txt, licence-texts/ad951c9680c6bcb084a38582514b75ae90e0b85fd022495b4a38d2a6c6810a0f.txt
 Owner determination: determinations/lfm2-kilix-commands/command-model-determination.json

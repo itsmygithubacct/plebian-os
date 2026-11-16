@@ -240,7 +240,7 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         is_command = command is not None and entry['artifact_id'] == command['asset_id']
         playalong_default = entry["artifact_id"] in online
         image_offline = entry["artifact_id"] in image
-        mode = ("bundled-command-model-archive" if is_command else
+        mode = ("first-use-upstream-download" if is_command else
                 "bundled-default-model" if bundled else
                 "playalong-default-upstream-download" if playalong_default else
                 "image-offline-model" if image_offline else
@@ -254,12 +254,38 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                     ('archive_sha256', 'sha256'), ('archive_bytes', 'bytes'),
                     ('version', 'version'), ('manifest_digest', 'manifest_digest'))):
                 gaps.append(f"{model}: command archive binding differs")
-            for claim in ('mode: bundled-command-model-archive', 'stages it offline',
-                          'record a notice receipt', 'custom terms', 'are a notice',
+            # A first-use download from 0.2.3 (provision/command-model.json):
+            # the image does not carry it and nothing downloads it unasked.
+            if (command.get('delivery') or {}).get('mode') != 'first-use-download':
+                gaps.append(f"{model}: the command model pin is not a first-use download")
+            earlier = (command.get('local_migration') or {}).get('from_version', '')
+            for claim in ('mode: first-use-upstream-download',
+                          "This model's weights are not present in the image, and neither "
+                          "provisioning nor upgrades download them.",
+                          'Kilix Ask uses its grammar until the model is installed.',
+                          'Local Workflows / Kilix Ask page, ask whether to download it.',
+                          'A non-interactive Ask never asks\nand never downloads.',
+                          'remembered as the saved Ask selection',
+                          'verified against the pinned digests before installation.',
+                          'No install route downloads it until a kilix-license receipt covers it:',
+                          'records a notice receipt', 'custom terms', 'are a notice',
                           'not waived', 'no agreement is recorded',
-                          'never answered by the image', 'verifies every member'):
+                          'never answered by Plebian-OS',
+                          f'A machine that has delivery {earlier} installed, with a receipt that covers it, keeps the model:',
+                          'installs this delivery from those files without a download',
+                          'If anything is missing or differs, nothing is installed.',
+                          'That step runs unattended and shows nothing',
+                          'withdraws that receipt if the install fails.',
+                          'Explicit Ask selections and earlier deliveries are retained.'):
                 if claim not in delivery:
                     gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            for false_claim in ('Installation media includes', 'stages it offline', 'they are shown',
+                                'bundled-command-model-archive', '/usr/local/share/doc/plebian-os/models'):
+                if false_claim in delivery:
+                    gaps.append(f"{model}: DELIVERY claims the model is on the media: {false_claim!r}")
+            notice = (root / model / "NOTICE").read_text()
+            if "Plebian-OS does not distribute these model bytes." not in notice:
+                gaps.append(f"{model}: NOTICE does not say the image omits the model")
             continue
         if bundled:
             if bundle["assets"][entry["artifact_id"]] != entry["manifest_digest"]:
@@ -385,11 +411,32 @@ def image_offline_installer_gaps(installer: str) -> list[str]:
 def command_installer_gaps(installer: str) -> list[str]:
     """AC-8: the command model DELIVERY is true of provision/install-image-models.py.
 
-    The image records the notice terms and never types an agreement answer,
-    and it stops rather than answer terms that need one.
+    The upgrade's local migration records the notice terms and never types an
+    agreement answer, leaves rather than answer terms that need one, installs
+    only through the supplied-directory path, and never downloads.
     """
     gaps = []
     tree = ast.parse(installer)
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    migrate = functions.get("migrate_command_model")
+    body = functions.get("_migrate_command_model")
+    if migrate is None or body is None or not any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "_migrate_command_model" for node in ast.walk(migrate)):
+        return ["the image installer has no command model migration"]
+    walked = [*ast.walk(migrate), *ast.walk(body)]
+    attributes = {node.attr for node in walked if isinstance(node, ast.Attribute)}
+    if "ensure_supplied_asset" not in attributes:
+        gaps.append("the command model migration does not install from the supplied files")
+    if attributes & {"ensure_upstream_asset", "ensure_asset", "urlopen"}:
+        gaps.append("the command model migration can download")
+    names = {node.id for node in walked if isinstance(node, ast.Name)}
+    if "fetch_default" in names or "_command_cache" in names:
+        gaps.append("the command model migration can download")
+    main = functions.get("main")
+    if main is None or not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                               and node.func.id == "migrate_command_model" for node in ast.walk(main)):
+        gaps.append("the image installer never runs the command model migration")
     captures = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute) and node.func.attr == "capture_agreement"]
     if not captures:
@@ -398,7 +445,7 @@ def command_installer_gaps(installer: str) -> list[str]:
         gaps.append("the image installer types an agreement answer")
     if not any(isinstance(node, ast.If)
                and ast.unparse(node.test) == "record.expected_decision != 'record'"
-               and any(isinstance(statement, ast.Raise) for statement in node.body)
+               and any(isinstance(statement, (ast.Raise, ast.Return)) for statement in node.body)
                for node in ast.walk(tree)):
         gaps.append("the image installer does not refuse terms that need agreement")
     return gaps
@@ -933,7 +980,10 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                                           "lic.capture_agreement(record, 'yes')"),
                         installer.replace("lic.capture_agreement(record)",
                                           "lic.capture_agreement(record, typed='yes')"),
-                        installer.replace("if record.expected_decision != 'record':", "if False:")):
+                        installer.replace("if record.expected_decision != 'record':", "if False:"),
+                        installer.replace("installer.ensure_supplied_asset(", "installer.ensure_upstream_asset("),
+                        installer.replace("    migrate_command_model(args.kilix, command_pin)\n", ""),
+                        installer.replace("return _migrate_command_model(cm, pin)", "return False")):
             self.assertNotEqual(planted, installer)
             self.assertTrue(command_installer_gaps(planted))
         # The download is digest-verified and receipt-gated at the pinned refs.
