@@ -69,8 +69,7 @@ entries below run newest first, from the final back through RC1.
 - Kilix Ask uses its grammar until LFM2 is installed. The first interactive
   `kilix ask` and the model wizard offer the LFM2 download (delivery v10,
   deduplicated runtime libraries, same weight); the ISO no longer bundles
-  it. The five recorded Ask grammar gaps are fixed.
-  <!-- LFM2: confirm at final list -->
+  it. The five recorded Ask grammar gaps are fixed (kilix-needle `bcef7e17`).
 - Install the slim Neuronte v2 set (`629ee1d2`) with a stall-based fetch and
   its own `neuronte-v2` component cache; Kilix 95 reads the v1 faces and
   flame and lays text with packed mask calls.

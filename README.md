@@ -55,7 +55,6 @@ In brief:
   refuses, nothing is installed and the upgrade continues
   (see [UPGRADING.md](UPGRADING.md)). See the
   [command-model selection](releases/0.2.3-command-model.json).
-  <!-- LFM2: confirm at final list -->
 - **Help** uses **kilix-qwen-sft1-2b**. Ask everyday questions about using
   Kilix and Plebian-OS and receive a command, a brief explanation and related
   documentation links:

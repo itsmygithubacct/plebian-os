@@ -438,8 +438,8 @@ together.
 3. Publish every dependency release asset the closure downloads **before**
    any OS tag, and verify each by anonymous download and SHA-256. For 0.2.3
    these are:
-   - the kilix-needle `lfm2-kilix-commands-20261115-v10` release
-     <!-- LFM2: confirm at final list -->;
+   - the kilix-needle `lfm2-kilix-commands-20261115-v10` release, with the
+     archive `provision/command-model.json` pins;
    - the Go mirror release `debian-go-1.27.4-1-bpo13-1`;
    - the default-models bundle at the release-independent tag
      `default-models-0221` (the same bytes and SHA-256 that
@@ -477,7 +477,6 @@ together.
    | Variable | Bundle | Pin |
    | --- | --- | --- |
    | `PLEBIAN_OS_DEFAULT_MODELS_BUNDLE` (required) | `default-models-0221.tar.xz`, the nine-model default bundle | `provision/default-models.json` |
-   | `PLEBIAN_OS_COMMAND_MODEL_BUNDLE` | the LFM2 Kilix Ask delivery | `provision/command-model.json` |
    | `PLEBIAN_OS_DEMUCS_MODEL_BUNDLE` | `demucs-htdemucs-6s.tar` | `provision/demucs-model.json` |
    | `PLEBIAN_OS_PARADEE_MODEL_BUNDLE` and `PLEBIAN_OS_SPACY_MODEL_BUNDLE` (together) | Paradee 8M and `en_core_web_sm` | the image-model pins |
    | `PLEBIAN_OS_PP_OCR_DET_MODEL_BUNDLE`, `PLEBIAN_OS_PP_OCR_REC_MODEL_BUNDLE` | PP-OCRv6 small detector and recogniser | the image-model pins |
@@ -485,8 +484,8 @@ together.
    | `PLEBIAN_OS_OLLAMA_CARRIER` (or argument 3) | the Ollama runtime carrier | `PLEBIAN_OS_OLLAMA_RUNTIME_*` |
 
    0.2.3 final ships LFM2 as a first-use download, so its ISO carries no
-   command-model archive. <!-- LFM2: confirm at final list (the re-pin removes
-   the PLEBIAN_OS_COMMAND_MODEL_BUNDLE requirement) --> Keep each bundle's
+   command-model archive, and remaster refuses a set
+   `PLEBIAN_OS_COMMAND_MODEL_BUNDLE`. Keep each bundle's
    SHA-256 in the build evidence; the provenance record names them.
 
    From 0.2.2, set `PLEBIAN_OS_OLLAMA_CARRIER` to the local

@@ -244,7 +244,6 @@ above:
   downloaded; Kilix Ask uses its grammar until the user installs LFM2, and a
   machine that has delivery v9 keeps it (see **The 0.2.3 Kilix Ask command
   model** below).
-  <!-- LFM2: confirm at final list -->
 - **Debian packages added.** The update installs `redshift`, Tesseract,
   `python3-torch` and the converter dependencies, plus Zell's dependencies:
   upower, bluez, scrot, brightnessctl, power-profiles-daemon, nftables and
@@ -366,7 +365,7 @@ loss does not run rollback.
 
 ### The 0.2.3 Kilix Ask command model
 
-- **LFM2 is a first-use download from this candidate.** RC5 through RC9 put the
+- **LFM2 is a first-use download from this candidate.** RC1 through RC9 put the
   command-model archive on the installation media and had every upgrade
   download and stage it (about 1.36 GB). An upgrade no longer downloads or
   stages it. Kilix Ask uses its grammar until the model is installed and asks
