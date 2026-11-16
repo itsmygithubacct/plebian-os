@@ -1253,16 +1253,21 @@ def migrate_command_model(kilix, pin):
 
 def _migrate_command_model(cm, pin):
     migration = pin['local_migration']
-    api, lic, spec, records, store = _catalog_spec(cm, pin['asset_id'])
+    api, lic = cm._api(), cm._license()
+    spec = cm._verified_catalog(api).require_asset(pin['asset_id'])
     differs = _catalog_differs(spec, pin)
     if differs:
         # Nothing is installed from a catalog the image does not pin. The
         # release guard refuses such an image at build time; on a checkout that
-        # still names another Kilix, the migration stays out of the way.
+        # still names another Kilix, the migration stays out of the way. Only
+        # the catalog has been read: the licence records, the receipt store
+        # (which ReceiptStore.shared() creates) and the v9 files are not opened.
         return _not_migrated(
             f"the pinned Kilix catalog selects {spec.version}, not {pin['version']} "
-            f"({', '.join(differs)} differ); nothing was read or written",
+            f"({', '.join(differs)} differ); nothing was installed, and no receipt "
+            "store, receipt or model file was opened or written",
             then='Kilix Ask keeps whatever that Kilix provides.')
+    records, store = lic.load_determined_records(), lic.ReceiptStore.shared()
     if _command_installed(cm, pin['asset_id']):
         print('Command model already verified: ' + pin['version'])
         return True
@@ -1328,8 +1333,12 @@ def _migrate_command_model(cm, pin):
                 written.append((path, path.read_bytes()))
             installer.ensure_supplied_asset(
                 spec, supplied=earlier, store=store, records=records, notices=texts, report=print)
-        except (OSError, RuntimeError, lic.LicenseError) as error:
+        except BaseException as error:
+            # Every failure after a receipt was written takes it back, including
+            # one this step does not expect (which then propagates).
             _withdraw_receipts(written, cm, pin['asset_id'])
+            if not isinstance(error, (OSError, RuntimeError, lic.LicenseError)):
+                raise
             return _not_migrated(f"{migration['from_version']} could not supply {pin['version']} ({error})")
     print('Command model installed from ' + migration['from_version'] + ' without a download: '
           + pin['version'] + ' (' + pin['weight_version'] + '). Its licence terms are in '

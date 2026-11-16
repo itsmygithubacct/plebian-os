@@ -1368,11 +1368,22 @@ class InstallPolicyTests(unittest.TestCase):
                 setattr(self.spec, key, original)
                 self.assertIs(result, False)
                 self.assertIn('the pinned Kilix catalog selects', printed)
-                self.assertIn('nothing was read or written', printed)
+                self.assertIn('no receipt store, receipt or model file was opened or written', printed)
         self.assertEqual(self.calls, [])
         self.assertEqual(self.receipts, [])
         self.assertEqual(opened, [])
         self.assertEqual(sorted(self.receipt_dir.iterdir()), [])
+
+    def test_the_catalog_skip_opens_no_receipt_store_or_licence_records(self):
+        """ReceiptStore.shared() creates and chmods the store, so the skip must not reach it."""
+        self.spec.manifest_digest = self.v9_digest
+        lic = self.cm._license()
+        with patch.object(lic.ReceiptStore, 'shared', side_effect=AssertionError('store opened')), \
+                patch.object(type(lic), 'load_determined_records',
+                             side_effect=AssertionError('records read')):
+            result, printed = self.migrate()
+        self.assertIs(result, False)
+        self.assertIn('the pinned Kilix catalog selects', printed)
 
     def test_a_full_or_unwritable_receipt_store_never_fails_the_run(self):
         for error in (OSError(28, 'No space left on device'), PermissionError(13, 'Permission denied')):
@@ -1457,6 +1468,26 @@ class InstallPolicyTests(unittest.TestCase):
                 self.assertEqual(sorted(self.receipt_dir.iterdir()), [])
                 self.assertIn('withdrew the receipt this run wrote', printed)
                 self.assertIn('on first use', printed)
+
+    def test_an_unexpected_failure_after_the_receipt_still_withdraws_it(self):
+        for error, escapes in ((ValueError('unexpected value'), False), (TypeError('a defect'), True),
+                               (KeyboardInterrupt(), True)):
+            with self.subTest(error=type(error).__name__):
+                self.covered_manifests = {self.v9_digest}
+                self.receipts.clear()
+                self.calls.clear()
+                self.supply_error = error
+                if escapes:
+                    with self.assertRaises(type(error)), \
+                            patch('sys.stdout', new_callable=io.StringIO), \
+                            patch('sys.stderr', new_callable=io.StringIO):
+                        installer.migrate_command_model(Path('/kilix'), self.pin)
+                else:
+                    result, printed = self.migrate()
+                    self.assertIs(result, False)
+                    self.assertIn('ValueError', printed)
+                self.assertEqual(len(self.receipts), 1)
+                self.assertEqual(sorted(self.receipt_dir.iterdir()), [])
 
     def test_a_receipt_another_process_replaced_is_not_withdrawn(self):
         self.covered_manifests = {self.v9_digest}
