@@ -266,9 +266,8 @@ above:
     a missing package by name ("release package closure is incomplete;
     missing …") instead of installing it from the system apt. A held package,
     or one installed for a second architecture, counts as installed. The
-    message says to run `pleb update`, or
-    `plebian-os-update --recover-interrupted` after an interrupted update, or
-    to report the package.
+    message says what to do ("run 'plebian-os-update --revalidate-current' to reinstall this release's
+    packages; if it is still missing, report it").
   - On rollback, packages that appeared during a package step are removed
     when nothing else would be removed with them (see **Interrupted updates
     and package rollback**).
