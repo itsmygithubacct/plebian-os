@@ -24,12 +24,19 @@ Optional --bootstrap-driver PATH --bootstrap-driver-ref SHA uses an explicit
 legacy migration driver without replacing the installed CLI before the hop.
 A same-version hop is accepted only as --from X.Y.Z --target X.Y.Z
 --release-tag vX.Y.Z --from-release-tag vX.Y.Z-rcN
---expected-release-commit SHA. It uses the installed CLI, checks the
-installed release tag or the RC commit in the closure, and rolls the final
-back to that closure before hopping again. No bootstrap driver is accepted.
-The guest must start on the accepted previous release. DIR must be outside
-$HOME. Image guests require all three final options. The command refuses
-non-VM hosts, a dirty source checkout, or a starting closure mismatch.
+--from-release-tag-object SHA --release-tag-object SHA
+--expected-release-commit SHA --from-release-manifest FILE. It uses the
+installed CLI. The guest reads the installed RC from the closure, shell-sourced,
+and checks it against pleb update --show and the published RC manifest. An
+image guest with no closure.env is accepted only when its build-info bytes
+equal the source ISO. Rollback must restore session, closure, settings, the
+image selector and updater, and every component checkout HEAD, then the hop
+runs again and those same paths must match the post-hop record. No bootstrap
+driver is accepted. The guest must start on the accepted previous release.
+DIR must be outside $HOME. Image guests require the build-info options,
+including --predecessor-build-info-sha256 for an upgraded install. The
+command refuses non-VM hosts, a dirty source checkout, or a starting
+closure mismatch.
 EOF
 }
 
@@ -44,7 +51,11 @@ target=""
 release_tag=""
 from_release_tag=""
 from_release_tag_object=""
+release_tag_object=""
 expected_release_commit=""
+from_release_manifest=""
+predecessor_build_info_sha256=""
+closure_pre_hop_absent=0
 same_version=0
 bootstrap_driver=""
 bootstrap_driver_ref=""
@@ -73,6 +84,9 @@ while [ "$#" -gt 0 ]; do
         --release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$release_tag" ] || die "--release-tag needs one nonempty tag"; release_tag="$2"; shift 2 ;;
         --from-release-tag) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$from_release_tag" ] || die "--from-release-tag needs one nonempty tag"; from_release_tag="$2"; shift 2 ;;
         --from-release-tag-object) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$from_release_tag_object" ] || die "--from-release-tag-object needs one value"; from_release_tag_object="$2"; shift 2 ;;
+        --release-tag-object) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$release_tag_object" ] || die "--release-tag-object needs one value"; release_tag_object="$2"; shift 2 ;;
+        --from-release-manifest) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$from_release_manifest" ] || die "--from-release-manifest needs one file"; from_release_manifest="$2"; shift 2 ;;
+        --predecessor-build-info-sha256) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$predecessor_build_info_sha256" ] || die "--predecessor-build-info-sha256 needs one value"; predecessor_build_info_sha256="$2"; shift 2 ;;
         --expected-release-commit) [ "$#" -ge 2 ] && [ -n "$2" ] && [ -z "$expected_release_commit" ] || die "--expected-release-commit needs one value"; expected_release_commit="$2"; shift 2 ;;
         --from-pleb-ref) [ "$#" -ge 2 ] || die "--from-pleb-ref needs a value"; from_pleb_ref="$2"; shift 2 ;;
         --from-kilix-ref) [ "$#" -ge 2 ] || die "--from-kilix-ref needs a value"; from_kilix_ref="$2"; shift 2 ;;
@@ -108,15 +122,15 @@ if [ "$from" = "$target" ]; then
         || die "--from-release-tag must name the installed RC as v$target-rcN"
     [[ "$expected_release_commit" =~ ^[0-9a-f]{40}$ ]] \
         || die "same-version finalization requires --expected-release-commit"
-    if [ -n "$from_release_tag_object" ]; then
-        [[ "$from_release_tag_object" =~ ^[0-9a-f]{40}$ ]] \
-            || die "--from-release-tag-object must be a full lowercase SHA"
-    fi
     [ -z "$bootstrap_driver$bootstrap_driver_ref" ] \
         || die "same-version finalization uses the installed release CLI; omit the bootstrap driver"
+    [[ "$from_release_tag_object" =~ ^[0-9a-f]{40}$ ]] \
+        || die "--from-release-tag-object must be a full lowercase SHA"
+    [[ "$release_tag_object" =~ ^[0-9a-f]{40}$ ]] \
+        || die "--release-tag-object must be a full lowercase SHA"
     same_version=1
 else
-    [ -z "$from_release_tag$from_release_tag_object$expected_release_commit" ] \
+    [ -z "$from_release_tag$from_release_tag_object$expected_release_commit$release_tag_object$from_release_manifest$predecessor_build_info_sha256" ] \
         || die "--from-release-tag is only valid when --from equals --target"
 fi
 if [ -n "$bootstrap_driver$bootstrap_driver_ref" ]; then
@@ -128,13 +142,21 @@ fi
 for named_ref in "$from_pleb_ref" "$from_kilix_ref"; do
     [[ "$named_ref" =~ ^[0-9a-f]{40}$ ]] || die "starting Pleb and Kilix refs must be full lowercase commit SHAs"
 done
+if [ "$same_version" = 1 ]; then
+    [ -f "$from_release_manifest" ] && [ ! -L "$from_release_manifest" ] \
+        || die "same-version finalization requires --from-release-manifest"
+fi
 if [ "$shape" = image ]; then
     [[ "$from_os_ref" =~ ^[0-9a-f]{40}$ ]] || die "image shape requires --from-os-ref as a full lowercase commit SHA"
     [[ "$from_kilix95_ref" =~ ^[0-9a-f]{40}$ ]] || die "image shape requires --from-kilix95-ref as a full lowercase commit SHA"
     [[ "$expected_build_info_sha256" =~ ^[0-9a-f]{64}$ ]] \
         || die "image shape requires --expected-build-info-sha256"
+    if [ "$same_version" = 1 ]; then
+        [[ "$predecessor_build_info_sha256" =~ ^[0-9a-f]{64}$ ]] \
+            || die "same-version image finalization requires --predecessor-build-info-sha256"
+    fi
 else
-    [ -z "$from_os_ref$from_kilix95_ref$expected_build_info_sha256" ] \
+    [ -z "$from_os_ref$from_kilix95_ref$expected_build_info_sha256$predecessor_build_info_sha256" ] \
         || die "standalone shape does not accept image-only starting-fixture options"
 fi
 if [ "$same_version" = 1 ] && [ "$shape" = image ] \
@@ -305,10 +327,208 @@ closure_key() {
     printf '%s\n' "$value"
 }
 
+# Shell assignment values, including leading whitespace, export, and +=.
+# Returns 2 when the key is absent and 1 when the file is malformed.
+# A textual awk read that disagrees with this value is not the installed value.
+closure_shell_value() {
+    local file="$1" key="$2"
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    python3 - "$file" "$key" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path, key = sys.argv[1], sys.argv[2]
+text = Path(path).read_bytes()
+if b"\0" in text:
+    sys.stderr.write("closure is not text\n")
+    raise SystemExit(1)
+values = {}
+for line_no, raw in enumerate(text.decode().splitlines(), 1):
+    line = raw.strip()
+    if line == "" or line.startswith("#"):
+        continue
+    if line.startswith("export "):
+        line = line[len("export "):].strip()
+    if "$(" in line or "`" in line:
+        sys.stderr.write("closure line %s is not a plain assignment\n" % line_no)
+        raise SystemExit(1)
+    match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)(\+?=)(.*)$", line)
+    if not match:
+        sys.stderr.write("malformed closure line %s\n" % line_no)
+        raise SystemExit(1)
+    name, op, value = match.group(1), match.group(2), match.group(3)
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    if op == "+=":
+        values[name] = values.get(name, "") + value
+    else:
+        values[name] = value
+if key not in values:
+    raise SystemExit(2)
+sys.stdout.write(values[key] + "\n")
+PY
+}
+
+# pleb update --show prints "  KEY=value  [source]".
+show_resolved_value() {
+    local file="$1" key="$2"
+    [ -f "$file" ] && [ ! -L "$file" ] || return 1
+    python3 - "$file" "$key" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path, key = sys.argv[1], sys.argv[2]
+found = None
+for line in Path(path).read_text().splitlines():
+    match = re.match(r"^  ([A-Za-z0-9_]+)=(.*?)  \[[^]]*\]\s*$", line)
+    if match and match.group(1) == key:
+        if found is not None:
+            sys.stderr.write("show lists %s more than once\n" % key)
+            raise SystemExit(1)
+        found = match.group(2)
+if found is None:
+    raise SystemExit(2)
+sys.stdout.write(found + "\n")
+PY
+}
+
+# Load one key the way the shell would, and refuse an awk read that disagrees.
+load_closure_identity() {
+    local file="$1" key="$2"
+    local shell_rc=0 text_rc=0 shell_value="" text_value=""
+    shell_value="$(closure_shell_value "$file" "$key")" || shell_rc=$?
+    text_value="$(closure_key "$file" "$key")" || text_rc=$?
+    if [ "$shell_rc" -eq 1 ] || [ "$text_rc" -eq 1 ]; then
+        return 1
+    fi
+    if [ "$text_rc" -eq 0 ] && [ "$shell_rc" -eq 0 ] && [ "$text_value" != "$shell_value" ]; then
+        printf '%s\n' "closure text and shell disagree on $key" >&2
+        return 1
+    fi
+    if [ "$shell_rc" -eq 2 ]; then
+        return 2
+    fi
+    printf '%s\n' "$shell_value"
+}
+
+# An image installed from the RC ISO has build-info and no closure.env.
+assert_fresh_iso_identity() {
+    local build_info="$1" from_tag="$2" expected_commit="$3" expected_object="$4"
+    local ref="" commit="" object="" object_rc=0
+    ref="$(closure_shell_value "$build_info" PLEBIAN_OS_REF)" || {
+        printf '%s\n' "source build-info has no PLEBIAN_OS_REF" >&2
+        return 1
+    }
+    commit="$(closure_shell_value "$build_info" PLEBIAN_OS_COMMIT)" || {
+        printf '%s\n' "source build-info has no PLEBIAN_OS_COMMIT" >&2
+        return 1
+    }
+    if [ "$ref" != "$from_tag" ]; then
+        printf '%s\n' "source build-info ref is $ref, expected $from_tag" >&2
+        return 1
+    fi
+    if [ "$commit" != "$expected_commit" ]; then
+        printf '%s\n' "source build-info commit is $commit, expected $expected_commit" >&2
+        return 1
+    fi
+    object="$(closure_shell_value "$build_info" PLEBIAN_OS_RELEASE_TAG_OBJECT)" || object_rc=$?
+    if [ "$object_rc" -eq 0 ] && [ "$object" != "$expected_object" ]; then
+        printf '%s\n' "source build-info tag object is $object, expected $expected_object" >&2
+        return 1
+    fi
+    if [ "$object_rc" -eq 1 ]; then
+        return 1
+    fi
+}
+
+# Release-controlled keys other than PLEBIAN_OS_REF. The manifest's
+# PLEBIAN_OS_REF is the RC tag; a selected closure stores the peeled commit.
+release_manifest_keys() {
+    printf '%s\n' \
+        PLEB_REF KILIX_REF KILIX95_REF \
+        NEURONTE_REF NEURONTE_REPO \
+        PLEBIAN_OS_KILIX_GO_MIN_VERSION PLEBIAN_OS_KILIX_GO_VERSION \
+        PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION \
+        PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64 \
+        PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES \
+        PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 \
+        PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES \
+        PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 \
+        PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL \
+        KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF KILIX_ICEWM_REF \
+        KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF KILIX_SECRETS_REF
+}
+
+# Closure (or fresh build-info), show-before, and the published RC manifest
+# must agree. A key the manifest omits may also be omitted from the closure.
+assert_pre_hop_manifest() {
+    local closure="$1" show="$2" manifest="$3" from_tag="$4" expected_commit="$5"
+    local key ref="" show_ref="" manifest_ref="" commit=""
+    local installed="" shown="" published="" installed_rc=0 shown_rc=0 published_rc=0
+    ref="$(closure_shell_value "$closure" PLEBIAN_OS_REF)" || {
+        printf '%s\n' "installed record has no PLEBIAN_OS_REF" >&2
+        return 1
+    }
+    show_ref="$(show_resolved_value "$show" PLEBIAN_OS_REF)" || {
+        printf '%s\n' "show-before has no PLEBIAN_OS_REF" >&2
+        return 1
+    }
+    manifest_ref="$(closure_shell_value "$manifest" PLEBIAN_OS_REF)" || {
+        printf '%s\n' "published manifest has no PLEBIAN_OS_REF" >&2
+        return 1
+    }
+    if [ "$show_ref" != "$ref" ]; then
+        printf '%s\n' "show-before PLEBIAN_OS_REF is $show_ref, installed record is $ref" >&2
+        return 1
+    fi
+    if [ "$manifest_ref" != "$from_tag" ]; then
+        printf '%s\n' "published manifest PLEBIAN_OS_REF is $manifest_ref, expected $from_tag" >&2
+        return 1
+    fi
+    if [ "$ref" = "$expected_commit" ]; then
+        :
+    elif [ "$ref" = "$from_tag" ]; then
+        commit="$(closure_shell_value "$closure" PLEBIAN_OS_COMMIT)" || {
+            printf '%s\n' "tag-named install record has no PLEBIAN_OS_COMMIT" >&2
+            return 1
+        }
+        if [ "$commit" != "$expected_commit" ]; then
+            printf '%s\n' "install record commit is $commit, expected $expected_commit" >&2
+            return 1
+        fi
+    else
+        printf '%s\n' "installed PLEBIAN_OS_REF is $ref, expected $expected_commit or $from_tag" >&2
+        return 1
+    fi
+    while IFS= read -r key; do
+        [ -n "$key" ] || continue
+        installed_rc=0
+        shown_rc=0
+        published_rc=0
+        installed="$(closure_shell_value "$closure" "$key")" || installed_rc=$?
+        shown="$(show_resolved_value "$show" "$key")" || shown_rc=$?
+        published="$(closure_shell_value "$manifest" "$key")" || published_rc=$?
+        if [ "$installed_rc" -eq 1 ] || [ "$shown_rc" -eq 1 ] || [ "$published_rc" -eq 1 ]; then
+            printf '%s\n' "could not read $key" >&2
+            return 1
+        fi
+        if [ "$published_rc" -eq 2 ] && [ "$installed_rc" -eq 2 ]; then
+            continue
+        fi
+        if [ "$published_rc" -ne 0 ] || [ "$installed_rc" -ne 0 ] || [ "$shown_rc" -ne 0 ] \
+            || [ "$installed" != "$published" ] || [ "$shown" != "$published" ]; then
+            printf '%s\n' "release key $key does not match the published RC manifest" >&2
+            return 1
+        fi
+    done < <(release_manifest_keys)
+}
+
 # Before a same-version hop, the installed closure must name --from-release-tag.
-# A recorded closure matches that tag (and its object, when one was published
-# in the source ISO). RC9's selector wrote neither key, so the installed
-# PLEBIAN_OS_REF commit is that tag's identity.
+# A recorded closure matches that tag and the published tag object. RC9's
+# selector wrote neither key, so the installed PLEBIAN_OS_REF commit is that
+# tag's identity. Values are the ones the shell would source.
 assert_pre_hop_release_identity() {
     local closure="$1" from_tag="$2" expected_commit="$3" expected_object="${4:-}"
     local tag="" object="" ref="" tag_rc=0 object_rc=0 ref_rc=0
@@ -316,15 +536,19 @@ assert_pre_hop_release_identity() {
             printf '%s\n' "expected release commit is not a full SHA" >&2
             return 1
         }
-    tag="$(closure_key "$closure" PLEBIAN_OS_RELEASE_TAG)" || tag_rc=$?
-    object="$(closure_key "$closure" PLEBIAN_OS_RELEASE_TAG_OBJECT)" || object_rc=$?
-    ref="$(closure_key "$closure" PLEBIAN_OS_REF)" || ref_rc=$?
+    tag="$(load_closure_identity "$closure" PLEBIAN_OS_RELEASE_TAG)" || tag_rc=$?
+    object="$(load_closure_identity "$closure" PLEBIAN_OS_RELEASE_TAG_OBJECT)" || object_rc=$?
+    ref="$(load_closure_identity "$closure" PLEBIAN_OS_REF)" || ref_rc=$?
     if [ "$tag_rc" -ne 0 ] && [ "$tag_rc" -ne 2 ]; then
         printf '%s\n' "installed PLEBIAN_OS_RELEASE_TAG is malformed" >&2
         return 1
     fi
     if [ "$object_rc" -ne 0 ] && [ "$object_rc" -ne 2 ]; then
         printf '%s\n' "installed PLEBIAN_OS_RELEASE_TAG_OBJECT is malformed" >&2
+        return 1
+    fi
+    if [ "$ref_rc" -eq 1 ]; then
+        printf '%s\n' "installed PLEBIAN_OS_REF is malformed" >&2
         return 1
     fi
     if [ "$tag_rc" -eq 0 ]; then
@@ -334,6 +558,10 @@ assert_pre_hop_release_identity() {
         fi
         if [[ ! "$object" =~ ^[0-9a-f]{40}$ ]]; then
             printf '%s\n' "installed release tag has no tag object" >&2
+            return 1
+        fi
+        if [ -z "$expected_object" ]; then
+            printf '%s\n' "installed tag object cannot be checked without the published object" >&2
             return 1
         fi
         if [ -n "$expected_object" ] && [ "$object" != "$expected_object" ]; then
@@ -398,6 +626,71 @@ assert_post_hop_release_identity() {
         printf '%s\n' "tag-object mismatch: closure $object, staged $staged_object" >&2
         return 1
     fi
+    if [ -n "${4:-}" ] && [ "$object" != "$4" ]; then
+        printf '%s\n' "selected tag object is $object, expected published $4" >&2
+        return 1
+    fi
+}
+
+# installed, source-iso hash, published predecessor hash.
+# Prints source-iso or installed-closure. Anything else fails.
+classify_installed_build_info() {
+    local installed="$1" source="$2" predecessor="${3:-}"
+    if [ "$installed" = "$source" ]; then
+        printf '%s\n' source-iso
+        return 0
+    fi
+    if [ -n "$predecessor" ] && [ "$installed" = "$predecessor" ]; then
+        printf '%s\n' installed-closure
+        return 0
+    fi
+    printf '%s\n' "installed build-info $installed is neither the source ISO nor the published predecessor" >&2
+    return 1
+}
+
+# Manifest lines are "fingerprint<TAB>path<TAB>expected" or "head<TAB>path<TAB>sha".
+# A difference prints "<label> did not restore <path>".
+assert_release_snapshot_restored() {
+    local label="$1" manifest="$2"
+    local kind path expected actual failed=0
+    [ -f "$manifest" ] || return 1
+    while IFS=$'\t' read -r kind path expected || [ -n "${kind:-}" ]; do
+        [ -n "$kind" ] || continue
+        case "$kind" in
+            fingerprint) actual="$(path_fingerprint "$path")" ;;
+            head)
+                [ -d "$path/.git" ] || actual="missing"
+                if [ -d "$path/.git" ]; then
+                    actual="$(git -C "$path" rev-parse --verify 'HEAD^{commit}')" || return 1
+                fi
+                ;;
+            *) printf '%s\n' "$label did not restore $path" >&2; return 1 ;;
+        esac
+        if [ "$actual" != "$expected" ]; then
+            printf '%s\n' "$label did not restore $path" >&2
+            failed=1
+        fi
+    done <"$manifest"
+    [ "$failed" -eq 0 ]
+}
+
+record_release_snapshot() {
+    local manifest="$1" path
+    : >"$manifest"
+    for path in "$session_env" "$closure_env" "$settings_file" \
+        /usr/local/bin/plebian-os-select-closure /usr/local/bin/plebian-os-update; do
+        printf 'fingerprint\t%s\t%s\n' "$path" "$(path_fingerprint "$path")" >>"$manifest"
+    done
+    if [ "$shape" = image ]; then
+        printf 'head\t%s\t%s\n' "$os_dir" \
+            "$(git -C "$os_dir" rev-parse --verify 'HEAD^{commit}')" >>"$manifest"
+        printf 'head\t%s\t%s\n' "$kilix95_dir" \
+            "$(git -C "$kilix95_dir" rev-parse --verify 'HEAD^{commit}')" >>"$manifest"
+    fi
+    printf 'head\t%s\t%s\n' "$pleb_dir" \
+        "$(git -C "$pleb_dir" rev-parse --verify 'HEAD^{commit}')" >>"$manifest"
+    printf 'head\t%s\t%s\n' "$kilix_dir" \
+        "$(git -C "$kilix_dir" rev-parse --verify 'HEAD^{commit}')" >>"$manifest"
 }
 
 # Every closure key, including the release tag object, byte for byte.
@@ -654,10 +947,14 @@ else
         test -f /etc/plebian-os/build-info.env
     installed_build_info_sha256="$(sha256sum /etc/plebian-os/build-info.env | awk '{print $1}')"
     if [ "$same_version" = 1 ] && [ "$installed_build_info_sha256" != "$expected_build_info_sha256" ]; then
-        # An upgrade to the RC leaves the install ISO's build-info in place.
-        # The closure record, not those bytes, is the installed RC identity.
-        record_check "image-build-info-is-install-predecessor" pass \
-            "installed $installed_build_info_sha256; source ISO $expected_build_info_sha256; identity is the installed closure"
+        # An upgrade to the RC leaves the predecessor ISO's build-info in place.
+        # That hash must be the published predecessor listed in its SHA256SUMS.
+        build_info_binding="$(classify_installed_build_info \
+            "$installed_build_info_sha256" "$expected_build_info_sha256" \
+            "$predecessor_build_info_sha256")" || build_info_binding=""
+        must "image-build-info-is-install-predecessor" \
+            "installed $installed_build_info_sha256; predecessor $predecessor_build_info_sha256; source ISO $expected_build_info_sha256" \
+            test "$build_info_binding" = installed-closure
     else
         must "image-build-info-matches-published-fixture" \
             "$installed_build_info_sha256/$expected_build_info_sha256" \
@@ -696,10 +993,27 @@ current="$(sed -n 's/^  PLEBIAN_OS_VERSION=\([^ ]*\).*/\1/p' "$report/show-befor
     || die "could not resolve the installed release from pleb update --show"
 must "starting-release-is-exact" "$current/$from" test "$current" = "$from"
 if [ "$same_version" = 1 ]; then
-    must "installed-release-identity-is-from-release-tag" "$from_release_tag" \
-        assert_pre_hop_release_identity "$closure_env" "$from_release_tag" \
-        "$expected_release_commit" "$from_release_tag_object"
-    cp -p -- "$closure_env" "$report/closure.pre-hop"
+    if [ -f "$closure_env" ] && [ ! -L "$closure_env" ]; then
+        must "installed-release-identity-is-from-release-tag" "$from_release_tag" \
+            assert_pre_hop_release_identity "$closure_env" "$from_release_tag" \
+            "$expected_release_commit" "$from_release_tag_object"
+        cp -p -- "$closure_env" "$report/closure.pre-hop"
+        closure_pre_hop_absent=0
+        must "installed-closure-matches-published-rc-manifest" "$from_release_manifest" \
+            assert_pre_hop_manifest "$closure_env" "$report/show-before.txt" \
+            "$from_release_manifest" "$from_release_tag" "$expected_release_commit"
+    elif [ "$shape" = image ] \
+        && [ "$installed_build_info_sha256" = "$expected_build_info_sha256" ]; then
+        must "installed-release-identity-is-source-build-info" "$from_release_tag" \
+            assert_fresh_iso_identity /etc/plebian-os/build-info.env \
+            "$from_release_tag" "$expected_release_commit" "$from_release_tag_object"
+        closure_pre_hop_absent=1
+        must "installed-build-info-matches-published-rc-manifest" "$from_release_manifest" \
+            assert_pre_hop_manifest /etc/plebian-os/build-info.env "$report/show-before.txt" \
+            "$from_release_manifest" "$from_release_tag" "$expected_release_commit"
+    else
+        die "same-version finalization requires the installed closure, or an image build-info that matches the source ISO"
+    fi
 else
     must "target-differs-from-installed-release" "$current -> $target" test "$current" != "$target"
 fi
@@ -852,6 +1166,10 @@ git_snapshot "$pleb_dir" pleb-before-failure
 git_snapshot "$kilix_dir" kilix-before-failure
 home_manifest "$report/home-before-failure.tsv"
 
+if [ "$same_version" = 1 ]; then
+    record_release_snapshot "$report/release-snapshot.pre-hop"
+fi
+
 failure_boundary=closure
 set +e
 PLEBIAN_OS_SELECT_TEST_FAIL_AFTER="$failure_boundary" \
@@ -871,7 +1189,7 @@ must "failure-restores-kilix-head" "1/1" cmp -s "$report/kilix-before-failure.he
 must "failure-restores-kilix-status" "1/1" cmp -s "$report/kilix-before-failure.status" "$report/kilix-after-failure.status"
 must "failure-restores-session-env" "$session_env" test "$(path_fingerprint "$session_env")" = "$session_before"
 must "failure-restores-closure-env" "$closure_env" test "$(path_fingerprint "$closure_env")" = "$closure_before"
-if [ "$same_version" = 1 ]; then
+if [ "$same_version" = 1 ] && [ "$closure_pre_hop_absent" != 1 ]; then
     must "failure-restores-closure-keys" "$closure_env" \
         closure_keys_match "$report/closure.pre-hop" "$closure_env"
 fi
@@ -902,8 +1220,10 @@ rollback_commands=0
 restoring_hops=0
 if [ "$same_version" = 1 ]; then
     must "selected-release-tag-object-is-staged" "$release_tag" \
-        assert_post_hop_release_identity "$closure_env" "$release_state" "$release_tag"
+        assert_post_hop_release_identity "$closure_env" "$release_state" "$release_tag" \
+        "$release_tag_object"
     cp -p -- "$closure_env" "$report/closure.post-hop"
+    record_release_snapshot "$report/release-snapshot.post-hop"
     set +e
     "$pleb_bin" update --rollback --yes --no-restart \
         >"$report/rollback.stdout" 2>"$report/rollback.stderr"
@@ -913,11 +1233,22 @@ if [ "$same_version" = 1 ]; then
     rollback_commands=1
     must "rollback-from-final-succeeds" "pleb update --rollback; exit=$rollback_rc" \
         test "$rollback_rc" -eq 0
-    must "rollback-restores-rc-closure-keys" "$closure_env" \
-        closure_keys_match "$report/closure.pre-hop" "$closure_env"
+    must "rollback-restores-pre-hop-state" "session closure settings selector updater and checkout heads" \
+        assert_release_snapshot_restored rollback "$report/release-snapshot.pre-hop"
+    closure_env_live="$closure_env"
+    if [ "$closure_pre_hop_absent" != 1 ]; then
+        must "rollback-restores-rc-closure-keys" "$closure_env" \
+            closure_keys_match "$report/closure.pre-hop" "$closure_env"
+    else
+        must "rollback-restores-absent-closure" "$closure_env" test ! -e "$closure_env"
+        printf 'absent\n' >"$report/closure.pre-hop"
+        printf 'absent\n' >"$report/closure.absence-proof"
+        closure_env="$report/closure.absence-proof"
+    fi
     must "rollback-restores-rc-closure-bytes" "$closure_env" \
         cmp -s "$report/closure.pre-hop" "$closure_env"
     set +e
+    closure_env="$closure_env_live"
     "${hop_command[@]}" update --to "$target" "${release_args[@]}" --yes --no-restart \
         >"$report/restoring-hop.stdout" 2>"$report/restoring-hop.stderr"
     restoring_rc=$?
@@ -933,7 +1264,10 @@ if [ "$same_version" = 1 ]; then
         test "$(sed -n '5p' "$release_state")" = "$release_tag"
     cp -- "$release_state" "$report/release-hop-active.after"
     must "restoring-hop-tag-object-is-staged" "$release_tag" \
-        assert_post_hop_release_identity "$closure_env" "$release_state" "$release_tag"
+        assert_post_hop_release_identity "$closure_env" "$release_state" "$release_tag" \
+        "$release_tag_object"
+    must "restoring-hop-restores-post-hop-state" "session closure settings selector updater and checkout heads" \
+        assert_release_snapshot_restored "restoring hop" "$report/release-snapshot.post-hop"
 fi
 target_components=(pleb kilix)
 if [ "$shape" = image ]; then target_components+=(os kilix95); fi
@@ -1015,6 +1349,8 @@ fi
 
 export F109_REPORT_SHAPE="$shape" F109_REPORT_TARGET="$target"
 export F109_REPORT_TAG="$release_tag" F109_REPORT_FROM_TAG="$from_release_tag"
+export F109_REPORT_FROM_TAG_OBJECT="$from_release_tag_object"
+export F109_REPORT_TAG_OBJECT="$release_tag_object"
 export F109_REPORT_DRIVER_REF="$bootstrap_driver_ref" F109_REPORT_ENTRYPOINT="$hop_entrypoint_mode"
 export F109_REPORT_ROLLBACK_COMMANDS="${rollback_commands:-0}"
 export F109_REPORT_RESTORING_HOPS="${restoring_hops:-0}"
@@ -1054,6 +1390,8 @@ report = {
         "to": os.environ["F109_REPORT_TARGET"],
         "release_tag": os.environ["F109_REPORT_TAG"] or None,
         "from_release_tag": os.environ["F109_REPORT_FROM_TAG"] or None,
+        "from_release_tag_object": os.environ["F109_REPORT_FROM_TAG_OBJECT"] or None,
+        "release_tag_object": os.environ["F109_REPORT_TAG_OBJECT"] or None,
         "entrypoint_mode": os.environ["F109_REPORT_ENTRYPOINT"],
         "bootstrap_driver_ref": os.environ["F109_REPORT_DRIVER_REF"] or None,
         "dry_run_commands": 1,
