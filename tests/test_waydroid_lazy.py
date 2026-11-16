@@ -81,7 +81,7 @@ class FirstUseRollback(unittest.TestCase):
         for installed in (False, True):
             with self.subTest(installed=installed):
                 fixture = Fixture(self)
-                (fixture.root / 'usr/lib').mkdir()
+                (fixture.root / 'usr/lib').mkdir(exist_ok=True)
                 directory = fixture.root / HELPER_ROOT
                 if installed:
                     directory.mkdir(parents=True)

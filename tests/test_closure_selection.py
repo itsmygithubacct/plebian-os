@@ -114,7 +114,7 @@ class ClosureSelectionTests(unittest.TestCase):
         etc = base / "root" / "etc" / "pleb"
         etc.mkdir(parents=True)
         (base / "root" / "var" / "lib").mkdir(parents=True)
-        (base / "root" / "usr" / "local" / "bin").mkdir(parents=True)
+        (base / "root" / "usr" / "bin").mkdir(parents=True)
         # Every release this fixture installs still resolves apt from its Debian
         # install snapshot, as a machine does until a 0.2.2 update commits.
         snapshot = base / "root" / "etc" / "apt" / "sources.list.d"
@@ -556,7 +556,7 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(env.read_bytes(), before)
             selected = self._run(base, '0.2.2.1', '--offline')
             self.assertEqual(selected.returncode, 0, selected.stderr)
-            tools = base / 'root/usr/local/bin'
+            tools = base / 'root/usr/bin'
             self.assertEqual((tools / 'plebian-os-update').read_bytes(), UPDATE.read_bytes())
             self.assertEqual((tools / 'plebian-os-select-closure').read_bytes(), SELECT.read_bytes())
             self.assertEqual(self._values(env)['PLEBIAN_OS_VERSION'], '0.2.2.1')
@@ -571,7 +571,7 @@ class ClosureSelectionTests(unittest.TestCase):
             before = env.read_bytes()
             values_before = self._values(env)
             commit = self._source(base, tag=None)
-            tools = base / "root" / "usr" / "local" / "bin"
+            tools = base / "root" / "usr" / "bin"
             originals = {}
             for name in ("plebian-os-select-closure", "plebian-os-update"):
                 path = tools / name
@@ -740,7 +740,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 env = self._machine(base)
                 before = env.read_bytes()
                 commit = self._source(base, tag=None)
-                tools = base / "root" / "usr" / "local" / "bin"
+                tools = base / "root" / "usr" / "bin"
                 originals = {}
                 for name in ("plebian-os-select-closure", "plebian-os-update"):
                     originals[name] = f"#!/bin/sh\necho {name}\n".encode()
@@ -997,9 +997,9 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertEqual(env.read_bytes(), before)
                 self.assertFalse(env.with_name("closure.env").exists())
                 self.assertFalse(
-                    (base / "root/usr/local/bin/plebian-os-select-closure").exists())
+                    (base / "root/usr/bin/plebian-os-select-closure").exists())
                 self.assertFalse(
-                    (base / "root/usr/local/bin/plebian-os-update").exists())
+                    (base / "root/usr/bin/plebian-os-update").exists())
                 self.assertEqual(self._recovery_records(base), [])
 
     def test_split_migration_refuses_an_ambiguous_release_pin_edit(self):
@@ -1045,8 +1045,8 @@ class ClosureSelectionTests(unittest.TestCase):
                 selected = self._run(base, "0.2.1", "--offline")
                 self.assertEqual(selected.returncode, 0, selected.stderr)
                 closure = session.with_name("closure.env")
-                selector = base / "root/usr/local/bin/plebian-os-select-closure"
-                updater = base / "root/usr/local/bin/plebian-os-update"
+                selector = base / "root/usr/bin/plebian-os-select-closure"
+                updater = base / "root/usr/bin/plebian-os-update"
                 selected_bytes = tuple(
                     path.read_bytes() for path in (session, closure, selector, updater)
                 )
@@ -1089,7 +1089,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertIn("has local changes; refusing a whole-stack update", refused.stderr)
                 self.assertEqual(session.read_bytes(), before)
                 self.assertFalse(session.with_name("closure.env").exists())
-                self.assertFalse((base / "root/usr/local/bin/plebian-os-update").exists())
+                self.assertFalse((base / "root/usr/bin/plebian-os-update").exists())
                 self.assertEqual(owner.read_bytes(), b"owner bytes\x00\xff")
                 for repo, history in zip((pleb, kilix, kilix95), histories):
                     self.assertEqual(subprocess.check_output(
@@ -1124,8 +1124,8 @@ class ClosureSelectionTests(unittest.TestCase):
                 base = Path(td)
                 session = self._selected_split_fixture(base)
                 paths = (session, session.with_name("closure.env"),
-                         base / "root/usr/local/bin/plebian-os-select-closure",
-                         base / "root/usr/local/bin/plebian-os-update")
+                         base / "root/usr/bin/plebian-os-select-closure",
+                         base / "root/usr/bin/plebian-os-update")
                 before = tuple(p.read_bytes() for p in paths)
                 record = self._recovery_records(base)[0]
                 bindir = base / "mock-bin"
@@ -1278,9 +1278,9 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertIn("did not deploy it", selected.stdout)
             self.assertFalse((base / "root/etc/pleb/session.env").exists())
             self.assertFalse(
-                (base / "root/usr/local/bin/plebian-os-select-closure").exists())
+                (base / "root/usr/bin/plebian-os-select-closure").exists())
             self.assertFalse(
-                (base / "root/usr/local/bin/plebian-os-update").exists())
+                (base / "root/usr/bin/plebian-os-update").exists())
             values = self._values(user_env)
             self.assertEqual(values["PLEBIAN_OS_VERSION"], "0.2.1")
             self.assertEqual(values["PLEB_RESPAWN"], "0")
@@ -1800,9 +1800,9 @@ class ClosureSelectionTests(unittest.TestCase):
     # ── a failure mid-write leaves the previous closure intact ──────────────
     def _fails_intact(self, base: Path, boundary: str, expected: str):
         env = base / "root" / "etc" / "pleb" / "session.env"
-        selector = (base / "root" / "usr" / "local" / "bin" /
+        selector = (base / "root" / "usr" / "bin" /
                     "plebian-os-select-closure")
-        updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
+        updater = base / "root" / "usr" / "bin" / "plebian-os-update"
         before = env.read_bytes()
         selector_before = selector.read_bytes() if selector.exists() else None
         updater_before = updater.read_bytes() if updater.exists() else None
@@ -2063,9 +2063,9 @@ class ClosureSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
-            selector = (base / "root" / "usr" / "local" / "bin" /
+            selector = (base / "root" / "usr" / "bin" /
                         "plebian-os-select-closure")
-            updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
+            updater = base / "root" / "usr" / "bin" / "plebian-os-update"
             before = env.read_bytes()
             self._source(base)
             self.assertFalse(selector.exists())
@@ -2188,9 +2188,9 @@ class ClosureSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
-            selector = (base / "root" / "usr" / "local" / "bin" /
+            selector = (base / "root" / "usr" / "bin" /
                         "plebian-os-select-closure")
-            updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
+            updater = base / "root" / "usr" / "bin" / "plebian-os-update"
             old_selector = b"#!/usr/bin/env bash\nprintf 'legacy selector\\n'\n"
             old_updater = b"#!/usr/bin/env bash\nprintf 'legacy updater\\n'\n"
             selector.write_bytes(old_selector)
@@ -2274,9 +2274,9 @@ class ClosureSelectionTests(unittest.TestCase):
             with self.subTest(evidence=evidence), tempfile.TemporaryDirectory() as td:
                 base = Path(td)
                 env = self._machine(base, release=self._release_values())
-                selector = (base / "root" / "usr" / "local" / "bin" /
+                selector = (base / "root" / "usr" / "bin" /
                             "plebian-os-select-closure")
-                updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
+                updater = base / "root" / "usr" / "bin" / "plebian-os-update"
                 self._source(base)
                 selected = self._run(base, "0.1.8", "--offline")
                 self.assertEqual(selected.returncode, 0, selected.stderr)
@@ -2380,9 +2380,9 @@ class ClosureSelectionTests(unittest.TestCase):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
                 base = Path(td)
                 env = self._machine(base)
-                selector = (base / "root" / "usr" / "local" / "bin" /
+                selector = (base / "root" / "usr" / "bin" /
                             "plebian-os-select-closure")
-                updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
+                updater = base / "root" / "usr" / "bin" / "plebian-os-update"
                 self._source(base)
                 selected = self._run(base, "0.1.8", "--offline")
                 self.assertEqual(selected.returncode, 0, selected.stderr)
@@ -2425,9 +2425,9 @@ class ClosureSelectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             env = self._machine(base)
-            selector = (base / "root" / "usr" / "local" / "bin" /
+            selector = (base / "root" / "usr" / "bin" /
                         "plebian-os-select-closure")
-            updater = base / "root" / "usr" / "local" / "bin" / "plebian-os-update"
+            updater = base / "root" / "usr" / "bin" / "plebian-os-update"
             before = env.read_bytes()
             self._source(base)
             result = self._run(base, "0.1.8", "--offline", "--dry-run")
@@ -2471,7 +2471,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('no source-qualified ARM64 closure', result.stderr)
                 self.assertEqual(env_file.read_bytes(), before)
-                self.assertEqual(list((base / 'root/usr/local/bin').iterdir()), [])
+                self.assertEqual(list((base / 'root/usr/bin').iterdir()), [])
                 self.assertFalse((base / 'root/etc/pleb/closure.env').exists())
 
     def test_arm64_sidecar_is_read_but_amd64_waydroid_still_refuses(self):
@@ -2557,7 +2557,7 @@ class ClosureSelectionContractTests(unittest.TestCase):
         self.assertIn("--revalidate-current) select_latest_release=0", source)
         self.assertIn("git ls-remote --refs --tags", source)
         self.assertIn(
-            'exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update',
+            'exec "${relaunch_env[@]}" $PLEBIAN_OS_BINDIR/plebian-os-update',
             source,
         )
 
@@ -2573,13 +2573,16 @@ class ClosureSelectionContractTests(unittest.TestCase):
         self.assertIn("provision/plebian-os-select-closure.sh", text)
 
     def test_selector_is_installed_by_every_os_delivery_path(self):
-        destination = "/usr/local/bin/plebian-os-select-closure"
+        # The updater names this file through the installed-path variables.
+        # The provisioner and the preseed still carry the old literal until
+        # that worker moves them. Both spellings name the same installed file.
         update = UPDATE.read_text()
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
-        for text in (update, provision, preseed):
-            self.assertIn(destination, text)
+        self.assertIn("$PLEBIAN_OS_BINDIR/plebian-os-select-closure", update)
+        for text in (provision, preseed):
+            self.assertIn("/usr/local/bin/plebian-os-select-closure", text)
         self.assertIn("plebian-os-select-closure.sh", remaster)
         self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
 

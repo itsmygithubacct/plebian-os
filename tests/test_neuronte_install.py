@@ -854,7 +854,7 @@ class ShellPathTests(unittest.TestCase):
         self.assertIn('--fetch-failure', call)
         self.assertEqual(call[call.index('--fetch-failure') + 1], 'warn')
         self.assertEqual(call[call.index('--archive') + 1],
-                         '/usr/local/share/plebian-os/neuronte-%s.tar.xz' % self.ref)
+                         '/var/lib/plebian-os/payloads/neuronte-%s.tar.xz' % self.ref)
         failed = self.update(f'NEURONTE_REF={self.ref}\ninstall_neuronte_update\necho done\n',
                              STUB_RC='1')
         self.assertNotEqual(failed.returncode, 0)

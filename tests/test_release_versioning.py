@@ -368,11 +368,11 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertIn("update_os_checkout", u)
         self.assertIn("PLEBIAN_OS_SELF_UPDATE", u)
         self.assertIn("install -m 0755", u)
-        self.assertIn("/usr/local/sbin/plebian-os-provision", u)
+        self.assertIn("$PLEBIAN_OS_SBINDIR/plebian-os-provision", u)
         # the password-nag helper is an OS-layer script too — it must redeploy
-        self.assertIn("/usr/local/sbin/plebian-os-passwd", u)
+        self.assertIn("$PLEBIAN_OS_SBINDIR/plebian-os-passwd", u)
         # the target-closure selector is the twelfth transactional payload
-        self.assertIn("/usr/local/bin/plebian-os-select-closure", u)
+        self.assertIn("$PLEBIAN_OS_BINDIR/plebian-os-select-closure", u)
         # Exact pins are resolved from the object returned by origin rather
         # than a potentially poisoned local tag, then deployed transactionally.
         self.assertIn(

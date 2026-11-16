@@ -36,13 +36,15 @@ class Fixture:
         self.tmp = Path(tempfile.mkdtemp())
         tc.addCleanup(subprocess.run, ["rm", "-rf", str(self.tmp)])
         self.root = self.tmp / "root"
-        for d in ("", "usr", "usr/local", "usr/local/share", "usr/local/sbin", "etc", "etc/lightdm",
+        for d in ("", "usr", "usr/bin", "usr/sbin", "usr/libexec", "usr/share",
+                  "usr/lib", "usr/lib/systemd", "usr/lib/systemd/system",
+                  "usr/local", "usr/local/share", "usr/local/sbin", "etc", "etc/lightdm",
                   "etc/pleb", "etc/systemd", "var", "var/lib", "var/lib/plebian-os"):
             (self.root / d).mkdir(parents=True, exist_ok=True)
             (self.root / d).chmod(0o755)
         self.dd = self.root / "etc/systemd/logind.conf.d"
         self.conf = self.dd / NAME
-        self.prov = self.root / "usr/local/sbin/plebian-os-provision"
+        self.prov = self.root / "usr/sbin/plebian-os-provision"
 
     def safe_bin(self):
         """A directory whose logger/systemd-cat do nothing, so no test can reach the host journal."""

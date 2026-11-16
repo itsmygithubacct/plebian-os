@@ -228,7 +228,7 @@ class SelectorBoundaryTests(unittest.TestCase):
                 self.assertIn("releases/0.2.2-arm64.env passed closure checks", result.stderr)
                 self.assertNotIn("selectable", result.stdout)
                 self.assertEqual(env_file.read_bytes(), before)
-                self.assertEqual(list((base / "root/usr/local/bin").iterdir()), [])
+                self.assertEqual(list((base / "root/usr/bin").iterdir()), [])
                 self.assertFalse((base / "root/etc/pleb/closure.env").exists())
 
     def test_amd64_machine_selects_amd64_values_beside_the_companion(self):

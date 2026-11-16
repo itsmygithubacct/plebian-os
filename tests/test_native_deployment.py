@@ -176,20 +176,26 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
         provision_paths = array(provision, 'PROVISION_ROOT_TRANSACTION_PATHS')
         for name in NATIVE:
             index = names.index(name)
-            directory = '/usr/local/sbin/' if name == NATIVE[0] else '/usr/local/libexec/plebian-os/'
+            directory = '$PLEBIAN_OS_SBINDIR/' if name == NATIVE[0] else '$PLEBIAN_OS_LIBEXECDIR/'
             self.assertEqual(paths[index], directory + name)
             self.assertEqual(modes[index], '0755' if name == NATIVE[0] else '0644')
             self.assertEqual(sizes[index], '131072')
             self.assertIn(paths[index], array(body(text, 'ROOT_SNAPSHOT'), 'paths'))
             self.assertIn(paths[index], array(body(text, 'ROOT_RESTORE'), 'paths'))
-            self.assertIn(paths[index], provision_paths)
+            self.assertTrue(any(item.endswith('/' + name) for item in provision_paths), name)
             validation = deploy[deploy.index('# Re-validate the root-owned copies,'):]
             validation = validation[:validation.index('# Nothing becomes destination-readable')]
             self.assertIn('"${new_paths[' + str(index) + ']}"', validation)
         for marker in ('ROOT_SNAPSHOT', 'ROOT_RESTORE'):
             directories = array(body(text, marker), 'managed_dirs')
-            self.assertLess(directories.index('/usr/local/libexec'),
-                            directories.index('/usr/local/libexec/plebian-os'))
+            self.assertIn('$PLEBIAN_OS_LIBEXECDIR', directories)
+            self.assertNotIn('/usr/sbin', directories)
+            self.assertNotIn('/usr/bin', directories)
+            self.assertNotIn('/usr/libexec', directories)
+            self.assertLess(directories.index('$PLEBIAN_OS_DATADIR'),
+                            directories.index('$PLEBIAN_OS_DATADIR/wallpapers'))
+            self.assertLess(directories.index('$PLEBIAN_OS_NOTICEDIR'),
+                            directories.index('$PLEBIAN_OS_NOTICEDIR/installer'))
 
     def test_media_copy_uses_only_fixed_files_and_private_target(self):
         text = (ROOT / 'preseed/preseed.cfg').read_text()
@@ -214,7 +220,7 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755 if name == NATIVE[0] else 0o644)
         wrapper = (ROOT / 'provision/plebian-os-native-runtime').read_text()
         self.assertEqual(wrapper.splitlines()[-1],
-            'exec /usr/bin/python3 -I -B /usr/local/libexec/plebian-os/native_runtime.py "$@"')
+            'exec /usr/bin/python3 -I -B "$PLEBIAN_OS_LIBEXECDIR/native_runtime.py" "$@"')
         self.assertEqual(subprocess.run(['/bin/sh', '-n'], input=wrapper.encode(),
                          capture_output=True, timeout=5).returncode, 0)
         remaster = (ROOT / 'build/remaster-iso.sh').read_text()

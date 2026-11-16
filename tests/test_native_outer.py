@@ -74,9 +74,16 @@ native_runtime_command() {
         return [line.rstrip('\t').split('\t') for line in self.events.read_text().splitlines()]
 
     def test_standalone_transaction_functions_remain_identical(self):
+        # The updater names this helper through the installed-path variable.
+        # The provisioner still carries the old literal until that worker
+        # moves it. Every other line of these functions stays byte-identical.
+        old = "/usr/local/sbin/plebian-os-native-runtime"
+        new = "$PLEBIAN_OS_SBINDIR/plebian-os-native-runtime"
         for name in FUNCTIONS:
-            self.assertEqual(closure.shell_function(SCRIPTS[0], name),
-                             closure.shell_function(SCRIPTS[1], name), name)
+            provision = closure.shell_function(SCRIPTS[0], name)
+            update = closure.shell_function(SCRIPTS[1], name)
+            self.assertNotIn(old, update, name)
+            self.assertEqual(provision, update.replace(new, old), name)
 
     def test_actual_shell_records_token_before_prepare_and_orders_success(self):
         for index, source in enumerate(SCRIPTS):
@@ -240,13 +247,16 @@ if rollback_native_runtime_transaction; then exit 99; fi
                 self.assertIn('active token ' + '6' * 32, result.stderr)
                 self.assertIn('attempted token ' + '7' * 32, result.stderr)
                 self.assertIn('this token may have no journal', result.stderr)
-                self.assertIn('/usr/local/sbin/plebian-os-native-runtime status as root',
-                              result.stderr)
+                expected_status = (
+                    '/usr/sbin/plebian-os-native-runtime status as root'
+                    if source.endswith('plebian-os-update.sh')
+                    else '/usr/local/sbin/plebian-os-native-runtime status as root')
+                self.assertIn(expected_status, result.stderr)
                 self.assertNotIn('recovery token ' + '7' * 32, result.stderr)
 
     def test_updater_helper_dispatch_uses_fixed_identity_and_elevation_tools(self):
         original = closure.shell_function(SCRIPTS[1], 'native_runtime_command')
-        fixed = ('/usr/bin/id', '/usr/bin/sudo', '/usr/local/sbin/plebian-os-native-runtime')
+        fixed = ('/usr/bin/id', '/usr/bin/sudo', '$PLEBIAN_OS_SBINDIR/plebian-os-native-runtime')
         for path in fixed:
             self.assertEqual(original.count(path), 1)
         poison = self.base / 'poison'

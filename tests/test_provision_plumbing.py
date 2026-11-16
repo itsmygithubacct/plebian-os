@@ -501,8 +501,8 @@ class ProvisionPlumbingTests(unittest.TestCase):
     def test_firstboot_retries_transient_failures(self):
         text = (ROOT / "provision" / "plebian-os-firstboot.service").read_text()
         self.assertIn(
-            "ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run "
-            "/usr/local/sbin/plebian-os-provision",
+            "ExecStart=/usr/sbin/plebian-os-firstboot-attempt run "
+            "/usr/sbin/plebian-os-provision",
             text,
         )
         self.assertIn("TimeoutStartSec=5h45min", text)

@@ -79,7 +79,7 @@ PLEB_DIR="$PLEB_ROOT"
             "MANIFEST.sha256",
             'test ! -e /etc/pleb/session.env',
             'test ! -e "$source_home/plebian-os"',
-            'test ! -e /usr/local/bin/plebian-os-update',
+            'test ! -e /usr/bin/plebian-os-update',
             '"installed-pleb-entrypoint-is-tested"',
             '"entrypoint-matches-participating-pleb-checkout"',
             '"starting-release-is-exact"',
@@ -101,7 +101,7 @@ PLEB_DIR="$PLEB_ROOT"
             '"restoring-hop-restores-post-hop-state"',
             "$label did not restore",
             '    for path in "$session_env" "$closure_env" "$settings_file" \\\n'
-            '        /usr/local/bin/plebian-os-select-closure /usr/local/bin/plebian-os-update; do',
+            '        /usr/bin/plebian-os-select-closure /usr/bin/plebian-os-update; do',
             '    printf \'head\\t%s\\t%s\\n\' "$pleb_dir" \\\n'
             '        "$(git -C "$pleb_dir" rev-parse --verify \'HEAD^{commit}\')" >>"$manifest"\n',
             '        printf \'head\\t%s\\t%s\\n\' "$os_dir" \\\n'

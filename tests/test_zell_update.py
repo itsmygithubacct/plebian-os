@@ -21,8 +21,8 @@ ARCHIVE = 'zell-0.1.1-x86_64.tar.xz'
 LEAVES = (
     'usr/local/bin/zell',
     'usr/local/sbin/install-zell-runtime.py',
-    'usr/local/share/plebian-os/zell-runtime.json',
-    'usr/local/share/plebian-os/' + ARCHIVE,
+    'usr/share/plebian-os/zell-runtime.json',
+    'var/lib/plebian-os/payloads/' + ARCHIVE,
     'usr/local/lib/systemd/user/kilix-secrets.service',
     'usr/local/lib/systemd/user/kilix-secrets.socket',
 )
@@ -75,8 +75,9 @@ class ZellUpdateTests(unittest.TestCase):
         app = fx.root / 'usr/local/share/kilix-zell'
         (app / 'tools').mkdir(parents=True)
         (app / 'tools/old-only').write_bytes(b'previous runtime')
-        for directory in (fx.root / 'usr').rglob('*'):
-            if directory.is_dir(): directory.chmod(0o755)
+        for base in (fx.root / 'usr', fx.root / 'var'):
+            for directory in base.rglob('*'):
+                if directory.is_dir(): directory.chmod(0o755)
         app.chmod(0o750)
         # Leaf symlinks are replaced without overwriting what they pointed at.
         target = fx.root / 'user-data/launcher-target'

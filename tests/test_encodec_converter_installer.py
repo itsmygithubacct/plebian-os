@@ -204,7 +204,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         for path in (identity, sudo, helper):
             path.chmod(0o755)
         function = function.replace("/usr/bin/id", str(identity)).replace("/usr/bin/sudo", str(sudo))
-        function = function.replace("/usr/local/sbin/" + HELPER.name, str(helper))
+        function = function.replace("$PLEBIAN_OS_SBINDIR/" + HELPER.name, str(helper))
         result = subprocess.run(["bash", "-eu", "-c", function + "\nrun_encodec_converter_installer"],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 7, result.stderr)

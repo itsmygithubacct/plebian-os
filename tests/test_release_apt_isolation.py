@@ -2177,10 +2177,10 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertIn(
             '${PLEBIAN_OS_RELEASE_APT_CONFIG:+"PLEBIAN_OS_RELEASE_APT_CONFIG=$PLEBIAN_OS_RELEASE_APT_CONFIG"}',
             refresh)
-        elevated = '"${elevate[@]}" /usr/local/sbin/plebian-os-qt-runtime --verify'
+        elevated = '"${elevate[@]}" $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime --verify'
         self.assertIn(elevated, refresh)
         self.assertLess(refresh.index("run_package_step_in_its_own_session"), refresh.index(elevated))
-        self.assertNotIn("if ! /usr/local/sbin/plebian-os-qt-runtime --verify", refresh)
+        self.assertNotIn("if ! $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime --verify", refresh)
         qt_done = updater.index('die "selected Qt runtime could not be installed/verified"')
         before_deps = updater[qt_done:updater.index("\nrefresh_os_dependencies\n", qt_done)]
         self.assertIn("refresh_release_qt_pin", before_deps)

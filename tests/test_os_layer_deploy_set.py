@@ -310,8 +310,18 @@ class RootTransportMetadataControls(unittest.TestCase):
         end=block.index('for hash in "${expected_hashes[@]}"',start)
         guards=block[start:end]
         count=len(array('names',block))
+        paths = (
+            'PLEBIAN_OS_SBINDIR=/usr/sbin\n'
+            'PLEBIAN_OS_BINDIR=/usr/bin\n'
+            'PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os\n'
+            'PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os\n'
+            'PLEBIAN_OS_DATADIR=/usr/share/plebian-os\n'
+            'PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices\n'
+            'PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads\n'
+            'PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system\n'
+        )
         for supplied, expected in ((count,0),(count-1,2)):
-            command='set -euo pipefail\nexpected_hashes=("$@")\n'+guards+'\nprintf PASSED\n'
+            command='set -euo pipefail\n'+paths+'expected_hashes=("$@")\n'+guards+'\nprintf PASSED\n'
             result=subprocess.run(['bash','-c',command,'metadata',*(['a'*64]*supplied)],capture_output=True,text=True)
             self.assertEqual(result.returncode,expected,result.stderr)
             self.assertEqual('PASSED' in result.stdout,expected==0)

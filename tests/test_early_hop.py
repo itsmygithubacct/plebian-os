@@ -197,9 +197,9 @@ class EarlyHopTests(unittest.TestCase):
             "PLEB_CLOSURE_SYSTEM": str(base / "root/etc/pleb/closure.env"),
             "PLEBIAN_OS_RECOVERY_BASE": str(base / "root/var/lib/plebian-os"),
             "PLEBIAN_OS_SELECTOR_DST": str(
-                base / "root/usr/local/bin/plebian-os-select-closure"),
+                base / "root/usr/bin/plebian-os-select-closure"),
             "PLEBIAN_OS_UPDATER_DST": str(
-                base / "root/usr/local/bin/plebian-os-update"),
+                base / "root/usr/bin/plebian-os-update"),
             "KILIX_DIR": str(kilix),
             "KILIX95_DIR": str(kilix95),
             "PLEBIAN_OS_CLOSURE_TEST_ROOT": str(base / "root"),
@@ -404,7 +404,7 @@ class EarlyHopTests(unittest.TestCase):
             self.assertEqual(env_path.read_bytes(), installed)
             self.assertEqual(closure.read_bytes(), closure_bytes)
 
-            updater = base / "root/usr/local/bin/plebian-os-update"
+            updater = base / "root/usr/bin/plebian-os-update"
             updater.write_text(
                 "#!/bin/bash\n"
                 "printf '%s\\n' \"$*\" >>\"${PLEB_TEST_UPDATER_LOG:-/dev/null}\"\n"
@@ -451,7 +451,7 @@ class EarlyHopTests(unittest.TestCase):
             older_name = records[0].name
             older = self._tree_bytes(records[0])
 
-            updater = base / "root/usr/local/bin/plebian-os-update"
+            updater = base / "root/usr/bin/plebian-os-update"
             updater.write_text(
                 "#!/bin/bash\n"
                 "printf '%s\\n' \"$*\" >>\"${PLEB_TEST_UPDATER_LOG:-/dev/null}\"\n"

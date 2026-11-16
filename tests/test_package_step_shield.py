@@ -84,7 +84,7 @@ class PackageStepShieldTests(unittest.TestCase):
         self.assertEqual(source.count(SHIELD), 2)
         native = closure.shell_function(UPDATE_NAME, "native_runtime_command")
         deps = closure.shell_function(UPDATE_NAME, "refresh_os_dependencies")
-        self.assertIn(SHIELD + "        /usr/local/sbin/plebian-os-native-runtime", native)
+        self.assertIn(SHIELD + "        $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime", native)
         self.assertIn(SHIELD + '        "$helper" --model-converters', deps)
 
     def test_unshielded_helper_dies_on_ctrl_c(self):
@@ -97,7 +97,7 @@ class PackageStepShieldTests(unittest.TestCase):
     def _shielded_native(self) -> str:
         helper = closure.shell_function(UPDATE_NAME, "run_package_step_in_its_own_session")
         native = closure.shell_function(UPDATE_NAME, "native_runtime_command")
-        native = native.replace("/usr/local/sbin/plebian-os-native-runtime", '"$HELPER"')
+        native = native.replace("$PLEBIAN_OS_SBINDIR/plebian-os-native-runtime", '"$HELPER"')
         native = native.replace("/usr/bin/sudo", "/usr/bin/env")
         return helper + "\n" + native
 

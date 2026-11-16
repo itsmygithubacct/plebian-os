@@ -536,8 +536,10 @@ fi
             update.index("\nROOT_DEPLOY", update.index("<<'ROOT_DEPLOY'"))
         ]
         self.assertNotIn("exit 1", root_deploy)
+        self.assertEqual(update.count("for dir in / /usr /usr/share; do"), 1)
         self.assertGreaterEqual(
-            update.count("for dir in / /usr /usr/local /usr/local/share"), 4
+            update.count('for dir in / /usr "$PLEBIAN_OS_BINDIR" "$PLEBIAN_OS_SBINDIR" /usr/libexec /usr/share'),
+            3,
         )
         self.assertIn("for path in / /usr /usr/local /usr/local/share; do", provision)
         self.assertIn("(8#$mode & 8#1) != 0", provision)
@@ -626,26 +628,29 @@ desktop_wallpaper_matches_expected_hash \
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         update = (ROOT / "provision" / "plebian-os-update.sh").read_text()
-        destination = "/usr/local/share/plebian-os/wallpapers/plebian-os.png"
+        preseed_destination = "/usr/local/share/plebian-os/wallpapers/plebian-os.png"
+        update_destination = "$PLEBIAN_OS_DATADIR/wallpapers/plebian-os.png"
 
         self.assertIn('assets/desktop/plebian-os.png', remaster)
         self.assertIn("PLEBIAN_OS_DESKTOP_WALLPAPER_SHA256", remaster)
         self.assertIn("desktop-wallpaper.png", remaster)
-        self.assertIn(destination, preseed)
+        self.assertIn(preseed_destination, preseed)
         self.assertIn('assets/desktop/plebian-os.png', update)
         self.assertIn("desktop-wallpaper.png", update)
         self.assertIn('wallpaper_actual" = "$wallpaper_expected', update)
         self.assertIn('wallpaper_actual" = "$wallpaper_update_expected', update)
-        self.assertGreaterEqual(update.count(destination), 3)
+        self.assertGreaterEqual(update.count(update_destination), 3)
+        self.assertGreaterEqual(
+            update.count("/usr/share/plebian-os/wallpapers/plebian-os.png"), 2)
         self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
         for source, installed in (
             (
                 "assets/installer/ATTRIBUTION.md",
-                "/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
+                "$PLEBIAN_OS_NOTICEDIR/installer/ATTRIBUTION.md",
             ),
             (
                 "assets/COPYING.GPL-2",
-                "/usr/local/share/doc/plebian-os/COPYING.GPL-2",
+                "$PLEBIAN_OS_NOTICEDIR/COPYING.GPL-2",
             ),
         ):
             self.assertIn(source, update)
@@ -709,8 +714,8 @@ desktop_wallpaper_matches_expected_hash \
             self.assertEqual(snapshot_array.group(1), restore_array.group(1))
         for directory in (
             "/usr/local/share/doc",
-            "/usr/local/share/doc/plebian-os",
-            "/usr/local/share/doc/plebian-os/installer",
+            "$PLEBIAN_OS_NOTICEDIR",
+            "$PLEBIAN_OS_NOTICEDIR/installer",
             "/usr/local/share/doc/pleb",
             "/etc/lightdm/lightdm-gtk-greeter.conf.d",
         ):

@@ -228,13 +228,13 @@ class OllamaManifestSelectionTests(unittest.TestCase):
         for marker in ("<<'ROOT_SNAPSHOT'", "<<'ROOT_RESTORE'"):
             start = self.updater.index(marker)
             end = self.updater.index("\n)", self.updater.index("paths=(", start))
-            self.assertIn("/usr/local/share/plebian-os/ollama-release.env", self.updater[start:end])
+            self.assertIn("$PLEBIAN_OS_DATADIR/ollama-release.env", self.updater[start:end])
 
     def test_real_snapshot_and_rollback_restore_version_and_manifest_together(self):
         for present in (False, True):
             with self.subTest(previous_manifest=present):
                 fixture = snapshots.Fixture(self)
-                directory = fixture.root / "usr/local/share/plebian-os"
+                directory = fixture.root / "usr/share/plebian-os"
                 directory.mkdir()
                 directory.chmod(0o755)
                 version = directory / "VERSION"

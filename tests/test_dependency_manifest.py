@@ -465,12 +465,12 @@ class DependencyManifestTests(unittest.TestCase):
             sudo = Path(td) / "sudo"
             sudo.write_text('#!/bin/sh\nexec "$@"\n')
             sudo.chmod(0o755)
-            function = function.replace("/usr/local/sbin/plebian-os-install-deps",
+            function = function.replace("$PLEBIAN_OS_SBINDIR/plebian-os-install-deps",
                                         str(helper))
             qt = Path(td) / "qt-runtime"
             qt.write_text("#!/bin/sh\nprintf '%s\\n' \"qt-runtime $*\"\n")
             qt.chmod(0o755)
-            function = function.replace("/usr/local/sbin/plebian-os-qt-runtime", str(qt))
+            function = function.replace("$PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime", str(qt))
             # Release mode classifies apt sources before the dry run. Point it
             # at a Debian fixture so the host's own sources are not read.
             suite = subprocess.run(

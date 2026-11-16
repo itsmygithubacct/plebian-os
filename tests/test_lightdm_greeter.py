@@ -13,8 +13,8 @@ UPDATE = ROOT / "provision" / "plebian-os-update.sh"
 PRESEED = ROOT / "preseed" / "preseed.cfg"
 REMASTER = ROOT / "build" / "remaster-iso.sh"
 DESTINATION = "/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf"
-WALLPAPER = "/usr/local/share/plebian-os/wallpapers/plebian-os.png"
-CONFIG_SHA256 = "985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560"
+WALLPAPER = "/usr/share/plebian-os/wallpapers/plebian-os.png"
+CONFIG_SHA256 = "4c888bb55fbd2e0d8ae60f8cca06bb606879fb3168168174156d0952a931564b"
 
 
 class LightdmGreeterBrandingTests(unittest.TestCase):
@@ -111,7 +111,7 @@ validate_artwork_notice "$CONFIG" "$LIGHTDM_GREETER_CONFIG_SHA256" \
         self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
         self.assertGreaterEqual(update.count("lightdm-gtk-greeter.conf"), 8)
         self.assertGreaterEqual(update.count(DESTINATION), 3)
-        self.assertIn("/ /usr /usr/local /usr/local/share /etc /etc/lightdm", update)
+        self.assertIn("/etc /etc/lightdm", update)
         self.assertIn("/etc/lightdm/lightdm-gtk-greeter.conf.d; do", update)
         self.assertIn('python3 - "${new_paths[10]}"', update)
         snapshot = update[update.index("<<'ROOT_SNAPSHOT'"):update.index("\nROOT_SNAPSHOT")]

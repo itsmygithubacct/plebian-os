@@ -399,7 +399,7 @@ class LatestReleaseUpdateTests(unittest.TestCase):
         source = UPDATE.read_text()
         self.assertIn('relaunch_env+=(-u "$key")', source)
         self.assertIn(
-            'exec "${relaunch_env[@]}" /usr/local/bin/plebian-os-update',
+            'exec "${relaunch_env[@]}" $PLEBIAN_OS_BINDIR/plebian-os-update',
             source,
         )
 

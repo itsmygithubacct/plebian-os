@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix='selector-owner-private-',dir='/tmp') as
     os.chown(root,1000,1000)
     stage=root/'stage';stage.mkdir();os.chown(stage,1000,1000)
     if request['mode']=='image':
-        config=root/'etc/pleb'; tools=root/'usr/local/bin';tools.mkdir(parents=True)
+        config=root/'etc/pleb'; tools=root/'usr/bin';tools.mkdir(parents=True)
         selector=str(tools/'plebian-os-select-closure');updater=str(tools/'plebian-os-update')
         original_owner=0
     else:

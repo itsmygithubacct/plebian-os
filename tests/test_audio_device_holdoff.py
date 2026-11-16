@@ -1569,7 +1569,7 @@ class UpdateReinstallTests(unittest.TestCase):
         self.assertNotIn(str(payload), asked + result.stderr + result.stdout)
         # Whatever this machine has installed, the step used — or refused, or
         # reported on — the default path, and nothing else.
-        self.assertIn("/usr/local/sbin/plebian-os-provision",
+        self.assertIn("/usr/sbin/plebian-os-provision",
                       asked + result.stderr + result.stdout,
                       f"{result.stdout}\n{result.stderr}")
 
@@ -1589,8 +1589,8 @@ class UpdateReinstallTests(unittest.TestCase):
 
     # Runs inside `unshare -rmn`: the caller's uid is namespace root there, so a
     # tmpfs it mounts is owned by uid 0 and a chroot into it is a machine whose
-    # /usr, /usr/local and /usr/local/sbin really are root-owned and not group-
-    # or other-writable. The real /usr/{bin,lib,...} are bound in read-only
+    # /usr and /usr/sbin really are root-owned and not group- or
+    # other-writable. The real /usr/{bin,lib,...} are bound in read-only
     # beneath them; a file or directory bound in from the host keeps its host
     # owner, which shows as the overflow uid because host root is not mapped.
     # That is what lets the step run in PRODUCTION mode — no override, the
@@ -1605,7 +1605,7 @@ chmod 755 "$R"
 mkdir "$R/usr"
 for d in /usr/*; do
     n=${d##*/}
-    [ "$n" != local ] && [ -d "$d" ] && [ ! -L "$d" ] || continue
+    [ "$n" != local ] && [ "$n" != sbin ] && [ -d "$d" ] && [ ! -L "$d" ] || continue
     mkdir "$R/usr/$n"
     mount --rbind "$d" "$R/usr/$n"
     mount -o remount,bind,ro "$R/usr/$n" 2>/dev/null || :
@@ -1619,34 +1619,39 @@ for l in bin sbin lib lib32 lib64 libx32; do
 done
 # No unit directories from the host: the rule must have nothing to act on.
 [ ! -d "$R/usr/lib/systemd/user" ] || mount -t tmpfs units "$R/usr/lib/systemd/user"
-mkdir -p "$R/etc" "$R/tmp" "$R/dev" "$R/proc" "$R/w" "$R/usr/local/sbin"
+mkdir -p "$R/etc" "$R/tmp" "$R/dev" "$R/proc" "$R/w" "$R/usr/sbin"
 chmod 1777 "$R/tmp"
+chmod 755 "$R/usr/sbin"
 [ ! -e /etc/ld.so.cache ] || cp /etc/ld.so.cache "$R/etc/"
 mount --rbind /dev "$R/dev"
 mount --rbind /proc "$R/proc"
 mount --bind "$W" "$R/w"
 mount -o remount,bind,ro "$R/w" 2>/dev/null || :
-install -m 755 "$PROV" "$R/usr/local/sbin/plebian-os-provision"
+install -m 755 "$PROV" "$R/usr/sbin/plebian-os-provision"
 case "$CASE" in
     pass) ;;
-    sbin-writable) chmod 775 "$R/usr/local/sbin" ;;
-    local-writable) chmod 757 "$R/usr/local" ;;
+    sbin-writable) chmod 775 "$R/usr/sbin" ;;
+    local-writable) chmod 757 "$R/usr" ;;
     usr-writable) chmod 770 "$R/usr" ;;
     sbin-symlink)
         mkdir "$R/opt"
-        mv "$R/usr/local/sbin" "$R/opt/sbin"
-        ln -s /opt/sbin "$R/usr/local/sbin" ;;
+        mv "$R/usr/sbin" "$R/opt/sbin"
+        ln -s /opt/sbin "$R/usr/sbin" ;;
     file-foreign)
-        mount --bind "$FOREIGN_FILE" "$R/usr/local/sbin/plebian-os-provision" ;;
+        mount --bind "$FOREIGN_FILE" "$R/usr/sbin/plebian-os-provision" ;;
     dir-foreign)
-        rm -rf "$R/usr/local"; mkdir "$R/usr/local"
-        mount --rbind "$FOREIGN_DIR" "$R/usr/local"
-        mount -t tmpfs sbin "$R/usr/local/sbin"
-        chmod 755 "$R/usr/local/sbin"
-        install -m 755 "$PROV" "$R/usr/local/sbin/plebian-os-provision" ;;
+        # Host /usr is root-owned, which this namespace shows as the overflow
+        # uid. Binding it keeps the interpreter. A private tmpfs replaces
+        # sbin so the file stays namespace-root owned and the host sbin is
+        # not written. The refusal is the /usr ancestor.
+        mount --bind /usr "$R/usr"
+        mount -t tmpfs sbin "$R/usr/sbin"
+        chmod 755 "$R/usr/sbin"
+        install -m 755 "$PROV" "$R/usr/sbin/plebian-os-provision"
+        ;;
     *) echo "unknown case $CASE" >&2; exit 90 ;;
 esac
-for p in /usr/local/sbin/plebian-os-provision /usr/local/sbin /usr/local /usr; do
+for p in /usr/sbin/plebian-os-provision /usr/sbin /usr; do
     printf 'OWNER %s %s %s\n' "$p" "$(stat -c %u "$R$p")" "$(stat -c %a "$R$p")"
 done
 "$CHROOT" "$R" /usr/bin/env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
@@ -1662,7 +1667,7 @@ done
     def test_the_production_bar_decides_what_root_sources(self):
         """Outside a test, only a root-owned file in root-owned directories is sourced.
 
-        The step sources /usr/local/sbin/plebian-os-provision as root. Every
+        The step sources /usr/sbin/plebian-os-provision as root. Every
         other arm of this class drives it in test mode, where the ownership
         bar is deliberately relaxed to "root or the suite's own user", so none
         of them reaches the production branch: its directory walk, or its
@@ -1710,8 +1715,8 @@ done
             self.assertEqual(result.returncode, 0, output)
             self.assertEqual(
                 {p: o[0] for p, o in owners(result).items()},
-                {"/usr/local/sbin/plebian-os-provision": "0",
-                 "/usr/local/sbin": "0", "/usr/local": "0", "/usr": "0"},
+                {"/usr/sbin/plebian-os-provision": "0",
+                 "/usr/sbin": "0", "/usr": "0"},
                 "the fixture is not root-owned, so it proves nothing")
             self.assertIn("STEP rc=0", output)
             self.assertIn("no enabled user unit holds the default sound card",
@@ -1719,12 +1724,12 @@ done
                           "could be refusing everything")
 
         refused = {
-            "sbin-writable": "/usr/local/sbin writable by its group",
-            "local-writable": "/usr/local writable by others",
+            "sbin-writable": "/usr/sbin writable by its group",
+            "local-writable": "/usr writable by others",
             "usr-writable": "/usr writable by its group",
-            "sbin-symlink": "/usr/local/sbin a symlink",
+            "sbin-symlink": "/usr/sbin a symlink",
             "file-foreign": "the provisioner owned by someone else",
-            "dir-foreign": "/usr/local owned by someone else",
+            "dir-foreign": "/usr owned by someone else",
         }
         foreign = {"file-foreign": foreign_file,
                    "dir-foreign": foreign_dir / "sbin"}
@@ -1739,20 +1744,20 @@ done
                 output = result.stdout + result.stderr
                 self.assertEqual(result.returncode, 0, output)
                 if case == "dir-foreign":
-                    self.assertNotEqual(owners(result)["/usr/local"][0], "0",
+                    self.assertNotEqual(owners(result)["/usr"][0], "0",
                                         "the foreign directory shows as root")
                     self.assertEqual(
-                        owners(result)["/usr/local/sbin/plebian-os-provision"][0],
+                        owners(result)["/usr/sbin/plebian-os-provision"][0],
                         "0", "the file itself must pass, or the arm tests "
                         "the file and not the directory")
                 if case == "file-foreign":
                     self.assertNotEqual(
-                        owners(result)["/usr/local/sbin/plebian-os-provision"][0],
+                        owners(result)["/usr/sbin/plebian-os-provision"][0],
                         "0", "the foreign file shows as root")
                 self.assertRegex(output, r"STEP rc=[1-9]",
                                  f"{why}, and the step did not fail")
                 self.assertIn("installed provisioner is missing or unsafe: "
-                              "/usr/local/sbin/plebian-os-provision", output,
+                              "/usr/sbin/plebian-os-provision", output,
                               f"{why}, and the step did not refuse it")
                 self.assertNotIn("re-checking for login-time daemons", output,
                                  f"{why}, and the step went on to source it")
