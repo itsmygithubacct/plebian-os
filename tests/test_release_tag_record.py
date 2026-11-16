@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -47,9 +48,10 @@ class SelectorRecordsReleaseTagTests(unittest.TestCase):
             "final_commit": git(src, "rev-parse", "HEAD"),
         }
 
-    def _select_rc(self, base, ids):
+    def _select_rc(self, base, ids, env_extra=None):
         r = self.fx._run(base, "0.2.1", "--release-tag", "v0.2.1-rc1", "--offline",
-                         env_extra={"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": ids["rc"]},
+                         env_extra={"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": ids["rc"],
+                                    **(env_extra or {})},
                          trust_tag=False)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         return r
@@ -85,6 +87,126 @@ class SelectorRecordsReleaseTagTests(unittest.TestCase):
             back = self.fx._run(base, "--rollback")
             self.assertEqual(back.returncode, 0, back.stdout + back.stderr)
             self.assertEqual(self._pair(base), after_rc)
+
+    @staticmethod
+    def _selection_tag(record):
+        meta = (record / "meta").read_text()
+        return re.search(r"^selection_tag=([0-9a-f]{40})$", meta, re.M)[1]
+
+    def _rc_then_final_in_one_second(self, base, epoch):
+        """Select the candidate, then its final, in one frozen UTC second."""
+        session = self.fx._machine(base)
+        original = session.read_bytes()
+        ids = self._rc_then_final(base)
+        clock = self.fx._frozen_clock(base, epoch)
+        self._select_rc(base, ids, clock)
+        after_rc = self._pair(base)
+        final = self.fx._run(base, "0.2.1", "--offline", env_extra=clock)
+        self.assertEqual(final.returncode, 0, final.stdout + final.stderr)
+        records = {self._selection_tag(r): r for r in self.fx._recovery_records(base)}
+        self.assertEqual(sorted(records), sorted((ids["rc"], ids["final"])))
+        at = "at=" + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch)) + "\n"
+        for record in records.values():
+            self.assertIn(at, (record / "meta").read_text())
+        return clock, original, after_rc, records[ids["rc"]], records[ids["final"]]
+
+    def test_candidate_and_final_selected_in_one_second_roll_back_in_order(self):
+        """The A3 failure, forced: the candidate and its final in one second.
+
+        Records were named by the UTC second and a random suffix, and
+        rollback took the last name in glob order. With both selections in
+        one second the suffix decided, and about one run in six restored the
+        candidate's record: the pre-candidate machine, with no closure.env.
+        The frozen clock and descending suffixes now force that order on
+        every run. The final's record must take the next second, so rollback
+        restores the candidate, and a second rollback the machine before it.
+        """
+        epoch = int(time.time())
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            clock, original, after_rc, rc_record, final_record = \
+                self._rc_then_final_in_one_second(base, epoch)
+            stamp = self.fx._record_stamp
+            self.assertTrue(rc_record.name.startswith(
+                f"closure-rollback.{stamp(epoch)}."), rc_record.name)
+            self.assertTrue(final_record.name.startswith(
+                f"closure-rollback.{stamp(epoch + 1)}."), final_record.name)
+            # Every earlier selector restores the last name in glob order.
+            recovery = base / "root/var/lib/plebian-os"
+            for locale in ("C", "en_US.UTF-8"):
+                self.assertEqual(self.fx._last_in_glob_order(recovery, locale),
+                                 final_record.name)
+
+            back = self.fx._run(base, "--rollback", env_extra=clock)
+            self.assertEqual(back.returncode, 0, back.stdout + back.stderr)
+            self.assertEqual(self._pair(base), after_rc)
+            self.assertTrue((final_record / "restored").exists())
+            self.assertFalse((rc_record / "restored").exists())
+            back = self.fx._run(base, "--rollback", env_extra=clock)
+            self.assertEqual(back.returncode, 0, back.stdout + back.stderr)
+            self.assertEqual((base / "root/etc/pleb/session.env").read_bytes(), original)
+            self.assertFalse((base / "root/etc/pleb/closure.env").exists())
+            self.assertTrue((rc_record / "restored").exists())
+
+    def test_a_record_from_an_older_selector_orders_before_the_next_one(self):
+        """Records an RC9 or 0.2.2 selector wrote keep their names.
+
+        Such a record has the same form, but its second was never checked
+        against other records: it may be the next selection's second with a
+        suffix that sorts last, or a later second if the clock was then
+        ahead. The next record must still sort after it, for this rollback
+        and for an older selector's last-in-glob-order rollback.
+        """
+        epoch = int(time.time())
+        stamp = self.fx._record_stamp
+        for ahead in (0, 30):
+            with self.subTest(older_record_ahead_of_clock=ahead), \
+                    tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                self.fx._machine(base)
+                ids = self._rc_then_final(base)
+                clock = self.fx._frozen_clock(base, epoch)
+                self._select_rc(base, ids, clock)
+                after_rc = self._pair(base)
+                (written,) = self.fx._recovery_records(base)
+                older = written.rename(written.with_name(
+                    f"closure-rollback.{stamp(epoch + ahead)}.zzzzzz"))
+                final = self.fx._run(base, "0.2.1", "--offline", env_extra=clock)
+                self.assertEqual(final.returncode, 0, final.stdout + final.stderr)
+                (newer,) = [r for r in self.fx._recovery_records(base) if r != older]
+                self.assertEqual(self._selection_tag(newer), ids["final"])
+                self.assertTrue(newer.name.startswith(
+                    f"closure-rollback.{stamp(epoch + ahead + 1)}."), newer.name)
+                recovery = base / "root/var/lib/plebian-os"
+                for locale in ("C", "en_US.UTF-8"):
+                    self.assertEqual(self.fx._last_in_glob_order(recovery, locale),
+                                     newer.name)
+                back = self.fx._run(base, "--rollback", env_extra=clock)
+                self.assertEqual(back.returncode, 0, back.stdout + back.stderr)
+                self.assertEqual(self._pair(base), after_rc)
+                self.assertTrue((newer / "restored").exists())
+                self.assertFalse((older / "restored").exists())
+
+    def test_rollback_refuses_two_unrestored_records_from_one_second(self):
+        """An earlier selector's same-second pair has no provable order.
+
+        Rollback must restore the record from before the last selection or
+        refuse. It refuses, restores nothing, and marks nothing.
+        """
+        epoch = int(time.time())
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            clock, _, _, rc_record, final_record = \
+                self._rc_then_final_in_one_second(base, epoch)
+            final_record = final_record.rename(final_record.with_name(
+                f"closure-rollback.{self.fx._record_stamp(epoch)}.000000"))
+            installed = self._pair(base)
+            refused = self.fx._run(base, "--rollback", env_extra=clock)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("cannot tell which recovery record is newest", refused.stderr)
+            self.assertEqual(self._pair(base), installed)
+            self.assertFalse((final_record / "restored").exists())
+            self.assertFalse((rc_record / "restored").exists())
 
     def test_failed_final_apply_leaves_the_candidate_closure_and_record(self):
         for boundary in ("session", "closure", "selector", "updater"):

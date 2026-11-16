@@ -457,9 +457,8 @@ class EarlyHopTests(unittest.TestCase):
                 "printf '%s\\n' \"$*\" >>\"${PLEB_TEST_UPDATER_LOG:-/dev/null}\"\n"
                 "exit 0\n")
             updater.chmod(0o755)
-            # Record names sort by UTC timestamp. A same-second pair would
-            # order by the random suffix, so the second selection waits.
-            time.sleep(1.1)
+            # No pause: the second selection's record sorts after the first
+            # even when both land in one UTC second.
             manifest = base / "src/releases/0.1.8.env"
             manifest.write_text(manifest.read_text().replace(
                 PREBUILT_SHA, "c" * 64, 1))

@@ -664,8 +664,13 @@ bash "$SEL" --rollback        # put the previous closure back
 The previous `/etc/pleb/session.env` is saved under
 `/var/lib/plebian-os/closure-rollback.<timestamp>.*` with a record of the closure
 that replaced it, so `--rollback` is available until the upgrade is committed and
-afterwards. Keep `$SEL` until the upgrade has succeeded as an independent
-recovery entrypoint, then `rm -f "$SEL"`.
+afterwards. `--rollback` restores the newest record not yet restored, by its
+`<timestamp>` (UTC, to the second). A selection names its record at least one
+second after every existing record, so two selections within one second still
+roll back in order; the time it actually ran is `at=` in the record's `meta`. If
+two unrestored records left by a selector before 0.2.3 share the newest second,
+`--rollback` refuses and restores nothing. Keep `$SEL` until the upgrade has
+succeeded as an independent recovery entrypoint, then `rm -f "$SEL"`.
 
 Do not assemble pins from several releases or run a bare privileged provisioner
 between closure selection and the updater. Back up irreplaceable personal data

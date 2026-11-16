@@ -1838,6 +1838,74 @@ record_release_value() {
     printf '%s\n' "$value"
 }
 
+# ── recovery records are ordered by the selection that wrote them ──────────
+# A record is named closure-rollback.<UTC second>.<random>, and every selector
+# since 0.1.8 restores the newest one by that second. Before 0.2.3 a record
+# took the current second, and rollback took the last name in glob order: two
+# selections in one second (an RC and its final, back to back), or a clock set
+# back, left the order to the random suffix, and --rollback could restore the
+# record of the selection before the last one. A new record now takes the
+# current second only if it is later than every existing record's; otherwise
+# it takes the second after the newest. The names keep their form, so a record
+# written here also sorts last for the glob-order rollback of an older
+# selector, and existing records keep their meaning. The time a selection ran
+# is in the record's meta (at=).
+recovery_record_seconds() {
+    local stamp="$1"
+    [[ "$stamp" =~ ^([0-9]{8})T([0-9]{6})Z$ ]] || return 1
+    printf '%s\n' "$((10#${BASH_REMATCH[1]}${BASH_REMATCH[2]}))"
+}
+
+# Print the stamp for a new record under $1.
+recovery_record_stamp() {
+    local base="$1" now now_key candidate stamp key newest="" newest_key=-1 epoch next
+    now="$(date -u +%Y%m%dT%H%M%SZ)" || return 1
+    now_key="$(recovery_record_seconds "$now")" || return 1
+    for candidate in "$base"/closure-rollback.*; do
+        [ -e "$candidate" ] || [ -L "$candidate" ] || continue
+        stamp="${candidate##*/closure-rollback.}"
+        stamp="${stamp%%.*}"
+        key="$(recovery_record_seconds "$stamp")" || continue
+        if (( key > newest_key )); then newest="$stamp" newest_key="$key"; fi
+    done
+    if (( now_key > newest_key )); then
+        printf '%s\n' "$now"
+        return 0
+    fi
+    epoch="$(date -u -d "${newest:0:4}-${newest:4:2}-${newest:6:2} ${newest:9:2}:${newest:11:2}:${newest:13:2} UTC" +%s)" \
+        || return 1
+    [[ "$epoch" =~ ^[0-9]+$ ]] || return 1
+    next="$(date -u -d "@$((epoch + 1))" +%Y%m%dT%H%M%SZ)" || return 1
+    key="$(recovery_record_seconds "$next")" || return 1
+    (( key > newest_key )) || return 1
+    printf '%s\n' "$next"
+}
+
+# Print the newest of the records given, by the second in each name. Status 12
+# when that is not provable: a name with no second, or two records sharing the
+# newest second. Only an earlier selector writes such a pair, and nothing in
+# it says which selection came last, so rollback refuses rather than guess.
+newest_recovery_record() {
+    local candidate stamp key newest="" newest_key=-1 tied=0
+    for candidate in "$@"; do
+        stamp="${candidate##*/closure-rollback.}"
+        stamp="${stamp%%.*}"
+        key="$(recovery_record_seconds "$stamp")" || return 12
+        if (( key > newest_key )); then
+            newest="$candidate" newest_key="$key" tied=0
+        elif (( key == newest_key )); then
+            tied=1
+        fi
+    done
+    [ -n "$newest" ] || return 4
+    [ "$tied" = 0 ] || return 12
+    printf '%s\n' "$newest"
+}
+
+die_unordered_recovery_records() {
+    die "refusing rollback: cannot tell which recovery record is newest under $RECOVERY_BASE. Two unrestored closure-rollback records share the newest second (a selector before 0.2.3 named two selections made in one second that way), or one has no second in its name. Nothing was restored or marked, and the selected closure is still installed. Compare from=, to= and at= in each record's meta to find the last selection; do not delete recovery records."
+}
+
 apply_selected_closure() {
     local pre_sha post_sha selector_pre selector_post selector_expected
     local updater_pre updater_post updater_expected rc=0 record
@@ -1851,7 +1919,7 @@ apply_selected_closure() {
     # shell writing into the stage would leave something root cannot hand back.
     closure_elevate bash -s -- \
         "$SESSION_ENV" "$SELECTOR_DST" "$UPDATER_DST" "$STAGE" "$RECOVERY_BASE" \
-        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_APPLY'
+        "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" < <(declare -f record_release_value recovery_record_seconds recovery_record_stamp; cat <<'ROOT_APPLY'
 set -euo pipefail
 umask 077
 env_path="$1"; selector_path="$2"; updater_path="$3"; stage="$4"; base="$5"; fail_after="$6"
@@ -1908,7 +1976,8 @@ if [ "$EUID" = 0 ]; then
     base_mode="$(stat -c '%a' -- "$base")"
     (( (8#$base_mode & 8#22) == 0 )) || exit 2
 fi
-record="$(mktemp -d "$base/closure-rollback.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+stamp="$(recovery_record_stamp "$base")" || exit 2
+record="$(mktemp -d "$base/closure-rollback.$stamp.XXXXXX")"
 env_tmp="" env_moved=0
 restore_copy() {
     local src="$1" dst="$2" tmp
@@ -2039,7 +2108,7 @@ apply_split_closure() {
         "$SESSION_ENV" "$CLOSURE_ENV" "$SELECTOR_DST" "$UPDATER_DST" \
         "$STAGE" "$RECOVERY_BASE" "$SELECTOR_MODE" \
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" "$config_uid" "$config_gid" \
-        >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_SPLIT_APPLY'
+        >"$STAGE/record" < <(declare -f record_release_value recovery_record_seconds recovery_record_stamp; cat <<'ROOT_SPLIT_APPLY'
 set -euo pipefail
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
@@ -2107,7 +2176,8 @@ for i in "${!paths[@]}"; do
     [ "$(sha256sum "$stage/${stage_names[$i]}" | awk '{print $1}')" = "${expected[$i]}" ] || exit 3
     moved[$i]=0
 done
-record="$(mktemp -d "$base/closure-rollback.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+stamp="$(recovery_record_stamp "$base")" || exit 2
+record="$(mktemp -d "$base/closure-rollback.$stamp.XXXXXX")"
 restore_copy() {
     local src="$1" dst="$2" tmp
     tmp="$(mktemp "$(dirname -- "$dst")/.plebian-os-restore.XXXXXX")" || return 1
@@ -2271,7 +2341,7 @@ rollback_previous_closure() {
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
         "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" \
         "${REQUIRE_OWN_RECORD:-0}" \
-        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record; cat <<'ROOT_ROLLBACK'
+        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record recovery_record_seconds newest_recovery_record; cat <<'ROOT_ROLLBACK'
 set -euo pipefail
 umask 077
 env_path="$1"; selector_path="$2"; updater_path="$3"; base="$4"; fail_after="$5"
@@ -2288,14 +2358,17 @@ if [ "$EUID" = 0 ]; then
         (( (8#$dir_mode & 8#22) == 0 )) || exit 2
     done
 fi
-record=""
+candidates=()
 for candidate in "$base"/closure-rollback.*; do
     [ -d "$candidate" ] && [ ! -L "$candidate" ] || continue
     [ -f "$candidate/session.env" ] || continue
     if [ -e "$candidate/restored" ]; then continue; fi
-    record="$candidate"                    # timestamped names sort oldest first
+    candidates+=("$candidate")
 done
-[ -n "$record" ] || exit 4
+[ "${#candidates[@]}" -gt 0 ] || exit 4
+record_status=0
+record="$(newest_recovery_record "${candidates[@]}")" || record_status=$?
+[ "$record_status" = 0 ] || exit "$record_status"
 refuse_unrelated_recovery_record "$record" "$require_own" "$trusted_tag"
 if [ "$EUID" = 0 ]; then
     [ "$(stat -c '%u' -- "$record")" = 0 ] || exit 2
@@ -2494,6 +2567,7 @@ ROOT_ROLLBACK
             prev="$(cat "$STAGE/record")"
             die "this machine has left the Debian install snapshot; release $prev predates live security sources and its updater would refuse live Debian indexes. Select a release >= 0.2.2 instead" ;;
         11) die_unstarted_selection ;;
+        12) die_unordered_recovery_records ;;
         *) die "could not restore the previous closure (status $rc); the selected session and installed tools were retained" ;;
     esac
     record="$(cat "$STAGE/record")"
@@ -2518,21 +2592,24 @@ rollback_split_closure() {
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
         "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" \
         "${REQUIRE_OWN_RECORD:-0}" \
-        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record; cat <<'ROOT_SPLIT_ROLLBACK'
+        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record recovery_record_seconds newest_recovery_record; cat <<'ROOT_SPLIT_ROLLBACK'
 set -euo pipefail
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
 base="$5"; mode="$6"; fail_after="$7"
 trusted_tag="${8:-}"; require_own="${9:-0}"
 [ -d "$base" ] && [ ! -L "$base" ] || exit 4
-record=""
+candidates=()
 for candidate in "$base"/closure-rollback.*; do
     [ -d "$candidate" ] && [ ! -L "$candidate" ] || continue
     [ -f "$candidate/session.existed" ] && [ -f "$candidate/closure.existed" ] || continue
     [ ! -e "$candidate/restored" ] || continue
-    record="$candidate"
+    candidates+=("$candidate")
 done
-[ -n "$record" ] || exit 4
+[ "${#candidates[@]}" -gt 0 ] || exit 4
+record_status=0
+record="$(newest_recovery_record "${candidates[@]}")" || record_status=$?
+[ "$record_status" = 0 ] || exit "$record_status"
 refuse_unrelated_recovery_record "$record" "$require_own" "$trusted_tag"
 
 # Apply the same live-APT downgrade floor as legacy rollback, reading the
@@ -2655,6 +2732,7 @@ ROOT_SPLIT_ROLLBACK
                 4) die "no split closure to roll back to" ;;
                 9) die "injected split rollback failure; the selected session, closure, and tools were retained" ;;
                 11) die_unstarted_selection ;;
+                12) die_unordered_recovery_records ;;
                 *) die "split closure rollback failed with status $rc; the selected bytes were retained" ;;
             esac
         fi

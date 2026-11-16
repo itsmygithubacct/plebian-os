@@ -332,6 +332,64 @@ class ClosureSelectionTests(unittest.TestCase):
         return sorted(p for p in recovery.iterdir()
                       if p.name.startswith("closure-rollback."))
 
+    @staticmethod
+    def _frozen_clock(base: Path, epoch: int) -> dict:
+        """PATH for a selector whose every selection lands in one UTC second.
+
+        `date` without an explicit time reports `epoch`; a date it is handed
+        (-d, -r, -f, -s) is passed through, so a conversion still works. A
+        recovery record made by `mktemp -d .../closure-rollback.*.XXXXXX`
+        gets a descending suffix: a later record's random part sorts before an
+        earlier one's, the order a real random suffix gave about half the
+        time. Only that template is changed; every other mktemp is real.
+        """
+        bindir = base / "frozen-clock-bin"
+        bindir.mkdir()
+        date = shutil.which("date")
+        mktemp = shutil.which("mktemp")
+        (bindir / "date").write_text(
+            "#!/bin/bash\n"
+            'for arg in "$@"; do\n'
+            '    case "$arg" in\n'
+            "        -d*|--date|--date=*|-r*|--reference|--reference=*|-f*|--file|--file=*|-s*|--set|--set=*)\n"
+            f'            exec {shlex.quote(date)} "$@" ;;\n'
+            "    esac\n"
+            "done\n"
+            f'exec {shlex.quote(date)} -d @{int(epoch)} "$@"\n')
+        counter = bindir / "record-count"
+        (bindir / "mktemp").write_text(
+            "#!/bin/bash\n"
+            'if [ "$#" = 2 ] && [ "$1" = -d ]; then\n'
+            '    case "$2" in\n'
+            "        */closure-rollback.*.XXXXXX)\n"
+            f"            n=$(cat {shlex.quote(str(counter))} 2>/dev/null || printf 0)\n"
+            f"            printf '%s\\n' \"$((n + 1))\" >{shlex.quote(str(counter))}\n"
+            "            dir=\"${2%XXXXXX}$(printf '%06d' \"$((999999 - n))\")\"\n"
+            '            mkdir -m 0700 -- "$dir" || exit 1\n'
+            "            printf '%s\\n' \"$dir\"\n"
+            "            exit 0 ;;\n"
+            "    esac\n"
+            "fi\n"
+            f'exec {shlex.quote(mktemp)} "$@"\n')
+        for tool in ("date", "mktemp"):
+            (bindir / tool).chmod(0o755)
+        return {"PATH": f"{bindir}:{os.environ['PATH']}"}
+
+    @staticmethod
+    def _record_stamp(epoch: int) -> str:
+        return time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(epoch))
+
+    @staticmethod
+    def _last_in_glob_order(recovery: Path, locale="C") -> str:
+        """The record every selector before 0.2.3 restores: the last
+        unrestored name in the shell's glob order."""
+        loop = ('for c in "$1"/closure-rollback.*; do '
+                '[ -e "$c/restored" ] || r=${c##*/}; done; printf %s "$r"')
+        env = dict(os.environ, LC_ALL=locale)
+        return subprocess.run(["bash", "-c", loop, "bash", str(recovery)],
+                              env=env, text=True, capture_output=True,
+                              check=True).stdout
+
     # ── a complete closure selects ──────────────────────────────────────────
     def test_a_bare_repository_is_an_acceptable_source(self):
         """Pleb hands the selector a bare repo, so the selector must take one.
@@ -1414,14 +1472,13 @@ class ClosureSelectionTests(unittest.TestCase):
                 first = (self._state(user_env), self._state(closure))
                 self.assertEqual(self._run(base, "--rollback", env_extra=env_extra).returncode, 0)
                 self.assertEqual((self._state(user_env), self._state(closure)), unselected)
-                # Recovery records are named by the second they were written.
-                time.sleep(1.1)
+                # No pause between selections: a record's name sorts after
+                # every existing record even within one second.
                 again = self._select_first(base, env_extra)
                 self.assertEqual(again.returncode, 0, again.stderr)
                 self.assertEqual((self._state(user_env), self._state(closure)), first)
                 # Selecting once more starts from a selected machine: an
                 # ordinary record carrying the selected release.
-                time.sleep(1.1)
                 reselected = self._select_first(base, env_extra)
                 self.assertEqual(reselected.returncode, 0, reselected.stderr)
                 self.assertIn("closure: 0.2.2 -> 0.2.2 (reselecting the same release",
@@ -2090,6 +2147,144 @@ class ClosureSelectionTests(unittest.TestCase):
             again = self._run(base, "--rollback")
             self.assertNotEqual(again.returncode, 0)
             self.assertIn("no closure to roll back to", again.stderr)
+
+    def _two_selections_in_one_second(self, base: Path, epoch: int):
+        """Select 0.1.8 twice in one UTC second on a legacy-layout machine.
+
+        Returns the clock PATH, the session bytes before and after the first
+        selection, and the two records, told apart by their contents: the
+        first selection found no installed selector, the second found one.
+        """
+        env = self._machine(base)
+        original = env.read_bytes()
+        self._source(base)
+        clock = self._frozen_clock(base, epoch)
+        first = self._run(base, "0.1.8", "--offline", env_extra=clock)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        selected = env.read_bytes()
+        self.assertNotEqual(selected, original)
+        second = self._run(base, "0.1.8", "--offline", env_extra=clock)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        by_selector = {(r / "selector.existed").read_text(): r
+                       for r in self._recovery_records(base)}
+        self.assertEqual(sorted(by_selector), ["0\n", "1\n"])
+        at = "at=" + time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch)) + "\n"
+        for record in by_selector.values():
+            self.assertIn(at, (record / "meta").read_text())
+        return clock, original, selected, by_selector["0\n"], by_selector["1\n"]
+
+    def test_legacy_selections_in_one_second_roll_back_newest_first(self):
+        """Two selections in one UTC second: --rollback undoes the second one.
+
+        A record was named by the UTC second plus a random suffix, and
+        rollback took the last name in glob order, so a same-second pair was
+        ordered by the random part and could restore the earlier selection's
+        record. A record now takes a second past every existing record. The
+        frozen clock and the descending suffixes make the old order fail
+        every time rather than about half the time.
+        """
+        epoch = int(time.time())
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            clock, original, selected, older, newer = \
+                self._two_selections_in_one_second(base, epoch)
+            env = base / "root/etc/pleb/session.env"
+            selector = base / "root/usr/local/bin/plebian-os-select-closure"
+            self.assertTrue(older.name.startswith(
+                f"closure-rollback.{self._record_stamp(epoch)}."), older.name)
+            self.assertTrue(newer.name.startswith(
+                f"closure-rollback.{self._record_stamp(epoch + 1)}."), newer.name)
+            # Every earlier selector restores the last name in glob order.
+            recovery = base / "root/var/lib/plebian-os"
+            for locale in ("C", "en_US.UTF-8"):
+                self.assertEqual(self._last_in_glob_order(recovery, locale), newer.name)
+
+            back = self._run(base, "--rollback", env_extra=clock)
+            self.assertEqual(back.returncode, 0, back.stderr)
+            self.assertIn(newer.name, back.stdout + back.stderr)
+            self.assertEqual(env.read_bytes(), selected)
+            self.assertEqual(selector.read_bytes(), SELECT.read_bytes())
+            self.assertTrue((newer / "restored").exists())
+            self.assertFalse((older / "restored").exists())
+            back = self._run(base, "--rollback", env_extra=clock)
+            self.assertEqual(back.returncode, 0, back.stderr)
+            self.assertEqual(env.read_bytes(), original)
+            self.assertFalse(selector.exists())
+            self.assertTrue((older / "restored").exists())
+
+    def test_recovery_record_stamps_order_records_by_selection(self):
+        """The stamp rule and the reader, apart from any selection."""
+        source = SELECT.read_text()
+        functions = "\n".join(
+            re.search(rf"^{name}\(\) \{{.*?^\}}", source, re.S | re.M)[0]
+            for name in ("recovery_record_seconds", "recovery_record_stamp",
+                         "newest_recovery_record"))
+        epoch = 1798761599          # 2026-12-31T23:59:59Z
+        stamp = self._record_stamp
+
+        def run(command, base, *args):
+            ran = subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", functions + "\n" + command,
+                 "bash", str(base), *args],
+                env={**os.environ, **clock}, text=True, capture_output=True)
+            return ran.returncode, ran.stdout.strip()
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "recovery"
+            base.mkdir()
+            clock = self._frozen_clock(Path(td), epoch)
+            new = 'recovery_record_stamp "$1"'
+            self.assertEqual(run(new, base), (0, stamp(epoch)))
+            (base / f"closure-rollback.{stamp(epoch - 5)}.zzzzzz").mkdir()
+            (base / "closure-rollback.copy").mkdir()
+            self.assertEqual(run(new, base), (0, stamp(epoch)))
+            (base / f"closure-rollback.{stamp(epoch)}.AAAAAA").mkdir()
+            # The next second, across a year boundary.
+            self.assertEqual(run(new, base), (0, "20270101T000000Z"))
+            (base / f"closure-rollback.{stamp(epoch + 3600)}.000000").mkdir()
+            self.assertEqual(run(new, base), (0, stamp(epoch + 3601)))
+
+            newest = 'newest_recovery_record "${@:2}"'
+            names = [f"closure-rollback.{stamp(epoch + 1)}.zzzzzz",
+                     f"closure-rollback.{stamp(epoch + 2)}.000000",
+                     f"closure-rollback.{stamp(epoch)}.zzzzzz"]
+            paths = [str(base / name) for name in names]
+            self.assertEqual(run(newest, base, *paths), (0, paths[1]))
+            # A shared second below the newest does not matter.
+            tied_below = paths + [str(base / f"closure-rollback.{stamp(epoch + 1)}.AAAAAA")]
+            self.assertEqual(run(newest, base, *tied_below), (0, paths[1]))
+            tied_top = paths + [str(base / f"closure-rollback.{stamp(epoch + 2)}.AAAAAA")]
+            self.assertEqual(run(newest, base, *tied_top)[0], 12)
+            self.assertEqual(run(newest, base, *paths, str(base / "closure-rollback.copy"))[0], 12)
+            self.assertEqual(run(newest, base, *paths,
+                                 str(base / "closure-rollback.2026111T000000Z.x"))[0], 12)
+
+    def test_rollback_refuses_records_it_cannot_order(self):
+        """Nothing in these names says which selection came last: refuse.
+
+        Two unrestored records from one second are what an earlier selector
+        left when two selections shared it. A record with no second in its
+        name was not written by any selector. Rollback restores nothing and
+        marks nothing, and the selected closure stays installed.
+        """
+        epoch = int(time.time())
+        for name in (f"closure-rollback.{self._record_stamp(epoch)}.000000",
+                     "closure-rollback.copy"):
+            with self.subTest(newer=name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                clock, _, _, older, newer = \
+                    self._two_selections_in_one_second(base, epoch)
+                newer = newer.rename(newer.with_name(name))
+                env = base / "root/etc/pleb/session.env"
+                selector = base / "root/usr/local/bin/plebian-os-select-closure"
+                installed = (env.read_bytes(), selector.read_bytes())
+                refused = self._run(base, "--rollback", env_extra=clock)
+                self.assertNotEqual(refused.returncode, 0)
+                self.assertIn("cannot tell which recovery record is newest",
+                              refused.stderr)
+                self.assertEqual((env.read_bytes(), selector.read_bytes()), installed)
+                self.assertFalse((newer / "restored").exists())
+                self.assertFalse((older / "restored").exists())
 
     # ── a rollback after an interrupted selection ──────────────────────────
     @staticmethod
