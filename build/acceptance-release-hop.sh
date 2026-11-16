@@ -34,9 +34,12 @@ session.env, which stores the commit, while that build-info stores the RC
 tag; the commit in the build-info peels the tag. Rollback compares session,
 closure, settings, the selector and updater, release-hop/active, the engine
 generation, and every component checkout HEAD. A fresh image has no closure
-to compare byte for byte, so that check is not recorded. The hop then runs
-again and those same paths must match the post-hop record. No bootstrap
-driver is accepted. The guest must start on the accepted previous release.
+to compare byte for byte, so that check is not recorded. Image recovery
+records are read with sudo -n. A selection_tag= value must equal
+--from-release-tag-object. A record that still cannot be read is unreadable
+and not-verified, not a pass. The hop then runs again and those same paths
+must match the post-hop record. No bootstrap driver is accepted. The guest
+must start on the accepted previous release.
 DIR must be outside $HOME. Image guests require the build-info options,
 including --predecessor-build-info-sha256 for an upgraded install. The
 command refuses non-VM hosts, a dirty source checkout, or a starting
@@ -417,25 +420,70 @@ load_closure_identity() {
     printf '%s\n' "$shell_value"
 }
 
-# RC9 writes selection_tag= into recovery meta when the trusted object is known.
-# Absent meta is not a failure. A recorded tag must equal the published object.
+# RC9 writes selection_tag= into root-only recovery meta. Read a record the
+# runner can see directly. Read a root 0700 record with sudo -n. Absent meta
+# is not a failure. A recorded tag must equal the published object. A record
+# that still cannot be read prints unreadable.
 assert_recorded_selection_tag() {
-    local root="$1" expected="$2" meta tag found=0
-    for meta in "$root"/closure-rollback.*/meta; do
-        [ -f "$meta" ] && [ ! -L "$meta" ] || continue
-        grep -q '^selection_tag=' "$meta" || continue
-        tag="$(sed -n 's/^selection_tag=\([0-9a-f]\{40\}\)$/\1/p' -- "$meta")"
+    local root="$1" expected="$2" record meta tag found=0 unreadable=0 body=""
+    [ -d "$root" ] && [ ! -L "$root" ] || {
+        printf 'absent\n'
+        return 0
+    }
+    if [ ! -r "$root" ] || [ ! -x "$root" ]; then
+        printf 'unreadable\n'
+        return 0
+    fi
+    for record in "$root"/closure-rollback.*; do
+        [ -d "$record" ] && [ ! -L "$record" ] || continue
+        meta="$record/meta"
+        body=""
+        if [ -r "$record" ] && [ -x "$record" ] && [ ! -L "$meta" ] \
+            && [ -f "$meta" ] && [ -r "$meta" ]; then
+            body="$(cat -- "$meta")" || { unreadable=1; continue; }
+        elif [ -r "$record" ] && [ -x "$record" ] \
+            && { [ -L "$meta" ] || [ ! -e "$meta" ]; }; then
+            continue
+        elif sudo -n test -f "$meta" 2>/dev/null \
+            && sudo -n test ! -L "$meta" 2>/dev/null; then
+            body="$(sudo -n cat -- "$meta" 2>/dev/null)" || { unreadable=1; continue; }
+        elif sudo -n test -L "$meta" 2>/dev/null; then
+            continue
+        elif sudo -n test -d "$record" 2>/dev/null \
+            && sudo -n test ! -e "$meta" 2>/dev/null; then
+            continue
+        else
+            unreadable=1
+            continue
+        fi
+        printf '%s\n' "$body" | grep -q '^selection_tag=' || continue
+        tag="$(printf '%s\n' "$body" | sed -n 's/^selection_tag=\([0-9a-f]\{40\}\)$/\1/p')"
         if [ "$tag" != "$expected" ]; then
             printf '%s\n' "recovery meta selection_tag does not match the published RC tag object: $meta" >&2
             return 1
         fi
         found=1
     done
+    if [ "$unreadable" -eq 1 ]; then
+        printf 'unreadable\n'
+        return 0
+    fi
     if [ "$found" -eq 1 ]; then
         printf 'matched\n'
     else
         printf 'absent\n'
     fi
+}
+
+# matched and absent pass. unreadable is recorded and is not a pass.
+record_selection_tag_check() {
+    local state="$1"
+    if [ "$state" = unreadable ]; then
+        record_check "recovery-meta-selection-tag-matches-published-rc-object" not-verified unreadable
+        return 0
+    fi
+    must "recovery-meta-selection-tag-matches-published-rc-object" "$state" \
+        test "$state" = matched -o "$state" = absent
 }
 
 # An image installed from the RC ISO has build-info and no closure.env.
@@ -1062,8 +1110,7 @@ if [ "$same_version" = 1 ]; then
     if [ "$shape" = image ]; then
         selection_tag_state="$(assert_recorded_selection_tag /var/lib/plebian-os "$from_release_tag_object")" \
             || die "installed recovery meta selection_tag does not match --from-release-tag-object"
-        must "recovery-meta-selection-tag-matches-published-rc-object" "$selection_tag_state" \
-            test "$selection_tag_state" = matched -o "$selection_tag_state" = absent
+        record_selection_tag_check "$selection_tag_state"
     fi
 else
     must "target-differs-from-installed-release" "$current -> $target" test "$current" != "$target"
