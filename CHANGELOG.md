@@ -71,8 +71,11 @@ entries below run newest first, from the final back through RC1.
   build; ten duplicate runtime libraries omitted; new modified-model notice
   `ad951c96`). A machine with delivery v9 installed and covered gets v10 from
   those files in the desktop-user upgrade step, with no download and a notice
-  receipt that claims no agreement; anything missing or different installs
-  nothing and never fails the upgrade. `stage-command-model.py` stays, as a
+  receipt that claims no agreement. That step runs unattended, shows nothing,
+  and prints where the installed terms are. Anything missing or different, a
+  partial v10 directory, a full disk, a refusing receipt store or installer,
+  or a Kilix whose catalog selects another delivery installs nothing, leaves
+  no receipt behind and never fails the upgrade. `stage-command-model.py` stays, as a
   step that changes nothing, because an earlier candidate's updater still
   runs it. The compliance carrier describes LFM2 as
   `first-use-upstream-download`; the validator refuses the retired

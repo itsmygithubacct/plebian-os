@@ -274,10 +274,12 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                           f'A machine that has delivery {earlier} installed, with a receipt that covers it, keeps the model:',
                           'installs this delivery from those files without a download',
                           'If anything is missing or differs, nothing is installed.',
+                          'That step runs unattended and shows nothing',
+                          'withdraws that receipt if the install fails.',
                           'Explicit Ask selections and earlier deliveries are retained.'):
                 if claim not in delivery:
                     gaps.append(f"{model}: DELIVERY lacks {claim!r}")
-            for false_claim in ('Installation media includes', 'stages it offline',
+            for false_claim in ('Installation media includes', 'stages it offline', 'they are shown',
                                 'bundled-command-model-archive', '/usr/local/share/doc/plebian-os/models'):
                 if false_claim in delivery:
                     gaps.append(f"{model}: DELIVERY claims the model is on the media: {false_claim!r}")

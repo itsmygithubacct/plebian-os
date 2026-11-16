@@ -8,12 +8,12 @@
   "delivery_version": "lfm2-kilix-commands-20261115-v10",
   "model_sha256": "3fa22c105b1f80823088de21a45fd2f3dc30a4cfdc63d21037c9344585fae4dd",
   "source_pins": {
-    "kilix": "aaae98295bf8f3736c08b645e5fc8aa9ffa9965d",
-    "kilix-95": "d9511f0b21903affddaf4ff80113a6f25f6a4e9b",
-    "kilix-content": "6a7f031f236f31bdb1253816399b5a1d4054ebec",
-    "kilix-license": "f363cf25d903d62ba356f325216f63f2ae168157",
-    "kilix-needle-runtime": "4f3aeaff96bd2381a34396e2afb40b900840b8ec",
-    "kilix-needle": "257e08568c51b1df4b344685b0d4428c78325804"
+    "kilix": "PENDING",
+    "kilix-95": "PENDING",
+    "kilix-content": "PENDING",
+    "kilix-license": "PENDING",
+    "kilix-needle-runtime": "PENDING",
+    "kilix-needle": "PENDING"
   },
   "model": {
     "bytes": 1388859040,
@@ -21,11 +21,11 @@
   },
   "manifest": {
     "repository": "https://github.com/itsmygithubacct/kilix-content",
-    "revision": "6a7f031f236f31bdb1253816399b5a1d4054ebec",
+    "revision": "PENDING",
     "path": "src/kilix_content/catalog/plebian.json",
-    "catalog_sha256": "a4f21955a9a908e68b5405e180f03400ebe4e8280200cd6a872c5c121b9d240c",
+    "catalog_sha256": "PENDING",
     "asset_id": "lfm2-kilix-commands",
-    "note": "kilix-needle 257e08568c51b1df4b344685b0d4428c78325804 describes delivery lfm2-kilix-commands-20261115-v10 and weight lfm2-kilix-v5e1-wse-20261106.9; kilix-license f363cf25d903d62ba356f325216f63f2ae168157 records the v10 modified-model notice (ad951c96). The weight and the CPU runtime build are those of delivery lfm2-kilix-commands-20261106-v9, byte for byte; v10 omits v9's ten duplicate copies of five versioned runtime libraries. None of these commits is published yet."
+    "note": "The final kilix-content catalog selects delivery lfm2-kilix-commands-20261115-v10 and weight lfm2-kilix-v5e1-wse-20261106.9, with the v10 modified-model notice (ad951c96) recorded by kilix-license. The weight and the CPU runtime build are those of delivery lfm2-kilix-commands-20261106-v9, byte for byte; v10 omits v9's ten duplicate copies of five versioned runtime libraries. None of the commits is published yet."
   },
   "delivery": {
     "mode": "first-use-download",
@@ -44,7 +44,7 @@
     ],
     "non_interactive": "a non-interactive Ask never asks and never downloads",
     "decline": "declining keeps the grammar and is remembered as the saved Ask selection",
-    "agreement": "notice terms by the owner's 2026-11-07 determination: the install records a notice receipt that claims no agreement; the terms, including the commercial-use limitation, are shown, shipped with the model and not waived; terms that need a typed agreement are never answered by Plebian-OS",
+    "agreement": "notice terms by the owner's 2026-11-07 determination: an install records a notice receipt that claims no agreement; the terms, including the commercial-use limitation, are shipped with the model under its notices/ directory and not waived. The first-use offer shows them before the download; the upgrade's local migration shows nothing, because it runs unattended, and records the same notice receipt Kilix's non-interactive path records, only where the user's v9 install already holds a receipt for the same licence record; it prints where the installed terms are. Terms that need a typed agreement are never answered by Plebian-OS",
     "local_migration": {
       "from_version": "lfm2-kilix-commands-20261106-v9",
       "from_manifest_digest": "ef701ec2c8fb6a46bbe733d51a6be498e325bb60d3b45ec8938f0ed0ba1aef50",
@@ -52,7 +52,7 @@
       "requires": "the desktop user's installed v9 directory and a receipt that covers it",
       "network": false,
       "verification": "Content's supplied-directory install verifies every file against the v10 manifest; licence notices come from the licence authority",
-      "on_failure": "nothing is installed, the upgrade continues, and Kilix Ask offers the download on first use",
+      "on_failure": "nothing is installed and the upgrade continues, whatever the cause: a catalog that does not select this delivery, missing or different v9 files or receipt, a partial v10 directory, too little space, or a receipt store or installer that refuses. A receipt the run wrote is withdrawn if the install then fails. Kilix Ask offers the download on first use",
       "older_deliveries": "not migrated; their weight is not this one, so they get the first-use offer"
     },
     "explicit_user_choices_preserved": true,
@@ -194,5 +194,6 @@
     "grammar_note": "The GPU figures were measured with kilix-needle-runtime 4f3aeaff. At kilix-needle 30ee74fe, whose grammar was unchanged from 3a8e41c5, the grammar alone read 1352 of 1383 development cases correctly with no wrong action, against 1346 at 073f5e03. The catalog now selects kilix-needle 257e0856; the grammar-only figures were not re-measured there.",
     "final_wording": "PENDING: the owner session supplies the final quality wording"
   },
-  "acceptance_scope": "Ask command model for 0.2.3: a first-use download, not on the installation media and not staged by upgrades; Ask uses the grammar until it is installed. The release asset is not published yet. Release seat review of this weight and delivery is pending. Final OS media and release acceptance remain separate. LFM2's terms are a notice by the owner's 2026-11-07 determination."
+  "acceptance_scope": "Ask command model for 0.2.3: a first-use download, not on the installation media and not staged by upgrades; Ask uses the grammar until it is installed. The release asset is not published yet. Release seat review of this weight and delivery is pending. Final OS media and release acceptance remain separate. LFM2's terms are a notice by the owner's 2026-11-07 determination.",
+  "source_pins_note": "The Kilix, Kilix 95, kilix-content, kilix-license and Needle commits this delivery ships with are not settled; they are filled in, and the carrier regenerated once, when the final pins are selected. Until then releases/0.2.3.env still names the RC9 Kilix, whose catalog selects v9: the migration then installs nothing and the release guard refuses the carrier."
 }

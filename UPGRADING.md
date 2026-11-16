@@ -295,15 +295,21 @@ closure is left unchanged.
   whether to download it on the first interactive `kilix ask` and on the model
   wizard's Local Workflows / Kilix Ask page. A non-interactive Ask never asks.
 - **A machine that has delivery v9 keeps the model, without a download.** The
-  upgraded catalog selects delivery `lfm2-kilix-commands-20261115-v10`, whose
-  files other than `notices/NOTICE.txt` are byte-identical to v9's. When the
+  release's Kilix catalog selects delivery `lfm2-kilix-commands-20261115-v10`,
+  whose files other than `notices/NOTICE.txt` are byte-identical to v9's. (The
+  release pins must name such a Kilix; with a Kilix whose catalog selects
+  another delivery, this step does nothing.) When the
   desktop user has v9 installed with a receipt that covers it, the desktop-user
   step installs v10 from those files through the Content installer's
   supplied-directory path, which verifies every file against the v10 manifest,
-  and records the notice receipt (no agreement is recorded or typed). If
-  anything is missing or differs, nothing is installed and the upgrade
-  continues; Ask then offers the download on first use. A saved Ask selection
-  is left unchanged.
+  and records the notice receipt (no agreement is recorded or typed). The
+  step runs unattended and shows nothing: it records that receipt only where
+  the v9 receipt covers the same licence record, and prints where the
+  installed terms are (the model's `notices/` directory). If anything is
+  missing or differs, a partial v10 directory is in the way, the disk is too
+  full, or the receipt store or installer refuses, nothing is installed, a
+  receipt the step wrote is withdrawn, and the upgrade continues; Ask then
+  offers the download on first use. A saved Ask selection is left unchanged.
 - **Older deliveries** (v8 and earlier) hold another weight and are not
   migrated; they get the first-use offer.
 - **What stays on disk.** The v9 directory and its receipt stay, so a rollback
