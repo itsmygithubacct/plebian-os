@@ -22,7 +22,7 @@ INSTALLER_BRANDER="$HERE/build/brand-installer.py"
 DESKTOP_WALLPAPER="$HERE/assets/desktop/plebian-os.png"
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 LIGHTDM_GREETER_CONFIG="$HERE/provision/lightdm-gtk-greeter.conf"
-LIGHTDM_GREETER_CONFIG_SHA256=985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560
+LIGHTDM_GREETER_CONFIG_SHA256=4c888bb55fbd2e0d8ae60f8cca06bb606879fb3168168174156d0952a931564b
 INSTALLER_ATTRIBUTION="$HERE/assets/installer/ATTRIBUTION.md"
 INSTALLER_ATTRIBUTION_SHA256=5f5996a32c0a92debe2fef972463d28d53495e6e64af78e0e14aa4a109196ce9
 GPL2_LICENSE="$HERE/assets/COPYING.GPL-2"
@@ -79,7 +79,7 @@ fi
     echo "tracked LightDM greeter configuration checksum mismatch: $LIGHTDM_GREETER_CONFIG" >&2
     exit 1
 }
-if ! grep -Fxq 'background=/usr/local/share/plebian-os/wallpapers/plebian-os.png' \
+if ! grep -Fxq 'background=/usr/share/plebian-os/wallpapers/plebian-os.png' \
         "$LIGHTDM_GREETER_CONFIG" \
         || ! grep -Fxq 'user-background=false' "$LIGHTDM_GREETER_CONFIG"; then
     echo "tracked LightDM greeter configuration does not select fixed Plebian branding" >&2

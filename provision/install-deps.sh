@@ -3,7 +3,7 @@
 #
 # The single source of truth for the first-boot dependency set: the provisioner
 # (plebian-os-provision) calls this, and it is deployed to the target as
-# /usr/local/sbin/plebian-os-install-deps so you can re-run it to debug a bad
+# /usr/sbin/plebian-os-install-deps so you can re-run it to debug a bad
 # dependency later.  Packages are installed in labelled groups, and a summary at
 # the end names any group that failed — so a broken/renamed package is easy to
 # find instead of hiding inside one giant apt line.

@@ -26,6 +26,18 @@
 # plan without touching anything.
 set -euo pipefail
 
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
+
+
 # Keep all existing source/rollback operations inside one bounded offline Git
 # environment when a digest-bound carrier is installed or explicitly selected.
 # The helper owns its temporary source pool for this invocation and cleans it.
@@ -33,7 +45,7 @@ if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_S
     && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
          || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
     _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
-    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=/usr/local/sbin/plebian-os-source-carrier
+    [ -f "$_source_carrier_helper" ] || _source_carrier_helper=$PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
     [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
     exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
 fi
@@ -59,7 +71,7 @@ WAYDROID_RECORDED_PUBLISH_DIR=""
 #
 # Both scripts declare the set, and neither can read the other's copy at the
 # moment it needs it: this provisioner is installed as one file in
-# /usr/local/sbin (the preseed's late_command and the updater's OS layer both
+# /usr/sbin (the preseed's late_command and the updater's OS layer both
 # copy exactly this file, with no siblings to source), and UPGRADING.md has the
 # operator run the selector as a standalone file extracted straight out of the
 # target release's tag. tests/test_provision_pin_integrity.py reads both
@@ -551,19 +563,19 @@ PLEB_BRANCH_EXPLICIT=0                         # 1 = --branch given on the comma
 # and the external Kilix 95 provider.  Keep this checksum in sync with the
 # tracked asset: firstboot and in-repo bootstrap fail closed rather than seed a
 # desktop state that points at missing or substituted artwork.
-DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
+DESKTOP_WALLPAPER_DST=$PLEBIAN_OS_DATADIR/wallpapers/plebian-os.png
 DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
 DESKTOP_WALLPAPER_MAX_BYTES=$((32 * 1024 * 1024))
-VERSION_MARKER_DST=/usr/local/share/plebian-os/VERSION
+VERSION_MARKER_DST=$PLEBIAN_OS_DATADIR/VERSION
 LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
-LIGHTDM_GREETER_CONFIG_SHA256=985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560
-INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
+LIGHTDM_GREETER_CONFIG_SHA256=4c888bb55fbd2e0d8ae60f8cca06bb606879fb3168168174156d0952a931564b
+INSTALLER_ATTRIBUTION_DST=$PLEBIAN_OS_NOTICEDIR/installer/ATTRIBUTION.md
 INSTALLER_ATTRIBUTION_SHA256=5f5996a32c0a92debe2fef972463d28d53495e6e64af78e0e14aa4a109196ce9
-GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
+GPL2_LICENSE_DST=$PLEBIAN_OS_NOTICEDIR/COPYING.GPL-2
 GPL2_LICENSE_SHA256=8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643
 ARTWORK_NOTICE_MAX_BYTES=$((1024 * 1024))
 
-# Where this script lives (deployed as /usr/local/sbin/plebian-os-provision, or
+# Where this script lives (deployed as $PLEBIAN_OS_SBINDIR/plebian-os-provision, or
 # run in-repo from provision/). The runtime dependency set now lives beside us
 # in install-deps.sh (deployed as plebian-os-install-deps) — the single source
 # of truth — which step 1 below calls.
@@ -572,7 +584,7 @@ SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Release version: prefer an explicit env (the builders bake it into
 # /etc/default/plebian-os); otherwise read the VERSION file shipped beside us.
 if [ -z "$PLEBIAN_OS_VERSION" ]; then
-    for _vf in "$SELF_DIR/../VERSION" "$SELF_DIR/VERSION" /usr/local/share/plebian-os/VERSION; do
+    for _vf in "$SELF_DIR/../VERSION" "$SELF_DIR/VERSION" $PLEBIAN_OS_DATADIR/VERSION; do
         [ -r "$_vf" ] && { PLEBIAN_OS_VERSION="$(cat "$_vf" 2>/dev/null)"; break; }
     done
 fi
@@ -802,7 +814,7 @@ ollama_verify_carrier_pins() {
 # leaves the caller to report the ordinary missing-carrier error.
 ollama_installed_runtime_matches_manifest() {
     local manifest="$1"
-    local installed_helper=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    local installed_helper=$PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
     local source_helper="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
     local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
     local helper_metadata
@@ -838,15 +850,19 @@ ollama_installed_runtime_matches_manifest() {
 
 preflight_ollama_carrier() {
     ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
-    local staging_root=/usr/local/share/plebian-os
-    local manifest_target="$staging_root/ollama-release.env"
+    # The release manifest is a small installed file. The tar.xz is payload
+    # bytes. They no longer share a directory, so each side is checked and
+    # created on its own.
+    local manifest_dir="$PLEBIAN_OS_DATADIR"
+    local carrier_dir="$PLEBIAN_OS_PAYLOADDIR"
+    local manifest_target="$manifest_dir/ollama-release.env"
     # Older 0.2.2 installations carried this exact name. Never use it for a
     # maintenance or newer release, or to bypass a present selected manifest.
     if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest_target" ] \
-        && [ ! -L "$manifest_target" ] && [ -e "$staging_root/0.2.2.env" ]; then
-        manifest_target="$staging_root/0.2.2.env"
+        && [ ! -L "$manifest_target" ] && [ -e "$manifest_dir/0.2.2.env" ]; then
+        manifest_target="$manifest_dir/0.2.2.env"
     fi
-    local carrier_target="$staging_root/ollama-runtime-carrier.tar.xz"
+    local carrier_target="$carrier_dir/ollama-runtime-carrier.tar.xz"
     local checkout_manifest="$SELF_DIR/../releases/$PLEBIAN_OS_VERSION.env"
     local cli_carrier="${PLEBIAN_OS_OLLAMA_CARRIER_ARG:-}"
     local env_carrier="${PLEBIAN_OS_OLLAMA_CARRIER:-}"
@@ -862,14 +878,17 @@ preflight_ollama_carrier() {
             || die "required preflight tool missing: $required_tool"
     done
 
-    if [ -e "$staging_root" ] || [ -L "$staging_root" ]; then
-        [ -d "$staging_root" ] && [ ! -L "$staging_root" ] \
-            || die "Ollama carrier staging path is not a real directory: $staging_root"
-        metadata="$(stat -c '%u:%a' -- "$staging_root" 2>/dev/null)" \
-            || die "could not inspect Ollama carrier staging directory: $staging_root"
-        [ "$metadata" = 0:755 ] \
-            || die "Ollama carrier staging directory must be root-owned mode 0755: $staging_root"
-    fi
+    local staging_dir
+    for staging_dir in "$manifest_dir" "$carrier_dir"; do
+        if [ -e "$staging_dir" ] || [ -L "$staging_dir" ]; then
+            [ -d "$staging_dir" ] && [ ! -L "$staging_dir" ] \
+                || die "Ollama carrier staging path is not a real directory: $staging_dir"
+            metadata="$(stat -c '%u:%a' -- "$staging_dir" 2>/dev/null)" \
+                || die "could not inspect Ollama carrier staging directory: $staging_dir"
+            [ "$metadata" = 0:755 ] \
+                || die "Ollama carrier staging directory must be root-owned mode 0755: $staging_dir"
+        fi
+    done
 
     if [ -e "$manifest_target" ] || [ -L "$manifest_target" ]; then
         [ -f "$manifest_target" ] && [ ! -L "$manifest_target" ] \
@@ -978,26 +997,26 @@ preflight_ollama_carrier() {
             || die "required preflight tool missing: $required_tool"
     done
 
-    if [ "$manifest_needs_stage" = 1 ] || [ "$carrier_needs_stage" = 1 ]; then
-        install -d -o root -g root -m 0755 "$staging_root" \
+    if [ "$manifest_needs_stage" = 1 ]; then
+        install -d -o root -g root -m 0755 "$manifest_dir" \
             || die "could not create Ollama carrier staging directory"
-        if [ "$manifest_needs_stage" = 1 ]; then
-            temporary_manifest="$(mktemp "$staging_root/.ollama-release.env.XXXXXX")" \
-                || die "could not stage the $PLEBIAN_OS_VERSION release manifest"
-            if ! install -o root -g root -m 0644 -- "$manifest_source" "$temporary_manifest" \
-                || ! mv -fT -- "$temporary_manifest" "$manifest_target"; then
-                rm -f -- "$temporary_manifest"
-                die "could not install the $PLEBIAN_OS_VERSION release manifest"
-            fi
+        temporary_manifest="$(mktemp "$manifest_dir/.ollama-release.env.XXXXXX")" \
+            || die "could not stage the $PLEBIAN_OS_VERSION release manifest"
+        if ! install -o root -g root -m 0644 -- "$manifest_source" "$temporary_manifest" \
+            || ! mv -fT -- "$temporary_manifest" "$manifest_target"; then
+            rm -f -- "$temporary_manifest"
+            die "could not install the $PLEBIAN_OS_VERSION release manifest"
         fi
-        if [ "$carrier_needs_stage" = 1 ]; then
-            temporary_carrier="$(mktemp "$staging_root/.ollama-runtime-carrier.XXXXXX")" \
-                || die "could not stage the $PLEBIAN_OS_VERSION Ollama carrier"
-            if ! install -o root -g root -m 0644 -- "$carrier_source" "$temporary_carrier" \
-                || ! mv -fT -- "$temporary_carrier" "$carrier_target"; then
-                rm -f -- "$temporary_carrier"
-                die "could not install the $PLEBIAN_OS_VERSION Ollama carrier"
-            fi
+    fi
+    if [ "$carrier_needs_stage" = 1 ]; then
+        install -d -o root -g root -m 0755 "$carrier_dir" \
+            || die "could not create Ollama carrier staging directory"
+        temporary_carrier="$(mktemp "$carrier_dir/.ollama-runtime-carrier.XXXXXX")" \
+            || die "could not stage the $PLEBIAN_OS_VERSION Ollama carrier"
+        if ! install -o root -g root -m 0644 -- "$carrier_source" "$temporary_carrier" \
+            || ! mv -fT -- "$temporary_carrier" "$carrier_target"; then
+            rm -f -- "$temporary_carrier"
+            die "could not install the $PLEBIAN_OS_VERSION Ollama carrier"
         fi
     fi
 
@@ -1319,10 +1338,10 @@ mpv_runtime_command() {
         fi
         env PLEBIAN_OS_RELEASE_MODE=1 \
             "PLEBIAN_OS_RELEASE_APT_CONFIG=$PROVISION_RELEASE_APT_CONFIG" \
-            /usr/local/sbin/plebian-os-mpv-runtime "$@"
+            $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime "$@"
         return $?
     fi
-    /usr/local/sbin/plebian-os-mpv-runtime "$@"
+    $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime "$@"
 }
 
 
@@ -1378,10 +1397,10 @@ qt_runtime_command() {
         fi
         env PLEBIAN_OS_RELEASE_MODE=1 \
             "PLEBIAN_OS_RELEASE_APT_CONFIG=$PROVISION_RELEASE_APT_CONFIG" \
-            /usr/local/sbin/plebian-os-qt-runtime "$@"
+            $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime "$@"
         return $?
     fi
-    /usr/local/sbin/plebian-os-qt-runtime "$@"
+    $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime "$@"
 }
 
 native_download_archive() {
@@ -1470,7 +1489,7 @@ rollback_native_runtime_transaction() {
     [ "$NATIVE_TRANSACTION_STARTED" = 1 ] || return 0
     native_runtime_command rollback "$NATIVE_TRANSACTION_TOKEN" --allow-unpublished || {
         warn "native recovery refused for attempted token $NATIVE_TRANSACTION_TOKEN; this token may have no journal"
-        warn "retain deployed helpers and native/outer recovery state; inspect /usr/local/sbin/plebian-os-native-runtime status as root for the active owner"
+        warn "retain deployed helpers and native/outer recovery state; inspect $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime status as root for the active owner"
         return 1
     }
     NATIVE_TRANSACTION_STARTED=0
@@ -1492,7 +1511,7 @@ finish_native_runtime_transaction() {
 }
 
 native_runtime_command() {
-    /usr/local/sbin/plebian-os-native-runtime "$@"
+    $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime "$@"
 }
 
 release_requires_f120_roots() {
@@ -2071,28 +2090,28 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     "$LIGHTDM_GREETER_CONFIG_DST"
     "$GPL2_LICENSE_DST"
     "$INSTALLER_ATTRIBUTION_DST"
-    /usr/local/bin/plebian-os-update
-    /usr/local/bin/plebian-os-select-closure
-    /usr/local/sbin/plebian-os-install-ollama-converter
-    /usr/local/sbin/plebian-os-install-diarization-converter
-    /usr/local/sbin/plebian-os-install-encodec-converter
-    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
-    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
-    /usr/local/sbin/plebian-os-native-runtime
-    /usr/local/sbin/plebian-os-source-carrier
-    /usr/local/sbin/plebian-os-qt-runtime
-    /usr/local/sbin/plebian-os-mpv-runtime
-    /usr/local/libexec/plebian-os/native_package.py
-    /usr/local/libexec/plebian-os/native_state.py
-    /usr/local/libexec/plebian-os/native_process.py
-    /usr/local/libexec/plebian-os/native_runtime.py
-    /usr/local/bin/plebian-os-nvidia-driver
+    $PLEBIAN_OS_BINDIR/plebian-os-update
+    $PLEBIAN_OS_BINDIR/plebian-os-select-closure
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
+    $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime
+    $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime
+    $PLEBIAN_OS_LIBEXECDIR/native_package.py
+    $PLEBIAN_OS_LIBEXECDIR/native_state.py
+    $PLEBIAN_OS_LIBEXECDIR/native_process.py
+    $PLEBIAN_OS_LIBEXECDIR/native_runtime.py
+    $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver
     /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
-    /usr/local/sbin/plebian-os-passwd
+    $PLEBIAN_OS_SBINDIR/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
-    /usr/local/sbin/plebian-os-ssh-server
+    $PLEBIAN_OS_SBINDIR/plebian-os-ssh-server
     /var/lib/plebian-os/ssh-server-offer
     /usr/local/bin/pleb-session
     /usr/local/bin/pleb-lock
@@ -2159,6 +2178,9 @@ PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS=(
     /etc/lightdm
     /etc/sudoers.d
     /usr
+    /usr/bin
+    /usr/sbin
+    /usr/libexec
     /usr/local
     /usr/local/bin
     /usr/local/sbin
@@ -2186,8 +2208,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
     /etc/systemd/user
-    /usr/local/libexec
-    /usr/local/libexec/plebian-os
+    $PLEBIAN_OS_LIBEXECDIR
     /etc/modprobe.d
     /etc/systemd/system.conf.d
     /etc/systemd/logind.conf.d
@@ -2197,11 +2218,12 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /etc/xdg
     /etc/pleb
     /usr/share/xsessions
-    /usr/local/share/plebian-os
-    /usr/local/share/plebian-os/wallpapers
+    $PLEBIAN_OS_DATADIR
+    $PLEBIAN_OS_DATADIR/wallpapers
     /usr/local/share/doc
-    /usr/local/share/doc/plebian-os
-    /usr/local/share/doc/plebian-os/installer
+    $PLEBIAN_OS_NOTICEDIR
+    $PLEBIAN_OS_NOTICEDIR/installer
+    $PLEBIAN_OS_PAYLOADDIR
     /usr/local/share/doc/pleb
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
@@ -3861,7 +3883,7 @@ install_desktop_wallpaper() {
     # Establish a trusted fixed path before probing or reading the installed
     # asset.  Only the two distribution-owned children may be absent; their
     # fixed ancestors must already be real, root-owned, non-writable dirs.
-    for path in / /usr /usr/local /usr/local/share; do
+    for path in / /usr /usr/share; do
         [ -d "$path" ] && [ ! -L "$path" ] \
             || die "wallpaper destination ancestor is unsafe: $path"
         owner="$(stat -c '%u' "$path" 2>/dev/null)" \
@@ -3872,7 +3894,7 @@ install_desktop_wallpaper() {
             || die "wallpaper destination ancestor is not safely root-owned: $path"
     done
     dest_dir="$(dirname "$DESKTOP_WALLPAPER_DST")"
-    for path in /usr/local/share/plebian-os "$dest_dir"; do
+    for path in "$PLEBIAN_OS_DATADIR" "$dest_dir"; do
         [ ! -L "$path" ] || die "refusing symlink in wallpaper destination: $path"
         if [ -e "$path" ] && [ ! -d "$path" ]; then
             die "wallpaper destination component is not a directory: $path"
@@ -4007,7 +4029,7 @@ install_version_marker() {
     # install_desktop_wallpaper establishes this distribution-owned directory
     # immediately before us. Revalidate its complete fixed ancestry before
     # writing a value later trusted by the public --version command.
-    for path in / /usr /usr/local /usr/local/share "$dest_dir"; do
+    for path in / /usr /usr/share "$dest_dir"; do
         [ -d "$path" ] && [ ! -L "$path" ] \
             || die "VERSION marker destination ancestor is unsafe: $path"
         owner="$(stat -c '%u' "$path" 2>/dev/null)" \
@@ -4072,7 +4094,7 @@ elif kind == "license":
 elif kind == "greeter":
     required = {
         "[greeter]",
-        "background=/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+        "background=/usr/share/plebian-os/wallpapers/plebian-os.png",
         "user-background=false",
     }
     lines = {line.strip() for line in text.splitlines()
@@ -4086,7 +4108,7 @@ PY
 
 validate_artwork_notice_destination_dirs() {
     local path owner mode
-    for path in / /usr /usr/local /usr/local/share; do
+    for path in / /usr /usr/share; do
         [ -d "$path" ] && [ ! -L "$path" ] \
             || die "artwork notice destination ancestor is unsafe: $path"
         owner="$(stat -c '%u' "$path" 2>/dev/null)" \
@@ -4097,9 +4119,9 @@ validate_artwork_notice_destination_dirs() {
             || die "artwork notice destination ancestor is not safely root-owned: $path"
     done
     for path in \
-        /usr/local/share/doc \
-        /usr/local/share/doc/plebian-os \
-        /usr/local/share/doc/plebian-os/installer; do
+        "$PLEBIAN_OS_DATADIR" \
+        "$PLEBIAN_OS_NOTICEDIR" \
+        "$PLEBIAN_OS_NOTICEDIR/installer"; do
         [ ! -L "$path" ] || die "refusing symlink in artwork notice destination: $path"
         if [ -e "$path" ] && [ ! -d "$path" ]; then
             die "artwork notice destination component is not a directory: $path"
@@ -4233,8 +4255,8 @@ import tempfile
 source_dir = Path(sys.argv[1])
 dry_run = sys.argv[2] == '1'
 required_uid = 0
-entry_dir = Path('/usr/local/sbin')
-module_dir = Path('/usr/local/libexec/plebian-os')
+entry_dir = Path('/usr/sbin')
+module_dir = Path('/usr/libexec/plebian-os')
 modules = ('native_package.py', 'native_state.py', 'native_process.py', 'native_runtime.py')
 entries = ('plebian-os-native-runtime', 'plebian-os-qt-runtime', 'plebian-os-mpv-runtime')
 names = (*entries, *modules)
@@ -4290,7 +4312,7 @@ def trusted_directory(path, *, optional=False):
             or info.st_mode & 0o022 or not info.st_mode & 0o001):
         raise RuntimeError('unsafe native helper destination directory: ' + str(path))
 
-for path in (Path('/'), Path('/usr'), Path('/usr/local'), entry_dir):
+for path in (Path('/'), Path('/usr'), entry_dir):
     trusted_directory(path)
 for path in (module_dir.parent, module_dir):
     trusted_directory(path, optional=True)
@@ -4428,7 +4450,7 @@ record_default_desktop() {
 # that finished first boot, a shell-only session, and a machine that already
 # has openssh-server are never asked; the updater never runs this.
 # "Yes" runs `sudo plebian-os-ssh-server enable` in that terminal.
-SSH_SERVER_HELPER=/usr/local/sbin/plebian-os-ssh-server
+SSH_SERVER_HELPER=$PLEBIAN_OS_SBINDIR/plebian-os-ssh-server
 SSH_SERVER_OFFER=/var/lib/plebian-os/ssh-server-offer
 IDENTITY_PROFILE_NAME=""
 
@@ -6439,7 +6461,7 @@ has_fresh_identity_profile() {
 # the owner change it, WITHOUT granting general passwordless sudo. The helper
 # only ever acts on the invoking user's own account.
 install_passwd_nag() {
-    local dst=/usr/local/sbin/plebian-os-passwd
+    local dst=$PLEBIAN_OS_SBINDIR/plebian-os-passwd
     local rule=/etc/sudoers.d/plebian-os-passwd
     local src=""
     if has_fresh_identity_profile; then
@@ -6681,8 +6703,8 @@ install_model_setup_software() {
     local helper
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    for helper in /usr/local/sbin/plebian-os-install-ollama-converter \
-                  /usr/local/sbin/plebian-os-install-diarization-converter; do
+    for helper in $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter \
+                  $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter; do
         if [ "${DRY_RUN:-0}" = 1 ]; then
             log "would install model conversion software with $helper (no model weights)"
             continue
@@ -6737,13 +6759,13 @@ install_kilix_llm() {
 # The Neuronte faces Kilix 95 reads (releases/0.2.3.env NEURONTE_REF): the pinned
 # files listed in provision/neuronte-payload.json, with build/libneuronte.so built
 # from their C source, in the desktop user's $GPU_TERMINAL_SOURCE_HOME/neuronte.
-# The image carries them as /usr/local/share/plebian-os/neuronte-<ref>.tar.xz, so
+# The image carries them as $PLEBIAN_OS_PAYLOADDIR/neuronte-<ref>.tar.xz, so
 # an installation from it needs no network; without that archive (a bootstrap
 # onto plain Debian) the pinned files are fetched. Either way each file is checked
 # against its pinned git blob id before anything is built. A tree the installer
 # did not write, or one changed since, is refused, and NEURONTE_HOME naming the
 # destination leaves it alone. Every failure here fails the provision.
-NEURONTE_IMAGE_ARCHIVE_DIR=/usr/local/share/plebian-os
+NEURONTE_IMAGE_ARCHIVE_DIR=$PLEBIAN_OS_PAYLOADDIR
 install_neuronte() {
     [ -n "$NEURONTE_REF" ] || return 0
     [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
@@ -8187,9 +8209,9 @@ ollama_download_carrier() {
 # fails verification, or any failure of the install itself, dies.
 install_ollama_runtime_for_update() {
     ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
-    local manifest=/usr/local/share/plebian-os/ollama-release.env
-    local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
-    local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    local manifest=$PLEBIAN_OS_DATADIR/ollama-release.env
+    local archive=$PLEBIAN_OS_PAYLOADDIR/ollama-runtime-carrier.tar.xz
+    local installer=$PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
     local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
     local staging_root=/var/lib/plebian-os/session
     local url bytes work retained_tmp
@@ -8239,7 +8261,14 @@ install_ollama_runtime_for_update() {
         rm -rf -- "$work"
         die "the downloaded Ollama carrier does not match the $PLEBIAN_OS_VERSION release pins"
     fi
-    retained_tmp="$(mktemp /usr/local/share/plebian-os/.ollama-runtime-carrier.XXXXXX)" \
+    if [ -e "$PLEBIAN_OS_PAYLOADDIR" ] || [ -L "$PLEBIAN_OS_PAYLOADDIR" ]; then
+        [ -d "$PLEBIAN_OS_PAYLOADDIR" ] && [ ! -L "$PLEBIAN_OS_PAYLOADDIR" ] \
+            && [ "$(stat -c '%u:%a' -- "$PLEBIAN_OS_PAYLOADDIR")" = 0:755 ] \
+            || { rm -rf -- "$work"; die "Ollama carrier staging directory must be root-owned mode 0755: $PLEBIAN_OS_PAYLOADDIR"; }
+    fi
+    install -d -o root -g root -m 0755 "$PLEBIAN_OS_PAYLOADDIR" \
+        || { rm -rf -- "$work"; die "could not create Ollama carrier staging directory"; }
+    retained_tmp="$(mktemp "$PLEBIAN_OS_PAYLOADDIR/.ollama-runtime-carrier.XXXXXX")" \
         || { rm -rf -- "$work"; die "could not stage the Ollama carrier for retention"; }
     if ! install -o root -g root -m 0644 "$work/carrier.tar.xz" "$retained_tmp" \
         || ! mv -fT -- "$retained_tmp" "$archive"; then
@@ -8253,14 +8282,14 @@ install_ollama_runtime_for_update() {
 
 install_ollama_runtime_from_carrier() {
     ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
-    local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
-    local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    local archive=$PLEBIAN_OS_PAYLOADDIR/ollama-runtime-carrier.tar.xz
+    local installer=$PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
     # The release manifest and helper arrive from the same remastered ISO.
     # PLEBIAN_OS_DIR is cloned later in firstboot, after this runtime is needed.
     local source_installer="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
-    local manifest=/usr/local/share/plebian-os/ollama-release.env
+    local manifest=$PLEBIAN_OS_DATADIR/ollama-release.env
     if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest" ] && [ ! -L "$manifest" ]; then
-        manifest=/usr/local/share/plebian-os/0.2.2.env
+        manifest=$PLEBIAN_OS_DATADIR/0.2.2.env
     fi
     [ -f "$manifest" ] && [ ! -L "$manifest" ] \
         && awk -F= -v version="$PLEBIAN_OS_VERSION" '
@@ -8573,7 +8602,7 @@ DEPS_SCRIPT=""
 for cand in \
     "$SELF_DIR/plebian-os-install-deps" \
     "$SELF_DIR/install-deps.sh" \
-    /usr/local/sbin/plebian-os-install-deps; do
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-deps; do
     [ -r "$cand" ] && DEPS_SCRIPT="$cand" && break
 done
 [ -n "$DEPS_SCRIPT" ] || die "dependency installer not found (plebian-os-install-deps / install-deps.sh)"
@@ -8618,17 +8647,17 @@ install_ollama_runtime_from_carrier
 # Installation carries no model weights and creates no licence receipts.
 ENCODEC_CONVERTER_INSTALLER_SRC=""
 for cand in "$SELF_DIR/plebian-os-install-encodec-converter" \
-    /usr/local/sbin/plebian-os-install-encodec-converter; do
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter; do
     [ -r "$cand" ] && ENCODEC_CONVERTER_INSTALLER_SRC="$cand" && break
 done
 [ -n "$ENCODEC_CONVERTER_INSTALLER_SRC" ] || die "required EnCodec converter installer is missing"
 if [ "$DRY_RUN" = 1 ]; then
     log "installing required EnCodec conversion software (no models)"
 else
-    if [ "$ENCODEC_CONVERTER_INSTALLER_SRC" != /usr/local/sbin/plebian-os-install-encodec-converter ]; then
-        install -m 0755 "$ENCODEC_CONVERTER_INSTALLER_SRC" /usr/local/sbin/plebian-os-install-encodec-converter
+    if [ "$ENCODEC_CONVERTER_INSTALLER_SRC" != $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter ]; then
+        install -m 0755 "$ENCODEC_CONVERTER_INSTALLER_SRC" $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
     fi
-    /usr/local/sbin/plebian-os-install-encodec-converter || die "required EnCodec converter installation failed"
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter || die "required EnCodec converter installation failed"
 fi
 
 begin_provision_root_transaction
@@ -8657,20 +8686,20 @@ apply_selected_native_runtime "$PROVISION_ROOT_TRANSACTION_DIR" "$DRY_RUN" \
 OLLAMA_CONVERTER_INSTALLER_SRC=""
 for cand in \
     "$SELF_DIR/plebian-os-install-ollama-converter" \
-    /usr/local/sbin/plebian-os-install-ollama-converter; do
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter; do
     [ -r "$cand" ] && OLLAMA_CONVERTER_INSTALLER_SRC="$cand" && break
 done
 if [ -n "$OLLAMA_CONVERTER_INSTALLER_SRC" ]; then
     if [ "$OLLAMA_CONVERTER_INSTALLER_SRC" = \
-        /usr/local/sbin/plebian-os-install-ollama-converter ]; then
-        log "optional Ollama converter installer already present at /usr/local/sbin/plebian-os-install-ollama-converter"
+        $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter ]; then
+        log "optional Ollama converter installer already present at $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter"
     elif [ "$DRY_RUN" = 1 ]; then
-        log "installing optional Ollama converter installer -> /usr/local/sbin/plebian-os-install-ollama-converter"
-        echo "    + install -m 0755 $OLLAMA_CONVERTER_INSTALLER_SRC /usr/local/sbin/plebian-os-install-ollama-converter"
+        log "installing optional Ollama converter installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter"
+        echo "    + install -m 0755 $OLLAMA_CONVERTER_INSTALLER_SRC $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter"
     else
-        log "installing optional Ollama converter installer -> /usr/local/sbin/plebian-os-install-ollama-converter"
+        log "installing optional Ollama converter installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter"
         install -m 0755 "$OLLAMA_CONVERTER_INSTALLER_SRC" \
-            /usr/local/sbin/plebian-os-install-ollama-converter
+            $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter
     fi
 else
     warn "optional Ollama converter installer not found; continuing without it"
@@ -8680,20 +8709,20 @@ fi
 DIARIZATION_CONVERTER_INSTALLER_SRC=""
 for cand in \
     "$SELF_DIR/plebian-os-install-diarization-converter" \
-    /usr/local/sbin/plebian-os-install-diarization-converter; do
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter; do
     [ -r "$cand" ] && DIARIZATION_CONVERTER_INSTALLER_SRC="$cand" && break
 done
 if [ -n "$DIARIZATION_CONVERTER_INSTALLER_SRC" ]; then
     if [ "$DIARIZATION_CONVERTER_INSTALLER_SRC" = \
-        /usr/local/sbin/plebian-os-install-diarization-converter ]; then
-        log "optional diarization converter installer already present at /usr/local/sbin/plebian-os-install-diarization-converter"
+        $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter ]; then
+        log "optional diarization converter installer already present at $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter"
     elif [ "$DRY_RUN" = 1 ]; then
-        log "installing optional diarization converter installer -> /usr/local/sbin/plebian-os-install-diarization-converter"
-        echo "    + install -m 0755 $DIARIZATION_CONVERTER_INSTALLER_SRC /usr/local/sbin/plebian-os-install-diarization-converter"
+        log "installing optional diarization converter installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter"
+        echo "    + install -m 0755 $DIARIZATION_CONVERTER_INSTALLER_SRC $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter"
     else
-        log "installing optional diarization converter installer -> /usr/local/sbin/plebian-os-install-diarization-converter"
+        log "installing optional diarization converter installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter"
         install -m 0755 "$DIARIZATION_CONVERTER_INSTALLER_SRC" \
-            /usr/local/sbin/plebian-os-install-diarization-converter
+            $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter
     fi
 else
     warn "optional diarization converter installer not found; continuing without it"
@@ -8706,20 +8735,20 @@ install_model_setup_software
 VULKAN_TTS_INSTALLER_SRC=""
 for cand in \
     "$SELF_DIR/plebian-os-install-kilix-vulkan-tts" \
-    /usr/local/sbin/plebian-os-install-kilix-vulkan-tts; do
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts; do
     [ -r "$cand" ] && VULKAN_TTS_INSTALLER_SRC="$cand" && break
 done
 if [ -n "$VULKAN_TTS_INSTALLER_SRC" ]; then
     if [ "$VULKAN_TTS_INSTALLER_SRC" = \
-        /usr/local/sbin/plebian-os-install-kilix-vulkan-tts ]; then
-        log "optional Kilix Vulkan TTS installer already present at /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
+        $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts ]; then
+        log "optional Kilix Vulkan TTS installer already present at $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts"
     elif [ "$DRY_RUN" = 1 ]; then
-        log "installing optional Kilix Vulkan TTS installer -> /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
-        echo "    + install -m 0755 $VULKAN_TTS_INSTALLER_SRC /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
+        log "installing optional Kilix Vulkan TTS installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts"
+        echo "    + install -m 0755 $VULKAN_TTS_INSTALLER_SRC $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts"
     else
-        log "installing optional Kilix Vulkan TTS installer -> /usr/local/sbin/plebian-os-install-kilix-vulkan-tts"
+        log "installing optional Kilix Vulkan TTS installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts"
         install -m 0755 "$VULKAN_TTS_INSTALLER_SRC" \
-            /usr/local/sbin/plebian-os-install-kilix-vulkan-tts
+            $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts
     fi
 else
     warn "optional Kilix Vulkan TTS installer not found; continuing without it"
@@ -8730,20 +8759,20 @@ fi
 OLLAMA_RUNTIME_INSTALLER_SRC=""
 for cand in \
     "$SELF_DIR/plebian-os-install-kilix-ollama-runtime" \
-    /usr/local/sbin/plebian-os-install-kilix-ollama-runtime; do
+    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime; do
     [ -r "$cand" ] && OLLAMA_RUNTIME_INSTALLER_SRC="$cand" && break
 done
 if [ -n "$OLLAMA_RUNTIME_INSTALLER_SRC" ]; then
     if [ "$OLLAMA_RUNTIME_INSTALLER_SRC" = \
-        /usr/local/sbin/plebian-os-install-kilix-ollama-runtime ]; then
-        log "Ollama runtime installer already present at /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime ]; then
+        log "Ollama runtime installer already present at $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime"
     elif [ "$DRY_RUN" = 1 ]; then
-        log "installing Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
-        echo "    + install -m 0755 $OLLAMA_RUNTIME_INSTALLER_SRC /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        log "installing Ollama runtime installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime"
+        echo "    + install -m 0755 $OLLAMA_RUNTIME_INSTALLER_SRC $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime"
     else
-        log "installing Ollama runtime installer -> /usr/local/sbin/plebian-os-install-kilix-ollama-runtime"
+        log "installing Ollama runtime installer -> $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime"
         install -m 0755 "$OLLAMA_RUNTIME_INSTALLER_SRC" \
-            /usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+            $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
     fi
 else
     if [[ "$PLEBIAN_OS_VERSION" =~ ^0\.2\.2(\.[1-9][0-9]*)?$ ]]; then
@@ -8757,12 +8786,12 @@ fi
 # boot after the selected Qt and native runtimes are in place. A checkout run
 # still copies the helper into place.
 if [ -f "$SELF_DIR/plebian-os-source-carrier" ]; then
-    if [ "$SELF_DIR/plebian-os-source-carrier" = /usr/local/sbin/plebian-os-source-carrier ]; then
-        log "source carrier helper already present at /usr/local/sbin/plebian-os-source-carrier"
+    if [ "$SELF_DIR/plebian-os-source-carrier" = $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier ]; then
+        log "source carrier helper already present at $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier"
     elif [ "$DRY_RUN" = 1 ]; then
-        echo "    + install -m 0755 $SELF_DIR/plebian-os-source-carrier /usr/local/sbin/plebian-os-source-carrier"
+        echo "    + install -m 0755 $SELF_DIR/plebian-os-source-carrier $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier"
     else
-        install -m 0755 "$SELF_DIR/plebian-os-source-carrier" /usr/local/sbin/plebian-os-source-carrier
+        install -m 0755 "$SELF_DIR/plebian-os-source-carrier" $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
     fi
 fi
 
@@ -8798,17 +8827,24 @@ ZELL_NEURONTE_LAUNCHER
 fi
 
 # The RC9 carrier is pinned and fully verified before replacing the runtime.
-ZELL_CARRIER_DIR="$SELF_DIR"
-[ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ] || ZELL_CARRIER_DIR=/usr/local/share/plebian-os
-ZELL_ARCHIVE="$ZELL_CARRIER_DIR/bundles/zell-0.1.1-x86_64.tar.xz"
-[ -f "$ZELL_ARCHIVE" ] || ZELL_ARCHIVE="$ZELL_CARRIER_DIR/zell-0.1.1-x86_64.tar.xz"
-if [ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ]; then
+# A checkout keeps the pin and the archive beside this script (the archive
+# may live in bundles/). An installed system keeps the pin with the other
+# small files and the archive with the other payload bytes.
+ZELL_PIN_DIR="$SELF_DIR"
+[ -f "$ZELL_PIN_DIR/zell-runtime.json" ] || ZELL_PIN_DIR="$PLEBIAN_OS_DATADIR"
+ZELL_ARCHIVE="$SELF_DIR/bundles/zell-0.1.1-x86_64.tar.xz"
+[ -f "$ZELL_ARCHIVE" ] || ZELL_ARCHIVE="$SELF_DIR/zell-0.1.1-x86_64.tar.xz"
+if [ ! -f "$ZELL_ARCHIVE" ]; then
+    ZELL_ARCHIVE="$PLEBIAN_OS_PAYLOADDIR/bundles/zell-0.1.1-x86_64.tar.xz"
+    [ -f "$ZELL_ARCHIVE" ] || ZELL_ARCHIVE="$PLEBIAN_OS_PAYLOADDIR/zell-0.1.1-x86_64.tar.xz"
+fi
+if [ -f "$ZELL_PIN_DIR/zell-runtime.json" ]; then
     ZELL_INSTALLER="$SELF_DIR/install-zell-runtime.py"
-    [ -f "$ZELL_INSTALLER" ] || ZELL_INSTALLER=/usr/local/sbin/install-zell-runtime.py
+    [ -f "$ZELL_INSTALLER" ] || ZELL_INSTALLER=$PLEBIAN_OS_SBINDIR/install-zell-runtime.py
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + verify and install pinned Zell 0.1.1 runtime from $ZELL_ARCHIVE"
     else
-        python3 "$ZELL_INSTALLER" --archive "$ZELL_ARCHIVE" --pin "$ZELL_CARRIER_DIR/zell-runtime.json" \
+        python3 "$ZELL_INSTALLER" --archive "$ZELL_ARCHIVE" --pin "$ZELL_PIN_DIR/zell-runtime.json" \
             --bin-dir /usr/local/bin --unit-dir /usr/local/lib/systemd/user \
             || die "Zell runtime installation failed"
     fi
@@ -8827,14 +8863,14 @@ for cand in \
     [ -r "$cand" ] && UPDATE_SRC="$cand" && break
 done
 if [ -n "$UPDATE_SRC" ]; then
-    log "installing update helper -> /usr/local/bin/plebian-os-update"
+    log "installing update helper -> $PLEBIAN_OS_BINDIR/plebian-os-update"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + install -m 0755 $UPDATE_SRC /usr/local/bin/plebian-os-update"
+        echo "    + install -m 0755 $UPDATE_SRC $PLEBIAN_OS_BINDIR/plebian-os-update"
     else
-        install -m 0755 "$UPDATE_SRC" /usr/local/bin/plebian-os-update
+        install -m 0755 "$UPDATE_SRC" $PLEBIAN_OS_BINDIR/plebian-os-update
     fi
-elif [ -x /usr/local/bin/plebian-os-update ]; then
-    log "update helper already present at /usr/local/bin/plebian-os-update"
+elif [ -x $PLEBIAN_OS_BINDIR/plebian-os-update ]; then
+    log "update helper already present at $PLEBIAN_OS_BINDIR/plebian-os-update"
 else
     warn "update helper not found; continuing without plebian-os-update"
 fi
@@ -8849,14 +8885,14 @@ for cand in \
     [ -r "$cand" ] && SELECTOR_SRC="$cand" && break
 done
 if [ -n "$SELECTOR_SRC" ]; then
-    log "installing closure selector -> /usr/local/bin/plebian-os-select-closure"
+    log "installing closure selector -> $PLEBIAN_OS_BINDIR/plebian-os-select-closure"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + install -m 0755 $SELECTOR_SRC /usr/local/bin/plebian-os-select-closure"
+        echo "    + install -m 0755 $SELECTOR_SRC $PLEBIAN_OS_BINDIR/plebian-os-select-closure"
     else
-        install -m 0755 "$SELECTOR_SRC" /usr/local/bin/plebian-os-select-closure
+        install -m 0755 "$SELECTOR_SRC" $PLEBIAN_OS_BINDIR/plebian-os-select-closure
     fi
-elif [ -x /usr/local/bin/plebian-os-select-closure ]; then
-    log "closure selector already present at /usr/local/bin/plebian-os-select-closure"
+elif [ -x $PLEBIAN_OS_BINDIR/plebian-os-select-closure ]; then
+    log "closure selector already present at $PLEBIAN_OS_BINDIR/plebian-os-select-closure"
 else
     warn "closure selector not found; continuing without plebian-os-select-closure"
 fi
@@ -8872,14 +8908,14 @@ for cand in \
     [ -r "$cand" ] && NVIDIA_SRC="$cand" && break
 done
 if [ -n "$NVIDIA_SRC" ]; then
-    log "installing optional NVIDIA driver helper -> /usr/local/bin/plebian-os-nvidia-driver"
+    log "installing optional NVIDIA driver helper -> $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + install -m 0755 $NVIDIA_SRC /usr/local/bin/plebian-os-nvidia-driver"
+        echo "    + install -m 0755 $NVIDIA_SRC $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver"
     else
-        install -m 0755 "$NVIDIA_SRC" /usr/local/bin/plebian-os-nvidia-driver
+        install -m 0755 "$NVIDIA_SRC" $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver
     fi
-elif [ -x /usr/local/bin/plebian-os-nvidia-driver ]; then
-    log "NVIDIA driver helper already present at /usr/local/bin/plebian-os-nvidia-driver"
+elif [ -x $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver ]; then
+    log "NVIDIA driver helper already present at $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver"
 else
     warn "NVIDIA driver helper not found; continuing without plebian-os-nvidia-driver"
 fi
