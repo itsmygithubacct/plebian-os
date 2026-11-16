@@ -13,7 +13,17 @@ import sys
 import tempfile
 import time
 
-DEFAULT = Path('/usr/share/plebian-os/source-carrier/manifest.json')
+# Installed paths. Same names and values as provision/plebian-os-paths.sh.
+PLEBIAN_OS_SBINDIR = "/usr/sbin"
+PLEBIAN_OS_BINDIR = "/usr/bin"
+PLEBIAN_OS_LIBEXECDIR = "/usr/libexec/plebian-os"
+PLEBIAN_OS_LIBDIR = "/usr/lib/plebian-os"
+PLEBIAN_OS_DATADIR = "/usr/share/plebian-os"
+PLEBIAN_OS_NOTICEDIR = "/usr/share/plebian-os/notices"
+PLEBIAN_OS_PAYLOADDIR = "/var/lib/plebian-os/payloads"
+PLEBIAN_OS_UNITDIR = "/usr/lib/systemd/system"
+
+DEFAULT = Path(PLEBIAN_OS_DATADIR) / "source-carrier" / "manifest.json"
 
 
 def read(root, relative, limit):

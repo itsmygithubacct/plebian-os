@@ -70,8 +70,19 @@
 # either file's absence.
 #
 # Run as the Pleb user; the bounded writes under /etc, /var/lib, and
-# /usr/local/bin elevate through sudo.
+# /usr/bin elevate through sudo.
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 
 # The published Pleb that starts a hop records `selecting` and then execs this
 # selector. If that parent dies, this process must stop with it. Otherwise a
@@ -156,8 +167,8 @@ case "$CLOSURE_LAYOUT" in auto|legacy|split) ;; *) die "invalid closure layout: 
 SESSION_ENV="${PLEBIAN_OS_SESSION_ENV:-$CLOSURE_ROOT/etc/pleb/session.env}"
 CLOSURE_ENV="${PLEBIAN_OS_CLOSURE_ENV:-$CLOSURE_ROOT/etc/pleb/closure.env}"
 RECOVERY_BASE="${PLEBIAN_OS_RECOVERY_BASE:-$CLOSURE_ROOT/var/lib/plebian-os}"
-SELECTOR_DST="${PLEBIAN_OS_SELECTOR_DST-$CLOSURE_ROOT/usr/local/bin/plebian-os-select-closure}"
-UPDATER_DST="${PLEBIAN_OS_UPDATER_DST-$CLOSURE_ROOT/usr/local/bin/plebian-os-update}"
+SELECTOR_DST="${PLEBIAN_OS_SELECTOR_DST-$CLOSURE_ROOT$PLEBIAN_OS_BINDIR/plebian-os-select-closure}"
+UPDATER_DST="${PLEBIAN_OS_UPDATER_DST-$CLOSURE_ROOT$PLEBIAN_OS_BINDIR/plebian-os-update}"
 for closure_path in "$SESSION_ENV" "$CLOSURE_ENV" "$RECOVERY_BASE"; do
     case "$closure_path" in /*) ;; *) die "closure path must be absolute: $closure_path" ;; esac
     [[ "$closure_path" != *$'\n'* && "$closure_path" != *$'\r'* ]] \
@@ -170,8 +181,8 @@ if [ "$SELECTOR_MODE" = image ]; then
         [ "$SESSION_ENV" = /etc/pleb/session.env ] \
             && [ "$CLOSURE_ENV" = /etc/pleb/closure.env ] \
             && [ "$RECOVERY_BASE" = /var/lib/plebian-os ] \
-            && [ "$SELECTOR_DST" = /usr/local/bin/plebian-os-select-closure ] \
-            && [ "$UPDATER_DST" = /usr/local/bin/plebian-os-update ] \
+            && [ "$SELECTOR_DST" = "$PLEBIAN_OS_BINDIR/plebian-os-select-closure" ] \
+            && [ "$UPDATER_DST" = "$PLEBIAN_OS_BINDIR/plebian-os-update" ] \
             || die "live image mode uses only the installed Plebian-OS closure paths"
     fi
 else
@@ -1853,15 +1864,26 @@ apply_selected_closure() {
         "$SESSION_ENV" "$SELECTOR_DST" "$UPDATER_DST" "$STAGE" "$RECOVERY_BASE" \
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_APPLY'
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 umask 077
 env_path="$1"; selector_path="$2"; updater_path="$3"; stage="$4"; base="$5"; fail_after="$6"
 case "$env_path" in */etc/pleb/session.env) ;; *) exit 2 ;; esac
-case "$selector_path" in */usr/local/bin/plebian-os-select-closure) ;; *) exit 2 ;; esac
-case "$updater_path" in */usr/local/bin/plebian-os-update) ;; *) exit 2 ;; esac
+case "$selector_path" in *$PLEBIAN_OS_BINDIR/plebian-os-select-closure) ;; *) exit 2 ;; esac
+case "$updater_path" in *$PLEBIAN_OS_BINDIR/plebian-os-update) ;; *) exit 2 ;; esac
 [ -d "$stage" ] && [ ! -L "$stage" ] || exit 2
 if [ "$EUID" = 0 ]; then
     [ "$(stat -c '%u' -- "$stage")" = "${SUDO_UID:-0}" ] || exit 2
-    for dir in / /etc /etc/pleb /var /var/lib /usr /usr/local /usr/local/bin; do
+    for dir in / /etc /etc/pleb /var /var/lib /usr "$PLEBIAN_OS_BINDIR"; do
         [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' -- "$dir")" = 0 ] \
             || exit 2
         dir_mode="$(stat -c '%a' -- "$dir")"
@@ -2041,6 +2063,17 @@ apply_split_closure() {
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" "$config_uid" "$config_gid" \
         >"$STAGE/record" < <(declare -f record_release_value; cat <<'ROOT_SPLIT_APPLY'
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
 stage="$5"; base="$6"; mode="$7"; fail_after="$8"
@@ -2051,8 +2084,8 @@ case "$mode" in
     image)
         case "$session_path" in */etc/pleb/session.env) ;; *) exit 2 ;; esac
         case "$closure_path" in */etc/pleb/closure.env) ;; *) exit 2 ;; esac
-        case "$selector_path" in */usr/local/bin/plebian-os-select-closure) ;; *) exit 2 ;; esac
-        case "$updater_path" in */usr/local/bin/plebian-os-update) ;; *) exit 2 ;; esac
+        case "$selector_path" in *$PLEBIAN_OS_BINDIR/plebian-os-select-closure) ;; *) exit 2 ;; esac
+        case "$updater_path" in *$PLEBIAN_OS_BINDIR/plebian-os-update) ;; *) exit 2 ;; esac
         file_mode=0644
         ;;
     standalone)
@@ -2273,15 +2306,26 @@ rollback_previous_closure() {
         "${REQUIRE_OWN_RECORD:-0}" \
         >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record; cat <<'ROOT_ROLLBACK'
 set -euo pipefail
+
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
 umask 077
 env_path="$1"; selector_path="$2"; updater_path="$3"; base="$4"; fail_after="$5"
 trusted_tag="${6:-}"; require_own="${7:-0}"
 case "$env_path" in */etc/pleb/session.env) ;; *) exit 2 ;; esac
-case "$selector_path" in */usr/local/bin/plebian-os-select-closure) ;; *) exit 2 ;; esac
-case "$updater_path" in */usr/local/bin/plebian-os-update) ;; *) exit 2 ;; esac
+case "$selector_path" in *$PLEBIAN_OS_BINDIR/plebian-os-select-closure) ;; *) exit 2 ;; esac
+case "$updater_path" in *$PLEBIAN_OS_BINDIR/plebian-os-update) ;; *) exit 2 ;; esac
 [ -d "$base" ] && [ ! -L "$base" ] || exit 4
 if [ "$EUID" = 0 ]; then
-    for dir in / /etc /etc/pleb /var /var/lib /usr /usr/local /usr/local/bin "$base"; do
+    for dir in / /etc /etc/pleb /var /var/lib /usr "$PLEBIAN_OS_BINDIR" "$base"; do
         [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' -- "$dir")" = 0 ] \
             || exit 2
         dir_mode="$(stat -c '%a' -- "$dir")"

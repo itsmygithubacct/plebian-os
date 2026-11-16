@@ -1,4 +1,14 @@
 #!/bin/sh
 # Fixed root-owned entry point. No caller-selected import path or alternate root.
 set -eu
-exec /usr/bin/python3 -I -B /usr/local/libexec/plebian-os/native_runtime.py "$@"
+# >>> plebian-os-paths
+PLEBIAN_OS_SBINDIR=/usr/sbin
+PLEBIAN_OS_BINDIR=/usr/bin
+PLEBIAN_OS_LIBEXECDIR=/usr/libexec/plebian-os
+PLEBIAN_OS_LIBDIR=/usr/lib/plebian-os
+PLEBIAN_OS_DATADIR=/usr/share/plebian-os
+PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
+PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
+PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
+# <<< plebian-os-paths
+exec /usr/bin/python3 -I -B "$PLEBIAN_OS_LIBEXECDIR/native_runtime.py" "$@"
