@@ -235,7 +235,7 @@ class EarlyHopTests(unittest.TestCase):
         except subprocess.TimeoutExpired:
             pass
 
-    def _assert_parent_death_stops_before_marker(self, base: Path) -> None:
+    def _assert_parent_death_stops_before_marker(self, base: Path, env_extra=None) -> None:
         fifo = base / "hold.fifo"
         os.mkfifo(fifo)
         env = {
@@ -248,6 +248,8 @@ class EarlyHopTests(unittest.TestCase):
             "PLEBIAN_OS_SELECT_TEST_HOLD_BEFORE_PENDING": str(fifo),
             "PLEBIAN_OS_SELECT_TEST_SKIP_COMPONENT_ANCESTRY": "1",
         }
+        if env_extra:
+            env.update(env_extra)
         log_path = base / "held-selector.log"
         log_f = open(log_path, "w")
         proc = subprocess.Popen(
@@ -367,6 +369,67 @@ class EarlyHopTests(unittest.TestCase):
             self.assertTrue((base / "root/var/lib/plebian-os" / record_name
                              / "restored").exists())
             self.assertEqual(notes.read_bytes(), b"notes-stay\n")
+
+    def test_same_tag_reselect_interrupted_before_pending_restores_nothing(self):
+        """A reselect of the installed tag that dies before selection-pending
+        must not restore the record that tag already wrote."""
+        helper = self._helper()
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env_path = helper._machine(base)
+            helper._source(base)
+            extra = {"PLEBIAN_OS_CLOSURE_LAYOUT": "split"}
+            selected = helper._run(base, "0.1.8", "--offline", env_extra=extra)
+            self.assertEqual(selected.returncode, 0, selected.stderr)
+            installed = env_path.read_bytes()
+            closure = base / "root/etc/pleb/closure.env"
+            closure_bytes = closure.read_bytes()
+            records = helper._recovery_records(base)
+            self.assertEqual(len(records), 1)
+            record_name = records[0].name
+            older = self._tree_bytes(records[0])
+            tag = subprocess.run(
+                ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.1.8"],
+                capture_output=True, text=True, check=True).stdout.strip()
+            self.assertEqual(
+                (records[0] / "meta").read_text().count(f"selection_tag={tag}\n"), 1)
+
+            self._assert_parent_death_stops_before_marker(
+                base, {"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag})
+            attempt = (base / "home/.local/gpu_terminal/pleb/state"
+                       / "selection-attempt")
+            self.assertEqual(
+                attempt.read_text(),
+                f"format=1\ntag={tag}\ntarget=0.1.8\n")
+            self.assertEqual(env_path.read_bytes(), installed)
+            self.assertEqual(closure.read_bytes(), closure_bytes)
+
+            updater = base / "root/usr/local/bin/plebian-os-update"
+            updater.write_text(
+                "#!/bin/bash\n"
+                "printf '%s\\n' \"$*\" >>\"${PLEB_TEST_UPDATER_LOG:-/dev/null}\"\n"
+                "exit 0\n")
+            updater.chmod(0o755)
+            root = base / "old-pleb"
+            self._extract_old_pleb(root)
+            old_env = self._old_env(base, root, base / "src", "0.1.8")
+            prepared = self._run_old(base, old_env, "prepare", "0.1.8")
+            self.assertEqual(prepared.returncode, 0, prepared.stderr)
+            recovered = self._run_old(base, old_env, "recover")
+            self.assertEqual(recovered.returncode, 0, recovered.stderr)
+            combined = recovered.stdout + recovered.stderr
+            self.assertIn("interrupted reselect of 0.1.8", combined)
+            self.assertIn("result=rolled-back", combined)
+            self.assertNotIn("previous closure restored", combined)
+            self.assertEqual(env_path.read_bytes(), installed)
+            self.assertEqual(closure.read_bytes(), closure_bytes)
+            self.assertEqual(self._tree_bytes(
+                base / "root/var/lib/plebian-os" / record_name), older)
+            self.assertFalse((base / "root/var/lib/plebian-os" / record_name
+                              / "restored").exists())
+            self.assertFalse(attempt.exists())
+            self.assertIn("--revalidate-current",
+                          (base / "updater.log").read_text().splitlines())
 
     def test_interrupted_after_change_restores_only_that_selection(self):
         helper = self._helper()

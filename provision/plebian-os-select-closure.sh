@@ -46,10 +46,12 @@
 #   --show        print the release-controlled keys this machine currently has.
 #   --rollback    put the previous closure back when this selector wrote that
 #                 recovery record, or when no trusted tag is bound to the
-#                 request. A trusted tag with no selection-pending marker did
-#                 not start a selection: the newest older record is left as it
-#                 is. Clear only the pre-selection marker and keep the
-#                 installed closure. Do not delete recovery records.
+#                 request. A trusted tag with no selection-pending marker and
+#                 no same-tag selection-attempt did not start a selection: the
+#                 newest older record is left as it is. A selection-attempt for
+#                 this trusted tag, whose target is the release still installed,
+#                 is an interrupted reselect: clear that marker, restore
+#                 nothing, and say so. Do not delete recovery records.
 #
 # The release-controlled keys move as one unit or not at all: the complete
 # session/closure pair is rendered and verified by sourcing it before the
@@ -406,6 +408,7 @@ STAGE=""
 STANDALONE_PLEB_BOOTSTRAP=""
 
 PENDING_SELECTION=""
+SELECTION_ATTEMPT=""
 SELECT_SIGNALLED=0
 # 1 when --rollback has no selection-pending marker. The trusted tag may
 # restore only the record that tag wrote. 0 keeps an ordinary rollback.
@@ -421,6 +424,12 @@ cleanup_stage() {
         rm -f -- "$PENDING_SELECTION"
     fi
     PENDING_SELECTION=""
+    # selection-attempt is the same kind of marker, written earlier: a signal
+    # keeps it, and every other exit removes it.
+    if [ -n "$SELECTION_ATTEMPT" ] && [ "$SELECT_SIGNALLED" = 0 ]; then
+        rm -f -- "$SELECTION_ATTEMPT"
+    fi
+    SELECTION_ATTEMPT=""
 }
 trap cleanup_stage EXIT
 
@@ -2809,15 +2818,21 @@ select_closure() {
 #   * the new hop died before selection-pending existed (no marker either;
 #     the trusted tag is the new hop, and the newest record belongs to an
 #     earlier one). Restoring that record moves the machine back a release.
+#   * a same-tag reselect died in that same window. Its trusted tag DID write
+#     the newest record, because the previous selection of this tag completed.
+#     Restoring that record undoes a selection that this attempt never replaced.
 #
-# A selection still publishes selection-pending, with the fingerprints of
-# every file it may replace, before it does anything slow. The same tag with
-# those fingerprints unchanged restores nothing. A marker that does not prove
+# A selection writes selection-attempt (tag and target) before it blocks, and
+# still publishes selection-pending, with the fingerprints of every file it
+# may replace, before it does anything slow. The same tag with those
+# fingerprints unchanged restores nothing. A pending marker that does not prove
 # that is spent: the selection got far enough to write its own record, and
-# the ordinary rollback restores that record. No marker plus a trusted tag
-# that did not write the newest record is an unstarted selection: refuse,
-# and do not mark, delete, or overwrite the older record. No trusted tag is
-# a manual rollback of the newest record.
+# the ordinary rollback restores that record. No pending marker, but a
+# selection-attempt for this trusted tag whose target is the release still
+# installed, is an interrupted reselect: restore nothing. No marker plus a
+# trusted tag that did not write the newest record is an unstarted selection:
+# refuse, and do not mark, delete, or overwrite the older record. No trusted
+# tag is a manual rollback of the newest record.
 die_unstarted_selection() {
     die "refusing rollback: no selection for this trusted tag replaced the closure, so the newest older recovery record was left unchanged and the installed closure was not modified. An unstarted or unprovable selection has nothing to undo; clear only the pre-selection marker and keep the installed closure. Do not delete recovery records."
 }
@@ -2850,6 +2865,12 @@ pending_selection_facts() {
     fi
 }
 
+arm_selection_signal_traps() {
+    trap 'SELECT_SIGNALLED=1; exit 130' INT
+    trap 'SELECT_SIGNALLED=1; exit 143' TERM
+    trap 'SELECT_SIGNALLED=1; exit 129' HUP
+}
+
 begin_pending_selection() {
     local path tmp
     path="$(pending_selection_path)"
@@ -2859,9 +2880,88 @@ begin_pending_selection() {
     pending_selection_facts >"$tmp"
     mv -fT -- "$tmp" "$path"
     PENDING_SELECTION="$path"
-    trap 'SELECT_SIGNALLED=1; exit 130' INT
-    trap 'SELECT_SIGNALLED=1; exit 143' TERM
-    trap 'SELECT_SIGNALLED=1; exit 129' HUP
+    arm_selection_signal_traps
+}
+
+selection_attempt_path() {
+    selector_state_home
+    printf '%s\n' "$PLEB_STATE_HOME/selection-attempt"
+}
+
+begin_selection_attempt() {
+    local path tmp tag
+    path="$(selection_attempt_path)"
+    mkdir -p -- "$(dirname -- "$path")"
+    tag="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:--}"
+    [[ "$tag" =~ ^[0-9a-f]{40}$ ]] || tag="-"
+    tmp="$(mktemp "$(dirname -- "$path")/.selection-attempt.XXXXXX")" \
+        || die "could not record that a selection was attempted"
+    {
+        printf 'format=1\n'
+        printf 'tag=%s\n' "$tag"
+        printf 'target=%s\n' "$TARGET"
+    } >"$tmp"
+    mv -fT -- "$tmp" "$path"
+    SELECTION_ATTEMPT="$path"
+}
+
+end_selection_attempt() {
+    [ -z "$SELECTION_ATTEMPT" ] || rm -f -- "$SELECTION_ATTEMPT"
+    SELECTION_ATTEMPT=""
+}
+
+clear_selection_attempt() {
+    local path
+    path="$(selection_attempt_path)"
+    rm -f -- "$path"
+    SELECTION_ATTEMPT=""
+}
+
+# The installed release, read as text. closure.env is a plain KEY=value file.
+# An older session.env keeps the provisioner's guarded assignment. Neither
+# file is sourced.
+installed_release_version() {
+    local file line value
+    for file in "$CLOSURE_ENV" "$SESSION_ENV"; do
+        [ -f "$file" ] && [ ! -L "$file" ] || continue
+        line="$(sed -n \
+            -e 's/^PLEBIAN_OS_VERSION=//p' \
+            -e 's/^if \[ -z "\${PLEBIAN_OS_VERSION+x}" \]; then PLEBIAN_OS_VERSION=//p' \
+            -- "$file" | head -n 1)"
+        value="${line%%; fi}"
+        value="${value#\'}"
+        value="${value%\'}"
+        value="${value#\"}"
+        value="${value%\"}"
+        [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || continue
+        printf '%s\n' "$value"
+        return 0
+    done
+    return 1
+}
+
+# Exit 0 when this trusted tag's selection died before selection-pending and
+# the installed release is still the attempt's target. Any other attempt is
+# stale: remove it and let the caller decide from the recovery record.
+acknowledge_interrupted_reselect() {
+    local path tag target trusted installed
+    path="$(selection_attempt_path)"
+    [ -f "$path" ] && [ ! -L "$path" ] || return 1
+    tag="$(sed -n 's/^tag=\([0-9a-f]\{40\}\|-\)$/\1/p' -- "$path" | head -n 1)"
+    target="$(sed -n 's/^target=\([0-9][0-9.]*\)$/\1/p' -- "$path" | head -n 1)"
+    trusted="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}"
+    if [[ "$trusted" =~ ^[0-9a-f]{40}$ ]] && [ "$tag" = "$trusted" ]; then
+        installed="$(installed_release_version || true)"
+        if [ -n "$installed" ] && [ "$installed" = "$target" ]; then
+            rm -f -- "$path"
+            SELECTION_ATTEMPT=""
+            log "interrupted reselect of $target; the installed closure is unchanged and nothing was restored"
+            exit 0
+        fi
+    fi
+    rm -f -- "$path"
+    SELECTION_ATTEMPT=""
+    return 1
 }
 
 end_pending_selection() {
@@ -3027,11 +3127,18 @@ case "$MODE" in
         rollback_selection_disposition || disposition=$?
         case "$disposition" in
             0)
+                clear_selection_attempt
                 log "the interrupted selection had not replaced the closure; the installed closure is unchanged and nothing was restored"
                 exit 0
                 ;;
-            1) REQUIRE_OWN_RECORD=1 ;;
-            2) REQUIRE_OWN_RECORD=0 ;;
+            1)
+                acknowledge_interrupted_reselect || true
+                REQUIRE_OWN_RECORD=1
+                ;;
+            2)
+                clear_selection_attempt
+                REQUIRE_OWN_RECORD=0
+                ;;
             *) die "could not read the interrupted-selection marker" ;;
         esac
         if split_layout_active; then
@@ -3046,11 +3153,14 @@ case "$MODE" in
         [[ "$TARGET" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
             || die "invalid release identifier: $TARGET"
         if [ "$DRY_RUN" != 1 ]; then
+            arm_selection_signal_traps
+            begin_selection_attempt
             arm_selection_hold_before_pending
             begin_pending_selection
         fi
         select_closure
         select_test_fail_after applied
         end_pending_selection
+        end_selection_attempt
         ;;
 esac
