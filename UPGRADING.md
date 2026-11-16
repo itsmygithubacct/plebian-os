@@ -248,9 +248,9 @@ above:
   upower, bluez, scrot, brightnessctl, power-profiles-daemon, nftables and
   wtmpdb. Release packages come only from Debian and Plebian files. An operator
   apt source, such as NVIDIA CUDA, is left configured and its packages are
-  kept. On rollback, packages the failed transaction newly added are removed
+  kept. <!-- CUDA: confirm after R2 --> On rollback, packages the failed transaction newly added are removed
   when nothing else would be removed with them; other packages and Debian
-  upgrades are kept. <!-- PENDING MERGE: interrupts (package removal on rollback) -->
+  upgrades are kept.
 - **SSH.** The update installs the `plebian-os-ssh-server` helper but does not
   install or enable openssh-server and does not ask. To turn SSH on, run
   `sudo plebian-os-ssh-server enable`.
@@ -282,7 +282,7 @@ Releases before 0.2.3 cannot be a first selection. A Pleb whose VERSION is
 
 A same-tag reselect interrupted before the selection is pending, such as the
 RC9 → 0.2.3 hop, is recovered as an interrupted reselect. The installed
-closure is left unchanged. <!-- PENDING MERGE: interrupts -->
+closure is left unchanged.
 
 ## Debian security updates
 

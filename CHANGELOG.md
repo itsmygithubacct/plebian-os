@@ -37,13 +37,13 @@ entries below run newest first, from the final back through RC1.
 - Release updates keep working when an operator apt source such as NVIDIA
   CUDA is configured. Release packages still come only from Debian, and
   packages from the operator source are left installed.
+  <!-- CUDA: confirm after R2 -->
 - Accept an Ollama carrier path that contains a backslash or a newline
   (0.2.2 known issue 8); size and SHA-256 checks are unchanged.
 - Say `interrupted; rolling back` on an interrupted update and keep the
   updater's own `update.log`; remove packages the interrupted transaction
   newly added when that is safe; recover an interrupted same-tag reselect
   without restoring an older closure.
-  <!-- PENDING MERGE: interrupts -->
 - QEMU manager: refuse a private-group directory when membership lookup is
   partial, the account files are not regular or not read whole, names are
   duplicated, or the DynamicUser peer cannot be verified.
