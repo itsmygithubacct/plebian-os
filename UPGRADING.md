@@ -251,15 +251,19 @@ above:
   wtmpdb. Release packages come only from Debian and Plebian files: release
   installs and updates use a private apt configuration that holds only Debian
   archive sources. An operator apt source, such as NVIDIA CUDA, stays
-  configured, but its source files, pins and `apt.conf.d` snippets do not
-  apply to release packages, and packages installed from it are never
+  configured, but its source files, pins, `/etc/apt/apt.conf` and
+  `apt.conf.d` snippets do not apply to release packages (Plebian-OS's own Qt
+  runtime pin is kept), and packages installed from it are never
   removed. In release mode, `pleb install` and the Kilix build-dependency step
   refuse a missing package by name ("release package closure is incomplete;
   missing …") instead of installing it from the system apt. Run
   `plebian-os-update --revalidate-current` to install the release packages
   again, and report the package if it is still refused. On rollback, packages
   that appeared during a package step are removed when nothing else would be
-  removed with them (see **Interrupted updates and package rollback**).
+  removed with them (see **Interrupted updates and package rollback**). An apt
+  proxy set in `apt.conf` or `apt.conf.d` is not used for release package
+  downloads; set the proxy in the environment for the update instead (a 0.2.3
+  known issue).
 - **SSH.** The update installs the `plebian-os-ssh-server` helper but does not
   install or enable openssh-server and does not ask. To turn SSH on, run
   `sudo plebian-os-ssh-server enable`, or use Kilix 95's Start ▸ System ▸

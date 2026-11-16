@@ -40,12 +40,14 @@ entries below run newest first, from the final back through RC1.
   do, without installing Waydroid or downloading Android. A fresh install on
   arm64 and other architectures does not stage it; updates stage it on every
   architecture.
-- Release updates keep working when an operator apt source such as NVIDIA
-  CUDA is configured. Release installs and updates use a private Debian-only
-  apt configuration, so operator sources, pins and `apt.conf.d` snippets do
-  not apply to release packages, and operator-installed packages are never
-  removed. In release mode, Pleb and Kilix refuse a missing package by name
-  instead of installing it from the system apt.
+- Release updates keep working when an operator apt source such as NVIDIA CUDA
+  is configured. Release installs and updates use a private Debian-only apt
+  configuration, so operator sources, pins, `/etc/apt/apt.conf` and
+  `apt.conf.d` snippets do not apply to release packages (Plebian-OS's own Qt
+  runtime pin is kept and the Qt runtime is verified after the dependency
+  step), and operator-installed packages are never removed. In release mode,
+  Pleb and Kilix refuse a missing package by name instead of installing it
+  from the system apt.
 - Accept an Ollama carrier path that contains a backslash or a newline
   (0.2.2 known issue 8); size and SHA-256 checks are unchanged.
 - Say `interrupted; rolling back` on an interrupted update and keep the

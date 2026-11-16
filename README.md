@@ -90,9 +90,11 @@ In brief:
   - Kilix 95's Start ▸ System ▸ Remote login (SSH) asks before sudo.
 - Release installs and updates install release packages through a private,
   Debian-only apt configuration. Operator apt sources such as NVIDIA CUDA, and
-  their pins and `apt.conf.d` snippets, do not apply to release packages, and
-  packages installed from them are never removed. In release mode, Pleb and
-  Kilix refuse a missing package by name instead of using the system apt; run
+  their pins, `/etc/apt/apt.conf` and `apt.conf.d` snippets, do not apply to
+  release packages (an apt proxy set there is not used either; set it in the
+  environment for the update), and packages installed from them are never
+  removed. In release mode, Pleb and Kilix refuse a missing package by name
+  instead of using the system apt; run
   `plebian-os-update --revalidate-current` and report the package if the
   refusal repeats.
 - Machines on a 0.2.3 release candidate move to the final once with
