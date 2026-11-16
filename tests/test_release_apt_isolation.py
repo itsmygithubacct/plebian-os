@@ -6,8 +6,10 @@ installed from it are not removed or downgraded.
 """
 
 import hashlib
+import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -1717,6 +1719,348 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
             self.assertNotIn("s3cret-token", logged)
             self.assertNotIn("s3cret", prep_err)
 
+    def test_a_non_proxy_acquire_key_with_a_url_is_not_carried(self):
+        """A URL value does not make an arbitrary Acquire key a proxy.
+
+        Acquire::http::Proxy-Auto-Detect set to http://x matches the proxy
+        URL rule. The key check is what drops it. The real prepare function
+        is what this runs.
+        """
+        if shutil.which("unshare") is None:
+            self.skipTest("unshare is not available")
+        probe = subprocess.run(["unshare", "-rm", "true"], capture_output=True)
+        if probe.returncode != 0:
+            self.skipTest("unshare -rm is not available")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            suite = codename()
+            apt = write_apt(tmp, {"debian.sources": debian_sources(suite)})
+            hostile = tmp / "hostile-apt"
+            (hostile / "apt.conf.d").mkdir(parents=True)
+            (hostile / "sources.list.d").mkdir()
+            (hostile / "sources.list").write_text("")
+            (hostile / "apt.conf").write_text(
+                'Acquire::http::Proxy "http://proxy.example:3128";\n'
+                'Acquire::http::Proxy-Auto-Detect "http://x";\n'
+                'Acquire::https::Timeout "http://x";\n'
+            )
+            dest = tmp / "dest"
+            dest.mkdir()
+            out = tmp / "out"
+            out.mkdir()
+            probe_sh = tmp / "probe.sh"
+            probe_sh.write_text(
+                "#!/bin/bash\n"
+                "set -u\n"
+                'mount --bind "$HOSTILE" /etc/apt || { echo MOUNT_FAILED >&2; exit 97; }\n'
+                'mkdir -p "$EMPTY_PLEB"\n'
+                'mount --bind "$EMPTY_PLEB" /etc/pleb || { echo MOUNT_PLEB_FAILED >&2; exit 97; }\n'
+                "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+                'export PLEB_STATE_HOME="$STATE"\n'
+                'source "$UPDATE"\n'
+                "LC_ALL=C env -u APT_CONFIG apt-config dump --no-empty "
+                "--format '%f%N%v%n' >\"$OUT/dump.txt\"\n"
+                'mkdir -p "$DEST"\n'
+                'prepare_release_apt_config "$DEST" lifetime "" "$CODENAME" "$APT" '
+                '>"$OUT/prepare.txt" 2>"$OUT/prepare.err"\n'
+                'printf "PREP_RC=%s\\n" "$?" >"$OUT/prep"\n'
+            )
+            probe_sh.chmod(0o755)
+            ran = subprocess.run(
+                ["unshare", "-rm", "bash", str(probe_sh)],
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOSTILE": str(hostile),
+                    "STATE": str(tmp / "state"),
+                    "UPDATE": str(UPDATE),
+                    "DEST": str(dest),
+                    "APT": str(apt),
+                    "OUT": str(out),
+                    "EMPTY_PLEB": str(tmp / "empty-pleb"),
+                    "CODENAME": suite,
+                    "HOME": str(tmp / "home"),
+                    "LC_ALL": "C",
+                },
+                text=True, capture_output=True, check=False, timeout=90,
+            )
+            detail = ran.stdout + ran.stderr
+            prep_err = (out / "prepare.err").read_text() if (out / "prepare.err").exists() else ""
+            self.assertEqual(ran.returncode, 0, detail + prep_err)
+            self.assertIn("PREP_RC=0", (out / "prep").read_text(), prep_err)
+            dump = (out / "dump.txt").read_text()
+            self.assertIn("Acquire::http::Proxy-Auto-Detect", dump)
+            self.assertIn("http://x", dump)
+            conf = (dest / "apt.conf").read_text()
+            self.assertIn('Acquire::http::Proxy "http://proxy.example:3128";', conf)
+            self.assertNotIn("Proxy-Auto-Detect", conf)
+            self.assertNotIn("Timeout", conf)
+            self.assertNotIn("http://x", conf)
+
+    def test_qt_verify_fails_unprivileged_and_passes_when_elevated(self):
+        """The real helper reads a root-only state directory.
+
+        The state path is the helper's own hardcoded directory. An unprivileged
+        uid gets EACCES. Namespace root, which is what elevation is inside
+        this user namespace, verifies the same directory. The helper is the
+        provision script, copied only so that uid can execute it.
+        """
+        if shutil.which("unshare") is None or shutil.which("setpriv") is None:
+            self.skipTest("unshare and setpriv are required")
+        probe = subprocess.run(
+            ["unshare", "--map-auto", "--map-root-user", "-m", "true"],
+            capture_output=True,
+        )
+        if probe.returncode != 0:
+            self.skipTest("unshare --map-auto is not available")
+        architecture = subprocess.run(
+            ["/usr/bin/dpkg", "--print-architecture"],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        triplet = {"amd64": "x86_64-linux-gnu", "arm64": "aarch64-linux-gnu"}.get(architecture)
+        if triplet is None:
+            self.skipTest(f"no Qt runtime paths for {architecture}")
+        packages = {"libqt5gui5t64": "5.15.15", "libqt6gui6": "6.8.2"}
+        library_paths = []
+        for name, qt in packages.items():
+            major = qt.split(".")[0]
+            library_paths.extend([
+                f"/usr/lib/{triplet}/libQt{major}Gui.so.{qt}",
+                f"/usr/lib/{triplet}/libQt{major}XcbQpa.so.{qt}",
+                f"/usr/lib/{triplet}/qt{major}/plugins/platforms/libqxcb.so",
+            ])
+        if any(not Path(path).is_file() for path in library_paths):
+            self.skipTest("selected Qt libraries are not installed")
+        if not Path("/usr/bin/dpkg-query").exists():
+            self.skipTest("dpkg-query is required")
+        if not Path("/etc/apt/preferences.d/plebian-os-qt-runtime").exists():
+            self.skipTest("the Qt preference path is not present to mount over")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            os.chmod(tmp, 0o755)
+            helper = tmp / "plebian-os-qt-runtime"
+            helper.write_bytes((ROOT / "provision" / "plebian-os-qt-runtime").read_bytes())
+            helper.chmod(0o755)
+            records = []
+            mounts = []
+            for name, qt in packages.items():
+                major = qt.split(".")[0]
+                version = qt + "+dfsg-1+plebianrc6.1"
+                files = []
+                for relative in (
+                    f"/usr/lib/{triplet}/libQt{major}Gui.so.{qt}",
+                    f"/usr/lib/{triplet}/libQt{major}XcbQpa.so.{qt}",
+                    f"/usr/lib/{triplet}/qt{major}/plugins/platforms/libqxcb.so",
+                ):
+                    data = f"fixture:{relative}".encode()
+                    source = tmp / "files" / relative.lstrip("/")
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    source.write_bytes(data)
+                    source.chmod(0o644)
+                    files.append({
+                        "path": relative,
+                        "bytes": len(data),
+                        "sha256": hashlib.sha256(data).hexdigest(),
+                    })
+                    mounts.append((source, relative))
+                records.append({
+                    "Package": name,
+                    "Version": version,
+                    "Architecture": architecture,
+                    "qt": qt,
+                    "path": f"{name}.deb",
+                    "bytes": 4,
+                    "sha256": hashlib.sha256(b"deb" + name.encode()).hexdigest(),
+                    "files": files,
+                })
+            for path in tmp.rglob("*"):
+                if path.is_dir():
+                    path.chmod(0o755)
+            pin = tmp / "pin"
+            pin.write_text("".join(
+                f"Package: {record['Package']}\nPin: version {record['Version']}\n"
+                f"Pin-Priority: 1001\n\n"
+                for record in records
+            ))
+            pin.chmod(0o644)
+            state = tmp / "state"
+            state.mkdir()
+            (state / "RUNTIME.json").write_text(json.dumps(records))
+            (state / "RUNTIME.json").chmod(0o644)
+            state.chmod(0o700)
+            stub = tmp / "dpkg-query"
+            cases = "\n".join(
+                f"  {record['Package']}) printf 'installed\\n{record['Version']}' ;;"
+                for record in records
+            )
+            stub.write_text(
+                "#!/bin/sh\n"
+                "pkg=\n"
+                "for arg in \"$@\"; do pkg=$arg; done\n"
+                "case \"$pkg\" in\n"
+                f"{cases}\n"
+                "  *) echo unknown >&2; exit 1 ;;\n"
+                "esac\n"
+            )
+            stub.chmod(0o755)
+            lines = [
+                "#!/bin/bash",
+                "set -u",
+                f"mount --bind {shlex.quote(str(state))} /var/lib/plebian-os/qt-runtime"
+                " || { echo MOUNT_STATE >&2; exit 97; }",
+                f"mount --bind {shlex.quote(str(pin))} /etc/apt/preferences.d/plebian-os-qt-runtime"
+                " || { echo MOUNT_PIN >&2; exit 97; }",
+                f"mount --bind {shlex.quote(str(stub))} /usr/bin/dpkg-query"
+                " || { echo MOUNT_DPKG >&2; exit 97; }",
+            ]
+            for source, target in mounts:
+                lines.append(
+                    f"mount --bind {shlex.quote(str(source))} {shlex.quote(target)}"
+                    " || { echo MOUNT_FILE >&2; exit 97; }"
+                )
+            lines.append(
+                f"{shlex.quote(str(helper))} --verify >{shlex.quote(str(tmp / 'elev.out'))}"
+                f" 2>{shlex.quote(str(tmp / 'elev.err'))}; echo elev_rc=$?"
+            )
+            lines.append(
+                "setpriv --reuid=1 --regid=1 --clear-groups --inh-caps=-all "
+                f"{shlex.quote(str(helper))} --verify >{shlex.quote(str(tmp / 'user.out'))}"
+                f" 2>{shlex.quote(str(tmp / 'user.err'))}; echo user_rc=$?"
+            )
+            script = tmp / "run.sh"
+            script.write_text("\n".join(lines) + "\n")
+            script.chmod(0o755)
+            ran = subprocess.run(
+                ["unshare", "--map-auto", "--map-root-user", "-m", "bash", str(script)],
+                text=True, capture_output=True, check=False, timeout=60,
+            )
+            detail = ran.stdout + ran.stderr
+            self.assertEqual(ran.returncode, 0, detail)
+            self.assertIn("elev_rc=0", ran.stdout, detail)
+            self.assertIn("user_rc=1", ran.stdout, detail)
+            self.assertIn(
+                "Plebian-OS selected Qt runtime verified",
+                (tmp / "elev.out").read_text(),
+            )
+            user_err = (tmp / "user.err").read_text()
+            self.assertIn("Permission denied", user_err)
+            self.assertIn("/var/lib/plebian-os/qt-runtime/RUNTIME.json", user_err)
+            self.assertNotIn("verified", (tmp / "user.out").read_text())
+
+    def test_the_private_qt_pin_is_copied_again_after_it_changes(self):
+        """A Qt hop rewrites the operator pin. The private copy follows it.
+
+        The same owner and mode checks apply. A group-writable pin, a pin
+        owned by another uid, a symlink, and an absent pin are not copied.
+        A qualifying pin that cannot be copied fails the stage.
+        """
+        if shutil.which("unshare") is None:
+            self.skipTest("unshare is not available")
+        probe = subprocess.run(
+            ["unshare", "--map-auto", "--map-root-user", "-m", "true"],
+            capture_output=True,
+        )
+        if probe.returncode != 0:
+            self.skipTest("unshare --map-auto is not available")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            apt = tmp / "apt"
+            (apt / "preferences.d").mkdir(parents=True)
+            (apt / "apt.conf.d").mkdir()
+            dest = tmp / "dest"
+            (dest / "preferences.d").mkdir(parents=True)
+            out = tmp / "out"
+            out.mkdir()
+            probe_sh = tmp / "probe.sh"
+            probe_sh.write_text(r"""#!/bin/bash
+set -u
+mkdir -p "$EMPTY_PLEB"
+mount --bind "$EMPTY_PLEB" /etc/pleb || { echo MOUNT_PLEB_FAILED >&2; exit 97; }
+export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1
+export PLEB_STATE_HOME="$STATE"
+source "$UPDATE"
+rc=0
+env -u RELEASE_APT_CONFIG PLEBIAN_OS_RELEASE_MODE=1 refresh_release_qt_pin || rc=$?
+printf '%s\n' "$rc" >"$OUT/missing-config"
+export PLEBIAN_OS_RELEASE_MODE=1
+export RELEASE_APT_CONFIG="$DEST"
+export PLEBIAN_OS_APT_SOURCES_ROOT="$APT"
+write_pin() {
+  local text="$1" mode="$2"
+  printf '%s\n' "$text" >"$APT/preferences.d/plebian-os-qt-runtime"
+  chmod "$mode" "$APT/preferences.d/plebian-os-qt-runtime"
+}
+snap() {
+  cp -a -- "$DEST/preferences.d/plebian-os-qt-runtime" "$OUT/$1"
+}
+write_pin $'Package: libqt\nPin: version 1.0+plebian\nPin-Priority: 1001' 644
+refresh_release_qt_pin || { echo FIRST_COPY_FAILED >&2; exit 1; }
+snap first
+write_pin $'Package: libqt\nPin: version 1.0+plebian2\nPin-Priority: 1001' 644
+refresh_release_qt_pin || { echo RECOPY_FAILED >&2; exit 1; }
+snap rewrite
+write_pin $'Package: libqt\nPin: version 1.0+plebian3\nPin-Priority: 1001' 664
+refresh_release_qt_pin || { echo GROUP_FAILED >&2; exit 1; }
+snap group
+write_pin $'Package: libqt\nPin: version 1.0+plebian4\nPin-Priority: 1001' 644
+chown 1:1 "$APT/preferences.d/plebian-os-qt-runtime" || { echo CHOWN_FAILED >&2; exit 1; }
+refresh_release_qt_pin || { echo OWNER_FAILED >&2; exit 1; }
+snap owner
+printf '%s\n' 'Package: libqt' 'Pin: version 1.0+plebian5' >"$APT/real-pin"
+chmod 644 "$APT/real-pin"
+rm -f -- "$APT/preferences.d/plebian-os-qt-runtime"
+ln -s "$APT/real-pin" "$APT/preferences.d/plebian-os-qt-runtime"
+refresh_release_qt_pin || { echo LINK_FAILED >&2; exit 1; }
+snap link
+rm -f -- "$APT/preferences.d/plebian-os-qt-runtime"
+refresh_release_qt_pin || { echo ABSENT_FAILED >&2; exit 1; }
+snap absent
+printf '%s\n' 'operator pin' >"$APT/preferences.d/operator-pin"
+chmod 644 "$APT/preferences.d/operator-pin"
+printf '%s\n' 'hook' >"$APT/apt.conf.d/93plebian-os-qt-runtime"
+chmod 644 "$APT/apt.conf.d/93plebian-os-qt-runtime"
+write_pin $'Package: libqt\nPin: version 1.0+plebian6\nPin-Priority: 1001' 644
+refresh_release_qt_pin || { echo LAST_COPY_FAILED >&2; exit 1; }
+if [ -e "$DEST/preferences.d/operator-pin" ] || [ -e "$DEST/apt.conf.d/93plebian-os-qt-runtime" ]; then
+  echo EXTRA_COPIED >&2
+  exit 1
+fi
+snap last
+rm -rf -- "$DEST/preferences.d"
+printf '%s\n' 'not a directory' >"$DEST/preferences.d"
+rc=0
+refresh_release_qt_pin || rc=$?
+printf '%s\n' "$rc" >"$OUT/fail-rc"
+""")
+            probe_sh.chmod(0o755)
+            ran = subprocess.run(
+                ["unshare", "--map-auto", "--map-root-user", "-m", "bash", str(probe_sh)],
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOME": str(tmp / "home"),
+                    "LC_ALL": "C",
+                    "UPDATE": str(UPDATE),
+                    "EMPTY_PLEB": str(tmp / "empty-pleb"),
+                    "STATE": str(tmp / "state"),
+                    "APT": str(apt),
+                    "DEST": str(dest),
+                    "OUT": str(out),
+                },
+                text=True, capture_output=True, check=False, timeout=60,
+            )
+            detail = ran.stdout + ran.stderr
+            self.assertEqual(ran.returncode, 0, detail)
+            self.assertNotEqual((out / "missing-config").read_text().strip(), "0", detail)
+            self.assertIn("1.0+plebian\n", (out / "first").read_text())
+            self.assertNotIn("plebian2", (out / "first").read_text())
+            self.assertIn("1.0+plebian2", (out / "rewrite").read_text())
+            self.assertEqual((out / "rewrite").read_text(), (out / "group").read_text())
+            self.assertEqual((out / "rewrite").read_text(), (out / "owner").read_text())
+            self.assertEqual((out / "rewrite").read_text(), (out / "link").read_text())
+            self.assertEqual((out / "rewrite").read_text(), (out / "absent").read_text())
+            self.assertIn("1.0+plebian6", (out / "last").read_text())
+            self.assertNotEqual((out / "fail-rc").read_text().strip(), "0")
+            self.assertEqual(oct((out / "rewrite").stat().st_mode & 0o777), "0o644")
+
 
 class ReleaseAptRouteTests(unittest.TestCase):
     """A new release-path apt command has to go through the private configuration.
@@ -1782,6 +2126,7 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertIn("\n_run_release_apt() {\n", runner)
         self.assertIn(
             'config="$(mktemp -d /tmp/plebian-os-removal-apt.XXXXXX)"', runner)
+        self.assertIn("declare -f copy_release_qt_pin", runner)
         self.assertIn('prepare_release_apt_config "$config"', runner)
         self.assertIn('release_apt_get "$config" "$@"', runner)
         self.assertNotIn('. "$1"', runner)
@@ -1832,13 +2177,31 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertIn(
             '${PLEBIAN_OS_RELEASE_APT_CONFIG:+"PLEBIAN_OS_RELEASE_APT_CONFIG=$PLEBIAN_OS_RELEASE_APT_CONFIG"}',
             refresh)
-        self.assertIn("/usr/local/sbin/plebian-os-qt-runtime --verify", refresh)
+        elevated = '"${elevate[@]}" /usr/local/sbin/plebian-os-qt-runtime --verify'
+        self.assertIn(elevated, refresh)
+        self.assertLess(refresh.index("run_package_step_in_its_own_session"), refresh.index(elevated))
+        self.assertNotIn("if ! /usr/local/sbin/plebian-os-qt-runtime --verify", refresh)
+        qt_done = updater.index('die "selected Qt runtime could not be installed/verified"')
+        before_deps = updater[qt_done:updater.index("\nrefresh_os_dependencies\n", qt_done)]
+        self.assertIn("refresh_release_qt_pin", before_deps)
+        self.assertNotIn("prepare_release_apt_config", before_deps)
         prepared = shell_function(updater, "prepare_release_apt_config")
         self.assertIn('Dir::Etc::main "/dev/null";', prepared)
         self.assertIn('Dir::Etc::Parts \\"$dest/apt.conf.d\\"', prepared)
-        self.assertIn("preferences.d/plebian-os-qt-runtime", prepared)
+        self.assertIn("copy_release_qt_pin", prepared)
         self.assertNotIn("apt.conf.d/*", prepared)
         self.assertNotIn("93plebian-os-qt-runtime", prepared)
+        pin_copy = shell_function(updater, "copy_release_qt_pin")
+        self.assertIn("preferences.d/plebian-os-qt-runtime", pin_copy)
+        self.assertIn("8#$qt_mode", pin_copy)
+        self.assertNotIn("93plebian-os-qt-runtime", pin_copy)
+        for name in ("copy_release_qt_pin", "prepare_release_apt_config"):
+            bodies = [
+                shell_function((ROOT / "provision" / script).read_text(), name)
+                for script in ("install-deps.sh", "plebian-os-update.sh", "plebian-os-provision.sh")
+            ]
+            self.assertEqual(bodies[0], bodies[1], name)
+            self.assertEqual(bodies[0], bodies[2], name)
         self.assertIn("apt-config dump", prepared)
         self.assertIn("dropping proxy setting", prepared)
         self.assertNotIn("Proxy-Auto-Detect", prepared)

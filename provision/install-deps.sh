@@ -111,13 +111,38 @@ validate_release_apt_provenance() {
 # operator apt directory, the one that contains sources.list. On success,
 # $1/indexes lists the release indexes. On failure, $1/failure names the
 # provenance refusal and the function returns 1.
+
+# Copy the one Plebian Qt pin into a private apt configuration.
+# $1 is the operator apt directory. $2 is the private configuration
+# directory; its preferences.d must already exist. A regular non-symlink
+# file owned by uid 0 and not group- or world-writable is copied, then
+# mode 0644. Anything else is left alone, including an absent file. A
+# qualifying file that cannot be copied is a failure. Operator pins and
+# the Qt verify hook are not copied.
+copy_release_qt_pin() {
+    local apt_dir="$1" dest="$2"
+    local qt_pin="" qt_owner="" qt_mode=""
+    qt_pin="$apt_dir/preferences.d/plebian-os-qt-runtime"
+    if [ -f "$qt_pin" ] && [ ! -L "$qt_pin" ]; then
+        qt_owner="$(stat -c '%u' -- "$qt_pin" 2>/dev/null || true)"
+        qt_mode="$(stat -c '%a' -- "$qt_pin" 2>/dev/null || true)"
+        case "$qt_mode" in
+            ''|*[!0-9]*) qt_mode="" ;;
+        esac
+        if [ "$qt_owner" = 0 ] && [ -n "$qt_mode" ] \
+                && [ $(( 8#$qt_mode & 022 )) -eq 0 ]; then
+            cp -- "$qt_pin" "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+            chmod 0644 -- "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+        fi
+    fi
+}
+
 prepare_release_apt_config() {
     local dest="$1" phase="$2" snapshot="$3" codename="$4" apt_dir="$5"
     local work="" reason_file="" file="" base="" rel="" staged=""
     local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
     local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
     local main_ok=0 snapshot_only=0 trust_disabled=0
-    local qt_pin="" qt_owner="" qt_mode=""
     local proxy_line="" proxy_key="" proxy_value="" proxy_host="" proxy_ok=0
     local proxy_userinfo=0 proxy_mode=0644
     case "$dest" in
@@ -241,27 +266,12 @@ prepare_release_apt_config() {
     done < <(LC_ALL=C env -u APT_CONFIG apt-config dump --no-empty --format '%f%N%v%n' 2>/dev/null || true)
     # The Plebian Qt pin is part of the release closure. Copy that one
     # root-owned file when it is a regular file and not group- or
-    # world-writable. Operator pins stay where they are.
-    qt_pin="$apt_dir/preferences.d/plebian-os-qt-runtime"
-    if [ -f "$qt_pin" ] && [ ! -L "$qt_pin" ]; then
-        qt_owner="$(stat -c '%u' -- "$qt_pin" 2>/dev/null || true)"
-        qt_mode="$(stat -c '%a' -- "$qt_pin" 2>/dev/null || true)"
-        case "$qt_mode" in
-            ''|*[!0-9]*) qt_mode="" ;;
-        esac
-        if [ "$qt_owner" = 0 ] && [ -n "$qt_mode" ] \
-                && [ $(( 8#$qt_mode & 022 )) -eq 0 ]; then
-            cp -- "$qt_pin" "$dest/preferences.d/plebian-os-qt-runtime" || {
-                rm -rf -- "$work"
-                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
-                return 1
-            }
-            chmod 0644 -- "$dest/preferences.d/plebian-os-qt-runtime" || {
-                rm -rf -- "$work"
-                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
-                return 1
-            }
-        fi
+    # world-writable. Operator pins stay where they are. The updater
+    # copies the pin again after a Qt hop, before install-deps.
+    if ! copy_release_qt_pin "$apt_dir" "$dest"; then
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
     fi
     : >"$work/files"
     : >"$work/accepted.idx"
