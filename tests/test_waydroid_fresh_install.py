@@ -12,6 +12,7 @@ only under a temporary directory.
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import shutil
 import stat
@@ -46,8 +47,15 @@ INSTALL_WAYDROID="$WANT_INSTALL_WAYDROID"
 DRY_RUN="$WANT_DRY_RUN"
 WAYDROID_CLOSURE_SHA256="$WANT_CLOSURE_SHA"
 PLEBIAN_OS_DIR="$CHECKOUT"
+TARGET_UID=0
 if [ -n "${DEST:-}" ]; then
     PLEBIAN_OS_WAYDROID_HELPER_DEST="$DEST"
+fi
+if [ -n "${FIXED_ROOT:-}" ]; then
+    PLEBIAN_OS_WAYDROID_FIXED_ROOT="$FIXED_ROOT"
+fi
+if [ -n "${STAGE_PARENT:-}" ]; then
+    PLEBIAN_OS_WAYDROID_STAGE_PARENT="$STAGE_PARENT"
 fi
 if [ -n "${UNAME_MACHINE:-}" ]; then
     mkdir -p "$WORK/bin"
@@ -84,13 +92,18 @@ class WaydroidFreshInstallTests(unittest.TestCase):
         self.parent.mkdir()
         self.parent.chmod(0o755)
         self.dest = self.parent / "waydroid"
+        self.stage_parent = self.tmp / "stages"
+        self.stage_parent.mkdir()
+        self.stage_parent.chmod(0o700)
         self.checkout = ROOT
 
     def run_root(self, body: str, *, checkout: Path | None = None,
                  dest: Path | None = None, install: str = "0",
                  dry_run: str = "0", closure_sha: str = "",
                  uname_machine: str = "",
-                 production_path: bool = False) -> subprocess.CompletedProcess[str]:
+                 production_path: bool = False,
+                 fixed_root: str = "",
+                 timeout: int = 180) -> subprocess.CompletedProcess[str]:
         if not self.unshare_ok:
             self.skipTest("unprivileged user namespaces are unavailable")
         if production_path:
@@ -110,15 +123,28 @@ class WaydroidFreshInstallTests(unittest.TestCase):
             "WORK": str(self.tmp),
             "PARENT": str(self.parent),
             "DEST": dest_value,
+            "FIXED_ROOT": fixed_root,
+            "STAGE_PARENT": str(self.stage_parent),
             "WANT_INSTALL_WAYDROID": install,
             "WANT_DRY_RUN": dry_run,
             "WANT_CLOSURE_SHA": closure_sha,
             "UNAME_MACHINE": uname_machine,
         }
-        return subprocess.run(
+        result = subprocess.run(
             [self.unshare, "-r", "bash", "-c", PRELUDE + body],
-            text=True, capture_output=True, check=False, env=env, timeout=180,
+            text=True, capture_output=True, check=False, env=env, timeout=timeout,
         )
+        leftovers = sorted(path.name for path in self.stage_parent.iterdir())
+        self.assertEqual(leftovers, [], result.stdout + result.stderr)
+        return result
+
+    def copy_checkout(self) -> Path:
+        checkout = self.tmp / "checkout"
+        provision = checkout / "provision"
+        provision.mkdir(parents=True)
+        for name in HELPERS:
+            shutil.copy2(ROOT / "provision" / name, provision / name)
+        return checkout
 
     def assert_published(self, result: subprocess.CompletedProcess[str]):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -153,6 +179,12 @@ class WaydroidFreshInstallTests(unittest.TestCase):
         self.assertNotIn("apt-get", staging)
         self.assertNotIn("curl", staging)
         self.assertEqual(staging.count('"$setup" --dry-run'), 1)
+        self.assertEqual(staging.count("mv -fT --"), 3)
+        self.assertNotIn('install -o root -g root -m 0644 -- "$closure"', staging)
+        copy = shell_function(source, "waydroid_copy_owned_source")
+        self.assertIn("os.O_NOFOLLOW", copy)
+        self.assertIn("os.O_NONBLOCK", copy)
+        self.assertIn("install_dir=/usr/lib/plebian-os/waydroid", staging)
         begun = source.index("\nbegin_provision_root_transaction\n")
         called = source.index("\nstage_waydroid_first_use_helper\n")
         committed = source.index("\ncommit_provision_root_transaction\n")
@@ -325,7 +357,7 @@ printf 'staged\n'
         )
         result = self.run_root("stage_waydroid_first_use_helper\n", checkout=checkout)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("no Waydroid setup closure", result.stderr)
+        self.assertIn("Waydroid closure file is a symlink", result.stderr)
         self.assertFalse(self.dest.exists())
 
     def test_a_bad_release_hash_and_a_broken_helper_write_nothing(self):
@@ -456,6 +488,260 @@ exit 0
 """)
         self.assert_published(result)
         self.assertEqual(list((self.tmp / "state").glob("provision-rollback.*")), [])
+
+    def test_override_is_ignored_unless_the_library_is_sourced(self):
+        marker = self.tmp / "hooked"
+        result = self.run_root(r"""
+ignored_hook() { printf 'hooked\n' > "$WORK/hooked"; }
+PLEBIAN_OS_PROVISION_LIB_ONLY=0
+PLEBIAN_OS_WAYDROID_FIXED_ROOT="$WORK/fake-root"
+PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE=ignored_hook
+stage_waydroid_first_use_helper
+printf 'staged\n'
+""")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe Waydroid first-use ancestor", result.stderr)
+        self.assertNotIn("staged", result.stdout)
+        self.assertFalse(marker.exists())
+        self.assertFalse(self.dest.exists())
+
+    def test_canonical_override_cannot_name_the_real_helper_directory(self):
+        host = Path("/usr/lib/plebian-os/waydroid")
+        before = host.stat().st_mtime_ns if host.exists() else None
+        names_before = sorted(path.name for path in host.iterdir()) if host.is_dir() else None
+        spellings = (
+            "/usr/lib/plebian-os/waydroid",
+            "/usr/lib/plebian-os/waydroid/",
+            "/usr//lib/plebian-os/waydroid",
+            "/usr/lib/./plebian-os/waydroid",
+            "/usr/lib/plebian-os/waydroid/.",
+            "/tmp/../usr/lib/plebian-os/waydroid",
+        )
+        for spelling in spellings:
+            with self.subTest(spelling=spelling):
+                result = self.run_root(
+                    "stage_waydroid_first_use_helper\n",
+                    dest=Path(spelling),
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "cannot replace a fixed system path",
+                    result.stderr,
+                )
+                self.assertFalse(self.dest.exists())
+        nested = self.run_root(
+            "stage_waydroid_first_use_helper\n",
+            dest=Path("/usr/lib/plebian-os/waydroid/extra"),
+        )
+        self.assertNotEqual(nested.returncode, 0)
+        self.assertIn("is under /usr/lib/plebian-os", nested.stderr)
+        self.assertFalse((host / "extra").exists())
+        if before is None:
+            self.assertFalse(host.exists())
+        else:
+            self.assertEqual(host.stat().st_mtime_ns, before)
+            self.assertEqual(sorted(path.name for path in host.iterdir()), names_before)
+
+    def test_directory_that_other_users_cannot_traverse_is_refused(self):
+        self.dest.mkdir()
+        self.dest.chmod(0o750)
+        result = self.run_root("stage_waydroid_first_use_helper\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe Waydroid first-use directory", result.stderr)
+        self.assertEqual(list(self.dest.iterdir()), [])
+
+    def test_group_writable_fixed_parent_is_refused(self):
+        fake = self.tmp / "fake-root"
+        parent = fake / "usr" / "lib" / "plebian-os"
+        parent.mkdir(parents=True)
+        for directory in (fake, fake / "usr", fake / "usr" / "lib"):
+            directory.chmod(0o755)
+        parent.chmod(0o775)
+        result = self.run_root(
+            "stage_waydroid_first_use_helper\n",
+            production_path=True,
+            fixed_root=str(fake),
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("unsafe Waydroid first-use parent", result.stderr)
+        self.assertFalse((parent / "waydroid").exists())
+
+        host = Path("/usr/lib/plebian-os/waydroid")
+        before = host.stat().st_mtime_ns
+        names_before = sorted(path.name for path in host.iterdir())
+        lied = self.run_root(r"""
+stat() {
+    local format="" path="" take_format=0 arg
+    for arg in "$@"; do
+        if [ "$take_format" = 1 ]; then
+            format="$arg"
+            take_format=0
+            continue
+        fi
+        case "$arg" in
+            -c) take_format=1 ;;
+            --) ;;
+            -*) ;;
+            *) path="$arg" ;;
+        esac
+    done
+    case "$path" in
+        /|/usr|/usr/lib)
+            case "$format" in
+                %u) printf '0\n' ;;
+                %a) printf '755\n' ;;
+                *) command stat "$@" ;;
+            esac
+            ;;
+        /usr/lib/plebian-os)
+            case "$format" in
+                %u) printf '0\n' ;;
+                %a) printf '775\n' ;;
+                *) command stat "$@" ;;
+            esac
+            ;;
+        *) command stat "$@" ;;
+    esac
+}
+stage_waydroid_first_use_helper
+printf 'staged\n'
+""", production_path=True)
+        self.assertNotEqual(lied.returncode, 0, lied.stdout + lied.stderr)
+        self.assertIn("unsafe Waydroid first-use parent: /usr/lib/plebian-os", lied.stderr)
+        self.assertNotIn("staged", lied.stdout)
+        self.assertEqual(host.stat().st_mtime_ns, before)
+        self.assertEqual(sorted(path.name for path in host.iterdir()), names_before)
+
+    def test_fixed_root_seam_publishes_under_the_fake_root(self):
+        fake = self.tmp / "fake-root"
+        parent = fake / "usr" / "lib" / "plebian-os"
+        parent.mkdir(parents=True)
+        for directory in (fake, fake / "usr", fake / "usr" / "lib", parent):
+            directory.chmod(0o755)
+        result = self.run_root(r"""
+stage_waydroid_first_use_helper
+install_dir="$FIXED_ROOT/usr/lib/plebian-os/waydroid"
+printf 'setup %s\n' "$(stat -c '%u:%g:%a:%h' -- "$install_dir/plebian-os-waydroid-setup")"
+printf 'closure %s\n' "$(stat -c '%u:%g:%a:%h' -- "$install_dir/waydroid-closure.env")"
+printf 'pin %s\n' "$(stat -c '%u:%g:%a:%h' -- "$install_dir/waydroid-closure.sha256")"
+[ "$(stat -c '%u:%g:%a:%h' -- "$install_dir/plebian-os-waydroid-setup")" = 0:0:755:1 ]
+[ "$(stat -c '%u:%g:%a:%h' -- "$install_dir/waydroid-closure.env")" = 0:0:644:1 ]
+""", production_path=True, fixed_root=str(fake))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        published = parent / "waydroid"
+        self.assertEqual(sorted(path.name for path in published.iterdir()), sorted(HELPERS))
+        for name in HELPERS:
+            self.assertEqual(
+                (published / name).read_bytes(),
+                (ROOT / "provision" / name).read_bytes(),
+                name,
+            )
+        self.assertFalse(self.dest.exists())
+
+    def test_override_parent_and_non_directory_destination_are_refused(self):
+        self.parent.chmod(0o777)
+        result = self.run_root("stage_waydroid_first_use_helper\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe Waydroid first-use parent:", result.stderr)
+        self.assertFalse(self.dest.exists())
+
+        self.parent.chmod(0o755)
+        self.dest.write_text("keep\n")
+        result = self.run_root("stage_waydroid_first_use_helper\n")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a directory", result.stderr)
+        self.assertEqual(self.dest.read_text(), "keep\n")
+
+    def test_non_regular_destination_members_are_refused_without_blocking(self):
+        self.dest.mkdir()
+        self.dest.chmod(0o755)
+        member = self.dest / "plebian-os-waydroid-setup"
+        member.mkdir()
+        (member / "keep").write_text("keep\n")
+        result = self.run_root("stage_waydroid_first_use_helper\n", timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a regular file", result.stderr)
+        self.assertEqual((member / "keep").read_text(), "keep\n")
+
+        shutil.rmtree(self.dest)
+        self.dest.mkdir()
+        self.dest.chmod(0o755)
+        fifo = self.dest / "waydroid-closure.env"
+        os.mkfifo(fifo)
+        result = self.run_root("stage_waydroid_first_use_helper\n", timeout=20)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not a regular file", result.stderr)
+        self.assertTrue(fifo.is_fifo())
+
+    def test_source_must_be_executable_regular_and_not_group_writable(self):
+        checkout = self.copy_checkout()
+        setup = checkout / "provision" / "plebian-os-waydroid-setup"
+        setup.chmod(0o644)
+        result = self.run_root("stage_waydroid_first_use_helper\n", checkout=checkout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("not executable", result.stderr)
+        self.assertFalse(self.dest.exists())
+
+        setup.chmod(0o755)
+        closure = checkout / "provision" / "waydroid-closure.env"
+        closure.chmod(0o666)
+        result = self.run_root("stage_waydroid_first_use_helper\n", checkout=checkout)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("group or world writable", result.stderr)
+        self.assertFalse(self.dest.exists())
+
+        closure.chmod(0o644)
+        closure.unlink()
+        os.mkfifo(closure)
+        result = self.run_root(
+            "stage_waydroid_first_use_helper\n",
+            checkout=checkout,
+            timeout=20,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Waydroid closure file is not a regular file", result.stderr)
+        self.assertFalse(self.dest.exists())
+
+    def test_swap_after_verification_publishes_the_staged_bytes(self):
+        checkout = self.copy_checkout()
+        original = (ROOT / "provision" / "waydroid-closure.env").read_bytes()
+        secret = self.tmp / "secret"
+        secret.write_bytes(b"not-the-closure\n")
+        secret.chmod(0o600)
+        swapped = self.run_root(r"""
+swap_closure_for_secret() {
+    ln -sfn "$WORK/secret" "$CHECKOUT/provision/waydroid-closure.env"
+}
+PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE=swap_closure_for_secret
+stage_waydroid_first_use_helper
+printf 'setup %s\n' "$(stat -c '%u:%g:%a:%h' -- "$DEST/plebian-os-waydroid-setup")"
+printf 'closure %s\n' "$(stat -c '%u:%g:%a:%h' -- "$DEST/waydroid-closure.env")"
+printf 'pin %s\n' "$(stat -c '%u:%g:%a:%h' -- "$DEST/waydroid-closure.sha256")"
+""", checkout=checkout, timeout=20)
+        self.assertEqual(swapped.returncode, 0, swapped.stdout + swapped.stderr)
+        self.assertEqual((self.dest / "waydroid-closure.env").read_bytes(), original)
+        self.assertNotIn(b"not-the-closure", (self.dest / "waydroid-closure.env").read_bytes())
+        self.assertEqual(secret.read_bytes(), b"not-the-closure\n")
+        self.assertEqual(sorted(path.name for path in self.dest.iterdir()), sorted(HELPERS))
+        self.assertIn("0:0:644:1", swapped.stdout)
+
+        shutil.rmtree(self.dest)
+        closure = checkout / "provision" / "waydroid-closure.env"
+        closure.unlink()
+        shutil.copy2(ROOT / "provision" / "waydroid-closure.env", closure)
+        fifo_swap = self.run_root(r"""
+swap_closure_for_fifo() {
+    rm -f -- "$CHECKOUT/provision/waydroid-closure.env"
+    mkfifo -- "$CHECKOUT/provision/waydroid-closure.env"
+}
+PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE=swap_closure_for_fifo
+stage_waydroid_first_use_helper
+printf 'closure %s\n' "$(stat -c '%u:%g:%a:%h' -- "$DEST/waydroid-closure.env")"
+""", checkout=checkout, timeout=20)
+        self.assertEqual(fifo_swap.returncode, 0, fifo_swap.stdout + fifo_swap.stderr)
+        self.assertEqual((self.dest / "waydroid-closure.env").read_bytes(), original)
+        self.assertFalse((self.dest / "waydroid-closure.env").is_fifo())
+        self.assertIn("0:0:644:1", fifo_swap.stdout)
 
 
 if __name__ == "__main__":
