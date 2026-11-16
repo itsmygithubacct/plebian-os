@@ -556,7 +556,7 @@ DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344c
 DESKTOP_WALLPAPER_MAX_BYTES=$((32 * 1024 * 1024))
 VERSION_MARKER_DST=/usr/local/share/plebian-os/VERSION
 LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
-LIGHTDM_GREETER_CONFIG_SHA256=985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560
+LIGHTDM_GREETER_CONFIG_SHA256=4c888bb55fbd2e0d8ae60f8cca06bb606879fb3168168174156d0952a931564b
 INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
 INSTALLER_ATTRIBUTION_SHA256=5f5996a32c0a92debe2fef972463d28d53495e6e64af78e0e14aa4a109196ce9
 GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
@@ -4072,7 +4072,7 @@ elif kind == "license":
 elif kind == "greeter":
     required = {
         "[greeter]",
-        "background=/usr/local/share/plebian-os/wallpapers/plebian-os.png",
+        "background=/usr/share/plebian-os/wallpapers/plebian-os.png",
         "user-background=false",
     }
     lines = {line.strip() for line in text.splitlines()

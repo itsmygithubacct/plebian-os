@@ -41,17 +41,17 @@ EnvironmentFile=-/etc/default/plebian-os
 # A persistent counter makes the three-attempt bound survive reboots. When it
 # is exhausted ExecCondition skips the unit without marking success; the display
 # manager can start, and an operator can inspect the journal/fix the network.
-ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check
+ExecCondition=/usr/sbin/plebian-os-firstboot-attempt check
 # Clear any temporary sudoers grant a previously killed attempt may have left
 # behind (SIGKILL can't run the provisioner's own cleanup trap).
 ExecStartPre=-/bin/rm -f /etc/sudoers.d/plebian-os-provision
-ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision
+ExecStart=/usr/sbin/plebian-os-firstboot-attempt run /usr/sbin/plebian-os-provision
 # Defense in depth: cleanup runs after success, ordinary failure, timeout, and
 # signal-driven stops even if the shell's own EXIT/signal trap is bypassed.
 ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision
 # Mark done and stop pulling on every boot (success only).
 ExecStartPost=/usr/bin/install -Dm644 /dev/null /var/lib/plebian-os/provisioned
-ExecStartPost=/usr/local/sbin/plebian-os-firstboot-attempt success
+ExecStartPost=/usr/sbin/plebian-os-firstboot-attempt success
 ExecStartPost=/bin/systemctl disable plebian-os-firstboot.service
 # The runner's five-hour ceiling covers every attempt, recovery and retry
 # delay. A stop at the ceiling then waits up to 10 minutes for a running dpkg,
