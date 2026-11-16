@@ -86,7 +86,7 @@ resolution pin; it does not freeze an installed 0.2.2 machine's Debian packages.
 RC6 additionally delivers the patched Qt5 and Qt6 GUI packages as one
 checksum-bound runtime bundle. Only `libqt5gui5t64` and `libqt6gui6` are pinned
 to their qualified package versions; other Debian security updates continue
-normally. `/usr/local/sbin/plebian-os-qt-runtime --verify` checks those versions
+normally. `/usr/sbin/plebian-os-qt-runtime --verify` checks those versions
 and the installed QtGui, QtXcbQpa, and XCB plugin bytes. The OS updater saves
 the actual prior GUI package archives before replacement and restores them if
 the enclosing update fails.
@@ -619,7 +619,7 @@ for example, 0.1.8's selector predates 0.1.9's exact uv pins and per-component
 ancestry proof.
 
 Beginning with 0.1.9, the selector is also the twelfth payload in the validated,
-rollback-safe OS layer and is installed as `/usr/local/bin/plebian-os-select-closure`.
+rollback-safe OS layer and is installed as `/usr/bin/plebian-os-select-closure`.
 That installed copy provides `--show`, `--rollback`, and same-release
 reselection. It is not a substitute for extracting a later target release's
 own selector from that target's immutable tag.

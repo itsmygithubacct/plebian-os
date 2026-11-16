@@ -26,7 +26,7 @@ archives, as on a fresh install.
 The espeakng-loader wheel in that interpreter bundles libespeak-ng
 (GPL-3.0-or-later) and ships no licence file. The image puts the loader's MIT
 text, its build notes and script, and the pinned espeak-ng 1.52.0 source under
-/usr/local/share/doc/plebian-os/espeak-ng. The root step puts any of them that
+/usr/share/plebian-os/notices/espeak-ng. The root step puts any of them that
 are missing there too, so an upgraded machine has them. The loader texts come
 from this checkout. An online run downloads the source and checks it against
 espeak-ng-source.json. A failed download leaves it out, and the next upgrade
@@ -76,12 +76,23 @@ import tempfile
 import time
 
 
+# Same values as provision/plebian-os-paths.sh. Fixed; not taken from the environment.
+PLEBIAN_OS_SBINDIR = "/usr/sbin"
+PLEBIAN_OS_BINDIR = "/usr/bin"
+PLEBIAN_OS_LIBEXECDIR = "/usr/libexec/plebian-os"
+PLEBIAN_OS_LIBDIR = "/usr/lib/plebian-os"
+PLEBIAN_OS_DATADIR = "/usr/share/plebian-os"
+PLEBIAN_OS_NOTICEDIR = "/usr/share/plebian-os/notices"
+PLEBIAN_OS_PAYLOADDIR = "/var/lib/plebian-os/payloads"
+PLEBIAN_OS_UNITDIR = "/usr/lib/systemd/system"
+
+
 BASIC_PITCH_FILES = (
     'models/nmp.onnx',
     'notices/LICENSE-apache-2.0.txt',
     'notices/NOTICE-basic-pitch.txt',
 )
-SHARED_BASIC_PITCH = Path('/usr/local/share/plebian-os')
+SHARED_BASIC_PITCH = Path(PLEBIAN_OS_PAYLOADDIR)
 DEMUCS_WEIGHTS = 'models/5c90dfd2-34c22ccb.th'
 DEMUCS_LICENCE = 'notices/LICENSE-mit.txt'
 DEMUCS_FILES = (DEMUCS_WEIGHTS, DEMUCS_LICENCE)
@@ -102,7 +113,7 @@ PARADEE_PYTHON = Path('/usr/lib/kilix/pd/bin/python')
 PARADEE_WHEELHOUSE = SHARED_BASIC_PITCH / 'paradee-wheels'
 PARADEE_WHEEL_LOCK = 'paradee-wheels.json'
 ESPEAK_SOURCE_PIN = 'espeak-ng-source.json'
-ESPEAK_DOCS = Path('/usr/local/share/doc/plebian-os/espeak-ng')
+ESPEAK_DOCS = Path(PLEBIAN_OS_NOTICEDIR) / 'espeak-ng'
 ESPEAK_NOTICES = ('espeakng-loader-0.2.4-LICENSE', 'espeakng-loader-0.2.4-build.txt',
                   'espeakng-loader-0.2.4-build.sh')
 SPACY_WHEEL ='en_core_web_sm-3.8.0-py3-none-any.whl'
@@ -134,7 +145,7 @@ NEURONTE_REPO = 'https://github.com/itsmygithubacct/neuronte-v2.git'
 SELECTED_CLOSURE = Path('/etc/pleb/closure.env')
 # The Ollama runtime (plebian-os-provision's install_ollama_runtime_for_update),
 # for an updater that predates its own step.
-INSTALLED_PROVISIONER = Path('/usr/local/sbin/plebian-os-provision')
+INSTALLED_PROVISIONER = Path(PLEBIAN_OS_SBINDIR) / 'plebian-os-provision'
 CHECKOUT_VERSION = Path(__file__).resolve().parent.parent / 'VERSION'
 OLLAMA_RUNTIME_UNAVAILABLE = 75
 OLLAMA_STEP_TOO_OLD = 98
@@ -638,7 +649,12 @@ def _download_pinned(url, size, target):
 
 def _place_shared_archive(built, pin, verify):
     """Put a checked archive where the image would have, without replacing another copy."""
+    # parents=True may create /var/lib/plebian-os. chmod and chown only the
+    # payload directory itself, never /var or /var/lib.
     SHARED_BASIC_PITCH.mkdir(parents=True, exist_ok=True)
+    os.chmod(SHARED_BASIC_PITCH, 0o755)
+    if os.geteuid() == 0:
+        os.chown(SHARED_BASIC_PITCH, 0, 0)
     target = SHARED_BASIC_PITCH / pin['filename']
     with tempfile.TemporaryDirectory(prefix='.plebian-image-archive-', dir=SHARED_BASIC_PITCH) as tmp:
         staged = Path(tmp) / pin['filename']

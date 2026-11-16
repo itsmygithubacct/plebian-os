@@ -815,13 +815,13 @@ class RemasterContractTests(unittest.TestCase):
                 'install -m 0644 "$INSTALLER_ATTRIBUTION" '
                 '"$EXTRACT/plebian-os/doc/installer/ATTRIBUTION.md"',
                 "/cdrom/plebian-os/doc/installer/ATTRIBUTION.md",
-                "/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
+                "/usr/share/plebian-os/notices/installer/ATTRIBUTION.md",
             ),
             (
                 'install -m 0644 "$GPL2_LICENSE" '
                 '"$EXTRACT/plebian-os/doc/COPYING.GPL-2"',
                 "/cdrom/plebian-os/doc/COPYING.GPL-2",
-                "/usr/local/share/doc/plebian-os/COPYING.GPL-2",
+                "/usr/share/plebian-os/notices/COPYING.GPL-2",
             ),
         )
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()

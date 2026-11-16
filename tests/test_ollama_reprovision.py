@@ -18,6 +18,33 @@ def extract_shell_function(source: str, name: str) -> str:
     return source[start:end]
 
 
+def point_carrier_paths_at(text: str, directory: str, installer: str) -> str:
+    """Point a sourced provision slice at one fixture directory.
+
+    The manifest and the tar.xz used to share /usr/local/share/plebian-os.
+    They are separate installed paths now. These tests still keep both in
+    the same fixture directory. Rewrite variable uses before any later
+    /var/lib/plebian-os replace, and rewrite the path-block assignments
+    when the slice includes them (the entry prefix does).
+    """
+    directory = str(directory)
+    text = text.replace("$PLEBIAN_OS_DATADIR", directory)
+    text = text.replace("$PLEBIAN_OS_PAYLOADDIR", directory)
+    text = text.replace(
+        "$PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime",
+        str(installer),
+    )
+    text = text.replace(
+        "PLEBIAN_OS_DATADIR=/usr/share/plebian-os",
+        "PLEBIAN_OS_DATADIR=" + directory,
+    )
+    text = text.replace(
+        "PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads",
+        "PLEBIAN_OS_PAYLOADDIR=" + directory,
+    )
+    return text
+
+
 class OllamaReprovisionTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -121,10 +148,10 @@ class OllamaReprovisionTests(unittest.TestCase):
         systemctl_shim.chmod(0o755)
 
         functions = self.ollama_functions
-        functions = functions.replace("/usr/local/share/plebian-os", str(media))
-        functions = functions.replace(
-            "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
-            str(installed_sbin / "plebian-os-install-kilix-ollama-runtime"),
+        functions = point_carrier_paths_at(
+            functions,
+            media,
+            installed_sbin / "plebian-os-install-kilix-ollama-runtime",
         )
         functions = functions.replace("/var/lib/plebian-os", str(state_root))
         prelude = "\n".join((
@@ -321,11 +348,10 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         )
         systemctl_shim.chmod(0o755)
 
-        source = self.preflight_function
-        source = source.replace("/usr/local/share/plebian-os", str(stage_root))
-        source = source.replace(
-            "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
-            str(installed_sbin / "plebian-os-install-kilix-ollama-runtime"),
+        source = point_carrier_paths_at(
+            self.preflight_function,
+            stage_root,
+            installed_sbin / "plebian-os-install-kilix-ollama-runtime",
         )
         source = source.replace(
             "/var/lib/plebian-os/ollama-runtime-carrier.receipt",
@@ -386,21 +412,20 @@ class OllamaCarrierPreflightTests(unittest.TestCase):
         source = self.entry_prefix.replace(
             'SELF_DIR="$(cd "$(dirname "$0")" && pwd)"',
             f"SELF_DIR={shlex.quote(str(fixture['checkout'] / 'provision'))}",
-        ).replace("/usr/local/share/plebian-os", str(fixture["stage_root"]))
+        )
+        source = point_carrier_paths_at(
+            source, fixture["stage_root"], fixture["installed_helper"],
+        )
         source = source.replace(
-            "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
-            str(fixture["installed_helper"]),
-        ).replace(
             "/var/lib/plebian-os/ollama-runtime-carrier.receipt",
             str(fixture["state_root"] / "ollama-runtime-carrier.receipt"),
         )
         script = source + '\nprintf \'entry-prefix-complete\\n\'\n'
         if follow_install:
-            install_function = self.install_function.replace(
-                "/usr/local/share/plebian-os", str(fixture["stage_root"])
-            ).replace(
-                "/usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
-                str(fixture["installed_helper"]),
+            install_function = point_carrier_paths_at(
+                self.install_function,
+                fixture["stage_root"],
+                fixture["installed_helper"],
             ).replace("/var/lib/plebian-os", str(fixture["state_root"]))
             script += install_function + "\ninstall_ollama_runtime_from_carrier\n"
         env = fixture["env"].copy()

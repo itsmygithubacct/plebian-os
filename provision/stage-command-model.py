@@ -14,7 +14,7 @@ as root, from the new checkout, and stops its upgrade if it fails. It checks
 the pin, accepts the arguments earlier callers pass, and changes nothing. It
 never opens the network and never writes, so an archive an earlier release
 staged under /usr/local/share/kilix/model-archives, and the licence documents
-it put under /usr/local/share/doc/plebian-os/models, stay as they are.
+that release left with that model, stay as they are.
 """
 import argparse
 import json

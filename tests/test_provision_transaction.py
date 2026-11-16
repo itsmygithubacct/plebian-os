@@ -363,12 +363,12 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             "/etc/modprobe.d/plebian-os-no-beep.conf",
             "/etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf",
             "/etc/systemd/logind.conf.d/50-plebian-lid.conf",
-            "/usr/local/share/plebian-os/wallpapers/plebian-os.png",
-            "/usr/local/share/plebian-os/VERSION",
+            "/usr/share/plebian-os/wallpapers/plebian-os.png",
+            "/usr/share/plebian-os/VERSION",
             "/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf",
-            "/usr/local/share/doc/plebian-os/COPYING.GPL-2",
-            "/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
-            "/usr/local/sbin/plebian-os-passwd",
+            "/usr/share/plebian-os/notices/COPYING.GPL-2",
+            "/usr/share/plebian-os/notices/installer/ATTRIBUTION.md",
+            "/usr/sbin/plebian-os-passwd",
             "/usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup",
             "/usr/lib/plebian-os/waydroid/waydroid-closure.env",
             "/usr/lib/plebian-os/waydroid/waydroid-closure.sha256",
@@ -388,7 +388,7 @@ class ProvisionRootTransactionTests(unittest.TestCase):
         }
         self.assertTrue(required_paths <= paths, required_paths - paths)
         self.assertNotIn("/etc/sudoers.d/plebian-os-provision", paths)
-        self.assertIn("/usr/local/share/doc/plebian-os/installer", dirs)
+        self.assertIn("/usr/share/plebian-os/notices/installer", dirs)
         self.assertIn("/usr/lib/plebian-os/waydroid", dirs)
         self.assertIn("/etc/pleb", dirs)
         self.assertIn("/etc/systemd/logind.conf.d", dirs)

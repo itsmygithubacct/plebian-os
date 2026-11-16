@@ -117,7 +117,7 @@ class OllamaManifestSelectionTests(unittest.TestCase):
                 (media / "VERSION").write_text(version + "\n")
                 manifest = media / "ollama-release.env"
                 source = self.copy_media.replace("/cdrom/plebian-os", str(media)).replace(
-                    "/target/usr/local/share/plebian-os", str(target))
+                    "/target/usr/share/plebian-os", str(target))
                 # Ownership is covered separately; this source test runs unprivileged.
                 source = source.replace("chown root:root ", "true ")
                 for value in (None, fixture["manifest"].read_text().replace(version, "9.9.9"),
@@ -146,7 +146,11 @@ class OllamaManifestSelectionTests(unittest.TestCase):
                 # provision prefix, stopping before logging/package mutation.
                 bootstrap = fixture["checkout"] / "bootstrap.sh"
                 shutil.copyfile(ROOT / "bootstrap.sh", bootstrap)
-                prefix = self.probes.entry_prefix.replace("/usr/local/share/plebian-os", str(fixture["stage_root"]))
+                prefix = fixtures.point_carrier_paths_at(
+                    self.probes.entry_prefix,
+                    fixture["stage_root"],
+                    fixture["installed_helper"],
+                )
                 provisioner = fixture["checkout"] / "provision/plebian-os-provision.sh"
                 provisioner.write_text(prefix + '\nprintf "bootstrap-prefix-complete\\n"\n')
                 provisioner.chmod(0o755)

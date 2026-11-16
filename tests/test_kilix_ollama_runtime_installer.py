@@ -223,10 +223,10 @@ class KilixOllamaRuntimeInstallerTests(unittest.TestCase):
         self.assertIn("/plebian-os/ollama-runtime-carrier.tar.xz", remaster)
         self.assertIn('install -m 0644 "$OLLAMA_MANIFEST"', remaster)
         self.assertIn("/cdrom/plebian-os/ollama-release.env", preseed)
-        self.assertIn("local manifest=/usr/local/share/plebian-os/ollama-release.env", provision)
+        self.assertIn("local manifest=$PLEBIAN_OS_DATADIR/ollama-release.env", provision)
         self.assertIn(
             "cp /cdrom/plebian-os/ollama-runtime-carrier.tar.xz "
-            "/target/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz",
+            "/target/var/lib/plebian-os/payloads/ollama-runtime-carrier.tar.xz",
             preseed,
         )
         self.assertIn("--extract-carrier \"$archive\"", provision)

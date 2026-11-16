@@ -623,7 +623,7 @@ class SelectedClosureGateTests(unittest.TestCase):
             else:
                 vm.verify_successful_update(cfg(), "askpass")
         commands = [call.args[1] for call in remote.call_args_list]
-        pattern = r"\btimeout [0-9]+ /usr/local/bin/plebian-os-update((?: --[a-z-]+)*)"
+        pattern = r"\btimeout [0-9]+ /usr/bin/plebian-os-update((?: --[a-z-]+)*)"
         matches = [re.search(pattern, command) for command in commands]
         options = [shlex.split(match.group(1)) for match in matches if match]
         self.assertEqual(len(options), 1)
@@ -915,7 +915,7 @@ class VmBuilderEnvTests(unittest.TestCase):
         self.assertIn('git -C "${dir_var}" rev-parse HEAD', source)
         self.assertIn('"provision version"', source)
         self.assertIn(
-            "/usr/local/sbin/plebian-os-provision --version",
+            "{PLEBIAN_OS_SBINDIR}/plebian-os-provision --version",
             source[source.index("def verify_provisioning"):],
         )
         self.assertIn('"component versions"', source)
@@ -1339,10 +1339,10 @@ class VmBuilderEnvTests(unittest.TestCase):
             vm.verify_update_rollback(cfg(), "askpass")
         command = remote.call_args.args[1]
         self.assertIn("PLEBIAN_OS_UPDATE_TEST_FAIL_AFTER=os-layer", command)
-        self.assertIn("/usr/local/bin/plebian-os-update", command)
+        self.assertIn("/usr/bin/plebian-os-update", command)
         self.assertIn("snapshot_acceptance_update", command)
         self.assertIn('cmp -s "$before" "$after"', command)
-        self.assertIn("/usr/local/bin/plebian-os-select-closure", command)
+        self.assertIn("/usr/bin/plebian-os-select-closure", command)
         for path in (
             "/usr/local/bin/uv",
             "/usr/local/bin/uvx",

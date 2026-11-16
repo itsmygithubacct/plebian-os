@@ -356,7 +356,7 @@ class ProvisioningPlumbingTests(unittest.TestCase):
         self.assertIn("has_fresh_identity_profile", p)
         self.assertIn("fresh identity profile has no legacy password transition", p)
         self.assertIn('rm -f -- "$rule" "$dst"', p)
-        self.assertIn("/usr/local/sbin/plebian-os-passwd", p)
+        self.assertIn("$PLEBIAN_OS_SBINDIR/plebian-os-passwd", p)
         self.assertIn("/etc/sudoers.d/plebian-os-passwd", p)
         # scoped to exactly the one command, not general passwordless sudo
         self.assertIn("NOPASSWD: %s", p)

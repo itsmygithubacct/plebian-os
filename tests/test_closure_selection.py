@@ -2573,16 +2573,13 @@ class ClosureSelectionContractTests(unittest.TestCase):
         self.assertIn("provision/plebian-os-select-closure.sh", text)
 
     def test_selector_is_installed_by_every_os_delivery_path(self):
-        # The updater names this file through the installed-path variables.
-        # The provisioner and the preseed still carry the old literal until
-        # that worker moves them. Both spellings name the same installed file.
         update = UPDATE.read_text()
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         self.assertIn("$PLEBIAN_OS_BINDIR/plebian-os-select-closure", update)
-        for text in (provision, preseed):
-            self.assertIn("/usr/local/bin/plebian-os-select-closure", text)
+        self.assertIn("$PLEBIAN_OS_BINDIR/plebian-os-select-closure", provision)
+        self.assertIn("/usr/bin/plebian-os-select-closure", preseed)
         self.assertIn("plebian-os-select-closure.sh", remaster)
         self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
 

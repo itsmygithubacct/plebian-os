@@ -10,6 +10,17 @@ import tempfile
 import urllib.request
 
 
+# Same values as provision/plebian-os-paths.sh. Fixed; not taken from the environment.
+PLEBIAN_OS_SBINDIR = "/usr/sbin"
+PLEBIAN_OS_BINDIR = "/usr/bin"
+PLEBIAN_OS_LIBEXECDIR = "/usr/libexec/plebian-os"
+PLEBIAN_OS_LIBDIR = "/usr/lib/plebian-os"
+PLEBIAN_OS_DATADIR = "/usr/share/plebian-os"
+PLEBIAN_OS_NOTICEDIR = "/usr/share/plebian-os/notices"
+PLEBIAN_OS_PAYLOADDIR = "/var/lib/plebian-os/payloads"
+PLEBIAN_OS_UNITDIR = "/usr/lib/systemd/system"
+
+
 def verify(path, pin):
     with path.open('rb') as stream:
         if path.stat().st_size != pin['bytes'] or hashlib.file_digest(stream, 'sha256').hexdigest() != pin['sha256']:
@@ -31,7 +42,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--kilix', type=Path)
     parser.add_argument('--archive', type=Path,
-                        default=Path('/usr/local/share/plebian-os/default-models.tar.xz'))
+                        default=Path(PLEBIAN_OS_PAYLOADDIR) / 'default-models.tar.xz')
     parser.add_argument('--verify-only', action='store_true')
     parser.add_argument('--offline', action='store_true')
     args = parser.parse_args(argv)
