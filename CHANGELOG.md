@@ -4,7 +4,61 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [Unreleased]
+## [0.2.3] — YYYY-MM-DD
+
+Final release. See [releases/0.2.3-notes.md](releases/0.2.3-notes.md) for
+install and upgrade instructions (including `pleb update --to 0.2.3` for
+release-candidate machines), known issues and the 0.2.4 deferrals. The
+entries below run newest first, from the final back through RC1.
+
+- Speak the whole Paradee utterance. Synthesis no longer stops silently at
+  510 phonemes; it runs across bounded sentence and word windows (Kilix
+  `fdb02036`, with a shared adaptive speech-timing estimator).
+- Debian Go installs and upgrades keep working after trixie-backports
+  replaces the selected upload: the exact package files are pinned and
+  fetched from snapshot.debian.org or the release mirror when needed, and
+  nothing is installed unless every file matches.
+- First boot stops an attempt only after 20 minutes without progress, under
+  one 5-hour ceiling; a stop waits for dpkg and lets the rollback finish, and
+  each attempt repairs an interrupted package database first.
+- A never-selected standalone Debian machine can make its first closure
+  selection with `pleb update --to 0.2.3`, and a rollback or failed apply
+  returns it to no selected closure. A Pleb at VERSION 0.2.1 runs a bare
+  `pleb update` first.
+- Record the selected release tag and tag object
+  (`PLEBIAN_OS_RELEASE_TAG`, `PLEBIAN_OS_RELEASE_TAG_OBJECT`) so a later
+  release candidate moves to its final on a plain update. RC9 machines move
+  once with `pleb update --to 0.2.3`.
+- Ask once at the first desktop login whether to turn on an SSH server; the
+  default is No. `plebian-os-ssh-server enable|disable|status` changes it
+  later. Upgrades install the helper but never enable SSH.
+- Stage the Waydroid first-use helper on fresh amd64 installs, as updates
+  do, without installing Waydroid or downloading Android.
+- Release updates keep working when an operator apt source such as NVIDIA
+  CUDA is configured. Release packages still come only from Debian, and
+  packages from the operator source are left installed.
+- Accept an Ollama carrier path that contains a backslash or a newline
+  (0.2.2 known issue 8); size and SHA-256 checks are unchanged.
+- Say `interrupted; rolling back` on an interrupted update and keep the
+  updater's own `update.log`; remove packages the interrupted transaction
+  newly added when that is safe; recover an interrupted same-tag reselect
+  without restoring an older closure.
+  <!-- PENDING MERGE: interrupts -->
+- QEMU manager: refuse a private-group directory when membership lookup is
+  partial, the account files are not regular or not read whole, names are
+  duplicated, or the DynamicUser peer cannot be verified.
+  <!-- PENDING MERGE: qemu-manager -->
+- Kilix Ask uses its grammar until LFM2 is installed. The first interactive
+  `kilix ask` and the model wizard offer the LFM2 download (delivery v10,
+  deduplicated runtime libraries, same weight); the ISO no longer bundles
+  it. The five recorded Ask grammar gaps are fixed.
+  <!-- LFM2: confirm at final list -->
+- Install the slim Neuronte v2 set (`629ee1d2`) with a stall-based fetch and
+  its own `neuronte-v2` component cache; Kilix 95 reads the v1 faces and
+  flame and lays text with packed mask calls.
+- Download the default-models bundle from the release-independent
+  `default-models-0221` tag instead of the `v0.2.3-rc1` prerelease. Same
+  bytes and SHA-256.
 
 - Select Debian's current trixie-backports Go package
   `1.27.4-1~bpo13+1` for the Kilix engine build. The archive no longer
@@ -151,8 +205,6 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   the first time a terminal calls them. The licence screen is shown, and
   a decline installs nothing. Status, doctor, and listing stay read-only.
   Bonsai is `48e18c7`. The kilix-content gitlink stays at `32722d0`.
-
-## [0.2.3] — 2026-11-05
 
 - Follow published RC7 (`b7e7e0d3`) with an RC8 candidate. kilix-llm
   `93f2202b` refuses `pull` of `qwen-0.8b-no-loop-02` and builds without

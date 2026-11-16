@@ -7404,10 +7404,10 @@ verify_kilix_voice_install() {
     if [ "$carried_is_the_users" = 1 ]; then
         log "voice: read-aloud is ready; verified the release default bundle and left other existing dictation assets alone (${carried_paths[*]})"
     elif [ "$INSTALL_VOICE_MODEL" = 1 ]; then
-        # Deliberately no command to run. At KILIX_REF the pinned Kilix
-        # closure carries no first-use flow, so naming one here would send the
-        # user at something this image cannot execute. See releases/0.2.2-notes.md,
-        # "Known limitation: the first-use route is not in the pinned closure".
+        # Deliberately no command to run here. Optional dictation models are
+        # installed through the pinned Kilix closure's first-use flow, which
+        # shows the licence screen when the user asks for the model; this
+        # provisioning step never installs or names one.
         log "voice: read-aloud is ready; release default assets are installed in Content and optional dictation assets retain first-use setup"
     else
         log "voice: all read-aloud tools execute; dictation assets were explicitly skipped"

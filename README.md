@@ -29,68 +29,49 @@ monitor scaling, device setup controls, and Pleb's user-selected X11 capture
 portal. Capture uses PipeWire with WirePlumber's `video-only` profile; PulseAudio
 continues to handle audio. The locally built capture transport supplies
 descriptor-backed video buffers. Pleb documents bounded Firefox ESR and Chromium
-capture evidence, including user consent and Stop sharing. These component
-checks still require complete installed-release and physical desktop acceptance.
+capture evidence, including user consent and Stop sharing. The release notes
+record which of these were checked on installed images and physical desktops.
 
-## 0.2.3 RC5 Ask default
+## 0.2.3
 
-This RC5 image-models branch includes **LFM2 Kilix revision .9**
-(`lfm2-kilix-v5e1-wse-20261106.9`) as the Kilix Ask default. The installer
-includes its verified 1.36 GB archive; upgrades stage
-the same pinned archive using their existing admin context. Original licence
-documents are installed under
-`/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/notices/`.
-A new install or upgrade then installs that staged archive for the desktop
-user. By the owner's 2026-11-07 determination, its published custom terms,
-including the commercial-use limitation, are a notice, as with a Debian
-non-free package: they are shipped with the model, and installation records a
-notice receipt that claims no agreement. The receipt is created on the machine.
-It is not shipped in the image, and the terms are not waived. Explicit model
-preferences remain in effect, and the previous `20261104-v8` directory is
-retained for rollback. The archive is published as release
-`lfm2-kilix-commands-20261106-v9` of kilix-needle. See the
-[command-model selection](releases/0.2.3-command-model.json)
-for exact hashes, source pins, results and limitations.
+Plebian-OS 0.2.3 is the current release. The
+[0.2.3 release notes](releases/0.2.3-notes.md) give install and upgrade
+instructions, the full change list, known issues and what moved to 0.2.4.
+In brief:
 
-The image also includes **Basic Pitch** (`basic-pitch-icassp-2022-onnx`).
-The same new install and upgrade install its archive under the standard
-licence policy. The nine-model default bundle is unchanged.
+- **Kilix Ask** answers with its command grammar until you install the LFM2
+  command model (`lfm2-kilix-v5e1-wse-20261106.9`, kilix-needle delivery
+  `lfm2-kilix-commands-20261115-v10`). The ISO does not carry it: the first
+  interactive `kilix ask` and the model wizard offer the download, and a decline
+  is remembered. By the owner's 2026-11-07 determination its custom terms,
+  including the commercial-use limitation, are a notice, as with a Debian
+  non-free package: they are shipped with the model, and installation records a
+  notice receipt that claims no agreement. The terms are not waived. See the
+  [command-model selection](releases/0.2.3-command-model.json).
+  <!-- LFM2: confirm at final list -->
+- **Help** uses **kilix-qwen-sft1-2b**. Ask everyday questions about using
+  Kilix and Plebian-OS and receive a command, a brief explanation and related
+  documentation links:
 
-## 0.2.3 RC4 Help default
+  ```sh
+  kilix help-setup
+  kilix help-answer "How do I list panes?"
+  ```
 
-The 0.2.3 RC4 candidate includes **kilix-qwen-sft1-2b** as the default local
-Help model. Ask everyday questions about using Kilix and Plebian-OS and receive
-a command, a brief explanation and related documentation links:
-
-```sh
-kilix help-setup
-kilix help-answer "How do I launch a Kilix pane?"
-kilix help-answer "How do I list panes?"
-kilix help-answer "How do I launch agents?"
-kilix help-answer "How do I use the TUI?"
-```
-
-Setup explicitly downloads about 4.6 GB of model files plus the CPU runtime,
-after checking memory and storage. A GPU is not required. For documentation
-passages without model setup, use `kilix help-search "How do I list panes?"`.
-Help does not inspect live machine state or execute its suggested commands.
-
-See the [Help setup and troubleshooting guide](https://github.com/itsmygithubacct/kilix/blob/6b6dbda8d75fe787b6e3bdfaac597980251fd03c/docs/help/answers.md)
-and the [0.2.3 release notes](releases/0.2.3-notes.md). The Help selection
-record pins source `4abc52e9236899a05738807d32a3431270b6a3c2` and the published
-adapter release `kilix-qwen-sft1-2b`. Final OS image and update qualification
-remain pending. The sections below retain the 0.2.2 baseline and component
-status; the 0.2.3 notes describe the newer selections and bundled models.
-
-## 0.2.2 development status
-
-The reviewed source integration for 0.2.2 includes managed coding sessions,
-persistent PTY controls, durable agent mailboxes, refreshed desktop providers,
-inline media repairs, and installer/update recovery fixes. Source publication
-does not establish release readiness: final ISO, installation, upgrade,
-rollback, physical desktop and provider acceptance remain open. See the
-[release notes](releases/0.2.2-notes.md), [selected revisions](releases/0.2.2.env)
-and [upgrade policy](UPGRADING.md) for the exact scope.
+  Setup explicitly downloads about 4.6 GB of model files plus the CPU runtime,
+  after checking memory and storage. A GPU is not required. For documentation
+  passages without model setup, use `kilix help-search "How do I list panes?"`.
+  Help does not inspect live machine state or execute its suggested commands.
+  See the [Help setup and troubleshooting guide](https://github.com/itsmygithubacct/kilix/blob/6b6dbda8d75fe787b6e3bdfaac597980251fd03c/docs/help/answers.md).
+  The Help selection record pins source `4abc52e9236899a05738807d32a3431270b6a3c2`
+  and the published adapter release `kilix-qwen-sft1-2b`.
+- The image ships Paradee 8M as the system voice, the slim Neuronte v2
+  renderer, Basic Pitch, Demucs and PDF Conversion's page OCR models, plus the
+  nine-model default bundle.
+- The first desktop login asks which desktop to use, and then whether to turn
+  on an SSH server (off unless you choose it).
+- Machines on a 0.2.3 release candidate move to the final once with
+  `pleb update --to 0.2.3`; see [UPGRADING.md](UPGRADING.md).
 
 The selected binary artifacts target **AMD64**. ARM64 support is under
 development; architecture checks in the Qt, media, converter and other runtime
@@ -103,8 +84,9 @@ root-owned managed paths, with source and provenance records and transactional
 upgrade/rollback coverage. The shared Content catalog exposes its single-instance
 Android entry. The separate checksummed first-use helper installs the Android
 runtime only on explicit request; OS provisioning does not download Android
-images. Installed-target, Android and physical acceptance remain open; the
-selected first-use runtime closure supports AMD64 only.
+images. Fresh amd64 installs and updates both stage that root-owned helper
+under `/usr/lib/plebian-os/waydroid/`; Waydroid itself is installed only on
+demand. The selected first-use runtime closure supports AMD64 only.
 
 The dependency manifest supplies
 the same compression providers, read-only hardware-discovery tools, and
@@ -144,10 +126,11 @@ space; its source archive and build tree are discarded after atomic
 installation. `--archive PATH` lets both installers reuse an already downloaded
 exact archive. A first request may also spend substantial time compiling the
 Vulkan shader cache. None of these commands runs during provisioning,
-qualification, preseed, or a plain Vulkan install. These closures remain 0.2.2
-candidates, not accepted release schemas or model-publication authorization.
+qualification, preseed, or a plain Vulkan install. These closures are optional
+source installs, not accepted release schemas or model-publication
+authorization.
 
-Plebian-OS 0.2.2 carries the approved Ollama 0.32.14 CPU + Vulkan runtime in
+Plebian-OS 0.2.2 and 0.2.3 carry the approved Ollama 0.32.14 CPU + Vulkan runtime in
 the ISO as a deterministic 20,689,764-byte offline archive. Provisioning checks
 its release-manifest size and SHA-256, extracts its confined 107-file/10-link
 closure, installs the notices under `/usr/share/doc/ollama-runtime/notices`,
@@ -156,8 +139,10 @@ publishes the OS-owned `RELEASE-DISPOSITION` beside the carrier's
 as the `ollama` system account with model state under `/var/lib/ollama`; the
 `ollama` client is available on `PATH` for the first-use model wizard.
 
-The image carries no model weights and provisioning downloads none. The wizard
-downloads a selected model only after its per-model licence step. The service
+The Ollama runtime carries no model weights, and provisioning downloads no
+Ollama model. The wizard downloads a selected model only after its per-model
+licence step. (The image does carry the default speech, voice and page-OCR
+models listed in the release notes.) The service
 sets `OLLAMA_NO_CLOUD=1` to disable Ollama cloud features and prevent registry
 identity creation; ordinary local model pulls remain available. Debian's
 Vulkan loader and Mesa driver copyright notices come from their Debian packages.
@@ -386,8 +371,9 @@ installed system tracks upstream.
 
 **Convert a running Debian (fastest to try):**
 
-For 0.2.2, first obtain the offline release asset
-`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` and keep it on a local disk. The
+For 0.2.3, first obtain the offline release asset
+`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` (published with 0.2.2 and reused
+unchanged by 0.2.3) and keep it on a local disk. The
 bootstrap does not download the carrier. Pass its path explicitly; preflight
 checks the release manifest and archive before changing packages.
 
@@ -405,7 +391,7 @@ The provisioner also accepts `PLEBIAN_OS_OLLAMA_CARRIER=/path/to/<asset>`.
 When running from a source checkout, it stages that checkout's
 `releases/<VERSION>.env` as `ollama-release.env`; if an ISO-staged manifest is
 also present, both copies must match byte for byte. The manifest must declare
-the exact numeric OS version. For example, a `v0.2.3-rc1` source checkout with
+the exact numeric OS version. For example, a `v0.2.3` source checkout with
 `VERSION=0.2.3` requires `releases/0.2.3.env`. A missing or mismatched manifest
 stops provisioning before package changes; another release's pins are never
 substituted. OS updates deploy this manifest with `VERSION` and restore both
@@ -645,20 +631,22 @@ Plebian-OS for a desktop-shaped one.
 
 ## Requirements
 
-- An AMD64 machine for the currently selected 0.2.2 binary closure. ARM64
+- An AMD64 machine for the selected 0.2.3 binary closure. ARM64
   development builds require their own matching artifacts and qualification.
 - A GPU with a KMS/DRM driver for hardware GL, or llvmpipe software GL as a
   fallback (kilix is a GPU terminal). No graphics at all → the greeter still
   works; the Pleb session falls back to a screen-filled kilix or a plain xterm.
-- Network on first boot (it clones from GitHub).
-- Go ≥ 1.26 for the Kilix fork build. Firstboot installs or upgrades the exact
-  pinned Go archive through pleb's checksum-verifying, rollback-safe helper when
-  the target does not already have a suitable toolchain.
-  `PLEBIAN_OS_KILIX_GO_VERSION` plus the architecture-specific
-  `PLEBIAN_OS_KILIX_GO_SHA256_AMD64` / `_ARM64` pins make that toolchain exact
-  and integrity-checked. Exact installs must also carry Pleb's root-owned
-  `.pleb-source` archive stamp; a same-version binary without the matching stamp
-  is reinstalled. Release-controlled pins persist into `/etc/pleb/closure.env`;
+- A wired network on first boot (it clones from GitHub). A machine with only
+  wireless networking cannot join a network before provisioning.
+- Go for the Kilix fork build. 0.2.3 builds the engine with Debian's
+  `golang-1.27-go` and `golang-1.27-src` 1.27.4-1~bpo13+1, pinned by file
+  name, size and SHA-256. Installs and upgrades take those files from
+  trixie-backports, then snapshot.debian.org, then the
+  `debian-go-1.27.4-1-bpo13-1` release mirror, and install nothing unless
+  every file matches. Older release closures keep the go.dev archive path
+  (`PLEBIAN_OS_KILIX_GO_VERSION` plus the architecture-specific
+  `PLEBIAN_OS_KILIX_GO_SHA256_AMD64` / `_ARM64` pins, installed through Pleb's
+  checksum-verifying, rollback-safe helper with its `.pleb-source` stamp). Release-controlled pins persist into `/etc/pleb/closure.env`;
   operator choices remain in `/etc/pleb/session.env`.
 - 4 GiB RAM is the release-tested installation baseline because the fork build
   compiles large generated Go packages during firstboot. Lower-memory runtime
@@ -695,10 +683,10 @@ images can set `PLEBIAN_OS_RELEASE_MODE=1`, `PLEBIAN_OS_NETINST_URL`,
 `PLEBIAN_OS_NETINST_SHA256`, `PLEBIAN_OS_APT_SNAPSHOT`, `PLEB_REF`, `KILIX_REF`,
 `KILIX95_REF`, `KILIX_PREBUILT_VERSION`, `KILIX_PREBUILT_SHA256`, and the exact
 Go version/architecture checksums before building. Simpler: set
-`PLEBIAN_OS_RELEASE=0.2.2` to load the current development pin manifest from
-[`releases/0.2.2.env`](releases/0.2.2.env) (see
-[RELEASING.md](RELEASING.md)). This selects development inputs, not a supported
-release upgrade. The current manifest leaves `PLEBIAN_OS_APT_SNAPSHOT` empty:
+`PLEBIAN_OS_RELEASE=0.2.3` to load the release pin manifest from
+[`releases/0.2.3.env`](releases/0.2.3.env) (see
+[RELEASING.md](RELEASING.md)). This selects build inputs for an image; it is
+not an upgrade of an installed machine. The current manifest leaves `PLEBIAN_OS_APT_SNAPSHOT` empty:
 apt tracks the signed live Debian `trixie`, `trixie-updates`, and
 `trixie-security` suites with replay protection enabled, and
 `unattended-upgrades` applies Debian security updates daily without rebooting.

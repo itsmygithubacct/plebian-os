@@ -3,15 +3,18 @@
 This policy starts with **Plebian-OS 0.1.7**. It is also encoded for tooling in
 [`releases/upgrade-policy.json`](releases/upgrade-policy.json).
 
-An in-development 0.2.2 checkout is not a supported upgrade destination. A
-target becomes supported only when its immutable release manifest, notes,
-artifacts, and adjacent-version acceptance evidence are published together.
-Never point the installed updater at a development branch or use 0.2.2 source
-work to modify a 0.2.1 release worktree.
+An in-development checkout is not a supported upgrade destination. A target
+becomes supported only when its immutable release manifest, notes, artifacts,
+and adjacent-version acceptance evidence are published together. The current
+release is 0.2.3; its supported upgrade source is 0.2.2, and 0.2.3 release
+candidates move to it with `pleb update --to 0.2.3` (see
+**The 0.2.2 to 0.2.3 transition**). Never point the installed updater at a
+development branch or use newer source work to modify an older release
+worktree.
 
 ## Architecture qualification
 
-The selected 0.2.2 closure is AMD64-only. ARM64 package handling in the Qt and
+The selected 0.2.2 and 0.2.3 closures are AMD64-only. ARM64 package handling in the Qt and
 player helpers does not qualify an ARM64 release: the required EnCodec
 converter, native runtime, patched Qt bundle and player must all have reviewed
 ARM64 artifacts selected together. The selector refuses this closure on ARM64
@@ -70,9 +73,10 @@ the previous representation. Unknown keys and newer-schema data must not be
 silently discarded.
 
 Release-controlled keys include the coordinated version/release mode, every
-`*_REF` source pin in the release manifest (ten as of 0.2.2, since the
-system-monitor, desktop-SDK, IceWM, media-SDK and Waydroid components joined
-the closure in 0.2.1), the Debian source policy and installer input, the Kilix
+`*_REF` source pin in the release manifest (ten component pins as of 0.2.2,
+since the system-monitor, desktop-SDK, IceWM, media-SDK and Waydroid
+components joined the closure in 0.2.1; 0.2.3 adds the Kilix Secrets and
+Neuronte pins), the Debian source policy and installer input, the Kilix
 engine and Go pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
 one reviewed target closure; mixing old and new release pins is unsupported.
 RC6 declares `PLEBIAN_OS_APT_SNAPSHOT=` to use signed live Debian sources from
@@ -134,14 +138,12 @@ transaction restores both the prior drop-in state and the running SSH policy.
 
 Fresh 0.2.2 installation media carries the pinned Ollama runtime archive and
 installs the local service during provisioning. The archive is not a Git object,
-so the current `plebian-os-update` path cannot acquire it: a 0.2.1 machine
-updated with the current updater will not receive the Ollama runtime. The
-release notes must state this gap until an update delivery path is implemented.
-The updater would need a bounded fetch for a separately published carrier,
-checked against the release manifest size and SHA-256 before extraction, plus
-transactional install and rollback handling. A manifest-authenticated release
-asset is the recommended delivery path; placing a 20 MB runtime archive in Git
-would enlarge every source checkout.
+so the 0.2.2 `plebian-os-update` path could not acquire it: a 0.2.1 machine
+updated to 0.2.2 did not receive the Ollama runtime. 0.2.3 closes that gap: its
+updater downloads the separately published carrier
+(`PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL`), checks it against the release
+manifest size and SHA-256 before extraction, and installs it inside the update
+transaction (see **The 0.2.2 to 0.2.3 transition**).
 
 Nothing migrates. These things change under an upgrader, all preserved or
 release-controlled by the rules above:
@@ -180,8 +182,8 @@ release-controlled by the rules above:
   licence. A previous 0.2.1 acceptance is not imported; accept again through
   the licence screen. Amp's unavailable-model refusal is silent. A supplied
   `--from DIR` install records acceptance, not the source or provenance of the
-  files. The flow has not yet been exercised in a built guest; no VM or ISO
-  has been built from rc1. Re-provisioning a machine that already carries a
+  files. The 0.2.2 release did not exercise that flow in a built guest; the
+  0.2.3 release notes record its installed-image checks. Re-provisioning a machine that already carries a
   model leaves it in place, without claiming who accepted it or when. Re-provisioning a machine that already carries a model is
   supported and leaves the model alone, whether its user accepted that model
   at first use or 0.2.1's firstboot fetched it before the upgrade — 0.2.2
@@ -197,6 +199,90 @@ release-controlled by the rules above:
   value; it now declares that the release advertises that first-use pull. This
   is the migration owner decision OD-BB requires the notes to name, and
   `releases/0.2.2-notes.md` names the old and new representation in full.
+
+### The 0.2.2 to 0.2.3 transition
+
+`pleb update --to 0.2.3` is the supported hop from 0.2.2, on installed images
+and standalone machines. Nothing an operator chose migrates; these things
+change under an upgrader, all preserved or release-controlled by the rules
+above:
+
+- **New release-controlled keys.** These keys move with the closure:
+  - `KILIX_SECRETS_*` and `NEURONTE_*`;
+  - the Debian Go file pins (`PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION` and the
+    `PLEBIAN_OS_KILIX_GO_DEB_*` names, sizes, SHA-256 values, snapshot and
+    mirror);
+  - `PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL`.
+
+  Selections made by 0.2.3 also record `PLEBIAN_OS_RELEASE_TAG` and
+  `PLEBIAN_OS_RELEASE_TAG_OBJECT` in `closure.env`. `pleb update --show` lists
+  them. Rollback to 0.2.2 restores the previous `closure.env`.
+- **Kilix Go.** The engine builds with Debian's Go 1.27.4 from
+  trixie-backports instead of the go.dev archive, with the snapshot and
+  release-mirror fallback described under **Debian security updates**. The
+  go.dev archive stays for older closures.
+- **Runtimes installed on upgrade.** The update installs these runtimes, each
+  checked against its pin. A failed update restores the previous installation
+  or its absence.
+  - the pinned Ollama runtime, which stays installed after a rollback, like the
+    Ollama converter;
+  - Kilix Secrets, Zell 0.1.1 and `/usr/local/bin/zell`, the Claudex app, and
+    kilix-llm's launcher and pinned source, with nothing compiled;
+  - the slim Neuronte v2 set under `~/.local/gpu_terminal/sources/neuronte`,
+    fetched into its own `neuronte-v2` component cache;
+  - the Waydroid first-use helper. Waydroid itself is not installed.
+- **Model files on upgrade.** A machine that lacks the image's offline models
+  downloads them as root, checked against the image pins:
+  - Paradee and `en_core_web_sm`;
+  - the espeak-ng source;
+  - PDF Conversion's page OCR models;
+  - the Playalong defaults, unless the Playalong page or one of their licences
+    was declined.
+
+  A failed download changes nothing, and the next update tries again. LFM2
+  is neither staged nor
+  downloaded; Kilix Ask uses its grammar until the user installs LFM2.
+  <!-- LFM2: confirm at final list -->
+- **Debian packages added.** The update installs `redshift`, Tesseract,
+  `python3-torch` and the converter dependencies, plus Zell's dependencies:
+  upower, bluez, scrot, brightnessctl, power-profiles-daemon, nftables and
+  wtmpdb. Release packages come only from Debian and Plebian files. An operator
+  apt source, such as NVIDIA CUDA, is left configured and its packages are
+  kept. On rollback, packages the failed transaction newly added are removed
+  when nothing else would be removed with them; other packages and Debian
+  upgrades are kept. <!-- PENDING MERGE: interrupts (package removal on rollback) -->
+- **SSH.** The update installs the `plebian-os-ssh-server` helper but does not
+  install or enable openssh-server and does not ask. To turn SSH on, run
+  `sudo plebian-os-ssh-server enable`.
+- **Kilix 95 caches.** Bytecode and startup letter caches are prepared as the
+  desktop user after the stack commits, bounded at 600 seconds. Failure only
+  warns.
+
+**From a 0.2.3 release candidate (RC1–RC9).** Such a machine already records
+version 0.2.3, so a bare `pleb update`, `pleb update --latest` and
+`plebian-os-update` treat it as current. Move it once with
+`pleb update --to 0.2.3`. Do not use `--latest` on a candidate:
+- before 0.2.3 is published, it names 0.2.2 and asks to downgrade;
+- after publication, it stays on the candidate.
+
+From 0.2.3 on, a selection records its release tag, so a 0.2.4 candidate
+moves to the 0.2.4 final on a plain update. A final never moves to a
+candidate.
+
+**Standalone machines that never selected a release.** `pleb update --to 0.2.3`
+makes the first selection and records where each checkout stands. A failed
+apply, or `pleb update --rollback`, returns the machine to no selected closure.
+Releases before 0.2.3 cannot be a first selection. A Pleb whose VERSION is
+0.2.1 first runs a bare `pleb update`, then `pleb update --to 0.2.3`.
+
+**Interrupted updates.** An interrupted update (status 130, 143 or 129):
+- prints `interrupted; rolling back`;
+- writes the updater's own log, `update.log` under the Pleb state directory;
+- reports the restore outcome.
+
+A same-tag reselect interrupted before the selection is pending, such as the
+RC9 → 0.2.3 hop, is recovered as an interrupted reselect. The installed
+closure is left unchanged. <!-- PENDING MERGE: interrupts -->
 
 ## Debian security updates
 
@@ -216,14 +302,16 @@ installer's snapshot `sources.list`, restores sources Plebian-OS had disabled,
 removes the global `Acquire::Check-Valid-Until "false"` that the installer and
 earlier provisioners wrote, and writes `plebian-os-debian.sources` unless
 operator sources already provide live `trixie`, `trixie-updates`, and
-`trixie-security`. The 0.2.3 RC8 candidate also writes
+`trixie-security`. 0.2.3 (from RC8) also writes
 `plebian-os-debian-backports.sources` for `<codename>-backports` on
 `deb.debian.org` whenever live Debian sources are in use, including when
 those operator sources already provide the three suites above. A snapshot
 pin removes that file along with `plebian-os-debian.sources`. Debian marks
 backports `NotAutomatic`, so apt's priority for the suite stays 100 and a
-package is installed from it only when an install asks for that suite. The
-Kilix engine in this candidate still installs the pinned go.dev archive.
+package is installed from it only when an install asks for that suite. 0.2.3
+builds the Kilix engine with Debian's `golang-1.27-go` and `golang-1.27-src`
+from that suite, pinned by file; when backports has replaced the upload, the
+same files come from snapshot.debian.org or the release mirror.
 The reconcile refuses to activate live sources while any other global
 validity or date-check override remains (find it with
 `grep -rE 'Check-Valid-Until|Check-Date' /etc/apt`), or while an operator
@@ -364,8 +452,8 @@ For both an installed Plebian-OS image and a standalone `pleb install` machine,
 the supported operator entrypoint is:
 
 ```sh
-pleb update --to 0.2.2 --dry-run
-pleb update --to 0.2.2
+pleb update --to 0.2.3 --dry-run
+pleb update --to 0.2.3
 ```
 
 Substitute the published adjacent target release. `pleb update --latest` is
