@@ -253,7 +253,14 @@ above:
   upgrades are kept.
 - **SSH.** The update installs the `plebian-os-ssh-server` helper but does not
   install or enable openssh-server and does not ask. To turn SSH on, run
-  `sudo plebian-os-ssh-server enable`.
+  `sudo plebian-os-ssh-server enable`. It refuses, before installing anything,
+  while any account still has the 0.2.0 starter password; change that password
+  with `passwd` (or lock the account) first. If SSH was turned on and the
+  update is later rolled back to a release without the helper, SSH stays on.
+  Turn it off with `sudo systemctl disable --now ssh.service ssh.socket`, plus
+  `sudo systemctl mask --now sshd-vsock.socket sshd-unix-local.socket` for the
+  extra sockets systemd binds once sshd is installed, or remove it entirely
+  with `sudo apt-get purge openssh-server`.
 - **Kilix 95 caches.** Bytecode and startup letter caches are prepared as the
   desktop user after the stack commits, bounded at 600 seconds. Failure only
   warns.

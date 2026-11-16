@@ -46,24 +46,71 @@ class Result:
         self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
 
 
+def crypt_hash(password, salt="$6$plebtest$"):
+    import ctypes
+    library = ctypes.CDLL("libcrypt.so.1")
+    library.crypt.restype = ctypes.c_char_p
+    library.crypt.argtypes = (ctypes.c_char_p, ctypes.c_char_p)
+    return library.crypt(password.encode(), salt.encode()).decode()
+
+
+GENERATED = ("sshd-vsock.socket", "sshd-unix-local.socket", "sshd-unix-export.socket")
+
+
 class FakeSystem:
     """Answers the helper's commands like a trixie machine would, and records
-    every command so a test can say what was and was not run."""
+    every command so a test can say what was and was not run.
+
+    `enabled`/`active` are ssh.service; `socket_*` are ssh.socket; `generated`
+    maps systemd-ssh-generator sockets to "active"/"inactive" (present only
+    once sshd is installed). The fake models Debian's postinst, which enables
+    and starts ssh.service during the install even when apt then fails."""
 
     def __init__(self, installed=False, plan=None, update_rc=0, install_rc=0,
-                 enable_rc=0):
+                 enable_rc=0, postinst_ran=True, start_fails=False, stuck=False,
+                 disable_rc=0, generated=None, etc=None, stray_sshd=False):
         self.installed = installed
         self.enabled = False
         self.active = False
+        self.socket_enabled = False
+        self.socket_active = False
         self.update_rc = update_rc
         self.install_rc = install_rc
         self.enable_rc = enable_rc
+        self.postinst_ran = postinst_ran
+        self.start_fails = start_fails
+        self.stuck = stuck
+        self.disable_rc = disable_rc
+        self.stray_sshd = stray_sshd
+        self.generated = dict(generated or {})
+        self.masked = set()
+        self.etc = etc
         self.plan = plan if plan is not None else (
             "Inst openssh-sftp-server (1:10.0p1-7+deb13u4 Debian:13.7/stable [amd64])\n"
             "Inst openssh-server (1:10.0p1-7+deb13u4 Debian-Security:13/stable-security [amd64])\n"
             "Conf openssh-server (1:10.0p1-7+deb13u4 Debian-Security:13/stable-security [amd64])\n")
         self.calls = []
         self.sources_seen = []
+
+    def _is_enabled(self, unit):
+        if unit in self.masked:
+            return "masked"
+        if not self.installed:
+            return "not-found"
+        if unit == "ssh.service":
+            return "enabled" if self.enabled else "disabled"
+        if unit == "ssh.socket":
+            return "enabled" if self.socket_enabled else "disabled"
+        if unit in self.generated:
+            return "generated"
+        return "not-found"
+
+    def _is_active(self, unit):
+        if unit == "ssh.service":
+            return self.active
+        if unit == "ssh.socket":
+            return self.socket_active
+        return self.generated.get(unit) == "active" and unit not in self.masked
 
     def run(self, argv, *, check=False):
         argv = list(argv)
@@ -74,20 +121,48 @@ class FakeSystem:
         if name == "systemctl":
             verb, unit = argv[1], argv[-1]
             if verb == "is-enabled":
-                if not self.installed:
-                    return Result(1, "not-found\n")
-                return Result(0 if self.enabled else 1,
-                              ("enabled" if self.enabled and unit.endswith("service") else "disabled") + "\n")
+                word = self._is_enabled(unit)
+                return Result(0 if word in ("enabled", "generated") else 1, word + "\n")
             if verb == "is-active":
-                on = self.active and unit.endswith("service")
+                on = self._is_active(unit)
                 return Result(0 if on else 3, ("active" if on else "inactive") + "\n")
+            if verb == "list-units":
+                rows = "".join(f"{u} loaded {'active' if self._is_active(u) else 'inactive'} x\n"
+                               for u in self.generated if self.installed)
+                return Result(0, rows)
             if verb == "enable":
                 if self.enable_rc == 0:
-                    self.enabled = self.active = True
+                    self.enabled = True
+                    self.active = not self.start_fails
                 return Result(self.enable_rc, "", "" if self.enable_rc == 0 else "Unit is masked.")
             if verb == "disable":
-                self.enabled = self.active = False
+                if self.disable_rc:
+                    return Result(self.disable_rc, "", "Failed to disable unit: Access denied")
+                if unit == "ssh.service":
+                    self.enabled = False
+                    self.active = self.stuck
+                else:
+                    self.socket_enabled = self.socket_active = False
                 return Result(0)
+            if verb == "mask":
+                if self.disable_rc:
+                    return Result(self.disable_rc, "", "Access denied")
+                self.masked.add(unit)
+                if self.etc is not None:
+                    link = Path(self.etc) / unit
+                    if not link.is_symlink():
+                        link.symlink_to("/dev/null")
+                return Result(0)
+            if verb == "unmask":
+                self.masked.discard(unit)
+                if self.etc is not None:
+                    (Path(self.etc) / unit).unlink(missing_ok=True)
+                return Result(0)
+        if name == "ss":
+            rows = ""
+            if self.active or self.stray_sshd:
+                rows = 'LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=7,fd=6))\n'
+            return Result(0, rows + 'LISTEN 0 4096 127.0.0.1:631 0.0.0.0:* users:(("cupsd",pid=9,fd=7))\n')
         if name == "apt-get" and "-s" in argv:
             self._record_sources(argv)
             return Result(0, self.plan)
@@ -100,7 +175,10 @@ class FakeSystem:
             return Result(0, "plebian\n")
         if name == "ssh-keygen" and "-l" in argv:
             kind = "ED25519" if "ed25519" in argv[-1] else "RSA"
-            return Result(0, f"256 SHA256:{kind}fingerprintvalue root@plebian ({kind})\n")
+            i = argv.index("-E") if "-E" in argv else -1
+            digest = argv[i + 1] if i >= 0 else "sha256"
+            label = {"sha256": "SHA256", "md5": "MD5"}.get(digest, digest.upper())
+            return Result(0, f"256 {label}:{kind}fingerprintvalue root@plebian ({kind})\n")
         return Result(0)
 
     def _record_sources(self, argv):
@@ -116,14 +194,21 @@ class FakeSystem:
         if "update" in argv:
             return self.update_rc
         if "install" in argv:
-            if self.install_rc == 0:
+            if self.install_rc == 0 or self.postinst_ran:
+                # Debian's postinst enables and starts ssh.service; a failing
+                # trigger or Post-Invoke hook can still fail apt afterwards.
                 self.installed = True
-                self.enabled = self.active = True  # Debian's postinst starts ssh
+                self.enabled = self.active = True
+                self.generated.setdefault("sshd-unix-local.socket", "inactive")
             return self.install_rc
         return 0
 
     def commands(self, name):
         return [c for c in self.calls if c[0] == name]
+
+    def changes(self):
+        return [c for c in self.calls if c[0] == "systemctl" and c[1] in
+                ("enable", "disable", "mask", "unmask")]
 
 
 class HelperTests(unittest.TestCase):
@@ -144,10 +229,15 @@ class HelperTests(unittest.TestCase):
         os_release.write_text('ID=debian\nVERSION_CODENAME=trixie\n')
         self.os_release = os_release
         (base / "var-lib").mkdir()
+        self.etc = base / "etc-systemd-system"
+        self.etc.mkdir()
+        self.shadow = base / "shadow"
+        self.write_shadow()
         self.patches = {
             "SSH_DIR": self.ssh, "KEYRING": str(keyring), "OS_RELEASE": str(os_release),
             "WORK_PARENT": str(base / "var-lib"), "LOCK_PATH": str(base / "lock"),
-            "LOG_PATH": str(base / "ssh-server.log"),
+            "LOG_PATH": str(base / "ssh-server.log"), "SHADOW_PATH": str(self.shadow),
+            "SYSTEMD_ETC": self.etc, "MASK_RECORD": str(base / "var-lib" / "masked-sockets"),
         }
         for key, value in self.patches.items():
             patcher = mock.patch.object(self.h, key, value)
@@ -158,9 +248,26 @@ class HelperTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
+    def write_shadow(self, *extra):
+        rows = [
+            "root:!:19000:0:99999:7:::",
+            "daemon:*:19000:0:99999:7:::",
+            "alice:" + crypt_hash("Corr3ct-h0rse") + ":19000:0:99999:7:::",
+            "bob:" + crypt_hash("bobs own", "$6$bobsalt$") + ":19000:0:99999:7:::",
+            "nopass::19000:0:99999:7:::",
+            *extra,
+        ]
+        self.shadow.write_text("\n".join(rows) + "\n")
+
+    def work_dirs(self):
+        return [p for p in Path(self.patches["WORK_PARENT"]).iterdir() if p.name != "masked-sockets"]
+
     def invoke(self, args, system, root=True):
+        if getattr(system, "etc", None) is None:
+            system.etc = self.etc
         out, err = io.StringIO(), io.StringIO()
-        saved = {n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGHUP, signal.SIGQUIT)}
+        saved = {n: signal.getsignal(n) for n in
+                 (signal.SIGINT, signal.SIGHUP, signal.SIGQUIT, signal.SIGTERM)}
         self.addCleanup(lambda: [signal.signal(n, h) for n, h in saved.items()])
         with mock.patch.object(self.h, "run", system.run), \
                 mock.patch.object(self.h, "run_shielded", system.run_shielded), \
@@ -247,15 +354,20 @@ class HelperTests(unittest.TestCase):
                                     "https://security.debian.org/debian-security"])
             self.assertEqual(re.findall(r"^Suites: (.+)$", text, re.M),
                              ["trixie trixie-updates", "trixie-security"])
-            self.assertEqual(set(re.findall(r"^Signed-By: (\S+)$", text, re.M)),
-                             {self.patches["KEYRING"]})
+            stanzas = [block for block in text.split("\n\n") if "URIs:" in block]
+            self.assertEqual(len(stanzas), 2)
+            for stanza in stanzas:  # every stanza, not just somewhere in the file
+                self.assertEqual(re.findall(r"^Signed-By: (\S+)$", stanza, re.M),
+                                 [self.patches["KEYRING"]], stanza)
             self.assertNotRegex(text, r"(?i)trusted|allow-")
         # The private apt work area is gone afterwards.
-        self.assertEqual(list(Path(self.patches["WORK_PARENT"]).iterdir()), [])
+        self.assertEqual(self.work_dirs(), [])
         self.assertIn(["systemctl", "enable", "--now", "ssh.service"], system.calls)
         # What the person is told.
         self.assertIn("SSH server: ON", out)
-        self.assertIn("accepts SSH logins from the network with your account\npassword", out)
+        self.assertIn("accepts SSH logins from the network for every account on it\n"
+                      "that has a password, not only yours.", out)
+        self.assertIn("Accounts with a password here: alice, bob\n", out)
         self.assertIn("ssh alice@192.0.2.10    (enp1s0)", out)
         self.assertNotIn("172.17.0.1", out)
         self.assertIn("ED25519  SHA256:ED25519fingerprintvalue", out)
@@ -274,11 +386,13 @@ class HelperTests(unittest.TestCase):
 
         def enable_and_look(argv, *, check=False):
             if argv[:2] == ["systemctl", "enable"]:
-                seen.update({n: signal.getsignal(n) for n in (signal.SIGINT, signal.SIGHUP)})
+                seen.update({n: signal.getsignal(n) for n in
+                             (signal.SIGINT, signal.SIGHUP, signal.SIGQUIT, signal.SIGTERM)})
             return system.__class__.run(system, argv, check=check)
         system.run = enable_and_look
         self.assertEqual(self.invoke(["enable"], system)[0], 0)
-        self.assertEqual(seen, {signal.SIGINT: signal.SIG_IGN, signal.SIGHUP: signal.SIG_IGN})
+        self.assertEqual(seen, {signal.SIGINT: signal.SIG_IGN, signal.SIGHUP: signal.SIG_IGN,
+                                signal.SIGQUIT: signal.SIG_IGN, signal.SIGTERM: signal.SIG_IGN})
 
     def test_enable_when_installed_only_enables(self):
         system = FakeSystem(installed=True)
@@ -315,19 +429,150 @@ class HelperTests(unittest.TestCase):
         self.assertFalse(any(c[:2] == ["systemctl", "enable"] for c in system.calls))
         self.assertIn("failed:", Path(self.patches["LOG_PATH"]).read_text())
 
-    def test_failed_install_is_reported(self):
-        system = FakeSystem(installed=False, install_rc=100)
+    def test_failed_install_before_the_postinst_leaves_ssh_off(self):
+        system = FakeSystem(installed=False, install_rc=100, postinst_ran=False)
         rc, out, err = self.invoke(["enable"], system)
         self.assertEqual(rc, 1)
         self.assertIn("exited with status 100", err)
         self.assertNotIn("SSH server: ON", out)
+        self.assertTrue(out.rstrip().endswith("SSH server: OFF -- nothing accepts SSH logins"), out)
 
-    def test_a_service_that_will_not_start_is_reported(self):
+    # -- B2: apt fails after Debian's postinst already started sshd -------------
+    def test_install_failing_after_the_postinst_started_sshd_turns_it_off_again(self):
+        system = FakeSystem(installed=False, install_rc=100)  # e.g. DPkg::Post-Invoke failed
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        self.assertIn("exited with status 100", err)
+        self.assertFalse(system.enabled or system.active, system.calls)
+        self.assertIn(["systemctl", "disable", "--now", "ssh.service"], system.calls)
+        self.assertIn(["systemctl", "disable", "--now", "ssh.socket"], system.calls)
+        for unit in GENERATED:
+            self.assertIn(["systemctl", "mask", "--now", unit], system.calls)
+        # The last word is the state read back afterwards.
+        self.assertTrue(out.rstrip().endswith("SSH server: OFF -- nothing accepts SSH logins"), out)
+        self.assertNotIn("SSH server: ON", out)
+        log = Path(self.patches["LOG_PATH"]).read_text()
+        self.assertIn("enable failed; turned SSH off again", log)
+        self.assertIn("final state: OFF", log)
+
+    def test_install_failure_that_cannot_be_undone_reports_ssh_on_with_the_warning(self):
+        system = FakeSystem(installed=False, install_rc=100, disable_rc=1)
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        self.assertTrue(system.active)
+        self.assertIn("SSH server: ON -- this run reported an error (above), and SSH is still on", out)
+        self.assertIn("for every account on it\nthat has a password", out)
+        self.assertIn("ED25519  SHA256:ED25519fingerprintvalue", out)
+        self.assertIn("Turn it off again with:  sudo plebian-os-ssh-server disable", out)
+        self.assertIn("sshd listening on 0.0.0.0:22", out)
+        self.assertNotIn("SSH server: OFF", out)
+        log = Path(self.patches["LOG_PATH"]).read_text()
+        self.assertIn("enable failed; could not turn SSH off again: ssh.service:", log)
+        self.assertNotIn("turned SSH off again", log)
+        self.assertIn("final state: ON", log)
+
+    def test_a_service_that_will_not_start_is_reported_and_left_off(self):
         system = FakeSystem(installed=True, enable_rc=1)
         rc, out, err = self.invoke(["enable"], system)
         self.assertEqual(rc, 1)
         self.assertIn("could not enable ssh.service", err)
         self.assertNotIn("SSH server: ON", out)
+        self.assertIn("SSH server: OFF", out)
+
+    def test_enabled_but_not_running_is_a_failure_and_is_turned_off(self):
+        system = FakeSystem(installed=True, start_fails=True)
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        self.assertIn("is not running after it was enabled", err)
+        self.assertFalse(system.enabled)
+        self.assertNotIn("SSH server: ON", out)
+
+    def test_a_failed_enable_leaves_ssh_that_was_already_on_alone_and_says_so(self):
+        system = FakeSystem(installed=True, enable_rc=1)
+        system.enabled = system.active = True
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        self.assertFalse(any(c[1] in ("disable", "mask") for c in system.changes()))
+        self.assertIn("SSH server: ON -- this run reported an error", out)
+
+    def test_an_unexpected_os_error_is_a_reported_failure_not_a_traceback(self):
+        system = FakeSystem(installed=False)
+        with mock.patch.object(self.h.tempfile, "mkdtemp", side_effect=PermissionError(13, "denied")):
+            rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 1)
+        self.assertIn("denied", err)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("SSH server: OFF", out)
+        self.assertIn("failed:", Path(self.patches["LOG_PATH"]).read_text())
+
+    # -- B1: the public 0.2.0 starter password ---------------------------------
+    def test_enable_refuses_while_any_account_has_the_starter_password(self):
+        self.write_shadow("pleb:" + crypt_hash("plebian") + ":19000:0:99999:7:::",
+                          "guest:" + crypt_hash("plebian", "$y$j9T$F5Jx5fExrKuPp53xLKQ..1$")
+                          + ":19000:0:99999:7:::")
+        with mock.patch.dict(os.environ, {"SUDO_USER": "pleb"}):
+            system = FakeSystem(installed=False)
+            rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 2)
+        self.assertIn("accounts pleb, guest still use the public Plebian-OS starter password", err)
+        self.assertIn("SSH was not turned on and nothing was installed", err)
+        self.assertIn("  passwd                  (your own account, pleb)", err)
+        self.assertIn("sudo passwd guest", err)
+        self.assertIn("sudo passwd -l guest", err)
+        self.assertEqual(system.commands("apt-get"), [])
+        self.assertEqual(system.changes(), [])
+        self.assertTrue(out.rstrip().endswith("SSH server: OFF"), out)
+        log = Path(self.patches["LOG_PATH"]).read_text()
+        self.assertIn("refused: accounts pleb, guest still use the public Plebian-OS starter "
+                      "password. | Anyone could log in", log)
+        self.assertNotIn("\nAnyone could log in", log)  # one audit entry per line
+
+    def test_starter_password_refusal_also_covers_an_installed_server(self):
+        self.write_shadow("pleb:" + crypt_hash("plebian") + ":19000:0:99999:7:::")
+        system = FakeSystem(installed=True)
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 2)
+        self.assertIn("account pleb still uses the public", err)
+        self.assertEqual(system.changes(), [])
+        system.enabled = system.active = True  # already on: say so, change nothing
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 2)
+        self.assertEqual(system.changes(), [])
+        self.assertIn("SSH server: ON", out)
+
+    def test_a_locked_starter_password_does_not_block_and_a_changed_one_passes(self):
+        self.write_shadow("pleb:!" + crypt_hash("plebian") + ":19000:0:99999:7:::",
+                          "carol:" + crypt_hash("plebian2") + ":19000:0:99999:7:::")
+        system = FakeSystem(installed=True)
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Accounts with a password here: alice, bob, carol\n", out)
+
+    def test_enable_refuses_when_passwords_cannot_be_checked(self):
+        cases = {
+            "unreadable": None,
+            "unknown hash": "zed:$9$zz$yy:19000:0:99999:7:::",
+        }
+        for label, extra in cases.items():
+            if extra is None:
+                self.shadow.unlink()
+            else:
+                self.write_shadow(extra)
+            system = FakeSystem(installed=False)
+            rc, out, err = self.invoke(["enable"], system)
+            self.assertEqual(rc, 2, label)
+            self.assertIn("cannot", err, label)
+            self.assertIn("SSH was not turned on", err, label)
+            self.assertEqual(system.commands("apt-get"), [], label)
+            self.assertEqual(system.changes(), [], label)
+            self.write_shadow()
+
+    def test_disable_never_needs_the_password_check(self):
+        self.shadow.unlink()
+        system = FakeSystem(installed=True)
+        system.enabled = system.active = True
+        self.assertEqual(self.invoke(["disable"], system)[0], 0)
+        self.assertFalse(system.active)
 
     # -- disable / status -----------------------------------------------------
     def test_disable_stops_service_and_socket_and_keeps_the_package(self):
@@ -341,6 +586,72 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(system.installed)
         self.assertIn("SSH server: OFF", out)
         self.assertIn("sudo plebian-os-ssh-server enable", out)
+
+    def test_disable_that_leaves_sshd_running_is_a_failure_that_says_on(self):
+        system = FakeSystem(installed=True, stuck=True)
+        system.enabled = system.active = True
+        rc, out, err = self.invoke(["disable"], system)
+        self.assertEqual(rc, 1)
+        self.assertIn("could not be turned off completely", err)
+        self.assertIn("running: ssh.service", err)
+        self.assertIn("SSH server: ON -- this run reported an error", out)
+
+    def test_an_sshd_listening_outside_systemd_counts_as_on(self):
+        system = FakeSystem(installed=True, stray_sshd=True)
+        rc, out, err = self.invoke(["disable"], system)
+        self.assertEqual(rc, 1)
+        self.assertIn("sshd listening on 0.0.0.0:22", err)
+        self.assertNotIn("cupsd", err + out)
+
+    def test_disable_masks_the_generator_sockets_and_enable_restores_only_those(self):
+        system = FakeSystem(installed=True, generated={
+            "sshd-vsock.socket": "active", "sshd-unix-local.socket": "inactive",
+            "sshd-extra-1.socket": "active"})
+        system.enabled = system.active = True
+        system.masked.add("sshd-unix-export.socket")  # the owner's own mask
+        (self.etc / "sshd-unix-export.socket").symlink_to("/dev/null")
+        rc, out, err = self.invoke(["disable"], system)
+        self.assertEqual(rc, 0, err)
+        for unit in ("sshd-vsock.socket", "sshd-unix-local.socket", "sshd-extra-1.socket"):
+            self.assertIn(["systemctl", "mask", "--now", unit], system.calls)
+        self.assertNotIn(["systemctl", "mask", "--now", "sshd-unix-export.socket"], system.calls)
+        self.assertFalse(any(system._is_active(u) for u in system.generated))
+        record = Path(self.patches["MASK_RECORD"])
+        self.assertEqual(record.read_text().split(),
+                         ["sshd-vsock.socket", "sshd-unix-local.socket", "sshd-extra-1.socket"])
+        self.assertEqual(oct(record.stat().st_mode & 0o777), "0o644")
+        # A second disable keeps the record and adds nothing.
+        self.assertEqual(self.invoke(["disable"], system)[0], 0)
+        self.assertEqual(len(record.read_text().split()), 3)
+        rc, out, err = self.invoke(["enable"], system)
+        self.assertEqual(rc, 0, err)
+        unmasked = [c[2] for c in system.changes() if c[1] == "unmask"]
+        self.assertEqual(unmasked, ["sshd-vsock.socket", "sshd-unix-local.socket", "sshd-extra-1.socket"])
+        self.assertIn("sshd-unix-export.socket", system.masked)  # the owner's mask stays
+        self.assertFalse(record.exists())
+
+    def test_the_audit_log_never_carries_an_unvalidated_caller_name(self):
+        system = FakeSystem(installed=True)
+        with mock.patch.dict(os.environ, {"SUDO_USER": "x\nenabled: forged (requested by root)"}):
+            self.invoke(["enable"], system)
+        log = Path(self.patches["LOG_PATH"]).read_text()
+        self.assertIn("enable (requested by unknown)", log)
+        self.assertNotIn("forged", log)
+
+    def test_children_get_default_signal_handling_back(self):
+        script = ["sh", "-c", "grep '^SigIgn:' /proc/self/status"]
+        saved = {n: signal.getsignal(n) for n in self.h.SHIELDED_SIGNALS}
+        self.addCleanup(lambda: [signal.signal(n, h) for n, h in saved.items()])
+        for number in self.h.SHIELDED_SIGNALS:
+            signal.signal(number, signal.SIG_IGN)
+        plain = self.h.run(script).stdout
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.h.run_shielded(script)
+        for text in (plain, out.getvalue()):
+            mask = int(text.split()[-1], 16)
+            for number in self.h.SHIELDED_SIGNALS:
+                self.assertFalse(mask & (1 << (number - 1)), f"{number} ignored in child: {text}")
 
     def test_disable_without_the_package_is_a_no_op(self):
         system = FakeSystem(installed=False)
@@ -534,6 +845,14 @@ class WiringTests(unittest.TestCase):
         self.assertIn("\ntasksel tasksel/first multiselect standard\n", preseed)
         remaster = (ROOT / "build" / "remaster-iso.sh").read_text()
         self.assertIn("release artifacts refuse an effective preseed that installs SSH", remaster)
+
+    def test_upgrading_says_how_enable_refuses_and_how_to_turn_ssh_off_after_a_rollback(self):
+        text = " ".join((ROOT / "UPGRADING.md").read_text().split())
+        self.assertIn("refuses, before installing anything, while any account still has the "
+                      "0.2.0 starter password", text)
+        self.assertIn("rolled back to a release without the helper, SSH stays on", text)
+        self.assertIn("sudo systemctl disable --now ssh.service ssh.socket", text)
+        self.assertIn("sudo systemctl mask --now sshd-vsock.socket sshd-unix-local.socket", text)
 
     def test_helper_is_isolated_python(self):
         first = HELPER.read_text().splitlines()[0]

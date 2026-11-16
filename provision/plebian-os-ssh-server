@@ -16,8 +16,19 @@ desktop's System menu, and anyone at a terminal:
 
 It takes exactly one of those words and nothing else, so sudo grants nothing
 wider than this. It does not change sshd's configuration: Debian's defaults
-apply, so the account password works over SSH and root cannot log in with a
-password.
+apply, so every account that has a password can log in over SSH with it, and
+root cannot log in with a password.
+
+`enable` refuses while any account still has the public Plebian-OS 0.2.0
+starter password (or when it cannot check), before anything is installed:
+the fix is to change or lock that password first. It never claims a state it
+did not verify. Every change ends by reading the real state back, and an
+install that fails after Debian's postinst already started sshd is turned off
+again (or, if that fails too, reported as ON with the warning).
+
+`disable` also masks the extra sockets systemd-ssh-generator binds when sshd
+is installed (AF_VSOCK in a VM, the local AF_UNIX socket, a container's
+export socket), so nothing accepts SSH logins until `enable` runs again.
 
 openssh-server is installed only from the official Debian archive. apt runs
 with a source list this helper writes itself (deb.debian.org for the release
@@ -25,6 +36,7 @@ and its updates, security.debian.org for security updates, all signed by
 debian-archive-keyring) and its own index directory, so no other configured
 source can supply the package or its dependencies, and nothing is removed.
 """
+import ctypes
 import fcntl
 import json
 import os
@@ -47,6 +59,15 @@ LOG_PATH = "/var/log/plebian-os-ssh-server.log"
 WORK_PARENT = "/var/lib/plebian-os"
 KEYRING = "/usr/share/keyrings/debian-archive-keyring.gpg"
 OS_RELEASE = "/etc/os-release"
+SHADOW_PATH = "/etc/shadow"
+SYSTEMD_ETC = pathlib.Path("/etc/systemd/system")
+MASK_RECORD = "/var/lib/plebian-os/ssh-server-masked-sockets"
+# Plebian-OS 0.2.0 shipped one shared password. An account still using it must
+# never become reachable by password over SSH through this helper.
+STARTER_PASSWORD = "plebian"
+# Sockets systemd-ssh-generator (systemd 256+) binds once sshd is installed.
+GENERATED_SOCKETS = ("sshd-vsock.socket", "sshd-unix-local.socket", "sshd-unix-export.socket")
+GENERATED_SOCKET_RE = re.compile(r"^sshd-[a-z0-9-]{1,40}\.socket$")
 LOCAL_BRIDGES = ("docker", "veth", "br-", "virbr", "lxcbr", "lxdbr", "podman", "cni")
 ACTIONS = ("enable", "disable", "status", "help")
 ACCOUNT_RE = re.compile(r"^[a-z][-a-z0-9_]{0,31}$")
@@ -114,10 +135,23 @@ def is_root():
     return os.geteuid() == 0
 
 
+SHIELDED_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM, signal.SIGQUIT)
+
+
+def child_signal_defaults():
+    """Children start with default signal handling. The helper ignores the
+    terminal's signals during a change; apt, dpkg and maintainer scripts must
+    not inherit that (they are kept away from the terminal by their own
+    session instead)."""
+    for number in SHIELDED_SIGNALS:
+        signal.signal(number, signal.SIG_DFL)
+
+
 def run(argv, *, check=False):
     """Run a fixed command with the clean environment, capturing output."""
     result = subprocess.run(list(argv), env=CLEAN_ENV, stdin=subprocess.DEVNULL,
-                            capture_output=True, text=True)
+                            capture_output=True, text=True,
+                            preexec_fn=child_signal_defaults)
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise Failed(f"{argv[0]} {' '.join(argv[1:3])} failed: {detail}")
@@ -132,13 +166,14 @@ def run_shielded(argv):
     and keeps reading the child's output even if its own terminal has gone.
     Returns the exit status."""
     previous = {}
-    for number in (signal.SIGINT, signal.SIGHUP, signal.SIGTERM, signal.SIGQUIT):
+    for number in SHIELDED_SIGNALS:
         previous[number] = signal.signal(number, signal.SIG_IGN)
     try:
         child = subprocess.Popen(list(argv), env=CLEAN_ENV, stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                  text=True, errors="replace",
-                                 start_new_session=True)
+                                 start_new_session=True,
+                                 preexec_fn=child_signal_defaults)
         with child.stdout:
             for line in child.stdout:
                 say("  " + line.rstrip("\n"))
@@ -153,6 +188,8 @@ def audit(message):
     caller = os.environ.get("SUDO_USER") or "root"
     if caller != "root" and not ACCOUNT_RE.fullmatch(caller):
         caller = "unknown"
+    # One entry is one line, in the log and the journal.
+    message = " | ".join(part.strip() for part in str(message).splitlines() if part.strip())
     line = f"{message} (requested by {caller})"
     if is_root():
         run(["logger", "-t", PROG, "-p", "auth.notice", "--", line])
@@ -200,10 +237,127 @@ def unit_state(verb, unit):
     return word or "unknown"
 
 
-def server_on():
-    enabled = any(unit_state("is-enabled", unit) == "enabled" for unit in (SERVICE, SOCKET))
-    active = any(unit_state("is-active", unit) == "active" for unit in (SERVICE, SOCKET))
-    return enabled, active
+def generated_sockets():
+    """The generator's fixed socket names plus any other sshd-*.socket systemd
+    has loaded (systemd.ssh_listen= or the ssh.listen credential)."""
+    names = list(GENERATED_SOCKETS)
+    result = run(["systemctl", "list-units", "--all", "--plain", "--no-legend",
+                  "--type=socket", "sshd-*.socket"])
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if fields and GENERATED_SOCKET_RE.fullmatch(fields[0]) and fields[0] not in names:
+            names.append(fields[0])
+    return names
+
+
+def sshd_listening():
+    """Local addresses an sshd process listens on (needs root to see owners)."""
+    if not is_root():
+        return []
+    result = run(["ss", "-H", "-l", "-t", "-n", "-p"])
+    rows = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if '(("sshd",' in line and len(fields) >= 4:
+            rows.append(fields[3])
+    return rows
+
+
+class State:
+    """What can accept an SSH login now, or will after the next boot."""
+
+    def __init__(self):
+        units = (SERVICE, SOCKET)
+        self.enabled = [u for u in units if unit_state("is-enabled", u) == "enabled"]
+        self.active = [u for u in units if unit_state("is-active", u) == "active"]
+        self.extra = [u for u in generated_sockets() if unit_state("is-active", u) == "active"]
+        self.listening = sshd_listening()
+
+    @property
+    def on(self):
+        return bool(self.enabled or self.active or self.extra or self.listening)
+
+    @property
+    def fully_on(self):
+        return SERVICE in self.enabled and SERVICE in self.active
+
+    def describe(self):
+        parts = []
+        if self.enabled:
+            parts.append("enabled at boot: " + ", ".join(self.enabled))
+        if self.active:
+            parts.append("running: " + ", ".join(self.active))
+        if self.extra:
+            parts.append("listening (systemd-ssh-generator): " + ", ".join(self.extra))
+        if self.listening:
+            parts.append("sshd listening on " + ", ".join(self.listening))
+        return "; ".join(parts) or "nothing accepts SSH logins"
+
+
+# ---- passwords ----------------------------------------------------------------
+
+def load_crypt():
+    try:
+        library = ctypes.CDLL("libcrypt.so.1", use_errno=True)
+    except OSError as error:
+        raise Refused(f"cannot check account passwords (libcrypt: {error}); SSH was not turned on")
+    library.crypt.restype = ctypes.c_char_p
+    library.crypt.argtypes = (ctypes.c_char_p, ctypes.c_char_p)
+    return library.crypt
+
+
+def password_accounts():
+    """(accounts that have a usable password, accounts whose password is the
+    public starter password). Fails closed: anything it cannot check refuses."""
+    try:
+        with open(SHADOW_PATH, encoding="utf-8", errors="strict") as stream:
+            lines = stream.read().splitlines()
+    except (OSError, UnicodeError) as error:
+        raise Refused(f"cannot read {SHADOW_PATH} to check account passwords ({error}); "
+                      "SSH was not turned on")
+    crypt = None
+    usable, starter = [], []
+    for line in lines:
+        fields = line.split(":")
+        if len(fields) < 2 or not fields[0]:
+            continue
+        name, stored = fields[0], fields[1]
+        # Empty (sshd refuses empty passwords by default), locked (!) or no
+        # password (*): no password login is possible for these.
+        if not stored or stored[0] in "!*":
+            continue
+        usable.append(name)
+        if crypt is None:
+            crypt = load_crypt()
+        try:
+            computed = crypt(STARTER_PASSWORD.encode(), stored.encode())
+        except (ValueError, TypeError) as error:
+            raise Refused(f"cannot check the password of {name!r} ({error}); SSH was not turned on")
+        if computed is None or computed.startswith(b"*"):
+            raise Refused(f"cannot check the password of {name!r} (unknown hash); "
+                          "SSH was not turned on")
+        if computed.decode("utf-8", "replace") == stored:
+            starter.append(name)
+    return usable, starter
+
+
+def refuse_starter_passwords():
+    usable, starter = password_accounts()
+    if not starter:
+        return usable
+    shown = ", ".join(starter)
+    lines = [
+        f"{'account ' + shown + ' still uses' if len(starter) == 1 else 'accounts ' + shown + ' still use'} "
+        "the public Plebian-OS starter password.",
+        "Anyone could log in with it over SSH, so SSH was not turned on and nothing was installed.",
+        "Change it first, then run this again:",
+    ]
+    for name in starter:
+        if name == os.environ.get("SUDO_USER"):
+            lines.append(f"  passwd                  (your own account, {name})")
+        else:
+            lines.append(f"  sudo passwd {name:<12}(or lock it: sudo passwd -l {name})")
+    raise Refused("\n".join(lines))
 
 
 def debian_codename():
@@ -387,16 +541,27 @@ def login_name():
     return user
 
 
-def report_on():
+def report_on(headline="SSH server: ON", detail=""):
     user = login_name()
     port = listen_port()
     port_flag = "" if port == 22 else f" -p {port}"
     say("")
-    say("SSH server: ON")
+    say(headline)
+    if detail:
+        say(f"  ({detail})")
     say("")
-    say("This computer now accepts SSH logins from the network with your account")
-    say("password. Anyone who can reach it and knows or guesses that password can")
-    say("log in as you. Root cannot log in with a password (Debian's default).")
+    say("This computer accepts SSH logins from the network for every account on it")
+    say("that has a password, not only yours. Anyone who can reach it and knows or")
+    say("guesses one of those passwords can log in as that account. Root cannot log")
+    say("in with a password (Debian's default).")
+    if is_root():
+        try:
+            usable, _ = password_accounts()
+        except Refused:
+            usable = []
+        named = [name for name in usable if name != "root"]
+        if named:
+            say("Accounts with a password here: " + ", ".join(named))
     say("")
     say("Connect from another computer with:")
     rows = addresses()
@@ -424,27 +589,117 @@ def report_on():
     say("This helper does not do that for you.")
 
 
+def report_final(failed):
+    """The last thing every enable/disable run prints: the state read back
+    from systemd and the socket table, never the state the run intended."""
+    state = State()
+    if state.on:
+        headline = "SSH server: ON"
+        if failed:
+            headline += " -- this run reported an error (above), and SSH is still on"
+        report_on(headline, state.describe())
+    else:
+        say("")
+        say("SSH server: OFF" + (" -- nothing accepts SSH logins" if failed else ""))
+    return state
+
+
+# ---- generator sockets --------------------------------------------------------
+
+def read_mask_record():
+    try:
+        text = pathlib.Path(MASK_RECORD).read_text()
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        raise Failed(f"cannot read {MASK_RECORD}: {error}")
+    return [line for line in text.splitlines() if GENERATED_SOCKET_RE.fullmatch(line)]
+
+
+def write_mask_record(units):
+    os.makedirs(WORK_PARENT, mode=0o755, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".ssh-server-masked.", dir=WORK_PARENT)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write("".join(unit + "\n" for unit in units))
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, MASK_RECORD)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def masked_by_link(unit):
+    link = SYSTEMD_ETC / unit
+    return link.is_symlink() and os.readlink(link) == "/dev/null"
+
+
+def unmask_generated_sockets():
+    """Undo only the masks `disable` added, so the generator's sockets are back
+    to the Debian/systemd default (bound again at the next boot)."""
+    recorded = read_mask_record()
+    for unit in recorded:
+        if masked_by_link(unit):
+            run(["systemctl", "unmask", unit], check=True)
+    if recorded:
+        os.unlink(MASK_RECORD)
+
+
 # ---- actions ------------------------------------------------------------------
+
+def turn_off():
+    """Stop and disable everything that accepts SSH logins. Returns problems."""
+    problems = []
+    for unit in (SOCKET, SERVICE):
+        result = run(["systemctl", "disable", "--now", unit])
+        if result.returncode != 0 and unit_state("is-enabled", unit) not in ("not-found", "disabled", "masked"):
+            problems.append(f"{unit}: {(result.stderr or result.stdout).strip()}")
+    recorded = read_mask_record()
+    added = []
+    for unit in generated_sockets():
+        if unit_state("is-enabled", unit) == "masked":
+            continue  # already masked (by an earlier disable, or the owner)
+        result = run(["systemctl", "mask", "--now", unit])
+        if result.returncode != 0 and unit_state("is-enabled", unit) != "masked":
+            problems.append(f"{unit}: {(result.stderr or result.stdout).strip()}")
+        elif unit not in recorded:
+            added.append(unit)
+    if added:
+        write_mask_record(recorded + added)
+    return problems
+
 
 def cmd_enable():
     audit("enable")
-    if not package_installed():
-        install_package()
-    else:
-        say(f"{PACKAGE} is already installed.")
-    if not any(SSH_DIR.glob("ssh_host_*_key")):
-        run(["ssh-keygen", "-A"], check=True)
-    # ssh.service checks the configuration itself (ExecStartPre=sshd -t) once
-    # its runtime directory exists, so a bad configuration fails the start.
-    result = run(["systemctl", "enable", "--now", SERVICE])
-    if result.returncode != 0:
-        raise Failed(f"could not enable {SERVICE}: "
-                     + (result.stderr or result.stdout).strip()
-                     + f"; see `journalctl -u {SERVICE}`")
-    enabled, active = server_on()
-    if not (enabled and active):
-        raise Failed(f"{SERVICE} is not running after it was enabled; see "
-                     f"`journalctl -u {SERVICE}`")
+    refuse_starter_passwords()
+    was_on = State().on
+    try:
+        if not package_installed():
+            install_package()
+        else:
+            say(f"{PACKAGE} is already installed.")
+        if not any(SSH_DIR.glob("ssh_host_*_key")):
+            run(["ssh-keygen", "-A"], check=True)
+        unmask_generated_sockets()
+        # ssh.service checks the configuration itself (ExecStartPre=sshd -t)
+        # once its runtime directory exists, so a bad configuration fails here.
+        result = run(["systemctl", "enable", "--now", SERVICE])
+        if result.returncode != 0:
+            raise Failed(f"could not enable {SERVICE}: "
+                         + (result.stderr or result.stdout).strip()
+                         + f"; see `journalctl -u {SERVICE}`")
+        if not State().fully_on:
+            raise Failed(f"{SERVICE} is not running after it was enabled; see "
+                         f"`journalctl -u {SERVICE}`")
+    except (Failed, Refused, OSError):
+        # Debian's postinst enables and starts ssh.service during the install,
+        # so a failure after that point can leave it on. Unless it was on
+        # before this run, put it back off; report_final then says what is true.
+        if not was_on and package_installed():
+            problems = turn_off()
+            audit("enable failed; could not turn SSH off again: " + "; ".join(problems)
+                  if problems else "enable failed; turned SSH off again")
+        raise
     audit("enabled: ssh.service is enabled and running")
     report_on()
     return 0
@@ -452,19 +707,15 @@ def cmd_enable():
 
 def cmd_disable():
     audit("disable")
-    if not package_installed():
+    if not package_installed() and not State().on:
         say("SSH server: OFF (openssh-server is not installed). Nothing to change.")
         return 0
-    failures = []
-    for unit in (SOCKET, SERVICE):
-        result = run(["systemctl", "disable", "--now", unit])
-        if result.returncode != 0 and unit_state("is-enabled", unit) not in ("not-found", "disabled", "masked"):
-            failures.append(f"{unit}: {(result.stderr or result.stdout).strip()}")
-    enabled, active = server_on()
-    if failures or enabled or active:
+    problems = turn_off()
+    state = State()
+    if problems or state.on:
         raise Failed("SSH could not be turned off completely: "
-                     + ("; ".join(failures) or f"enabled={enabled} active={active}"))
-    audit("disabled: ssh.service and ssh.socket are stopped and disabled")
+                     + ("; ".join(problems) or state.describe()))
+    audit("disabled: ssh.service, ssh.socket and the generator's sockets are off")
     say("SSH server: OFF")
     say("")
     say("New SSH logins are refused. Sessions that are already open keep running")
@@ -479,14 +730,16 @@ def cmd_status():
         say("SSH server: OFF (openssh-server is not installed)")
         say(f"Turn it on with:  sudo {PROG} enable")
         return 0
-    enabled, active = server_on()
-    if enabled and active:
+    state = State()
+    if state.fully_on:
         report_on()
+        if state.extra:
+            say("Also listening (systemd-ssh-generator): " + ", ".join(state.extra))
     else:
-        state = "enabled but not running" if enabled else ("running but not enabled at boot" if active else "off")
-        say(f"SSH server: {'OFF' if not (enabled or active) else state}")
-        if enabled or active:
-            say(f"  {SERVICE}: {unit_state('is-enabled', SERVICE)}, {unit_state('is-active', SERVICE)}")
+        if state.on:
+            say("SSH server: ON, partly (" + state.describe() + ")")
+        else:
+            say("SSH server: OFF")
         say(f"Turn it on with:  sudo {PROG} enable")
         say(f"Turn it off with: sudo {PROG} disable")
     return 0
@@ -500,6 +753,7 @@ def main(argv):
     if action == "help":
         sys.stdout.write(USAGE)
         return 0
+    changing = False
     try:
         if action == "status":
             return cmd_status()
@@ -507,12 +761,14 @@ def main(argv):
             raise Refused(f"`{action}` needs root: run  sudo {PROG} {action}")
         os.umask(0o022)
         # A change, once started, runs to the end: the terminal's Ctrl-C,
-        # hang-up or quit never leaves openssh-server half installed or
-        # ssh.service half changed. Every step is bounded (apt timeouts).
-        for number in (signal.SIGINT, signal.SIGHUP, signal.SIGQUIT):
+        # hang-up or quit, or a stray TERM, never leaves openssh-server half
+        # installed or ssh.service half changed. Every step is bounded (apt
+        # timeouts); children get default handling back (child_signal_defaults).
+        for number in SHIELDED_SIGNALS:
             signal.signal(number, signal.SIG_IGN)
         lock = take_lock()
         try:
+            changing = True
             open_log()
             return cmd_enable() if action == "enable" else cmd_disable()
         finally:
@@ -521,12 +777,27 @@ def main(argv):
         if is_root() and action != "status":
             audit(f"refused: {error}")
         sys.stderr.write(f"{PROG}: refused: {error}\n")
+        if changing:
+            final_state_after_error(failed=False)
         return 2
-    except Failed as error:
+    except (Failed, OSError) as error:
         if is_root() and action != "status":
             audit(f"failed: {error}")
         sys.stderr.write(f"{PROG}: {error}\n")
+        if changing:
+            final_state_after_error(failed=True)
         return 1
+
+
+def final_state_after_error(failed):
+    try:
+        sys.stderr.flush()
+        state = report_final(failed)
+        audit("final state: " + ("ON (" + state.describe() + ")" if state.on else "OFF"))
+    except Exception as error:  # noqa: BLE001 - say so rather than guess
+        sys.stderr.write(f"{PROG}: could not read the SSH server state back: {error}\n"
+                         f"Check it with:  {PROG} status\n")
+
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
