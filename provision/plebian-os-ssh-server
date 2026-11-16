@@ -153,7 +153,7 @@ def child_signal_defaults():
         signal.signal(number, signal.SIG_DFL)
 
 
-def run(argv, *, check=False, env=None):
+def run(argv, *, check=False, env=None, errors=None):
     """Run a fixed command with the clean environment, capturing output.
 
     Apt calls pass env so APT_CONFIG names this helper's own apt.conf.
@@ -161,7 +161,7 @@ def run(argv, *, check=False, env=None):
     """
     result = subprocess.run(list(argv), env=CLEAN_ENV if env is None else env,
                             stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                            preexec_fn=child_signal_defaults)
+                            errors=errors, preexec_fn=child_signal_defaults)
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()
         raise Failed(f"{argv[0]} {' '.join(argv[1:3])} failed: {detail}")
@@ -446,12 +446,73 @@ def apt_env(work):
 
     Dir::Etc::main in that file is /dev/null, and Dir::Etc::Parts is applied
     before apt.conf.d is read, so the host apt.conf and a snippet such as
-    APT::Sources::With cannot add a package. The caller's APT_CONFIG is not
-    in CLEAN_ENV.
+    APT::Sources::With cannot add a package; only validated proxy values are
+    copied in (operator_proxies). The caller's APT_CONFIG is not in CLEAN_ENV.
     """
     env = dict(CLEAN_ENV)
     env["APT_CONFIG"] = str(work / "apt.conf")
     return env
+
+
+# The operator's apt proxy, ported rule for rule from the shared
+# prepare_release_apt_config (install-deps.sh, plebian-os-update.sh,
+# plebian-os-provision.sh); test_ssh_server_optin feeds both one table of
+# inputs so they cannot drift. Dir::Etc::main is /dev/null in this helper's
+# apt.conf, so without this a proxy debian-installer wrote to /etc/apt/apt.conf
+# would be lost. Keys: Acquire::{http,https,ftp}::Proxy and their per-host
+# form with a host of [A-Za-z0-9.-]+. Value: DIRECT, or an http://, https://
+# or socks5h:// URL with no quotes, semicolons, braces or whitespace. Anything
+# else, including a proxy auto-detect program, is left out (apt-config dump
+# only parses, it runs nothing). A proxy cannot forge a package: the signed
+# Release check still applies.
+PROXY_KEYS = ("Acquire::http::Proxy", "Acquire::https::Proxy", "Acquire::ftp::Proxy")
+PROXY_HOST_BAD_RE = re.compile(r"[^A-Za-z0-9.-]", re.ASCII)
+PROXY_VALUE_BAD = set("'\";{}") | set(" \t\n\v\f\r")
+PROXY_URL_RE = re.compile(
+    r"(http|https|socks5h)://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?",
+    re.ASCII)
+
+
+def proxy_lines(dump):
+    """apt.conf lines for the validated proxies in `apt-config dump --no-empty
+    --format '%f%N%v%n'` output, in order; dropped keys are reported."""
+    lines = []
+    for line in dump.split("\n"):
+        if not line or "\t" not in line:
+            continue
+        key, value = line.split("\t", 1)
+        if key not in PROXY_KEYS:
+            if not key.startswith(tuple(k + "::" for k in PROXY_KEYS)):
+                continue
+            host = key.split("::Proxy::", 1)[1]
+            if not host or "::" in host or PROXY_HOST_BAD_RE.search(host):
+                sys.stderr.write(f"{PROG}: dropping proxy setting {key}\n")
+                continue
+        if PROXY_VALUE_BAD.intersection(value):
+            ok = False
+        elif value == "DIRECT":
+            ok = True
+        else:
+            ok = PROXY_URL_RE.fullmatch(value) is not None
+        if not ok:
+            sys.stderr.write(f"{PROG}: dropping proxy setting {key}\n")
+            continue
+        lines.append(f'{key} "{value}";\n')
+    return lines
+
+
+def operator_proxies():
+    """The validated proxies of the operator apt configuration, read without
+    the caller's APT_CONFIG (CLEAN_ENV has none)."""
+    env = dict(CLEAN_ENV, LANG="C", LC_ALL="C")
+    try:
+        # Bytes that are not UTF-8 stay as surrogates, which no rule accepts,
+        # as the shell's C-locale patterns reject them.
+        result = run(["apt-config", "dump", "--no-empty", "--format", "%f%N%v%n"],
+                     env=env, errors="surrogateescape")
+    except OSError:
+        return []  # as the shell's `|| true`: no operator proxy
+    return proxy_lines(result.stdout or "")
 
 
 def prepare_apt_work(codename):
@@ -469,6 +530,7 @@ def prepare_apt_work(codename):
     (work / "apt.conf").write_text(
         'Dir::Etc::main "/dev/null";\n'
         f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n'
+        + "".join(operator_proxies())
     )
     return work
 
