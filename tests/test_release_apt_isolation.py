@@ -1000,14 +1000,51 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertIn("PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG", updater)
         self.assertNotIn("build/lib.sh", updater)
         self.assertNotIn("build_vm_image.py", updater)
+        prepare = updater[updater.index("\n_prepare_removal_apt_config() {\n"):]
+        prepare = prepare[:prepare.index("\n}\n")]
+        self.assertIn('prepare_release_apt_config "$config"', prepare)
+        self.assertIn(
+            'declare -f release_apt_get >"$config/release-apt-get.fn"', prepare)
+        runner = updater[updater.index("\n_run_release_apt() {\n"):]
+        runner = runner[:runner.index("\n}\n")]
+        self.assertIn('. "$1"; shift; release_apt_get "$@"', runner)
+        self.assertIn('"$config/release-apt-get.fn"', runner)
+        self.assertNotIn("apt-get ", runner.replace("release-apt-get.fn", "FN"))
+        simulated = updater[updater.index("\n_apt_simulated_removals() {\n"):]
+        simulated = simulated[:simulated.index("\n}\n")]
+        self.assertIn(
+            '_run_release_apt "$_REMOVAL_APT_CONFIG" -s remove -y '
+            '--no-install-recommends',
+            simulated)
+        self.assertNotIn("apt-get ", simulated)
         removal = updater[updater.index("\nremove_transaction_package_additions() {\n"):]
         removal = removal[:removal.index("\n}\n")]
-        self.assertNotIn("release_apt_get", removal)
-        self.assertIn("apt-get remove -y --no-install-recommends", removal)
+        self.assertIn("_prepare_removal_apt_config", removal)
+        self.assertIn(
+            '_run_release_apt "$config" remove -y --no-install-recommends',
+            removal)
+        self.assertNotIn("apt-get remove", removal)
+        self.assertNotIn("apt-get -s remove", removal)
+        self.assertNotIn("--no-remove", removal)
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn('export PLEBIAN_OS_RELEASE_APT_CONFIG="$PROVISION_RELEASE_APT_CONFIG"', provision)
         self.assertIn('cp -a -- "$PROVISION_RELEASE_APT_CONFIG/indexes"', provision)
         self.assertNotIn('release_apt="$(mktemp -d "$state/.release-apt.XXXXXX")"', provision)
+
+    def test_release_children_receive_the_pinned_machine_marker(self):
+        updater = (ROOT / "provision" / "plebian-os-update.sh").read_text()
+        stack = updater[updater.index("\nstack_env=("):]
+        stack = stack[:stack.index("\n)")]
+        self.assertIn('"PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"', stack)
+        self.assertIn(
+            '"PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"', stack)
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        install = provision[provision.index("\ninstall_env=("):]
+        install = install[:install.index("\n)")]
+        self.assertIn('"PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"', install)
+        self.assertIn(
+            '"PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"', install)
+        self.assertIn('"PLEBIAN_OS_MANAGED_INSTALL=1"', install)
 
     @staticmethod
     def _reason(name: str, text: str) -> str | None:
@@ -1049,10 +1086,18 @@ class ReleaseAptRouteTests(unittest.TestCase):
             return "non-install query; release mode does not use this branch"
         if "apt-get update -y" in text or "apt-get update against" in text or text.startswith("echo "):
             return "provisioner list refresh after operator sources were renamed aside"
-        if "apt-get -s remove" in text:
-            return "owned by interrupts R2; still system apt until that worker routes it"
-        if "apt-get remove " in text:
-            return "owned by interrupts R2; still system apt until that worker routes it"
+        # Rollback removal writes release_apt_get into the private configuration
+        # and the child sources that file. A raw apt-get remove is left
+        # unclassified so the scanner still fails if system apt comes back.
+        if "release-apt-get.fn" in text:
+            routed = (
+                'declare -f release_apt_get >"$config/release-apt-get.fn"' in text
+                or text == '[ -f "$config/release-apt-get.fn" ] || return 1'
+                or text == '"$config/release-apt-get.fn" \\'
+            )
+            if routed:
+                return "rollback removal sources release_apt_get from the private configuration"
+            return None
         if "command -v" in text and "apt-get" in text:
             return "presence check"
         if "apt-get -f install" in text and ("die " in text or text.startswith("die ")):
