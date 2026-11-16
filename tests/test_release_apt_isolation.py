@@ -1000,22 +1000,52 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertIn("PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG", updater)
         self.assertNotIn("build/lib.sh", updater)
         self.assertNotIn("build_vm_image.py", updater)
+        self.assertNotIn("_prepare_removal_apt_config", updater)
+        self.assertNotIn("release-apt-get.fn", updater)
+        runner = updater[updater.index("root-owned when this step is elevated"):]
+        runner = runner[:runner.index("\n}\n")]
+        self.assertIn("\n_run_release_apt() {\n", runner)
+        self.assertIn(
+            'config="$(mktemp -d /tmp/plebian-os-removal-apt.XXXXXX)"', runner)
+        self.assertIn('prepare_release_apt_config "$config"', runner)
+        self.assertIn('release_apt_get "$config" "$@"', runner)
+        self.assertNotIn('. "$1"', runner)
+        self.assertNotIn("apt-get ", runner)
+        simulated = updater[updater.index("\n_apt_simulated_removals() {\n"):]
+        simulated = simulated[:simulated.index("\n}\n")]
+        self.assertIn(
+            "_run_release_apt -s remove -y --no-install-recommends",
+            simulated)
+        self.assertNotIn("$_REMOVAL_APT_CONFIG", simulated)
+        self.assertNotIn("apt-get ", simulated)
         removal = updater[updater.index("\nremove_transaction_package_additions() {\n"):]
         removal = removal[:removal.index("\n}\n")]
-        self.assertNotIn("apt-get remove", removal)
-        self.assertNotIn("apt-get -s", removal)
+        self.assertIn(
+            "_run_release_apt remove -y --no-install-recommends",
+            removal)
         self.assertIn("command -v apt-get", removal)
-        self.assertNotIn("release-apt-get.fn", removal)
-        self.assertIn("_run_release_apt", removal)
-        runner_at = updater.index("\n_run_release_apt() {\n")
-        runner = updater[runner_at:updater.index("\n}\n", runner_at)]
-        self.assertIn("release_apt_get", runner)
-        self.assertIn("mktemp -d", runner)
-        self.assertNotIn("release-apt-get.fn", runner)
+        self.assertNotIn("apt-get remove", removal)
+        self.assertNotIn("apt-get -s remove", removal)
+        self.assertNotIn("--no-remove", removal)
         provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         self.assertIn('export PLEBIAN_OS_RELEASE_APT_CONFIG="$PROVISION_RELEASE_APT_CONFIG"', provision)
         self.assertIn('cp -a -- "$PROVISION_RELEASE_APT_CONFIG/indexes"', provision)
         self.assertNotIn('release_apt="$(mktemp -d "$state/.release-apt.XXXXXX")"', provision)
+
+    def test_release_children_receive_the_pinned_machine_marker(self):
+        updater = (ROOT / "provision" / "plebian-os-update.sh").read_text()
+        stack = updater[updater.index("\nstack_env=("):]
+        stack = stack[:stack.index("\n)")]
+        self.assertIn('"PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"', stack)
+        self.assertIn(
+            '"PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"', stack)
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        install = provision[provision.index("\ninstall_env=("):]
+        install = install[:install.index("\n)")]
+        self.assertIn('"PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"', install)
+        self.assertIn(
+            '"PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"', install)
+        self.assertIn('"PLEBIAN_OS_MANAGED_INSTALL=1"', install)
 
     @staticmethod
     def _reason(name: str, text: str) -> str | None:
@@ -1057,7 +1087,11 @@ class ReleaseAptRouteTests(unittest.TestCase):
             return "non-install query; release mode does not use this branch"
         if "apt-get update -y" in text or "apt-get update against" in text or text.startswith("echo "):
             return "provisioner list refresh after operator sources were renamed aside"
-        if "apt-get -s remove" in text or "apt-get remove " in text:
+        # Removal builds its configuration inside the child. A raw apt-get
+        # remove stays unclassified, so the scanner still fails if system apt
+        # comes back. A sourced release-apt-get.fn is the same failure.
+        if ("apt-get -s remove" in text or "apt-get remove " in text
+                or "release-apt-get.fn" in text):
             return None
         if "command -v" in text and "apt-get" in text:
             return "presence check"

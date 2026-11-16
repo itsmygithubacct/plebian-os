@@ -6353,6 +6353,9 @@ stack_env=(
     "PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
     "PLEBIAN_OS_RELEASE=$PLEBIAN_OS_RELEASE"
     "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"
+    # Plebs and Kilix refuse system apt only on an installed Plebian OS. Pin the
+    # marker so a caller cannot point it at another file and fall back to system apt.
+    "PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"
     "PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT"
     "PLEBIAN_OS_INSTALL_UV=$PLEBIAN_OS_INSTALL_UV"
     "PLEBIAN_OS_UV_VERSION=$PLEBIAN_OS_UV_VERSION"
