@@ -43,11 +43,15 @@ entries below run newest first, from the final back through RC1.
 - Release updates keep working when an operator apt source such as NVIDIA CUDA
   is configured. Release installs and updates use a private Debian-only apt
   configuration, so operator sources, pins, `/etc/apt/apt.conf` and
-  `apt.conf.d` snippets do not apply to release packages (Plebian-OS's own Qt
-  runtime pin is kept and the Qt runtime is verified after the dependency
-  step), and operator-installed packages are never removed. In release mode,
-  Pleb and Kilix refuse a missing package by name instead of installing it
-  from the system apt.
+  `apt.conf.d` snippets do not apply to release packages, and
+  operator-installed packages are never removed. A proxy set in apt.conf
+  (`Acquire::http`, `https` or `ftp` `::Proxy`, including per-host `DIRECT`)
+  is carried after validation; a `Proxy-Auto-Detect` program is never run.
+  Plebian-OS's own Qt runtime pin is kept by exact file name, and in release
+  mode the Qt runtime is verified after the dependency step, which stops if
+  the check fails. In release mode, Pleb and Kilix refuse a missing package
+  by name instead of installing it from the system apt; an `apt-mark hold` or
+  a second-architecture install counts as installed.
 - Accept an Ollama carrier path that contains a backslash or a newline
   (0.2.2 known issue 8); size and SHA-256 checks are unchanged.
 - Say `interrupted; rolling back` on an interrupted update and keep the
