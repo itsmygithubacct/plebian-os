@@ -91,12 +91,14 @@ In brief:
 - Release installs and updates install release packages through a private,
   Debian-only apt configuration. Operator apt sources such as NVIDIA CUDA, and
   their pins, `/etc/apt/apt.conf` and `apt.conf.d` snippets, do not apply to
-  release packages (an apt proxy set there is not used either; set it in the
-  environment for the update), and packages installed from them are never
-  removed. In release mode, Pleb and Kilix refuse a missing package by name
-  instead of using the system apt; run
-  `plebian-os-update --revalidate-current` and report the package if the
-  refusal repeats.
+  release packages, and packages installed from them are never removed. A
+  proxy set in apt.conf is carried after its value is checked; a
+  `Proxy-Auto-Detect` program is never run. Plebian-OS's own Qt pin is kept,
+  and the Qt runtime is verified after the dependency step. In release mode,
+  Pleb and Kilix refuse a missing package by name instead of using the system
+  apt (a held package counts as installed); the message says to run
+  `pleb update`, or `plebian-os-update --recover-interrupted`, or to report
+  it.
 - Machines on a 0.2.3 release candidate move to the final once with
   `pleb update --to 0.2.3`; see [UPGRADING.md](UPGRADING.md).
 
