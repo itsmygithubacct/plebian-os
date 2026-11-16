@@ -49,9 +49,12 @@
 #                 request. A trusted tag with no selection-pending marker and
 #                 no same-tag selection-attempt did not start a selection: the
 #                 newest older record is left as it is. A selection-attempt for
-#                 this trusted tag, whose target is the release still installed,
-#                 is an interrupted reselect: clear that marker, restore
-#                 nothing, and say so. Do not delete recovery records.
+#                 this trusted tag is an interrupted reselect only when its
+#                 target is the release that was already installed before the
+#                 attempt and is still installed: clear that marker, restore
+#                 nothing, and say so. An attempt is removed once
+#                 selection-pending is published, so a finished selection is
+#                 not mistaken for that reselect. Do not delete recovery records.
 #
 # The release-controlled keys move as one unit or not at all: the complete
 # session/closure pair is rendered and verified by sourcing it before the
@@ -2822,17 +2825,21 @@ select_closure() {
 #     the newest record, because the previous selection of this tag completed.
 #     Restoring that record undoes a selection that this attempt never replaced.
 #
-# A selection writes selection-attempt (tag and target) before it blocks, and
-# still publishes selection-pending, with the fingerprints of every file it
-# may replace, before it does anything slow. The same tag with those
-# fingerprints unchanged restores nothing. A pending marker that does not prove
-# that is spent: the selection got far enough to write its own record, and
-# the ordinary rollback restores that record. No pending marker, but a
-# selection-attempt for this trusted tag whose target is the release still
-# installed, is an interrupted reselect: restore nothing. No marker plus a
-# trusted tag that did not write the newest record is an unstarted selection:
-# refuse, and do not mark, delete, or overwrite the older record. No trusted
-# tag is a manual rollback of the newest record.
+# A selection writes selection-attempt (tag, target, and the release already
+# installed) before it blocks, and still publishes selection-pending, with the
+# fingerprints of every file it may replace, before it does anything slow.
+# The attempt is removed as soon as that pending marker is published, because
+# pending supersedes it. The same tag with those fingerprints unchanged
+# restores nothing. A pending marker that does not prove that is spent: the
+# selection got far enough to write its own record, and the ordinary rollback
+# restores that record. No pending marker, but a selection-attempt for this
+# trusted tag whose target is both the release recorded before the attempt
+# and the release still installed, is an interrupted reselect: restore
+# nothing. A completed cross-version selection does not match that, even if
+# the attempt file is still there. No marker plus a trusted tag that did not
+# write the newest record is an unstarted selection: refuse, and do not mark,
+# delete, or overwrite the older record. No trusted tag is a manual rollback
+# of the newest record.
 die_unstarted_selection() {
     die "refusing rollback: no selection for this trusted tag replaced the closure, so the newest older recovery record was left unchanged and the installed closure was not modified. An unstarted or unprovable selection has nothing to undo; clear only the pre-selection marker and keep the installed closure. Do not delete recovery records."
 }
@@ -2880,6 +2887,10 @@ begin_pending_selection() {
     pending_selection_facts >"$tmp"
     mv -fT -- "$tmp" "$path"
     PENDING_SELECTION="$path"
+    # Pending supersedes the attempt. A signal while selection-pending is
+    # removed, after the closure has already been replaced, must not still
+    # find an attempt and treat that finished selection as a reselect.
+    end_selection_attempt
     arm_selection_signal_traps
 }
 
@@ -2889,17 +2900,20 @@ selection_attempt_path() {
 }
 
 begin_selection_attempt() {
-    local path tmp tag
+    local path tmp tag installed
     path="$(selection_attempt_path)"
     mkdir -p -- "$(dirname -- "$path")"
     tag="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:--}"
     [[ "$tag" =~ ^[0-9a-f]{40}$ ]] || tag="-"
+    installed="$(installed_release_version || true)"
+    [[ "$installed" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || installed="-"
     tmp="$(mktemp "$(dirname -- "$path")/.selection-attempt.XXXXXX")" \
         || die "could not record that a selection was attempted"
     {
         printf 'format=1\n'
         printf 'tag=%s\n' "$tag"
         printf 'target=%s\n' "$TARGET"
+        printf 'installed=%s\n' "$installed"
     } >"$tmp"
     mv -fT -- "$tmp" "$path"
     SELECTION_ATTEMPT="$path"
@@ -2940,23 +2954,28 @@ installed_release_version() {
     return 1
 }
 
-# Exit 0 when this trusted tag's selection died before selection-pending and
-# the installed release is still the attempt's target. Any other attempt is
-# stale: remove it and let the caller decide from the recovery record.
+# Exit 0 when this trusted tag's selection died before selection-pending, the
+# release installed before the attempt was already the target, and that
+# release is still installed. A finished cross-version selection fails the
+# before-attempt check. Any other attempt is stale: remove it and let the
+# caller decide from the recovery record.
 acknowledge_interrupted_reselect() {
-    local path tag target trusted installed
+    local path tag target trusted installed recorded
     path="$(selection_attempt_path)"
     [ -f "$path" ] && [ ! -L "$path" ] || return 1
     tag="$(sed -n 's/^tag=\([0-9a-f]\{40\}\|-\)$/\1/p' -- "$path" | head -n 1)"
     target="$(sed -n 's/^target=\([0-9][0-9.]*\)$/\1/p' -- "$path" | head -n 1)"
+    recorded="$(sed -n 's/^installed=\([0-9][0-9.]*\|-\)$/\1/p' -- "$path" | head -n 1)"
     trusted="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}"
     if [[ "$trusted" =~ ^[0-9a-f]{40}$ ]] && [ "$tag" = "$trusted" ]; then
         installed="$(installed_release_version || true)"
         if [ -n "$installed" ] && [ "$installed" = "$target" ]; then
-            rm -f -- "$path"
-            SELECTION_ATTEMPT=""
-            log "interrupted reselect of $target; the installed closure is unchanged and nothing was restored"
-            exit 0
+            if [ "$recorded" = "$target" ]; then
+                rm -f -- "$path"
+                SELECTION_ATTEMPT=""
+                log "interrupted reselect of $target; the installed closure is unchanged and nothing was restored"
+                exit 0
+            fi
         fi
     fi
     rm -f -- "$path"
