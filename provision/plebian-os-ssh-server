@@ -444,9 +444,10 @@ def apt_options(work):
 def apt_env(work):
     """CLEAN_ENV plus this helper's apt.conf.
 
-    Dir::Etc::Parts in that file is applied before apt.conf.d is read, so a
-    host snippet such as APT::Sources::With cannot add a package. The
-    caller's APT_CONFIG is not in CLEAN_ENV.
+    Dir::Etc::main in that file is /dev/null, and Dir::Etc::Parts is applied
+    before apt.conf.d is read, so the host apt.conf and a snippet such as
+    APT::Sources::With cannot add a package. The caller's APT_CONFIG is not
+    in CLEAN_ENV.
     """
     env = dict(CLEAN_ENV)
     env["APT_CONFIG"] = str(work / "apt.conf")
@@ -465,7 +466,10 @@ def prepare_apt_work(codename):
     (work / "apt.conf.d").mkdir(mode=0o755)
     (work / "lists" / "partial").mkdir(mode=0o755, parents=True)
     (work / "sources.list.d" / "debian.sources").write_text(debian_sources(codename))
-    (work / "apt.conf").write_text(f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n')
+    (work / "apt.conf").write_text(
+        'Dir::Etc::main "/dev/null";\n'
+        f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n'
+    )
     return work
 
 

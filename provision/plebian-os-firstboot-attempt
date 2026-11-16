@@ -306,9 +306,10 @@ recover_package_state() {
     [ "$stop_status" -eq 0 ] || return 0
     say "firstboot: dpkg --configure -a exited $status; running a bounded apt-get -f install"
     # One apt-get, still -f install, against a Debian-only source list.
-    # Host apt.conf.d cannot add a package: APT_CONFIG points Parts at an
-    # empty directory. The system list cache stays, so already-fetched
-    # Debian indexes remain usable. Do not pass --no-remove; fixing a
+    # Host apt.conf and apt.conf.d cannot add a package: this file sets
+    # Dir::Etc::main to /dev/null and points Dir::Etc::Parts at an empty
+    # directory. The system list cache stays, so already-fetched Debian
+    # indexes remain usable. Do not pass --no-remove; fixing a
     # half-installed database is allowed to remove a broken package.
     apt_work="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-firstboot-apt.XXXXXX")" || {
         say "firstboot: could not prepare a Debian-only apt configuration"
@@ -330,7 +331,10 @@ Suites: $apt_codename-security
 Components: main
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
-    printf '%s\n' "Dir::Etc::Parts \"$apt_work/apt.conf.d\";" >"$apt_work/apt.conf"
+    printf '%s\n' \
+        'Dir::Etc::main "/dev/null";' \
+        "Dir::Etc::Parts \"$apt_work/apt.conf.d\";" \
+        >"$apt_work/apt.conf"
     : >"$apt_work/preferences"
     chmod 0755 "$apt_work" "$apt_work/sources.list.d" "$apt_work/apt.conf.d" "$apt_work/preferences.d"
     chmod 0644 "$apt_work/apt.conf" "$apt_work/preferences" "$apt_work/sources.list.d/debian.sources"

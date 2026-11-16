@@ -412,6 +412,10 @@ class DependencyManifestTests(unittest.TestCase):
             sudo.chmod(0o755)
             function = function.replace("/usr/local/sbin/plebian-os-install-deps",
                                         str(helper))
+            qt = Path(td) / "qt-runtime"
+            qt.write_text("#!/bin/sh\nprintf '%s\\n' \"qt-runtime $*\"\n")
+            qt.chmod(0o755)
+            function = function.replace("/usr/local/sbin/plebian-os-qt-runtime", str(qt))
             # Release mode classifies apt sources before the dry run. Point it
             # at a Debian fixture so the host's own sources are not read.
             suite = subprocess.run(
@@ -451,6 +455,7 @@ class DependencyManifestTests(unittest.TestCase):
                  function + "\nrefresh_os_dependencies"],
                 env=env, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("qt-runtime --verify", result.stdout)
             for package in VULKAN_TTS_CONVERTER_PACKAGES:
                 self.assertIn(package, result.stdout)
             for package in VULKAN_TTS_BUILD_PACKAGES:
@@ -777,6 +782,45 @@ class DependencyManifestTests(unittest.TestCase):
         pkgs = preseed_packages()
         self.assertNotIn("boolean", pkgs)
         self.assertNotIn("base-installer/install-recommends", pkgs)
+
+    def test_pleb_and_kilix_release_packages_stay_inside_the_closure(self):
+        """Pleb and Kilix release package lists are inside the install-deps closure.
+
+        Direct names come from DEP_GROUPS. Five more are dependencies of that
+        set, recorded from an offline amd64 simulation (empty status,
+        --no-install-recommends, no apt-get update). Seat B found the same
+        consumer lists covered on arm64; the only arm64 gaps are two DEP_GROUPS
+        names, committed here because this host has no arm64 package lists.
+        mbrola-us1 is not a closure package and is not a required consumer.
+        """
+        closure = {token.split("=", 1)[0] for token in install_deps_packages()}
+        fixture = ROOT / "tests" / "fixtures" / "release-closure"
+
+        def names(filename):
+            rows = []
+            for line in (fixture / filename).read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    rows.append(line)
+            return rows
+
+        pleb = names("pleb-runtime.txt")
+        kilix = names("kilix-debian.txt")
+        dependencies = set(names("closure-dependencies.txt"))
+        arm64_gaps = set(names("arm64-no-candidate.txt"))
+        self.assertEqual(len(pleb), 91)
+        self.assertEqual(len(kilix), 42)
+        self.assertTrue(arm64_gaps <= closure)
+        self.assertTrue(arm64_gaps.isdisjoint(pleb))
+        self.assertTrue(arm64_gaps.isdisjoint(kilix))
+        self.assertNotIn("mbrola-us1", closure)
+        self.assertNotIn("mbrola-us1", pleb)
+        self.assertNotIn("mbrola-us1", kilix)
+        covered = closure | dependencies
+        missing = [name for name in pleb + kilix + ["libjack-dev"] if name not in covered]
+        self.assertEqual(missing, [])
+        # The dependency fixture is the gap, not a second copy of DEP_GROUPS.
+        self.assertTrue(dependencies.isdisjoint(closure))
 
 
 if __name__ == "__main__":

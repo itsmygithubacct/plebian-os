@@ -365,6 +365,7 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(verbs, ["update", "install", "install"])  # update, plan, install
         self.assertEqual(len(system.apt_configs), len(apt))
         for conf in system.apt_configs:
+            self.assertIn('Dir::Etc::main "/dev/null";', conf)
             self.assertIn('Dir::Etc::Parts "', conf)
             self.assertNotIn("Sources::With", conf)
             self.assertNotIn("AllowUnauthenticated", conf)
