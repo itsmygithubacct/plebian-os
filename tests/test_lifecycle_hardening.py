@@ -957,6 +957,18 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
             _shell_function(UPDATE, "validate_release_apt_provenance"),
         )
 
+    def test_release_apt_isolation_helpers_are_identical_in_every_script(self):
+        deps = (ROOT / "provision" / "install-deps.sh").read_text()
+        for name in (
+            "validate_release_apt_provenance",
+            "prepare_release_apt_config",
+            "release_apt_get",
+        ):
+            with self.subTest(name=name):
+                provision = _shell_function(PROVISION, name)
+                self.assertEqual(provision, _shell_function(UPDATE, name))
+                self.assertEqual(provision, _shell_function(deps, name))
+
     def test_release_apt_provenance_gate_rules(self):
         ts = self.SNAPSHOT
         cases = (

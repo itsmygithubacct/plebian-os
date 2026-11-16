@@ -412,10 +412,35 @@ class DependencyManifestTests(unittest.TestCase):
             sudo.chmod(0o755)
             function = function.replace("/usr/local/sbin/plebian-os-install-deps",
                                         str(helper))
+            # Release mode classifies apt sources before the dry run. Point it
+            # at a Debian fixture so the host's own sources are not read.
+            suite = subprocess.run(
+                ["bash", "-c",
+                 '. /etc/os-release 2>/dev/null; printf %s "${VERSION_CODENAME:-trixie}"'],
+                text=True, capture_output=True, check=True,
+            ).stdout
+            apt = Path(td) / "apt"
+            (apt / "sources.list.d").mkdir(parents=True)
+            (apt / "sources.list").write_text("")
+            (apt / "sources.list.d" / "debian.sources").write_text(
+                "Types: deb\n"
+                "URIs: https://deb.debian.org/debian\n"
+                f"Suites: {suite} {suite}-updates\n"
+                "Components: main\n"
+                "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+                "\n"
+                "Types: deb\n"
+                "URIs: https://security.debian.org/debian-security\n"
+                f"Suites: {suite}-security\n"
+                "Components: main\n"
+                "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+            )
             env = {"PATH": td + ":/usr/bin:/bin", "LC_ALL": "C",
                    "PLEBIAN_OS_RELEASE_MODE": "1", "PLEBIAN_OS_INSTALL_UV": "0",
                    "PLEBIAN_OS_UV_VERSION": "", "PLEBIAN_OS_UV_INSTALLER_SHA256": "",
-                   "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": ""}
+                   "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "",
+                   "PLEBIAN_OS_APT_SOURCES_ROOT": str(apt),
+                   "PLEBIAN_OS_APT_CODENAME": suite}
             result = subprocess.run(
                 ["bash", "-euc", "log() { :; }\ndie() { exit 1; }\n" +
                  function + "\nrefresh_os_dependencies"],
