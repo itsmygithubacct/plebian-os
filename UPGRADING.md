@@ -248,16 +248,41 @@ above:
 - **Debian packages added.** The update installs `redshift`, Tesseract,
   `python3-torch` and the converter dependencies, plus Zell's dependencies:
   upower, bluez, scrot, brightnessctl, power-profiles-daemon, nftables and
-  wtmpdb. Release packages come only from Debian and Plebian files. An operator
-  apt source, such as NVIDIA CUDA, is left configured and its packages are
-  kept. <!-- CUDA: confirm after R2 --> On rollback, packages the failed transaction newly added are removed
-  when nothing else would be removed with them; other packages and Debian
-  upgrades are kept.
+  wtmpdb. Release packages come only from Debian and Plebian files: release
+  installs and updates use a private apt configuration that holds only Debian
+  archive sources. An operator apt source, such as NVIDIA CUDA, stays
+  configured, but its source files, pins, `/etc/apt/apt.conf` and
+  `apt.conf.d` snippets do not apply to release packages (Plebian-OS's own Qt
+  runtime pin is kept), and packages installed from it are never
+  removed. In release mode, `pleb install` and the Kilix build-dependency step
+  refuse a missing package by name ("release package closure is incomplete;
+  missing …") instead of installing it from the system apt. Run
+  `plebian-os-update --revalidate-current` to install the release packages
+  again, and report the package if it is still refused. On rollback, packages
+  that appeared during a package step are removed when nothing else would be
+  removed with them (see **Interrupted updates and package rollback**). An apt
+  proxy set in `apt.conf` or `apt.conf.d` is not used for release package
+  downloads; set the proxy in the environment for the update instead (a 0.2.3
+  known issue).
 - **SSH.** The update installs the `plebian-os-ssh-server` helper but does not
   install or enable openssh-server and does not ask. To turn SSH on, run
-  `sudo plebian-os-ssh-server enable`. It refuses, before installing anything,
-  while any account still has the 0.2.0 starter password; change that password
-  with `passwd` (or lock the account) first. If SSH was turned on and the
+  `sudo plebian-os-ssh-server enable`, or use Kilix 95's Start ▸ System ▸
+  Remote login (SSH), which asks `Turn SSH on now? [y/N]` before sudo asks for
+  a password.
+  - Enable refuses, before installing anything, while any account still has
+    the 0.2.0 starter password, and names each such account. Change your own
+    with `passwd` and another with `sudo passwd NAME` (or lock it with
+    `sudo passwd -l NAME`), then run enable again.
+  - Enable and disable end by printing the real state, and
+    `plebian-os-ssh-server status` reports the same.
+  - A failed enable turns SSH off again, unless it was on before the run.
+  - A half-installed openssh-server is held off (its units are masked), so a
+    later `dpkg --configure -a` does not start it; the next successful enable
+    removes those masks.
+  - Disable also masks the extra sockets systemd binds for SSH, including
+    AF_VSOCK in a virtual machine.
+
+  If SSH was turned on and the
   update is later rolled back to a release without the helper, SSH stays on.
   Turn it off with `sudo systemctl disable --now ssh.service ssh.socket`, plus
   `sudo systemctl mask --now sshd-vsock.socket sshd-unix-local.socket` for the
@@ -284,14 +309,47 @@ apply, or `pleb update --rollback`, returns the machine to no selected closure.
 Releases before 0.2.3 cannot be a first selection. A Pleb whose VERSION is
 0.2.1 first runs a bare `pleb update`, then `pleb update --to 0.2.3`.
 
-**Interrupted updates.** An interrupted update (status 130, 143 or 129):
-- prints `interrupted; rolling back`;
-- writes the updater's own log, `update.log` under the Pleb state directory;
-- reports the restore outcome.
+**Interrupted updates and package rollback.** Packages that appear during a
+package step can be removed on rollback:
+- `pleb install` and `pleb update` include builds, so that window is the whole
+  step;
+- the native runtime window covers only `install-dependencies` and `apply`,
+  and only when the script defines the window helpers. The provisioner does
+  not.
+
+Packages installed while no package step is running, packages already
+installed, and Debian upgrades are kept. If removing an added package would
+remove something else, the updater says so and keeps it. If the transaction
+also removed a package that was already installed, the new packages are kept
+and the updater says so. A window left by another process, including
+`--recover-interrupted` after a kill, removes nothing.
+
+An interrupted update (status 130, 143 or 129) prints `interrupted; rolling
+back` and records that line in the updater log, `update.log` under the Pleb
+state directory:
+- the package-step helper inherits the log and writes the line when a group
+  signal reaches it;
+- the updater's interrupt trap writes it again, and rollback writes it again;
+- a signal sent only to the updater's own process prints nothing until the
+  shielded step returns.
+
+The log refuses a symlink, is mode 0600, and rotates past one megabyte. The
+restore outcome is printed and logged as well.
 
 A same-tag reselect interrupted before the selection is pending, such as the
-RC9 → 0.2.3 hop, is recovered as an interrupted reselect. The installed
-closure is left unchanged.
+RC9 → 0.2.3 hop, is recovered as an interrupted reselect when the release
+installed before the attempt was already the target and is still installed.
+The installed closure is left unchanged. A finished selection whose version
+has since moved is not treated as that reselect, and neither is an attempt
+whose recorded version differs from the target. A Pleb from before this
+change may still label the same-tag recovery as rolled back and revalidate
+the current installation; it does not restore an older closure when the
+selector exits 0.
+
+Two limits remain (see the 0.2.3 notes' known issues): a Ctrl-C during a
+foreground step that does not use sudo, such as the Kilix engine rebuild,
+reaches that process, and the updater waits for it to end; SIGKILL or power
+loss does not run rollback.
 
 ### The 0.2.3 Kilix Ask command model
 

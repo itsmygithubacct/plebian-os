@@ -31,23 +31,33 @@ entries below run newest first, from the final back through RC1.
   once with `pleb update --to 0.2.3`.
 - Ask once at the first desktop login whether to turn on an SSH server; the
   default is No. `plebian-os-ssh-server enable|disable|status` changes it
-  later. Upgrades install the helper but never enable SSH.
+  later. Upgrades install the helper but never enable SSH. Enable refuses,
+  naming the accounts, while any account has the 0.2.0 starter password;
+  every run reports the real state; a failed enable turns SSH off again; a
+  half-installed openssh-server is held off; disable masks the generator
+  sockets; and Kilix 95 asks before sudo.
 - Stage the Waydroid first-use helper on fresh amd64 installs, as updates
-  do, without installing Waydroid or downloading Android.
-- Release updates keep working when an operator apt source such as NVIDIA
-  CUDA is configured. Release packages still come only from Debian, and
-  packages from the operator source are left installed.
-  <!-- CUDA: confirm after R2 -->
+  do, without installing Waydroid or downloading Android. A fresh install on
+  arm64 and other architectures does not stage it; updates stage it on every
+  architecture.
+- Release updates keep working when an operator apt source such as NVIDIA CUDA
+  is configured. Release installs and updates use a private Debian-only apt
+  configuration, so operator sources, pins, `/etc/apt/apt.conf` and
+  `apt.conf.d` snippets do not apply to release packages (Plebian-OS's own Qt
+  runtime pin is kept and the Qt runtime is verified after the dependency
+  step), and operator-installed packages are never removed. In release mode,
+  Pleb and Kilix refuse a missing package by name instead of installing it
+  from the system apt.
 - Accept an Ollama carrier path that contains a backslash or a newline
   (0.2.2 known issue 8); size and SHA-256 checks are unchanged.
 - Say `interrupted; rolling back` on an interrupted update and keep the
   updater's own `update.log`; remove packages the interrupted transaction
-  newly added when that is safe; recover an interrupted same-tag reselect
+  that appeared during a package step when that is safe; recover an interrupted same-tag reselect
   without restoring an older closure.
 - QEMU manager: refuse a private-group directory when membership lookup is
   partial, the account files are not regular or not read whole, names are
-  duplicated, or the DynamicUser peer cannot be verified.
-  <!-- PENDING MERGE: qemu-manager -->
+  duplicated, or the DynamicUser peer cannot be verified or is not root
+  (kilix-tui-utils `bd1999bd`).
 - Kilix Ask uses its grammar until LFM2 is installed. The first interactive
   `kilix ask` and the model wizard offer the LFM2 download (delivery v10,
   deduplicated runtime libraries, same weight); the ISO no longer bundles
