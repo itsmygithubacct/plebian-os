@@ -54,7 +54,7 @@ valid_release_tag() {
 _update_record() {
     [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' now)" "$*" \
-        >&"$_UPDATE_LOG_FD" 2>/dev/null || true
+        2>/dev/null 1>&"$_UPDATE_LOG_FD" || true
 }
 log()  { _update_record "$*"; printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { _update_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
