@@ -599,7 +599,29 @@ EOF
 
 log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Drop a private Waydroid stage and any unpublished destination temps. Safe to
+# call more than once. die and cleanup both use it so a failed first boot does
+# not leave a temp that makes the transaction rmdir return 70.
+waydroid_release_private_stage() {
+    local path
+    if [ -n "${WAYDROID_PUBLISH_TEMPS:-}" ]; then
+        while IFS= read -r path; do
+            [ -z "$path" ] || rm -f -- "$path" || true
+        done <<<"$WAYDROID_PUBLISH_TEMPS"
+        WAYDROID_PUBLISH_TEMPS=""
+    fi
+    if [ -n "${WAYDROID_PRIVATE_STAGE:-}" ]; then
+        rm -rf -- "$WAYDROID_PRIVATE_STAGE" || true
+        WAYDROID_PRIVATE_STAGE=""
+    fi
+}
+
+die() {
+    waydroid_release_private_stage || true
+    printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2
+    exit 1
+}
 
 PLEBIAN_OS_OLLAMA_CARRIER_ARG=""
 OLLAMA_PREFLIGHT_SKIP=0
@@ -2507,6 +2529,9 @@ commit_provision_root_transaction() {
 cleanup() {
     local cleanup_failed=0
     if [ "$DRY_RUN" != 1 ]; then
+        # Drop a private Waydroid stage before rollback rmdir. Temps live in
+        # the destination directory; a leftover makes that rmdir fail.
+        waydroid_release_private_stage
         if ! rm -f "$SUDOERS"; then
             warn "could not remove temporary provisioning sudoers rule: $SUDOERS"
             cleanup_failed=1
@@ -6714,6 +6739,82 @@ waydroid_directory_is_root_safe() {
     return 0
 }
 
+# Copy one user-owned source into a root-private file.
+#
+# Open the source exactly once with O_NOFOLLOW and copy from that descriptor.
+# A same-user replacement of the path cannot make this follow a symlink or
+# FIFO, and cannot change the bytes already read. The size bounds match the
+# updater's root deploy of these three files, except the pin bound is large
+# enough that a slightly long pin still fails the trailing-data check by name.
+waydroid_copy_owned_source() {
+    python3 - "$1" "$2" "$3" "$4" <<'PY'
+import errno
+import os
+import stat
+import sys
+
+source, destination, owner_text, limit_text = sys.argv[1:]
+owner = int(owner_text)
+limit = int(limit_text)
+read_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW
+write_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+source_fd = None
+destination_fd = None
+try:
+    try:
+        source_fd = os.open(source, read_flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise SystemExit("Waydroid source is a symlink: " + source)
+        if exc.errno == errno.ENOENT:
+            raise SystemExit("Waydroid source is missing: " + source)
+        raise SystemExit("could not open Waydroid source: " + source)
+    info = os.fstat(source_fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise SystemExit("Waydroid source is not a regular file: " + source)
+    if info.st_uid != owner:
+        raise SystemExit("Waydroid source is not owned by the target user: " + source)
+    if info.st_mode & 0o022:
+        raise SystemExit("Waydroid source is group or world writable: " + source)
+    if info.st_size > limit:
+        raise SystemExit("Waydroid source exceeds its copy limit: " + source)
+    try:
+        destination_fd = os.open(destination, write_flags, 0o600)
+    except OSError:
+        raise SystemExit("could not create Waydroid private copy: " + destination)
+    if os.geteuid() == 0:
+        os.fchown(destination_fd, 0, 0)
+    os.fchmod(destination_fd, 0o600)
+    total = 0
+    while True:
+        chunk = os.read(source_fd, min(1024 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise SystemExit("Waydroid source grew beyond its copy limit: " + source)
+        view = memoryview(chunk)
+        while view:
+            written = os.write(destination_fd, view)
+            view = view[written:]
+    os.fsync(destination_fd)
+except BaseException:
+    if destination_fd is not None:
+        os.close(destination_fd)
+        destination_fd = None
+        try:
+            os.unlink(destination)
+        except FileNotFoundError:
+            pass
+    raise
+finally:
+    if source_fd is not None:
+        os.close(source_fd)
+    if destination_fd is not None:
+        os.close(destination_fd)
+PY
+}
+
 # Stage the root-owned first-use helper from the Plebian-OS checkout.
 #
 # The updater always publishes these three files. A fresh install used to
@@ -6723,12 +6824,21 @@ waydroid_directory_is_root_safe() {
 # so other architectures stay unstaged. The flag still means "do not install
 # the application": this function never calls install_waydroid_application.
 #
-# Library fixtures may set PLEBIAN_OS_WAYDROID_HELPER_DEST. The script returns
-# before its main steps when PLEBIAN_OS_PROVISION_LIB_ONLY=1, so a real
-# provision run never honors that variable.
+# The checkout is owned by the target user. Copy each source once into a
+# root-private stage, verify that stage, then publish with mv -fT from a
+# temporary name in the destination directory. A symlink or FIFO swapped in
+# after verification is not what gets published, and the open does not block.
+#
+# Library fixtures may set PLEBIAN_OS_WAYDROID_HELPER_DEST,
+# PLEBIAN_OS_WAYDROID_FIXED_ROOT, PLEBIAN_OS_WAYDROID_STAGE_PARENT, and
+# PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE. The script returns before its main
+# steps when PLEBIAN_OS_PROVISION_LIB_ONLY=1, so a real provision run never
+# honors those variables.
 stage_waydroid_first_use_helper() {
-    local machine install_dir setup closure pin actual pinned parent
-    local installed_pin installed_actual dest name owner mode links
+    local machine install_dir waydroid_root setup closure pin_source actual pinned
+    local parent dest name owner mode links stage_parent expected_owner
+    local staged_setup staged_closure staged_pin pin
+    local setup_new closure_new pin_new err
     machine="$(uname -m)"
     case "$machine" in
         x86_64|amd64) ;;
@@ -6742,44 +6852,83 @@ stage_waydroid_first_use_helper() {
     esac
 
     install_dir=/usr/lib/plebian-os/waydroid
+    waydroid_root=/
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+            && [ -n "${PLEBIAN_OS_WAYDROID_FIXED_ROOT:-}" ]; then
+        case "$PLEBIAN_OS_WAYDROID_FIXED_ROOT" in
+            *$'\n'*|*$'\r'*) die "unsafe Waydroid fixed-root test seam" ;;
+        esac
+        waydroid_root="$(realpath -m -- "$PLEBIAN_OS_WAYDROID_FIXED_ROOT")" \
+            || die "unsafe Waydroid fixed-root test seam"
+        case "$waydroid_root" in
+            /|/usr|/usr/lib|/usr/lib/plebian-os|/usr/lib/plebian-os/*)
+                die "Waydroid fixed-root test seam cannot replace a system path"
+                ;;
+            /*) ;;
+            *) die "Waydroid fixed-root test seam must be absolute" ;;
+        esac
+        install_dir="$waydroid_root/usr/lib/plebian-os/waydroid"
+    fi
     if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
             && [ -n "${PLEBIAN_OS_WAYDROID_HELPER_DEST:-}" ]; then
         case "$PLEBIAN_OS_WAYDROID_HELPER_DEST" in
-            /usr/lib/plebian-os/waydroid|/|/usr|/usr/lib|/usr/lib/plebian-os)
-                die "Waydroid helper test destination cannot replace a fixed system path"
-                ;;
+            *$'\n'*|*$'\r'*) die "unsafe Waydroid helper test destination" ;;
             /*) ;;
             *) die "Waydroid helper test destination must be absolute" ;;
         esac
-        case "$PLEBIAN_OS_WAYDROID_HELPER_DEST" in
-            *..*|*$'\n'*|*$'\r'*|//*)
-                die "unsafe Waydroid helper test destination" ;;
-        esac
-        install_dir="$PLEBIAN_OS_WAYDROID_HELPER_DEST"
+        # realpath would turn a symlink destination into its target. Keep the
+        # raw path so the directory symlink check below still sees it.
+        if [ -L "$PLEBIAN_OS_WAYDROID_HELPER_DEST" ]; then
+            install_dir="$PLEBIAN_OS_WAYDROID_HELPER_DEST"
+        else
+            install_dir="$(realpath -m -- "$PLEBIAN_OS_WAYDROID_HELPER_DEST")" \
+                || die "unsafe Waydroid helper test destination"
+            case "$install_dir" in
+            /usr/lib/plebian-os/waydroid|/|/usr|/usr/lib|/usr/lib/plebian-os)
+                    die "Waydroid helper test destination cannot replace a fixed system path"
+                    ;;
+                /usr/lib/plebian-os/*)
+                    die "Waydroid helper test destination is under /usr/lib/plebian-os"
+                    ;;
+                /*) ;;
+                *) die "unsafe Waydroid helper test destination" ;;
+            esac
+        fi
     fi
 
     setup="$PLEBIAN_OS_DIR/provision/plebian-os-waydroid-setup"
     closure="$PLEBIAN_OS_DIR/provision/waydroid-closure.env"
-    pin="$PLEBIAN_OS_DIR/provision/waydroid-closure.sha256"
-    if [ ! -f "$setup" ] || [ -L "$setup" ] || [ ! -x "$setup" ] \
-            || [ ! -f "$closure" ] || [ -L "$closure" ] \
-            || [ ! -f "$pin" ] || [ -L "$pin" ]; then
-        die "pinned Plebian-OS checkout has no Waydroid setup closure"
+    pin_source="$PLEBIAN_OS_DIR/provision/waydroid-closure.sha256"
+    if [ -L "$setup" ]; then
+        die "Waydroid setup file is a symlink: $setup"
     fi
-    actual="$(sha256sum -- "$closure" | awk '{print $1}')"
-    IFS= read -r pinned <"$pin" \
-        || die "could not read the Waydroid closure pin"
-    printf '%s\n' "$pinned" | cmp -s - "$pin" \
-        || die "Waydroid closure pin has trailing data"
-    if ! [[ "$pinned" =~ ^[0-9a-f]{64}$ ]] \
-            || [ "$actual" != "$pinned" ]; then
-        die "pinned Plebian-OS checkout has a mismatched Waydroid closure"
+    if [ ! -e "$setup" ]; then
+        die "Waydroid setup file is missing: $setup"
     fi
-    if [ -n "$WAYDROID_CLOSURE_SHA256" ]; then
-        [ "$actual" = "$WAYDROID_CLOSURE_SHA256" ] \
-            || die "release Waydroid closure differs from the pinned checkout"
+    if [ ! -f "$setup" ]; then
+        die "Waydroid setup file is not a regular file: $setup"
     fi
-    bash -n "$setup" || die "invalid Waydroid first-use helper"
+    if [ ! -f "$setup" ] || [ -L "$setup" ] || [ ! -x "$setup" ]; then
+        die "Waydroid setup file is not executable: $setup"
+    fi
+    if [ -L "$closure" ]; then
+        die "Waydroid closure file is a symlink: $closure"
+    fi
+    if [ ! -e "$closure" ]; then
+        die "Waydroid closure file is missing: $closure"
+    fi
+    if [ ! -f "$closure" ]; then
+        die "Waydroid closure file is not a regular file: $closure"
+    fi
+    if [ -L "$pin_source" ]; then
+        die "Waydroid closure pin is a symlink: $pin_source"
+    fi
+    if [ ! -e "$pin_source" ]; then
+        die "Waydroid closure pin is missing: $pin_source"
+    fi
+    if [ ! -f "$pin_source" ]; then
+        die "Waydroid closure pin is not a regular file: $pin_source"
+    fi
 
     if [ "$install_dir" = /usr/lib/plebian-os/waydroid ]; then
         for parent in / /usr /usr/lib; do
@@ -6789,6 +6938,17 @@ stage_waydroid_first_use_helper() {
         if [ -e /usr/lib/plebian-os ] || [ -L /usr/lib/plebian-os ]; then
             waydroid_directory_is_root_safe /usr/lib/plebian-os 1 \
                 || die "unsafe Waydroid first-use parent: /usr/lib/plebian-os"
+        fi
+    elif [ "$waydroid_root" != / ] \
+            && [ "$install_dir" = "$waydroid_root/usr/lib/plebian-os/waydroid" ]; then
+        for parent in "$waydroid_root" "$waydroid_root/usr" "$waydroid_root/usr/lib"; do
+            waydroid_directory_is_root_safe "$parent" 1 \
+                || die "unsafe Waydroid first-use ancestor: $parent"
+        done
+        if [ -e "$waydroid_root/usr/lib/plebian-os" ] \
+                || [ -L "$waydroid_root/usr/lib/plebian-os" ]; then
+            waydroid_directory_is_root_safe "$waydroid_root/usr/lib/plebian-os" 1 \
+                || die "unsafe Waydroid first-use parent: $waydroid_root/usr/lib/plebian-os"
         fi
     else
         parent="$(dirname -- "$install_dir")"
@@ -6817,14 +6977,85 @@ stage_waydroid_first_use_helper() {
     fi
 
     log "staging the Plebian-OS Waydroid first-use closure"
+    case "${TARGET_UID:-}" in
+        ''|*[!0-9]*) die "Waydroid first-use staging requires the target user id" ;;
+    esac
+
+    stage_parent="${TMPDIR:-/tmp}"
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+            && [ -n "${PLEBIAN_OS_WAYDROID_STAGE_PARENT:-}" ]; then
+        stage_parent="$PLEBIAN_OS_WAYDROID_STAGE_PARENT"
+        waydroid_directory_is_root_safe "$stage_parent" 0 \
+            || die "unsafe Waydroid private-stage parent: $stage_parent"
+        [ "$(stat -c '%a' -- "$stage_parent")" = 700 ] \
+            || die "Waydroid private-stage parent is not mode 0700: $stage_parent"
+    fi
+    WAYDROID_PUBLISH_TEMPS=""
+    WAYDROID_PRIVATE_STAGE="$(mktemp -d "$stage_parent/plebian-os-waydroid.XXXXXX")" \
+        || die "could not create the Waydroid private stage"
+    chmod 0700 -- "$WAYDROID_PRIVATE_STAGE" \
+        || die "could not restrict the Waydroid private stage"
+    expected_owner="$(id -u)"
+    [ "$(stat -c '%u:%a' -- "$WAYDROID_PRIVATE_STAGE")" = "${expected_owner}:700" ] \
+        || die "unsafe Waydroid private stage"
+    staged_setup="$WAYDROID_PRIVATE_STAGE/plebian-os-waydroid-setup"
+    staged_closure="$WAYDROID_PRIVATE_STAGE/waydroid-closure.env"
+    staged_pin="$WAYDROID_PRIVATE_STAGE/waydroid-closure.sha256"
+    if ! err="$(waydroid_copy_owned_source "$setup" "$staged_setup" "$TARGET_UID" 1048576 2>&1)"; then
+        die "${err:-could not copy the Waydroid setup file}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$closure" "$staged_closure" "$TARGET_UID" 65536 2>&1)"; then
+        die "${err:-could not copy the Waydroid closure}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$pin_source" "$staged_pin" "$TARGET_UID" 4096 2>&1)"; then
+        die "${err:-could not copy the Waydroid closure pin}"
+    fi
+
+    actual="$(sha256sum -- "$staged_closure" | awk '{print $1}')" \
+        || die "could not hash the Waydroid closure"
+    IFS= read -r pinned <"$staged_pin" \
+        || die "could not read the Waydroid closure pin"
+    pin="$staged_pin"
+    printf '%s\n' "$pinned" | cmp -s - "$pin" \
+        || die "Waydroid closure pin has trailing data"
+    if ! [[ "$pinned" =~ ^[0-9a-f]{64}$ ]] \
+            || [ "$actual" != "$pinned" ]; then
+        die "pinned Plebian-OS checkout has a mismatched Waydroid closure"
+    fi
+    if [ -n "$WAYDROID_CLOSURE_SHA256" ]; then
+        [ "$actual" = "$WAYDROID_CLOSURE_SHA256" ] \
+            || die "release Waydroid closure differs from the pinned checkout"
+    fi
+    # The private copy is created 0600. The flag-1 dry run executes it, so the
+    # owner needs the execute bit while it still lives in the 0700 stage.
+    chmod 0700 -- "$staged_setup" \
+        || die "could not set the staged Waydroid helper mode"
+    setup="$staged_setup"
+    bash -n "$setup" || die "invalid Waydroid first-use helper"
+
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+            && [ -n "${PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE:-}" ]; then
+        [[ "${PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+            || die "unsafe Waydroid test hook"
+        "${PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE}" \
+            || die "Waydroid test hook failed"
+    fi
+
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + install root-owned first-use helper + closure -> $install_dir"
         # Preview Android only when the application feature is selected. With
         # the flag at 0 the plan is the helper copy and nothing else.
+        # set +e keeps a failing preview from skipping the stage release.
+        preview_rc=0
+        set +e
         if [ "$INSTALL_WAYDROID" = 1 ]; then
             env PLEBIAN_OS_WAYDROID_CLOSURE_SHA256="$actual" \
                 "$setup" --dry-run
         fi
+        preview_rc=$?
+        set -e
+        waydroid_release_private_stage
+        [ "$preview_rc" = 0 ] || die "Waydroid first-use helper preview failed"
         return 0
     fi
 
@@ -6835,30 +7066,48 @@ stage_waydroid_first_use_helper() {
     fi
     waydroid_directory_is_root_safe "$install_dir" 1 \
         || die "unsafe Waydroid first-use directory: $install_dir"
-    install -o root -g root -m 0755 -- "$setup" \
-        "$install_dir/plebian-os-waydroid-setup" \
-        || die "could not install the Waydroid first-use helper"
-    install -o root -g root -m 0644 -- "$closure" \
-        "$install_dir/waydroid-closure.env" \
-        || die "could not install the Waydroid closure"
-    install -o root -g root -m 0644 -- "$pin" \
-        "$install_dir/waydroid-closure.sha256" \
-        || die "could not install the Waydroid closure pin"
 
-    cmp -s -- "$setup" "$install_dir/plebian-os-waydroid-setup" \
-        || die "staged Waydroid helper bytes differ from the checkout"
-    cmp -s -- "$closure" "$install_dir/waydroid-closure.env" \
-        || die "staged Waydroid closure bytes differ from the checkout"
-    cmp -s -- "$pin" "$install_dir/waydroid-closure.sha256" \
-        || die "staged Waydroid closure pin differs from the checkout"
-    IFS= read -r installed_pin <"$install_dir/waydroid-closure.sha256" \
+    setup_new="$install_dir/.plebian-os-waydroid-setup.plebian-os-new.$$"
+    closure_new="$install_dir/.waydroid-closure.env.plebian-os-new.$$"
+    pin_new="$install_dir/.waydroid-closure.sha256.plebian-os-new.$$"
+    WAYDROID_PUBLISH_TEMPS="$setup_new"$'\n'"$closure_new"$'\n'"$pin_new"
+    if ! err="$(waydroid_copy_owned_source "$staged_setup" "$setup_new" 0 1048576 2>&1)"; then
+        die "${err:-could not publish the Waydroid setup file}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$staged_closure" "$closure_new" 0 65536 2>&1)"; then
+        die "${err:-could not publish the Waydroid closure}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$staged_pin" "$pin_new" 0 4096 2>&1)"; then
+        die "${err:-could not publish the Waydroid closure pin}"
+    fi
+    # Root owns the private copies. chmod then rename so a reader never sees a
+    # partial file under the published name. Match the updater's mv -fT.
+    chmod 0755 -- "$setup_new" \
+        || die "could not set the Waydroid helper mode"
+    chmod 0644 -- "$closure_new" \
+        || die "could not set the Waydroid closure mode"
+    chmod 0644 -- "$pin_new" \
+        || die "could not set the Waydroid closure pin mode"
+    mv -fT -- "$setup_new" "$install_dir/plebian-os-waydroid-setup" \
+        || die "could not publish the Waydroid first-use helper"
+    mv -fT -- "$closure_new" "$install_dir/waydroid-closure.env" \
+        || die "could not publish the Waydroid closure"
+    mv -fT -- "$pin_new" "$install_dir/waydroid-closure.sha256" \
+        || die "could not publish the Waydroid closure pin"
+    WAYDROID_PUBLISH_TEMPS=""
+
+    cmp -s -- "$staged_setup" "$install_dir/plebian-os-waydroid-setup" \
+        || die "staged Waydroid helper bytes differ from the private stage"
+    cmp -s -- "$staged_closure" "$install_dir/waydroid-closure.env" \
+        || die "staged Waydroid closure bytes differ from the private stage"
+    cmp -s -- "$staged_pin" "$install_dir/waydroid-closure.sha256" \
+        || die "staged Waydroid closure pin differs from the private stage"
+    IFS= read -r pinned <"$install_dir/waydroid-closure.sha256" \
         || die "could not read the staged Waydroid closure pin"
-    printf '%s\n' "$installed_pin" | cmp -s - "$install_dir/waydroid-closure.sha256" \
-        || die "Waydroid closure pin has trailing data"
-    installed_actual="$(sha256sum -- "$install_dir/waydroid-closure.env")" \
+    actual="$(sha256sum -- "$install_dir/waydroid-closure.env")" \
         || die "could not hash the staged Waydroid closure"
-    [[ "$installed_pin" =~ ^[0-9a-f]{64}$ ]] \
-        && [ "${installed_actual%% *}" = "$installed_pin" ] \
+    [[ "$pinned" =~ ^[0-9a-f]{64}$ ]] \
+        && [ "${actual%% *}" = "$pinned" ] \
         || die "Waydroid closure checksum mismatch"
     bash -n "$install_dir/plebian-os-waydroid-setup" \
         || die "invalid Waydroid first-use helper"
@@ -6878,8 +7127,8 @@ stage_waydroid_first_use_helper() {
         mode="$(stat -c '%g' -- "$dest")"
         [ "$mode" = 0 ] || die "staged Waydroid first-use file is not root-group: $dest"
     done
+    waydroid_release_private_stage
 }
-
 install_waydroid_application() {
     [ "$INSTALL_WAYDROID" = 1 ] || return 0
     [[ "$KILIX_WAYDROID_REF" =~ ^[0-9a-f]{40}$ ]] \
