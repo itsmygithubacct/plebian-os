@@ -350,16 +350,20 @@ restore outcome is printed and logged as well.
 
 A release hop that is interrupted while its update is still running restores
 the previous closure only after that update has finished rolling back. The
-update restores its own snapshot of `/etc/pleb/session.env`, `plebian-os-select-closure`
-and `plebian-os-update`, which it took after the selection; a closure rollback
-that ran first would be overwritten, with its recovery record already marked
-restored. So `plebian-os-select-closure --rollback` waits, up to 30 minutes
-(`PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS`), for a running update's stack
-transaction to end. If the update is still running then, the rollback exits 13
-and changes nothing, and its recovery record stays restorable: run
-`plebian-os-select-closure --rollback` again once the update has finished. This
-holds whichever Pleb drives the hop, including a Pleb from before this change
-that does not defer a hangup (SIGHUP) the way it defers Ctrl-C and SIGTERM.
+update restores its own snapshot of `/etc/pleb/session.env`,
+`plebian-os-select-closure` and `plebian-os-update`, taken after the
+selection; a closure rollback that ran first would be overwritten, with its
+recovery record already marked restored. So `plebian-os-select-closure
+--rollback` waits, up to 30 minutes (`PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS`),
+for a running update's stack transaction to end. If that update is still
+running then, the rollback exits 13 and changes nothing, and its recovery
+record stays restorable: run `plebian-os-select-closure --rollback` again once
+the update has finished. The wait is in the selector, so it applies whichever
+Pleb drives the hop, including a published Pleb that does not defer a hangup
+(SIGHUP) the way it defers Ctrl-C and SIGTERM. When the terminal itself has
+hung up, the selector and the updater lose only their terminal messages: the
+updater's lines are in `update.log`, and its rollback and the selector's
+restore still run.
 
 A same-tag reselect interrupted before the selection is pending, such as the
 RC9 → 0.2.3 hop, is recovered as an interrupted reselect when the release

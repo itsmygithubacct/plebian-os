@@ -8,6 +8,7 @@ touching a single operator-controlled choice.
 
 import fcntl
 import os
+import pty
 import re
 import shutil
 import shlex
@@ -226,7 +227,7 @@ class ClosureSelectionTests(unittest.TestCase):
 
     def _run(self, base: Path, *args, fail_after=None, check_ancestry=False,
              env_extra=None, trust_tag=True, pass_fds=(), popen=False,
-             command=None):
+             command=None, dead_tty=False):
         env = {
             "HOME": str(base / "home"),
             "PATH": os.environ["PATH"],
@@ -250,6 +251,15 @@ class ClosureSelectionTests(unittest.TestCase):
             if tag.returncode == 0:
                 env["PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA"] = tag.stdout.strip()
         argv = [str(SELECT), *args] if command is None else command
+        if dead_tty:
+            # The terminal hung up: every write to the descriptors fails with EIO.
+            master, slave = pty.openpty()
+            os.close(master)
+            try:
+                return subprocess.Popen(argv, env=env, stdin=slave, stdout=slave,
+                                        stderr=slave, pass_fds=pass_fds)
+            finally:
+                os.close(slave)
         if popen:
             return subprocess.Popen(argv, env=env, text=True, pass_fds=pass_fds,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -2408,6 +2418,46 @@ class ClosureSelectionTests(unittest.TestCase):
             again = self._run(base, "--rollback")
             self.assertEqual(again.returncode, 0, again.stderr)
             self.assertEqual(env.read_bytes(), original)
+
+    def test_a_rollback_on_a_hung_up_terminal_still_restores_and_exits_zero(self):
+        """Closing the terminal makes every message write fail with EIO. A
+        message that cannot be written must not abort the rollback, before it
+        restores (the wait's first warning) or after (its last line)."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            original = env.read_bytes()
+            self._source(base)
+            self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
+            self.assertNotEqual(env.read_bytes(), original)
+            rollback = self._run(base, "--rollback", dead_tty=True)
+            self.addCleanup(rollback.kill)
+            self.assertEqual(rollback.wait(timeout=60), 0)
+            self.assertEqual(env.read_bytes(), original)
+            self.assertTrue(all((r / "restored").exists() for r in self._recovery_records(base)))
+            again = self._run(base, "--rollback")
+            self.assertIn("no closure to roll back to", again.stderr)
+
+    def test_a_hung_up_terminal_does_not_end_the_wait_for_a_running_update(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env, original, selected, updater, fifo = self._select_with_running_update(base)
+            rollback = self._run(base, "--rollback", dead_tty=True)
+            self.addCleanup(rollback.kill)
+            # The wait loop is a child `sleep`; a selector that died at its first
+            # (unwritable) warning never gets there.
+            for _ in range(400):
+                if rollback.poll() is not None or subprocess.run(
+                        ["pgrep", "-P", str(rollback.pid), "sleep"],
+                        capture_output=True).returncode == 0:
+                    break
+                time.sleep(0.05)
+            self.assertIsNone(rollback.poll(), "the selector ended instead of waiting")
+            self.assertEqual(env.read_bytes(), selected)
+            self._release(updater, fifo)
+            self.assertEqual(rollback.wait(timeout=60), 0)
+            self.assertEqual(env.read_bytes(), original, "the selector's restore lands last")
+            self.assertTrue(all((r / "restored").exists() for r in self._recovery_records(base)))
 
     def test_a_rollback_run_by_the_update_itself_does_not_wait_for_it(self):
         with tempfile.TemporaryDirectory() as td:

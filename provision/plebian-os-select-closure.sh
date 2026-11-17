@@ -85,9 +85,9 @@ set -euo pipefail
 # process and kept across the re-exec.
 if [ "${PLEBIAN_OS_SELECT_PARENT_WATCH:-}" != 1 ]; then
     command -v python3 >/dev/null 2>&1 \
-        || { printf '\033[1;31m[plebian-os] python3 is required so a selection stops when its parent exits\033[0m\n' >&2; exit 1; }
+        || { printf '\033[1;31m[plebian-os] python3 is required so a selection stops when its parent exits\033[0m\n' >&2 || true; exit 1; }
     _parent_stat="$(cat "/proc/${PPID}/stat" 2>/dev/null)" \
-        || { printf '\033[1;31m[plebian-os] the selecting parent is not running\033[0m\n' >&2; exit 129; }
+        || { printf '\033[1;31m[plebian-os] the selecting parent is not running\033[0m\n' >&2 || true; exit 129; }
     _parent_stat="${_parent_stat##*) }"
     export PLEBIAN_OS_SELECT_PARENT_WATCH=1
     export PLEBIAN_OS_SELECT_PARENT_PID="$PPID"
@@ -116,7 +116,7 @@ _parent_stat="${_parent_stat##*) }"
 _parent_now="$(awk '{print $20}' <<<"${_parent_stat:-}")"
 if [ "${_parent_now}" != "${PLEBIAN_OS_SELECT_PARENT_START}" ] \
         || [ "${PLEBIAN_OS_SELECT_PARENT_BOOT}" != "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)" ]; then
-    printf '\033[1;31m[plebian-os] the selecting parent exited before the selection started\033[0m\n' >&2
+    printf '\033[1;31m[plebian-os] the selecting parent exited before the selection started\033[0m\n' >&2 || true
     exit 129
 fi
 unset _parent_stat _parent_now
@@ -132,9 +132,12 @@ valid_release_tag() {
 }
 
 
-log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+# A hung-up terminal fails every write with EIO. A message that cannot be
+# written must not end a rollback that has already restored the closure, or
+# keep one from starting.
+log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*" || true; }
+warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2 || true; }
+die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2 || true; exit 1; }
 
 # Same boundary as the updater: this tool asks for exactly the privilege each
 # write needs and no more, so running the whole thing as root is a mistake

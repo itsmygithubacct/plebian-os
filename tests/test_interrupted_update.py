@@ -1,6 +1,7 @@
 """An update killed mid-transaction is detected, and --recover-interrupted undoes it."""
 import os
 from pathlib import Path
+import pty
 import subprocess
 import tempfile
 import unittest
@@ -35,7 +36,7 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.log = self.tmp / "log"
         self.log.write_text("")
 
-    def run_lib(self, body, **extra):
+    def run_lib(self, body, tty=None, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
         env.update({"HOME": str(self.tmp / "home"), "LOG": str(self.log),
                     # never this machine's own installation record
@@ -47,8 +48,21 @@ class InterruptedUpdateTests(unittest.TestCase):
             f"source {str(UPDATE_PATH)!r}\n"
             f"PLEB_STATE_HOME={str(self.state)!r}\n"
             + STUBS + body)
-        return subprocess.run(["bash", "-c", script], env=env, text=True,
-                              capture_output=True, check=False, timeout=60)
+        if tty is None:
+            return subprocess.run(["bash", "-c", script], env=env, text=True,
+                                  capture_output=True, check=False, timeout=60)
+        # tty="dead": the terminal hung up, so every write to it fails with EIO.
+        master, slave = pty.openpty()
+        try:
+            if tty == "dead":
+                os.close(master)
+                master = None
+            return subprocess.run(["bash", "-c", script], env=env, stdin=slave,
+                                  stdout=slave, stderr=slave, check=False, timeout=60)
+        finally:
+            os.close(slave)
+            if master is not None:
+                os.close(master)
 
     DEAD = "pid=999999\nstart=1\nboot=gone\n"
 
@@ -63,6 +77,28 @@ class InterruptedUpdateTests(unittest.TestCase):
 
     def boot_id(self):
         return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+    def test_an_interrupt_on_a_hung_up_terminal_still_exits_with_its_signal_status(self):
+        # The warning cannot be written (EIO); set -e must not turn 129 into 1.
+        result = self.run_lib("acknowledge_update_interrupt 129\n", tty="dead")
+        self.assertEqual(result.returncode, 129)
+
+    def test_the_rollback_leaves_a_hung_up_terminal_but_keeps_a_live_one(self):
+        body = (
+            'rollback_stack_transaction() {\n'
+            '    echo "fd1=$(readlink /proc/$$/fd/1) fd2=$(readlink /proc/$$/fd/2)" >>"$LOG"\n'
+            '    warn "rolling back"\n'
+            '}\n'
+            '_STACK_TXN_ACTIVE=1\n_STACK_TXN_DIR=' + str(self.state / "stack-rollback.Now001") + '\n'
+            'mkdir -p "$_STACK_TXN_DIR"\n'
+            'stack_transaction_cleanup\n')
+        for tty, detached in (("dead", True), ("live", False)):
+            with self.subTest(tty=tty):
+                self.log.write_text("")
+                result = self.run_lib(body, tty=tty)
+                self.assertEqual(result.returncode, 1)   # an uncommitted update exits non-zero
+                line = [x for x in self.log.read_text().splitlines() if x.startswith("fd1=")][0]
+                self.assertEqual(line == "fd1=/dev/null fd2=/dev/null", detached, line)
 
     def test_only_transactions_whose_owner_is_gone_count_as_interrupted(self):
         live = subprocess.Popen(["sleep", "60"])

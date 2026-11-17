@@ -56,8 +56,10 @@ _update_record() {
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' now)" "$*" \
         2>/dev/null 1>&"$_UPDATE_LOG_FD" || true
 }
-log()  { _update_record "$*"; printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
-warn() { _update_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
+# A hung-up terminal fails every write with EIO. The line is in the log above;
+# losing it on the terminal must not end a rollback that set -e would abort.
+log()  { _update_record "$*"; printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*" || true; }
+warn() { _update_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2 || true; }
 # `exit` does not trigger the ERR trap, so a die() -- the convention at 152 call
 # sites here -- would otherwise reach the EXIT-trap cleanup with no record of
 # what went wrong, and the retained failure-reason would read "<not captured>".
@@ -76,8 +78,24 @@ die()  {
     fi
     _STACK_FAIL_COMMAND="die: $*"
     _update_record "$*"
-    printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2
+    printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2 || true
     exit 1
+}
+
+# After the terminal hangs up, every child that writes to it (apt, dpkg, the
+# helper scripts) fails or dies on EIO in the middle of the rollback. The log
+# keeps every line, so point the dead descriptors at /dev/null. A hung-up
+# terminal is still named /dev/pts/N or /dev/ttyN but no longer answers
+# isatty. Anything else, and a terminal that still answers, is left alone.
+detach_dead_terminal() {
+    local fd target
+    for fd in 1 2; do
+        target="$(readlink "/proc/$$/fd/$fd" 2>/dev/null)" || continue
+        case "$target" in /dev/pts/*|/dev/tty*) ;; *) continue ;; esac
+        [ -t "$fd" ] && continue
+        if [ "$fd" = 1 ]; then exec 1>/dev/null; else exec 2>/dev/null; fi
+    done
+    return 0
 }
 
 # Own log for this updater. A test may name PLEBIAN_OS_UPDATE_LOG; otherwise a
@@ -572,6 +590,7 @@ PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
 # PLEB_STATE_HOME, which is inside GPU_TERMINAL_HOME.
 if [ "$check_source_checkouts" != 1 ]; then
     open_updater_log
+    detach_dead_terminal
 fi
 PLEB_CACHE_HOME="${PLEB_CACHE_HOME:-$PLEB_STORAGE_HOME/cache}"
 PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
@@ -3149,6 +3168,7 @@ stack_transaction_cleanup() {
     trap - EXIT INT TERM HUP PIPE
     trap '' PIPE
     set +e
+    detach_dead_terminal
     [ -z "${_OS_LAYER_STAGE:-}" ] || rm -rf -- "$_OS_LAYER_STAGE"
     [ -z "${_PROVENANCE_STAGE:-}" ] || rm -rf -- "$_PROVENANCE_STAGE"
     if [ "${_STACK_TXN_ACTIVE:-0}" = 1 ] \
