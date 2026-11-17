@@ -18,14 +18,15 @@ Description: Plebian-OS release identity
 
 Package: plebian-os-tools
 Architecture: all
-Depends: plebian-os-release (= ${binary:Version}), python3, ${misc:Depends}
+Depends: plebian-os-release (= ${binary:Version}), python3, git, sudo, curl,
+ ca-certificates, ${misc:Depends}
 Description: Plebian-OS administration tools
  The release updater and its closure selector, and the root helpers that
  install and verify the optional runtimes of a Plebian-OS release.
 
 Package: plebian-os-firstboot
 Architecture: all
-Depends: plebian-os-tools (= ${binary:Version}), ${misc:Depends}
+Depends: plebian-os-tools (= ${binary:Version}), systemd, ${misc:Depends}
 Description: Plebian-OS first-boot provisioning
  The provisioner that turns a fresh Debian installation into Plebian-OS and
  the systemd unit that runs it once. Installing this package does not enable
