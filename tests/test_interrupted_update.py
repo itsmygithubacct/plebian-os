@@ -100,6 +100,38 @@ class InterruptedUpdateTests(unittest.TestCase):
                 line = [x for x in self.log.read_text().splitlines() if x.startswith("fd0=")][0]
                 self.assertEqual(line == "fd0=/dev/null fd1=/dev/null fd2=/dev/null", detached, line)
 
+    def test_a_retained_failed_rollback_is_named_but_never_blocks(self):
+        """What a dropped terminal can leave: the updater's rollback stopped at
+        the Qt restore, its transaction directory kept with a failure note and a
+        dead owner. The next update and --recover-interrupted say so, neither
+        refuses, and a rollback that finished is not mentioned."""
+        root = "/var/lib/plebian-os/update-rollback.Fixture9"
+        kept = self.orphan(
+            "stack-rollback.Kept01", active="", root_transaction=root + "\n",
+            failure_reason="exit-status: 129\nrollback-complete: no\nrecover-with: x\n")
+        self.orphan("stack-rollback.Done01", failure_reason="rollback-complete: yes\n")
+        live = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(live.wait)
+        self.addCleanup(live.kill)
+        start = Path(f"/proc/{live.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+        self.orphan("stack-rollback.Live01",
+                    owner=f"pid={live.pid}\nstart={start}\nboot={self.boot_id()}\n",
+                    failure_reason="rollback-complete: no\n")
+        result = self.run_lib("note_retained_failed_rollbacks\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"{kept} and {root}", result.stderr)
+        self.assertNotIn("Done01", result.stderr)
+        self.assertNotIn("Live01", result.stderr)
+        self.assertIn("reconciled from the selected closure", result.stderr)
+        # Not an interrupted update, so nothing refuses and nothing is recovered.
+        result = self.run_lib("refuse_interrupted_stack_transaction\necho CONTINUED\n")
+        self.assertEqual((result.returncode, result.stdout), (0, "CONTINUED\n"), result.stderr)
+        result = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no interrupted update to recover", result.stdout)
+        self.assertIn(str(kept), result.stderr)
+        self.assertTrue(kept.is_dir(), "the retained data is kept")
+
     def test_only_transactions_whose_owner_is_gone_count_as_interrupted(self):
         live = subprocess.Popen(["sleep", "60"])
         self.addCleanup(live.wait)

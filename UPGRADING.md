@@ -358,16 +358,25 @@ recovery record already marked restored. So `plebian-os-select-closure
 for a running update's stack transaction to end. If that update is still
 running then, the rollback exits 13 and changes nothing, and its recovery
 record stays restorable: run `plebian-os-select-closure --rollback` again once
-the update has finished. The wait is in the selector, so it applies whichever
-Pleb drives the hop, including a published Pleb that does not defer a hangup
-(SIGHUP) the way it defers Ctrl-C and SIGTERM. When the terminal itself has
-hung up, the selector and the updater lose only their terminal messages: the
-updater's lines are in `update.log`, and its rollback and the selector's
-restore still run. The updater reads nothing from a hung-up terminal, so its
-`sudo` calls during the rollback are not signalled as if the terminal had been
-closed. A package step that starts on a terminal reads nothing from it and
-writes through a pipe the updater copies to the terminal while it answers, so
-it is not killed when the terminal goes away mid-step.
+the update has finished. The wait is in the selector, so it applies whichever Pleb drives the hop,
+including a published Pleb that does not defer a hangup (SIGHUP) the way it
+defers Ctrl-C and SIGTERM.
+
+A terminal that goes away mid-update (a closed or dropped ssh session) can
+interrupt the update: `sudo` signals the package step it started on that
+terminal, so the step can end early, and the update then rolls back. The
+rollback can finish, or stop part-way with its recovery data retained in a
+`stack-rollback.*` directory under the Pleb state directory and a root
+snapshot under `/var/lib/plebian-os`. Either way, run `pleb update` again
+(or `pleb update --to 0.2.3` to repeat the hop). It repeats the closure
+rollback, settles it, reconciles the installation from the selected closure
+with `plebian-os-update --revalidate-current` and clears the hop marker. It
+does not restore the part-way rollback from the retained data: the retained
+directories do not block updates, `--recover-interrupted` leaves them alone,
+and the next update names them. Remove them once an update has completed (the
+root one with `sudo`). When the terminal itself has hung up, the selector and
+the updater lose only their terminal messages: the updater's lines are in
+`update.log`, and its rollback and the selector's restore still run.
 
 If a hop's driver dies after the closure rollback ran but before it cleared its
 `selected` marker, the next `pleb update` repeats the rollback. The selector
@@ -376,10 +385,7 @@ session and closure equal to what it saved, and reports that there is nothing
 left to roll back (status 0). A closure that is not the saved one, another
 hop's tag, or a manual `--rollback` still fails with "no closure to roll back
 to". Pleb applies the same rule from its own record of the closure before the
-hop. The recovery then reconciles the stack with `plebian-os-update
---revalidate-current`. That is also the procedure a retained
-`stack-rollback.*/failure-reason` names; such a retained directory neither
-blocks an update nor is touched by `--recover-interrupted`.
+hop.
 
 A same-tag reselect interrupted before the selection is pending, such as the
 RC9 → 0.2.3 hop, is recovered as an interrupted reselect when the release

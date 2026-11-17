@@ -85,12 +85,10 @@ die()  {
 # After the terminal hangs up, every child that writes to it (apt, dpkg, the
 # helper scripts) fails or dies on EIO in the middle of the rollback. The log
 # keeps every line, so point the dead descriptors at /dev/null. Standard input
-# counts: a sudo whose input is a hung-up terminal reads EIO from it, and
-# signals the command it runs (SIGHUP, then a revoked pty) as if the user had
-# closed the terminal, which kills a rollback step such as the Qt restore. A
-# hung-up terminal is still named /dev/pts/N or /dev/ttyN but no longer
-# answers isatty. Anything else, and a terminal that still answers, is left
-# alone.
+# counts: a child that reads a hung-up terminal gets EIO. A hung-up terminal
+# is still named /dev/pts/N or /dev/ttyN but no longer answers isatty.
+# Anything else, and a terminal that still answers, is left alone, so output
+# on a live terminal is unchanged.
 detach_dead_terminal() {
     local fd target
     for fd in 0 1 2; do
@@ -2673,43 +2671,14 @@ run_package_step_in_its_own_session() {
         return $?
     fi
     /usr/bin/python3 -I -c '
-import os, signal, subprocess, sys, threading, time
+import os, signal, subprocess, sys, time
 signalled = []
 def note(number, frame):
     signalled.append(number)
 signal.signal(signal.SIGINT, note)
 signal.signal(signal.SIGTERM, note)
 signal.signal(signal.SIGHUP, note)
-# A step started from a terminal must not depend on it. sudo reads its own
-# terminal, and when that goes away it signals the command and revokes the
-# command'"'"'s pty, so a step that shares the terminal dies mid-package with
-# EIO on every write. Decided now, while the terminal exists: the step reads
-# nothing from it, and its output goes through pipes that this process copies
-# to the terminal for as long as the terminal answers, then drains.
-relay = any(os.isatty(fd) for fd in (0, 1, 2))
-if relay:
-    child = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    def pump(source, target):
-        alive = True
-        while True:
-            try:
-                data = os.read(source, 65536)
-            except OSError:
-                break
-            if not data:
-                break
-            while alive and data:
-                try:
-                    data = data[os.write(target, data):]
-                except OSError:
-                    alive = False
-    pumps = [threading.Thread(target=pump, args=(child.stdout.fileno(), 1), daemon=True),
-             threading.Thread(target=pump, args=(child.stderr.fileno(), 2), daemon=True)]
-    for thread in pumps:
-        thread.start()
-else:
-    child = subprocess.Popen(sys.argv[1:])
+child = subprocess.Popen(sys.argv[1:])
 status = 1
 while True:
     try:
@@ -2717,9 +2686,6 @@ while True:
         break
     except KeyboardInterrupt:
         signalled.append(signal.SIGINT)
-if relay:
-    for thread in pumps:
-        thread.join(2)
 if signalled:
     number = signalled[0]
     codes = {int(signal.SIGINT): 130, int(signal.SIGTERM): 143, int(signal.SIGHUP): 129}
@@ -3365,6 +3331,34 @@ note_legacy_stack_leftovers() {
     return 0
 }
 
+# A rollback that could not finish retains its recovery data, and the failure
+# note it writes says so (rollback-complete: no). Such a directory has its own
+# procedure and never blocks an update: the installation is reconciled from the
+# selected closure, not restored from that data. Nothing else says the data is
+# still there once the terminal that showed the first warning is gone, so say it
+# at the start of the next update and of --recover-interrupted.
+note_retained_failed_rollbacks() {
+    local dir root noted=0
+    for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
+        [ -f "$dir/failure-reason" ] && [ ! -L "$dir/failure-reason" ] || continue
+        grep -qx -- 'rollback-complete: no' "$dir/failure-reason" 2>/dev/null || continue
+        ! stack_transaction_owner_alive "$dir" || continue
+        if [ "$noted" = 0 ]; then
+            warn "an earlier update's rollback did not finish; its recovery data is retained and does not block updates:"
+            noted=1
+        fi
+        root="$(head -n 1 -- "$dir/root-transaction" 2>/dev/null || true)"
+        warn "  $dir${root:+ and $root}"
+    done
+    if [ "$noted" = 1 ]; then
+        warn "the installation is reconciled from the selected closure, not from that data;"
+        warn "once an update has completed, remove those directories (the root one with sudo)."
+    fi
+    return 0
+}
+
 refuse_interrupted_stack_transaction() {
     local found
     found="$(interrupted_stack_transactions)"
@@ -3419,6 +3413,7 @@ recover_interrupted_stack_transaction() {
     local orphan root token
     acquire_kilix_transaction_lock
     note_legacy_stack_leftovers
+    note_retained_failed_rollbacks
     mapfile -t owned < <(interrupted_stack_transactions)
     if [ "${#owned[@]}" -eq 0 ]; then
         log "no interrupted update to recover"
@@ -7664,6 +7659,7 @@ if [ "$recover_interrupted" = 1 ]; then
 fi
 note_legacy_stack_leftovers
 refuse_interrupted_stack_transaction
+note_retained_failed_rollbacks
 refuse_per_user_source_layout
 preflight_release_apt_provenance
 warm_release_apt_indexes
