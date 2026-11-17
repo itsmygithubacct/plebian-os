@@ -2103,6 +2103,9 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/lib/pleb/capture_screenshot.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
+    /usr/local/lib/pleb/displays_gui.py
+    /usr/local/lib/pleb/screenlock.py
+    /usr/local/lib/pleb/screenlock_gui.py
     /usr/local/lib/pleb/capture_transport.so
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
@@ -2146,6 +2149,8 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/lib/pleb/.screensaver.py.new
     /usr/local/lib/pleb/session-bin/xdg-screensaver
     /usr/local/lib/pleb/session-bin/.xdg-screensaver.new
+    /usr/local/lib/pleb/notification_center.py
+    /usr/local/lib/pleb/.notification_center.py.new
 )
 
 # These fixed ancestors must already be safe. They are never removed by a

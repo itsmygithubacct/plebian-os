@@ -11,6 +11,12 @@ install and upgrade instructions (including `pleb update --to 0.2.3` for
 release-candidate machines), known issues and the 0.2.4 deferrals. The
 entries below run newest first, from the final back through RC1.
 
+- Let a failed first boot roll back completely. The provisioning transaction
+  now protects every module Pleb 0.2.3 installs under `/usr/local/lib/pleb`
+  (`displays_gui.py`, `screenlock.py`, `screenlock_gui.py`) and the
+  notification centre. Without them the rollback could not remove the
+  directory, reported itself incomplete and kept its recovery data. The test
+  that ties this list to Pleb's module list now reads the 0.2.3 pins.
 - Make an interrupted release hop recover. `plebian-os-select-closure
   --rollback` waits (up to 30 minutes, status 13 on timeout) while an update is
   still running, so its restore lands after that update's own rollback. A repeat
