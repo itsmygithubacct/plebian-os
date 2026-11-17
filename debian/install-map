@@ -38,3 +38,5 @@ plebian-desktop-base 0644 assets/desktop/plebian-os.png                       /u
 plebian-desktop-base 0644 assets/installer/ATTRIBUTION.md                     /usr/share/plebian-os/notices/installer/ATTRIBUTION.md
 plebian-desktop-base 0644 assets/COPYING.GPL-2                                /usr/share/plebian-os/notices/COPYING.GPL-2
 plebian-desktop-base 0644 provision/lightdm-gtk-greeter.conf                  /etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
+
+plebian-archive-keyring 0644 debian/keyring/plebian-archive-keyring.gpg     /usr/share/keyrings/plebian-archive-keyring.gpg

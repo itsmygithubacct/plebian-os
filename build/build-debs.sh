@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # build-debs.sh OUTDIR
 #
-# Build the four binary packages from this tree and check them against
+# Build the five binary packages from this tree and check them against
 # debian/install-map. The build is reproducible for a given SOURCE_DATE_EPOCH:
 # the same tree and epoch produce the same package contents. Exit non-zero if
 # the build or the check fails.
@@ -101,8 +101,8 @@ fi
 shopt -s nullglob
 built=("$stage"/*.deb)
 shopt -u nullglob
-if [ "${#built[@]}" -ne 4 ]; then
-    echo "expected 4 packages, found ${#built[@]}" >&2
+if [ "${#built[@]}" -ne 5 ]; then
+    echo "expected 5 packages, found ${#built[@]}" >&2
     exit 1
 fi
 rm -f "$OUTDIR"/*.deb

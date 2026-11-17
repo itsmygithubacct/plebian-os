@@ -38,3 +38,11 @@ Depends: ${misc:Depends}
 Description: Plebian-OS desktop artwork and login defaults
  The Plebian-OS wallpaper, the login greeter settings that use it, and the
  attribution and licence notices for the artwork.
+
+Package: plebian-archive-keyring
+Architecture: all
+Depends: ${misc:Depends}
+Description: Plebian-OS archive signing key
+ The public key that signs the Plebian-OS package repository. It is installed
+ where an apt source can name it with Signed-By, and is trusted for no other
+ repository.

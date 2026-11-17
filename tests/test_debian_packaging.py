@@ -5,6 +5,7 @@ carries its own list of the same files. These tests hold the two equal, with
 the installed locations written here as literals, so neither list can move a
 file or change a mode without the other.
 """
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -26,7 +27,10 @@ PACKAGES = {
     "plebian-os-tools",
     "plebian-os-firstboot",
     "plebian-desktop-base",
+    "plebian-archive-keyring",
 }
+KEYRING = "plebian-archive-keyring"
+KEY_FINGERPRINT = "1730239E771FE87ED7AB9BCFEDC605E76D3B99B0"
 
 
 def install_map():
@@ -60,10 +64,52 @@ def updater_deploy_set():
 
 class DebianPackagingTests(unittest.TestCase):
     def test_packages_install_exactly_what_the_updater_deploys(self):
-        packaged = {(destination, mode) for _, mode, _, destination in install_map()}
+        # The archive key is the one packaged file the updater never deployed.
+        core = [row for row in install_map() if row[0] != KEYRING]
+        packaged = {(destination, mode) for _, mode, _, destination in core}
         self.assertEqual(packaged, updater_deploy_set())
-        self.assertEqual(len(packaged), len(install_map()), "duplicate destination")
+        self.assertEqual(len(packaged), len(core), "duplicate destination")
         self.assertEqual(len(packaged), 31)
+        self.assertEqual(len(install_map()), 32)
+
+    def test_the_keyring_package_ships_only_the_public_archive_key(self):
+        rows = [row for row in install_map() if row[0] == KEYRING]
+        self.assertEqual(rows, [(
+            KEYRING, "0644", "debian/keyring/plebian-archive-keyring.gpg",
+            "/usr/share/keyrings/plebian-archive-keyring.gpg",
+        )])
+        data = (ROOT / rows[0][2]).read_bytes()
+        tags, bodies, at = [], [], 0
+        while at < len(data):                     # OpenPGP packets, RFC 4880 4.2
+            head = data[at]
+            self.assertTrue(head & 0x80)
+            if head & 0x40:
+                tag, first = head & 0x3F, data[at + 1]
+                if first < 192:
+                    size, used = first, 2
+                elif first < 224:
+                    size, used = ((first - 192) << 8) + data[at + 2] + 192, 3
+                else:
+                    self.assertEqual(first, 255)
+                    size, used = int.from_bytes(data[at + 2:at + 6], "big"), 6
+            else:
+                tag, kind = (head >> 2) & 0x0F, head & 0x03
+                self.assertLess(kind, 3)
+                width = (1, 2, 4)[kind]
+                size, used = int.from_bytes(data[at + 1:at + 1 + width], "big"), 1 + width
+            tags.append(tag)
+            bodies.append(data[at + used:at + used + size])
+            at += used + size
+        self.assertEqual(at, len(data))
+        self.assertEqual(tags[0], 6, "first packet is not a public key")
+        self.assertEqual(tags.count(6), 1, "more than one primary key")
+        self.assertNotIn(5, tags, "secret key packet")
+        self.assertNotIn(7, tags, "secret subkey packet")
+        self.assertIn(14, tags, "no signing subkey")
+        body = bodies[0]
+        self.assertEqual(body[0], 4, "not a version 4 key")
+        digest = hashlib.sha1(b"\x99" + len(body).to_bytes(2, "big") + body)
+        self.assertEqual(digest.hexdigest().upper(), KEY_FINGERPRINT)
 
     def test_nothing_is_installed_under_usr_local(self):
         for _, _, _, destination in install_map():
