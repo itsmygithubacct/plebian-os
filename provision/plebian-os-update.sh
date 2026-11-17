@@ -3144,7 +3144,7 @@ rollback_stack_transaction() {
         if [ -n "${PLEBIAN_OS_RELEASE_HOP_FROM:-}" ]; then
             warn "this run had already advanced the selected closure from ${PLEBIAN_OS_RELEASE_HOP_FROM} before it failed"
             warn "the stack is back on ${PLEBIAN_OS_RELEASE_HOP_FROM}, but /etc/pleb/session.env still names the target"
-            warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update', which recovers the hop)"
+            warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update --to <version>' to go forward); a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'"
             warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
         fi
     else
@@ -3155,7 +3155,7 @@ rollback_stack_transaction() {
         # pinned-new -- and the operator is left with no stated next step.
         # Say which command restores coherence.
         warn "the selected closure was NOT rolled back; /etc/pleb/session.env may still name the target"
-        warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update', which recovers the hop)"
+        warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update --to <version>' to go forward); a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'"
         warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
         warn "then 'plebian-os-update --revalidate-current' to put the machine back on it"
     fi
@@ -3200,7 +3200,7 @@ stack_transaction_cleanup() {
                 printf 'failing-command: %s\n' "${_STACK_FAIL_COMMAND:-<not captured>}"
                 printf 'rollback-complete: %s\n' \
                     "$([ "$rollback_ok" = 1 ] && echo yes || echo no)"
-                printf 'recover-with: pleb update --rollback (or pleb update: it recovers the interrupted hop)\n'
+                printf 'recover-with: pleb update --rollback (or pleb update --to <version> to go forward; a 0.2.3 or later Pleb also recovers it with a plain pleb update)\n'
                 printf 'check-first: plebian-os-select-closure --show; a manual --rollback can restore an older hop\n'
                 printf 'then: plebian-os-update --revalidate-current --restart\n'
             } > "$_STACK_TXN_DIR/failure-reason" 2>/dev/null || true
@@ -3500,7 +3500,7 @@ recover_interrupted_stack_transaction() {
                 printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
                 printf 'failing-command: plebian-os-update --recover-interrupted\n'
                 printf 'rollback-complete: no\n'
-                printf 'recover-with: pleb update --rollback (or pleb update: it recovers the interrupted hop)\n'
+                printf 'recover-with: pleb update --rollback (or pleb update --to <version> to go forward; a 0.2.3 or later Pleb also recovers it with a plain pleb update)\n'
                 printf 'check-first: plebian-os-select-closure --show; a manual --rollback can restore an older hop\n'
                 printf 'then: plebian-os-update --revalidate-current --restart\n'
             } >"$orphan/failure-reason" 2>/dev/null || true
@@ -4307,7 +4307,7 @@ warn_release_hop_split_state() {
     [ "${1:-0}" -eq 0 ] && return 0
     warn "the selected closure was already advanced ${_RELEASE_HOP_FROM:-?} -> ${_RELEASE_HOP_TO:-?} before this failure"
     warn "the previous release is still installed; /etc/pleb/session.env now names the target"
-    warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update', which recovers the hop)"
+    warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update --to <version>' to go forward); a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'"
     warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
     return 0
 }

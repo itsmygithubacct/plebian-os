@@ -1407,6 +1407,7 @@ class ClosureSelectionTests(unittest.TestCase):
                             self.assertEqual(names, {"unselected-checkouts"}, names)
                             self.assertIn("settled the interrupted release hop's marker",
                                           result.stdout)
+                            self.assertIn("the closure was already restored", result.stdout)
 
     def test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops(self):
         cases = {
@@ -1599,6 +1600,8 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertEqual((marker / "active").exists(), not settled)
                 if settled:
                     self.assertIn("settled the interrupted release hop's marker", result.stdout)
+                    self.assertIn("nothing was replaced", result.stdout)
+                    self.assertNotIn("already restored", result.stdout)
 
     def test_an_interrupted_same_tag_reselect_settles_only_a_selecting_marker(self):
         for phase, settled in (("selecting", True), ("selected", False)):
@@ -1615,6 +1618,9 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertIn("interrupted reselect", result.stdout)
                 self.assertEqual(session.read_bytes(), before)
                 self.assertEqual((marker / "active").exists(), not settled)
+                if settled:
+                    self.assertIn("settled the interrupted release hop's marker", result.stdout)
+                    self.assertIn("nothing was replaced", result.stdout)
 
     def test_a_rollback_not_bound_to_the_hops_own_record_leaves_the_marker(self):
         """A pending marker that no longer matches the files (disposition 2) is
@@ -1662,6 +1668,7 @@ class ClosureSelectionTests(unittest.TestCase):
             text = "\n".join(lines)
             self.assertIn("previous split closure restored from", text)
             self.assertIn("settled the interrupted release hop's marker", text)
+            self.assertIn("the closure was already restored", text)
             self.assertIn("this selection was already rolled back", text)
 
     def test_a_refused_rollback_is_recorded_too(self):

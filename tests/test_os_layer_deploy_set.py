@@ -256,6 +256,8 @@ class ReleaseHopSplitStateTests(unittest.TestCase):
         self.assertIn("LOG restored", out)
         self.assertIn("0.2.1", out)
         self.assertIn("pleb update --rollback", out)
+        self.assertIn("'pleb update --to <version>' to go forward", out)
+        self.assertIn("a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'", out)
         self.assertIn("plebian-os-select-closure --show", out)
         self.assertIn("can be an older hop", out)
 

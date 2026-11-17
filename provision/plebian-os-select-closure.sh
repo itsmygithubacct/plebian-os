@@ -2647,7 +2647,7 @@ done
 # must not be walked back to. When the newest record is spent, is this tag's
 # own, and the installed session and closure are the bytes it saved, there is
 # nothing left to undo: say so (exit 15). When it is spent and is this tag's
-# own but the installed closure differs, refuse (exit 4) rather than walk back
+# own but the installed closure differs, refuse (exit 16) rather than walk back
 # to an older record. Anything else continues exactly as before.
 if [ "$require_own" = 1 ] && [[ "$trusted_tag" =~ ^[0-9a-f]{40}$ ]] \
         && [ "${#every[@]}" -gt 0 ]; then
@@ -3126,7 +3126,7 @@ acknowledge_interrupted_reselect() {
                 rm -f -- "$path"
                 SELECTION_ATTEMPT=""
                 log "interrupted reselect of $target; the installed closure is unchanged and nothing was restored"
-                settle_interrupted_hop_marker selecting
+                settle_interrupted_hop_marker selecting "nothing was replaced"
                 exit 0
             fi
         fi
@@ -3337,7 +3337,7 @@ retained_failed_rollback_exists() {
 }
 
 settle_interrupted_hop_marker() {
-    local phases="${1:-selecting selected}"
+    local phases="${1:-selecting selected}" reason="${2:-the closure was already restored}"
     local tag="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" dir active phase lines value
     [ "$SELECTOR_MODE" = image ] || return 0
     [[ "$tag" =~ ^[0-9a-f]{40}$ ]] || return 0
@@ -3363,7 +3363,7 @@ settle_interrupted_hop_marker() {
     case " $phases " in *" $(cat -- "$phase") "*) ;; *) return 0 ;; esac
     ! retained_failed_rollback_exists || return 0
     rm -f -- "$active" "$phase" "$dir/baseline"
-    log "settled the interrupted release hop's marker in $dir; the closure was already restored"
+    log "settled the interrupted release hop's marker in $dir; $reason"
 }
 
 usage() {
@@ -3437,7 +3437,7 @@ case "$MODE" in
             0)
                 clear_selection_attempt
                 log "the interrupted selection had not replaced the closure; the installed closure is unchanged and nothing was restored"
-                settle_interrupted_hop_marker selecting
+                settle_interrupted_hop_marker selecting "nothing was replaced"
                 exit 0
                 ;;
             1)

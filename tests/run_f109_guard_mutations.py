@@ -181,7 +181,7 @@ MUTATIONS = (
     ),
     Mutation(
         "hop marker: a selection that replaced nothing settles only selecting",
-        '                settle_interrupted_hop_marker selecting\n                exit 0\n                ;;',
+        '                settle_interrupted_hop_marker selecting "nothing was replaced"\n                exit 0\n                ;;',
         '                settle_interrupted_hop_marker # mutation\n                exit 0\n                ;;',
         (CASE + "test_a_selection_that_replaced_nothing_settles_only_a_selecting_marker",),
     ),

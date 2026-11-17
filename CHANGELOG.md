@@ -11,6 +11,33 @@ install and upgrade instructions (including `pleb update --to 0.2.3` for
 release-candidate machines), known issues and the 0.2.4 deferrals. The
 entries below run newest first, from the final back through RC1.
 
+- Make an interrupted release hop recover. `plebian-os-select-closure
+  --rollback` waits (up to 30 minutes, status 13 on timeout) while an update is
+  still running, so its restore lands after that update's own rollback. A repeat
+  of a rollback answers "already rolled back" from the hop's own record and never
+  restores an older one; a changed closure gets its own refusal. After a
+  finished rollback, or where an interrupted selection replaced nothing, it
+  settles the hop marker a dropped driver left in the Pleb state directory
+  (image only, matching tag object, phase `selecting` or `selected`, no retained
+  failed rollback), so a 0.2.2 Pleb's plain `pleb update` is not blocked. Its
+  rollback messages are also appended to `update.log` (`plebian-os-select-closure:`).
+- Survive a hung-up terminal: the selector and the updater no longer abort on a
+  message they cannot print, and the updater points a dead terminal's
+  descriptors at `/dev/null`. The next update, and `--recover-interrupted`, name
+  a retained failed rollback and print the commands to remove it. The updater's
+  advice names `pleb update --rollback` instead of a bare selector rollback.
+- Pleb: a hangup is deferred like Ctrl-C and SIGTERM in every `pleb update`;
+  hop-marker recovery falls back to the recorded closure when the selector has
+  nothing left to roll back; the update lock is handed to the reconcile on an
+  image and on a standalone machine, and a failed reconcile names the command to
+  run; the rescue terminal takes typing at once (`xterm -name pleb-recovery`, one
+  Openbox rule, `xdotool`, now in Pleb's package list and the recorded copy).
+- The release acceptance check requires no `release-hop` record after a
+  rollback: Pleb keeps one generation, so a record from an earlier hop is not
+  restored.
+- Kilix: the model wizard asks only for an install confirmation on a notice
+  licence, and the per-Ask verification record is no longer printed.
+
 - `--rollback` restores the last selection even when two selections land
   in one second (a release candidate and its final, back to back) or the
   clock was set back between selections made by 0.2.3 or later. It could restore the record from the selection before,
