@@ -2470,6 +2470,8 @@ echo "==> building the core packages"
 pkg_debs="$WORK/core-debs"
 mkdir -p "$pkg_debs"
 "$HERE/build/build-debs.sh" "$pkg_debs"
+echo "==> adding the pinned Debian packages the core depends on"
+"$HERE/build/fetch-disc-closure.sh" "$pkg_debs"
 echo "==> signing the installer package repository"
 "$HERE/build/write-disc-apt.sh" "$pkg_debs" "$EXTRACT/plebian-os/apt"
 

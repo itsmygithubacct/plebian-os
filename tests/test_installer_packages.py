@@ -20,7 +20,13 @@ PRESEED = ROOT / "preseed" / "preseed.cfg"
 REMASTER = ROOT / "build" / "remaster-iso.sh"
 SIGN = ROOT / "build" / "write-disc-apt.sh"
 BUILD = ROOT / "build" / "build-debs.sh"
-INSTALL = "in-target apt-get install -y --no-install-recommends"
+DISC_ONLY = (
+    "-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/plebian-os-installer.list "
+    "-o Dir::Etc::sourceparts=/var/empty"
+)
+INSTALL = "in-target apt-get " + DISC_ONLY + " install -y --no-install-recommends"
+LOCK = ROOT / "build" / "disc-apt-closure.lock"
+FETCH = ROOT / "build" / "fetch-disc-closure.sh"
 REMOVE = (
     "rm -f /target/etc/apt/sources.list.d/plebian-os-installer.list "
     "/target/etc/apt/keyrings/plebian-os-installer.gpg"
@@ -52,7 +58,7 @@ class InstallerPackageTests(unittest.TestCase):
     def test_late_command_installs_exactly_the_declared_packages(self):
         late = late_command()
         match = re.search(
-            r"in-target apt-get install -y --no-install-recommends ([^;\\]+)",
+            re.escape(INSTALL) + r" ([^;\\]+)",
             late,
         )
         self.assertIsNotNone(match)
@@ -239,6 +245,96 @@ class InstallerPackageTests(unittest.TestCase):
             ],
             capture_output=True, text=True, timeout=30,
         )
+
+
+def outside_dependencies():
+    text = (ROOT / "debian" / "control").read_text()
+    ours = set(control_packages())
+    names = set()
+    for field in re.findall(r"^Depends:((?:.*\n(?:[ \t].*\n)*))", text, flags=re.M):
+        for item in field.replace("\n", " ").split(","):
+            item = item.strip()
+            if item and not item.startswith("${"):
+                names.add(re.sub(r"\s*\(.*\)$", "", item))
+    return names - ours
+
+
+def lock_rows(path=LOCK):
+    rows = []
+    for line in path.read_text().splitlines():
+        if line and not line.startswith("#"):
+            rows.append(line.split(" "))
+    return rows
+
+
+class DiscClosureTests(unittest.TestCase):
+    def test_lock_carries_every_outside_dependency(self):
+        wanted = outside_dependencies()
+        self.assertEqual(
+            wanted,
+            {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"},
+        )
+        carried = {row[0].split("_", 1)[0] for row in lock_rows()}
+        self.assertEqual(wanted - carried, set())
+
+    def test_lock_rows_are_pinned_to_a_dated_snapshot(self):
+        rows = lock_rows()
+        self.assertGreater(len(rows), len(outside_dependencies()))
+        for row in rows:
+            self.assertEqual(len(row), 4, row)
+            name, digest, size, url = row
+            self.assertRegex(name, r"^[a-z0-9][a-z0-9.+-]*_[^_/]+_(amd64|all)\.deb$")
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+            self.assertRegex(size, r"^[1-9][0-9]*$")
+            self.assertRegex(
+                url, r"^https://snapshot\.debian\.org/archive/[a-z-]+/\d{8}T\d{6}Z/pool/"
+            )
+        self.assertEqual(len({row[0] for row in rows}), len(rows))
+
+    def test_remaster_adds_the_closure_before_signing(self):
+        remaster = REMASTER.read_text()
+        build = remaster.index('"$HERE/build/build-debs.sh" "$pkg_debs"')
+        fetch = remaster.index('"$HERE/build/fetch-disc-closure.sh" "$pkg_debs"')
+        sign = remaster.index('"$HERE/build/write-disc-apt.sh" "$pkg_debs"')
+        self.assertLess(build, fetch)
+        self.assertLess(fetch, sign)
+
+    def _fetch(self, tmp, content, recorded):
+        tmp = Path(tmp)
+        cache, dest = tmp / "cache", tmp / "dest"
+        cache.mkdir()
+        digest = __import__("hashlib").sha256(recorded).hexdigest()
+        (cache / (digest + ".deb")).write_bytes(content)
+        lock = tmp / "lock"
+        lock.write_text(
+            "# test\ndemo_1_all.deb %s %d https://snapshot.debian.org/archive/"
+            "debian/20260101T000000Z/pool/main/d/demo/demo_1_all.deb\n"
+            % (digest, len(recorded))
+        )
+        env = dict(
+            os.environ,
+            PLEBIAN_OS_DISC_CLOSURE_LOCK=str(lock),
+            PLEBIAN_OS_DISC_CLOSURE_CACHE=str(cache),
+            PLEBIAN_OS_DISC_CLOSURE_OFFLINE="1",
+        )
+        result = subprocess.run(
+            ["bash", str(FETCH), str(dest)],
+            env=env, capture_output=True, text=True, timeout=30,
+        )
+        return result, dest / "demo_1_all.deb"
+
+    def test_fetch_delivers_a_cached_file_that_matches_the_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, delivered = self._fetch(tmp, b"right bytes", b"right bytes")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(delivered.read_bytes(), b"right bytes")
+
+    def test_fetch_refuses_a_file_that_does_not_match_the_lock(self):
+        # Same length, different bytes: only the digest can tell them apart.
+        with tempfile.TemporaryDirectory() as tmp:
+            result, delivered = self._fetch(tmp, b"wrong bytes", b"right bytes")
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertFalse(delivered.exists())
 
 
 if __name__ == "__main__":
