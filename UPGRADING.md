@@ -286,7 +286,7 @@ above:
     with `passwd` and another with `sudo passwd NAME` (or lock it with
     `sudo passwd -l NAME`), then run enable again.
   - Enable and disable end by printing the real state, and
-    `plebian-os-ssh-server status` reports the same.
+    `sudo plebian-os-ssh-server status` reports the same.
   - A failed enable turns SSH off again, unless it was on before the run.
   - A half-installed openssh-server is held off (its units are masked), so a
     later `dpkg --configure -a` does not start it; the next successful enable
