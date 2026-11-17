@@ -2622,14 +2622,17 @@ done
 # leaves an older unspent one that must not be mistaken for this hop's, and
 # must not be walked back to. When the newest record is spent, is this tag's
 # own, and the installed session and closure are the bytes it saved, there is
-# nothing left to undo: say so (exit 15). Anything else continues exactly as
-# before.
+# nothing left to undo: say so (exit 15). When it is spent and is this tag's
+# own but the installed closure differs, refuse (exit 4) rather than walk back
+# to an older record. Anything else continues exactly as before.
 if [ "$require_own" = 1 ] && [[ "$trusted_tag" =~ ^[0-9a-f]{40}$ ]] \
         && [ "${#every[@]}" -gt 0 ]; then
     newest_status=0
     newest="$(newest_recovery_record "${every[@]}")" || newest_status=$?
-    if [ "$newest_status" = 0 ] && [ -f "$newest/restored" ] \
-            && [ ! -L "$newest/restored" ] \
+    # Two newest records the order of which cannot be told: refuse, and never
+    # guess which one this hop wrote.
+    [ "$newest_status" = 0 ] || exit "$newest_status"
+    if [ -f "$newest/restored" ] && [ ! -L "$newest/restored" ] \
             && refuse_unrelated_recovery_record "$newest" 1 "$trusted_tag"; then
         installed_as_saved=1
         for pair in "session:$session_path:session.env" "closure:$closure_path:closure.env"; do
@@ -2643,6 +2646,9 @@ if [ "$require_own" = 1 ] && [[ "$trusted_tag" =~ ^[0-9a-f]{40}$ ]] \
             esac
         done
         [ "$installed_as_saved" != 1 ] || exit 15
+        # This hop's own record is spent but the installed closure is not what
+        # it saved: never fall back to an older record, same tag or not.
+        exit 4
     fi
 fi
 [ "${#candidates[@]}" -gt 0 ] || exit 4
@@ -3260,6 +3266,71 @@ wait_for_running_update() {
     [ "$said" = 0 ] || log "the running update finished; restoring the previous closure"
 }
 
+# ── a finished rollback settles the hop marker Pleb left behind ─────────────
+# A driver that dies after this rollback restored the closure (a dropped
+# terminal is the usual cause) leaves Pleb's marker, release-hop/active with
+# phase `selecting` or `selected`, in the user's state directory. The next
+# `pleb update` would then try to recover a hop that is already undone, and a
+# Pleb from before 0.2.3 cannot: its plain-update recovery runs the updater
+# while holding the update lock the updater needs. Once the rollback has fully
+# succeeded (or answered "already rolled back"), remove that marker when it is
+# provably the one for this rollback:
+#   - image mode, and a request bound to a trusted tag object (the hop driver);
+#   - release-hop is a real directory and its files are regular files owned by
+#     the invoking user, under the state directory derived for this run;
+#   - active has the 4-line form of Pleb 0.2.2 or the 5-line form of later
+#     ones, well formed, and its third line is exactly the trusted tag object;
+#   - phase is `selecting` or `selected` (a `complete` hop is a finished one
+#     that --rollback can still undo, and `rolling-back` belongs to a driver
+#     that is in the middle of its own rollback);
+#   - no retained failed rollback (a dead update's stack-rollback directory
+#     whose note says rollback-complete: no) exists: that half-restored stack
+#     still needs the reconcile the marker would trigger.
+# Only active, phase and baseline go. Standalone machines keep theirs: Pleb's
+# recovery also puts their checkouts back. This runs only after success: every
+# failure, and the wait for a running update (status 13), exits earlier.
+retained_failed_rollback_exists() {
+    local dir
+    for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
+        [ -f "$dir/failure-reason" ] && [ ! -L "$dir/failure-reason" ] || continue
+        grep -qx -- 'rollback-complete: no' "$dir/failure-reason" 2>/dev/null || continue
+        ! stack_transaction_owner_alive "$dir" || continue
+        return 0
+    done
+    return 1
+}
+
+settle_interrupted_hop_marker() {
+    local tag="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" dir active phase lines value
+    [ "$SELECTOR_MODE" = image ] || return 0
+    [[ "$tag" =~ ^[0-9a-f]{40}$ ]] || return 0
+    [ -n "${PLEB_STATE_HOME:-}" ] || return 0
+    dir="$PLEB_STATE_HOME/release-hop"
+    active="$dir/active"
+    phase="$dir/phase"
+    [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || return 0
+    for value in "$active" "$phase"; do
+        [ -f "$value" ] && [ ! -L "$value" ] \
+            && [ "$(stat -c '%u' -- "$value" 2>/dev/null)" = "$EUID" ] || return 0
+    done
+    lines="$(wc -l <"$active")"
+    { [ "$lines" = 4 ] || [ "$lines" = 5 ]; } || return 0
+    [[ "$(sed -n 1p -- "$active")" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 0
+    [[ "$(sed -n 2p -- "$active")" =~ ^[0-9a-f]{40}$ ]] || return 0
+    [ "$(sed -n 3p -- "$active")" = "$tag" ] || return 0
+    [[ "$(sed -n 4p -- "$active")" =~ ^[0-9a-f]{64}$ ]] || return 0
+    if [ "$lines" = 5 ]; then
+        [[ "$(sed -n 5p -- "$active")" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?(-rc[1-9][0-9]*)?$ ]] \
+            || return 0
+    fi
+    case "$(cat -- "$phase")" in selecting|selected) ;; *) return 0 ;; esac
+    ! retained_failed_rollback_exists || return 0
+    rm -f -- "$active" "$phase" "$dir/baseline"
+    log "settled the interrupted release hop's marker in $dir; the closure was already restored"
+}
+
 usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
 }
@@ -3348,6 +3419,7 @@ case "$MODE" in
         else
             rollback_previous_closure
         fi
+        settle_interrupted_hop_marker
         ;;
     select)
         [ -n "$TARGET" ] \

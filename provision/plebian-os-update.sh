@@ -3144,8 +3144,8 @@ rollback_stack_transaction() {
         if [ -n "${PLEBIAN_OS_RELEASE_HOP_FROM:-}" ]; then
             warn "this run had already advanced the selected closure from ${PLEBIAN_OS_RELEASE_HOP_FROM} before it failed"
             warn "the stack is back on ${PLEBIAN_OS_RELEASE_HOP_FROM}, but /etc/pleb/session.env still names the target"
-            warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
-            warn "(if it reports there is no closure to roll back to, the closure is already the previous one; nothing more to do)"
+            warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update', which recovers the hop)"
+            warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
         fi
     else
         warn "automatic stack rollback was incomplete; recovery data retained at $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
@@ -3155,8 +3155,8 @@ rollback_stack_transaction() {
         # pinned-new -- and the operator is left with no stated next step.
         # Say which command restores coherence.
         warn "the selected closure was NOT rolled back; /etc/pleb/session.env may still name the target"
-        warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
-        warn "(if it reports there is no closure to roll back to, the closure is already the previous one: skip it)"
+        warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update', which recovers the hop)"
+        warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
         warn "then 'plebian-os-update --revalidate-current' to put the machine back on it"
     fi
     return "$failed"
@@ -3200,8 +3200,8 @@ stack_transaction_cleanup() {
                 printf 'failing-command: %s\n' "${_STACK_FAIL_COMMAND:-<not captured>}"
                 printf 'rollback-complete: %s\n' \
                     "$([ "$rollback_ok" = 1 ] && echo yes || echo no)"
-                printf 'recover-with: plebian-os-select-closure --rollback\n'
-                printf 'already-rolled-back: if that reports there is no closure to roll back to, the closure is already the previous one; skip it\n'
+                printf 'recover-with: pleb update --rollback (or pleb update: it recovers the interrupted hop)\n'
+                printf 'check-first: plebian-os-select-closure --show; a manual --rollback can restore an older hop\n'
                 printf 'then: plebian-os-update --revalidate-current --restart\n'
             } > "$_STACK_TXN_DIR/failure-reason" 2>/dev/null || true
             warn "why it stopped: $_STACK_TXN_DIR/failure-reason"
@@ -3340,6 +3340,16 @@ note_legacy_stack_leftovers() {
 # selected closure, not restored from that data. Nothing else says the data is
 # still there once the terminal that showed the first warning is gone, so say it
 # at the start of the next update and of --recover-interrupted.
+root_snapshot_in_use() {
+    local live
+    for live in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$live" ] && [ ! -L "$live" ] || continue
+        stack_transaction_owner_alive "$live" || continue
+        [ "$(head -n 1 -- "$live/root-transaction" 2>/dev/null || true)" != "$1" ] || return 0
+    done
+    return 1
+}
+
 note_retained_failed_rollbacks() {
     local dir root noted=0
     local -a removals=()
@@ -3356,10 +3366,15 @@ note_retained_failed_rollbacks() {
         root="$(head -n 1 -- "$dir/root-transaction" 2>/dev/null || true)"
         warn "  $dir${root:+ and $root}"
         removals+=("rm -rf -- $(printf '%q' "$dir")")
-        # The note file is user-writable: only a path of exactly the shape mktemp
-        # gives the root snapshot is ever offered as a command.
+        # The note file is user-writable. A root path is offered as a command
+        # only if it has exactly the shape mktemp gives the root snapshot and no
+        # running update's transaction names it.
         if [[ "$root" =~ ^/var/lib/plebian-os/update-rollback\.[A-Za-z0-9]+$ ]]; then
-            removals+=("sudo rm -rf -- $(printf '%q' "$root")")
+            if root_snapshot_in_use "$root"; then
+                warn "  ($root belongs to a running update; leave it)"
+            else
+                removals+=("sudo rm -rf -- $(printf '%q' "$root")")
+            fi
         fi
     done
     if [ "$noted" = 1 ]; then
@@ -3416,8 +3431,9 @@ report_selection_against_installation() {
         warn "could not compare /etc/pleb/closure.env with the installation; if they differ, choose one:"
     fi
     warn "  plebian-os-update --revalidate-current   installs the selected release"
-    warn "  plebian-os-select-closure --rollback     selects the previous closure again"
-    warn "  (it reports there is no closure to roll back to when the closure is already the previous one)"
+    warn "  pleb update --rollback                   puts the previous closure back (it names the hop it undoes)"
+    warn "  plebian-os-select-closure --show         shows the closure that is selected; a manual --rollback restores the newest"
+    warn "                                           record not yet restored, which can be an older hop"
 }
 
 recover_interrupted_stack_transaction() {
@@ -3484,8 +3500,8 @@ recover_interrupted_stack_transaction() {
                 printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
                 printf 'failing-command: plebian-os-update --recover-interrupted\n'
                 printf 'rollback-complete: no\n'
-                printf 'recover-with: plebian-os-select-closure --rollback\n'
-                printf 'already-rolled-back: if that reports there is no closure to roll back to, the closure is already the previous one; skip it\n'
+                printf 'recover-with: pleb update --rollback (or pleb update: it recovers the interrupted hop)\n'
+                printf 'check-first: plebian-os-select-closure --show; a manual --rollback can restore an older hop\n'
                 printf 'then: plebian-os-update --revalidate-current --restart\n'
             } >"$orphan/failure-reason" 2>/dev/null || true
             warn "recovery was incomplete; recovery data retained at $orphan${root:+ and $root}"
@@ -4291,8 +4307,8 @@ warn_release_hop_split_state() {
     [ "${1:-0}" -eq 0 ] && return 0
     warn "the selected closure was already advanced ${_RELEASE_HOP_FROM:-?} -> ${_RELEASE_HOP_TO:-?} before this failure"
     warn "the previous release is still installed; /etc/pleb/session.env now names the target"
-    warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
-    warn "(if it reports there is no closure to roll back to, the closure is already the previous one)"
+    warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update', which recovers the hop)"
+    warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
     return 0
 }
 

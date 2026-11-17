@@ -843,7 +843,7 @@ keys to match `pleb update --show` and the RC manifest. After the hop the
 closure's tag object must equal `--release-tag-object`. Rollback must restore
 the session, closure, settings, the selector and updater, the engine
 generation, and every component checkout HEAD, and must leave no
-`release-hop` record (`active`, `phase`, `baseline`). Pleb keeps one generation
+`release-hop` record (`active`, `phase`, `baseline`, `unselected-checkouts`). Pleb keeps one generation
 of rollback: a record that a guest carried from an earlier completed hop is
 replaced when the new hop starts and is not restored by the rollback. A fresh image has
 no closure file, and the byte comparison is not recorded for that absence.

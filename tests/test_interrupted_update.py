@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import pty
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -132,6 +133,18 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertIn(f"  sudo rm -rf -- {root}", result.stderr)
         self.assertEqual(result.stderr.count("sudo rm -rf"), 1, result.stderr)
         self.assertNotIn("../..", result.stderr.split("remove it with")[-1])
+        # A root snapshot that a running update's transaction names is not offered.
+        live = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(live.wait)
+        self.addCleanup(live.kill)
+        start2 = Path(f"/proc/{live.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+        self.orphan("stack-rollback.Run001", root_transaction=root + "\n",
+                    owner=f"pid={live.pid}\nstart={start2}\nboot={self.boot_id()}\n")
+        result = self.run_lib("note_retained_failed_rollbacks\n")
+        self.assertNotIn("sudo rm -rf", result.stderr)
+        self.assertIn("belongs to a running update", result.stderr)
+        self.assertIn(f"  rm -rf -- {kept}", result.stderr)
+        shutil.rmtree(self.state / "stack-rollback.Run001")
         # Not an interrupted update, so nothing refuses and nothing is recovered.
         result = self.run_lib("refuse_interrupted_stack_transaction\necho CONTINUED\n")
         self.assertEqual((result.returncode, result.stdout), (0, "CONTINUED\n"), result.stderr)
@@ -355,8 +368,10 @@ class InterruptedUpdateTests(unittest.TestCase):
                 self.assertIn("but release 0.2.2 (Plebian-OS 111111111111) is installed (differs: PLEBIAN_OS_REF KILIX_REF)", split.stderr)
                 self.assertIn("plebian-os-update --revalidate-current   installs the selected release",
                               split.stderr)
-                self.assertIn("plebian-os-select-closure --rollback     selects the previous closure again",
+                self.assertIn("pleb update --rollback                   puts the previous closure back",
                               split.stderr)
+                self.assertIn("a manual --rollback restores the newest", split.stderr)
+                self.assertNotIn("no closure to roll back to", split.stderr)
         self.orphan("stack-rollback.NoVer1", root_transaction=ROOT_TXN + "\n")
         unknown = self.recover_with_installed(newer, installed=None)
         self.assertIn("could not compare /etc/pleb/closure.env with the installation", unknown.stderr)

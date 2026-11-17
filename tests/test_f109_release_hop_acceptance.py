@@ -1083,7 +1083,7 @@ write_reboot_verifier "$report/verify.sh"
                 self.assertNotEqual(left.returncode, 0)
                 self.assertIn(f"rollback did not restore {active}", left.stderr)
             active.unlink()
-            for leftover in ("phase", "baseline"):
+            for leftover in ("phase", "baseline", "unselected-checkouts"):
                 (state / leftover).write_text("x\n")
                 left = run(check)
                 self.assertNotEqual(left.returncode, 0, leftover)

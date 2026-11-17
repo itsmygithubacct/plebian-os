@@ -371,40 +371,69 @@ under `/var/lib/plebian-os`. When the terminal has hung up, the selector and the
 updater lose only their terminal messages: the updater's lines are in
 `update.log`, and its rollback and the selector's restore still run. The
 selector's rollback has by then restored `/etc/pleb/session.env` and removed
-`closure.env`, but Pleb's hop marker still says `selected`, and the next
-`pleb update` recovers it. What that does depends on the Pleb installed:
+`closure.env`. Pleb's hop marker (`release-hop/active` and `phase`, `selected`
+or `selecting`, in the Pleb state directory) may still be there. What happens
+next:
 
-- **A Pleb from before this change, including 0.2.2, which is the usual case
-  after a dropped 0.2.2 to 0.2.3 hop because the rollback puts its checkouts
-  back.** Its recovery asks the selector to roll back; the selector answers
-  "already rolled back" (status 0) when the hop's own record is the newest one,
-  already restored, and `session.env` and `closure.env` are the bytes it saved.
-  The 0.2.2 Pleb then runs the installed updater with no arguments, and the
-  0.2.2 updater moves to the latest published release. So the next
-  `pleb update`, and `pleb update --rollback` as well, ends on 0.2.3 and not on
-  0.2.2. There is no supported way to settle on 0.2.2 from that state.
-- **A Pleb with this change.** Its recovery runs `plebian-os-update
-  --revalidate-current`, which stays on the selected 0.2.2, and then clears the
-  hop marker; `pleb update --to 0.2.3` carries on with the hop afterwards. When
-  the selector's rollback fails with the marker still `selected`, Pleb treats
-  the closure as already restored only if the `session.env` and `closure.env`
-  hashes equal the ones it recorded before the hop and, on an image, the
-  installed selector is no longer the target's. It prints the selector's status
-  and carries on; otherwise the hop stays blocked.
+- **The selector settles the marker.** After a rollback that fully succeeded,
+  or one that answers "already rolled back", the 0.2.3 selector removes `active`,
+  `phase` and `baseline` itself and logs "settled the interrupted release hop's
+  marker". It does this only on an image, for a request bound to the hop's tag
+  object, when `active` is well formed (4 lines as written by Pleb 0.2.2, or 5)
+  with that tag object as its third line, `phase` is `selecting` or `selected`,
+  every file is a regular file owned by the invoking user, and no retained
+  failed-rollback directory exists. A `complete` marker, a marker for another
+  tag, a standalone machine, a failed rollback and the wait for a running update
+  (status 13) leave it alone. After this the next plain `pleb update` finds
+  nothing to recover and updates normally.
+- **A marker is left** when the selector never got that far (its caller was
+  killed first), or a retained failed-rollback directory exists, or the marker
+  did not match. Then the next `pleb update` recovers it, and which Pleb is
+  installed decides how:
 
-The 0.2.2 updater's `--revalidate-current` redeploys the OS layer from the
-pinned Plebian-OS checkout (its refresh step, then the dependencies, the native
-runtime and the Pleb and Kilix checkouts at their pins). It does not restore a
-part-way rollback from the retained data: the retained directories do not block
-updates, `--recover-interrupted` leaves them alone, and the next update names
-them with the exact commands to remove them. Files that only 0.2.3 installs
-(its Qt, mpv and SSH helpers under `/usr/local/sbin`, for example) stay where
-the interrupted update put them until a later 0.2.3 update replaces them.
+- **The 0.2.2 Pleb (2dd44b0), the usual case after a dropped 0.2.2 to 0.2.3 hop
+  that the user ran with `pleb update --to 0.2.3`, because the rollback puts its
+  checkouts back.** That hop wrote a 4-line marker, which this Pleb reads. A plain
+  `pleb update` cannot finish the recovery: it holds the update lock while the
+  updater it runs needs the same lock, so it prints "another Pleb/Plebian-OS
+  update is already running" and the hop stays blocked. `pleb update --rollback`
+  and `pleb update --to 0.2.3` hand the lock over. Their recovery asks the
+  selector to roll back (it answers "already rolled back" when the hop's own
+  record is the newest one, already restored, and `session.env` and `closure.env`
+  are the bytes it saved) and then runs the installed updater with no arguments.
+  By the code, the 0.2.2 updater moves to the latest published release, so both
+  commands end on 0.2.3 and not on 0.2.2. No route to stay on 0.2.2 is
+  documented here.
+- **A hop run through the `pleb-release-hop` driver** (the legacy migration route
+  in the Pleb README, which candidates need) leaves a 5-line marker. The
+  installed 0.2.2 Pleb refuses it as "malformed", so recovery goes through the
+  driver again, with `--to` or `--rollback`.
+- **A Pleb from RC9 on, including the 0.2.3 Pleb.** On an image its recovery
+  runs `plebian-os-update --revalidate-current`, which stays on the selected
+  release, and then clears the hop marker; `pleb update --to 0.2.3` carries on
+  with the hop afterwards. A standalone machine reconciles with a `pleb update`
+  pinned to the closure (or to the checkout positions recorded before its first
+  selection). From the 0.2.3 Pleb on, a plain `pleb update` also hands its update
+  lock to that updater. When the selector's rollback fails with the marker still
+  `selected`, Pleb treats the closure as already restored only if the
+  `session.env` and `closure.env` hashes equal the ones it recorded before the
+  hop and, on an image, the installed selector is no longer the target's. It
+  prints the selector's status and carries on; otherwise the hop stays blocked.
 
-If the failure note, the updater or the selector tells you to run
-`plebian-os-select-closure --rollback` and it answers that there is no closure
-to roll back to, the closure is already the previous one: skip that step and run
-`plebian-os-update --revalidate-current`.
+On an image, the 0.2.2 updater's `--revalidate-current` redeploys the OS layer
+from the pinned Plebian-OS checkout (its refresh step, then the dependencies,
+the native runtime and the Pleb and Kilix checkouts at their pins). It does not
+restore a part-way rollback from the retained data: the retained directories do
+not block updates, `--recover-interrupted` leaves them alone, and the next
+update names them with the commands to remove them. Files that only 0.2.3
+installs (its Qt, mpv and SSH helpers under `/usr/local/sbin`, for example) stay
+where the interrupted update put them until a later 0.2.3 update replaces them.
+
+A manual `plebian-os-select-closure --rollback` has no trusted tag. It restores
+the newest record not yet restored, which on a machine with selection history can
+be an older hop's. To undo the hop that was interrupted, use `pleb update
+--rollback` (or `pleb update`, which recovers it), and look at
+`plebian-os-select-closure --show` first if in doubt.
 
 A same-tag reselect interrupted before the selection is pending, such as the
 RC9 → 0.2.3 hop, is recovered as an interrupted reselect when the release

@@ -1351,6 +1351,232 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(session.read_bytes(), original)
             self.assertFalse(closure.exists())
 
+    # ── a finished rollback settles the hop marker Pleb left behind ─────────
+    def _hop_marker(self, base, tag, lines=4, phase="selected", tag_line="v0.2.1",
+                    target="0.2.1"):
+        state = base / "home/.local/gpu_terminal/pleb/state"
+        marker = state / "release-hop"
+        marker.mkdir(parents=True, exist_ok=True, mode=0o700)
+        rows = [target, "a" * 40, tag, "b" * 64, tag_line][:lines]
+        (marker / "active").write_text("\n".join(rows) + "\n")
+        (marker / "phase").write_text(phase + "\n")
+        (marker / "baseline").write_text("absent\nabsent\n")
+        return marker
+
+    def _spent_hop(self, base):
+        session = self._selected_split_fixture(base)
+        tag = subprocess.run(
+            ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.2.1"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        tagged = {"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag,
+                  "PLEBIAN_OS_CLOSURE_LAYOUT": "split"}
+        return session, tag, tagged
+
+    def test_a_finished_rollback_settles_the_hop_marker_it_belongs_to(self):
+        for lines in (4, 5):
+            for retained in (False, True):
+                for repeat in (False, True):
+                    with self.subTest(lines=lines, retained=retained, repeat=repeat), \
+                            tempfile.TemporaryDirectory() as td:
+                        base = Path(td)
+                        session, tag, tagged = self._spent_hop(base)
+                        state = base / "home/.local/gpu_terminal/pleb/state"
+                        if repeat:
+                            first = self._run(base, "--rollback", env_extra=tagged)
+                            self.assertEqual(first.returncode, 0, first.stderr)
+                        marker = self._hop_marker(base, tag, lines)
+                        (marker / "unselected-checkouts").write_text("kept\n")
+                        if retained:
+                            kept = state / "stack-rollback.Kept01"
+                            kept.mkdir(parents=True, mode=0o700)
+                            (kept / "owner").write_text("pid=999999\nstart=1\nboot=gone\n")
+                            (kept / "failure-reason").write_text("rollback-complete: no\n")
+                        result = self._run(base, "--rollback", env_extra=tagged)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        if repeat:
+                            self.assertIn("already rolled back", result.stdout)
+                        names = {p.name for p in marker.iterdir()}
+                        if retained:
+                            self.assertTrue({"active", "phase", "baseline"} <= names, names)
+                            self.assertNotIn("settled", result.stdout)
+                        else:
+                            self.assertEqual(names, {"unselected-checkouts"}, names)
+                            self.assertIn("settled the interrupted release hop's marker",
+                                          result.stdout)
+
+    def test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops(self):
+        cases = {
+            "another tag object": dict(tag="2" * 40),
+            "a complete hop": dict(phase="complete"),
+            "a driver mid-rollback": dict(phase="rolling-back"),
+            "a malformed marker": dict(lines=3),
+            "an unknown phase": dict(phase="sideways"),
+        }
+        for name, change in cases.items():
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                session, tag, tagged = self._spent_hop(base)
+                options = {"tag": tag, **change}
+                marker = self._hop_marker(base, options.pop("tag"), **options)
+                result = self._run(base, "--rollback", env_extra=tagged)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual({p.name for p in marker.iterdir()},
+                                 {"active", "phase", "baseline"})
+        with self.subTest(case="a symlinked marker file"), tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            marker = self._hop_marker(base, tag)
+            real = marker / "active.real"
+            (marker / "active").rename(real)
+            (marker / "active").symlink_to(real)
+            result = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((marker / "phase").exists())
+        with self.subTest(case="a request with no trusted tag"), tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            marker = self._hop_marker(base, tag)
+            result = self._run(base, "--rollback",
+                               env_extra={"PLEBIAN_OS_CLOSURE_LAYOUT": "split"})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((marker / "active").exists())
+        with self.subTest(case="a standalone machine"), tempfile.TemporaryDirectory() as td:
+            # Pleb's own recovery also puts a standalone machine's checkouts
+            # back, so its marker stays.
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            marker = self._hop_marker(base, tag)
+            result = self._run(base, "--rollback", env_extra={
+                **tagged, "PLEBIAN_OS_SELECTOR_MODE": "standalone",
+                "PLEBIAN_OS_SELECTOR_DST": "", "PLEBIAN_OS_UPDATER_DST": ""})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("previous split closure restored", result.stdout)
+            self.assertEqual({p.name for p in marker.iterdir()},
+                             {"active", "phase", "baseline"})
+        with self.subTest(case="a failed rollback"), tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            marker = self._hop_marker(base, tag)
+            failed = self._run(base, "--rollback", env_extra=tagged,
+                               fail_after="rollback-session")
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertTrue((marker / "active").exists())
+
+    def test_the_published_022_recovery_finds_nothing_after_the_marker_is_settled(self):
+        """2dd44b0's own recovery, unchanged: with the marker its 4-line form
+        left behind it tries to recover the hop (and a plain pleb update could
+        not finish that); once the rollback settled the marker it returns at
+        once with nothing to do."""
+        pleb_repo = os.environ.get("PLEBIAN_OS_PLEB_REPO")
+        if not pleb_repo:
+            self.skipTest("PLEBIAN_OS_PLEB_REPO is not set")
+        published = subprocess.run(
+            ["git", "-C", pleb_repo, "cat-file", "-t", "2dd44b0"],
+            capture_output=True, text=True)
+        if published.returncode != 0:
+            self.skipTest("the 0.2.2 Pleb commit is not in PLEBIAN_OS_PLEB_REPO")
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            old = base / "pleb-022"
+            old.mkdir()
+            archive = subprocess.Popen(["git", "-C", pleb_repo, "archive", "2dd44b0"],
+                                       stdout=subprocess.PIPE)
+            subprocess.run(["tar", "-x", "-C", str(old)], stdin=archive.stdout, check=True)
+            archive.stdout.close()
+            self.assertEqual(archive.wait(), 0)
+            session, tag, tagged = self._spent_hop(base)
+            marker = self._hop_marker(base, tag, lines=4, target="0.2.1")
+            storage = base / "home/.local/gpu_terminal/pleb"
+            env = {"HOME": str(base / "home"), "PATH": os.environ["PATH"], "LANG": "C",
+                   "PLEB_STORAGE_HOME": str(storage),
+                   "PLEB_STATE_HOME": str(storage / "state"),
+                   "PLEB_CACHE_HOME": str(storage / "cache")}
+            def recover():
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c",
+                     f"PLEB_ROOT={old}; . {old}/lib/common.sh; . {old}/lib/closure.sh\n"
+                     'pleb_recover_incomplete_release_hop\n'
+                     'echo "RESULT=[${_PLEB_HOP_RECOVERY_RESULT:-}]"'],
+                    env=env, capture_output=True, text=True, check=False)
+            before = recover()
+            self.assertNotEqual(before.returncode, 0, "the marker is still an interrupted hop")
+            rolled = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(rolled.returncode, 0, rolled.stderr)
+            self.assertFalse((marker / "active").exists())
+            after = recover()
+            self.assertEqual((after.returncode, after.stdout, after.stderr),
+                             (0, "RESULT=[]\n", ""))
+
+    def test_a_hop_rollback_never_walks_back_to_an_older_record(self):
+        """Once the newest record is this tag's own and spent, nothing falls
+        through to an older one, whatever the installed state or timing is."""
+        with self.subTest(case="the closure changed after the rollback"), \
+                tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            own = self._recovery_records(base)[0]
+            earlier = own.parent / "closure-rollback.20200101T000000Z.AAAAAA"
+            shutil.copytree(own, earlier)
+            (earlier / "session.env").write_bytes(b"# an older hop's saved session\n")
+            first = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            with session.open("a") as stream:
+                stream.write("OPERATOR_NOTE=changed-since\n")
+            kept = session.read_bytes()
+            again = self._run(base, "--rollback", env_extra=tagged)
+            self.assertNotEqual(again.returncode, 0)
+            self.assertEqual(session.read_bytes(), kept)
+            self.assertFalse((earlier / "restored").exists())
+        with self.subTest(case="two newest records in one second"), \
+                tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            own = self._recovery_records(base)[0]
+            twin = own.parent / (own.name.rsplit(".", 1)[0] + ".TWIN01")
+            shutil.copytree(own, twin)
+            (twin / "restored").write_text("restored=2026-11-17T00:00:00Z\n")
+            before = session.read_bytes()
+            refused = self._run(base, "--rollback", env_extra=tagged)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("cannot tell which recovery record is newest", refused.stderr)
+            self.assertEqual(session.read_bytes(), before)
+            self.assertFalse((own / "restored").exists())
+
+    def test_an_unspent_newest_record_is_restored_even_when_the_closure_looks_saved(self):
+        """The 'already rolled back' answer needs the newest record to be spent.
+        An unspent one whose saved session and closure happen to be installed
+        still has the selector and updater to put back."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            record = self._recovery_records(base)[0]
+            session.write_bytes((record / "session.env").read_bytes())
+            session.with_name("closure.env").unlink()
+            selector = base / "root/usr/local/bin/plebian-os-select-closure"
+            updater = base / "root/usr/local/bin/plebian-os-update"
+            self.assertTrue(selector.exists() and updater.exists())
+            result = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("already rolled back", result.stdout)
+            self.assertTrue((record / "restored").exists())
+            self.assertFalse(selector.exists() or updater.exists())
+
+    def test_a_rollback_that_waits_out_a_running_update_does_not_settle_the_marker(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env, original, selected, updater, fifo = self._select_with_running_update(base)
+            tag = subprocess.run(
+                ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.1.8"],
+                capture_output=True, text=True, check=True).stdout.strip()
+            marker = self._hop_marker(base, tag)
+            refused = self._run(base, "--rollback", env_extra={
+                "PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS": "1",
+                "PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag})
+            self.assertEqual(refused.returncode, 13, refused.stderr)
+            self.assertEqual({p.name for p in marker.iterdir()},
+                             {"active", "phase", "baseline"})
+            self._release(updater, fifo)
+
     def test_split_rollback_sync_failure_is_retryable(self):
         for fail_target in ("marker", "record"):
             with self.subTest(target=fail_target), tempfile.TemporaryDirectory() as td:

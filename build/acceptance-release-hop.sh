@@ -34,7 +34,7 @@ session.env, which stores the commit, while that build-info stores the RC
 tag; the commit in the build-info peels the tag. Rollback compares session,
 closure, settings, the selector and updater, the engine generation, and every
 component checkout HEAD with their pre-hop state, and requires that no
-release-hop record (active, phase, baseline) is left: Pleb keeps one generation
+release-hop record (active, phase, baseline, unselected-checkouts) is left: Pleb keeps one generation
 of rollback, so a record from an earlier completed hop is replaced when the hop
 starts and is not restored. A fresh image has no closure
 to compare byte for byte, so that check is not recorded. Image recovery
@@ -780,7 +780,7 @@ rollback_expected_manifest() {
         '$1 == "fingerprint" && $2 == state { $3 = "absent" } { print }' \
         "$source" >"$target" || return 1
     printf 'fingerprint\t%s\t%s\n' "$state_dir/phase" absent \
-        "$state_dir/baseline" absent >>"$target"
+        "$state_dir/baseline" absent "$state_dir/unselected-checkouts" absent >>"$target"
 }
 
 record_release_snapshot() {
