@@ -109,7 +109,7 @@ MUTATIONS = (
     ),
     Mutation(
         "no walk back to an older record when the closure changed",
-        '        exit 4\n    fi\nfi\n[ "${#candidates[@]}" -gt 0 ] || exit 4',
+        '        exit 16\n    fi\nfi\n[ "${#candidates[@]}" -gt 0 ] || exit 4',
         '        : # mutation\n    fi\nfi\n[ "${#candidates[@]}" -gt 0 ] || exit 4',
         (CASE + "test_a_hop_rollback_never_walks_back_to_an_older_record",),
     ),
@@ -127,7 +127,7 @@ MUTATIONS = (
     ),
     Mutation(
         "hop marker: phase must be selecting or selected",
-        '    case "$(cat -- "$phase")" in selecting|selected) ;; *) return 0 ;; esac',
+        '    case " $phases " in *" $(cat -- "$phase") "*) ;; *) return 0 ;; esac',
         '    : # mutation',
         (CASE + "test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops",),
     ),
@@ -142,6 +142,54 @@ MUTATIONS = (
         '    ! retained_failed_rollback_exists || return 0',
         '    : # mutation',
         (CASE + "test_a_finished_rollback_settles_the_hop_marker_it_belongs_to",),
+    ),
+    Mutation(
+        "hop marker: release-hop must not be a symlink",
+        '    [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c \'%u\' -- "$dir" 2>/dev/null)" = "$EUID" ] || return 0',
+        '    [ -d "$dir" ] && [ "$(stat -c \'%u\' -- "$dir" 2>/dev/null)" = "$EUID" ] || return 0',
+        (CASE + "test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops",),
+    ),
+    Mutation(
+        "hop marker: four or five lines",
+        '    { [ "$lines" = 4 ] || [ "$lines" = 5 ]; } || return 0',
+        '    : # mutation',
+        (CASE + "test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops",),
+    ),
+    Mutation(
+        "hop marker: release on line 1",
+        '    [[ "$(sed -n 1p -- "$active")" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+(\\.[1-9][0-9]*)?$ ]] || return 0',
+        '    : # mutation',
+        (CASE + "test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops",),
+    ),
+    Mutation(
+        "hop marker: selector hash on line 4",
+        '    [[ "$(sed -n 4p -- "$active")" =~ ^[0-9a-f]{64}$ ]] || return 0',
+        '    : # mutation',
+        (CASE + "test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops",),
+    ),
+    Mutation(
+        "hop marker: tag on line 5",
+        '        [[ "$(sed -n 5p -- "$active")" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+(\\.[1-9][0-9]*)?(-rc[1-9][0-9]*)?$ ]] \\\n            || return 0',
+        '        : # mutation',
+        (CASE + "test_the_hop_marker_is_left_alone_unless_it_is_provably_this_hops",),
+    ),
+    Mutation(
+        "hop marker: only a request bound to the hop's own record settles",
+        '        [ "$REQUIRE_OWN_RECORD" != 1 ] || settle_interrupted_hop_marker',
+        '        settle_interrupted_hop_marker # mutation',
+        (CASE + "test_a_rollback_not_bound_to_the_hops_own_record_leaves_the_marker",),
+    ),
+    Mutation(
+        "hop marker: a selection that replaced nothing settles only selecting",
+        '                settle_interrupted_hop_marker selecting\n                exit 0\n                ;;',
+        '                settle_interrupted_hop_marker # mutation\n                exit 0\n                ;;',
+        (CASE + "test_a_selection_that_replaced_nothing_settles_only_a_selecting_marker",),
+    ),
+    Mutation(
+        "wait for a running update: status 13 settles nothing",
+        '            exit 13',
+        '            break # mutation',
+        (CASE + "test_a_rollback_that_waits_out_a_running_update_does_not_settle_the_marker",),
     ),
     Mutation(
         "operator install-policy validation",

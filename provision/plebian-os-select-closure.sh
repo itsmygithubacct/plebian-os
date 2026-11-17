@@ -2648,7 +2648,7 @@ if [ "$require_own" = 1 ] && [[ "$trusted_tag" =~ ^[0-9a-f]{40}$ ]] \
         [ "$installed_as_saved" != 1 ] || exit 15
         # This hop's own record is spent but the installed closure is not what
         # it saved: never fall back to an older record, same tag or not.
-        exit 4
+        exit 16
     fi
 fi
 [ "${#candidates[@]}" -gt 0 ] || exit 4
@@ -2779,6 +2779,7 @@ ROOT_SPLIT_ROLLBACK
             case "$rc" in
                 6) die "recovery release metadata is missing, invalid, or ambiguous; no files were restored" ;;
                 4) die "no split closure to roll back to" ;;
+                16) die "refusing rollback: this hop's recovery record is already restored and the installed session or closure has changed since, so nothing was restored. If the installed closure is the one you want, remove Pleb's hop marker (release-hop/active, phase and baseline under the Pleb state directory, normally ~/.local/gpu_terminal/pleb/state); to change releases afterwards use 'pleb update --to <version>'." ;;
                 9) die "injected split rollback failure; the selected session, closure, and tools were retained" ;;
                 11) die_unstarted_selection ;;
                 12) die_unordered_recovery_records ;;
@@ -3101,6 +3102,7 @@ acknowledge_interrupted_reselect() {
                 rm -f -- "$path"
                 SELECTION_ATTEMPT=""
                 log "interrupted reselect of $target; the installed closure is unchanged and nothing was restored"
+                settle_interrupted_hop_marker selecting
                 exit 0
             fi
         fi
@@ -3257,7 +3259,8 @@ wait_for_running_update() {
         fi
         if [ "$waited" -ge "$limit" ]; then
             warn "the update is still running after ${limit}s; the installed closure was not modified"
-            warn "the recovery record is unchanged. When that update has finished, run: plebian-os-select-closure --rollback"
+            warn "the recovery record is unchanged. When that update has finished, run 'pleb update --rollback' (a manual"
+            warn "plebian-os-select-closure --rollback restores the newest record not yet restored, which can be an older hop)"
             exit 13
         fi
         sleep 1
@@ -3288,7 +3291,14 @@ wait_for_running_update() {
 #     still needs the reconcile the marker would trigger.
 # Only active, phase and baseline go. Standalone machines keep theirs: Pleb's
 # recovery also puts their checkouts back. This runs only after success: every
-# failure, and the wait for a running update (status 13), exits earlier.
+# failure, and the wait for a running update (status 13), exits earlier. It
+# also runs where this selector finds that a selection replaced nothing (the
+# pending marker still equals the installed files, or an interrupted same-tag
+# reselect left the closure installed): the closure is certainly the one before
+# the hop there, and the marker, then necessarily `selecting`, is the only thing
+# a dropped driver left. The rollback path settles only a request bound to the
+# hop's own record (REQUIRE_OWN_RECORD=1): an unbound one may have restored an
+# older hop's record.
 retained_failed_rollback_exists() {
     local dir
     for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
@@ -3303,6 +3313,7 @@ retained_failed_rollback_exists() {
 }
 
 settle_interrupted_hop_marker() {
+    local phases="${1:-selecting selected}"
     local tag="${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" dir active phase lines value
     [ "$SELECTOR_MODE" = image ] || return 0
     [[ "$tag" =~ ^[0-9a-f]{40}$ ]] || return 0
@@ -3325,7 +3336,7 @@ settle_interrupted_hop_marker() {
         [[ "$(sed -n 5p -- "$active")" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?(-rc[1-9][0-9]*)?$ ]] \
             || return 0
     fi
-    case "$(cat -- "$phase")" in selecting|selected) ;; *) return 0 ;; esac
+    case " $phases " in *" $(cat -- "$phase") "*) ;; *) return 0 ;; esac
     ! retained_failed_rollback_exists || return 0
     rm -f -- "$active" "$phase" "$dir/baseline"
     log "settled the interrupted release hop's marker in $dir; the closure was already restored"
@@ -3402,6 +3413,7 @@ case "$MODE" in
             0)
                 clear_selection_attempt
                 log "the interrupted selection had not replaced the closure; the installed closure is unchanged and nothing was restored"
+                settle_interrupted_hop_marker selecting
                 exit 0
                 ;;
             1)
@@ -3419,7 +3431,7 @@ case "$MODE" in
         else
             rollback_previous_closure
         fi
-        settle_interrupted_hop_marker
+        [ "$REQUIRE_OWN_RECORD" != 1 ] || settle_interrupted_hop_marker
         ;;
     select)
         [ -n "$TARGET" ] \

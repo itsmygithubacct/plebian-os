@@ -1230,7 +1230,9 @@ class ClosureSelectionTests(unittest.TestCase):
                 stream.write("OPERATOR_NOTE=changed-since\n")
             moved = self._run(base, "--rollback", env_extra=tagged)
             self.assertNotEqual(moved.returncode, 0)
-            self.assertIn("no split closure to roll back to", moved.stderr)
+            self.assertIn("is already restored and the installed session or closure has changed since",
+                          moved.stderr)
+            self.assertIn("release-hop/active", moved.stderr)
             closure.write_text("PLEBIAN_OS_VERSION=0.2.1\n")
             selected = self._run(base, "--rollback", env_extra=tagged)
             self.assertNotEqual(selected.returncode, 0)
@@ -1353,11 +1355,13 @@ class ClosureSelectionTests(unittest.TestCase):
 
     # ── a finished rollback settles the hop marker Pleb left behind ─────────
     def _hop_marker(self, base, tag, lines=4, phase="selected", tag_line="v0.2.1",
-                    target="0.2.1"):
+                    target="0.2.1", commit="a" * 40, selector_sha="b" * 64, extra=None):
         state = base / "home/.local/gpu_terminal/pleb/state"
         marker = state / "release-hop"
         marker.mkdir(parents=True, exist_ok=True, mode=0o700)
-        rows = [target, "a" * 40, tag, "b" * 64, tag_line][:lines]
+        rows = [target, commit, tag, selector_sha, tag_line][:lines]
+        if extra:
+            rows.append(extra)
         (marker / "active").write_text("\n".join(rows) + "\n")
         (marker / "phase").write_text(phase + "\n")
         (marker / "baseline").write_text("absent\nabsent\n")
@@ -1410,6 +1414,11 @@ class ClosureSelectionTests(unittest.TestCase):
             "a complete hop": dict(phase="complete"),
             "a driver mid-rollback": dict(phase="rolling-back"),
             "a malformed marker": dict(lines=3),
+            "six lines": dict(lines=5, extra="v0.2.1"),
+            "a bad release on line 1": dict(target="0.2"),
+            "a bad commit on line 2": dict(commit="nothex"),
+            "a bad selector hash on line 4": dict(selector_sha="c" * 63),
+            "a bad tag on line 5": dict(lines=5, tag_line="0.2.1"),
             "an unknown phase": dict(phase="sideways"),
         }
         for name, change in cases.items():
@@ -1422,6 +1431,16 @@ class ClosureSelectionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual({p.name for p in marker.iterdir()},
                                  {"active", "phase", "baseline"})
+        with self.subTest(case="a symlinked release-hop directory"), tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            marker = self._hop_marker(base, tag)
+            real = marker.with_name("release-hop.real")
+            marker.rename(real)
+            marker.symlink_to(real)
+            result = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((real / "active").exists())
         with self.subTest(case="a symlinked marker file"), tempfile.TemporaryDirectory() as td:
             base = Path(td)
             session, tag, tagged = self._spent_hop(base)
@@ -1560,6 +1579,62 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertNotIn("already rolled back", result.stdout)
             self.assertTrue((record / "restored").exists())
             self.assertFalse(selector.exists() or updater.exists())
+
+    def test_a_selection_that_replaced_nothing_settles_only_a_selecting_marker(self):
+        for phase, settled in (("selecting", True), ("selected", False)):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                env = self._machine(base)
+                before = env.read_bytes()
+                self._source(base)
+                interrupted = self._run(base, "0.1.8", "--offline",
+                                        fail_after="interrupt:render")
+                self.assertEqual(interrupted.returncode, 130, interrupted.stderr)
+                facts = self._pending(base).read_text().splitlines()
+                marker = self._hop_marker(base, facts[1].split("=", 1)[1], phase=phase)
+                result = self._rollback_for_pending_tag(base, facts[1])
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("nothing was restored", result.stdout + result.stderr)
+                self.assertEqual(env.read_bytes(), before)
+                self.assertEqual((marker / "active").exists(), not settled)
+                if settled:
+                    self.assertIn("settled the interrupted release hop's marker", result.stdout)
+
+    def test_an_interrupted_same_tag_reselect_settles_only_a_selecting_marker(self):
+        for phase, settled in (("selecting", True), ("selected", False)):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                session, tag, tagged = self._spent_hop(base)
+                attempt = base / "home/.local/gpu_terminal/pleb/state/selection-attempt"
+                attempt.parent.mkdir(parents=True, exist_ok=True)
+                attempt.write_text(f"format=1\ntag={tag}\ntarget=0.2.1\ninstalled=0.2.1\n")
+                marker = self._hop_marker(base, tag, phase=phase)
+                before = session.read_bytes()
+                result = self._run(base, "--rollback", env_extra=tagged)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("interrupted reselect", result.stdout)
+                self.assertEqual(session.read_bytes(), before)
+                self.assertEqual((marker / "active").exists(), not settled)
+
+    def test_a_rollback_not_bound_to_the_hops_own_record_leaves_the_marker(self):
+        """A pending marker that no longer matches the files (disposition 2) is
+        an ordinary rollback of the newest record, which may be an older hop's."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env = self._machine(base)
+            original = env.read_bytes()
+            self._source(base)
+            interrupted = self._run(base, "0.1.8", "--offline", fail_after="interrupt:render")
+            self.assertEqual(interrupted.returncode, 130, interrupted.stderr)
+            pending = self._pending(base)
+            text = pending.read_text()
+            self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
+            pending.write_text(text)
+            marker = self._hop_marker(base, text.splitlines()[1].split("=", 1)[1])
+            result = self._rollback_for_pending_tag(base, text.splitlines()[1])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(env.read_bytes(), original)
+            self.assertEqual({p.name for p in marker.iterdir()}, {"active", "phase", "baseline"})
 
     def test_a_rollback_that_waits_out_a_running_update_does_not_settle_the_marker(self):
         with tempfile.TemporaryDirectory() as td:
@@ -2795,7 +2870,7 @@ class ClosureSelectionTests(unittest.TestCase):
                 "PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS": "1"})
             self.assertEqual(refused.returncode, 13, refused.stderr)
             self.assertIn("still running after 1s", refused.stderr)
-            self.assertIn("run: plebian-os-select-closure --rollback", refused.stderr)
+            self.assertIn("run 'pleb update --rollback'", refused.stderr)
             self.assertEqual(env.read_bytes(), selected)
             records = self._recovery_records(base)
             self.assertEqual(len(records), 1)

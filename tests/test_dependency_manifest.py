@@ -863,7 +863,7 @@ class DependencyManifestTests(unittest.TestCase):
         kilix = names("kilix-debian.txt")
         dependencies = set(names("closure-dependencies.txt"))
         arm64_gaps = set(names("arm64-no-candidate.txt"))
-        self.assertEqual(len(pleb), 91)
+        self.assertEqual(len(pleb), 92)
         self.assertEqual(len(kilix), 42)
         self.assertTrue(arm64_gaps <= closure)
         self.assertTrue(arm64_gaps.isdisjoint(pleb))

@@ -17,6 +17,7 @@ xinit
 x11-xserver-utils
 x11-utils
 xterm
+xdotool
 openbox
 libgl1
 libegl1
