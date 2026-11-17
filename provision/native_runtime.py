@@ -673,6 +673,8 @@ def main():
         need(not error and output in (b"amd64\n", b"arm64\n"), "unsupported native architecture")
         architecture = output.decode("ascii").strip()
         with state.Tree() as tree:
+            tree.lock_canceled = lambda: runner.canceled
+            tree.lock_waited = runner.extend
             manager = Manager(tree, Dpkg(tree, runner, architecture=architecture))
             if args.command == 'install-dependencies':
                 manager.install_dependencies(artifact.read_archive(args.artifact),

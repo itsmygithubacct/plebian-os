@@ -11,6 +11,14 @@ install and upgrade instructions (including `pleb update --to 0.2.3` for
 release-candidate machines), known issues and the 0.2.4 deferrals. The
 entries below run newest first, from the final back through RC1.
 
+- Wait for the dpkg lock instead of failing. Another package manager
+  (`unattended-upgrades`, `apt-daily`) can hold it for minutes. The native
+  runtime now retries its `lock-frontend` and `lock` takes for up to 600 s,
+  names the holder once when it starts waiting, never signals it, and does not
+  charge the wait to its work limit; on timeout it stops with nothing changed.
+  Every `apt-get` in the provisioner, updater, dependency installer and Qt and mpv
+  helpers carries `-o DPkg::Lock::Timeout=600`.
+- Document the early-drop recovery: a hop marker left in phase `selecting`.
 - Let a failed first boot roll back completely. The provisioning transaction
   now protects every module Pleb 0.2.3 installs under `/usr/local/lib/pleb`
   (`displays_gui.py`, `screenlock.py`, `screenlock_gui.py`) and the

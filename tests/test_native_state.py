@@ -2,7 +2,10 @@
 import importlib.util
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -18,9 +21,14 @@ class StateTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.tree = state.Tree(self.root, uid=os.getuid())
         self.tree.private_directory('managed')
+        self.holders = []
         self.before_fds = len(os.listdir('/proc/self/fd'))
 
     def tearDown(self):
+        for holder in self.holders:
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
         self.assertEqual(len(os.listdir('/proc/self/fd')), self.before_fds)
         self.tree.close()
         self.temporary.cleanup()
@@ -159,6 +167,63 @@ class StateTests(unittest.TestCase):
                         self.fail('unsafe lock admitted')
             finally:
                 path.rmdir() if kind == 'directory' else path.unlink()
+
+    def _holder(self, seconds, name='managed/lock', call='lockf'):
+        """Another process that holds the lock file the way dpkg (lockf) or the helper (flock) does."""
+        path = self.root / name
+        script = ("import fcntl, os, sys, time\n"
+                  f"fd = os.open({str(path)!r}, os.O_RDWR | os.O_CREAT, 0o600)\n"
+                  f"fcntl.{call}(fd, fcntl.LOCK_EX)\n"
+                  "print('held', flush=True)\n"
+                  f"time.sleep({seconds})\n")
+        holder = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE, text=True)
+        self.holders.append(holder)
+        self.assertEqual(holder.stdout.readline().strip(), 'held')
+        return holder
+
+    def test_a_dpkg_lock_is_waited_for_and_then_taken(self):
+        holder = self._holder(1.5)
+        notices, waited = [], []
+        self.tree.lock_notice = notices.append
+        self.tree.lock_waited = waited.append
+        started = time.monotonic()
+        with patch.object(state, 'LOCK_WAIT_SECONDS', 20), patch.object(state, 'LOCK_POLL_SECONDS', 0.05):
+            with self.tree.lock('managed/lock', frontend=True) as check:
+                check()
+        self.assertGreaterEqual(time.monotonic() - started, 1.0)
+        self.assertEqual(len(notices), 1)
+        self.assertIn('waiting up to 20s for the dpkg lock held by process %d (python' % holder.pid, notices[0])
+        self.assertEqual(len(waited), 1)
+        self.assertGreaterEqual(waited[0], 1.0)
+
+    def test_a_dpkg_lock_that_stays_held_refuses_cleanly_after_the_bound(self):
+        holder = self._holder(10)
+        self.tree.lock_notice = lambda text: None
+        with patch.object(state, 'LOCK_WAIT_SECONDS', 0.5), patch.object(state, 'LOCK_POLL_SECONDS', 0.05):
+            with self.assertRaises(state.UnsafeState) as caught:
+                with self.tree.lock('managed/lock', frontend=True):
+                    self.fail('a held lock was admitted')
+        text = str(caught.exception)
+        self.assertIn('the dpkg lock was still held by process %d' % holder.pid, text)
+        self.assertIn('after 0.5s; nothing was changed; run the update again', text)
+
+    def test_the_helpers_own_lock_still_refuses_at_once_and_a_cancel_stops_the_wait(self):
+        self._holder(5, 'managed/own', call='flock')
+        started = time.monotonic()
+        with patch.object(state, 'LOCK_WAIT_SECONDS', 20):
+            with self.assertRaises(BlockingIOError):
+                with self.tree.lock('managed/own'):          # not a dpkg lock
+                    self.fail('admitted')
+        self.assertLess(time.monotonic() - started, 1.0)
+        self._holder(5, 'managed/cancel')
+        self.tree.lock_notice = lambda text: None
+        calls = []
+        self.tree.lock_canceled = lambda: calls.append(1) or len(calls) > 2
+        with patch.object(state, 'LOCK_WAIT_SECONDS', 20), patch.object(state, 'LOCK_POLL_SECONDS', 0.05):
+            with self.assertRaises(state.UnsafeState) as caught:
+                with self.tree.lock('managed/cancel', frontend=True):
+                    self.fail('admitted')
+        self.assertIn('canceled while waiting for the dpkg lock', str(caught.exception))
 
 
 if __name__ == '__main__':

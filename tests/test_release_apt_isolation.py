@@ -1294,13 +1294,15 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
                     }, clear=False):
                         module.apt_run(["/usr/bin/apt-get", "install", "libdep-sim"])
                 self.assertIn(f"Dir::Etc::SourceList={config}/sources.list", recorded["argv"])
+                self.assertEqual(recorded["argv"].count("DPkg::Lock::Timeout=600"), 1)
                 self.assertEqual(recorded["env"]["APT_CONFIG"], str(config / "apt.conf"))
                 recorded.clear()
                 with mock.patch.object(module.subprocess, "run", fake_run):
                     with mock.patch.dict(os.environ, {"PLEBIAN_OS_RELEASE_MODE": "0"}, clear=False):
                         os.environ.pop("PLEBIAN_OS_RELEASE_APT_CONFIG", None)
                         module.apt_run(["/usr/bin/apt-get", "install", "libdep-sim"])
-                self.assertEqual(recorded["argv"], ["/usr/bin/apt-get", "install", "libdep-sim"])
+                self.assertEqual(recorded["argv"], ["/usr/bin/apt-get", "-o", "DPkg::Lock::Timeout=600",
+                                                    "install", "libdep-sim"])
                 self.assertNotIn("Dir::Etc::SourceList", " ".join(recorded["argv"]))
                 called = []
 
@@ -2123,6 +2125,27 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertFalse(unclassified, "\n".join(unclassified))
         self.assertGreaterEqual(len(seen), 20)
 
+    def test_every_package_step_waits_for_the_dpkg_lock(self):
+        # apt-daily and unattended-upgrades hold the dpkg lock for minutes; a
+        # package step waits for it (600 s) instead of failing at once.
+        for name in ("plebian-os-provision.sh", "plebian-os-update.sh", "install-deps.sh"):
+            text = (ROOT / "provision" / name).read_text()
+            body = text[text.index("release_apt_get() {"):]
+            body = body[:body.index("\n}\n")]
+            self.assertIn("-o DPkg::Lock::Timeout=600", body, name)
+        provision = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        self.assertEqual(provision.count("apt-get -o DPkg::Lock::Timeout=600 update -y"), 2)
+        self.assertNotIn("apt-get update -y", provision.replace("echo", ""))
+        for name in ("plebian-os-qt-runtime", "plebian-os-mpv-runtime"):
+            text = (ROOT / "provision" / name).read_text()
+            helper = text[text.index("def apt_run("):]
+            helper = helper[:helper.index("\n\n\n")]
+            self.assertLess(helper.index('"DPkg::Lock::Timeout=600"'),
+                            helper.index('PLEBIAN_OS_RELEASE_MODE'), name)
+        runtime = (ROOT / "provision" / "native_runtime.py").read_text()
+        self.assertIn("tree.lock_canceled = lambda: runner.canceled", runtime)
+        self.assertIn("tree.lock_waited = runner.extend", runtime)
+
     def test_helpers_keep_their_own_private_configuration(self):
         ssh = (ROOT / "provision" / "plebian-os-ssh-server").read_text()
         self.assertIn('Dir::Etc::main "/dev/null";', ssh)
@@ -2254,6 +2277,8 @@ class ReleaseAptRouteTests(unittest.TestCase):
         if name == "plebian-os-nvidia-driver":
             return "operator-facing helper, not called by release install, update, or first boot"
         if name in ("plebian-os-qt-runtime", "plebian-os-mpv-runtime"):
+            if 'endswith("/apt-get")' in text:
+                return "adds the dpkg lock wait; not a command"
             if "apt_run(" in text or text.startswith("print(") or "Run apt-get" in text:
                 return "release mode routes this through the private configuration"
             if (text.startswith('"""') or text.startswith("command = ")
@@ -2283,7 +2308,8 @@ class ReleaseAptRouteTests(unittest.TestCase):
             return "install-deps update goes through deps_apt"
         if "indextargets" in text:
             return "non-install query; release mode does not use this branch"
-        if "apt-get update -y" in text or "apt-get update against" in text or text.startswith("echo "):
+        if ("apt-get update -y" in text or "apt-get -o DPkg::Lock::Timeout=600 update -y" in text
+                or "apt-get update against" in text) or text.startswith("echo "):
             return "provisioner list refresh after operator sources were renamed aside"
         # Removal builds its configuration inside the child. A raw apt-get
         # remove stays unclassified, so the scanner still fails if system apt

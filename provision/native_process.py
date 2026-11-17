@@ -41,6 +41,10 @@ class Runner:
     def cancel(self, *_):
         self.canceled = True
 
+    def extend(self, seconds):
+        """Time spent waiting for a lock is not work: do not charge it to the budget."""
+        self.deadline += seconds
+
     def check(self):
         if self.canceled:
             raise CommandFailed('native package operation canceled')

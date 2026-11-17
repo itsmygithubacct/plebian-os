@@ -5252,7 +5252,7 @@ EOF
     [ "$signal_rc" = 0 ] || exit "$signal_rc"
     # A network failure must not roll back: that would freeze the machine on the
     # snapshot again. apt's daily timer retries against the live sources.
-    if [ "$changed" = 1 ] && ! apt-get update -y; then
+    if [ "$changed" = 1 ] && ! apt-get -o DPkg::Lock::Timeout=600 update -y; then
         warn "apt-get update against live Debian failed; apt will retry on its daily timer"
     fi
 }
@@ -5396,7 +5396,7 @@ EOF
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then _remove_global_validity_overrides || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$marker_tmp" "$marker" || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$inventory_tmp" "$inventory" || failed=1; fi
-    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ] && ! apt-get update -y; then failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ] && ! apt-get -o DPkg::Lock::Timeout=600 update -y; then failed=1; fi
     [ "$signal_rc" = 0 ] || failed=1
     if [ "$failed" != 0 ]; then
         _restore_managed_apt_file "$src" "$txn/src" "$src_old" || rollback_ok=0
@@ -6068,6 +6068,7 @@ release_apt_get() {
     shift
     env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
     apt-get \
+        -o DPkg::Lock::Timeout=600 \
         -o "Dir::Etc::SourceList=$config/sources.list" \
         -o "Dir::Etc::SourceParts=$config/sources.list.d" \
         -o "Dir::State::lists=$config/lists" \

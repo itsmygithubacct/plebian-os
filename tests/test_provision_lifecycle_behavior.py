@@ -67,6 +67,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "  done\n"
             "  exit 0\n"
             "fi\n"
+            "if [ \"${1:-}\" = -o ] && [ \"${2:-}\" = DPkg::Lock::Timeout=600 ]; then shift 2; fi\n"
             "if [ \"${1:-}\" = update ]; then\n"
             "  policy=\"$PLEBIAN_OS_APT_ETC_ROOT/apt/apt.conf.d/52plebian-os-security-upgrades\"\n"
             "  if [ -f \"$policy\" ]; then state=yes; else state=no; fi\n"
@@ -174,8 +175,9 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         log = base / "apt.log"
         if not log.exists():
             return 0
+        # Every package step carries the dpkg lock wait; it is not the command.
         return sum(1 for line in log.read_text().splitlines()
-                   if line.split()[:1] == ["update"])
+                   if line.replace("-o DPkg::Lock::Timeout=600", "").split()[:1] == ["update"])
 
     def _run_library(self, body: str, env: dict[str, str]):
         return subprocess.run(

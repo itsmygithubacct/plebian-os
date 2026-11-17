@@ -7,6 +7,7 @@ override. No file under the shared dpkg database is written by this module.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import errno
 import fcntl
 import hashlib
 import json
@@ -14,6 +15,16 @@ import os
 from pathlib import Path, PurePosixPath
 import secrets
 import stat
+import sys
+import time
+
+# The dpkg locks are held by apt, unattended-upgrades and apt-daily for minutes at
+# a time on a machine that updates itself. A package step waits for them, up to
+# the same 600 s that the dependency installer gives apt (DPkg::Lock::Timeout),
+# instead of refusing at once. It never signals or takes anything from the
+# holder; the wait is cancelable and reported once.
+LOCK_WAIT_SECONDS = 600
+LOCK_POLL_SECONDS = 0.2
 
 
 class UnsafeState(ValueError):
@@ -38,6 +49,11 @@ class Tree:
     def __init__(self, root=Path('/'), *, uid=0):
         self.root = Path(root)
         self.uid = uid
+        # Hooks for the helper: the wait is told to stop on cancellation, is not
+        # charged to the command's work budget, and is announced on stderr.
+        self.lock_canceled = lambda: False
+        self.lock_waited = lambda seconds: None
+        self.lock_notice = lambda text: print(text, file=sys.stderr, flush=True)
         self.fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
         try:
             self.check_dir(self.fd)
@@ -213,6 +229,56 @@ class Tree:
         except FileNotFoundError:
             return None
 
+    @staticmethod
+    def lock_holder(info):
+        """Name the process that holds a lock file, as far as /proc/locks says."""
+        mark = f'{os.major(info.st_dev):02x}:{os.minor(info.st_dev):02x}:{info.st_ino}'
+        try:
+            for line in Path('/proc/locks').read_text().splitlines():
+                fields = line.split()
+                if mark in fields and 'ADVISORY' in fields:
+                    pid = fields[fields.index(mark) - 1]
+                    if pid.isdigit():
+                        try:
+                            name = Path(f'/proc/{pid}/comm').read_text().strip()
+                        except OSError:
+                            name = '?'
+                        return f'process {pid} ({name})'
+        except OSError:
+            pass
+        return 'another process'
+
+    def take(self, fd, info, frontend):
+        """Take the lock without blocking; a dpkg lock is retried until the bound."""
+        def attempt():
+            if frontend:
+                fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            attempt()
+            return
+        except OSError as error:
+            if not frontend or error.errno not in (errno.EAGAIN, errno.EACCES):
+                raise
+        holder = self.lock_holder(info)
+        limit = LOCK_WAIT_SECONDS
+        started = time.monotonic()
+        self.lock_notice(f'native runtime: waiting up to {limit:g}s for the dpkg lock held by {holder}')
+        while True:
+            need(not self.lock_canceled(), 'canceled while waiting for the dpkg lock')
+            left = started + limit - time.monotonic()
+            need(left > 0, f'the dpkg lock was still held by {holder} after {limit:g}s; '
+                 'nothing was changed; run the update again when it has finished')
+            time.sleep(min(LOCK_POLL_SECONDS, left))
+            try:
+                attempt()
+                break
+            except OSError as error:
+                if error.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+        self.lock_waited(time.monotonic() - started)
+
     @contextmanager
     def lock(self, relative, *, frontend=False):
         """Nonblocking lock with a continuing held/name identity check."""
@@ -239,10 +305,7 @@ class Tree:
                          (info.st_dev, info.st_ino, info.st_uid, info.st_mode, info.st_nlink),
                          'package lock entry changed while held')
                     self.check_dir(parent)
-                if frontend:
-                    fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                else:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                self.take(fd, info, frontend)
                 check()
                 yield check
                 check()

@@ -622,6 +622,7 @@ release_apt_get() {
     shift
     env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
     apt-get \
+        -o DPkg::Lock::Timeout=600 \
         -o "Dir::Etc::SourceList=$config/sources.list" \
         -o "Dir::Etc::SourceParts=$config/sources.list.d" \
         -o "Dir::State::lists=$config/lists" \

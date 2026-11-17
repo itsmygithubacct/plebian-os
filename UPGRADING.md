@@ -404,22 +404,34 @@ By the 0.2.2 Pleb's code, once the marker is gone a plain `pleb update` stays on
 --rollback` exits 1 with "no selected release closure is available to roll
 back" and changes nothing, and `pleb update --to 0.2.3` is an ordinary hop.
 
+**An early drop.** A hangup before the selector has replaced the closure can
+leave the marker in phase `selecting`. On an image, the 0.2.2 Pleb's first plain
+`pleb update` then has the selector settle the marker ("the interrupted selection
+had not replaced the closure ..." and "settled the interrupted release hop's
+marker") and reports "interrupted release hop is blocked: previous-stack
+reconciliation failed" once, because its reconcile needs the update lock the
+command holds. The marker is gone by then, so the next plain `pleb update` runs
+normally on 0.2.2. `pleb update --to 0.2.3` and `pleb update --rollback` hand the
+lock over and recover.
+
 **If a marker is left** (the selector never got that far because its caller was
 killed first, a retained failed-rollback directory exists, or the marker did not
 match), the next Pleb run recovers it, and the installed Pleb decides how:
-- **The 0.2.2 Pleb (2dd44b0)**, the usual case after a dropped 0.2.2 to 0.2.3
-  hop that the user ran with `pleb update --to 0.2.3`, because the rollback puts
-  its checkouts back. That hop wrote a 4-line marker, which this Pleb reads. A
-  plain `pleb update` cannot finish the recovery: it holds the update lock while
-  the updater it runs needs the same lock, so it prints "another Pleb/Plebian-OS
-  update is already running" and the hop stays blocked. `pleb update --rollback`
-  and `pleb update --to 0.2.3` hand the lock over. Their recovery asks the
-  selector to roll back (it answers "already rolled back" when the hop's own
-  record is the newest one, already restored, and `session.env` and `closure.env`
-  are the bytes it saved) and then runs the installed updater with no arguments.
-  By the code, the 0.2.2 updater moves to the latest published release, so both
-  commands end on 0.2.3 and not on 0.2.2. No route to stay on 0.2.2 is
-  documented here.
+- **The 0.2.2 Pleb (2dd44b0)** after a dropped `pleb update --to 0.2.3` (a
+  4-line marker, which it reads).
+  - *On an image,* a plain `pleb update` cannot finish the recovery while a marker
+    is left: it holds the update lock the updater it runs needs, so it reports the
+    hop as blocked (with no marker it is unaffected). `pleb update --rollback` and
+    `pleb update --to 0.2.3` hand the lock over; the selector answers "already
+    rolled back" and the bare 0.2.2 updater then runs. By the code that updater
+    moves to the latest release, so both end on 0.2.3.
+  - *On a standalone machine* the reconcile is a nested, pinned `pleb update`. On
+    a guest dropped mid-hop the Pleb checkout had already advanced to the 0.2.3
+    pin, so the 0.2.3 Pleb ran the recovery and handed the lock over: a plain
+    `pleb update` and `pleb update --rollback` both reconciled to the 0.2.2 pins,
+    cleared the marker and ended on 0.2.2, and `pleb update --to 0.2.3`
+    completed the hop. The 0.2.2 Pleb's own code opens the same lock file without
+    being handed the lock, so it would collide as on an image.
 - **A hop run through the `pleb-release-hop` driver** (the legacy migration route
   in the Pleb README, which candidates need) leaves a 5-line marker. The
   installed 0.2.2 Pleb refuses it as "malformed", so recovery goes through the
@@ -483,6 +495,21 @@ Two limits remain (see the 0.2.3 notes' known issues): a Ctrl-C during a
 foreground step that does not use sudo, such as the Kilix engine rebuild,
 reaches that process, and the updater waits for it to end; SIGKILL or power
 loss does not run rollback.
+
+**Package locks.** A machine that updates itself (`apt-daily`,
+`unattended-upgrades`) can hold the dpkg lock for minutes. Every package step of
+an update now waits for it, up to 600 seconds, instead of failing at once: the
+native runtime retries the `lock-frontend` and `lock` takes once every 0.2 s and
+prints one line naming the holder it can read ("waiting up to 600s for the dpkg
+lock held by process N (name)"), and every `apt-get` of the provisioner, the
+updater, the dependency installer, and the Qt and mpv helpers
+carry `-o DPkg::Lock::Timeout=600`. It never signals the holder, and the
+time spent waiting does not count against the helper's own work limit. If the
+lock is still held when the 600 seconds end, the step stops with "the dpkg lock
+was still held by ... nothing was changed; run the update again when it has
+finished", and the update's rollback runs as for any failed step. The native
+runtime shipped in 0.2.2 and took these locks without waiting, so a 0.2.2
+update could fail the same way; the Qt and mpv helpers are new in 0.2.3.
 
 ### The 0.2.3 Kilix Ask command model
 
