@@ -24,7 +24,7 @@ DISC_ONLY = (
     "-o Dir::Etc::sourcelist=/etc/apt/sources.list.d/plebian-os-installer.list "
     "-o Dir::Etc::sourceparts=/var/empty"
 )
-INSTALL = "in-target apt-get " + DISC_ONLY + " install -y --no-install-recommends"
+INSTALL = "in-target apt-get install -y --no-install-recommends " + DISC_ONLY
 LOCK = ROOT / "build" / "disc-apt-closure.lock"
 FETCH = ROOT / "build" / "fetch-disc-closure.sh"
 REMOVE = (
