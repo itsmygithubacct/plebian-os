@@ -16,23 +16,26 @@ in `/etc/plebian-os/build-info.env` for release acceptance.
 
 ## Source and runtime map
 
-The approved set was promoted from the 2026-07-13 authoring record:
+The mark was promoted from the 2026-07-13 authoring record. From 0.2.4 the
+splash and both banners are drawn by [`build/draw-artwork.py`](../../build/draw-artwork.py)
+from the mark and the Neuronte large desktop face, and from nothing else:
 
-| Repository file | Retained authoring source | Runtime use | Required contract | Approved SHA-256 |
+| Repository file | Source | Runtime use | Required contract | SHA-256 |
 |---|---|---|---|---|
 | `logo.svg` | `images/logo-geek-angular-p.svg` | Canonical editable angular-P geek mark; not embedded directly by Debian Installer | SVG, 512-square viewBox | `13457ceebdd3bfc498ae41fbc200b37314e8b27d23016912c0811f6594971615` |
 | `logo.png` | `images/logo-geek-angular-p.png` | Transparent raster reference/export of `logo.svg` | 1024x1024, 8-bit RGBA PNG, non-interlaced | `e667095e5156417d0c43d2fa60cdf8ec51dba57ea2c54902bfaf4f0e5df13d22` |
-| `splash.png` | `images/installer-splash-geek.png` | Replaces ISO `/isolinux/splash.png`; GRUB and ISOLINUX share it | 640x480, 8-bit RGB PNG, no alpha, non-interlaced | `1110ed74dfc015ff1c5f2420b09428a89d82c278f8a618cf0cc3167b2c0a777c` |
-| `banner.png` | `images/installer-banner-geek.png` | Overrides GTK initrd `usr/share/graphics/logo_debian.png` | 800x75, 8-bit RGB PNG, no alpha, non-interlaced | `0317df64efd7af9b03380f301c514357b5a0bd50120abacfd0ebeffb90516772` |
-| `banner-dark.png` | Byte-for-byte copy of `banner.png` until a distinct dark treatment is approved | Overrides GTK initrd `usr/share/graphics/logo_debian_dark.png` | 800x75, 8-bit RGB PNG, no alpha, non-interlaced | `0317df64efd7af9b03380f301c514357b5a0bd50120abacfd0ebeffb90516772` |
+| `splash.png` | `build/draw-artwork.py` | Replaces ISO `/isolinux/splash.png`; GRUB and ISOLINUX share it | 640x480, 8-bit RGB PNG, no alpha, non-interlaced | `3e85b926f360e0e3dc33c1c04110ed9a402cd73069c4982a33da535e1851bcc8` |
+| `banner.png` | `build/draw-artwork.py` | Overrides GTK initrd `usr/share/graphics/logo_debian.png` | 800x75, 8-bit RGB PNG, no alpha, non-interlaced | `384f10f3c044337f0732acbaca9d0ba907272042389a32833eca19c9f5fd6029` |
+| `banner-dark.png` | Byte-for-byte copy of `banner.png` (the drawing is already dark) | Overrides GTK initrd `usr/share/graphics/logo_debian_dark.png` | 800x75, 8-bit RGB PNG, no alpha, non-interlaced | `384f10f3c044337f0732acbaca9d0ba907272042389a32833eca19c9f5fd6029` |
 
 The matching desktop-only treatment is tracked separately as
-`../desktop/plebian-os.png`; it is not embedded into Debian Installer.
+`../desktop/plebian-os.png`; the same program draws it and it is not embedded
+into Debian Installer.
 
-The authoring-source names in the table document lineage only and are not build
-inputs. Those source records are not part of this distribution.
+The authoring-source names in the two logo rows document lineage only and are
+not build inputs. Those source records are not part of this distribution.
 
-The upstream artwork was anchored to this exact Debian source image:
+The files these replace in the installer come from this exact Debian image:
 
 ```text
 debian-13.5.0-amd64-netinst.iso
@@ -40,14 +43,38 @@ SHA-256: 95838884f5ea6c82421dfe6baaa5a639dbbe6756c1e380f9fe7a7cb0c1949d2a
 rootskel-gtk: 13.0.4
 ```
 
-Within that ISO, the relevant originals are `/isolinux/splash.png` and the GTK
+Within that ISO, the replaced originals are `/isolinux/splash.png` and the GTK
 initrd's `usr/share/graphics/logo_debian.png` and
-`usr/share/graphics/logo_debian_dark.png`. Their Debian source notices were
-captured in the retained authoring record.
+`usr/share/graphics/logo_debian_dark.png`. Through 0.2.3 the Plebian-OS splash
+and banners were edits of those originals; from 0.2.4 they are not, and none
+of the originals is an input. [ATTRIBUTION.md](ATTRIBUTION.md) keeps the
+upstream notices and the record of the earlier set.
 
-## Generation chain
+## How the pictures are drawn
 
-The source chain is deliberately separate from the small runtime payload:
+```sh
+python3 build/draw-artwork.py --neuronte /path/to/neuronte-release          # write the four files
+python3 build/draw-artwork.py --neuronte /path/to/neuronte-release --check  # redraw and compare
+```
+
+`--neuronte` names a Neuronte release directory holding `build/libneuronte.so`
+and `weights/neuronte-ui-large-latin1-v1.nrt`; the program refuses a weight
+file whose SHA-256 is not the one it records. It needs Python 3 with NumPy and
+Pillow. It uses no random numbers and writes the PNG itself, so the same
+inputs give the same bytes; the tracked files were written with zlib 1.3.1,
+Pillow 11.1.0 and NumPy 2.2.4. Nothing in a build or an installation runs it:
+builds consume the tracked files and check their hashes.
+
+Each picture is a dark vertical gradient, the outline of the mark enlarged and
+cropped as a faint background shape, the mark in full colour, and the name
+drawn by the Neuronte face in the mark's colour. Positions and sizes are the
+three short functions `splash`, `banner` and `wallpaper` in the program.
+
+## Earlier generation chain
+
+This is the record of the mark, which stays, and of the splash and banner
+shipped through 0.2.3, which the drawings above replaced. None of these
+records is a build input and none is distributed.
 
 | Stage | Authoring record (not distributed) | SHA-256 |
 |---|---|---|
@@ -64,11 +91,9 @@ The source chain is deliberately separate from the small runtime payload:
 | Final banner model output | `images/generated-raw/installer-banner-geek-full.png` | `e04ccf660c69f7fb657c75b489c79be74a5ad23775d6332643e33db96590abc4` |
 | Final splash model output | `images/generated-raw/installer-splash-geek-full.png` | `d34d6d96a545a446398dd89594a228a4afde3a48dd26dcb04bc5de6982f95add` |
 
-`INSTALLER_IMAGE_REVIEW.md` records the exact final normalization commands. In
-summary, the banner retains the top 192 pixels of the trimmed 2048-pixel-wide
-generated strip, then is resized to exactly 800x75. The splash is resized to
-exactly 640x480. Both use Lanczos filtering, metadata stripping, 8-bit depth,
-and a forced PNG24 output.
+The final banner and splash of that chain were normalized to 800x75 and
+640x480 with Lanczos filtering; `INSTALLER_IMAGE_REVIEW.md` in the authoring
+record has the exact commands.
 
 ## No version in artwork
 
@@ -76,41 +101,36 @@ No release number may be baked into any file in this directory. Raster and SVG
 artwork contains only the stable `Plebian-OS` identity. BIOS and UEFI menu text
 must render the resolved `PLEBIAN_OS_VERSION` at build time.
 
-This policy prevents stale artwork, avoids regenerating lossy/model-assisted
-images for a release-only text change, and keeps one asset set reusable across
+This policy prevents stale artwork, avoids redrawing and re-pinning images for
+a release-only text change, and keeps one asset set reusable across
 versions. A release must update bootloader text through the build's authoritative
 version path; it must not rename or patch image pixels to carry the version.
 
 ## Artwork update workflow
 
-1. **Re-audit the Debian base.** Pin and verify the new ISO SHA-256. Extract the
-   stock splash, both GTK banners, package version, and current source copyright
-   metadata. Stop if paths, formats, authorship, or license terms changed.
-2. **Work outside the build tree.** Retain exact prompts, supplied references,
-   full model outputs, and selected candidates in a dated provenance record. Note
-   the generation provider, model/version, date, seed when available, tool
-   versions, and every deterministic conversion command.
-3. **Edit the canonical source first.** `logo.svg` is authoritative for the
-   angular-P mark. Render `logo.png` from it with real transparency; never treat
-   a checkerboard image as alpha.
-4. **Normalize runtime files.** Export the splash and both banners to their
-   exact dimensions and PNG color contracts. Do not place a release version in
-   any bitmap. Keep `banner-dark.png` byte-identical to `banner.png` unless a
-   separately reviewed accessible-dark treatment is approved.
-5. **Promote stable names.** Copy only the canonical vector, its transparent
-   raster reference, and the three normalized runtime files into this directory.
-   Builds must not depend on raw generations or workstation-local paths.
-6. **Update the record.** Replace the source/runtime hashes and generation-chain
-   hashes in this README. Update `ATTRIBUTION.md` whenever the upstream source,
-   copyright, selected license, or editing method changes.
-7. **Validate before commit.** Verify all SHA-256 values; parse PNG IHDR fields
-   for dimensions, 8-bit depth, RGB/RGBA type, and non-interlacing; compare the
-   two banners when they are meant to match. Inspect the logo at 32 pixels, the
-   banner at its native 75-pixel height, and the splash in BIOS and UEFI menu
-   layouts. Confirm the eye, exactly two hair strokes, complete orange `>_`,
-   exact `Plebian-OS` spelling, menu contrast, safe margins, and absence of any
-   version number.
-8. **Test the media result.** Confirm the ISO contains the tracked splash bytes,
+1. **Re-audit the Debian base.** Pin and verify the new ISO SHA-256. Confirm the
+   paths and formats of the stock splash and both GTK banners that these files
+   replace. Stop if a path or format changed.
+2. **Edit the canonical source first.** `logo.svg` is authoritative for the
+   angular-P mark, and `build/draw-artwork.py` reads the mark from it. Render
+   `logo.png` from it with real transparency; never treat a checkerboard image
+   as alpha.
+3. **Change the drawing in the program.** Layout, colours and sizes live in
+   `build/draw-artwork.py`. Do not edit the PNG files by hand and do not place
+   a release version in any bitmap. `banner-dark.png` stays byte-identical to
+   `banner.png` unless a separately reviewed treatment is approved.
+4. **Redraw and re-pin.** Run the program, then replace the SHA-256 values in
+   this README, in `../desktop/README.md`, and wherever the build, the
+   provisioner, the updater and the tests name them (search for the old
+   value). Update `ATTRIBUTION.md` whenever a source, a copyright, the selected
+   license, or the method changes, and re-pin its hash the same way.
+5. **Validate before commit.** Run the test suite; `tests/test_artwork_drawing.py`
+   redraws the files when `NEURONTE_HOME` names a Neuronte release. Inspect the
+   logo at 32 pixels, the banner at its native 75-pixel height, and the splash
+   in BIOS and UEFI menu layouts. Confirm the eye, exactly two hair strokes,
+   complete orange `>_`, exact `Plebian-OS` spelling, menu contrast, safe
+   margins, and absence of any version number.
+6. **Test the media result.** Confirm the ISO contains the tracked splash bytes,
    both GTK initrd overrides, branded BIOS/UEFI text in every theme, and a valid
    refresh of every entry in Debian's existing media-check manifest. The
    manifest's upstream entry set excludes `isolinux/` and does not gain newly

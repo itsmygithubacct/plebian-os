@@ -17,7 +17,7 @@ class ArtworkNoticeTests(unittest.TestCase):
         contracts = (
             (
                 ATTRIBUTION,
-                "5f5996a32c0a92debe2fef972463d28d53495e6e64af78e0e14aa4a109196ce9",
+                "3503192cf57c91e7f6ebc9fe9e0b3109e84ff5ce850abab4991cdd0c2e39ad35",
             ),
             (
                 LICENSE,
