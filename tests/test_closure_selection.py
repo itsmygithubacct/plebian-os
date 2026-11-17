@@ -225,7 +225,8 @@ class ClosureSelectionTests(unittest.TestCase):
         ) + "\n"
 
     def _run(self, base: Path, *args, fail_after=None, check_ancestry=False,
-             env_extra=None, trust_tag=True, pass_fds=()):
+             env_extra=None, trust_tag=True, pass_fds=(), popen=False,
+             command=None):
         env = {
             "HOME": str(base / "home"),
             "PATH": os.environ["PATH"],
@@ -248,7 +249,11 @@ class ClosureSelectionTests(unittest.TestCase):
             )
             if tag.returncode == 0:
                 env["PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA"] = tag.stdout.strip()
-        return subprocess.run([str(SELECT), *args], env=env, text=True,
+        argv = [str(SELECT), *args] if command is None else command
+        if popen:
+            return subprocess.Popen(argv, env=env, text=True, pass_fds=pass_fds,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        return subprocess.run(argv, env=env, text=True,
                               capture_output=True, check=False, pass_fds=pass_fds)
 
     @staticmethod
@@ -2328,6 +2333,104 @@ class ClosureSelectionTests(unittest.TestCase):
             deliberate = self._rollback_for_pending_tag(base, facts[1])
             self.assertEqual(deliberate.returncode, 0, deliberate.stderr)
             self.assertEqual(env.read_bytes(), original)
+
+    # ── a rollback lands after the running update's own rollback ───────────
+    def _select_with_running_update(self, base: Path):
+        """A completed selection, and an updater that owns a stack transaction
+        and, once released, rolls back from its post-selection snapshot of
+        session.env, as an interrupted update does."""
+        env = self._machine(base)
+        original = env.read_bytes()
+        self._source(base)
+        self.assertEqual(self._run(base, "0.1.8", "--offline").returncode, 0)
+        selected = env.read_bytes()
+        self.assertNotEqual(selected, original)
+        snapshot = base / "updater-snapshot"
+        snapshot.write_bytes(selected)
+        fifo = base / "release-updater"
+        os.mkfifo(fifo)
+        state = base / "home/.local/gpu_terminal/pleb/state/stack-rollback.Live01"
+        state.mkdir(parents=True, mode=0o700)
+        updater = subprocess.Popen(
+            ["bash", "-c",
+             'read -r _ <"$1"; cat -- "$2" >"$3"; rm -rf -- "$4"', "updater",
+             str(fifo), str(snapshot), str(env), str(state)])
+        self.addCleanup(updater.wait)
+        self.addCleanup(updater.kill)
+        ticks = Path(f"/proc/{updater.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        (state / "owner").write_text(f"pid={updater.pid}\nstart={ticks}\nboot={boot}\n")
+        return env, original, selected, updater, fifo
+
+    def _release(self, updater, fifo):
+        with open(fifo, "w") as stream:
+            stream.write("go\n")
+        updater.wait(timeout=30)
+
+    def test_rollback_waits_for_a_running_update_so_its_restore_lands_last(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env, original, selected, updater, fifo = self._select_with_running_update(base)
+            rollback = self._run(base, "--rollback", popen=True)
+            self.addCleanup(rollback.wait)
+            self.addCleanup(rollback.kill)
+            seen = ""
+            while "waiting up to" not in seen:
+                line = rollback.stderr.readline()
+                self.assertTrue(line, "the selector ended instead of waiting: " + seen)
+                seen += line
+            self.assertIn("stack-rollback.Live01", seen)
+            self.assertEqual(env.read_bytes(), selected, "nothing is restored while it runs")
+            self.assertIsNone(rollback.poll())
+            self.assertFalse(any((r / "restored").exists() for r in self._recovery_records(base)))
+            self._release(updater, fifo)          # its rollback writes the snapshot back
+            self.assertEqual(env.read_bytes(), selected)
+            out, err = rollback.communicate(timeout=30)
+            self.assertEqual(rollback.returncode, 0, err)
+            self.assertIn("finished", out)
+            self.assertEqual(env.read_bytes(), original, "the selector's restore lands last")
+            self.assertTrue(all((r / "restored").exists() for r in self._recovery_records(base)))
+
+    def test_a_rollback_that_outwaits_the_update_changes_nothing_and_can_be_repeated(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env, original, selected, updater, fifo = self._select_with_running_update(base)
+            refused = self._run(base, "--rollback", env_extra={
+                "PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS": "1"})
+            self.assertEqual(refused.returncode, 13, refused.stderr)
+            self.assertIn("still running after 1s", refused.stderr)
+            self.assertIn("run: plebian-os-select-closure --rollback", refused.stderr)
+            self.assertEqual(env.read_bytes(), selected)
+            records = self._recovery_records(base)
+            self.assertEqual(len(records), 1)
+            self.assertFalse((records[0] / "restored").exists(), "the record stays restorable")
+            self._release(updater, fifo)
+            again = self._run(base, "--rollback")
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertEqual(env.read_bytes(), original)
+
+    def test_a_rollback_run_by_the_update_itself_does_not_wait_for_it(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            env, original, _, updater, fifo = self._select_with_running_update(base)
+            go = base / "go"
+            wrapper = self._run(
+                base, popen=True,
+                command=["bash", "-c",
+                         'while [ ! -e "$1" ]; do sleep 0.05; done; "$2" --rollback',
+                         "wrapper", str(go), str(SELECT)])
+            self.addCleanup(wrapper.wait)
+            self.addCleanup(wrapper.kill)
+            owner = base / "home/.local/gpu_terminal/pleb/state/stack-rollback.Live01/owner"
+            ticks = Path(f"/proc/{wrapper.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+            boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            owner.write_text(f"pid={wrapper.pid}\nstart={ticks}\nboot={boot}\n")
+            go.write_text("")
+            out, err = wrapper.communicate(timeout=30)
+            self.assertEqual(wrapper.returncode, 0, err)
+            self.assertNotIn("waiting", err)
+            self.assertEqual(env.read_bytes(), original)
+            self._release(updater, fifo)
 
     def test_pending_marker_of_a_selection_that_did_replace_is_ignored(self):
         with tempfile.TemporaryDirectory() as td:

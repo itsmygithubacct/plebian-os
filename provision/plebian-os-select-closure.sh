@@ -55,6 +55,11 @@
 #                 nothing, and say so. An attempt is removed once
 #                 selection-pending is published, so a finished selection is
 #                 not mistaken for that reselect. Do not delete recovery records.
+#                 A running plebian-os-update restores its own snapshot of
+#                 session.env and these tools when it rolls back, so --rollback
+#                 first waits (PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS, default
+#                 1800) for that update to end; if it does not, exit 13 and
+#                 change nothing.
 #
 # The release-controlled keys move as one unit or not at all: the complete
 # session/closure pair is rendered and verified by sourcing it before the
@@ -3159,6 +3164,64 @@ refuse_selection_during_interrupted_update() {
     die "run 'plebian-os-update --recover-interrupted' first; selecting now would pin a release that is not installed"
 }
 
+# ── a rollback waits for a running update to finish its own ─────────────────
+# An update that is still running owns a stack transaction. When it is
+# interrupted it finishes its shielded package step, which can take minutes,
+# and then rolls back from its own snapshot, taken after the selection. That
+# snapshot holds the selected session.env, selector and updater, so its
+# rollback puts them back. A selector rollback that ran before it would restore
+# the previous closure, stamp the recovery record restored, and then be
+# overwritten, leaving a pinned-new session with no recovery record to repair
+# it. A caller whose own traps do not defer a signal until the update returns
+# (a hangup under a Pleb that traps only INT and TERM) reaches this rollback
+# while that update is still running. So the restore waits for the update to
+# end, and always lands last.
+process_is_self_or_ancestor() {
+    local want="$1" pid="$$" stat
+    while [ -n "$pid" ] && [ "$pid" -gt 1 ]; do
+        [ "$pid" = "$want" ] && return 0
+        stat="$(cat "/proc/$pid/stat" 2>/dev/null)" || return 1
+        stat="${stat##*) }"
+        pid="$(awk '{print $2}' <<<"$stat")"
+    done
+    return 1
+}
+
+running_stack_transactions() {
+    local dir pid
+    for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
+        stack_transaction_owner_alive "$dir" || continue
+        pid="$(sed -n 's/^pid=\([0-9]\+\)$/\1/p' "$dir/owner")"
+        # An updater that runs this selector cannot end before it returns.
+        ! process_is_self_or_ancestor "$pid" || continue
+        printf '%s\n' "$dir"
+    done
+}
+
+wait_for_running_update() {
+    local limit="${PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS:-1800}" waited=0 found dir said=0
+    [[ "$limit" =~ ^[0-9]+$ ]] || limit=1800
+    selector_state_home
+    while found="$(running_stack_transactions)"; [ -n "$found" ]; do
+        if [ "$said" = 0 ]; then
+            said=1
+            warn "a plebian-os-update is still running and will restore its own snapshot when it ends:"
+            while IFS= read -r dir; do warn "  $dir"; done <<<"$found"
+            warn "waiting up to ${limit}s for it to finish before restoring the previous closure"
+        fi
+        if [ "$waited" -ge "$limit" ]; then
+            warn "the update is still running after ${limit}s; the installed closure was not modified"
+            warn "the recovery record is unchanged. When that update has finished, run: plebian-os-select-closure --rollback"
+            exit 13
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    [ "$said" = 0 ] || log "the running update finished; restoring the previous closure"
+}
+
 usage() {
     sed -n '2,/^set -euo/p' "$0" | sed '$d; s/^# \{0,1\}//'
 }
@@ -3208,6 +3271,10 @@ STAGE="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-closure.XXXXXX")"
 if [ ! -f "$SESSION_ENV" ] && [ "$SELECTOR_MODE" != standalone ]; then
     die "no installed session configuration at $SESSION_ENV — this tool runs on a provisioned machine, not in a source checkout"
 fi
+
+case "$MODE" in
+    rollback) wait_for_running_update ;;
+esac
 
 case "$MODE" in
     rollback|select) refuse_selection_during_interrupted_update ;;
