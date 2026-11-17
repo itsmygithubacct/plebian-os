@@ -2579,8 +2579,25 @@ class ClosureSelectionContractTests(unittest.TestCase):
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         self.assertIn("$PLEBIAN_OS_BINDIR/plebian-os-select-closure", update)
         self.assertIn("$PLEBIAN_OS_BINDIR/plebian-os-select-closure", provision)
-        self.assertIn("/usr/bin/plebian-os-select-closure", preseed)
         self.assertIn("plebian-os-select-closure.sh", remaster)
+        # The installer no longer copies this file. plebian-os-tools owns it.
+        self.assertNotIn(
+            "cp /cdrom/plebian-os/plebian-os-select-closure.sh", preseed)
+        installed = preseed.split(
+            "in-target apt-get install -y --no-install-recommends", 1
+        )[1].split(";", 1)[0]
+        self.assertIn("plebian-os-tools", installed)
+        mapped = [
+            line.split()
+            for line in (ROOT / "debian" / "install-map").read_text().splitlines()
+            if line and not line.startswith("#")
+        ]
+        self.assertIn(
+            ["plebian-os-tools", "0755",
+             "provision/plebian-os-select-closure.sh",
+             "/usr/bin/plebian-os-select-closure"],
+            mapped,
+        )
         self.assertIn('[ "${#expected_hashes[@]}" -eq "$staged_count" ]', update)
 
 

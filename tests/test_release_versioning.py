@@ -301,9 +301,9 @@ class ReleaseVersioningTests(unittest.TestCase):
             remaster,
         )
         marker = "/target/usr/share/plebian-os/VERSION"
-        self.assertIn(f"cp /cdrom/plebian-os/VERSION {marker}", preseed)
-        self.assertIn(f"chown root:root {marker}", preseed)
-        self.assertIn(f"chmod 0644 {marker}", preseed)
+        self.assertNotIn(f"cp /cdrom/plebian-os/VERSION {marker}", preseed)
+        self.assertNotIn(f"chown root:root {marker}", preseed)
+        self.assertNotIn(f"chmod 0644 {marker}", preseed)
         self.assertIn("install_version_marker", provision)
         self.assertIn("/etc/plebian-os/build-info.env", provision)
         self.assertIn("VERSION_MARKER_DST=$PLEBIAN_OS_DATADIR/VERSION", provision)

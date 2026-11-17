@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import test_debian_packaging
+
 
 ROOT = Path(__file__).resolve().parents[1]
 # These fixtures model ordinary external directories, not the private umask of
@@ -634,7 +636,16 @@ desktop_wallpaper_matches_expected_hash \
         self.assertIn('assets/desktop/plebian-os.png', remaster)
         self.assertIn("PLEBIAN_OS_DESKTOP_WALLPAPER_SHA256", remaster)
         self.assertIn("desktop-wallpaper.png", remaster)
-        self.assertIn(installed, preseed)
+        self.assertNotIn(
+            "cp /cdrom/plebian-os/desktop-wallpaper.png "
+            "/target/usr/share/plebian-os/wallpapers/plebian-os.png",
+            preseed,
+        )
+        mapped = {
+            destination: package
+            for package, _, _, destination in test_debian_packaging.install_map()
+        }
+        self.assertEqual(mapped[installed], "plebian-desktop-base")
         self.assertIn('assets/desktop/plebian-os.png', update)
         self.assertIn("desktop-wallpaper.png", update)
         self.assertIn('wallpaper_actual" = "$wallpaper_expected', update)

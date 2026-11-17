@@ -1,0 +1,245 @@
+"""The installer installs the core from the signed packages on the disc.
+
+These checks are literals: the package names, the copied destinations, the
+removal of the disc source, and the temporary directory that holds the
+signing key.
+"""
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+import test_debian_packaging
+
+
+ROOT = Path(__file__).resolve().parents[1]
+PRESEED = ROOT / "preseed" / "preseed.cfg"
+REMASTER = ROOT / "build" / "remaster-iso.sh"
+SIGN = ROOT / "build" / "write-disc-apt.sh"
+BUILD = ROOT / "build" / "build-debs.sh"
+INSTALL = "in-target apt-get install -y --no-install-recommends"
+REMOVE = (
+    "rm -f /target/etc/apt/sources.list.d/plebian-os-installer.list "
+    "/target/etc/apt/keyrings/plebian-os-installer.gpg"
+)
+ENABLE = "in-target systemctl enable plebian-os-firstboot.service"
+
+
+def control_packages():
+    return re.findall(
+        r"^Package: (\S+)$",
+        (ROOT / "debian" / "control").read_text(),
+        flags=re.MULTILINE,
+    )
+
+
+def late_command():
+    return PRESEED.read_text().split("d-i preseed/late_command string", 1)[1]
+
+
+def copy_segments(late):
+    segments = []
+    for piece in late.replace("\\\n", "\n").split(";"):
+        if re.search(r"(^|\s)cp(\s|$)", piece):
+            segments.append(piece)
+    return segments
+
+
+class InstallerPackageTests(unittest.TestCase):
+    def test_late_command_installs_exactly_the_declared_packages(self):
+        late = late_command()
+        match = re.search(
+            r"in-target apt-get install -y --no-install-recommends ([^;\\]+)",
+            late,
+        )
+        self.assertIsNotNone(match)
+        installed = match.group(1).split()
+        declared = control_packages()
+        self.assertEqual(installed, declared)
+        self.assertEqual(set(installed), set(declared))
+        self.assertEqual(
+            declared,
+            [
+                "plebian-os-release",
+                "plebian-os-tools",
+                "plebian-os-firstboot",
+                "plebian-desktop-base",
+            ],
+        )
+
+    def test_late_command_does_not_copy_packaged_destinations(self):
+        late = late_command()
+        segments = copy_segments(late)
+        self.assertNotIn("cp /cdrom/plebian-os/$native_module", late)
+        for _, _, _, destination in test_debian_packaging.install_map():
+            needle = "/target" + destination
+            for segment in segments:
+                self.assertNotIn(needle, segment, destination)
+
+    def test_disc_source_and_key_are_removed_before_firstboot_is_enabled(self):
+        preseed = PRESEED.read_text()
+        self.assertIn(
+            "deb [signed-by=/etc/apt/keyrings/plebian-os-installer.gpg] "
+            "file:/mnt/cdrom/plebian-os/apt trixie main",
+            preseed,
+        )
+        self.assertIn(REMOVE, preseed)
+        install_at = preseed.index(INSTALL)
+        remove_at = preseed.index(REMOVE)
+        enable_at = preseed.index(ENABLE)
+        self.assertLess(install_at, remove_at)
+        self.assertLess(remove_at, enable_at)
+        self.assertLess(preseed.index("umount /target/mnt/cdrom"), enable_at)
+        after = preseed[remove_at + len(REMOVE):]
+        self.assertNotIn("plebian-os-installer.list", after)
+        self.assertNotIn("plebian-os-installer.gpg", after)
+
+    def test_remaster_signs_inside_a_temporary_directory_only(self):
+        script = SIGN.read_text()
+        self.assertIn("plebian-os-installer-gpg.XXXXXX", script)
+        self.assertIn("trap cleanup_signing_key EXIT", script)
+        self.assertIn('rm -rf "$GNUPGHOME"', script)
+        self.assertNotIn("~/.gnupg", script)
+        self.assertNotIn("$HOME/.gnupg", script)
+        self.assertNotIn("/home/", script)
+        remaster = REMASTER.read_text()
+        refresh = remaster.index(
+            'python3 "$INSTALLER_BRANDER" refresh-md5 "$EXTRACT"'
+        )
+        self.assertLess(remaster.index('"$HERE/build/build-debs.sh"'), refresh)
+        self.assertLess(remaster.index('"$HERE/build/write-disc-apt.sh"'), refresh)
+        self.assertNotRegex(remaster, r"\bgpg\b")
+        builder = BUILD.read_text()
+        self.assertIn("dpkg-buildpackage -b -us -uc", builder)
+        self.assertIn('python3 "$HERE/build/check-debs.py" "$OUTDIR"', builder)
+        self.assertIn("plebian-024-build:spike", builder)
+        self.assertIn("debian:trixie", builder)
+
+    def test_signing_script_leaves_no_key_outside_its_temporary_directory(self):
+        for wrong in (False, True):
+            with self.subTest(wrong_key=wrong):
+                self._sign_and_check(wrong)
+
+    def _sign_and_check(self, wrong):
+        with tempfile.TemporaryDirectory(prefix="installer-apt-") as td:
+            root = Path(td)
+            home = root / "home"
+            tmpdir = root / "tmp"
+            sentinel = root / "caller-gnupg"
+            debs = root / "debs"
+            repo = root / "repo"
+            for path in (home, tmpdir, sentinel, debs):
+                path.mkdir(mode=0o700)
+            (sentinel / "marker").write_text("untouched\n")
+            self._write_deb(debs)
+            env = os.environ.copy()
+            env["HOME"] = str(home)
+            env["TMPDIR"] = str(tmpdir)
+            env["GNUPGHOME"] = str(sentinel)
+            if wrong:
+                env["PLEBIAN_OS_INSTALLER_APT_WRONG_KEY"] = "1"
+            else:
+                env.pop("PLEBIAN_OS_INSTALLER_APT_WRONG_KEY", None)
+            result = subprocess.run(
+                [str(SIGN), str(debs), str(repo)],
+                env=env, text=True, capture_output=True, timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((home / ".gnupg").exists())
+            self.assertEqual(sorted(p.name for p in sentinel.iterdir()), ["marker"])
+            self.assertEqual(list(tmpdir.glob("plebian-os-installer-gpg.*")), [])
+            self.assertEqual((repo / ".aptignr").read_bytes(), b"")
+            self.assertTrue((repo / "dists/trixie/main/binary-amd64/Packages").is_file())
+            self.assertTrue((repo / "dists/trixie/main/binary-amd64/Packages.gz").is_file())
+            inrelease = (repo / "dists/trixie/InRelease").read_text()
+            self.assertIn("BEGIN PGP SIGNED MESSAGE", inrelease)
+            names = {path.name for path in repo.rglob("*")}
+            for forbidden in ("private-keys-v1.d", "trustdb.gpg", "pubring.kbx"):
+                self.assertNotIn(forbidden, names)
+            self.assertEqual(list(repo.rglob("*.key")), [])
+            self._verify_published_key(repo, root / "verify-gpg", accepts=not wrong)
+            update = self._apt_update(repo, root / "apt")
+            if wrong:
+                self.assertNotEqual(update.returncode, 0, update.stderr)
+                self.assertIn("Missing key", update.stderr)
+            else:
+                self.assertEqual(update.returncode, 0, update.stderr)
+
+    def _write_deb(self, debs):
+        staging = debs / "staging"
+        control_dir = staging / "DEBIAN"
+        control_dir.mkdir(parents=True)
+        staging.chmod(0o755)
+        control_dir.chmod(0o755)
+        payload = staging / "usr/share/sample"
+        payload.mkdir(parents=True)
+        payload.chmod(0o755)
+        (payload.parent).chmod(0o755)
+        (staging / "usr").chmod(0o755)
+        (payload / "file").write_text("sample\n")
+        (staging / "DEBIAN/control").write_text(
+            "Package: sample-installer-package\n"
+            "Version: 1\n"
+            "Architecture: all\n"
+            "Maintainer: Plebian-OS test <test@example.invalid>\n"
+            "Description: sample\n"
+            " sample package for the disc repository test\n"
+        )
+        subprocess.run(
+            [
+                "dpkg-deb", "--root-owner-group", "-b",
+                str(staging), str(debs / "sample-installer-package_1_all.deb"),
+            ],
+            check=True, capture_output=True, timeout=20,
+        )
+
+    def _verify_published_key(self, repo, home, accepts):
+        home.mkdir(mode=0o700)
+        key = repo / "plebian-os-installer.gpg"
+        subprocess.run(
+            ["gpg", "--homedir", str(home), "--batch", "--import", str(key)],
+            check=True, capture_output=True, timeout=20,
+        )
+        result = subprocess.run(
+            ["gpg", "--homedir", str(home), "--batch", "--verify",
+             str(repo / "dists/trixie/InRelease")],
+            capture_output=True, text=True, timeout=20,
+        )
+        if accepts:
+            self.assertEqual(result.returncode, 0, result.stderr)
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+
+    def _apt_update(self, repo, root):
+        key = root / "etc/apt/keyrings/key.gpg"
+        key.parent.mkdir(parents=True)
+        shutil.copyfile(repo / "plebian-os-installer.gpg", key)
+        src = root / "tmp/src.list"
+        src.parent.mkdir(parents=True)
+        src.write_text(
+            "deb [signed-by=" + str(key) + "] file:" + str(repo) + " trixie main\n"
+        )
+        empty = root / "var/empty"
+        empty.mkdir(parents=True)
+        (root / "var/lib/dpkg").mkdir(parents=True)
+        (root / "var/lib/dpkg/status").write_text("")
+        (root / "var/lib/apt/lists/partial").mkdir(parents=True)
+        (root / "var/cache/apt/archives/partial").mkdir(parents=True)
+        return subprocess.run(
+            [
+                "apt-get",
+                "-o", "Dir=" + str(root),
+                "-o", "Dir::Etc::sourcelist=" + str(src),
+                "-o", "Dir::Etc::sourceparts=" + str(empty),
+                "-o", "APT::Get::List-Cleanup=false",
+                "update",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

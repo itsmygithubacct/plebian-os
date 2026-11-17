@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # remaster-iso.sh — build a Plebian-OS netinst ISO from a stock Debian trixie
-# netinst by injecting the preseed + the first-boot provisioner. Phase-1
+# netinst by injecting the preseed and a signed repository of the core packages. Phase-1
 # "preseeded remaster" approach (same as the plebian sibling project): stock
 # installer and repos, with unsigned artwork/config/initrd payloads branded for
 # Plebian-OS. Secure Boot's signed shim/GRUB/kernel binaries stay untouched.
@@ -2465,6 +2465,13 @@ fi
 # key.  Autoboot is an explicit VM/kiosk opt-in and gets a deterministic BIOS
 # and UEFI countdown even when the source image omitted one.
 configure_boot_menu_policy "$EXTRACT" "${PLEBIAN_OS_AUTOBOOT:-0}"
+
+echo "==> building the core packages"
+pkg_debs="$WORK/core-debs"
+mkdir -p "$pkg_debs"
+"$HERE/build/build-debs.sh" "$pkg_debs"
+echo "==> signing the installer package repository"
+"$HERE/build/write-disc-apt.sh" "$pkg_debs" "$EXTRACT/plebian-os/apt"
 
 echo "==> refreshing installer media checksums"
 python3 "$INSTALLER_BRANDER" refresh-md5 "$EXTRACT"
