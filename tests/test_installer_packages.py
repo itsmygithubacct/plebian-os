@@ -63,9 +63,7 @@ class InstallerPackageTests(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         installed = match.group(1).split()
-        # The archive key is packaged and not yet installed from the disc.
-        self.assertEqual(control_packages()[-1], "plebian-archive-keyring")
-        declared = control_packages()[:-1]
+        declared = control_packages()
         self.assertEqual(installed, declared)
         self.assertEqual(set(installed), set(declared))
         self.assertEqual(
@@ -75,6 +73,7 @@ class InstallerPackageTests(unittest.TestCase):
                 "plebian-os-tools",
                 "plebian-os-firstboot",
                 "plebian-desktop-base",
+                "plebian-archive-keyring",
             ],
         )
 
