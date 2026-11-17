@@ -231,8 +231,12 @@ class OllamaManifestSelectionTests(unittest.TestCase):
         members = self.deploy_names.split()[1:-1]
         self.assertEqual(members.count("ollama-release.env"), 1)
         self.assertEqual(members[6], "VERSION")
-        result = run_shell("names=(VERSION other)\nnew_paths=(a b)\n" + self.root_validate)
-        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(members[30], "plebian-os-ssh-server")
+        self.assertIn('"${new_paths[24]}" "${new_paths[30]}" <<', self.updater)
+        # A set without the manifest fails through the rollback trap, not a bare exit.
+        result = run_shell("set -e\ntrap 'echo rolled-back; exit 1' ERR\n"
+                           "names=(VERSION other)\nnew_paths=(a b)\n" + self.root_validate)
+        self.assertEqual((result.returncode, result.stdout.strip()), (1, "rolled-back"), result.stderr)
 
     def test_updater_missing_selected_manifest_refuses_in_user_stage(self):
         fixture = self.fixture("0.2.3")

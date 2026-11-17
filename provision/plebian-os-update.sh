@@ -4863,7 +4863,7 @@ done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
     "${new_paths[15]}" "${new_paths[16]}" "${new_paths[18]}" \
     "${new_paths[19]}" "${new_paths[20]}" "${new_paths[21]}" \
-    "${new_paths[22]}" "${new_paths[23]}" "${new_paths[24]}" <<'PY'
+    "${new_paths[22]}" "${new_paths[23]}" "${new_paths[24]}" "${new_paths[30]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
@@ -4882,7 +4882,7 @@ manifest_index=-1
 for index in "${!names[@]}"; do
     [ "${names[$index]}" != ollama-release.env ] || manifest_index=$index
 done
-[ "$manifest_index" -ge 0 ] || exit 2
+[ "$manifest_index" -ge 0 ] || false
 python3 "-" "${new_paths[$manifest_index]}" "${new_paths[6]}" <<'PY_MANIFEST'
 import pathlib
 import re
