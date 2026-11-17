@@ -86,7 +86,7 @@ class InterruptedUpdateTests(unittest.TestCase):
     def test_the_rollback_leaves_a_hung_up_terminal_but_keeps_a_live_one(self):
         body = (
             'rollback_stack_transaction() {\n'
-            '    echo "fd1=$(readlink /proc/$$/fd/1) fd2=$(readlink /proc/$$/fd/2)" >>"$LOG"\n'
+            '    echo "fd0=$(readlink /proc/$$/fd/0) fd1=$(readlink /proc/$$/fd/1) fd2=$(readlink /proc/$$/fd/2)" >>"$LOG"\n'
             '    warn "rolling back"\n'
             '}\n'
             '_STACK_TXN_ACTIVE=1\n_STACK_TXN_DIR=' + str(self.state / "stack-rollback.Now001") + '\n'
@@ -97,8 +97,8 @@ class InterruptedUpdateTests(unittest.TestCase):
                 self.log.write_text("")
                 result = self.run_lib(body, tty=tty)
                 self.assertEqual(result.returncode, 1)   # an uncommitted update exits non-zero
-                line = [x for x in self.log.read_text().splitlines() if x.startswith("fd1=")][0]
-                self.assertEqual(line == "fd1=/dev/null fd2=/dev/null", detached, line)
+                line = [x for x in self.log.read_text().splitlines() if x.startswith("fd0=")][0]
+                self.assertEqual(line == "fd0=/dev/null fd1=/dev/null fd2=/dev/null", detached, line)
 
     def test_only_transactions_whose_owner_is_gone_count_as_interrupted(self):
         live = subprocess.Popen(["sleep", "60"])

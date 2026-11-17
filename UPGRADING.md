@@ -363,7 +363,23 @@ Pleb drives the hop, including a published Pleb that does not defer a hangup
 (SIGHUP) the way it defers Ctrl-C and SIGTERM. When the terminal itself has
 hung up, the selector and the updater lose only their terminal messages: the
 updater's lines are in `update.log`, and its rollback and the selector's
-restore still run.
+restore still run. The updater reads nothing from a hung-up terminal, so its
+`sudo` calls during the rollback are not signalled as if the terminal had been
+closed. A package step that starts on a terminal reads nothing from it and
+writes through a pipe the updater copies to the terminal while it answers, so
+it is not killed when the terminal goes away mid-step.
+
+If a hop's driver dies after the closure rollback ran but before it cleared its
+`selected` marker, the next `pleb update` repeats the rollback. The selector
+then finds the selection's own record already restored and the installed
+session and closure equal to what it saved, and reports that there is nothing
+left to roll back (status 0). A closure that is not the saved one, another
+hop's tag, or a manual `--rollback` still fails with "no closure to roll back
+to". Pleb applies the same rule from its own record of the closure before the
+hop. The recovery then reconciles the stack with `plebian-os-update
+--revalidate-current`. That is also the procedure a retained
+`stack-rollback.*/failure-reason` names; such a retained directory neither
+blocks an update nor is touched by `--recover-interrupted`.
 
 A same-tag reselect interrupted before the selection is pending, such as the
 RC9 → 0.2.3 hop, is recovered as an interrupted reselect when the release

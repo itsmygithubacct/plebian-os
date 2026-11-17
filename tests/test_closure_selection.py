@@ -1191,6 +1191,49 @@ class ClosureSelectionTests(unittest.TestCase):
         self.assertEqual(selected.returncode, 0, selected.stderr)
         return session
 
+    def test_a_repeated_hop_rollback_finds_its_own_spent_record_and_succeeds(self):
+        """The hop driver died after this rollback ran, before it cleared its
+        own marker; its recovery asks again with the same trusted tag. The
+        call pattern is the published driver's: --rollback and the tag object."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session = self._selected_split_fixture(base)
+            closure = session.with_name("closure.env")
+            tag = subprocess.run(
+                ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.2.1"],
+                capture_output=True, text=True, check=True).stdout.strip()
+            # The hop driver names the split layout, as it does on every call.
+            tagged = {"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag,
+                      "PLEBIAN_OS_CLOSURE_LAYOUT": "split"}
+            first = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertFalse(closure.exists())
+            restored = session.read_bytes()
+            again = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertIn("already rolled back", again.stdout)
+            self.assertEqual(session.read_bytes(), restored)
+            self.assertFalse(closure.exists())
+            # A manual rollback, another hop's tag, or a closure that is not the
+            # one the record saved is still the hard failure.
+            manual = self._run(base, "--rollback",
+                               env_extra={"PLEBIAN_OS_CLOSURE_LAYOUT": "split"})
+            self.assertNotEqual(manual.returncode, 0)
+            self.assertIn("no split closure to roll back to", manual.stderr)
+            other = self._run(base, "--rollback", env_extra={
+                "PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": "1" * 40,
+                "PLEBIAN_OS_CLOSURE_LAYOUT": "split"})
+            self.assertNotEqual(other.returncode, 0)
+            self.assertIn("no split closure to roll back to", other.stderr)
+            with session.open("a") as stream:
+                stream.write("OPERATOR_NOTE=changed-since\n")
+            moved = self._run(base, "--rollback", env_extra=tagged)
+            self.assertNotEqual(moved.returncode, 0)
+            self.assertIn("no split closure to roll back to", moved.stderr)
+            closure.write_text("PLEBIAN_OS_VERSION=0.2.1\n")
+            selected = self._run(base, "--rollback", env_extra=tagged)
+            self.assertNotEqual(selected.returncode, 0)
+
     def test_split_rollback_sync_failure_is_retryable(self):
         for fail_target in ("marker", "record"):
             with self.subTest(target=fail_target), tempfile.TemporaryDirectory() as td:

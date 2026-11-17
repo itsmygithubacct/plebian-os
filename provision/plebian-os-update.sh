@@ -84,16 +84,20 @@ die()  {
 
 # After the terminal hangs up, every child that writes to it (apt, dpkg, the
 # helper scripts) fails or dies on EIO in the middle of the rollback. The log
-# keeps every line, so point the dead descriptors at /dev/null. A hung-up
-# terminal is still named /dev/pts/N or /dev/ttyN but no longer answers
-# isatty. Anything else, and a terminal that still answers, is left alone.
+# keeps every line, so point the dead descriptors at /dev/null. Standard input
+# counts: a sudo whose input is a hung-up terminal reads EIO from it, and
+# signals the command it runs (SIGHUP, then a revoked pty) as if the user had
+# closed the terminal, which kills a rollback step such as the Qt restore. A
+# hung-up terminal is still named /dev/pts/N or /dev/ttyN but no longer
+# answers isatty. Anything else, and a terminal that still answers, is left
+# alone.
 detach_dead_terminal() {
     local fd target
-    for fd in 1 2; do
+    for fd in 0 1 2; do
         target="$(readlink "/proc/$$/fd/$fd" 2>/dev/null)" || continue
         case "$target" in /dev/pts/*|/dev/tty*) ;; *) continue ;; esac
         [ -t "$fd" ] && continue
-        if [ "$fd" = 1 ]; then exec 1>/dev/null; else exec 2>/dev/null; fi
+        case "$fd" in 0) exec 0</dev/null ;; 1) exec 1>/dev/null ;; *) exec 2>/dev/null ;; esac
     done
     return 0
 }
@@ -2669,14 +2673,43 @@ run_package_step_in_its_own_session() {
         return $?
     fi
     /usr/bin/python3 -I -c '
-import os, signal, subprocess, sys, time
+import os, signal, subprocess, sys, threading, time
 signalled = []
 def note(number, frame):
     signalled.append(number)
 signal.signal(signal.SIGINT, note)
 signal.signal(signal.SIGTERM, note)
 signal.signal(signal.SIGHUP, note)
-child = subprocess.Popen(sys.argv[1:])
+# A step started from a terminal must not depend on it. sudo reads its own
+# terminal, and when that goes away it signals the command and revokes the
+# command'"'"'s pty, so a step that shares the terminal dies mid-package with
+# EIO on every write. Decided now, while the terminal exists: the step reads
+# nothing from it, and its output goes through pipes that this process copies
+# to the terminal for as long as the terminal answers, then drains.
+relay = any(os.isatty(fd) for fd in (0, 1, 2))
+if relay:
+    child = subprocess.Popen(sys.argv[1:], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    def pump(source, target):
+        alive = True
+        while True:
+            try:
+                data = os.read(source, 65536)
+            except OSError:
+                break
+            if not data:
+                break
+            while alive and data:
+                try:
+                    data = data[os.write(target, data):]
+                except OSError:
+                    alive = False
+    pumps = [threading.Thread(target=pump, args=(child.stdout.fileno(), 1), daemon=True),
+             threading.Thread(target=pump, args=(child.stderr.fileno(), 2), daemon=True)]
+    for thread in pumps:
+        thread.start()
+else:
+    child = subprocess.Popen(sys.argv[1:])
 status = 1
 while True:
     try:
@@ -2684,6 +2717,9 @@ while True:
         break
     except KeyboardInterrupt:
         signalled.append(signal.SIGINT)
+if relay:
+    for thread in pumps:
+        thread.join(2)
 if signalled:
     number = signalled[0]
     codes = {int(signal.SIGINT): 130, int(signal.SIGTERM): 143, int(signal.SIGHUP): 129}

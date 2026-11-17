@@ -2614,7 +2614,38 @@ for candidate in "$base"/closure-rollback.*; do
     [ ! -e "$candidate/restored" ] || continue
     candidates+=("$candidate")
 done
-[ "${#candidates[@]}" -gt 0 ] || exit 4
+if [ "${#candidates[@]}" -eq 0 ]; then
+    # Every record is spent. A hop driver that died after this rollback ran,
+    # before it cleared its own marker, asks again with the same trusted tag.
+    # When the newest record is that tag's own and the installed session and
+    # closure are the bytes it saved, there is nothing left to undo: say so
+    # (exit 15) instead of "no closure to roll back to". Anything else is
+    # still the hard failure it always was.
+    [ "$require_own" = 1 ] && [[ "$trusted_tag" =~ ^[0-9a-f]{40}$ ]] || exit 4
+    spent=()
+    for candidate in "$base"/closure-rollback.*; do
+        [ -d "$candidate" ] && [ ! -L "$candidate" ] || continue
+        [ -f "$candidate/session.existed" ] && [ -f "$candidate/closure.existed" ] || continue
+        [ -f "$candidate/restored" ] && [ ! -L "$candidate/restored" ] || continue
+        spent+=("$candidate")
+    done
+    [ "${#spent[@]}" -gt 0 ] || exit 4
+    record_status=0
+    record="$(newest_recovery_record "${spent[@]}")" || record_status=$?
+    [ "$record_status" = 0 ] || exit 4
+    refuse_unrelated_recovery_record "$record" 1 "$trusted_tag" || exit 4
+    for pair in "session:$session_path:session.env" "closure:$closure_path:closure.env"; do
+        key="${pair%%:*}"; rest="${pair#*:}"; path="${rest%%:*}"; name="${rest#*:}"
+        case "$(cat "$record/$key.existed" 2>/dev/null || true)" in
+            0) [ ! -e "$path" ] && [ ! -L "$path" ] || exit 4 ;;
+            1) [ -f "$path" ] && [ ! -L "$path" ] \
+                    && [ -f "$record/$name" ] && [ ! -L "$record/$name" ] \
+                    && cmp -s -- "$record/$name" "$path" || exit 4 ;;
+            *) exit 4 ;;
+        esac
+    done
+    exit 15
+fi
 record_status=0
 record="$(newest_recovery_record "${candidates[@]}")" || record_status=$?
 [ "$record_status" = 0 ] || exit "$record_status"
@@ -2725,6 +2756,10 @@ sync -f "$record"
 printf '%s\n' "$record"
 ROOT_SPLIT_ROLLBACK
     ) || rc=$?
+    if [ "$rc" = 15 ]; then
+        log "this selection was already rolled back and the previous closure is installed; nothing to restore"
+        return 0
+    fi
     if [ "$rc" -ne 0 ]; then
         session_post="$(installed_tool_fingerprint "$SESSION_ENV")"
         closure_post="$(installed_tool_fingerprint "$CLOSURE_ENV")"

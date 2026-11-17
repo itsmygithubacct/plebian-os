@@ -124,6 +124,58 @@ class PackageStepShieldTests(unittest.TestCase):
         self.assertEqual(rc, 130)
         self.assertIn("interrupted; rolling back", log.read_text())
 
+    # A step that keeps writing after the terminal is gone, as apt and dpkg do.
+    TALKING_HELPER = """#!/usr/bin/python3 -I
+import os, signal, sys, time
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+open(os.environ["STARTED"], "w").close()
+for number in range(8):
+    print("package output", number, flush=True)
+    print("package warning", number, file=sys.stderr, flush=True)
+    time.sleep(0.25)
+open(os.environ["FINISHED"], "w").write("finished\\n")
+"""
+
+    def _hang_up_during_step(self):
+        """Run the shielded step under a login-shell stand-in on a pty, close
+        the master once the step started, so the shell dies of the hangup and
+        its death hangs up the foreground group, and return the updater's
+        recorded status. The stand-in step keeps writing for two seconds."""
+        self.helper.write_text(self.TALKING_HELPER)
+        rc_file = self.base / "updater-rc"
+        log = self.base / "update.log"
+        quoted = str(log).replace("'", "'\\''")
+        script = (self._shielded_native() + "\n"
+                  f"exec {{_UPDATE_LOG_FD}}>>'{quoted}'\n"
+                  'export PLEBIAN_OS_UPDATE_LOG_FD="$_UPDATE_LOG_FD"\n'
+                  f"trap 'echo $? >{shlex.quote(str(rc_file))}' EXIT\n"
+                  "trap 'exit 129' HUP\n"
+                  "native_runtime_command status\n")
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.execve("/bin/bash", ["/bin/bash", "-c", '"$@"; exit $?', "login-shell",
+                                    "/bin/bash", "-c", script], self.env)
+        deadline = time.monotonic() + 20
+        while not self.started.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertTrue(self.started.exists())
+        os.close(fd)
+        os.waitpid(pid, 0)
+        deadline = time.monotonic() + 20
+        while not rc_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return rc_file, log
+
+    def test_a_step_finishes_when_the_terminal_vanishes_while_it_writes(self):
+        rc_file, log = self._hang_up_during_step()
+        deadline = time.monotonic() + 20
+        while not self.finished.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        self.assertEqual(self.finished.read_text(), "finished\n",
+                         "the step died with its terminal")
+        self.assertEqual(rc_file.read_text().strip(), "129")
+        self.assertIn("interrupted; rolling back", log.read_text())
+
     def test_update_refuses_a_half_installed_package_database(self):
         bin_dir = self.base / "bin"
         bin_dir.mkdir()
