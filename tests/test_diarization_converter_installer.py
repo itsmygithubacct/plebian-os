@@ -86,9 +86,15 @@ class DiarizationConverterInstallerTests(unittest.TestCase):
                     main()
 
     def test_helper_is_delivered_in_image_and_upgrade(self):
-        for relative in ("build/remaster-iso.sh", "preseed/preseed.cfg",
+        for relative in ("build/remaster-iso.sh",
                          "provision/plebian-os-provision.sh", "provision/plebian-os-update.sh"):
             self.assertIn(HELPER.name, (ROOT / relative).read_text(), relative)
+        preseed = (ROOT / "preseed/preseed.cfg").read_text()
+        self.assertNotIn("cp /cdrom/plebian-os/" + HELPER.name, preseed)
+        installed = preseed.split(
+            "in-target apt-get install -y --no-install-recommends", 1
+        )[1].split(";", 1)[0]
+        self.assertIn("plebian-os-tools", installed)
 
 
 if __name__ == "__main__":

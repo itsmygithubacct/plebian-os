@@ -107,6 +107,11 @@ class OllamaManifestSelectionTests(unittest.TestCase):
             self.assertIn("release pin", result.stderr)
 
     def test_preseed_copies_only_a_version_matching_manifest_and_refuses_missing_payload(self):
+        """A missing or mismatched manifest still stops the install.
+
+        The manifest file is installed by the package. A matching check exits
+        zero and does not copy the file into the target.
+        """
         for version in VERSIONS:
             with self.subTest(version=version):
                 fixture = self.fixture(version)
@@ -128,7 +133,7 @@ class OllamaManifestSelectionTests(unittest.TestCase):
                     result = run_shell(source)
                     if value == fixture["manifest"].read_text():
                         self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual((target / manifest.name).read_bytes(), manifest.read_bytes())
+                        self.assertFalse((target / manifest.name).exists())
                     else:
                         self.assertNotEqual(result.returncode, 0)
                         self.assertFalse((target / manifest.name).exists())

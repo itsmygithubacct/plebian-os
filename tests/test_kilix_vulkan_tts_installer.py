@@ -120,11 +120,16 @@ class KilixVulkanTtsInstallerTests(unittest.TestCase):
         expected = "plebian-os-install-kilix-vulkan-tts"
         for relative in (
             "build/remaster-iso.sh",
-            "preseed/preseed.cfg",
             "provision/plebian-os-provision.sh",
             "provision/plebian-os-update.sh",
         ):
             self.assertIn(expected, (ROOT / relative).read_text(), relative)
+        preseed = (ROOT / "preseed/preseed.cfg").read_text()
+        self.assertNotIn("cp /cdrom/plebian-os/" + expected, preseed)
+        installed = preseed.split(
+            "in-target apt-get install -y --no-install-recommends", 1
+        )[1].split(";", 1)[0]
+        self.assertIn("plebian-os-tools", installed)
 
     def test_file_verifier_rejects_symlinks_and_wrong_mode(self):
         verify = self.namespace["verified_file_digest"]

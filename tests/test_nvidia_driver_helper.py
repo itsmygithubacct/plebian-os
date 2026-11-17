@@ -20,7 +20,7 @@ PROVISION = ROOT / "provision" / "plebian-os-provision.sh"
 
 class HelperShipsAsAnOptionalTool(unittest.TestCase):
     def test_iso_and_late_command_deliver_the_executable(self):
-        """Run the actual media-copy and target-copy commands in a fake image."""
+        """Stage the media copy. The installed copy comes from the tools package."""
         name = "plebian-os-nvidia-driver"
         remaster = (ROOT / "build/remaster-iso.sh").read_text()
         media_commands = [line for line in remaster.splitlines()
@@ -28,22 +28,29 @@ class HelperShipsAsAnOptionalTool(unittest.TestCase):
         self.assertEqual(len(media_commands), 1)
         preseed = (ROOT / "preseed/preseed.cfg").read_text()
         late = preseed.split("d-i preseed/late_command string", 1)[1]
-        target_commands = [line.strip().removesuffix("\\")
-                           for line in late.splitlines() if name in line]
-        self.assertTrue(target_commands, "helper absent from installed image")
+        self.assertNotIn(f"cp /cdrom/plebian-os/{name}", late)
+        installed = late.split(
+            "in-target apt-get install -y --no-install-recommends", 1
+        )[1].split(";", 1)[0]
+        self.assertIn("plebian-os-tools", installed)
+        row = None
+        for line in (ROOT / "debian/install-map").read_text().splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            package, mode, _source, destination = line.split()
+            if destination == "/usr/bin/" + name:
+                row = (package, mode)
+        self.assertEqual(row, ("plebian-os-tools", "0755"))
         with tempfile.TemporaryDirectory() as td:
-            media, target = Path(td) / "media", Path(td) / "target"
+            media = Path(td) / "media"
             (media / "plebian-os").mkdir(parents=True)
-            (target / "usr/bin").mkdir(parents=True)
-            script = "\n".join(media_commands + target_commands)
-            script = script.replace("/cdrom/", '"$EXTRACT"/').replace(
-                "/target/", '"$TARGET"/')
+            script = "\n".join(media_commands)
+            script = script.replace("/cdrom/", '"$EXTRACT"/')
             subprocess.run(["bash", "-euc", script], check=True,
                            env={**os.environ, "HERE": str(ROOT),
-                                "EXTRACT": str(media), "TARGET": str(target)})
-            installed = target / "usr/bin" / name
-            self.assertEqual(installed.read_bytes(), HELPER.read_bytes())
-            self.assertEqual(installed.stat().st_mode & 0o777, 0o755)
+                                "EXTRACT": str(media)})
+            staged = media / "plebian-os" / name
+            self.assertEqual(staged.read_bytes(), HELPER.read_bytes())
 
     def test_helper_exists_and_is_executable(self):
         self.assertTrue(HELPER.is_file(), f"{HELPER} is missing")

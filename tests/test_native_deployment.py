@@ -1,10 +1,10 @@
-"""Native helper file population, actual private staging and rerooted media copy.
+"""Native helper file population and actual private staging.
 
 No privileged deployment, dpkg, ldconfig or native ELF is executed here.
 The staging test supplies only systemd-analyze's installed-service existence
 precondition; actual file copies, shell/Python validation and byte checks run.
-The media-copy test substitutes a private target and an explicit chown observer;
-it does not claim installed root ownership or a real installer run.
+The media test checks that the installer no longer copies the native helpers
+and that the tools package owns them.
 """
 import os
 from pathlib import Path
@@ -15,6 +15,8 @@ import stat
 import subprocess
 import tempfile
 import unittest
+
+import test_debian_packaging
 
 ROOT = Path(__file__).resolve().parents[1]
 UPDATE = ROOT / 'provision/plebian-os-update.sh'
@@ -202,26 +204,27 @@ stage_and_validate_os_layer "$NATIVE_STAGE"
                             directories.index('$PLEBIAN_OS_NOTICEDIR/installer'))
 
     def test_media_copy_uses_only_fixed_files_and_private_target(self):
-        text = (ROOT / 'preseed/preseed.cfg').read_text()
-        start = text.index('    mkdir -p /target/usr/libexec/plebian-os;')
-        end = text.index('    cp /cdrom/plebian-os/plebian-os-update.sh', start)
-        copied = self.base / 'media'
-        copied.mkdir()
-        target = self.base / 'target'
-        (target / 'usr/sbin').mkdir(parents=True)
-        for name in (*NATIVE, 'plebian-os-qt-runtime', 'plebian-os-mpv-runtime'):
-            shutil.copy2(ROOT / 'provision' / name, copied / name)
-        snippet = text[start:end].replace('\\\n', '\n')
-        snippet = snippet.replace('/cdrom/plebian-os', shlex.quote(str(copied)))
-        snippet = snippet.replace('/target', shlex.quote(str(target)))
-        script = 'set -euo pipefail\nchown() { [ "$1" = root:root ]; }\n' + snippet
-        result = subprocess.run(['/bin/bash', '-c', script], capture_output=True, timeout=5,
-                                env={'PATH': '/usr/bin:/bin', 'HOME': str(self.base)})
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-        for name in NATIVE:
-            path = target / ('usr/sbin' if name == NATIVE[0] else 'usr/libexec/plebian-os') / name
-            self.assertEqual(path.read_bytes(), (ROOT / 'provision' / name).read_bytes())
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o755 if name == NATIVE[0] else 0o644)
+        late = (ROOT / 'preseed/preseed.cfg').read_text().split(
+            'd-i preseed/late_command string', 1)[1]
+        for name in ('plebian-os-native-runtime', 'plebian-os-qt-runtime',
+                     'plebian-os-mpv-runtime'):
+            self.assertNotIn(f'cp /cdrom/plebian-os/{name}', late)
+        self.assertNotIn('cp /cdrom/plebian-os/$native_module', late)
+        expected = {
+            '/usr/sbin/plebian-os-native-runtime': '0755',
+            '/usr/sbin/plebian-os-qt-runtime': '0755',
+            '/usr/sbin/plebian-os-mpv-runtime': '0755',
+            '/usr/libexec/plebian-os/native_package.py': '0644',
+            '/usr/libexec/plebian-os/native_state.py': '0644',
+            '/usr/libexec/plebian-os/native_process.py': '0644',
+            '/usr/libexec/plebian-os/native_runtime.py': '0644',
+        }
+        mapped = {
+            destination: (package, mode)
+            for package, mode, _, destination in test_debian_packaging.install_map()
+        }
+        for destination, mode in expected.items():
+            self.assertEqual(mapped[destination], ('plebian-os-tools', mode))
         wrapper = (ROOT / 'provision/plebian-os-native-runtime').read_text()
         self.assertEqual(wrapper.splitlines()[-1],
             'exec /usr/bin/python3 -I -B "$PLEBIAN_OS_LIBEXECDIR/native_runtime.py" "$@"')

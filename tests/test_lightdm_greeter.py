@@ -69,11 +69,15 @@ validate_artwork_notice "$CONFIG" "$LIGHTDM_GREETER_CONFIG_SHA256" \
             '"$EXTRACT/plebian-os/lightdm-gtk-greeter.conf"',
             remaster,
         )
-        self.assertIn(media_path, preseed)
-        self.assertEqual(preseed.count(f"/target{DESTINATION}"), 3)
-        self.assertIn(f"chown root:root /target{DESTINATION}", preseed)
-        self.assertIn(f"chmod 0644 /target{DESTINATION}", preseed)
-        self.assertLess(preseed.index(media_path), preseed.index("in-target systemctl enable"))
+        self.assertNotIn(
+            f"cp {media_path} /target{DESTINATION}",
+            preseed,
+        )
+        install = preseed.index(
+            "in-target apt-get install -y --no-install-recommends"
+        )
+        self.assertLess(install, preseed.index("in-target systemctl enable"))
+        self.assertIn("plebian-desktop-base", preseed[install:preseed.index(";", install)])
         self.assertEqual(
             remaster.count("manifest_kv PLEBIAN_OS_LIGHTDM_GREETER_CONFIG_SHA256"),
             1,

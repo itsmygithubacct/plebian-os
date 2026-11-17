@@ -827,9 +827,8 @@ class RemasterContractTests(unittest.TestCase):
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         for stage, media, installed in contracts:
             self.assertIn(stage, self.source)
-            self.assertIn(media, preseed)
-            self.assertIn(installed, preseed)
-            self.assertIn(f"chmod 0644 /target{installed}", preseed)
+            self.assertNotIn(f"cp {media} /target{installed}", preseed)
+            self.assertNotIn(f"chmod 0644 /target{installed}", preseed)
 
     def test_media_checksum_refresh_follows_all_mutations_and_precedes_repack(self):
         refresh = 'python3 "$INSTALLER_BRANDER" refresh-md5 "$EXTRACT"'
