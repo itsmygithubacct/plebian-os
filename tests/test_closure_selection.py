@@ -7,6 +7,7 @@ touching a single operator-controlled choice.
 """
 
 import fcntl
+import hashlib
 import os
 import pty
 import re
@@ -1233,6 +1234,122 @@ class ClosureSelectionTests(unittest.TestCase):
             closure.write_text("PLEBIAN_OS_VERSION=0.2.1\n")
             selected = self._run(base, "--rollback", env_extra=tagged)
             self.assertNotEqual(selected.returncode, 0)
+
+    def test_a_repeated_hop_rollback_never_walks_back_to_an_older_record(self):
+        """Records are never pruned and a completed hop leaves its record
+        unspent, so a machine with selection history has an older unspent
+        record when a later hop is rolled back twice. The repeat must answer
+        from the hop's own spent record and must not restore the older one,
+        whether the older record carries another tag or the same one."""
+        for older in ("another tag", "the same tag"):
+            with self.subTest(older=older), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                session = self._selected_split_fixture(base)
+                tag = subprocess.run(
+                    ["git", "-C", str(base / "src"), "rev-parse", "refs/tags/v0.2.1"],
+                    capture_output=True, text=True, check=True).stdout.strip()
+                own = self._recovery_records(base)[0]
+                earlier = own.parent / "closure-rollback.20200101T000000Z.AAAAAA"
+                shutil.copytree(own, earlier)
+                (earlier / "session.env").write_bytes(b"# an older hop's saved session\n")
+                if older == "another tag":
+                    meta = (earlier / "meta").read_text().replace(tag, "2" * 40)
+                    (earlier / "meta").write_text(meta)
+                tagged = {"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag,
+                          "PLEBIAN_OS_CLOSURE_LAYOUT": "split"}
+                first = self._run(base, "--rollback", env_extra=tagged)
+                self.assertEqual(first.returncode, 0, first.stderr)
+                self.assertTrue((own / "restored").exists())
+                restored = session.read_bytes()
+                self.assertNotEqual(restored, b"# an older hop's saved session\n")
+                again = self._run(base, "--rollback", env_extra=tagged)
+                self.assertEqual(again.returncode, 0, again.stderr)
+                self.assertIn("already rolled back", again.stdout)
+                self.assertEqual(session.read_bytes(), restored)
+                self.assertFalse((earlier / "restored").exists(), "the older record is untouched")
+                # Without a trusted tag a rollback is a deliberate one and still
+                # undoes the older hop, as it always did.
+                manual = self._run(base, "--rollback",
+                                   env_extra={"PLEBIAN_OS_CLOSURE_LAYOUT": "split"})
+                self.assertEqual(manual.returncode, 0, manual.stderr)
+                self.assertTrue((earlier / "restored").exists())
+
+    def test_real_pleb_recovery_settles_a_hop_whose_record_is_already_restored(self):
+        """The state a dropped terminal leaves: the selector's record is stamped
+        restored, the closure is the pre-hop one, and Pleb's hop marker still
+        says `selected`. Real Pleb recovery drives the real selector."""
+        pleb_repo = os.environ.get("PLEBIAN_OS_PLEB_REPO")
+        if not pleb_repo or not (Path(pleb_repo) / "bin/pleb").is_file():
+            self.skipTest("PLEBIAN_OS_PLEB_REPO is not set")
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session = self._selected_split_fixture(base)
+            closure = session.with_name("closure.env")
+            src = base / "src"
+            commit = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"],
+                                    capture_output=True, text=True, check=True).stdout.strip()
+            tag = subprocess.run(["git", "-C", str(src), "rev-parse", "refs/tags/v0.2.1"],
+                                 capture_output=True, text=True, check=True).stdout.strip()
+            record = self._recovery_records(base)[0]
+            baseline = [hashlib.sha256((record / "session.env").read_bytes()).hexdigest(), "absent"]
+            tagged = {"PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA": tag,
+                      "PLEBIAN_OS_CLOSURE_LAYOUT": "split"}
+            first = self._run(base, "--rollback", env_extra=tagged)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertTrue((record / "restored").exists())
+            original = session.read_bytes()
+            # Pleb's side of the dropped hop: the cache, and the hop marker.
+            home = base / "home"
+            storage = home / ".local/gpu_terminal/pleb"
+            state = storage / "state/release-hop"
+            cache = storage / "cache/release-hop"
+            for directory in (state, cache / "selectors", cache / "tag-trust"):
+                directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            repo = cache / "plebian-os.git"
+            origin = dict(INSTALLED_RELEASE_VALUES)["PLEBIAN_OS_REPO"]
+            subprocess.run(["git", "init", "-q", "--bare", str(repo)], check=True)
+            subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", origin], check=True)
+            subprocess.run(["git", "-C", str(repo), "fetch", "-q", str(src),
+                            "refs/tags/v0.2.1:refs/tags/v0.2.1"], check=True)
+            (cache / "selectors" / commit).write_bytes(SELECT.read_bytes())
+            (cache / "selectors" / commit).chmod(0o755)
+            (state / "active").write_text("\n".join((
+                "0.2.1", commit, tag, hashlib.sha256(SELECT.read_bytes()).hexdigest(),
+                "v0.2.1")) + "\n")
+            (state / "baseline").write_text("\n".join(baseline) + "\n")
+            (state / "phase").write_text("selected\n")
+            updater_log = base / "updater.log"
+            fake = base / "fake-updater"
+            fake.write_text(f"#!/bin/sh\necho \"$@\" >>{shlex.quote(str(updater_log))}\n")
+            fake.chmod(0o755)
+            root = base / "root"
+            env = {
+                "HOME": str(home), "PATH": os.environ["PATH"], "LANG": "C",
+                "GPU_TERMINAL_HOME": str(home / ".local/gpu_terminal"),
+                "PLEB_STORAGE_HOME": str(storage),
+                "PLEB_ENV_SYSTEM": str(session), "PLEB_CLOSURE_SYSTEM": str(closure),
+                "PLEB_ENV_USER": str(base / "no-user-session.env"),
+                "PLEB_CLOSURE_USER": str(base / "no-user-closure.env"),
+                "PLEBIAN_OS_MANAGED_INSTALL": "1",
+                "PLEBIAN_OS_CLOSURE_TEST_ROOT": str(root),
+                "PLEBIAN_OS_RECOVERY_BASE": str(root / "var/lib/plebian-os"),
+                "PLEBIAN_OS_SELECTOR_DST": str(root / "usr/local/bin/plebian-os-select-closure"),
+                "PLEBIAN_OS_UPDATER_DST": str(fake),
+                "PLEBIAN_OS_SELECT_TEST_SKIP_COMPONENT_ANCESTRY": "1",
+            }
+            for name in ("kilix", "kilix-desktops/kilix-95"):
+                directory = home / ".local/gpu_terminal/sources" / name
+                directory.mkdir(parents=True)
+                subprocess.run(["git", "init", "-q", str(directory)], check=True)
+            recovered = subprocess.run(
+                [str(Path(pleb_repo) / "bin/pleb"), "update", "--rollback", "--no-restart"],
+                env=env, capture_output=True, text=True, check=False, timeout=120)
+            self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+            self.assertIn("already rolled back", recovered.stdout + recovered.stderr)
+            self.assertFalse((state / "active").exists())
+            self.assertEqual(updater_log.read_text().strip(), "--revalidate-current")
+            self.assertEqual(session.read_bytes(), original)
+            self.assertFalse(closure.exists())
 
     def test_split_rollback_sync_failure_is_retryable(self):
         for fail_target in ("marker", "record"):

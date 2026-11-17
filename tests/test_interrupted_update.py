@@ -110,6 +110,11 @@ class InterruptedUpdateTests(unittest.TestCase):
             "stack-rollback.Kept01", active="", root_transaction=root + "\n",
             failure_reason="exit-status: 129\nrollback-complete: no\nrecover-with: x\n")
         self.orphan("stack-rollback.Done01", failure_reason="rollback-complete: yes\n")
+        # The note file is user-writable; a path that only looks like the root
+        # snapshot is never turned into a command.
+        self.orphan("stack-rollback.Odd001", active="",
+                    root_transaction="/var/lib/plebian-os/update-rollback.x/../../etc\n",
+                    failure_reason="rollback-complete: no\n")
         live = subprocess.Popen(["sleep", "60"])
         self.addCleanup(live.wait)
         self.addCleanup(live.kill)
@@ -123,6 +128,10 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertNotIn("Done01", result.stderr)
         self.assertNotIn("Live01", result.stderr)
         self.assertIn("reconciled from the selected closure", result.stderr)
+        self.assertIn(f"  rm -rf -- {kept}", result.stderr)
+        self.assertIn(f"  sudo rm -rf -- {root}", result.stderr)
+        self.assertEqual(result.stderr.count("sudo rm -rf"), 1, result.stderr)
+        self.assertNotIn("../..", result.stderr.split("remove it with")[-1])
         # Not an interrupted update, so nothing refuses and nothing is recovered.
         result = self.run_lib("refuse_interrupted_stack_transaction\necho CONTINUED\n")
         self.assertEqual((result.returncode, result.stdout), (0, "CONTINUED\n"), result.stderr)
