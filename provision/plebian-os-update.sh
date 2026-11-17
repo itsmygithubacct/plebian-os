@@ -4875,9 +4875,14 @@ grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
     && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "${new_paths[6]}"
-# The manifest is the final member of the fixed deployment set. Validate its
-# inert data here; never execute a caller-supplied helper with root privileges.
-manifest_index=$((${#new_paths[@]} - 1))
+# Find the manifest in the fixed deployment set by name: the set grows, and its
+# last member is not always the manifest. Validate its inert data here; never
+# execute a caller-supplied helper with root privileges.
+manifest_index=-1
+for index in "${!names[@]}"; do
+    [ "${names[$index]}" != ollama-release.env ] || manifest_index=$index
+done
+[ "$manifest_index" -ge 0 ] || exit 2
 python3 "-" "${new_paths[$manifest_index]}" "${new_paths[6]}" <<'PY_MANIFEST'
 import pathlib
 import re
