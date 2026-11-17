@@ -841,8 +841,11 @@ single `build-info.env` named by `--predecessor-sha256sums` (the published
 guest shell-sources the closure and requires its Neuronte, Go, and satellite
 keys to match `pleb update --show` and the RC manifest. After the hop the
 closure's tag object must equal `--release-tag-object`. Rollback must restore
-the session, closure, settings, the selector and updater, `release-hop/active`,
-the engine generation, and every component checkout HEAD. A fresh image has
+the session, closure, settings, the selector and updater, the engine
+generation, and every component checkout HEAD, and must leave no
+`release-hop` record (`active`, `phase`, `baseline`). Pleb keeps one generation
+of rollback: a record that a guest carried from an earlier completed hop is
+replaced when the new hop starts and is not restored by the rollback. A fresh image has
 no closure file, and the byte comparison is not recorded for that absence.
 A standalone guest has no selector or updater, and those paths must stay
 absent. Image recovery records are root-only and are read with `sudo -n`.

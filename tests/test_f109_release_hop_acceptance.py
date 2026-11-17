@@ -106,7 +106,8 @@ PLEB_DIR="$PLEB_ROOT"
             '        "$(git -C "$pleb_dir" rev-parse --verify \'HEAD^{commit}\')" >>"$manifest"\n',
             '        printf \'head\\t%s\\t%s\\n\' "$os_dir" \\\n'
             '            "$(git -C "$os_dir" rev-parse --verify \'HEAD^{commit}\')" >>"$manifest"\n',
-            '        assert_release_snapshot_restored rollback "$report/release-snapshot.pre-hop"',
+            '        assert_release_snapshot_restored rollback "$report/release-snapshot.rollback-expected"',
+            'rollback_expected_manifest "$report/release-snapshot.pre-hop"',
             '        assert_release_snapshot_restored "restoring hop" "$report/release-snapshot.post-hop"',
             '    if [ "$show_ref" != "$ref" ]; then',
             '        must "installed-closure-matches-published-rc-manifest" "$from_release_manifest" \\\n'
@@ -1040,6 +1041,57 @@ write_reboot_verifier "$report/verify.sh"
             restoring = compare(post, "restoring hop")
             self.assertNotEqual(restoring.returncode, 0)
             self.assertIn(f"restoring hop did not restore {pleb}", restoring.stderr)
+
+    def test_rollback_needs_no_hop_record_even_when_the_guest_had_one_before(self):
+        """A guest that completed an earlier hop carries release-hop/active
+        before this hop. The new hop replaces it and the rollback consumes the
+        new one, so the check demands no record at all, not the old bytes."""
+        source = RUNNER.read_text()
+        helper = "\n".join(
+            self._bash_function(source, name)
+            for name in ("path_fingerprint", "assert_release_snapshot_restored",
+                         "rollback_expected_manifest"))
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            state = root / "state/release-hop"
+            state.mkdir(parents=True)
+            session = root / "session.env"
+            session.write_text("session-rc\n")
+            active = state / "active"
+            active.write_text("0.2.2\nearlier hop\n")
+
+            def run(body):
+                return subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c",
+                     f"release_state={shlex.quote(str(active))}\n" + helper + "\n" + body,
+                     "bash", str(root)], capture_output=True, text=True, check=False)
+
+            fingerprints = run(
+                'for p in "$1/session.env" "$1/state/release-hop/active"; do '
+                'printf "fingerprint\\t%s\\t%s\\n" "$p" "$(path_fingerprint "$p")"; done'
+                ' >"$1/pre-hop"')
+            self.assertEqual(fingerprints.returncode, 0, fingerprints.stderr)
+            check = ('rollback_expected_manifest "$1/pre-hop" "$1/expected"\n'
+                     'assert_release_snapshot_restored rollback "$1/expected"')
+            # The new hop replaced the record; the rollback consumed it.
+            active.unlink()
+            self.assertEqual(run(check).returncode, 0)
+            # A record left behind, old bytes or new, is not a finished rollback.
+            for text in ("0.2.2\nearlier hop\n", "0.2.3\nthis hop\n"):
+                active.write_text(text)
+                left = run(check)
+                self.assertNotEqual(left.returncode, 0)
+                self.assertIn(f"rollback did not restore {active}", left.stderr)
+            active.unlink()
+            for leftover in ("phase", "baseline"):
+                (state / leftover).write_text("x\n")
+                left = run(check)
+                self.assertNotEqual(left.returncode, 0, leftover)
+                self.assertIn(f"rollback did not restore {state / leftover}", left.stderr)
+                (state / leftover).unlink()
+            # Everything else is still compared with the pre-hop state.
+            session.write_text("session-final\n")
+            self.assertIn(f"rollback did not restore {session}", run(check).stderr)
 
     def test_fresh_rc9_image_identity_comes_from_build_info(self):
         helper = "\n".join(

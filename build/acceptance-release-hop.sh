@@ -32,8 +32,11 @@ image guest with no closure.env is accepted only when its build-info bytes
 equal the source ISO. Release-mode show resolves PLEBIAN_OS_REF from
 session.env, which stores the commit, while that build-info stores the RC
 tag; the commit in the build-info peels the tag. Rollback compares session,
-closure, settings, the selector and updater, release-hop/active, the engine
-generation, and every component checkout HEAD. A fresh image has no closure
+closure, settings, the selector and updater, the engine generation, and every
+component checkout HEAD with their pre-hop state, and requires that no
+release-hop record (active, phase, baseline) is left: Pleb keeps one generation
+of rollback, so a record from an earlier completed hop is replaced when the hop
+starts and is not restored. A fresh image has no closure
 to compare byte for byte, so that check is not recorded. Image recovery
 records are read with sudo -n. A selection_tag= value must equal
 --from-release-tag-object. A record that still cannot be read is unreadable
@@ -763,6 +766,23 @@ assert_release_snapshot_restored() {
     [ "$failed" -eq 0 ]
 }
 
+# Pleb keeps one generation of rollback. release-hop/active names the hop that
+# --rollback would undo: a new hop replaces an earlier completed record when it
+# starts, and a successful rollback consumes the record it used, so the record
+# a guest carried before the hop (left by an earlier completed hop) cannot come
+# back. What a rolled-back machine must show is no record, phase or baseline at
+# all; every other path must be what it was. Comparing the pre-hop fingerprint
+# of the record would fail every guest that has hop history.
+rollback_expected_manifest() {
+    local source="$1" target="$2" state_dir
+    state_dir="$(dirname -- "$release_state")"
+    awk -F '\t' -v OFS='\t' -v state="$release_state" \
+        '$1 == "fingerprint" && $2 == state { $3 = "absent" } { print }' \
+        "$source" >"$target" || return 1
+    printf 'fingerprint\t%s\t%s\n' "$state_dir/phase" absent \
+        "$state_dir/baseline" absent >>"$target"
+}
+
 record_release_snapshot() {
     local manifest="$1" path
     : >"$manifest"
@@ -1331,8 +1351,10 @@ if [ "$same_version" = 1 ]; then
     rollback_commands=1
     must "rollback-from-final-succeeds" "pleb update --rollback; exit=$rollback_rc" \
         test "$rollback_rc" -eq 0
-    must "rollback-restores-pre-hop-state" "session closure settings selector updater and checkout heads" \
-        assert_release_snapshot_restored rollback "$report/release-snapshot.pre-hop"
+    rollback_expected_manifest "$report/release-snapshot.pre-hop" \
+        "$report/release-snapshot.rollback-expected"
+    must "rollback-restores-pre-hop-state" "session closure settings selector updater and checkout heads; no hop record left" \
+        assert_release_snapshot_restored rollback "$report/release-snapshot.rollback-expected"
     closure_env_live="$closure_env"
     if [ "$closure_pre_hop_absent" != 1 ]; then
         must "rollback-restores-rc-closure-keys" "$closure_env" \
