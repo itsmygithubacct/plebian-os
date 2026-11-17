@@ -1636,6 +1636,77 @@ class ClosureSelectionTests(unittest.TestCase):
             self.assertEqual(env.read_bytes(), original)
             self.assertEqual({p.name for p in marker.iterdir()}, {"active", "phase", "baseline"})
 
+    def test_a_rollback_leaves_a_durable_record_even_with_a_dead_terminal(self):
+        """The terminal is often gone when the driver died, so the outcome lines
+        are also appended to update.log in the Pleb state directory."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            state = base / "home/.local/gpu_terminal/pleb/state"
+            log = state / "update.log"
+            self.assertFalse(log.exists(), "a selection records nothing")
+            self._hop_marker(base, tag)
+            log.write_text("2026-11-17T00:00:00Z earlier line\n")
+            first = self._run(base, "--rollback", env_extra=tagged, dead_tty=True)
+            self.addCleanup(first.kill)
+            self.assertEqual(first.wait(timeout=60), 0)
+            repeat = self._run(base, "--rollback", env_extra=tagged, dead_tty=True)
+            self.addCleanup(repeat.kill)
+            self.assertEqual(repeat.wait(timeout=60), 0)
+            lines = log.read_text().splitlines()
+            self.assertEqual(lines[0], "2026-11-17T00:00:00Z earlier line")
+            for line in lines[1:]:
+                self.assertRegex(
+                    line, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ plebian-os-select-closure: \S")
+                self.assertNotIn("\x1b", line)
+            text = "\n".join(lines)
+            self.assertIn("previous split closure restored from", text)
+            self.assertIn("settled the interrupted release hop's marker", text)
+            self.assertIn("this selection was already rolled back", text)
+
+    def test_a_refused_rollback_is_recorded_too(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            session, tag, tagged = self._spent_hop(base)
+            self.assertEqual(self._run(base, "--rollback", env_extra=tagged).returncode, 0)
+            with session.open("a") as stream:
+                stream.write("OPERATOR_NOTE=changed-since\n")
+            refused = self._run(base, "--rollback", env_extra=tagged)
+            self.assertNotEqual(refused.returncode, 0)
+            log = base / "home/.local/gpu_terminal/pleb/state/update.log"
+            self.assertIn("is already restored and the installed session or closure has changed",
+                          log.read_text())
+            self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+
+    def test_a_failing_record_never_fails_the_rollback_and_is_never_followed_through_a_link(self):
+        for case in ("a symlinked update.log", "an unwritable state directory",
+                     "a symlinked state directory"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as td:
+                base = Path(td)
+                session, tag, tagged = self._spent_hop(base)
+                state = base / "home/.local/gpu_terminal/pleb/state"
+                state.mkdir(parents=True, exist_ok=True)
+                victim = base / "victim"
+                victim.write_text("untouched\n")
+                if case == "a symlinked update.log":
+                    (state / "update.log").symlink_to(victim)
+                elif case == "an unwritable state directory":
+                    state.chmod(0o500)
+                else:
+                    elsewhere = base / "elsewhere"
+                    state.rename(elsewhere)
+                    state.symlink_to(elsewhere)
+                try:
+                    result = self._run(base, "--rollback", env_extra=tagged)
+                finally:
+                    if state.is_dir() and not state.is_symlink():
+                        state.chmod(0o700)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("previous split closure restored", result.stdout)
+                self.assertEqual(victim.read_text(), "untouched\n")
+                if case == "a symlinked state directory":
+                    self.assertFalse((elsewhere / "update.log").exists())
+
     def test_a_rollback_that_waits_out_a_running_update_does_not_settle_the_marker(self):
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)

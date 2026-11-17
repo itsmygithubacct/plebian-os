@@ -135,9 +135,33 @@ valid_release_tag() {
 # A hung-up terminal fails every write with EIO. A message that cannot be
 # written must not end a rollback that has already restored the closure, or
 # keep one from starting.
-log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*" || true; }
-warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2 || true; }
-die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2 || true; exit 1; }
+#
+# A rollback's messages are also appended to update.log in the Pleb state
+# directory, the file the updater writes its own lines to, because the
+# terminal that would show them is often gone when the driver died. The record
+# is best effort and never fails the rollback: the directory must be a real one
+# owned by this user, update.log a regular file (or absent) that is not a
+# symlink and is owned by this user, and a new file is created 0600 as the
+# updater creates it. Only --rollback records; a selection is long and its
+# report is for the terminal.
+SELECTOR_RECORD=0
+selector_record() {
+    [ "$SELECTOR_RECORD" = 1 ] && [ -n "${PLEB_STATE_HOME:-}" ] || return 0
+    (
+        dir="$PLEB_STATE_HOME"; path="$PLEB_STATE_HOME/update.log"
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' -- "$dir")" = "$EUID" ] || exit 0
+        [ ! -L "$path" ] || exit 0
+        if [ -e "$path" ]; then
+            [ -f "$path" ] && [ "$(stat -c '%u' -- "$path")" = "$EUID" ] || exit 0
+        fi
+        umask 077
+        printf '%s plebian-os-select-closure: %s\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$path"
+    ) 2>/dev/null || true
+}
+log()  { selector_record "$*"; printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*" || true; }
+warn() { selector_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2 || true; }
+die()  { selector_record "$*"; printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2 || true; exit 1; }
 
 # Same boundary as the updater: this tool asks for exactly the privilege each
 # write needs and no more, so running the whole thing as root is a mistake
@@ -3393,7 +3417,7 @@ if [ ! -f "$SESSION_ENV" ] && [ "$SELECTOR_MODE" != standalone ]; then
 fi
 
 case "$MODE" in
-    rollback) wait_for_running_update ;;
+    rollback) SELECTOR_RECORD=1; wait_for_running_update ;;
 esac
 
 case "$MODE" in

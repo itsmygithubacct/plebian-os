@@ -192,6 +192,18 @@ MUTATIONS = (
         (CASE + "test_a_rollback_that_waits_out_a_running_update_does_not_settle_the_marker",),
     ),
     Mutation(
+        "rollback record: a symlinked update.log is never followed",
+        '        [ ! -L "$path" ] || exit 0',
+        '        : # mutation',
+        (CASE + "test_a_failing_record_never_fails_the_rollback_and_is_never_followed_through_a_link",),
+    ),
+    Mutation(
+        "rollback record: --rollback appends its outcome to update.log",
+        'rollback) SELECTOR_RECORD=1; wait_for_running_update ;;',
+        'rollback) wait_for_running_update ;;',
+        (CASE + "test_a_rollback_leaves_a_durable_record_even_with_a_dead_terminal",),
+    ),
+    Mutation(
         "operator install-policy validation",
         '        require_manifest_format "$key" \'^[01]$\' \\\n            "0 or 1 (an image default; an installed operator choice is preserved)"',
         "        : # mutation: invalid operator-policy image default accepted",

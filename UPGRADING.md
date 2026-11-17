@@ -384,7 +384,11 @@ next:
   every file is a regular file owned by the invoking user, and no retained
   failed-rollback directory exists. A `complete` marker, a marker for another
   tag, a standalone machine, a failed rollback and the wait for a running update
-  (status 13) leave it alone. It also settles a `selecting` marker when the
+  (status 13) leave it alone. Whatever the terminal shows, the selector also
+  appends its rollback messages (restored, already rolled back, settled the
+  marker, refused) to `update.log` in the Pleb state directory, one line each
+  prefixed `plebian-os-select-closure:`, so a dropped terminal does not hide
+  them; it never follows a symlink and a failure to write is ignored. It also settles a `selecting` marker when the
   selector finds that an interrupted selection replaced nothing (its pending
   marker still equals the installed files, or a same-tag reselect left the
   closure installed), and only a request bound to the hop's own record settles
