@@ -8,7 +8,7 @@ Everything in the three pictures is drawn here, from two things only:
 * the angular-P mark, read from assets/installer/logo.svg (its paths, stroke
   widths and colours; nothing about the mark is repeated in this file), and
 * the lettering "Plebian-OS", drawn by the Neuronte large desktop face
-  (weights/neuronte-ui-large-latin1-v1.nrt of a Neuronte release, through
+  (weights/neuronte-ui-large-latin1-v2.nrt of a Neuronte release, through
   build/libneuronte.so of the same release). DIR is that release's directory.
   The weight file must have the SHA-256 recorded below.
 
@@ -43,8 +43,8 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[1]
 LOGO = ROOT / 'assets' / 'installer' / 'logo.svg'
 LETTERING = 'Plebian-OS'
-FACE = 'weights/neuronte-ui-large-latin1-v1.nrt'
-FACE_SHA256 = '8fec97a302697a703e15b9c59d90a2ce542a9dd98d8e9fe11a533eabe2623747'
+FACE = 'weights/neuronte-ui-large-latin1-v2.nrt'
+FACE_SHA256 = 'f50ffdae9770686accf3e0fd79109487885977e06c4d1282102c5d9701dd3fc4'
 LIBRARY = 'build/libneuronte.so'
 SUPERSAMPLE = 8
 

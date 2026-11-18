@@ -58,8 +58,11 @@ python3 build/draw-artwork.py --neuronte /path/to/neuronte-release --check  # re
 ```
 
 `--neuronte` names a Neuronte release directory holding `build/libneuronte.so`
-and `weights/neuronte-ui-large-latin1-v1.nrt`; the program refuses a weight
-file whose SHA-256 is not the one it records. It needs Python 3 with NumPy and
+and `weights/neuronte-ui-large-latin1-v2.nrt` (neuronte-v2 2.5.0 and
+later); the program refuses a weight file whose SHA-256 is not the one it
+records. The tracked files were drawn with `neuronte-ui-large-latin1-v1`
+of 2.4.0; the 2.5.0 face adds Latin-1 signs beside the unchanged ASCII
+nets, and redrawing with it gives the same bytes for all four files. It needs Python 3 with NumPy and
 Pillow. It uses no random numbers and writes the PNG itself, so the same
 inputs give the same bytes; the tracked files were written with zlib 1.3.1,
 Pillow 11.1.0 and NumPy 2.2.4. Nothing in a build or an installation runs it:
