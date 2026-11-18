@@ -87,6 +87,10 @@ class TransactionTests(unittest.TestCase):
         self.sentinel.write_bytes(b'operator and unrelated package state\n')
 
     def tearDown(self):
+        for holder in getattr(self, 'holders', []):
+            holder.kill()
+            holder.wait()
+            holder.stdout.close()
         self.assertEqual(self.sentinel.read_bytes(), b'operator and unrelated package state\n')
         self.assertEqual(len(os.listdir('/proc/self/fd')), self.fd_count)
         self.tree.close()
@@ -480,6 +484,42 @@ class TransactionTests(unittest.TestCase):
                 self.assertEqual(probe(), {'lock-frontend': False, 'lock': True})
             self.assertEqual(probe(), {'lock-frontend': False, 'lock': False})
         self.assertEqual(probe(), {'lock-frontend': True, 'lock': True})
+
+    def _hold_dpkg_lock(self, seconds):
+        path = self.root / 'var/lib/dpkg/lock-frontend'
+        code = ('import fcntl,os,sys,time\n'
+                'fd=os.open(sys.argv[1],os.O_RDWR|os.O_CREAT,0o600)\n'
+                'fcntl.lockf(fd,fcntl.LOCK_EX)\nprint("held",flush=True)\ntime.sleep(float(sys.argv[2]))\n')
+        holder = subprocess.Popen(['/usr/bin/python3', '-I', '-B', '-c', code, str(path), str(seconds)],
+                                  stdout=subprocess.PIPE, text=True)
+        self.holders = getattr(self, 'holders', []) + [holder]
+        self.assertEqual(holder.stdout.readline().strip(), 'held')
+        return holder
+
+    def test_a_package_step_waits_for_a_held_dpkg_lock_then_runs(self):
+        self._hold_dpkg_lock(1.2)
+        notices, entered = [], []
+        self.tree.lock_notice = notices.append
+        with patch.object(runtime.state, 'LOCK_POLL_SECONDS', 0.05):
+            with self.manager.locked():
+                entered.append(True)
+        self.assertEqual(entered, [True])
+        self.assertEqual(len(notices), 1)
+        self.assertIn('waiting up to 600s for the dpkg lock held by process', notices[0])
+
+    def test_a_package_step_refuses_cleanly_when_the_dpkg_lock_stays_held(self):
+        self._hold_dpkg_lock(8)
+        self.tree.lock_notice = lambda text: None
+        with patch.object(runtime.state, 'LOCK_WAIT_SECONDS', 0.4), \
+                patch.object(runtime.state, 'LOCK_POLL_SECONDS', 0.05):
+            with self.assertRaises(runtime.state.UnsafeState) as caught:
+                with self.manager.locked():
+                    self.fail('entered with the dpkg lock held')
+        self.assertIn('the dpkg lock was still held by process', str(caught.exception))
+        self.assertIn('nothing was changed; run the update again when it has finished', str(caught.exception))
+        # The helper's own lock was released on the way out.
+        with self.manager.locked():
+            pass
 
     def test_database_lock_name_replacement_during_handoff_refuses(self):
         with self.assertRaises(runtime.state.UnsafeState):

@@ -39,7 +39,9 @@ LICENCE_RECORD_IDS = {"whisper-small-en": "faster-whisper-small-en",
 # is separately bound by this carrier's owner determination and review seats.
 LICENCE_RECORD_DIRS = {"whistle": "app-records", "kilix-diarization-cpu": "diarization-records",
                        "lfm2-kilix-commands": "lfm2-records",
-                       "whisper-medium-en": "whisper-medium-records"}
+                       "whisper-medium-en": "whisper-medium-records",
+                       "paradee-8m-v1.2": "paradee-records",
+                       "en-core-web-sm-3.8.0": "en-core-web-sm-records"}
 
 
 DISTRIBUTION_HEADING = "# Owner distribution decision"
@@ -152,6 +154,15 @@ def regenerate(content: Path, license_: Path, out: Path,
     return subprocess.run(args, text=True, capture_output=True)
 
 
+def image_offline_inventory() -> dict[str, str]:
+    """asset id -> manifest digest for models the image installs offline."""
+    found = {}
+    for filename in ("paradee-model.json", "en-core-web-sm-model.json"):
+        pin = json.loads((ROOT / "provision" / filename).read_bytes())
+        found[pin["asset_id"]] = pin["manifest_digest"]
+    return found
+
+
 def advertised_models(provision: str) -> list[tuple[str, bool]]:
     block = provision[provision.index("validate_voice_model_catalog() {"):]
     block = block[:block.index("\n}\n")]
@@ -161,6 +172,7 @@ def advertised_models(provision: str) -> list[tuple[str, bool]]:
     command_path = ROOT / 'provision/command-model.json'
     if command_path.exists():
         models.append((json.loads(command_path.read_bytes())['asset_id'], True))
+    models.extend((asset_id, True) for asset_id in image_offline_inventory())
     return models
 
 
@@ -221,14 +233,17 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
         gaps.append("carried Playalong defaults differ from provisioning")
     online = {asset: item["manifest_digest"] for asset, item in playalong["assets"].items()
               if item["delivery"] == "online"}
+    image = image_offline_inventory()
     for model, entry in carrier["models"].items():
         delivery = (root / model / "DELIVERY").read_text()
         bundled = entry["artifact_id"] in bundle["assets"]
         is_command = command is not None and entry['artifact_id'] == command['asset_id']
         playalong_default = entry["artifact_id"] in online
-        mode = ("bundled-command-model-archive" if is_command else
+        image_offline = entry["artifact_id"] in image
+        mode = ("first-use-upstream-download" if is_command else
                 "bundled-default-model" if bundled else
                 "playalong-default-upstream-download" if playalong_default else
+                "image-offline-model" if image_offline else
                 "first-use-upstream-download")
         if entry["delivery"] != mode:
             gaps.append(f"{model}: delivery differs from the pinned bundle")
@@ -239,12 +254,38 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                     ('archive_sha256', 'sha256'), ('archive_bytes', 'bytes'),
                     ('version', 'version'), ('manifest_digest', 'manifest_digest'))):
                 gaps.append(f"{model}: command archive binding differs")
-            for claim in ('mode: bundled-command-model-archive', 'stages it offline',
-                          'record a notice receipt', 'custom terms', 'are a notice',
+            # A first-use download from 0.2.3 (provision/command-model.json):
+            # the image does not carry it and nothing downloads it unasked.
+            if (command.get('delivery') or {}).get('mode') != 'first-use-download':
+                gaps.append(f"{model}: the command model pin is not a first-use download")
+            earlier = (command.get('local_migration') or {}).get('from_version', '')
+            for claim in ('mode: first-use-upstream-download',
+                          "This model's weights are not present in the image, and neither "
+                          "provisioning nor upgrades download them.",
+                          'Kilix Ask uses its grammar until the model is installed.',
+                          'Local Workflows / Kilix Ask page, ask whether to download it.',
+                          'A non-interactive Ask never asks\nand never downloads.',
+                          'remembered as the saved Ask selection',
+                          'verified against the pinned digests before installation.',
+                          'No install route downloads it until a kilix-license receipt covers it:',
+                          'records a notice receipt', 'custom terms', 'are a notice',
                           'not waived', 'no agreement is recorded',
-                          'never answered by the image', 'verifies every member'):
+                          'never answered by Plebian-OS',
+                          f'A machine that has delivery {earlier} installed, with a receipt that covers it, keeps the model:',
+                          'installs this delivery from those files without a download',
+                          'If anything is missing or differs, nothing is installed.',
+                          'That step runs unattended and shows nothing',
+                          'withdraws that receipt if the install fails.',
+                          'Explicit Ask selections and earlier deliveries are retained.'):
                 if claim not in delivery:
                     gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            for false_claim in ('Installation media includes', 'stages it offline', 'they are shown',
+                                'bundled-command-model-archive', '/usr/local/share/doc/plebian-os/models'):
+                if false_claim in delivery:
+                    gaps.append(f"{model}: DELIVERY claims the model is on the media: {false_claim!r}")
+            notice = (root / model / "NOTICE").read_text()
+            if "Plebian-OS does not distribute these model bytes." not in notice:
+                gaps.append(f"{model}: NOTICE does not say the image omits the model")
             continue
         if bundled:
             if bundle["assets"][entry["artifact_id"]] != entry["manifest_digest"]:
@@ -253,6 +294,35 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
                           "local standard-policy receipts", "build-time receipts are never distributed"):
                 if claim not in delivery:
                     gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            continue
+        if image_offline:
+            if entry["manifest_digest"] != image[entry["artifact_id"]]:
+                gaps.append(f"{model}: image archive manifest differs")
+            notice = (root / model / "NOTICE").read_text()
+            if "Plebian-OS distributes these model bytes" not in notice:
+                gaps.append(f"{model}: NOTICE does not say the image distributes the bytes")
+            if "does not distribute these model bytes" in notice:
+                gaps.append(f"{model}: NOTICE says the image omits an offline model")
+            for claim in (
+                    "mode: image-offline-model",
+                    "Installation media includes this model.",
+                    "installs the supplied bytes offline and does not download them.",
+                    "An online install uses the same image archive. A fresh install without it is an error.",
+                    "An online upgrade of a machine installed without that archive downloads the pinned files",
+                    "builds the same archive, and checks it against the image pin before installation.",
+                    "A failed download installs nothing, and the next upgrade tries again.",
+                    "Original licence documents accompany the model, and installation verifies every catalogued file.",
+                    "creates a local standard-policy receipt",
+                    "build-time receipts are never distributed.",
+                    "An existing voice selection is left unchanged.",
+                    "Female-02 stays installed and selectable.",
+                    "This bundling does not remove it.",
+                    f"Upstream artifact provenance: {entry['upstream_host']}.",
+            ):
+                if claim not in delivery:
+                    gaps.append(f"{model}: DELIVERY lacks {claim!r}")
+            if "This model's weights are not present in the image" in delivery:
+                gaps.append(f"{model}: DELIVERY says the image omits an offline model")
             continue
         # Whisper and Whistle installation hands off to the model catalog (the licence screen)
         # rather than asking the receipt check itself; say so, and nothing more.
@@ -295,14 +365,78 @@ def delivery_gaps(provision: str, root: Path = CARRIER) -> list[str]:
     return gaps
 
 
+def image_offline_installer_gaps(installer: str) -> list[str]:
+    """AC-8: Paradee and en_core_web_sm install from the image, with a copied interpreter."""
+    gaps = []
+    if "'--copies'" not in installer:
+        gaps.append("the Paradee runtime venv is not created with --copies")
+    for function in ("def verify_paradee_runtime(", "def stage_paradee_runtime("):
+        body = installer.split(function, 1)[1].split("\ndef ", 1)[0] if function in installer else ""
+        if "for name in PARADEE_FILES:" not in body:
+            gaps.append("runtime staging omits the Apache-2.0 text")
+    for claim in ("the installation media did not supply the Paradee model",
+                  "the installation media did not supply the en_core_web_sm model"):
+        if claim not in installer:
+            gaps.append("a missing image archive is not an error: " + claim)
+    paradee = installer.split("def install_paradee(", 1)[1].split("def install_spacy(", 1)[0]
+    spacy = installer.split("def install_spacy(", 1)[1].split("def install_whisper_medium(", 1)[0]
+    if "fetch_default" in paradee or "fetch_default" in spacy:
+        gaps.append("an image-offline install can download weights")
+    # Only Playalong's online defaults and page OCR fetch through the catalog.
+    callers = set()
+    for function in ast.walk(ast.parse(installer)):
+        if isinstance(function, ast.FunctionDef):
+            for node in ast.walk(function):
+                if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                        and node.func.id == "fetch_default"):
+                    callers.add(function.name)
+    if not callers <= {"install_demucs", "install_whisper_medium", "install_pp_ocr"}:
+        gaps.append("an image-offline install can download weights through the catalog")
+    # The upgrade download (DELIVERY) builds the image's archives with the
+    # image's own checked builders and places nothing it has not verified.
+    fetch = installer.split("def fetch_paradee_media(", 1)[1].split("\ndef ", 1)[0]
+    for call in ("build_paradee_archive(", "build_spacy_archive(", "verify_paradee_wheels(",
+                 "_place_shared_archive("):
+        if call not in fetch:
+            gaps.append("the upgrade download skips " + call.rstrip("("))
+    place = installer.split("def _place_shared_archive(", 1)[1].split("\ndef ", 1)[0]
+    if place.find("verify(staged, pin)") < 0 or place.find("verify(staged, pin)") > place.find("os.link("):
+        gaps.append("an upgrade archive is placed before it is checked")
+    root = installer.split("def install_paradee_runtime(", 1)[1].split("\ndef ", 1)[0]
+    if "if offline or" not in root or "the next upgrade tries again" not in root:
+        gaps.append("the root step can download on a fresh install, or fails an upgrade on a download")
+    return gaps
+
+
 def command_installer_gaps(installer: str) -> list[str]:
     """AC-8: the command model DELIVERY is true of provision/install-image-models.py.
 
-    The image records the notice terms and never types an agreement answer,
-    and it stops rather than answer terms that need one.
+    The upgrade's local migration records the notice terms and never types an
+    agreement answer, leaves rather than answer terms that need one, installs
+    only through the supplied-directory path, and never downloads.
     """
     gaps = []
     tree = ast.parse(installer)
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    migrate = functions.get("migrate_command_model")
+    body = functions.get("_migrate_command_model")
+    if migrate is None or body is None or not any(
+            isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "_migrate_command_model" for node in ast.walk(migrate)):
+        return ["the image installer has no command model migration"]
+    walked = [*ast.walk(migrate), *ast.walk(body)]
+    attributes = {node.attr for node in walked if isinstance(node, ast.Attribute)}
+    if "ensure_supplied_asset" not in attributes:
+        gaps.append("the command model migration does not install from the supplied files")
+    if attributes & {"ensure_upstream_asset", "ensure_asset", "urlopen"}:
+        gaps.append("the command model migration can download")
+    names = {node.id for node in walked if isinstance(node, ast.Name)}
+    if "fetch_default" in names or "_command_cache" in names:
+        gaps.append("the command model migration can download")
+    main = functions.get("main")
+    if main is None or not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                               and node.func.id == "migrate_command_model" for node in ast.walk(main)):
+        gaps.append("the image installer never runs the command model migration")
     captures = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute) and node.func.attr == "capture_agreement"]
     if not captures:
@@ -311,7 +445,7 @@ def command_installer_gaps(installer: str) -> list[str]:
         gaps.append("the image installer types an agreement answer")
     if not any(isinstance(node, ast.If)
                and ast.unparse(node.test) == "record.expected_decision != 'record'"
-               and any(isinstance(statement, ast.Raise) for statement in node.body)
+               and any(isinstance(statement, (ast.Raise, ast.Return)) for statement in node.body)
                for node in ast.walk(tree)):
         gaps.append("the image installer does not refuse terms that need agreement")
     return gaps
@@ -804,6 +938,26 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         # The command model DELIVERY describes what the image installer does.
         installer = (ROOT / "provision" / "install-image-models.py").read_text()
         self.assertEqual(command_installer_gaps(installer), [])
+        self.assertEqual(image_offline_installer_gaps(installer), [])
+        for planted in (
+                installer.replace("'--copies'", "'--symlinks'"),
+                installer.replace("for name in PARADEE_FILES:",
+                                  "for name in (PARADEE_ONNX, PARADEE_CONFIG):", 1),
+                installer.replace("    for name in PARADEE_FILES:\n        target = root / name",
+                                  "    for name in (PARADEE_ONNX, PARADEE_CONFIG):\n        target = root / name"),
+                installer.replace("the installation media did not supply the Paradee model",
+                                  "the installation media will download the Paradee model"),
+                installer.replace("        build_spacy_archive(scratch / SPACY_WHEEL, output, spacy_pin)\n",
+                                  "        output.write_bytes((scratch / SPACY_WHEEL).read_bytes())\n"),
+                installer.replace("        verify_paradee_wheels(wheelhouse, lock)\n    placed",
+                                  "    placed"),
+                installer.replace("        verify(staged, pin)\n        staged.chmod", "        staged.chmod"),
+                installer.replace("        if offline or (archive", "        if (archive"),
+                installer.replace("    install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin, offline=args.offline)",
+                                  "    install_paradee(args.kilix, resolve_paradee(args.paradee), paradee_pin, offline=args.offline)\n"
+                                  "    fetch_default(args.kilix, paradee_pin['asset_id'], 'Paradee', paradee_pin['manifest_digest'])")):
+            self.assertNotEqual(planted, installer)
+            self.assertTrue(image_offline_installer_gaps(planted))
         # ...and the Playalong default DELIVERY too, with each claim it rests on planted false.
         self.assertEqual(playalong_installer_gaps(installer), [])
         for planted in (installer.replace("    if declined is None:\n        install_whisper_medium",
@@ -826,7 +980,10 @@ class ModelComplianceCarrierTests(unittest.TestCase):
                                           "lic.capture_agreement(record, 'yes')"),
                         installer.replace("lic.capture_agreement(record)",
                                           "lic.capture_agreement(record, typed='yes')"),
-                        installer.replace("if record.expected_decision != 'record':", "if False:")):
+                        installer.replace("if record.expected_decision != 'record':", "if False:"),
+                        installer.replace("installer.ensure_supplied_asset(", "installer.ensure_upstream_asset("),
+                        installer.replace("    migrate_command_model(args.kilix, command_pin)\n", ""),
+                        installer.replace("return _migrate_command_model(cm, pin)", "return False")):
             self.assertNotEqual(planted, installer)
             self.assertTrue(command_installer_gaps(planted))
         # The download is digest-verified and receipt-gated at the pinned refs.
@@ -1036,7 +1193,8 @@ class ModelComplianceCarrierTests(unittest.TestCase):
         env = manifest(f"{VERSION}.env")
         requirements = manifest(f"{VERSION}.requirements")
         for key in ("PLEBIAN_OS_VOICE_CARRIER_DIR", "PLEBIAN_OS_VOICE_CARRIER_SHA256",
-                    "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256", "KILIX_LICENSE_REF"):
+                    "PLEBIAN_OS_VOICE_CARRIER_RECEIPT_SHA256", "PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF",
+                    "KILIX_LICENSE_REF"):
             self.assertIn(key, requirements)
             self.assertEqual(requirements[key], env[key], key)
         self.assertEqual(env["PLEBIAN_OS_VOICE_CARRIER_DIR"],

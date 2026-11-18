@@ -4,19 +4,333 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## [0.2.3] — 2026-11-05
+## [0.2.3] — 2026-11-16
 
+Final release. See [releases/0.2.3-notes.md](releases/0.2.3-notes.md) for
+install and upgrade instructions (including `pleb update --to 0.2.3` for
+release-candidate machines), known issues and the 0.2.4 deferrals. The
+entries below run newest first, from the final back through RC1.
+
+- Wait for the dpkg lock instead of failing. Another package manager
+  (`unattended-upgrades`, `apt-daily`) can hold it for minutes. The native
+  runtime now retries its `lock-frontend` and `lock` takes for up to 600 s,
+  names the holder once when it starts waiting, never signals it, and does not
+  charge the wait to its work limit; on timeout it stops with nothing changed.
+  Every `apt-get` in the provisioner, updater, dependency installer and Qt and mpv
+  helpers carries `-o DPkg::Lock::Timeout=600`.
+- Document the early-drop recovery: a hop marker left in phase `selecting`.
+- Let a failed first boot roll back completely. The provisioning transaction
+  now protects every module Pleb 0.2.3 installs under `/usr/local/lib/pleb`
+  (`displays_gui.py`, `screenlock.py`, `screenlock_gui.py`) and the
+  notification centre. Without them the rollback could not remove the
+  directory, reported itself incomplete and kept its recovery data. The test
+  that ties this list to Pleb's module list now reads the 0.2.3 pins.
+- Make an interrupted release hop recover. `plebian-os-select-closure
+  --rollback` waits (up to 30 minutes, status 13 on timeout) while an update is
+  still running, so its restore lands after that update's own rollback. A repeat
+  of a rollback answers "already rolled back" from the hop's own record and never
+  restores an older one; a changed closure gets its own refusal. After a
+  finished rollback, or where an interrupted selection replaced nothing, it
+  settles the hop marker a dropped driver left in the Pleb state directory
+  (image only, matching tag object, phase `selecting` or `selected`, no retained
+  failed rollback), so a 0.2.2 Pleb's plain `pleb update` is not blocked. Its
+  rollback messages are also appended to `update.log` (`plebian-os-select-closure:`).
+- Survive a hung-up terminal: the selector and the updater no longer abort on a
+  message they cannot print, and the updater points a dead terminal's
+  descriptors at `/dev/null`. The next update, and `--recover-interrupted`, name
+  a retained failed rollback and print the commands to remove it. The updater's
+  advice names `pleb update --rollback` instead of a bare selector rollback.
+- Pleb: a hangup is deferred like Ctrl-C and SIGTERM in every `pleb update`;
+  hop-marker recovery falls back to the recorded closure when the selector has
+  nothing left to roll back; the update lock is handed to the reconcile on an
+  image and on a standalone machine, and a failed reconcile names the command to
+  run; the rescue terminal takes typing at once (`xterm -name pleb-recovery`, one
+  Openbox rule, `xdotool`, now in Pleb's package list and the recorded copy).
+- The release acceptance check requires no `release-hop` record after a
+  rollback: Pleb keeps one generation, so a record from an earlier hop is not
+  restored.
+- Kilix: the model wizard asks only for an install confirmation on a notice
+  licence, and the per-Ask verification record is no longer printed.
+
+- `--rollback` restores the last selection even when two selections land
+  in one second (a release candidate and its final, back to back) or the
+  clock was set back between selections made by 0.2.3 or later. It could restore the record from the selection before,
+  which removed `/etc/pleb/closure.env`. A new recovery record is named at
+  least one second after every existing one; when two records an earlier
+  selector wrote share the newest second, rollback refuses, restores
+  nothing and says to select the wanted release explicitly.
+- Speak the whole Paradee utterance. Synthesis no longer stops silently at
+  510 phonemes; it runs across bounded sentence and word windows (Kilix
+  `fdb02036`, with a shared adaptive speech-timing estimator).
+- Debian Go installs and upgrades keep working after trixie-backports
+  replaces the selected upload: the exact package files are pinned and
+  fetched from snapshot.debian.org or the release mirror when needed, and
+  nothing is installed unless every file matches.
+- First boot stops an attempt only after 20 minutes without progress, under
+  one 5-hour ceiling; a stop waits for dpkg and lets the rollback finish, and
+  each attempt repairs an interrupted package database first.
+- A never-selected standalone Debian machine can make its first closure
+  selection with `pleb update --to 0.2.3`, and a rollback or failed apply
+  returns it to no selected closure. A Pleb at VERSION 0.2.1 runs a bare
+  `pleb update` first.
+- Record the selected release tag and tag object
+  (`PLEBIAN_OS_RELEASE_TAG`, `PLEBIAN_OS_RELEASE_TAG_OBJECT`) so a later
+  release candidate moves to its final on a plain update. RC9 machines move
+  once with `pleb update --to 0.2.3`.
+- Ask once at the first desktop login whether to turn on an SSH server; the
+  default is No. `plebian-os-ssh-server enable|disable|status` changes it
+  later. Upgrades install the helper but never enable SSH. Enable refuses,
+  naming the accounts, while any account has the 0.2.0 starter password;
+  every run reports the real state; a failed enable turns SSH off again; a
+  half-installed openssh-server is held off; disable masks the generator
+  sockets; and Kilix 95 asks before sudo.
+- Stage the Waydroid first-use helper on fresh amd64 installs, as updates
+  do, without installing Waydroid or downloading Android. A fresh install on
+  arm64 and other architectures does not stage it; updates stage it on every
+  architecture.
+- Release updates keep working when an operator apt source such as NVIDIA CUDA
+  is configured. Release installs and updates use a private Debian-only apt
+  configuration, so operator sources, pins, `/etc/apt/apt.conf` and
+  `apt.conf.d` snippets do not apply to release packages, and
+  operator-installed packages are never removed. A proxy set in apt.conf
+  (`Acquire::http`, `https` or `ftp` `::Proxy`, including per-host `DIRECT`)
+  is carried after validation, including an authenticated proxy, and is
+  never printed; a `Proxy-Auto-Detect` program is never run. With the Debian
+  archive unreachable, a release install or update stops instead of
+  continuing on stale package lists, and turning SSH on stops if any Debian
+  source cannot be read.
+  Plebian-OS's own Qt runtime pin is kept by exact file name, and in release
+  mode the Qt runtime is verified after the dependency step, which stops if
+  the check fails. In release mode, Pleb and Kilix refuse a missing package
+  by name instead of installing it from the system apt; an `apt-mark hold` or
+  a second-architecture install counts as installed.
+- Accept an Ollama carrier path that contains a backslash or a newline
+  (0.2.2 known issue 8); size and SHA-256 checks are unchanged.
+- Say `interrupted; rolling back` on an interrupted update and keep the
+  updater's own `update.log`; remove packages the interrupted transaction
+  that appeared during a package step when that is safe; recover an interrupted same-tag reselect
+  without restoring an older closure.
+- QEMU manager: refuse a private-group directory when membership lookup is
+  partial, the account files are not regular or not read whole, names are
+  duplicated, or the DynamicUser peer cannot be verified or is not root
+  (kilix-tui-utils `bd1999bd`).
+- Kilix Ask uses its grammar until LFM2 is installed. The first interactive
+  `kilix ask` and the model wizard offer the LFM2 download (delivery v10,
+  deduplicated runtime libraries, same weight); the ISO no longer bundles
+  it. The five recorded Ask grammar gaps are fixed (kilix-needle `bcef7e17`).
+- Install the slim Neuronte v2 set (`629ee1d2`) with a stall-based fetch and
+  its own `neuronte-v2` component cache; Kilix 95 reads the v1 faces and
+  flame and lays text with packed mask calls.
+- Download the default-models bundle from the release-independent
+  `default-models-0221` tag instead of the `v0.2.3-rc1` prerelease. Same
+  bytes and SHA-256.
+
+- Make Kilix Ask's LFM2 command model a first-use download. The image no
+  longer carries the command-model archive (the remaster neither needs nor
+  copies it, and the preseed no longer copies `model-archives`), and neither a
+  fresh install nor an upgrade downloads, stages or installs it. Kilix Ask
+  uses its grammar until the model is installed and offers the download on
+  the first interactive `kilix ask` and on the model wizard's Local
+  Workflows / Kilix Ask page. The pin moves to delivery
+  `lfm2-kilix-commands-20261115-v10` (same weight `20261106.9` and runtime
+  build; ten duplicate runtime libraries omitted; new modified-model notice
+  `ad951c96`). A machine with delivery v9 installed and covered gets v10 from
+  those files in the desktop-user upgrade step, with no download and a notice
+  receipt that claims no agreement. That step runs unattended, shows nothing,
+  and prints where the installed terms are. Anything missing or different, a
+  partial v10 directory, a full disk, a refusing receipt store or installer,
+  or a Kilix whose catalog selects another delivery installs nothing, leaves
+  no receipt behind and never fails the upgrade. `stage-command-model.py` stays, as a
+  step that changes nothing, because an earlier candidate's updater still
+  runs it. The compliance carrier describes LFM2 as
+  `first-use-upstream-download`; the validator refuses the retired
+  `bundled-command-model-archive` mode and a set
+  `PLEBIAN_OS_COMMAND_MODEL_BUNDLE`.
+
+- Select Debian's current trixie-backports Go package
+  `1.27.4-1~bpo13+1` for the Kilix engine build. The archive no longer
+  serves `1.27.3-1~bpo13+1`, so installs and upgrades stopped at the Go
+  step and restored. Attach independent reviews of OS `0007c491` and
+  their receipt; preserve earlier receipts and review records with
+  their original source scope.
+
+- Isolate the Neuronte rollback fixture from installed host settings
+  and unrelated component snapshot operations. Attach independent
+  reviews of OS `b226c490` and their receipt; preserve earlier
+  receipts and review records with their original source scope.
+
+- Align installed qualification instructions with the existing Vosk
+  catalogue licence route and selected model inventory; correct the
+  standalone wallpaper test for the current packaged artwork. Attach
+  independent reviews of OS `fca36425` and their receipt; preserve
+  earlier receipts and review records with their original scope.
+
+- Preserve the distribution's verified local Go compiler through the Kilix
+  engine build, avoiding an unexpected download of an older compiler.
+  Attach two independent delta reviews of OS `b72655d6` and their receipt;
+  preserve prior receipts and review records verbatim under their original scope.
+
+- Select the reviewed Zell four-room and theater payload, with native playback,
+  browser hold controls and preservation of the displayed frame after rejected
+  media opens. Wait for queued private-bus activation within its existing
+  deadline while retaining identity and placement checks.
+- Attach the two independent delta reviews and their receipt for SDK/Zell
+  successor OS `ecb5d279`; preserve earlier receipt and review records
+  verbatim with their original source scope.
+
+- Attach two independent reviews and the acceptance receipt for RC9 carrier
+  `de2ff296`, preserving their exact source scope and unchanged model bytes.
+
+- Ask for a default desktop on first login, with Kilix 95, IceWM, Kilix TUI
+  and zell (RPG Desktop) as the primary choices. Save the answer for later
+  sessions and support zell through the normal desktop provider commands.
+- Stack notifications in one window that expands and retracts downward.
+  Clicking each cat invokes that notification's pane action directly.
+- Verify the provisioned `ask` alias accepts quoted and unquoted questions.
+- Install pinned Kilix Secrets on upgrade with rollback; close the abandoned
+  parent race in early release hops. Include reviewed X11 scroll fixes,
+  pinned icon glyphs, and complete writes for the desktop letter cache.
+
+- Preserve two independent RC9 carrier reviews, both ship with known issues,
+  and their original receipt. Carrier `d5dd1a40` binds content `b861d44`
+  and licence `596ada2`; model artifacts and licence records remain unchanged.
+  The records state their exact source scope and do not qualify an RC9 image
+  or the later `de2ff296` carrier selected by the log fixes.
+
+- Select merged PDF Conversion `873f3298`, retaining OCR and batch path
+  confinement with complete dependency notices. Plain pane close now reaps
+  stopped and detached descendants. Debian Go reconciliation supports
+  restoring the release pin after a newer package was installed.
+
+- Restore **Close pane** in the coding-session close dialog. Closing no
+  longer requires a successful rollout-log lookup or recovery handoff.
+  Log recovery, background-to-tmux, and cancel remain separate choices.
+
+- Ship Paradee 8M as the fresh-install system voice, with its int8 ONNX,
+  `config.json`, Apache-2.0 text, the `en_core_web_sm` 3.8.0 wheel and a
+  hash-locked Python wheelhouse in the image. Provision installs those bytes
+  offline and does not download them. An existing voice selection is left
+  unchanged, and Female-02 stays installed.
+- RC8 creates the Paradee interpreter with `python3 -m venv --copies`, stages
+  and checks the Apache-2.0 text before install and synthesis, and ships the
+  espeak-ng 1.52.0 source plus the espeakng-loader MIT text for the bundled
+  `libespeak-ng`. The 0.2.3 carrier names both image models as
+  `image-offline-model`. Carrier `62d0c800` binds kilix-content
+  `db463a7` and kilix-license `596ada2`. Two seats reviewed carrier
+  `62d0c800` and both say ship with known issues.
+- Upgrading a machine installed without the Paradee and `en_core_web_sm`
+  archives, such as one installed from 0.2.2, no longer stops at
+  `required image model installation failed`. As root, the updater
+  downloads:
+  - the pinned Paradee ONNX and `config.json`;
+  - the Paradee wheels the lock names. Those wheels include the
+    `en_core_web_sm` wheel, downloaded once.
+
+  That is 150,535,592 bytes. It builds the same archives with the image's
+  builders and checks each
+  against its image pin before placing it where the image would have. A
+  failed download changes nothing, and the next upgrade tries again. A
+  fresh install still never downloads them. The same failure had kept
+  the page OCR models from that upgrade path.
+- The root Paradee step runs under umask 0022, so a 0077 umask kept by
+  sudo no longer leaves `/usr/lib/kilix/paradee` and `/usr/lib/kilix/pd`
+  root-only, which the desktop user cannot read. It also makes a runtime
+  that an earlier run left root-only readable again. A runtime that is a
+  symlink, or holds one in place of its own directories or files, is
+  refused before anything is downloaded, written or chmodded. An upgrade
+  downloads the `en_core_web_sm` wheel once, not twice.
+- An upgraded machine now also gets the espeak-ng 1.52.0 source and the
+  espeakng-loader texts under `/usr/local/share/doc/plebian-os/espeak-ng`,
+  as a fresh install does. The source is downloaded and checked against
+  its pin. A failed download leaves only the source out, and the next
+  upgrade tries again.
+- Install Debian's Tesseract (`tesseract-ocr`, `tesseract-ocr-eng`,
+  5.5.0-1+b1 with language data 4.1.0-2) on the Debian-installer path and
+  in `install-deps.sh`. kilix-pdf-conversion 0.4.0 uses it for page OCR,
+  beside RapidOCR with the PP-OCRv6 small models. This adds five packages,
+  about 23 MiB installed. Tesseract is Apache-2.0.
+- Ship PDF Conversion's page OCR models in the image:
+  `pp-ocrv6-small-det` and `pp-ocrv6-small-rec`, PaddlePaddle's PP-OCRv6
+  small text detector and recogniser as ONNX. The owner determined
+  Apache-2.0 for both on 2026-11-10. Neither Hugging Face repository has a
+  LICENSE file, so each archive carries Debian's Apache-2.0 text. The two
+  archives are 31,232,000 bytes. A fresh install installs both offline into
+  the content root. An upgrade on a machine without the archives downloads
+  the same files from the pinned revisions. Both models install whether or
+  not Playalong's models were declined. They are outside the voice carrier,
+  like Demucs. Kilix `b77e49b` moves its kilix-content gitlink to `32722d0`.
+  That commit catalogues both models and selects kilix-pdf-conversion
+  `2cff8ff`, which adds page OCR. Kilix 95 is `f8f58c9`, and kilix-license
+  is `596ada2`.
+- Kilix 95 `f8f58c9` expects a NumLock keypad digit to type in kilix
+  browse. Its workflow still names Kilix `f0f3639b`. Two seats reviewed
+  that commit and both say ship. The plebian-os pin of it has no seat
+  review yet.
+- Ask answers a question Needle finds no job for with the catalog's
+  `qwen3.5-4b` through the local Ollama, when the model sizer says it fits
+  (Kilix `f0f3639b`). The answer is labelled as a model answer, and the
+  model never acts. No model ships in the image. `kilix models install
+  qwen3.5-4b` shows the licence and asks for agreement, and
+  `kilix ask --model-answers setup` registers the verified install with
+  Ollama. Kilix's kilix-content gitlink stays at `32722d0`, so Needle stays
+  `30ee74fe` and the carrier is unchanged.
+- Kilix `b3719704` points Bonsai at `5fd3ef95`. Loading a Bonsai image
+  checks out the pinned kilix-content gitlink when that checkout is empty,
+  instead of reporting that the content API is unavailable. Kilix's
+  kilix-content gitlink stays at `32722d0`.
+- Kilix `755f1123` installs a model the first time a command calls it.
+  The licence screen is shown, and a decline installs nothing. Bonsai
+  moves to `124d9a4e`, which does the same for a missing runtime. The
+  kilix-content gitlink stays at `32722d0`.
+- Kilix `2cb82cf6` installs Paradee the first time a terminal calls it
+  and the image copy is absent. The licence screen is shown, and a
+  decline installs nothing. The wizard's default-voice check stays a
+  verify. The short-path interpreter stays the image copy. The
+  kilix-content gitlink stays at `32722d0`.
+- Kilix `fafc0a14` installs Bonsai weights, a named Qwen voice,
+  Female-02, YAMNet, YOLOX, Playalong, PDF conversion, and Pocket weights
+  the first time a terminal calls them. The licence screen is shown, and
+  a decline installs nothing. Status, doctor, and listing stay read-only.
+  Bonsai is `48e18c7`. The kilix-content gitlink stays at `32722d0`.
+
+- Follow published RC7 (`b7e7e0d3`) with an RC8 candidate. kilix-llm
+  `93f2202b` refuses `pull` of `qwen-0.8b-no-loop-02` and builds without
+  llama.cpp's web UI. Kilix Avatar `202f03cd` names `kilix models install`
+  when that file is missing. Kilix is `f93c100c` and Kilix 95 is `e54c186`.
+  Ask answers a closed sum and the closed machine readings directly.
+  An integer sum prints in full, a conversion keeps its unit, and "and"
+  is addition except inside one hundred. A written thousand, million,
+  or billion still reads as that number. `kilix ask --repl` stays open
+  until exit, quit, or the end of input, including a final line with no
+  newline. How-to search calls the installed help program. A wifi
+  question uses wifi devices only. A temperature down to -100°C is a
+  reading. The numeric keypad reaches Chromium in a `kilix run` pane.
+  Ask also answers dates and other clocks, facts about this computer,
+  unit conversions, text and status-code questions, and dice directly,
+  and "what can you do?" lists them. Courtesy around a request is ignored.
+  kilix-content `c7aaac12` selects Needle `30ee74fe`. Its parent
+  `f9ba621e` merges the Paradee catalog `543e4673` into
+  the download-interrupt fix `dfcda81b`. The image carrier `81994103`
+  binds that content commit. The local tag `v0.2.3-rc8` does not name
+  this commit, and RC8 acceptance is not claimed.
+- Configure Debian's `<codename>-backports` archive in
+  `plebian-os-debian-backports.sources` whenever live Debian sources are in
+  use, and remove it while apt is pinned to a snapshot. Apt's default
+  priority leaves the suite unselected. Release apt provenance accepts that
+  suite only from `deb.debian.org/debian`. RC8 selects Debian Go
+  `1.27.3-1~bpo13+1` with authenticated apt package indexes and package
+  verification. Upgrades reconcile Go even without an engine rebuild.
 - Offer the optional chat model `qwen-0.8b-no-loop-02`, a modified
   Qwen3.5-0.8B GGUF that loops less often in thinking mode, through kilix-llm
   (RC7). The model wizard downloads it from the kilix-llm release of the same
   name under the standard licence policy; its Apache-2.0 and CC BY 4.0
-  components are owner-approved. Installation and upgrades install kilix-llm
+  components are owner-approved. Published RC7 installs kilix-llm
   `ba4eaca3` (launcher and shallow pinned llama.cpp source, nothing compiled),
   and Kilix 95 then offers LLM Chat and Kilix Avatar entries for the model.
   Their first start builds kilix-llm's CPU runtime once and keeps only its
-  `bin/`, about 25 MB. Kilix is `55d7ea2a`, kilix-content is `b0c6f650`,
-  kilix-license is `2737f321`, Kilix 95 is `a9f28965` and Kilix Avatar is
-  `c06f6aec`, each the RC6 pin plus this change. The regenerated
+  `bin/`, about 25 MB. Published RC7 pins Kilix `55d7ea2a`, kilix-content
+  `b0c6f650`, kilix-license `2737f321`, Kilix 95 `a9f28965` and Kilix Avatar
+  `c06f6aec`, each the RC6 pin plus that change. The regenerated
   model carrier `42b6956b` changes only its interface refs from the RC6
   carrier `4fdbffce`; two independent seats reviewed it (ship with known
   issues, listed in the 0.2.3 follow-ups).

@@ -1,0 +1,30 @@
+espeakng-loader 0.2.4 bundles libespeak-ng.so and espeak-ng-data.
+libespeak-ng is GPL-3.0-or-later. The wheel ships no licence file for it.
+
+Corresponding source is espeak-ng tag 1.52.0. The archive
+espeak-ng-1.52.0.tar.gz in this directory is
+https://github.com/espeak-ng/espeak-ng/archive/refs/tags/1.52.0.tar.gz
+(17739803 bytes, sha256
+bb4338102ff3b49a81423da8a1a158b420124b055b60fa76cfb4b18677130a23).
+That archive contains COPYING, the GNU GPL version 3.
+
+The loader commit 146599e29be31bf17d99f0bcb7dbb2f92aef3d95 builds the Linux
+x86_64 shared library from that tag. Its build script is
+espeakng-loader-0.2.4-build.sh in this directory. The workflow clones the tag
+and runs that script:
+
+    git clone --single-branch --depth 1 -b 1.52.0 https://github.com/espeak-ng/espeak-ng
+    ./build.sh
+
+On Linux, build.sh configures the tree with:
+
+    cmake -B build -DBUILD_SHARED_LIBS=ON -DENABLE_TESTS=OFF -DCOMPILE_INTONATIONS=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=_dynamic . -DCMAKE_C_FLAGS=-pthread -DCMAKE_EXE_LINKER_FLAGS=-pthread
+
+The data directory in the wheel is produced from the same tag with:
+
+    cmake -B build . -DCMAKE_INSTALL_PREFIX=_espeak_ng_data -DCOMPILE_INTONATIONS=ON
+
+espeakng-loader-0.2.4-LICENSE is the loader's MIT text from commit
+0ddc87adf77e5850d7eeb542ac8a87d421b64daa (1069 bytes, sha256
+b05c73bb1335b4320ec97edff106b3991c12d0acdc6e899c96f061a15039119f).
+That text covers the loader. The library remains under GPL-3.0-or-later.

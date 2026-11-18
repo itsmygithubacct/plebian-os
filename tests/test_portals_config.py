@@ -81,8 +81,16 @@ class PortalsConfigTests(unittest.TestCase):
         restore = updater[updater.index("ROOT_RESTORE"):]
         provision = self.protected_pleb_modules(PROVISION, "PROVISION_ROOT_TRANSACTION_PATHS=(")
         self.assertIn("capture_session.py", provision)
-        self.assertEqual(self.protected_pleb_modules(snapshot, "paths=("), provision)
-        self.assertEqual(self.protected_pleb_modules(restore, "paths=("), provision)
+        snapshot_modules = self.protected_pleb_modules(snapshot, "paths=(")
+        self.assertEqual(self.protected_pleb_modules(restore, "paths=("), snapshot_modules)
+        # The updater's snapshot layout is positional, so modules Pleb added in
+        # 0.2.3 are not in it yet (an update rollback leaves them as inert
+        # extras, a documented known issue). The provisioning transaction is
+        # inventoried per run, so it protects every installed module.
+        self.assertEqual(sorted(set(provision) - set(snapshot_modules)),
+                         ["displays_gui.py", "notification_center.py",
+                          "screenlock.py", "screenlock_gui.py"])
+        self.assertEqual(sorted(set(snapshot_modules) - set(provision)), [])
 
     def test_every_module_pleb_installs_is_protected(self):
         # The list lives in the sibling pleb repository (PLEB_CAPTURE_MODULES in
@@ -93,7 +101,7 @@ class PortalsConfigTests(unittest.TestCase):
         pleb = ROOT.parent / "pleb"
         if not (pleb / ".git").exists():
             self.skipTest(f"no sibling pleb checkout at {pleb}")
-        manifest = (ROOT / "releases/0.2.2.env").read_text()
+        manifest = (ROOT / "releases/0.2.3.env").read_text()
         ref = re.search(r"^PLEB_REF=([0-9a-f]{40})$", manifest, re.M).group(1)
         shown = subprocess.run(["git", "-C", str(pleb), "show", f"{ref}:lib/install.sh"],
                                capture_output=True, text=True)
@@ -104,7 +112,10 @@ class PortalsConfigTests(unittest.TestCase):
         provision = self.protected_pleb_modules(PROVISION, "PROVISION_ROOT_TRANSACTION_PATHS=(")
         # Screensaver support is installed separately from capture modules.
         self.assertIn('"$PLEB_ROOT/lib/screensaver.py"', shown.stdout)
-        self.assertEqual(provision, sorted(found.group(1).split() + ["screensaver.py"]))
+        # So is the notification centre (lib/install.sh installs it on its own).
+        self.assertIn('"$PLEB_ROOT/lib/notification_center.py"', shown.stdout)
+        self.assertEqual(provision, sorted(found.group(1).split()
+                                           + ["screensaver.py", "notification_center.py"]))
 
 
 if __name__ == "__main__":

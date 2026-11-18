@@ -16,6 +16,49 @@ import tempfile
 
 
 STATE = Path('/var/lib/plebian-os/mpv-runtime')
+
+
+def apt_run(argv, **kwargs):
+    """Run apt-get. Release mode uses the private Debian configuration.
+
+    Outside release mode the command and environment are unchanged. In
+    release mode a missing configuration is a failure, not a fall back to
+    the operator's sources, pins, or apt.conf.d snippets.
+    """
+    # Wait for apt-daily/unattended-upgrades to release the dpkg lock instead of failing.
+    if argv[0].endswith("/apt-get") and "DPkg::Lock::Timeout=600" not in argv:
+        argv = [argv[0], "-o", "DPkg::Lock::Timeout=600", *argv[1:]]
+    if os.environ.get("PLEBIAN_OS_RELEASE_MODE") != "1":
+        return subprocess.run(argv, **kwargs)
+    config = os.environ.get("PLEBIAN_OS_RELEASE_APT_CONFIG", "")
+    conf = os.path.join(config, "apt.conf") if config else ""
+    if (not config or os.path.islink(config) or not os.path.isdir(config)
+            or os.path.islink(conf) or not os.path.isfile(conf)):
+        raise SystemExit(
+            "plebian-os-mpv-runtime: release apt configuration is missing; "
+            "refusing the system apt configuration")
+    options = [
+        "-o", f"Dir::Etc::SourceList={config}/sources.list",
+        "-o", f"Dir::Etc::SourceParts={config}/sources.list.d",
+        "-o", f"Dir::State::lists={config}/lists",
+        "-o", "Dir::State::status=" + os.environ.get("PLEBIAN_OS_DPKG_STATUS", "/var/lib/dpkg/status"),
+        "-o", "Dir::State::extended_states=" + os.environ.get(
+            "PLEBIAN_OS_APT_EXTENDED_STATES", "/var/lib/apt/extended_states"),
+        "-o", f"Dir::Cache={config}/cache",
+        "-o", f"Dir::Cache::archives={config}/archives",
+        "-o", f"Dir::Cache::pkgcache={config}/cache/pkgcache.bin",
+        "-o", f"Dir::Cache::srcpkgcache={config}/cache/srcpkgcache.bin",
+        "-o", f"Dir::Etc::Preferences={config}/preferences",
+        "-o", f"Dir::Etc::PreferencesParts={config}/preferences.d",
+    ]
+    argv = [argv[0], *options, *argv[1:]]
+    env = dict(kwargs.get("env") or os.environ)
+    env.pop("APT_CONFIG", None)
+    env["APT_CONFIG"] = conf
+    kwargs["env"] = env
+    return subprocess.run(argv, **kwargs)
+
+
 FILES = {
     'usr/bin/kilix-mpv', 'usr/bin/kilix-video',
     'usr/lib/kilix-mpv/terminal_video.py',
@@ -161,9 +204,9 @@ def restore(directory):
         record = archive_info(archive)
         if record != prior['record'] or record['version'] != prior['version']:
             raise ValueError('previous player archive identity differs')
-        subprocess.run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
-                        '--no-install-recommends', '--no-remove', '--allow-downgrades',
-                        'install', str(archive)], check=True)
+        apt_run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
+                 '--no-install-recommends', '--no-remove', '--allow-downgrades',
+                 'install', str(archive)], check=True)
         verify(record)
     if prior['runtime'] is None:
         (STATE / 'RUNTIME.json').unlink(missing_ok=True)
@@ -201,8 +244,8 @@ def install(path, expected_sha, expected_bytes, version, source, launcher):
             raise ValueError('refusing different player bytes under an existing version')
         if not target.exists():
             os.replace(held, target)
-        subprocess.run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
-                        '--no-install-recommends', '--no-remove', 'install', str(target)], check=True)
+        apt_run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
+                 '--no-install-recommends', '--no-remove', 'install', str(target)], check=True)
         verify(record)
         atomic_json(STATE / 'RUNTIME.json', record)
 

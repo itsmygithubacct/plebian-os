@@ -1,22 +1,62 @@
 #!/bin/sh
 # Persistently bound firstboot provisioning attempts across retries and reboots.
 # Used by ExecCondition/ExecStart/ExecStartPost in the firstboot unit.
+#
+# `run` supervises each attempt itself instead of using timeout(1):
+#   - an attempt is stopped only when it makes no progress for the stall
+#     limit, or when the whole start job reaches its overall ceiling, so a slow
+#     but progressing first boot is not killed;
+#   - a stop (stall, ceiling, or the unit being stopped) never signals while a
+#     dpkg process is running: it waits for dpkg to finish, bounded, before it
+#     signals the attempt's process group;
+#   - before every attempt an interrupted package database is recovered with
+#     dpkg --configure -a and a bounded apt-get -f install.
 set -eu
 
 state_dir="${PLEBIAN_OS_STATE_DIR:-/var/lib/plebian-os}"
 attempt_file="$state_dir/firstboot-attempts"
 max="${PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS:-3}"
-attempt_timeout="${PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT:-3600}"
+# Seconds without progress before an attempt is stopped. Twice the longest
+# silent stretch observed on a slow link (a 598 s git fetch), even before the
+# I/O signal below is counted.
+stall_limit="${PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT:-1200}"
+# Overall ceiling for every attempt, recovery and retry delay of one start job.
+ceiling="${PLEBIAN_OS_FIRSTBOOT_CEILING:-18000}"
+# How long a stop waits for a running dpkg before it signals anyway.
+dpkg_grace="${PLEBIAN_OS_FIRSTBOOT_DPKG_GRACE:-600}"
+# How long a stopped provisioner may take to roll back before it is killed.
+stop_grace="${PLEBIAN_OS_FIRSTBOOT_STOP_GRACE:-900}"
+# Ceiling for each package-database recovery step.
+recovery_ceiling="${PLEBIAN_OS_FIRSTBOOT_RECOVERY_CEILING:-1800}"
+poll="${PLEBIAN_OS_FIRSTBOOT_POLL_INTERVAL:-15}"
 retry_delay="${PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY:-60}"
 temporary_sudoers="${PLEBIAN_OS_TEMP_SUDOERS:-/etc/sudoers.d/plebian-os-provision}"
+progress_log="${PLEBIAN_OS_PROVISION_LOG:-/var/log/plebian-os-provision.log}"
+dpkg_admindir="${PLEBIAN_OS_DPKG_ADMINDIR:-/var/lib/dpkg}"
+# Process names that must never be signalled mid-operation.
+package_comms="${PLEBIAN_OS_FIRSTBOOT_PACKAGE_COMMS:-dpkg}"
 
-case "$max" in ''|*[!0-9]*|0) echo "invalid firstboot attempt limit: $max" >&2; exit 2 ;; esac
-case "$attempt_timeout" in ''|*[!0-9]*|0) echo "invalid firstboot attempt timeout: $attempt_timeout" >&2; exit 2 ;; esac
+positive() {
+    case "$2" in ''|*[!0-9]*|0) echo "invalid firstboot $1: $2" >&2; exit 2 ;; esac
+}
+positive 'attempt limit' "$max"
+positive 'stall timeout' "$stall_limit"
+positive 'ceiling' "$ceiling"
+positive 'dpkg grace' "$dpkg_grace"
+positive 'stop grace' "$stop_grace"
+positive 'recovery ceiling' "$recovery_ceiling"
+case "$poll" in
+    ''|.*|*.|*[!0-9.]*|*.*.*) echo "invalid firstboot poll interval: $poll" >&2; exit 2 ;;
+    *[1-9]*) ;;
+    *) echo "invalid firstboot poll interval: $poll" >&2; exit 2 ;;
+esac
 case "$retry_delay" in *[!0-9]*|'') echo "invalid firstboot retry delay: $retry_delay" >&2; exit 2 ;; esac
 case "$temporary_sudoers" in
     /*) ;;
     *) echo "temporary sudoers path must be absolute: $temporary_sudoers" >&2; exit 2 ;;
 esac
+
+say() { echo "$*" >&2; }
 
 read_attempts() {
     n=0
@@ -27,6 +67,298 @@ read_attempts() {
         esac
     fi
     return 0
+}
+
+# Seconds since boot: unaffected by the clock step NTP makes on a first boot.
+now() {
+    read -r up _ </proc/uptime
+    echo "${up%.*}"
+}
+
+# Sets proc_state, proc_pgrp and proc_start for $1; fails if it is gone.
+read_proc() {
+    proc_stat=""
+    read -r proc_stat 2>/dev/null <"/proc/$1/stat" || return 1
+    proc_comm="${proc_stat#*\(}"
+    proc_comm="${proc_comm%\)*}"
+    # shellcheck disable=SC2086
+    set -- ${proc_stat##*) }
+    proc_state="$1"
+    proc_pgrp="$3"
+    shift 19
+    proc_start="$1"
+}
+
+# The supervised command has exited (it may already have been reaped by the
+# shell, and its pid reused, so its start time must still match).
+command_exited() {
+    read_proc "$command_pid" || return 0
+    [ "$proc_state" = Z ] && return 0
+    [ "$proc_start" != "$command_start" ]
+}
+
+# Prints the pid of a running package process (system-wide: during first boot
+# every dpkg is provisioning's own, including ones in their own session).
+running_package_process() {
+    for d in /proc/[0-9]*; do
+        read_proc "${d#/proc/}" || continue
+        [ "$proc_state" != Z ] || continue
+        for c in $package_comms; do
+            if [ "$proc_comm" = "$c" ]; then
+                echo "${d#/proc/}"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
+# The processes whose I/O counts as the attempt's progress: the whole unit
+# under systemd (so package steps in their own session count too), otherwise
+# the supervised process group.
+attempt_pids() {
+    if [ -n "$unit_cgroup" ] && [ -r "$unit_cgroup/cgroup.procs" ]; then
+        find "$unit_cgroup" -name cgroup.procs -exec cat {} + 2>/dev/null || true
+        return 0
+    fi
+    for d in /proc/[0-9]*; do
+        read_proc "${d#/proc/}" || continue
+        [ "$proc_pgrp" != "$command_pid" ] || echo "${d#/proc/}"
+    done
+}
+
+# Progress signal: bytes read and written by any process of the attempt
+# (rchar/wchar count downloads, apt/dpkg, build and git I/O and every byte of
+# output) plus the size of the provisioning log. A process blocked on a dead
+# connection or a lock adds nothing; only counters of processes present in two
+# consecutive samples are compared, so the sampling's own commands never count.
+sample_progress() {
+    : >"$1"
+    size=0
+    if [ -f "$progress_log" ]; then
+        size="$(wc -c <"$progress_log" 2>/dev/null || echo 0)"
+    fi
+    echo "log $size" >>"$1"
+    for pid in $(attempt_pids); do
+        [ "$pid" != "$$" ] || continue
+        total=0
+        while read -r key value; do
+            case "$key" in rchar:|wchar:) total=$((total + value)) ;; esac
+        done 2>/dev/null <"/proc/$pid/io" || continue
+        echo "$pid $total" >>"$1"
+    done
+}
+
+progressed() {
+    awk 'NR == FNR { old[$1] = $2; next }
+         ($1 in old) && $2 != old[$1] { moved = 1 }
+         END { exit moved ? 0 : 1 }' "$1" "$2"
+}
+
+# Interruptible sleep: a caught signal returns from wait at once.
+pause() {
+    sleep "$1" &
+    pause_pid=$!
+    wait "$pause_pid" 2>/dev/null || true
+    kill "$pause_pid" 2>/dev/null || true
+    pause_pid=""
+}
+
+group_signal() {
+    kill -s "$1" -- "-$command_pid" 2>/dev/null || true
+}
+
+# Return once no package process runs, with the attempt's group frozen so no
+# dpkg can start between this check and the signal that follows. A running
+# dpkg is waited for unfrozen; the freeze only confirms it is idle. If dpkg is
+# still running after the grace period the group is frozen and stopped anyway.
+quiesce_packages() {
+    quiesce_end=$(( $(now) + dpkg_grace ))
+    waited=""
+    while :; do
+        busy="$(running_package_process || true)"
+        if [ -z "$busy" ]; then
+            group_signal STOP
+            # Let a fork or exec already inside the kernel settle before looking.
+            sleep 0.2
+            busy="$(running_package_process || true)"
+            [ -n "$busy" ] || return 0
+            group_signal CONT
+        fi
+        if [ "$(now)" -ge "$quiesce_end" ]; then
+            say "firstboot: dpkg (pid $busy) is still running after ${dpkg_grace}s; stopping anyway"
+            group_signal STOP
+            return 1
+        fi
+        if [ -z "$waited" ]; then
+            say "firstboot: waiting for dpkg (pid $busy) to finish before stopping the attempt"
+            waited=1
+        fi
+        pause 1
+    done
+}
+
+signal_attempt() {
+    quiesce_packages || true
+    group_signal "$1"
+    group_signal CONT
+}
+
+# Stop the supervised command: TERM once dpkg is idle, let its rollback run
+# for the stop grace (its own package steps are never signalled again), then
+# KILL once dpkg is idle again.
+stop_command() {
+    say "firstboot: stopping $command_label: $1"
+    signal_attempt TERM
+    stop_end=$(( $(now) + stop_grace ))
+    while ! command_exited; do
+        if [ "$(now)" -ge "$stop_end" ]; then
+            say "firstboot: $command_label did not finish its rollback within ${stop_grace}s; killing it"
+            signal_attempt KILL
+            break
+        fi
+        pause 1
+    done
+}
+
+on_signal() {
+    [ "$stop_status" -eq 0 ] || return 0
+    stop_status="$1"
+    stop_signal="$2"
+}
+
+# supervise LABEL STALL DEADLINE COMMAND [ARG ...]: run COMMAND in its own
+# process group and session, stop it on stall/deadline/unit stop, and set
+# `status` to its exit status (124 after a stall or the deadline).
+supervise() {
+    command_label="$1"
+    stall="$2"
+    deadline="$3"
+    shift 3
+    reason=""
+    setsid "$@" &
+    command_pid=$!
+    command_start=""
+    while read_proc "$command_pid"; do
+        command_start="$proc_start"
+        [ "$proc_pgrp" != "$command_pid" ] || break
+        [ "$proc_state" != Z ] || break
+        sleep 0.05
+    done
+    sample_progress "$work/previous"
+    last_progress="$(now)"
+    while ! command_exited; do
+        if [ "$stop_status" -ne 0 ]; then
+            reason="the firstboot unit is stopping (SIG$stop_signal)"
+            break
+        fi
+        t="$(now)"
+        if [ "$t" -ge "$deadline" ]; then
+            reason="reached the overall ${ceiling}s ceiling"
+            break
+        fi
+        sample_progress "$work/current"
+        if progressed "$work/previous" "$work/current"; then
+            last_progress="$t"
+        elif [ $((t - last_progress)) -ge "$stall" ]; then
+            reason="no progress for ${stall}s"
+            break
+        fi
+        mv -f "$work/current" "$work/previous"
+        if command_exited; then break; fi
+        pause "$poll"
+    done
+    [ -z "$reason" ] || stop_command "$reason"
+    if wait "$command_pid"; then status=0; else status=$?; fi
+    command_pid=""
+    if [ -n "$reason" ] && [ "$stop_status" -eq 0 ]; then
+        say "firstboot: $command_label stopped after $reason (exit $status)"
+        status=124
+    fi
+}
+
+# Any journal in dpkg's updates directory means an interrupted dpkg run (this
+# is what apt's "dpkg was interrupted" check reads); dpkg --audit reports
+# packages left unpacked, half-configured or half-installed.
+package_state_faults() {
+    for f in "$dpkg_admindir"/updates/*; do
+        [ -e "$f" ] || continue
+        case "${f##*/}" in
+            *[!0-9]*) ;;
+            *) echo "dpkg journal pending: $f"; break ;;
+        esac
+    done
+    LC_ALL=C dpkg --admindir="$dpkg_admindir" --audit 2>&1 || true
+}
+
+recover_package_state() {
+    command -v dpkg >/dev/null 2>&1 || return 0
+    faults="$(package_state_faults)"
+    [ -n "$faults" ] || return 0
+    say "firstboot: the package database was left interrupted; recovering it before provisioning:"
+    printf '%s\n' "$faults" | sed 's/^/firstboot:   /' >&2
+    recovery_deadline=$(( $(now) + recovery_ceiling ))
+    [ "$recovery_deadline" -le "$job_deadline" ] || recovery_deadline="$job_deadline"
+    say "firstboot: running dpkg --configure -a"
+    supervise 'dpkg --configure -a' "$stall_limit" "$recovery_deadline" \
+        env DEBIAN_FRONTEND=noninteractive dpkg --admindir="$dpkg_admindir" \
+        --force-confdef --force-confold --configure -a
+    [ "$stop_status" -eq 0 ] || return 0
+    say "firstboot: dpkg --configure -a exited $status; running a bounded apt-get -f install"
+    # One apt-get, still -f install, against a Debian-only source list.
+    # Host apt.conf and apt.conf.d cannot add a package: this file sets
+    # Dir::Etc::main to /dev/null and points Dir::Etc::Parts at an empty
+    # directory. The system list cache stays, so already-fetched Debian
+    # indexes remain usable. Do not pass --no-remove; fixing a
+    # half-installed database is allowed to remove a broken package.
+    apt_work="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-firstboot-apt.XXXXXX")" || {
+        say "firstboot: could not prepare a Debian-only apt configuration"
+        return 1
+    }
+    mkdir -p "$apt_work/sources.list.d" "$apt_work/apt.conf.d" "$apt_work/preferences.d" \
+        || { rm -rf "$apt_work"; return 1; }
+    apt_codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
+    cat >"$apt_work/sources.list.d/debian.sources" <<EOF
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: $apt_codename $apt_codename-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: https://security.debian.org/debian-security
+Suites: $apt_codename-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+    printf '%s\n' \
+        'Dir::Etc::main "/dev/null";' \
+        "Dir::Etc::Parts \"$apt_work/apt.conf.d\";" \
+        >"$apt_work/apt.conf"
+    : >"$apt_work/preferences"
+    chmod 0755 "$apt_work" "$apt_work/sources.list.d" "$apt_work/apt.conf.d" "$apt_work/preferences.d"
+    chmod 0644 "$apt_work/apt.conf" "$apt_work/preferences" "$apt_work/sources.list.d/debian.sources"
+    supervise 'apt-get -f install' "$stall_limit" "$recovery_deadline" \
+        env -u APT_CONFIG DEBIAN_FRONTEND=noninteractive APT_CONFIG="$apt_work/apt.conf" \
+        apt-get -y -f install \
+        -o Dir::Etc::SourceList=/dev/null \
+        -o "Dir::Etc::SourceParts=$apt_work/sources.list.d" \
+        -o "Dir::Etc::Preferences=$apt_work/preferences" \
+        -o "Dir::Etc::PreferencesParts=$apt_work/preferences.d" \
+        -o DPkg::Lock::Timeout=300 -o Acquire::Retries=3 \
+        -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+    rm -rf "$apt_work"
+    [ "$stop_status" -eq 0 ] || return 0
+    say "firstboot: apt-get -f install exited $status"
+    faults="$(package_state_faults)"
+    if [ -n "$faults" ]; then
+        say "firstboot: the package database is still inconsistent after recovery; not provisioning:"
+        printf '%s\n' "$faults" | sed 's/^/firstboot:   /' >&2
+        say "firstboot: repair it as root with dpkg --configure -a and apt-get -f install"
+        return 1
+    fi
+    say "firstboot: the package database is consistent again"
 }
 
 case "${1:-}" in
@@ -59,28 +391,31 @@ case "${1:-}" in
             echo "usage: $0 run COMMAND [ARG ...]" >&2
             exit 2
         }
-        command -v timeout >/dev/null 2>&1 || {
-            echo "firstboot retry runner requires timeout" >&2
+        command -v setsid >/dev/null 2>&1 || {
+            echo "firstboot retry runner requires setsid" >&2
             exit 2
         }
         command_pid=""
+        pause_pid=""
         stop_status=0
-        stop_attempt() {
-            # Keep the unit's main process alive until the provisioner finishes
-            # rollback. Otherwise systemd can reap its remaining control group
-            # while package removal is still updating the dpkg database.
-            [ "$stop_status" -eq 0 ] || return 0
-            stop_status="$1"
-            if [ -n "$command_pid" ]; then
-                kill -s "$2" "$command_pid" 2>/dev/null || true
-            else
-                rm -f "$temporary_sudoers"
-                exit "$stop_status"
-            fi
-        }
-        trap 'stop_attempt 143 TERM' TERM
-        trap 'stop_attempt 130 INT' INT
-        trap 'stop_attempt 129 HUP' HUP
+        stop_signal=""
+        unit_cgroup=""
+        if [ -n "${INVOCATION_ID:-}" ] && [ -r /proc/self/cgroup ]; then
+            while IFS= read -r line; do
+                case "$line" in
+                    0::/plebian-os-firstboot.service|0::/*/plebian-os-firstboot.service)
+                        unit_cgroup="/sys/fs/cgroup${line#0::}" ;;
+                esac
+            done </proc/self/cgroup
+        fi
+        work="$(mktemp -d "${TMPDIR:-/tmp}/plebian-os-firstboot.XXXXXX")"
+        # The unit's KillMode=mixed sends a stop to this process only; the
+        # supervisor turns it into a dpkg-safe stop of the attempt.
+        trap 'on_signal 143 TERM' TERM
+        trap 'on_signal 130 INT' INT
+        trap 'on_signal 129 HUP' HUP
+        trap 'rm -rf "$work"; rm -f "$temporary_sudoers"' EXIT
+        job_deadline=$(( $(now) + ceiling ))
         while :; do
             read_attempts || exit 1
             if [ "$n" -ge "$max" ]; then
@@ -90,24 +425,16 @@ case "${1:-}" in
 
             "$0" begin
             rm -f "$temporary_sudoers"
-            echo "firstboot provisioning command has ${attempt_timeout}s to complete" >&2
-            timeout --signal=TERM --kill-after=30s \
-                "${attempt_timeout}s" "$@" &
-            command_pid=$!
-            while :; do
-                if wait "$command_pid"; then
-                    status=0
-                    break
-                else
-                    status=$?
-                fi
-                # A caught signal interrupts wait before the child finishes.
-                # Reap it before leaving; timeout retains the 30s KILL bound.
-                if [ "$stop_status" -eq 0 ] || ! kill -0 "$command_pid" 2>/dev/null; then
-                    break
-                fi
-            done
-            command_pid=""
+            [ "$stop_status" -eq 0 ] || exit "$stop_status"
+            if recover_package_state; then
+                [ "$stop_status" -eq 0 ] || exit "$stop_status"
+                remaining=$(( job_deadline - $(now) ))
+                [ "$remaining" -gt 0 ] || remaining=0
+                echo "firstboot provisioning command may run while it makes progress: stopped after ${stall_limit}s without progress or in ${remaining}s at the overall ceiling" >&2
+                supervise 'firstboot provisioning' "$stall_limit" "$job_deadline" "$@"
+            else
+                status=75
+            fi
             rm -f "$temporary_sudoers"
             [ "$stop_status" -eq 0 ] || exit "$stop_status"
             [ "$status" -ne 0 ] || exit 0
@@ -117,8 +444,13 @@ case "${1:-}" in
                 echo "firstboot provisioning exhausted $n/$max attempts (last exit $status)" >&2
                 exit "$status"
             fi
+            if [ "$(now)" -ge "$job_deadline" ]; then
+                echo "firstboot provisioning reached its overall ${ceiling}s ceiling after attempt $n/$max (last exit $status); the next boot retries" >&2
+                exit "$status"
+            fi
             echo "firstboot provisioning attempt $n/$max failed (exit $status); retrying in ${retry_delay}s" >&2
-            sleep "$retry_delay"
+            pause "$retry_delay"
+            [ "$stop_status" -eq 0 ] || exit "$stop_status"
         done
         ;;
     *)

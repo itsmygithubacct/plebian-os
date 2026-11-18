@@ -1,0 +1,10 @@
+# Dependency packages, not DEP_GROUPS names, that the release closure installs.
+# Offline amd64 `apt-get -s --no-install-recommends` of DEP_GROUPS against the
+# local trixie lists, with an empty status and no apt-get update. Seat B found
+# the pleb and Kilix lists covered on arm64 as well. libjack-dev is the dev
+# package selected once that install has brought in libjack0.
+fontconfig
+fonts-dejavu-core
+libdrm-dev
+libegl-dev
+libjack-dev

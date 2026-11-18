@@ -255,13 +255,18 @@ class ReleaseHopSplitStateTests(unittest.TestCase):
         out = self._run(tail, PLEBIAN_OS_RELEASE_HOP_FROM="0.2.1").stdout
         self.assertIn("LOG restored", out)
         self.assertIn("0.2.1", out)
-        self.assertIn("plebian-os-select-closure --rollback", out)
+        self.assertIn("pleb update --rollback", out)
+        self.assertIn("'pleb update --to <version>' to go forward", out)
+        self.assertIn("a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'", out)
+        self.assertIn("plebian-os-select-closure --show", out)
+        self.assertIn("can be an older hop", out)
 
     def test_a_clean_rollback_without_a_hop_stays_quiet(self):
         tail = "failed=0\n" + self._reporting_tail()
         out = self._run(tail).stdout
         self.assertIn("LOG restored", out)
-        self.assertNotIn("plebian-os-select-closure --rollback", out)
+        self.assertNotIn("pleb update --rollback", out)
+        self.assertNotIn("plebian-os-select-closure", out)
 
     def test_the_marker_is_appended_after_every_unset_so_it_survives_exec(self):
         body = function_body("select_latest_release_if_needed", self.text)
@@ -283,7 +288,8 @@ class ReleaseHopSplitStateTests(unittest.TestCase):
         result = self._run(script)
         self.assertEqual(result.returncode, 1)
         self.assertIn("0.2.1 -> 0.2.2", result.stdout)
-        self.assertIn("plebian-os-select-closure --rollback", result.stdout)
+        self.assertIn("pleb update --rollback", result.stdout)
+        self.assertIn("plebian-os-select-closure --show", result.stdout)
 
     def test_that_warning_is_silent_on_a_successful_hop(self):
         source = function_body("warn_release_hop_split_state", self.text)

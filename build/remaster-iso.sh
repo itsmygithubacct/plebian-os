@@ -135,6 +135,14 @@ load_release_manifest() {
     # values cannot supply fields omitted by the authoritative manifest.
     PLEBIAN_OS_NATIVE_DEB_URL=
     PLEBIAN_OS_NATIVE_DEB_SHA256=
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE=
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES=
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256=
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE=
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES=
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256=
+    PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT=
+    PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL=
     PLEBIAN_OS_NATIVE_DEB_BYTES=
     PLEBIAN_OS_NATIVE_SOURCE_REF=
     PLEBIAN_OS_NATIVE_CONTENT_REF=
@@ -148,6 +156,7 @@ load_release_manifest() {
     PLEBIAN_OS_MPV_SOURCE_REF=
     PLEBIAN_OS_MPV_LAUNCHER_REF=
     PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF=
+    PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL=
     declare -A seen=()
     while IFS= read -r line || [ -n "$line" ]; do
         case "$line" in ''|\#*) continue ;; esac
@@ -274,6 +283,10 @@ try:
         command = json.loads(Path(sys.argv[3]).read_bytes())
         if json.loads((root / 'COMMAND-MODEL.json').read_bytes()) != command:
             raise ValueError('command archive differs from the release inventory')
+        # The Kilix Ask command model is a first-use download (0.2.3): no
+        # carrier may describe it as being on the media.
+        if (command.get('delivery') or {}).get('mode') != 'first-use-download':
+            raise ValueError('the command model must be a first-use download')
     # Kilix Playalong's defaults that upgrades download (not in the image).
     online = {}
     if sys.argv[4]:
@@ -282,6 +295,12 @@ try:
             raise ValueError('Playalong defaults differ from the release inventory')
         online = {asset: item['manifest_digest'] for asset, item in playalong['assets'].items()
                   if item['delivery'] == 'online'}
+    image = {}
+    for filename in ('paradee-model.json', 'en-core-web-sm-model.json'):
+        path = expected.parent / filename
+        if path.is_file():
+            pin = json.loads(path.read_bytes())
+            image[pin['asset_id']] = pin['manifest_digest']
     bundle = json.loads((root / 'DEFAULT-MODELS.json').read_bytes())
     if bundle != json.loads(expected.read_bytes()):
         raise ValueError('default bundle differs from the release inventory')
@@ -291,9 +310,10 @@ try:
         asset = entry['artifact_id']
         bundled = asset in bundle['assets']
         is_command = command is not None and asset == command['asset_id']
-        mode = ('bundled-command-model-archive' if is_command else
+        mode = ('first-use-upstream-download' if is_command else
                 'bundled-default-model' if bundled else
                 'playalong-default-upstream-download' if asset in online else
+                'image-offline-model' if asset in image else
                 'first-use-upstream-download')
         prefix = 'm_' + ''.join(c if c.isascii() and c.isalnum() else '_' for c in model)
         if entry['delivery'] != mode or env[prefix + '_delivery'] != mode:
@@ -302,6 +322,8 @@ try:
             raise ValueError(model + ': bundled manifest digest differs')
         if asset in online and entry['manifest_digest'] != online[asset]:
             raise ValueError(model + ': Playalong default manifest digest differs')
+        if asset in image and entry['manifest_digest'] != image[asset]:
+            raise ValueError(model + ': image model manifest digest differs')
         if is_command and any(entry[k] != command[v] for k, v in (
                 ('manifest_digest', 'manifest_digest'), ('archive_sha256', 'sha256'),
                 ('archive_bytes', 'bytes'), ('version', 'version'), ('source_url', 'url'))):
@@ -309,6 +331,9 @@ try:
     if command is not None and not any(e['artifact_id'] == command['asset_id']
                                        for e in carrier['models'].values()):
         raise ValueError('command model is missing from the carrier')
+    for asset in image:
+        if not any(e['artifact_id'] == asset for e in carrier['models'].values()):
+            raise ValueError(asset + ' is missing from the carrier')
 except (OSError, ValueError, KeyError, TypeError) as error:
     sys.exit('carrier: ' + str(error))
 PY
@@ -448,7 +473,7 @@ validate_voice_compliance_carrier() {
                 || { carrier_refuse "$model licence text $digest is missing or altered"; return 1; }
         done
         case "${cv[${prefix}delivery]}" in
-            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|bundled-command-model-archive) ;;
+            first-use-upstream-download|playalong-default-upstream-download|bundled-default-model|image-offline-model) ;;
             *) carrier_refuse "$model delivery mode is unsupported"; return 1 ;;
         esac
         host="${cv[${prefix}source_url]#https://}"; host="${host%%/*}"
@@ -739,6 +764,28 @@ validate_kilix_secrets_release_root() {
     }
 }
 
+# 0.2.3 carries the pinned Neuronte faces (provision/neuronte-payload.json).
+release_requires_neuronte() {
+    [ "${PLEBIAN_OS_VERSION:-}" = 0.2.3 ]
+}
+
+validate_neuronte_release_root() {
+    release_requires_neuronte || return 0
+    local key
+    for key in NEURONTE_REPO NEURONTE_REF; do
+        [ -n "${!key:-}" ] || {
+            echo "PLEBIAN_OS_RELEASE_MODE=1 requires a pinned $key" >&2
+            exit 1
+        }
+    done
+    is_hex_len "${NEURONTE_REF}" 40 || {
+        echo "release mode requires NEURONTE_REF to be a full 40-character lowercase commit SHA" >&2
+        exit 1
+    }
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
+        || { echo "release mode requires the canonical NEURONTE_REPO" >&2; exit 1; }
+}
+
 validate_f120_release_roots() {
     release_requires_f120_roots || return 0
     local key missing=()
@@ -790,6 +837,28 @@ firstboot_source_ref() {
     else
         printf '%s\n' "${!key:-}"
     fi
+}
+
+# The release tag this image is built from and its tag object, as
+# "<tag> <object>", for the installed closure to record. Only a release build
+# whose PLEBIAN_OS_REF is a stable or numbered candidate tag of its own VERSION
+# has one; release_preflight has already bound that tag to HEAD. Any other build
+# prints nothing and the installed machine records no tag.
+firstboot_release_identity() {
+    local tag="${PLEBIAN_OS_REF:-}" version="${PLEBIAN_OS_VERSION:-}" suffix object
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 0
+    if [ "$tag" != "v$version" ]; then
+        suffix="${tag#"v$version-rc"}"
+        [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]] || return 0
+    fi
+    object="$(git -C "$HERE" rev-parse --verify --quiet "refs/tags/$tag" 2>/dev/null)" \
+        && [[ "$object" =~ ^[0-9a-f]{40}$ ]] \
+        || { echo "release tag $tag does not resolve to a local tag object" >&2; return 1; }
+    [ "$(git -C "$HERE" rev-parse --verify "$object^{commit}" 2>/dev/null)" \
+        = "$(git -C "$HERE" rev-parse HEAD 2>/dev/null)" ] \
+        || { echo "release tag $tag does not name the checked-out commit" >&2; return 1; }
+    printf '%s %s\n' "$tag" "$object"
 }
 
 # Run before fetch_netinst or mkdir: a release build must verify its immutable
@@ -917,7 +986,46 @@ validate_release_refs_resolve_on_their_remotes() {
     }
 }
 
+validate_debian_go_selection() {
+    local debian="${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" files=""
+    files="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE:-}${PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES:-}${PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256:-}"
+    files+="${PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE:-}${PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES:-}${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:-}"
+    files+="${PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT:-}${PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL:-}"
+    if [ -z "$debian" ]; then
+        [ -z "$files" ] || {
+            echo "Debian Go package file pins require PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION" >&2
+            return 1
+        }
+        return 0
+    fi
+    [[ "$debian" =~ ^1\.27\.[0-9]+-[0-9]+~bpo13\+[0-9]+$ ]] \
+        && [[ "$debian" == "${PLEBIAN_OS_KILIX_GO_VERSION#go}-"* ]] \
+        && [ -z "${PLEBIAN_OS_APT_SNAPSHOT:-}" ] || {
+            echo "Debian Go requires matching compiler/package pins and live trixie-backports" >&2
+            return 1
+        }
+    # The backports suite keeps only its current upload. A release pins the
+    # exact files and where the same bytes stay available once it moves on.
+    [ -n "$files" ] || [ "${PLEBIAN_OS_RELEASE_MODE:-0}" != 1 ] || {
+        echo "release mode requires Debian Go package file pins (PLEBIAN_OS_KILIX_GO_DEB_*)" >&2
+        return 1
+    }
+    [ -n "$files" ] || return 0
+    [ "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE:-}" = "golang-1.27-go_${debian}_amd64.deb" ] \
+        && [ "${PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE:-}" = "golang-1.27-src_${debian}_all.deb" ] \
+        && [[ "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES:-}" =~ ^[1-9][0-9]{0,9}$ ]] \
+        && [[ "${PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES:-}" =~ ^[1-9][0-9]{0,9}$ ]] \
+        && [[ "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+        && [[ "${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] \
+        && [[ "${PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT:-}" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] \
+        && [[ "${PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL:-}" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~%+-]+)*$ ]] || {
+            echo "Debian Go package file pins are incomplete or malformed (PLEBIAN_OS_KILIX_GO_DEB_*)" >&2
+            return 1
+        }
+}
+
 release_preflight() {
+    validate_debian_go_selection || exit 1
     validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" "${PLEBIAN_OS_RELEASE_MODE:-0}" || return 1
     validate_mpv_release_closure || return 1
     validate_native_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" \
@@ -930,6 +1038,7 @@ release_preflight() {
         KILIX_PREBUILT_VERSION KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
         PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == PLEBIAN_OS_KILIX_GO_SHA256_* ]] && [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ]; then continue; fi
         [ -n "${!key:-}" ] || missing+=("$key")
     done
     if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
@@ -944,6 +1053,7 @@ release_preflight() {
     validate_uv_release_closure
     validate_f120_release_roots
     validate_kilix_secrets_release_root
+    validate_neuronte_release_root
     validate_voice_release_closure
     validate_waydroid_release_closure
     # A publishable image always uses the interactive identity profile. Secrets
@@ -970,6 +1080,7 @@ release_preflight() {
     done
     for key in PLEBIAN_OS_NETINST_SHA256 KILIX_PREBUILT_SHA256 \
         PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == PLEBIAN_OS_KILIX_GO_SHA256_* ]] && [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ]; then continue; fi
         is_hex_len "${!key}" 64 || { echo "release mode requires a 64-character $key" >&2; exit 1; }
     done
     case "${PLEBIAN_OS_APT_SNAPSHOT-unset}" in
@@ -995,13 +1106,17 @@ SRC_ISO="${1:-}"
 resolve_ollama_carrier() {
     local argument="${1:-}" configured="${PLEBIAN_OS_OLLAMA_CARRIER:-}"
     local argument_real="" configured_real=""
+    # NUL-delimited readlink keeps a name that ends in a newline. Command
+    # substitution would strip those bytes before the file test.
     if [ -n "$argument" ]; then
-        argument_real="$(readlink -f -- "$argument" 2>/dev/null || true)"
+        argument_real=""
+        IFS= read -r -d '' argument_real < <(readlink -f -z -- "$argument" 2>/dev/null) || true
         [ -n "$argument_real" ] && [ -f "$argument_real" ] \
             || { echo "Ollama carrier argument 3 is missing or is not a regular file" >&2; exit 1; }
     fi
     if [ -n "$configured" ]; then
-        configured_real="$(readlink -f -- "$configured" 2>/dev/null || true)"
+        configured_real=""
+        IFS= read -r -d '' configured_real < <(readlink -f -z -- "$configured" 2>/dev/null) || true
         [ -n "$configured_real" ] && [ -f "$configured_real" ] \
             || { echo "PLEBIAN_OS_OLLAMA_CARRIER is missing or is not a regular file" >&2; exit 1; }
     fi
@@ -1020,12 +1135,12 @@ DEFAULT_MODELS_BUNDLE="${PLEBIAN_OS_DEFAULT_MODELS_BUNDLE:-}"
 }
 validate_default_model_release_closure
 python3 "$HERE/provision/install-default-models.py" --verify-only --archive "$DEFAULT_MODELS_BUNDLE"
-COMMAND_MODEL_BUNDLE="${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}"
-[ -n "$COMMAND_MODEL_BUNDLE" ] || {
-    echo "PLEBIAN_OS_COMMAND_MODEL_BUNDLE must name the release's command model archive" >&2
+# The Kilix Ask command model (LFM2) is a first-use download from 0.2.3: the
+# image does not carry its archive, so the build neither needs nor copies one.
+[ -z "${PLEBIAN_OS_COMMAND_MODEL_BUNDLE:-}" ] || {
+    echo "PLEBIAN_OS_COMMAND_MODEL_BUNDLE is retired: the command model is a first-use download and is not put on the image" >&2
     exit 1
 }
-python3 "$HERE/provision/stage-command-model.py" --verify-only --archive "$COMMAND_MODEL_BUNDLE"
 python3 "$HERE/provision/install-image-models.py" --verify-only \
     --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz"
 # Demucs htdemucs_6s ships in the image with Meta's MIT text beside it (owner
@@ -1037,8 +1152,38 @@ if [ -n "$DEMUCS_MODEL_BUNDLE" ]; then
         --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
         --demucs "$DEMUCS_MODEL_BUNDLE"
 fi
-COMMAND_MODEL_SHA256="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha256"])' \
-    "$HERE/provision/command-model.json")"
+# Paradee 8M is the fresh-install system voice (owner decision 2026-11-10).
+# The image carries the ONNX, config.json, the spaCy wheel and their licence
+# texts. A supplied pair is checked here; without one the build fetches the
+# pinned files once the work tree exists. Provision does not download them.
+PARADEE_MODEL_BUNDLE="${PLEBIAN_OS_PARADEE_MODEL_BUNDLE:-}"
+SPACY_MODEL_BUNDLE="${PLEBIAN_OS_SPACY_MODEL_BUNDLE:-}"
+if [ -n "$PARADEE_MODEL_BUNDLE" ] || [ -n "$SPACY_MODEL_BUNDLE" ]; then
+    [ -n "$PARADEE_MODEL_BUNDLE" ] && [ -n "$SPACY_MODEL_BUNDLE" ] || {
+        echo "Paradee and en_core_web_sm image archives must be supplied together" >&2
+        exit 1
+    }
+    python3 "$HERE/provision/install-image-models.py" --verify-only \
+        --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+        --paradee "$PARADEE_MODEL_BUNDLE" \
+        --en-core-web-sm "$SPACY_MODEL_BUNDLE"
+fi
+# PDF Conversion's page OCR models, PaddlePaddle's PP-OCRv6 small detector and
+# recogniser, ship in the image with the Apache-2.0 text (owner determination
+# 2026-11-10). A supplied archive is checked here; without one the build fetches
+# the pinned Hugging Face files once the work tree exists.
+PP_OCR_DET_MODEL_BUNDLE="${PLEBIAN_OS_PP_OCR_DET_MODEL_BUNDLE:-}"
+PP_OCR_REC_MODEL_BUNDLE="${PLEBIAN_OS_PP_OCR_REC_MODEL_BUNDLE:-}"
+if [ -n "$PP_OCR_DET_MODEL_BUNDLE" ]; then
+    python3 "$HERE/provision/install-image-models.py" --verify-only \
+        --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+        --pp-ocrv6-small-det "$PP_OCR_DET_MODEL_BUNDLE"
+fi
+if [ -n "$PP_OCR_REC_MODEL_BUNDLE" ]; then
+    python3 "$HERE/provision/install-image-models.py" --verify-only \
+        --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+        --pp-ocrv6-small-rec "$PP_OCR_REC_MODEL_BUNDLE"
+fi
 default_iso_name=plebian-os-netinst-amd64.iso
 if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
@@ -1072,6 +1217,13 @@ if ollama_carrier_required "$PLEBIAN_OS_VERSION"; then
     python3 "$HERE/provision/plebian-os-install-kilix-ollama-runtime" \
         --manifest "$OLLAMA_MANIFEST" --expected-version "$PLEBIAN_OS_VERSION" \
         --verify-carrier "$OLLAMA_CARRIER"
+    # Optional (0.2.2 names none). When present it is the one release asset an
+    # upgraded machine without the runtime downloads; keep it the canonical one.
+    if [ -n "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL:-}" ] \
+        && ! [[ "$PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL" =~ ^https://github\.com/itsmygithubacct/plebian-os/releases/download/[A-Za-z0-9._-]+/ollama-0\.32\.14-kilix-unix-vulkan-r1\.tar\.xz$ ]]; then
+        echo "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL must name the canonical Plebian-OS release asset" >&2
+        exit 1
+    fi
 fi
 if [ -z "$SRC_ISO" ]; then
     SRC_ISO="$(fetch_netinst)"           # auto-pull the Debian netinst
@@ -1287,6 +1439,7 @@ env_kv() {
 }
 
 release_mode_check() {
+    validate_debian_go_selection || exit 1
     [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
     local missing=()
     for key in \
@@ -1296,6 +1449,7 @@ release_mode_check() {
         PLEBIAN_OS_KILIX_GO_VERSION \
         PLEBIAN_OS_KILIX_GO_SHA256_AMD64 \
         PLEBIAN_OS_KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == PLEBIAN_OS_KILIX_GO_SHA256_* ]] && [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ]; then continue; fi
         [ -n "${!key:-}" ] || missing+=("$key")
     done
     if [ "${PLEBIAN_OS_INSTALL_UV:-0}" = 1 ]; then
@@ -1310,6 +1464,7 @@ release_mode_check() {
     validate_uv_release_closure
     validate_f120_release_roots
     validate_kilix_secrets_release_root
+    validate_neuronte_release_root
     validate_voice_release_closure
     case "${PLEBIAN_OS_APT_SNAPSHOT-unset}" in
         '') ;; # Explicit live Debian sources, including security updates.
@@ -1364,7 +1519,6 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_SOURCE_ISO "$(basename "$SRC_ISO")"
         manifest_kv PLEBIAN_OS_SOURCE_ISO_SHA256 "$iso_sha"
         manifest_kv PLEBIAN_OS_PRESEED_SHA256 "$preseed_sha"
-        manifest_kv PLEBIAN_OS_COMMAND_MODEL_ARCHIVE_SHA256 "${COMMAND_MODEL_SHA256:-}"
         manifest_kv PLEBIAN_OS_INSTALLER_SPLASH_SHA256 "$splash_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_SHA256 "$banner_sha"
         manifest_kv PLEBIAN_OS_INSTALLER_BANNER_DARK_SHA256 "$banner_dark_sha"
@@ -1396,6 +1550,7 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_MPV_LAUNCHER_REF "${PLEBIAN_OS_MPV_LAUNCHER_REF:-}"
         manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES:-}"
         manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256 "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256:-}"
+        manifest_kv PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL "${PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL:-}"
         manifest_kv PLEBIAN_OS_APT_SNAPSHOT "${PLEBIAN_OS_APT_SNAPSHOT:-}"
         manifest_kv PLEBIAN_OS_DESKTOP "${PLEBIAN_OS_DESKTOP:-1}"
         manifest_kv PLEBIAN_OS_KIOSK "${PLEBIAN_OS_KIOSK:-0}"
@@ -1427,6 +1582,8 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_REPO "${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
         manifest_kv PLEBIAN_OS_BRANCH "${PLEBIAN_OS_BRANCH:-}"
         manifest_kv PLEBIAN_OS_REF "${PLEBIAN_OS_REF:-}"
+        manifest_kv PLEBIAN_OS_RELEASE_TAG "${BUILD_RELEASE_TAG:-}"
+        manifest_kv PLEBIAN_OS_RELEASE_TAG_OBJECT "${BUILD_RELEASE_TAG_OBJECT:-}"
         manifest_kv PLEBIAN_OS_DIR "${PLEBIAN_OS_DIR:-}"
         manifest_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_STORAGE_HOME:-}"
         manifest_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_SESSION_HOME:-}"
@@ -1455,8 +1612,17 @@ write_build_info() {
         manifest_kv PLEBIAN_OS_BUILD_KILIX_FORK "${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
         manifest_kv PLEBIAN_OS_KILIX_GO_MIN_VERSION "${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
         manifest_kv PLEBIAN_OS_KILIX_GO_VERSION "${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
         manifest_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
         manifest_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE "${PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES "${PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 "${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT "${PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT:-}"
+        manifest_kv PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL "${PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL:-}"
         manifest_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-auto}"
         manifest_kv KILIX_DESKTOP_COMMAND "${KILIX_DESKTOP_COMMAND:-}"
         manifest_kv KILIX_DESKTOP_NAME "${KILIX_DESKTOP_NAME:-desktop}"
@@ -1505,6 +1671,8 @@ write_build_info() {
         manifest_kv KILIX_SECRETS_REPO "${KILIX_SECRETS_REPO:-}"
         manifest_kv KILIX_SECRETS_BRANCH "${KILIX_SECRETS_BRANCH:-}"
         manifest_kv KILIX_SECRETS_REF "${KILIX_SECRETS_REF:-}"
+        manifest_kv NEURONTE_REPO "${NEURONTE_REPO:-}"
+        manifest_kv NEURONTE_REF "${NEURONTE_REF:-}"
         manifest_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         manifest_kv KILIX_DIR "${KILIX_DIR:-}"
         manifest_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"
@@ -1571,6 +1739,10 @@ write_firstboot_env() {
         # Installed release updates pin the resolved build commit. Build-info
         # separately retains the human release tag as artifact metadata.
         env_kv PLEBIAN_OS_REF "$runtime_os_ref"
+        # The exact tag and tag object, so a candidate image can later tell
+        # its published final apart from itself (same VERSION).
+        env_kv PLEBIAN_OS_RELEASE_TAG "${BUILD_RELEASE_TAG:-}"
+        env_kv PLEBIAN_OS_RELEASE_TAG_OBJECT "${BUILD_RELEASE_TAG_OBJECT:-}"
         env_kv PLEBIAN_OS_DIR "${PLEBIAN_OS_DIR:-}"
         env_kv PLEBIAN_OS_STORAGE_HOME "${PLEBIAN_OS_STORAGE_HOME:-}"
         env_kv PLEBIAN_OS_SESSION_HOME "${PLEBIAN_OS_SESSION_HOME:-}"
@@ -1598,8 +1770,17 @@ write_firstboot_env() {
         env_kv PLEBIAN_OS_BUILD_KILIX_FORK "${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
         env_kv PLEBIAN_OS_KILIX_GO_MIN_VERSION "${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
         env_kv PLEBIAN_OS_KILIX_GO_VERSION "${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
         env_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
         env_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 "${PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE "${PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES "${PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 "${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT "${PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT:-}"
+        env_kv PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL "${PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL:-}"
         env_kv KILIX_DESKTOP_PROVIDER "${KILIX_DESKTOP_PROVIDER:-auto}"
         env_kv KILIX_DESKTOP_COMMAND "${KILIX_DESKTOP_COMMAND:-}"
         env_kv KILIX_DESKTOP_NAME "${KILIX_DESKTOP_NAME:-desktop}"
@@ -1648,6 +1829,8 @@ write_firstboot_env() {
         env_kv KILIX_SECRETS_REPO "${KILIX_SECRETS_REPO:-}"
         env_kv KILIX_SECRETS_BRANCH "${KILIX_SECRETS_BRANCH:-}"
         env_kv KILIX_SECRETS_REF "${KILIX_SECRETS_REF:-}"
+        env_kv NEURONTE_REPO "${NEURONTE_REPO:-}"
+        env_kv NEURONTE_REF "${NEURONTE_REF:-}"
         env_kv KILIX95_AUTO_INSTALL "${KILIX95_AUTO_INSTALL:-1}"
         env_kv KILIX_DIR "${KILIX_DIR:-}"
         env_kv KILIX_STORAGE_HOME "${KILIX_STORAGE_HOME:-}"
@@ -1670,6 +1853,14 @@ write_firstboot_env() {
 }
 
 release_mode_check
+
+# The exact tag and tag object this image is built from, or none. Build-info
+# and the firstboot environment both record them; the installed closure keeps
+# them so a candidate can later tell its published final apart from itself.
+BUILD_RELEASE_IDENTITY="$(firstboot_release_identity)" || exit 1
+BUILD_RELEASE_TAG="${BUILD_RELEASE_IDENTITY%% *}"
+BUILD_RELEASE_TAG_OBJECT=""
+[ -z "$BUILD_RELEASE_IDENTITY" ] || BUILD_RELEASE_TAG_OBJECT="${BUILD_RELEASE_IDENTITY#* }"
 
 mkdir -p "$PLEBIAN_OS_BUILD_HOME" "$(dirname "$OUT_ISO")"
 WORK="$(mktemp -d "$PLEBIAN_OS_BUILD_HOME/remaster.XXXXXX")"
@@ -2028,6 +2219,133 @@ python3 "$HERE/provision/install-image-models.py" --verify-only \
     --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
     --demucs "$DEMUCS_MODEL_BUNDLE"
 install -m 0644 "$DEMUCS_MODEL_BUNDLE" "$EXTRACT/plebian-os/demucs-htdemucs-6s.tar"
+if [ -z "$PARADEE_MODEL_BUNDLE" ] || [ -z "$SPACY_MODEL_BUNDLE" ]; then
+    paradee_pin="$HERE/provision/paradee-model.json"
+    spacy_pin="$HERE/provision/en-core-web-sm-model.json"
+    paradee_onnx_url="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["onnx/paradee_int8.onnx"]["url"])' "$paradee_pin")"
+    paradee_onnx_bytes="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["onnx/paradee_int8.onnx"]["bytes"])' "$paradee_pin")"
+    paradee_config_url="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["config.json"]["url"])' "$paradee_pin")"
+    paradee_config_bytes="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["config.json"]["bytes"])' "$paradee_pin")"
+    spacy_wheel_url="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["en_core_web_sm-3.8.0-py3-none-any.whl"]["url"])' "$spacy_pin")"
+    spacy_wheel_bytes="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print(p["files"]["en_core_web_sm-3.8.0-py3-none-any.whl"]["bytes"])' "$spacy_pin")"
+    echo "==> fetching the pinned Paradee files for the image"
+    _bounded_download "$paradee_onnx_bytes" 1800 "$WORK/paradee_int8.onnx" \
+        -fsSL --proto '=https' "$paradee_onnx_url" \
+        || { echo "could not download the pinned Paradee ONNX" >&2; exit 1; }
+    _bounded_download "$paradee_config_bytes" 120 "$WORK/paradee-config.json" \
+        -fsSL --proto '=https' "$paradee_config_url" \
+        || { echo "could not download the pinned Paradee config.json" >&2; exit 1; }
+    echo "==> fetching the pinned en_core_web_sm wheel for the image"
+    _bounded_download "$spacy_wheel_bytes" 600 "$WORK/en_core_web_sm-3.8.0-py3-none-any.whl" \
+        -fsSL --proto '=https' "$spacy_wheel_url" \
+        || { echo "could not download the pinned en_core_web_sm wheel" >&2; exit 1; }
+    PARADEE_MODEL_BUNDLE="$WORK/paradee-8m-v1.2.tar"
+    SPACY_MODEL_BUNDLE="$WORK/en-core-web-sm-3.8.0.tar"
+    python3 "$HERE/provision/install-image-models.py" \
+        --build-paradee-archive "$PARADEE_MODEL_BUNDLE" \
+        --paradee-onnx "$WORK/paradee_int8.onnx" \
+        --paradee-config "$WORK/paradee-config.json"
+    python3 "$HERE/provision/install-image-models.py" \
+        --build-en-core-web-sm-archive "$SPACY_MODEL_BUNDLE" \
+        --en-core-web-sm-wheel "$WORK/en_core_web_sm-3.8.0-py3-none-any.whl"
+    rm -f -- "$WORK/paradee_int8.onnx" "$WORK/paradee-config.json" \
+        "$WORK/en_core_web_sm-3.8.0-py3-none-any.whl"
+fi
+python3 "$HERE/provision/install-image-models.py" --verify-only \
+    --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+    --paradee "$PARADEE_MODEL_BUNDLE" \
+    --en-core-web-sm "$SPACY_MODEL_BUNDLE"
+install -m 0644 "$PARADEE_MODEL_BUNDLE" "$EXTRACT/plebian-os/paradee-8m-v1.2.tar"
+install -m 0644 "$SPACY_MODEL_BUNDLE" "$EXTRACT/plebian-os/en-core-web-sm-3.8.0.tar"
+# Write one page OCR archive from its pin's Hugging Face files, each fetched
+# through the bounded download at its pinned size; the builder checks them.
+build_pp_ocr_bundle() {
+    local asset_id="$1" files="$WORK/$1-files" name bytes url
+    mkdir -p "$files"
+    while IFS=$'\t' read -r name bytes url; do
+        _bounded_download "$bytes" 600 "$files/$name" -fsSL --proto '=https' "$url" \
+            || { echo "could not download the pinned $asset_id file $name" >&2; exit 1; }
+    done < <(python3 -c 'import json,sys
+for name, item in json.load(open(sys.argv[1]))["files"].items():
+    if "url" in item:
+        print(name, item["bytes"], item["url"], sep="\t")' "$HERE/provision/$asset_id-model.json")
+    python3 "$HERE/provision/install-image-models.py" \
+        --build-pp-ocr-archive "$asset_id" "$WORK/$asset_id.tar" --pp-ocr-files "$files"
+    rm -rf -- "$files"
+}
+if [ -z "$PP_OCR_DET_MODEL_BUNDLE" ]; then
+    echo "==> fetching the pinned PP-OCRv6 small detector for the image"
+    build_pp_ocr_bundle pp-ocrv6-small-det
+    PP_OCR_DET_MODEL_BUNDLE="$WORK/pp-ocrv6-small-det.tar"
+fi
+if [ -z "$PP_OCR_REC_MODEL_BUNDLE" ]; then
+    echo "==> fetching the pinned PP-OCRv6 small recogniser for the image"
+    build_pp_ocr_bundle pp-ocrv6-small-rec
+    PP_OCR_REC_MODEL_BUNDLE="$WORK/pp-ocrv6-small-rec.tar"
+fi
+python3 "$HERE/provision/install-image-models.py" --verify-only \
+    --basic-pitch "$HERE/provision/bundles/basic-pitch-icassp-2022-onnx.tar.xz" \
+    --pp-ocrv6-small-det "$PP_OCR_DET_MODEL_BUNDLE" \
+    --pp-ocrv6-small-rec "$PP_OCR_REC_MODEL_BUNDLE"
+install -m 0644 "$PP_OCR_DET_MODEL_BUNDLE" "$EXTRACT/plebian-os/pp-ocrv6-small-det.tar"
+install -m 0644 "$PP_OCR_REC_MODEL_BUNDLE" "$EXTRACT/plebian-os/pp-ocrv6-small-rec.tar"
+# The Paradee Python environment is a hash-locked wheelhouse. docopt has no
+# upstream wheel, so its wheel is the one file carried in provision/bundles.
+mkdir -p "$WORK/paradee-wheels"
+python3 - "$HERE/provision/paradee-wheels.json" "$HERE/provision/bundles" \
+    "$WORK/paradee-wheels" "$WORK/paradee-wheel-downloads.tsv" << 'PY'
+import json
+import sys
+from pathlib import Path
+lock_path, bundles, dest, listing = sys.argv[1:]
+lock = json.load(open(lock_path))
+dest = Path(dest)
+lines = []
+for item in lock["wheels"]:
+    if "bundle" in item:
+        source = Path(bundles) / item["filename"]
+        target = dest / item["filename"]
+        target.write_bytes(source.read_bytes())
+        target.chmod(0o644)
+    else:
+        lines.append(f"{item['bytes']}\t{item['url']}\t{item['filename']}")
+Path(listing).write_text("\n".join(lines) + "\n")
+PY
+while IFS="$(printf '\t')" read -r wheel_bytes wheel_url wheel_name; do
+    [ -n "$wheel_name" ] || continue
+    _bounded_download "$wheel_bytes" 600 "$WORK/paradee-wheels/$wheel_name" \
+        -fsSL --proto '=https' "$wheel_url" \
+        || { echo "could not download Paradee wheel $wheel_name" >&2; exit 1; }
+done < "$WORK/paradee-wheel-downloads.tsv"
+python3 "$HERE/provision/install-image-models.py" \
+    --verify-paradee-wheels "$WORK/paradee-wheels"
+# libespeak-ng in the espeakng-loader wheel is GPL-3.0-or-later. The wheel
+# ships no licence file. The image carries the loader's MIT text, the build
+# script, and the espeak-ng 1.52.0 source that script compiles.
+espeak_pin="$HERE/provision/espeak-ng-source.json"
+espeak_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$espeak_pin")"
+espeak_bytes="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bytes"])' "$espeak_pin")"
+echo "==> fetching the espeak-ng 1.52.0 source for the bundled libespeak-ng"
+_bounded_download "$espeak_bytes" 600 "$WORK/espeak-ng-1.52.0.tar.gz" \
+    -fsSL --proto '=https' "$espeak_url" \
+    || { echo "could not download the espeak-ng source" >&2; exit 1; }
+python3 - "$espeak_pin" "$WORK/espeak-ng-1.52.0.tar.gz" << 'PY'
+import hashlib, json, sys
+pin = json.load(open(sys.argv[1]))
+data = open(sys.argv[2], "rb").read()
+if len(data) != pin["bytes"] or hashlib.sha256(data).hexdigest() != pin["sha256"]:
+    raise SystemExit("espeak-ng source size or checksum mismatch")
+PY
+for notice in espeakng-loader-0.2.4-LICENSE espeakng-loader-0.2.4-build.txt espeakng-loader-0.2.4-build.sh; do
+    install -m 0644 "$HERE/provision/bundles/$notice" "$WORK/paradee-wheels/$notice"
+done
+mkdir -p "$EXTRACT/plebian-os/paradee-wheels"
+cp -a "$WORK/paradee-wheels/." "$EXTRACT/plebian-os/paradee-wheels/"
+chmod 0644 "$EXTRACT/plebian-os/paradee-wheels/"*
+install -m 0644 "$WORK/espeak-ng-1.52.0.tar.gz" "$EXTRACT/plebian-os/espeak-ng-1.52.0.tar.gz"
+for notice in espeakng-loader-0.2.4-LICENSE espeakng-loader-0.2.4-build.txt espeakng-loader-0.2.4-build.sh; do
+    install -m 0644 "$HERE/provision/bundles/$notice" "$EXTRACT/plebian-os/$notice"
+done
 # Optional explicit source carrier is staged only after complete digest/graph checks.
 # Its immutable manifest and helper bytes are reviewed with the final source tuple.
 if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; then
@@ -2035,8 +2353,39 @@ if [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ]; 
 fi
 cp "$HERE/provision/plebian-os-source-carrier" "$EXTRACT/plebian-os/"
 
-mkdir -p "$EXTRACT/plebian-os/model-archives"
-install -m 0644 "$COMMAND_MODEL_BUNDLE" "$EXTRACT/plebian-os/model-archives/$COMMAND_MODEL_SHA256"
+# RC9 carries a complete, digest-pinned Zell runtime for offline installation.
+python3 "$HERE/provision/install-zell-runtime.py" --verify-only \
+    --archive "$HERE/provision/bundles/zell-0.1.1-x86_64.tar.xz" --pin "$HERE/provision/zell-runtime.json"
+install -m 0644 "$HERE/provision/bundles/zell-0.1.1-x86_64.tar.xz" "$EXTRACT/plebian-os/zell-0.1.1-x86_64.tar.xz"
+install -m 0644 "$HERE/provision/zell-runtime.json" "$EXTRACT/plebian-os/zell-runtime.json"
+install -m 0755 "$HERE/provision/install-zell-runtime.py" "$EXTRACT/plebian-os/install-zell-runtime.py"
+
+# The Neuronte faces Kilix 95 reads, for an installation without network: the
+# files provision/neuronte-payload.json pins at NEURONTE_REF, as one xz tar that
+# first boot verifies file by file before building build/libneuronte.so. A
+# supplied PLEBIAN_OS_NEURONTE_ARCHIVE is checked the same way; without one the
+# build fetches only the pinned files (blob-less, about 37 MB).
+if [ -n "${NEURONTE_REF:-}" ]; then
+    neuronte_archive="${PLEBIAN_OS_NEURONTE_ARCHIVE:-}"
+    if [ -z "$neuronte_archive" ]; then
+        echo "==> fetching the pinned Neuronte files for the image"
+        neuronte_archive="$WORK/neuronte-$NEURONTE_REF.tar.xz"
+        python3 "$HERE/provision/install-neuronte.py" fetch-archive --xz \
+            --manifest "$HERE/provision/neuronte-payload.json" \
+            --ref "$NEURONTE_REF" --repo "${NEURONTE_REPO:-}" --out "$neuronte_archive" \
+            || { echo "could not fetch the pinned Neuronte files" >&2; exit 1; }
+    fi
+    xz -t -- "$neuronte_archive" \
+        || { echo "the Neuronte image archive is not an xz file: $neuronte_archive" >&2; exit 1; }
+    python3 "$HERE/provision/install-neuronte.py" verify \
+        --manifest "$HERE/provision/neuronte-payload.json" --ref "$NEURONTE_REF" \
+        --archive "$neuronte_archive"
+    install -m 0644 "$neuronte_archive" "$EXTRACT/plebian-os/neuronte-$NEURONTE_REF.tar.xz"
+elif release_requires_neuronte; then
+    echo "$PLEBIAN_OS_VERSION carries Neuronte; NEURONTE_REF is not set" >&2
+    exit 1
+fi
+
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"

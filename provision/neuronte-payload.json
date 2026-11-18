@@ -1,0 +1,770 @@
+{
+ "schema": "plebian.neuronte-payload/v1",
+ "repository": "https://github.com/itsmygithubacct/neuronte-v2.git",
+ "commit": "629ee1d2bcf510181a1936613a108683cf3409c0",
+ "tree": "b8749c6f287bc8158a1b3f2da48bfcd5ca567968",
+ "reader": "Kilix 95 desktop faces and flame; Neuronte runtime assets and video player",
+ "license": "MIT renderer and weights; LGPL-2.1-or-later media decoder; see LICENSE, LICENSES and THIRD_PARTY_NOTICES.md",
+ "files": {
+  "LICENSE": {
+   "blob": "cce853aba4c234779d667cafe4b6593c4cd9fdb5",
+   "mode": "100644",
+   "bytes": 1072
+  },
+  "LICENSES/FFmpeg-LGPL-2.1-or-later.txt": {
+   "blob": "f6683e74e0f0130f246dbf7054f4cacc88ca84b0",
+   "mode": "100644",
+   "bytes": 26419
+  },
+  "Makefile": {
+   "blob": "ee6aff99a55f6d082eec6688322e44c6fc1dfbf8",
+   "mode": "100644",
+   "bytes": 1688
+  },
+  "PROVENANCE.md": {
+   "blob": "afe5193ba12881f8a862654760c8d2b075a06a12",
+   "mode": "100644",
+   "bytes": 5279
+  },
+  "README.md": {
+   "blob": "1f07d73da46a053c7666206bd897b566bad5c1d2",
+   "mode": "100644",
+   "bytes": 10257
+  },
+  "THIRD_PARTY_NOTICES.md": {
+   "blob": "5013cdea84285e5e060d32e77b34cc39e61fb05c",
+   "mode": "100644",
+   "bytes": 6075
+  },
+  "font/octants.txt": {
+   "blob": "c6c1e16974f9bb302accd3107b13fe8f0a0c510a",
+   "mode": "100644",
+   "bytes": 3349
+  },
+  "font/ui-1.txt": {
+   "blob": "0dc6c95b211ed1051490ca4d019663fa7566b583",
+   "mode": "100644",
+   "bytes": 1332
+  },
+  "font/ui-10-italic.txt": {
+   "blob": "c6a072096835665c7e1ee19865abfb3fc99b8785",
+   "mode": "100644",
+   "bytes": 8830
+  },
+  "font/ui-10.txt": {
+   "blob": "41bde8d8312f9a03e9ec56e203d97b119d001329",
+   "mode": "100644",
+   "bytes": 7526
+  },
+  "font/ui-11-italic.txt": {
+   "blob": "b11b8ab873fb879bd0b148373ee2356573d5fc72",
+   "mode": "100644",
+   "bytes": 10224
+  },
+  "font/ui-11.txt": {
+   "blob": "e1b9cde1edd14d625f70cebf5b5bcd5965a1060c",
+   "mode": "100644",
+   "bytes": 8652
+  },
+  "font/ui-12-italic.txt": {
+   "blob": "d27e716e64e269abdff2799af01e5ca1dbbe7674",
+   "mode": "100644",
+   "bytes": 10401
+  },
+  "font/ui-12.txt": {
+   "blob": "c49b98cf7d52994aceb422a57bc1f43641869fd1",
+   "mode": "100644",
+   "bytes": 9128
+  },
+  "font/ui-13-italic.txt": {
+   "blob": "022e4e8336c9599e851e5cdebaf50242a7b67d27",
+   "mode": "100644",
+   "bytes": 11422
+  },
+  "font/ui-13.txt": {
+   "blob": "39c2755c4c91ffa951440777ffc6e3854b7ec283",
+   "mode": "100644",
+   "bytes": 10296
+  },
+  "font/ui-14-italic.txt": {
+   "blob": "003a3e1694e348f960862031d563b8bc819daa0c",
+   "mode": "100644",
+   "bytes": 13531
+  },
+  "font/ui-14.txt": {
+   "blob": "58165b2e3b7f2db8604a387e34a4ce4f92982ae8",
+   "mode": "100644",
+   "bytes": 11741
+  },
+  "font/ui-15-italic.txt": {
+   "blob": "a90252429b65aa4760b1ccf841e6d1d44b09c000",
+   "mode": "100644",
+   "bytes": 14687
+  },
+  "font/ui-15.txt": {
+   "blob": "b21bf83d30033390ae6ef16f9971b05d25c0e3d8",
+   "mode": "100644",
+   "bytes": 13092
+  },
+  "font/ui-16-italic.txt": {
+   "blob": "644e6fcc387f46e398bf6cce05b88cfa33dfe133",
+   "mode": "100644",
+   "bytes": 17064
+  },
+  "font/ui-16.txt": {
+   "blob": "a9c0966d9c99e5583ae4debb808e48f13dd51349",
+   "mode": "100644",
+   "bytes": 14750
+  },
+  "font/ui-17-italic.txt": {
+   "blob": "2b02a8cf5ba88dd6946c403747316b26f5232527",
+   "mode": "100644",
+   "bytes": 20783
+  },
+  "font/ui-17.txt": {
+   "blob": "cb1a294830cc1dbae30aad7cdf85f08c54dd73d2",
+   "mode": "100644",
+   "bytes": 18442
+  },
+  "font/ui-18-italic.txt": {
+   "blob": "5c0020d1b3547b6b08a0679e0d6642b4b2dfb622",
+   "mode": "100644",
+   "bytes": 22663
+  },
+  "font/ui-18.txt": {
+   "blob": "332a2614228902691f8e9c4b113a249b75420354",
+   "mode": "100644",
+   "bytes": 19673
+  },
+  "font/ui-19-italic.txt": {
+   "blob": "7a4a5be95b84a12198bdfcb2c32bc333699f75de",
+   "mode": "100644",
+   "bytes": 24162
+  },
+  "font/ui-19.txt": {
+   "blob": "9722e3d2ab8b091bee32d699f0bb72014f539e19",
+   "mode": "100644",
+   "bytes": 21424
+  },
+  "font/ui-2.txt": {
+   "blob": "b60a8145c2396c49bed9160152d21bdfaec88ca4",
+   "mode": "100644",
+   "bytes": 1678
+  },
+  "font/ui-20-italic.txt": {
+   "blob": "6e7eb3416979a76101fd8146ae9345f3d85b85e5",
+   "mode": "100644",
+   "bytes": 26628
+  },
+  "font/ui-20.txt": {
+   "blob": "14af87deb6446ec40b11492575b961421c083a29",
+   "mode": "100644",
+   "bytes": 22625
+  },
+  "font/ui-21-italic.txt": {
+   "blob": "0c5807099479868277b88deb306d084e0ec25ce2",
+   "mode": "100644",
+   "bytes": 28334
+  },
+  "font/ui-21.txt": {
+   "blob": "669aab9e47dfd8db0efbaf51a732948fbfa8d7e9",
+   "mode": "100644",
+   "bytes": 24490
+  },
+  "font/ui-22-italic.txt": {
+   "blob": "1fff4016f76f908dbe2217f6cc6ce95138f6938f",
+   "mode": "100644",
+   "bytes": 32516
+  },
+  "font/ui-22.txt": {
+   "blob": "918ad9b92a4298050ccb5c098a9ef71417e38f50",
+   "mode": "100644",
+   "bytes": 27569
+  },
+  "font/ui-23-italic.txt": {
+   "blob": "3c8012562ba1257bdab022edc8124dcb208175b0",
+   "mode": "100644",
+   "bytes": 34031
+  },
+  "font/ui-23.txt": {
+   "blob": "290d0fc23227dd5b56cdad86514a2d632e4dc8c3",
+   "mode": "100644",
+   "bytes": 29635
+  },
+  "font/ui-24-italic.txt": {
+   "blob": "01a7def980f0557b109c0744ed22205cea384586",
+   "mode": "100644",
+   "bytes": 37119
+  },
+  "font/ui-24.txt": {
+   "blob": "be26d1ec7dbd710f47f75f75d5928173124f15cf",
+   "mode": "100644",
+   "bytes": 32115
+  },
+  "font/ui-25-italic.txt": {
+   "blob": "c2e7ba3b0e5e485beb6e88ffdba54a88139b75a5",
+   "mode": "100644",
+   "bytes": 39242
+  },
+  "font/ui-25.txt": {
+   "blob": "5a8e0d99bdbde2d989d3f0af7bcad47786459cd9",
+   "mode": "100644",
+   "bytes": 34332
+  },
+  "font/ui-26-italic.txt": {
+   "blob": "ffb2edd99320c68125915b068ab58835c0bd5e11",
+   "mode": "100644",
+   "bytes": 42746
+  },
+  "font/ui-26.txt": {
+   "blob": "4b4519a78748c2a8db3e7ef7572a82404168bbb5",
+   "mode": "100644",
+   "bytes": 36925
+  },
+  "font/ui-27-italic.txt": {
+   "blob": "afa63ae0d8c6c71753257f74fb63ebd62608f94e",
+   "mode": "100644",
+   "bytes": 48963
+  },
+  "font/ui-27.txt": {
+   "blob": "4a8f88e7594fb686e315380c8dadbb5563ee48bc",
+   "mode": "100644",
+   "bytes": 42247
+  },
+  "font/ui-28-italic.txt": {
+   "blob": "7b2fc73c26db7230e1fad93635fcc2f00b259279",
+   "mode": "100644",
+   "bytes": 52061
+  },
+  "font/ui-28.txt": {
+   "blob": "fb278417fefafcfd711bda0a812ba9b99cc00656",
+   "mode": "100644",
+   "bytes": 44797
+  },
+  "font/ui-29-italic.txt": {
+   "blob": "af622559e58b66ffb5020d8e144b00384f4edb05",
+   "mode": "100644",
+   "bytes": 54999
+  },
+  "font/ui-29.txt": {
+   "blob": "15f2d7959cdc9d8fcd77785b4a04b03fdabc4ad3",
+   "mode": "100644",
+   "bytes": 47431
+  },
+  "font/ui-3-italic.txt": {
+   "blob": "4fdd51a69c7791d7e5b5e4fd33b00b9ef93910ec",
+   "mode": "100644",
+   "bytes": 2068
+  },
+  "font/ui-3.txt": {
+   "blob": "c09509121d4f914e5332f9d0d55b316b97b84aae",
+   "mode": "100644",
+   "bytes": 2069
+  },
+  "font/ui-30-italic.txt": {
+   "blob": "561fc909877f34c61c4e49706c067774baf66bc1",
+   "mode": "100644",
+   "bytes": 58737
+  },
+  "font/ui-30.txt": {
+   "blob": "3d90486361ee384a499eb5049755353d6237cdcb",
+   "mode": "100644",
+   "bytes": 50560
+  },
+  "font/ui-31-italic.txt": {
+   "blob": "380c8abd1c3a8aa7e71b86ca8b12dbd5fd4c366a",
+   "mode": "100644",
+   "bytes": 61751
+  },
+  "font/ui-31.txt": {
+   "blob": "f6b934bc3abfe9ab4cb10f15151afbc9ac2faf27",
+   "mode": "100644",
+   "bytes": 53356
+  },
+  "font/ui-32-italic.txt": {
+   "blob": "3ab1c935bb7600843190a26438c18ad61b87faea",
+   "mode": "100644",
+   "bytes": 65983
+  },
+  "font/ui-32.txt": {
+   "blob": "e8d841f7d891bfec579aaf14059edace48f36d08",
+   "mode": "100644",
+   "bytes": 56762
+  },
+  "font/ui-4-italic.txt": {
+   "blob": "e1e16bedf8e3a94986ac79f8a1b1336b014800fa",
+   "mode": "100644",
+   "bytes": 2612
+  },
+  "font/ui-4.txt": {
+   "blob": "f98783ea99c020db051d0a3e1fc1f02d4adac1e4",
+   "mode": "100644",
+   "bytes": 2534
+  },
+  "font/ui-5-italic.txt": {
+   "blob": "c65ef681391c98295ac9d14fc99a54d234d2578f",
+   "mode": "100644",
+   "bytes": 3428
+  },
+  "font/ui-5.txt": {
+   "blob": "2e55bd9a9a9de91ca45c5684e210594a7eef4dc6",
+   "mode": "100644",
+   "bytes": 3172
+  },
+  "font/ui-6-italic.txt": {
+   "blob": "0f0da9270c66e2a757aaf03dab159a8d59b1c879",
+   "mode": "100644",
+   "bytes": 3946
+  },
+  "font/ui-6.txt": {
+   "blob": "40b5173f31d0dedc68ce1a2a5dc94fddf7b893a1",
+   "mode": "100644",
+   "bytes": 3584
+  },
+  "font/ui-7-italic.txt": {
+   "blob": "7393fbde3aa041089388038abe18feb3a5bd39d5",
+   "mode": "100644",
+   "bytes": 4877
+  },
+  "font/ui-7.txt": {
+   "blob": "9a724a4a8b96bf8b8752bed669897864b202dcc8",
+   "mode": "100644",
+   "bytes": 4453
+  },
+  "font/ui-8-italic.txt": {
+   "blob": "c43609e76e6a737d73b5c3d76e56272a14ad1ea5",
+   "mode": "100644",
+   "bytes": 6513
+  },
+  "font/ui-8.txt": {
+   "blob": "5977dccd4dddf577a79a2e8fb783667ebd4c2f01",
+   "mode": "100644",
+   "bytes": 5907
+  },
+  "font/ui-9-italic.txt": {
+   "blob": "89927ad74c6f20f5ad67ca38be05fb3b3254d7eb",
+   "mode": "100644",
+   "bytes": 7552
+  },
+  "font/ui-9.txt": {
+   "blob": "b5a3c810da72976c12eed8879655225cabbc011f",
+   "mode": "100644",
+   "bytes": 6941
+  },
+  "font/ui-tops.json": {
+   "blob": "3df33640e40fd6157f535be6b2627f36d40ddf81",
+   "mode": "100644",
+   "bytes": 1835
+  },
+  "include/neuronte.h": {
+   "blob": "b549a560aafc95d503da2d33f838f681d1dfb41a",
+   "mode": "100644",
+   "bytes": 18144
+  },
+  "include/neuronte_media.h": {
+   "blob": "c0ea73581b55bb3eabbfb3df963f44a2e96d5e61",
+   "mode": "100644",
+   "bytes": 3246
+  },
+  "src/bits.c": {
+   "blob": "692509f1877684f088d2e9107aad41f25a6d97f5",
+   "mode": "100644",
+   "bytes": 4446
+  },
+  "src/media.c": {
+   "blob": "eca430b3c094d5df08d67ae6662d5666f5ea05bc",
+   "mode": "100644",
+   "bytes": 41743
+  },
+  "src/neuronte.c": {
+   "blob": "02431b0b884a702a5d522fe4f06003f22df6c4dd",
+   "mode": "100644",
+   "bytes": 88614
+  },
+  "src/utf8.c": {
+   "blob": "ffe75a8c245f8d8a4bc0191c0ca9e2eacb72ac9e",
+   "mode": "100644",
+   "bytes": 1805
+  },
+  "src/video.c": {
+   "blob": "fa4fa4f7b159015022025fd4e5c8559c65052bf9",
+   "mode": "100644",
+   "bytes": 8619
+  },
+  "tools/neuronte-play.py": {
+   "blob": "6ce3dfecdfeb48138d6bbb4958fe14dbc42ec7df",
+   "mode": "100755",
+   "bytes": 41707
+  },
+  "tools/neuronte-video.md": {
+   "blob": "c7489e40bad1838fba1232991d9ac64057d87e15",
+   "mode": "100644",
+   "bytes": 16534
+  },
+  "tools/neuronte_video.py": {
+   "blob": "cd1835561670fc31287f3887dce2a22dd2918432",
+   "mode": "100644",
+   "bytes": 31139
+  },
+  "train/glyphs.py": {
+   "blob": "7506d13ecf61d330bbccb6940d9fb6ed00caeada",
+   "mode": "100644",
+   "bytes": 45072
+  },
+  "train/strokes.py": {
+   "blob": "cc08fe57af2da7bdc26a96abf1c4064077a06610",
+   "mode": "100644",
+   "bytes": 6237
+  },
+  "weights/neuronte-emoji-v1.nrt": {
+   "blob": "a6336d82cea37fb11eb58831a358c962fc98fbcd",
+   "mode": "100644",
+   "bytes": 4785292
+  },
+  "weights/neuronte-flame-v1.nrt": {
+   "blob": "acbe5cbfa175d36748963a690c597b297964fb30",
+   "mode": "100644",
+   "bytes": 57372
+  },
+  "weights/neuronte-icon-v2.nrt": {
+   "blob": "229088f3edd212de57a0a9c1bb20955a88cdf65a",
+   "mode": "100644",
+   "bytes": 496184
+  },
+  "weights/neuronte-pointer-v1.manifest.json": {
+   "blob": "30fde3d41f429249075606a991f80506f20fc623",
+   "mode": "100644",
+   "bytes": 979
+  },
+  "weights/neuronte-pointer-v1.nrt": {
+   "blob": "119fc6d54eadc3ed6d86f0c7f7f86d9e27b260fd",
+   "mode": "100644",
+   "bytes": 41984
+  },
+  "weights/neuronte-split-v8.nrt": {
+   "blob": "2e064180b0ad6fa33c36898a0ce60e3a2ae2af4b",
+   "mode": "100644",
+   "bytes": 2805688
+  },
+  "weights/neuronte-ui-large-v0.nrt": {
+   "blob": "f232fd69c013e6f355c0094c409f0b1a3d845dad",
+   "mode": "100644",
+   "bytes": 1325072
+  },
+  "weights/neuronte-ui1-v1.nrt": {
+   "blob": "182890459578eef8a88e69715e5210f3669c2b73",
+   "mode": "100644",
+   "bytes": 9788
+  },
+  "weights/neuronte-ui10-italic-v1.nrt": {
+   "blob": "af6be9adaa91b29211c11632d1fd5bf026d6ae43",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui10-v1.nrt": {
+   "blob": "0628cf3a9d131ada3197f531312f064bbb813994",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui11-italic-v1.nrt": {
+   "blob": "0da7d47f21b874d9ff01e02ef2d081d93b567c86",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui11-v1.nrt": {
+   "blob": "26355ed74acdf65ebbbd5d7225698abe68a15ce2",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui12-italic-v1.nrt": {
+   "blob": "bc8c38c3fc9b05a362c43dcb06a43f9d8643b530",
+   "mode": "100644",
+   "bytes": 1119068
+  },
+  "weights/neuronte-ui12-v1.nrt": {
+   "blob": "48c1331f3933ff58102019538cc2f15087893b5f",
+   "mode": "100644",
+   "bytes": 1119068
+  },
+  "weights/neuronte-ui13-italic-v1.nrt": {
+   "blob": "24bcccdac8c0fe352a5014480103449e51bb4bf0",
+   "mode": "100644",
+   "bytes": 110864
+  },
+  "weights/neuronte-ui13-v1.nrt": {
+   "blob": "c69b0990fd09f4abadb1e963ddb4e40d3f8530ae",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui14-italic-v1.nrt": {
+   "blob": "cfca71ce9248be7a40263e34184e4b5668bdfef9",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui14-v1.nrt": {
+   "blob": "1f920fb9dd083a3cb86e95b8fb37894528de2585",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui15-italic-v1.nrt": {
+   "blob": "5384b1e104ff89c53f72487b8f48d5ea20cd67b9",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui15-v1.nrt": {
+   "blob": "96dddc7b48de4d8465374a066046b24a03da8bc5",
+   "mode": "100644",
+   "bytes": 1119068
+  },
+  "weights/neuronte-ui16-italic-v1.nrt": {
+   "blob": "cb37b0cda84364a7ecf69fff233cecad8347284a",
+   "mode": "100644",
+   "bytes": 110864
+  },
+  "weights/neuronte-ui16-v1.nrt": {
+   "blob": "1b0ffcb1c1fcc67ab0ea6fcef375d87f1513de46",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui17-italic-v1.nrt": {
+   "blob": "682150ac3eedd2d9a6b21092cbdfafb1105465f8",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui17-v1.nrt": {
+   "blob": "e2e3c92794f58551db2e572ade34b33128b4d805",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui18-italic-v1.nrt": {
+   "blob": "8b1b18bd820671980074d4fc46f4e0f3b137af9f",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui18-v1.nrt": {
+   "blob": "1c47708c456dee5934289c6142db91c42ced76d5",
+   "mode": "100644",
+   "bytes": 110864
+  },
+  "weights/neuronte-ui19-italic-v1.nrt": {
+   "blob": "36a9eedc873ceff205eebd1ecfb2da8ac97ca801",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui19-v1.nrt": {
+   "blob": "0398fa6abc12d3247780794bd0c65804f993e98e",
+   "mode": "100644",
+   "bytes": 1119068
+  },
+  "weights/neuronte-ui2-v1.nrt": {
+   "blob": "862e4c681a4be6349f5d63bdaf6947174b34449c",
+   "mode": "100644",
+   "bytes": 9808
+  },
+  "weights/neuronte-ui20-italic-v1.nrt": {
+   "blob": "d244846ac6ac6013288a543efa977e304afedb91",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui20-v1.nrt": {
+   "blob": "ed51c535a2eb613a8a72721c9ea5ff0f6da779de",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui21-italic-v1.nrt": {
+   "blob": "99863d83fba0c33f11082f3d87ebc177cfd608f2",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui21-v1.nrt": {
+   "blob": "7466b694590b266fe33b7bd5c15d26ec9ec4b364",
+   "mode": "100644",
+   "bytes": 466792
+  },
+  "weights/neuronte-ui22-italic-v1.nrt": {
+   "blob": "bf8f20c49be974aea4986d433b699c4211bdcca5",
+   "mode": "100644",
+   "bytes": 266000
+  },
+  "weights/neuronte-ui22-v1.nrt": {
+   "blob": "56681bc2c7e4c32a06f46a84073f3330230a0cf3",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui23-italic-v1.nrt": {
+   "blob": "a7d8085f873cd34682105250c528374060d5674e",
+   "mode": "100644",
+   "bytes": 266000
+  },
+  "weights/neuronte-ui23-v1.nrt": {
+   "blob": "184b2a278fcad3beaf648f46eb956ffdf228c61e",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui24-italic-v1.nrt": {
+   "blob": "9a9b96c81b72e30812bdf11573da6430830b220f",
+   "mode": "100644",
+   "bytes": 599400
+  },
+  "weights/neuronte-ui24-v1.nrt": {
+   "blob": "cd1111ba6f263e778d5d2f3ee45b7beadb2bceb0",
+   "mode": "100644",
+   "bytes": 599400
+  },
+  "weights/neuronte-ui25-italic-v1.nrt": {
+   "blob": "da0bd28c3ad4c20f90df78c2b7cb320a67ee5abb",
+   "mode": "100644",
+   "bytes": 266000
+  },
+  "weights/neuronte-ui25-v1.nrt": {
+   "blob": "9a686aad9ff0cfa7f3b0ce7a1672a666c40edd80",
+   "mode": "100644",
+   "bytes": 266000
+  },
+  "weights/neuronte-ui26-italic-v1.nrt": {
+   "blob": "9fd7063c18f2eff87a83a1c20e0dc1db7df23b01",
+   "mode": "100644",
+   "bytes": 266000
+  },
+  "weights/neuronte-ui26-v1.nrt": {
+   "blob": "5837099cb80d7a2ea54a0f64245d6095114f00db",
+   "mode": "100644",
+   "bytes": 180240
+  },
+  "weights/neuronte-ui27-italic-v1.nrt": {
+   "blob": "917be66a1f13685e9e282f892254474806af4ebb",
+   "mode": "100644",
+   "bytes": 881256
+  },
+  "weights/neuronte-ui27-v1.nrt": {
+   "blob": "e95697aa9a6f08aaead803fbd5ae0bb55cac34cb",
+   "mode": "100644",
+   "bytes": 599400
+  },
+  "weights/neuronte-ui28-italic-v1.nrt": {
+   "blob": "3afbfddf5b14c5c62c1ced478c571a08b0f97a13",
+   "mode": "100644",
+   "bytes": 925032
+  },
+  "weights/neuronte-ui28-v1.nrt": {
+   "blob": "77612f5cd186b524cc9edf6a88d3591f742b00c4",
+   "mode": "100644",
+   "bytes": 599400
+  },
+  "weights/neuronte-ui29-italic-v1.nrt": {
+   "blob": "de1d147e74b549e32e86aa1b478ae66c2a62ff46",
+   "mode": "100644",
+   "bytes": 599400
+  },
+  "weights/neuronte-ui29-v1.nrt": {
+   "blob": "4b63f3d73146a29fa8777ab2e85c15d354b231b8",
+   "mode": "100644",
+   "bytes": 599400
+  },
+  "weights/neuronte-ui3-italic-v1.nrt": {
+   "blob": "244e6efc27f45cb8dd26eed88c843f2d4223800f",
+   "mode": "100644",
+   "bytes": 288616
+  },
+  "weights/neuronte-ui3-v1.nrt": {
+   "blob": "a021630155bbcfb1b777112ab45e0a0c7aa61102",
+   "mode": "100644",
+   "bytes": 288616
+  },
+  "weights/neuronte-ui30-italic-v1.nrt": {
+   "blob": "0085dbe2def4b972c0aea709561d7b91b93e279e",
+   "mode": "100644",
+   "bytes": 886888
+  },
+  "weights/neuronte-ui30-v1.nrt": {
+   "blob": "98d6481c7153f70cc7221c97ba4df894aaa889a4",
+   "mode": "100644",
+   "bytes": 925032
+  },
+  "weights/neuronte-ui31-italic-v1.nrt": {
+   "blob": "ba09b29a3dbd4aede2a399af76c09ebfaee195f7",
+   "mode": "100644",
+   "bytes": 1436264
+  },
+  "weights/neuronte-ui31-v1.nrt": {
+   "blob": "c0d295826236361947114bde7962dc9b5c7de840",
+   "mode": "100644",
+   "bytes": 881256
+  },
+  "weights/neuronte-ui32-italic-v1.nrt": {
+   "blob": "b423bafc0bbaeaf3739f10191ddbdf594f6571a6",
+   "mode": "100644",
+   "bytes": 1436264
+  },
+  "weights/neuronte-ui32-v1.nrt": {
+   "blob": "bf3fcaa4a548e43c638f1729f01c86fca039ed89",
+   "mode": "100644",
+   "bytes": 881256
+  },
+  "weights/neuronte-ui4-italic-v1.nrt": {
+   "blob": "f10e040ea0bf92f668af65b266cecd410034d69f",
+   "mode": "100644",
+   "bytes": 288616
+  },
+  "weights/neuronte-ui4-v1.nrt": {
+   "blob": "51fe21e31e027c44636bda00ebc8aaeaf0792cee",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui5-italic-v1.nrt": {
+   "blob": "8841d723006a8d3f22b2457fcd7ac8b172eed1d2",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui5-v1.nrt": {
+   "blob": "364953c6fc4bf00c9d6e96f642522d276d1d3af7",
+   "mode": "100644",
+   "bytes": 288616
+  },
+  "weights/neuronte-ui6-italic-v1.nrt": {
+   "blob": "a58f0c1bb95eb3fcaaa26a6a45012d0186a382dc",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui6-v1.nrt": {
+   "blob": "135068dc83393e030d45409c4d9edc8053ace778",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui7-italic-v1.nrt": {
+   "blob": "ba64701af48bfe47cd43c2988b878b468aefdf1e",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui7-v1.nrt": {
+   "blob": "eb55c4b639d0f7652278130c1224fa8dfa269bb9",
+   "mode": "100644",
+   "bytes": 288616
+  },
+  "weights/neuronte-ui8-italic-v1.nrt": {
+   "blob": "c92b6430fdef515230c430f483093d99ed13a6de",
+   "mode": "100644",
+   "bytes": 288616
+  },
+  "weights/neuronte-ui8-v1.nrt": {
+   "blob": "1f4fdbbc61eed4746740c138cdac9c57a6a625fe",
+   "mode": "100644",
+   "bytes": 288616
+  },
+  "weights/neuronte-ui9-italic-v1.nrt": {
+   "blob": "53161efaf3377c5bc57357f63ef97ea9cdcbff6a",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-ui9-v1.nrt": {
+   "blob": "7417edf558a5ab8765378779c3cf41b391e6e1cf",
+   "mode": "100644",
+   "bytes": 864092
+  },
+  "weights/neuronte-video-masks-v0.nrt": {
+   "blob": "d77ec26db7b2f5e38f46b20f9a051f3332e2e928",
+   "mode": "100644",
+   "bytes": 358996
+  }
+ }
+}

@@ -5,6 +5,9 @@ left every test green, so "runnable" was a claim nothing tied to the pins.
 For each model the speech catalog marks runnable, the pinned kilix-voice must
 mark it runtime-supported, and for VibeVoice the pinned Kilix must carry the
 pinned runtime installer and the `kilix voice vibeasr` verb that builds it.
+Paradee and en_core_web_sm are image-offline models that kilix-voice does not
+run: the pinned Kilix's Paradee runtime does, in the Python environment the
+image builds from its hash-locked wheelhouse.
 """
 import io
 import json
@@ -51,6 +54,7 @@ class RunnableModelTests(unittest.TestCase):
         command = ROOT / "provision" / "command-model.json"
         self.command_model = (json.loads(command.read_bytes())["asset_id"]
                               if command.exists() else None)
+        self.image_offline = carrier.image_offline_inventory()
 
     def test_the_pinned_voice_runs_every_runnable_model(self):
         voice = carrier.repo_holding("PLEBIAN_OS_KILIX_VOICE_REPO", "kilix-voice",
@@ -77,11 +81,37 @@ class RunnableModelTests(unittest.TestCase):
                 # (test_command_model_records_needle_serves_are_the_carried_ones)
                 # ties it to the Needle the pinned catalog selects.
                 continue
+            if model in self.image_offline:
+                # Kilix's Paradee runtime runs it, not kilix-voice; checked in
+                # test_the_pinned_kilix_runs_the_image_offline_voice.
+                continue
             with self.subTest(model=model):
                 entry = re.search(rf'ModelSpec\(\s*"{re.escape(model)}",\s*\w+,\s*\d+,\s*(True|False),',
                                   catalog)
                 self.assertIsNotNone(entry, f"{model} is not in the pinned voice catalog")
                 self.assertEqual(entry.group(1), "True", f"{model} is not runnable at KILIX_VOICE_REF")
+
+    def test_the_pinned_kilix_runs_the_image_offline_voice(self):
+        self.assertEqual(sorted(self.image_offline), ["en-core-web-sm-3.8.0", "paradee-8m-v1.2"])
+        for model in self.image_offline:
+            self.assertIn(model, self.runnable)
+        kilix = carrier.repo_holding("PLEBIAN_OS_KILIX_REPO", "kilix", self.pins["KILIX_REF"])
+        self.assertIsNotNone(kilix, "no kilix checkout holds KILIX_REF; set PLEBIAN_OS_KILIX_REPO")
+        runtime = show(kilix, self.pins["KILIX_REF"], "config/paradee_runtime.py")
+        self.assertIsNotNone(runtime, "KILIX_REF has no Paradee runtime")
+        self.assertIn("PARADEE_ID = 'paradee-8m-v1.2'", runtime)
+        self.assertIn("LICENCE_NAME = 'notices/LICENSE-apache-2.0.txt'", runtime)
+        self.assertIsNotNone(show(kilix, self.pins["KILIX_REF"], "config/paradee_synth.py"),
+                             "KILIX_REF has no Paradee synthesizer")
+        # en_core_web_sm runs inside that runtime's Python, installed from the
+        # image's wheelhouse; the locked wheel is the one the image pin carries.
+        spacy = json.loads((ROOT / "provision" / "en-core-web-sm-model.json").read_bytes())
+        wheel = next(name for name in spacy["files"] if name.endswith(".whl"))
+        lock = json.loads((ROOT / "provision" / "paradee-wheels.json").read_bytes())
+        locked = [item for item in lock["wheels"] if item["filename"] == wheel]
+        self.assertEqual(len(locked), 1, wheel)
+        self.assertEqual((locked[0]["bytes"], locked[0]["sha256"]),
+                         (spacy["files"][wheel]["bytes"], spacy["files"][wheel]["sha256"]))
 
     def test_the_pinned_kilix_exposes_the_managed_diarization_route(self):
         self.assertIn("kilix-diarization-cpu", self.runnable)

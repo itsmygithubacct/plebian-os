@@ -3,15 +3,18 @@
 This policy starts with **Plebian-OS 0.1.7**. It is also encoded for tooling in
 [`releases/upgrade-policy.json`](releases/upgrade-policy.json).
 
-An in-development 0.2.2 checkout is not a supported upgrade destination. A
-target becomes supported only when its immutable release manifest, notes,
-artifacts, and adjacent-version acceptance evidence are published together.
-Never point the installed updater at a development branch or use 0.2.2 source
-work to modify a 0.2.1 release worktree.
+An in-development checkout is not a supported upgrade destination. A target
+becomes supported only when its immutable release manifest, notes, artifacts,
+and adjacent-version acceptance evidence are published together. The current
+release is 0.2.3; its supported upgrade source is 0.2.2, and 0.2.3 release
+candidates move to it with `pleb update --to 0.2.3` (see
+**The 0.2.2 to 0.2.3 transition**). Never point the installed updater at a
+development branch or use newer source work to modify an older release
+worktree.
 
 ## Architecture qualification
 
-The selected 0.2.2 closure is AMD64-only. ARM64 package handling in the Qt and
+The selected 0.2.2 and 0.2.3 closures are AMD64-only. ARM64 package handling in the Qt and
 player helpers does not qualify an ARM64 release: the required EnCodec
 converter, native runtime, patched Qt bundle and player must all have reviewed
 ARM64 artifacts selected together. The selector refuses this closure on ARM64
@@ -70,9 +73,10 @@ the previous representation. Unknown keys and newer-schema data must not be
 silently discarded.
 
 Release-controlled keys include the coordinated version/release mode, every
-`*_REF` source pin in the release manifest (ten as of 0.2.2, since the
-system-monitor, desktop-SDK, IceWM, media-SDK and Waydroid components joined
-the closure in 0.2.1), the Debian source policy and installer input, the Kilix
+`*_REF` source pin in the release manifest (ten component pins as of 0.2.2,
+since the system-monitor, desktop-SDK, IceWM, media-SDK and Waydroid
+components joined the closure in 0.2.1; 0.2.3 adds the Kilix Secrets and
+Neuronte pins), the Debian source policy and installer input, the Kilix
 engine and Go pins, and enabled optional-closure pins such as Kilix Voice. Those keys move as
 one reviewed target closure; mixing old and new release pins is unsupported.
 RC6 declares `PLEBIAN_OS_APT_SNAPSHOT=` to use signed live Debian sources from
@@ -134,14 +138,12 @@ transaction restores both the prior drop-in state and the running SSH policy.
 
 Fresh 0.2.2 installation media carries the pinned Ollama runtime archive and
 installs the local service during provisioning. The archive is not a Git object,
-so the current `plebian-os-update` path cannot acquire it: a 0.2.1 machine
-updated with the current updater will not receive the Ollama runtime. The
-release notes must state this gap until an update delivery path is implemented.
-The updater would need a bounded fetch for a separately published carrier,
-checked against the release manifest size and SHA-256 before extraction, plus
-transactional install and rollback handling. A manifest-authenticated release
-asset is the recommended delivery path; placing a 20 MB runtime archive in Git
-would enlarge every source checkout.
+so the 0.2.2 `plebian-os-update` path could not acquire it: a 0.2.1 machine
+updated to 0.2.2 did not receive the Ollama runtime. 0.2.3 closes that gap: its
+updater downloads the separately published carrier
+(`PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL`), checks it against the release
+manifest size and SHA-256 before extraction, and installs it inside the update
+transaction (see **The 0.2.2 to 0.2.3 transition**).
 
 Nothing migrates. These things change under an upgrader, all preserved or
 release-controlled by the rules above:
@@ -180,8 +182,8 @@ release-controlled by the rules above:
   licence. A previous 0.2.1 acceptance is not imported; accept again through
   the licence screen. Amp's unavailable-model refusal is silent. A supplied
   `--from DIR` install records acceptance, not the source or provenance of the
-  files. The flow has not yet been exercised in a built guest; no VM or ISO
-  has been built from rc1. Re-provisioning a machine that already carries a
+  files. The 0.2.2 release did not exercise that flow in a built guest; the
+  0.2.3 release notes record its installed-image checks. Re-provisioning a machine that already carries a
   model leaves it in place, without claiming who accepted it or when. Re-provisioning a machine that already carries a model is
   supported and leaves the model alone, whether its user accepted that model
   at first use or 0.2.1's firstboot fetched it before the upgrade — 0.2.2
@@ -197,6 +199,354 @@ release-controlled by the rules above:
   value; it now declares that the release advertises that first-use pull. This
   is the migration owner decision OD-BB requires the notes to name, and
   `releases/0.2.2-notes.md` names the old and new representation in full.
+
+### The 0.2.2 to 0.2.3 transition
+
+`pleb update --to 0.2.3` is the supported hop from 0.2.2, on installed images
+and standalone machines. Nothing an operator chose migrates; these things
+change under an upgrader, all preserved or release-controlled by the rules
+above:
+
+- **New release-controlled keys.** These keys move with the closure:
+  - `KILIX_SECRETS_*` and `NEURONTE_*`;
+  - the Debian Go file pins (`PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION` and the
+    `PLEBIAN_OS_KILIX_GO_DEB_*` names, sizes, SHA-256 values, snapshot and
+    mirror);
+  - `PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL`.
+
+  Selections made by 0.2.3 also record `PLEBIAN_OS_RELEASE_TAG` and
+  `PLEBIAN_OS_RELEASE_TAG_OBJECT` in `closure.env`. `pleb update --show` lists
+  them. Rollback to 0.2.2 restores the previous `closure.env`.
+- **Kilix Go.** The engine builds with Debian's Go 1.27.4 from
+  trixie-backports instead of the go.dev archive, with the snapshot and
+  release-mirror fallback described under **Debian security updates**. The
+  go.dev archive stays for older closures.
+- **Runtimes installed on upgrade.** The update installs these runtimes, each
+  checked against its pin. A failed update restores the previous installation
+  or its absence.
+  - the pinned Ollama runtime, which stays installed after a rollback, like the
+    Ollama converter;
+  - Kilix Secrets, Zell 0.1.1 and `/usr/local/bin/zell`, the Claudex app, and
+    kilix-llm's launcher and pinned source, with nothing compiled;
+  - the slim Neuronte v2 set under `~/.local/gpu_terminal/sources/neuronte`,
+    fetched into its own `neuronte-v2` component cache;
+  - the Waydroid first-use helper. Waydroid itself is not installed.
+- **Model files on upgrade.** A machine that lacks the image's offline models
+  downloads them as root, checked against the image pins:
+  - Paradee and `en_core_web_sm`;
+  - the espeak-ng source;
+  - PDF Conversion's page OCR models;
+  - the Playalong defaults, unless the Playalong page or one of their licences
+    was declined.
+
+  A failed download changes nothing, and the next update tries again. LFM2
+  is neither staged nor
+  downloaded; Kilix Ask uses its grammar until the user installs LFM2, and a
+  machine that has delivery v9 keeps it (see **The 0.2.3 Kilix Ask command
+  model** below).
+- **Debian packages added.** The update installs `redshift`, Tesseract,
+  `python3-torch` and the converter dependencies, plus Zell's dependencies:
+  upower, bluez, scrot, brightnessctl, power-profiles-daemon, nftables and
+  wtmpdb. Release packages come only from Debian and Plebian files: release
+  installs and updates use a private apt configuration that holds only Debian
+  archive sources.
+  - An operator apt source, such as NVIDIA CUDA, stays configured, but its
+    source files, pins, `/etc/apt/apt.conf` and `apt.conf.d` snippets do not
+    apply to release packages, and packages installed from it are never
+    removed.
+  - A proxy set in `apt.conf` or `apt.conf.d` (`Acquire::http`, `https` or
+    `ftp` `::Proxy`, including a per-host `DIRECT`) is carried after its value
+    is checked, including an authenticated proxy
+    (`http://user:pass@host:port/`, as the Debian installer writes it). Proxy
+    values are never printed. A `Proxy-Auto-Detect` program is never run for
+    release packages.
+  - In release mode, an install or update that cannot reach the Debian archive
+    stops with "could not reach the Debian archive; check the network
+    connection and the apt proxy" instead of continuing on stale package
+    lists.
+  - Plebian-OS's own Qt runtime pin is kept by its exact file name. In release
+    mode the Qt runtime is verified after the dependency step, and a failed
+    check stops the step.
+  - In release mode, `pleb install` and the Kilix build-dependency step refuse
+    a missing package by name ("release package closure is incomplete;
+    missing …") instead of installing it from the system apt. A held package,
+    or one installed for a second architecture, counts as installed. The
+    message says what to do ("run 'plebian-os-update --revalidate-current' to reinstall this release's
+    packages; if it is still missing, report it").
+  - On rollback, packages that appeared during a package step are removed
+    when nothing else would be removed with them (see **Interrupted updates
+    and package rollback**).
+- **SSH.** The update installs the `plebian-os-ssh-server` helper but does not
+  install or enable openssh-server and does not ask. To turn SSH on, run
+  `sudo plebian-os-ssh-server enable`, or use Kilix 95's Start ▸ System ▸
+  Remote login (SSH), which asks `Turn SSH on now? [y/N]` before sudo asks for
+  a password.
+  - Enable refuses, before installing anything, while any account still has
+    the 0.2.0 starter password, and names each such account. Change your own
+    with `passwd` and another with `sudo passwd NAME` (or lock it with
+    `sudo passwd -l NAME`), then run enable again.
+  - Enable and disable end by printing the real state, and
+    `sudo plebian-os-ssh-server status` reports the same.
+  - A failed enable turns SSH off again, unless it was on before the run.
+  - A half-installed openssh-server is held off (its units are masked), so a
+    later `dpkg --configure -a` does not start it; the next successful enable
+    removes those masks.
+  - Disable also masks the extra sockets systemd binds for SSH, including
+    AF_VSOCK in a virtual machine.
+
+  If SSH was turned on and the
+  update is later rolled back to a release without the helper, SSH stays on.
+  Turn it off with `sudo systemctl disable --now ssh.service ssh.socket`, plus
+  `sudo systemctl mask --now sshd-vsock.socket sshd-unix-local.socket` for the
+  extra sockets systemd binds once sshd is installed, or remove it entirely
+  with `sudo apt-get purge openssh-server`.
+- **Kilix 95 caches.** Bytecode and startup letter caches are prepared as the
+  desktop user after the stack commits, bounded at 600 seconds. Failure only
+  warns.
+
+**From a 0.2.3 release candidate (RC1–RC9).** Such a machine already records
+version 0.2.3, so a bare `pleb update`, `pleb update --latest` and
+`plebian-os-update` treat it as current. Move it once with
+`pleb update --to 0.2.3`. Do not use `--latest` on a candidate:
+- before 0.2.3 is published, it names 0.2.2 and asks to downgrade;
+- after publication, it stays on the candidate.
+
+From 0.2.3 on, a selection records its release tag, so a 0.2.4 candidate
+moves to the 0.2.4 final on a plain update. A final never moves to a
+candidate.
+
+**Standalone machines that never selected a release.** `pleb update --to 0.2.3`
+makes the first selection and records where each checkout stands. A failed
+apply, or `pleb update --rollback`, returns the machine to no selected closure.
+Releases before 0.2.3 cannot be a first selection. A Pleb whose VERSION is
+0.2.1 first runs a bare `pleb update`, then `pleb update --to 0.2.3`.
+
+**Interrupted updates and package rollback.** Packages that appear during a
+package step can be removed on rollback:
+- `pleb install` and `pleb update` include builds, so that window is the whole
+  step;
+- the native runtime window covers only `install-dependencies` and `apply`,
+  and only when the script defines the window helpers. The provisioner does
+  not.
+
+Packages installed while no package step is running, packages already
+installed, and Debian upgrades are kept. If removing an added package would
+remove something else, the updater says so and keeps it. If the transaction
+also removed a package that was already installed, the new packages are kept
+and the updater says so. A window left by another process, including
+`--recover-interrupted` after a kill, removes nothing.
+
+An interrupted update (status 130, 143 or 129) prints `interrupted; rolling
+back` and records that line in the updater log, `update.log` under the Pleb
+state directory:
+- the package-step helper inherits the log and writes the line when a group
+  signal reaches it;
+- the updater's interrupt trap writes it again, and rollback writes it again;
+- a signal sent only to the updater's own process prints nothing until the
+  shielded step returns.
+
+The log refuses a symlink, is mode 0600, and rotates past one megabyte. The
+restore outcome is printed and logged as well.
+
+A release hop that is interrupted while its update is still running restores
+the previous closure only after that update has finished rolling back. The
+update restores its own snapshot of `/etc/pleb/session.env`,
+`plebian-os-select-closure` and `plebian-os-update`, taken after the
+selection; a closure rollback that ran first would be overwritten, with its
+recovery record already marked restored. So `plebian-os-select-closure
+--rollback` waits, up to 30 minutes (`PLEBIAN_OS_SELECT_UPDATE_WAIT_SECONDS`),
+for a running update's stack transaction to end. If that update is still
+running then, the rollback exits 13 and changes nothing, and its recovery
+record stays restorable: run `pleb update --rollback` again once the update
+has finished. The wait is in the selector, so it applies whichever Pleb drives
+the hop, including a published Pleb that does not defer a hangup (SIGHUP) the
+way it defers Ctrl-C and SIGTERM.
+
+A terminal that goes away mid-update (a closed or dropped ssh session) can
+interrupt the update: `sudo` signals the package step it started on that
+terminal, so the step can end early and the update rolls back. The rollback
+can finish, or stop part-way with its recovery data retained in a
+`stack-rollback.*` directory under the Pleb state directory and a root snapshot
+under `/var/lib/plebian-os`. When the terminal has hung up, the selector and the
+updater lose only their terminal messages: the updater's lines are in
+`update.log`, and its rollback and the selector's restore still run. The
+selector's rollback has by then restored `/etc/pleb/session.env` and removed
+`closure.env`. Pleb's hop marker (`release-hop/active` and `phase`, `selected`
+or `selecting`, in the Pleb state directory) may still be there.
+
+The selector records what it did. Whatever the terminal shows, a `--rollback`
+also appends its messages (restored, already rolled back, settled the marker,
+nothing was replaced, refused) to `update.log` in the Pleb state directory, one
+line each prefixed `plebian-os-select-closure:`. It never follows a symlink and
+a failure to write is ignored. On a standalone machine, which has no OS updater,
+that file can therefore hold only these lines.
+
+**The selector settles the marker.** It removes `active`, `phase` and
+`baseline` itself, and logs "settled the interrupted release hop's marker", in
+two places:
+- after a rollback bound to the hop's own record that fully succeeded, or that
+  answered "already rolled back": a marker in phase `selecting` or `selected`,
+  logged as "the closure was already restored";
+- where an interrupted selection replaced nothing (its pending marker still
+  equals the installed files, or a same-tag reselect left the closure
+  installed): a marker in phase `selecting` only, logged as "nothing was
+  replaced".
+
+Every other guard applies to both: an image (a standalone machine keeps its
+marker, because Pleb's recovery also puts its checkouts back); a request bound to
+the hop's tag object; `active` well formed (4 lines as written by Pleb 0.2.2, or
+5) with that tag object as its third line; every file a regular file owned by the
+invoking user under a real release-hop directory; and no retained
+failed-rollback directory. A `complete` marker, a marker for another tag, a
+failed rollback and the wait for a running update (status 13) leave it alone.
+By the 0.2.2 Pleb's code, once the marker is gone a plain `pleb update` stays on
+0.2.2 and reports that 0.2.3 is available (it does not move), `pleb update
+--rollback` exits 1 with "no selected release closure is available to roll
+back" and changes nothing, and `pleb update --to 0.2.3` is an ordinary hop.
+
+**An early drop.** A hangup before the selector has replaced the closure can
+leave the marker in phase `selecting`. On an image, the 0.2.2 Pleb's first plain
+`pleb update` then has the selector settle the marker ("the interrupted selection
+had not replaced the closure ..." and "settled the interrupted release hop's
+marker") and reports "interrupted release hop is blocked: previous-stack
+reconciliation failed" once, because its reconcile needs the update lock the
+command holds. The marker is gone by then, so the next plain `pleb update` runs
+normally on 0.2.2. `pleb update --to 0.2.3` and `pleb update --rollback` hand the
+lock over and recover.
+
+**If a marker is left** (the selector never got that far because its caller was
+killed first, a retained failed-rollback directory exists, or the marker did not
+match), the next Pleb run recovers it, and the installed Pleb decides how:
+- **The 0.2.2 Pleb (2dd44b0)** after a dropped `pleb update --to 0.2.3` (a
+  4-line marker, which it reads).
+  - *On an image,* a plain `pleb update` cannot finish the recovery while a marker
+    is left: it holds the update lock the updater it runs needs, so it reports the
+    hop as blocked (with no marker it is unaffected). `pleb update --rollback` and
+    `pleb update --to 0.2.3` hand the lock over; the selector answers "already
+    rolled back" and the bare 0.2.2 updater then runs. By the code that updater
+    moves to the latest release, so both end on 0.2.3.
+  - *On a standalone machine* the reconcile is a nested, pinned `pleb update`. On
+    a guest dropped mid-hop the Pleb checkout had already advanced to the 0.2.3
+    pin, so the 0.2.3 Pleb ran the recovery and handed the lock over: a plain
+    `pleb update` and `pleb update --rollback` both reconciled to the 0.2.2 pins,
+    cleared the marker and ended on 0.2.2, and `pleb update --to 0.2.3`
+    completed the hop. The 0.2.2 Pleb's own code opens the same lock file without
+    being handed the lock, so it would collide as on an image.
+- **A hop run through the `pleb-release-hop` driver** (the legacy migration route
+  in the Pleb README, which candidates need) leaves a 5-line marker. The
+  installed 0.2.2 Pleb refuses it as "malformed", so recovery goes through the
+  driver again, with `--to` or `--rollback`.
+- **A Pleb from RC9 on, including the 0.2.3 Pleb.** On an image its recovery
+  runs `plebian-os-update --revalidate-current`, which stays on the selected
+  release, and then clears the hop marker; `pleb update --to 0.2.3` carries on
+  with the hop afterwards. A standalone machine reconciles with a `pleb update`
+  pinned to the closure (or to the checkout positions recorded before its first
+  selection). From the 0.2.3 Pleb on, a plain `pleb update` also hands its update
+  lock to that updater, so a plain `pleb update` recovers the hop too. When the
+  selector's rollback fails with the marker still `selected`, Pleb treats the
+  closure as already restored only if the `session.env` and `closure.env`
+  hashes equal the ones it recorded before the hop and, on an image, the
+  installed selector is no longer the target's. It prints the selector's status
+  and carries on; otherwise the hop stays blocked.
+
+On an image, the 0.2.2 updater's `--revalidate-current` redeploys the OS layer
+from the pinned Plebian-OS checkout (its refresh step, then the dependencies,
+the native runtime and the Pleb and Kilix checkouts at their pins). It does not
+restore a part-way rollback from the retained data: the retained directories do
+not block updates, `--recover-interrupted` leaves them alone, and the next
+update names them with the commands to remove them. Files that only 0.2.3
+installs (its Qt, mpv and SSH helpers under `/usr/local/sbin`, for example) stay
+where the interrupted update put them until a later 0.2.3 update replaces them.
+
+If the hop's record is already restored but the installed session or closure has
+changed since, a rollback bound to that hop refuses with "this hop's recovery
+record is already restored and the installed session or closure has changed
+since" and restores nothing; it never falls back to an older record. That can
+follow something else selecting a release or editing `session.env`, or a
+reconcile that committed (its session-defaults write to `/etc/pleb/session.env`,
+the window-manager and lock defaults, is part of what it commits; a failure
+before the commit restores the file) and then failed in a step after the
+commit. If the installed closure is the one you want,
+remove Pleb's hop marker: `release-hop/active`, `phase` and `baseline` under the
+Pleb state directory (normally `~/.local/gpu_terminal/pleb/state`), and
+`unselected-checkouts` there if it exists. That last file exists only after a
+standalone first selection, where Pleb uses it to put the checkouts back when it
+rolls that selection back; once you keep the closure it is not used, so removing
+it is harmless. Change releases afterwards with `pleb update --to <version>`.
+
+A manual `plebian-os-select-closure --rollback` has no trusted tag. It restores
+the newest record not yet restored, which on a machine with selection history can
+be an older hop's. To undo the hop that was interrupted, use `pleb update
+--rollback` (or `pleb update --to <version>` to go forward; a 0.2.3 or later
+Pleb also recovers the hop with a plain `pleb update`), and look at
+`plebian-os-select-closure --show` first if in doubt.
+
+A same-tag reselect interrupted before the selection is pending, such as the
+RC9 → 0.2.3 hop, is recovered as an interrupted reselect when the release
+installed before the attempt was already the target and is still installed.
+The installed closure is left unchanged. A finished selection whose version
+has since moved is not treated as that reselect, and neither is an attempt
+whose recorded version differs from the target. A Pleb from before this
+change may still label the same-tag recovery as rolled back and revalidate
+the current installation; it does not restore an older closure when the
+selector exits 0.
+
+Two limits remain (see the 0.2.3 notes' known issues): a Ctrl-C during a
+foreground step that does not use sudo, such as the Kilix engine rebuild,
+reaches that process, and the updater waits for it to end; SIGKILL or power
+loss does not run rollback.
+
+**Package locks.** A machine that updates itself (`apt-daily`,
+`unattended-upgrades`) can hold the dpkg lock for minutes. Every package step of
+an update now waits for it, up to 600 seconds, instead of failing at once: the
+native runtime retries the `lock-frontend` and `lock` takes once every 0.2 s and
+prints one line naming the holder it can read ("waiting up to 600s for the dpkg
+lock held by process N (name)"), and every `apt-get` of the provisioner, the
+updater, the dependency installer, and the Qt and mpv helpers
+carry `-o DPkg::Lock::Timeout=600`. It never signals the holder, and the
+time spent waiting does not count against the helper's own work limit. If the
+lock is still held when the 600 seconds end, the step stops with "the dpkg lock
+was still held by ... nothing was changed; run the update again when it has
+finished", and the update's rollback runs as for any failed step. The native
+runtime shipped in 0.2.2 and took these locks without waiting, so a 0.2.2
+update could fail the same way; the Qt and mpv helpers are new in 0.2.3.
+
+### The 0.2.3 Kilix Ask command model
+
+- **LFM2 is a first-use download from this candidate.** RC1 through RC9 put the
+  command-model archive on the installation media and had every upgrade
+  download and stage it (about 1.36 GB). An upgrade no longer downloads or
+  stages it. Kilix Ask uses its grammar until the model is installed and asks
+  whether to download it on the first interactive `kilix ask` and on the model
+  wizard's Local Workflows / Kilix Ask page. A non-interactive Ask never asks.
+- **A machine that has delivery v9 keeps the model, without a download.** The
+  release's Kilix catalog selects delivery `lfm2-kilix-commands-20261115-v10`,
+  whose files other than `notices/NOTICE.txt` are byte-identical to v9's. (The
+  release pins must name such a Kilix; with a Kilix whose catalog selects
+  another delivery, this step does nothing.) When the
+  desktop user has v9 installed with a receipt that covers it, the desktop-user
+  step installs v10 from those files through the Content installer's
+  supplied-directory path, which verifies every file against the v10 manifest,
+  and records the notice receipt (no agreement is recorded or typed). The
+  step runs unattended and shows nothing: it records that receipt only where
+  the v9 receipt covers the same licence record, and prints where the
+  installed terms are (the model's `notices/` directory). If anything is
+  missing or differs, a partial v10 directory is in the way, the disk is too
+  full, or the receipt store or installer refuses, nothing is installed, a
+  receipt the step wrote is withdrawn, and the upgrade continues; Ask then
+  offers the download on first use. A saved Ask selection is left unchanged.
+- **Older deliveries** (v8 and earlier) hold another weight and are not
+  migrated; they get the first-use offer.
+- **What stays on disk.** The v9 directory and its receipt stay, so a rollback
+  selects them as before. An archive an earlier candidate staged under
+  `/usr/local/share/kilix/model-archives/` and its licence documents under
+  `/usr/local/share/doc/plebian-os/models/lfm2-kilix-commands-20261106-v9/`
+  are not removed: archives there are content-addressed and kept across
+  upgrades and rollback, and the documents belong to the v9 files still on
+  disk. Once the machine no longer needs a rollback to an RC9 image, an
+  administrator may delete the archive
+  (`ea03c42ce0f36d12bca1844c558c0fcaeb442887e55e1e7b76ccb3ed632c3a85`) to free
+  its space; nothing in 0.2.3 reads it.
 
 ## Debian security updates
 
@@ -216,7 +566,17 @@ installer's snapshot `sources.list`, restores sources Plebian-OS had disabled,
 removes the global `Acquire::Check-Valid-Until "false"` that the installer and
 earlier provisioners wrote, and writes `plebian-os-debian.sources` unless
 operator sources already provide live `trixie`, `trixie-updates`, and
-`trixie-security`. It refuses to activate live sources while any other global
+`trixie-security`. 0.2.3 (from RC8) also writes
+`plebian-os-debian-backports.sources` for `<codename>-backports` on
+`deb.debian.org` whenever live Debian sources are in use, including when
+those operator sources already provide the three suites above. A snapshot
+pin removes that file along with `plebian-os-debian.sources`. Debian marks
+backports `NotAutomatic`, so apt's priority for the suite stays 100 and a
+package is installed from it only when an install asks for that suite. 0.2.3
+builds the Kilix engine with Debian's `golang-1.27-go` and `golang-1.27-src`
+from that suite, pinned by file; when backports has replaced the upload, the
+same files come from snapshot.debian.org or the release mirror.
+The reconcile refuses to activate live sources while any other global
 validity or date-check override remains (find it with
 `grep -rE 'Check-Valid-Until|Check-Date' /etc/apt`), or while an operator
 source for those Debian suites turns off signature or replay checks with
@@ -356,8 +716,8 @@ For both an installed Plebian-OS image and a standalone `pleb install` machine,
 the supported operator entrypoint is:
 
 ```sh
-pleb update --to 0.2.2 --dry-run
-pleb update --to 0.2.2
+pleb update --to 0.2.3 --dry-run
+pleb update --to 0.2.3
 ```
 
 Substitute the published adjacent target release. `pleb update --latest` is
@@ -452,8 +812,15 @@ bash "$SEL" --rollback        # put the previous closure back
 The previous `/etc/pleb/session.env` is saved under
 `/var/lib/plebian-os/closure-rollback.<timestamp>.*` with a record of the closure
 that replaced it, so `--rollback` is available until the upgrade is committed and
-afterwards. Keep `$SEL` until the upgrade has succeeded as an independent
-recovery entrypoint, then `rm -f "$SEL"`.
+afterwards. `--rollback` restores the newest record not yet restored, by its
+`<timestamp>` (UTC, to the second). A selection names its record at least one
+second after every existing record, so two selections within one second still
+roll back in order; the time it actually ran is `at=` in the record's `meta`. If
+two unrestored records share the newest second (written by a selector before
+0.2.3, or by two selector runs at once), or a `closure-rollback.*` entry has no
+second in its name, `--rollback` refuses and restores nothing; select the release
+you want explicitly instead (`pleb update --to <version>`). Keep `$SEL` until the upgrade has
+succeeded as an independent recovery entrypoint, then `rm -f "$SEL"`.
 
 Do not assemble pins from several releases or run a bare privileged provisioner
 between closure selection and the updater. Back up irreplaceable personal data

@@ -40,6 +40,13 @@ argument 3. If both forms are set, they must resolve to the same file. The
 existing size and SHA-256 pins in `releases/0.2.2.env` are the byte acceptance
 check; no carrier download is performed.
 
+From 0.2.3 the Kilix Ask command model (LFM2) is a first-use download and is
+not put on the media. `PLEBIAN_OS_COMMAND_MODEL_BUNDLE` is retired: the
+remaster refuses it when set, so a build cannot silently omit an archive its
+operator meant to ship. The release still publishes the delivery's archive as a
+kilix-needle release asset, at the URL `provision/command-model.json` pins,
+before the image is released, because first use downloads it from there.
+
 For 0.2.2 and later releases, remastering selects the carrier pins from
 `releases/<VERSION>.env` and checks its declared version before accepting the
 archive. The media carries that exact manifest as `ollama-release.env` for
@@ -164,10 +171,11 @@ The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
 The last published coordinated release is **0.2.2**. Its published tags and
 artifacts remain immutable. The next planned release is
-**0.2.3**, starting with **v0.2.3-rc1** based on the patched 0.2.2.1 sources.
-The 0.2.2.1 work was a local source candidate; it did not produce a published
-release. RC1 requires its own component pins, mixed model-delivery carrier,
-independent review records and installation/update acceptance.
+**0.2.3**, the final after nine published release candidates (`v0.2.3-rc1`
+through `v0.2.3-rc9`) built on the patched 0.2.2.1 sources. The 0.2.2.1 work
+was a local source candidate; it did not produce a published release. Once
+`v0.2.3` is published, the release after it is 0.2.4, whose candidates record
+their release tag and so move to the 0.2.4 final on a plain update.
 
 A maintenance release may append one positive decimal component without leading
 zeroes: `MAJOR.MINOR.PATCH.MAINTENANCE`. Thus `0.2.2 < 0.2.2.1 < 0.2.3`.
@@ -287,15 +295,18 @@ actually cutting.
   Omitting the key is invalid. Installed machines track live Debian security
   and point-release suites after successful provisioning or migration;
 - the fallback kitty bundle version and SHA-256;
-- the exact Go version and SHA-256 for every supported build architecture;
+- the exact Go version and either archive SHA-256 values for every supported
+  build architecture or an exact authenticated Debian backports package version;
 - pinned installer versions/checksums and a positive download byte bound for
   any optional network installers that are enabled (currently `uv`);
 - when `PLEBIAN_OS_INSTALL_VOICE_MODEL=1`, the full Kilix Voice source ref,
   library version/URL/SHA-256, and acoustic-model URL/SHA-256. The flag records
   those pins. Speech weights are included as needed: `small-en-us` and
   `whistle` ship with the image and may be installed for the desktop user.
-  `lgraph-en-us`, `vibevoice-asr-bitnet`, and `whisper-small-en` stay
-  first-use pulls and are not downloaded unattended. The advertised
+  `lgraph-en-us`, `vibevoice-asr-bitnet`, `whisper-small-en` and
+  `whisper-medium-en` stay first-use pulls and are not downloaded unattended
+  (from 0.2.3 an online upgrade also installs `whisper-medium-en` as a
+  Playalong default unless the Playalong models were declined). The advertised
   `small-en-us` URL and SHA-256 must be the ones kilix-content's
   `vosk-model-small-en-us-0.15` asset record carries, because that record is
   what the first-use screen and the F100 carrier read. The pinned Voice source
@@ -419,9 +430,24 @@ together.
    Immediately before tagging, confirm those
    commits are still the intended branch tips; classify any newer commit as
    either part of this release or explicitly post-release. For the pinned Kilix
-   commit, inspect its `src/go.mod` `toolchain` line and make the manifest's
-   exact Go version and architecture hashes match it.
-3. Push the reviewed commits **without tags**. Firstboot fetches the exact
+   commit, inspect its `src/go.mod` `toolchain` line and pin an exact compiler
+   that satisfies it. Archive selections require architecture hashes. Debian
+   selections require the matching exact package version and live apt policy;
+   verify that `GOTOOLCHAIN=local` and the selected compiler reach the engine
+   build, so its declaration cannot trigger a second toolchain download.
+3. Publish every dependency release asset the closure downloads **before**
+   any OS tag, and verify each by anonymous download and SHA-256. For 0.2.3
+   these are:
+   - the kilix-needle `lfm2-kilix-commands-20261115-v10` release, with the
+     archive `provision/command-model.json` pins;
+   - the Go mirror release `debian-go-1.27.4-1-bpo13-1`;
+   - the default-models bundle at the release-independent tag
+     `default-models-0221` (the same bytes and SHA-256 that
+     `provision/default-models.json` pins).
+
+   An installed machine downloads them by URL from the closure, so a tag that
+   names an unpublished asset ships an update that fails. Then push the
+   reviewed commits **without tags**. Firstboot fetches the exact
    component SHAs from GitHub, so the pinned acceptance guest cannot test an
    unpublished object. A failed acceptance is fixed with new commits; no
    immutable release ref has been published at this point.
@@ -443,7 +469,26 @@ together.
    sha256sum "plebian-os-<x.y.z>-amd64.iso"
    ```
 
-   For 0.2.2, set `PLEBIAN_OS_OLLAMA_CARRIER` to the local
+   Release builds read the image's offline payloads from local, verified input
+   bundles. None of them is committed to the source repository. Supply each
+   one by path before building; remaster checks it against its pin and refuses
+   a mismatch:
+
+   | Variable | Bundle | Pin |
+   | --- | --- | --- |
+   | `PLEBIAN_OS_DEFAULT_MODELS_BUNDLE` (required) | `default-models-0221.tar.xz`, the nine-model default bundle | `provision/default-models.json` |
+   | `PLEBIAN_OS_DEMUCS_MODEL_BUNDLE` | `demucs-htdemucs-6s.tar` | `provision/demucs-model.json` |
+   | `PLEBIAN_OS_PARADEE_MODEL_BUNDLE` and `PLEBIAN_OS_SPACY_MODEL_BUNDLE` (together) | Paradee 8M and `en_core_web_sm` | the image-model pins |
+   | `PLEBIAN_OS_PP_OCR_DET_MODEL_BUNDLE`, `PLEBIAN_OS_PP_OCR_REC_MODEL_BUNDLE` | PP-OCRv6 small detector and recogniser | the image-model pins |
+   | `PLEBIAN_OS_NEURONTE_ARCHIVE` | the slim Neuronte set | `provision/neuronte-payload.json` |
+   | `PLEBIAN_OS_OLLAMA_CARRIER` (or argument 3) | the Ollama runtime carrier | `PLEBIAN_OS_OLLAMA_RUNTIME_*` |
+
+   0.2.3 final ships LFM2 as a first-use download, so its ISO carries no
+   command-model archive, and remaster refuses a set
+   `PLEBIAN_OS_COMMAND_MODEL_BUNDLE`. Keep each bundle's
+   SHA-256 in the build evidence; the provenance record names them.
+
+   From 0.2.2, set `PLEBIAN_OS_OLLAMA_CARRIER` to the local
    `ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz` release asset before building.
    The manifest requires exactly 20,689,764 bytes with SHA-256
    `47cdb94ae64351242aee2e4391e87de1c7ff7f8cb579006b8dfd56353aaa6914`.
@@ -508,7 +553,9 @@ release upgrade, physical or human acceptance gate. Retain the report and
    ceiling; pass a larger `--timeout` on a slower host or mirror. Retain the
    generated JSON and `.sha256`; only `status: "passed"` satisfies this lane.
    `--no-wait` or `--no-verify` is diagnostic and cannot satisfy release
-   acceptance.
+   acceptance. The live switch also writes `plebian-os-debian-backports.sources`
+   for `<codename>-backports`. The security-source check does not read that
+   file, and apt's default priority leaves the suite unselected.
 
    Then validate and boot the exact, publishable bytes produced in step 5:
 
@@ -554,23 +601,25 @@ release upgrade, physical or human acceptance gate. Retain the report and
      `kilix-tts --version`, `kilix-stt --version`, and
      `kilix-voiced --version`, then require `kilix-stt --print` to produce a
      dictation report. Require `kilix-stt --models --json` to pass the
-     `kilix.speech.models/v1` schema gate with all five 0.2.2 models
+     `kilix.speech.models/v1` schema gate with all six selected models
      (`small-en-us`, `lgraph-en-us`, `vibevoice-asr-bitnet`,
-     `whisper-small-en`, and `whistle`), exactly
+     `whisper-small-en`, `whisper-medium-en`, and `whistle`), exactly
      one selected default, truthful runtime-support flags, positive exact byte
      sizes, and the shared explicit install-and-default argv. This listing must
      not open the network or change installed/default state. Require the
      device-free acceptance smoke to synthesize a phrase with real espeak.
      **Include speech-model weights as needed.** `small-en-us` and `whistle`
-     are bundled, so a fresh guest may hold `voice/models/small-en-us`, the
-     matching `voice/models/vosk-model-*` generation, `voice/lib/current`, the
-     content-store copies of those two models, and an install stamp that
-     records the installed libvosk and `model-small-en-us` digests.
-     `lgraph-en-us`, `vibevoice-asr-bitnet`, and `whisper-small-en` stay
+     are bundled in the content store. Fresh provisioning leaves Vosk's
+     active model and library uninstalled; its stamp records
+     `libvosk=skipped` and `model-small-en-us=skipped`.
+     `lgraph-en-us`, `vibevoice-asr-bitnet`, `whisper-small-en`, and
+     `whisper-medium-en` stay
      first-use pulls and must be absent as installed weights. Exercise that
      first-use path on `lgraph-en-us`: require the screen to show model id,
      upstream source URL and host, bytes, licence and licensor before any fetch;
-     decline once and prove no bytes or model directory appeared; then accept
+     use `kilix models install vosk-model-en-us-0.22-lgraph` to display that
+     licence screen. Decline once and prove no bytes or model directory
+     appeared; then accept
      and require a receipt, verified download and atomic install matching that
      model's pinned catalog checksum. Do not download the 1.6 GiB VibeVoice
      weights to satisfy this paragraph. Old 0.2.1 receipts are not read, so accept
@@ -584,14 +633,17 @@ release upgrade, physical or human acceptance gate. Retain the report and
    - on the pristine guest, exercise all five model-management surfaces against
      the same catalog. `kilix stt --models` and the Models tab must show both
      Vosk models, VibeVoice through the selected VibeASR provider, Whisper
-     small.en, and Whistle. Check runtime-support flags against the pinned
+     small.en and medium.en, and Whistle. Check runtime-support flags against the pinned
      catalog contract; support does not imply that model weights are installed.
      `kilix settings --section voice`, built-in WM Settings, and Kilix
      95 Settings must each offer **Install + use** for the selected model. Before
      installing `lgraph-en-us`, make it the pending default, click the terminal
      microphone, require the 124.5 MiB lazy-install confirmation, cancel it, and
-     prove no model directory appeared. Then install it through one settings
-     surface, require checksum verification and coherent Vosk/model defaulting,
+     prove no model directory appeared. Before a covering Vosk receipt
+     exists, an install action must refuse with the catalogue licence command;
+     retain that result. Complete the explicit catalogue licence flow above,
+     then retry **Install + use** through one settings surface. Require checksum
+     verification and coherent Vosk/model defaulting,
      and use the other surfaces to verify the same installed/default state.
      Restore the release default before recording acceptance. Do not download
      the 1.6 GiB VibeVoice weights solely for this check; require the truthful
@@ -625,7 +677,8 @@ release upgrade, physical or human acceptance gate. Retain the report and
      source layout and `~/.local/gpu_terminal/` as the data root in build info,
      session defaults, and final provenance; confirm `external`, `builtin`, and
      both `auto` outcomes seed only Pleb's `data/desktop` state, while launching
-     Kilix-95 standalone still uses its XP wallpaper;
+     Kilix-95 standalone uses its own packaged default wallpaper, independently
+     of Pleb's desktop state;
    - verify the shared data root and its `pleb`, `kilix`, `kilix-95`, and
      `plebian-os` component roots are real, target-user-owned directories with
      mode `0700`; check every persisted category below them, including Pleb's
@@ -769,3 +822,73 @@ no preparatory checkout replacement is allowed. Reports distinguish
 commit. A successful bootstrap lane qualifies that migration route only, not
 an unavailable capability of the old installed CLI. Source fixture tests do
 not qualify either image or standalone guests, reboot, rollback or user data.
+
+An installed RC of the same version hops to its final without a bootstrap
+driver. RC9's Pleb already accepts `--release-tag`, and its closure has no
+`PLEBIAN_OS_RELEASE_TAG` because selectors before 0.2.3 did not write one.
+Pass the published RC ISO, its manifest, the published RC tag object, and the
+staged final tag object. `--source-sha256sums` must list the manifest; the
+host checks `--from-release-manifest` against that line before the guest
+sees the file. The guest runner reads the installed RC: from the closure
+when the selector wrote one, or from build-info when a fresh image has no
+`closure.env` and those bytes equal the RC ISO. On that fresh image,
+`pleb update --show` resolves `PLEBIAN_OS_REF` from `session.env`, which
+stores the commit, while build-info stores the RC tag. The build-info
+`PLEBIAN_OS_COMMIT` peels the tag so the two compare. An upgraded image
+guest still has its predecessor ISO's build-info. That hash must be the
+single `build-info.env` named by `--predecessor-sha256sums` (the published
+0.2.2 `SHA256SUMS` for the 0.2.2 disks). Any other build-info fails. The
+guest shell-sources the closure and requires its Neuronte, Go, and satellite
+keys to match `pleb update --show` and the RC manifest. After the hop the
+closure's tag object must equal `--release-tag-object`. Rollback must restore
+the session, closure, settings, the selector and updater, the engine
+generation, and every component checkout HEAD, and must leave no
+`release-hop` record (`active`, `phase`, `baseline`, `unselected-checkouts`). Pleb keeps one generation
+of rollback: a record that a guest carried from an earlier completed hop is
+replaced when the new hop starts and is not restored by the rollback. A fresh image has
+no closure file, and the byte comparison is not recorded for that absence.
+A standalone guest has no selector or updater, and those paths must stay
+absent. Image recovery records are root-only and are read with `sudo -n`.
+A `selection_tag=` line must equal `--from-release-tag-object`. A record that
+still cannot be read is recorded as unreadable with status not-verified and
+is not a pass. The hop then runs again and those
+paths must match the post-hop record. The host's post-reboot
+version check cannot tell the installed RC from the final, because both
+report 0.2.3. The tag pin in the guest reboot verifier, and the
+`PLEBIAN_OS_RELEASE_TAG` line in `show-after-reboot.txt`, carry that
+distinction.
+
+```sh
+build/acceptance-release-hop-host.sh \
+  --from 0.2.3 --target 0.2.3 \
+  --release-tag v0.2.3 --from-release-tag v0.2.3-rc9 \
+  --from-release-tag-object 532d238f65c4bc1dc82a817bab01a467e287ba16 \
+  --release-tag-object <staged-v0.2.3-tag-object> \
+  --source-iso plebian-os-0.2.3-rc9-amd64.iso \
+  --source-sha256sums SHA256SUMS \
+  --predecessor-sha256sums <published-0.2.2-SHA256SUMS> \
+  --from-release-manifest plebian-os-0.2.3-rc9.env \
+  --image-guest releaseci@<image-host> \
+  --standalone-guest releaseci@<standalone-host> \
+  --known-hosts <qualification-known-hosts> \
+  --report <host-evidence-directory>
+```
+
+### Release identity: candidates and their final
+
+From 0.2.3, a selection records the exact release tag and tag object it
+selected, as `PLEBIAN_OS_RELEASE_TAG` and `PLEBIAN_OS_RELEASE_TAG_OBJECT` in
+`closure.env`. An image built from a release tag records them in
+`build-info.env`, `firstboot.env` and `session.env`. A recorded candidate
+(`vX.Y.Z-rcN`) therefore moves to the published `vX.Y.Z` on a plain
+`pleb update --latest` or `plebian-os-update`. A final never moves to a
+candidate. A candidate moves to another candidate only through an explicit
+`--release-tag`.
+
+Machines selected before 0.2.3 record no tag. The 0.2.3 RC1–RC9 machines are
+the last of these, so their notes tell them to move once with
+`pleb update --to 0.2.3`. Before each final, confirm that:
+- the final's `releases/<x.y.z>.env` names `PLEBIAN_OS_REF=v<x.y.z>`, because
+  the selector refuses a manifest whose REF is neither the selected tag nor its
+  commit;
+- the built image records the tag and its object.

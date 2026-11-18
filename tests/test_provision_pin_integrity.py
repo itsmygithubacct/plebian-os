@@ -48,6 +48,8 @@ INSTALLED_CLOSURE = {
     "PLEBIAN_OS_REPO": "https://github.com/itsmygithubacct/plebian-os.git",
     "PLEBIAN_OS_BRANCH": "",
     "PLEBIAN_OS_REF": "1" * 40,
+    "PLEBIAN_OS_RELEASE_TAG": "v0.2.1-rc1",
+    "PLEBIAN_OS_RELEASE_TAG_OBJECT": "e" * 40,
     "PLEB_REPO": "https://github.com/itsmygithubacct/pleb.git",
     "PLEB_BRANCH": "",
     "PLEB_REF": "2" * 40,
@@ -81,6 +83,8 @@ INSTALLED_CLOSURE = {
         "https://github.com/itsmygithubacct/kilix-secrets.git",
     "KILIX_SECRETS_BRANCH": "",
     "KILIX_SECRETS_REF": "9" * 40,
+    "NEURONTE_REPO": "https://github.com/itsmygithubacct/neuronte-v2.git",
+    "NEURONTE_REF": "b" * 40,
     "PLEBIAN_OS_APT_SNAPSHOT": "20260727T000000Z",
     # 0.2.1 had no managed native-package selection. Re-provision must retain
     # these empty values just as 0.2.2 must retain its five exact values.
@@ -108,8 +112,17 @@ INSTALLED_CLOSURE = {
     "PLEBIAN_OS_BUILD_KILIX_FORK": "0",
     "PLEBIAN_OS_KILIX_GO_MIN_VERSION": "1.25",
     "PLEBIAN_OS_KILIX_GO_VERSION": "go1.26.5",
+    "PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION": "",
     "PLEBIAN_OS_KILIX_GO_SHA256_AMD64": "6" * 64,
     "PLEBIAN_OS_KILIX_GO_SHA256_ARM64": "7" * 64,
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE": "",
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES": "",
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256": "",
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE": "",
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES": "",
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256": "",
+    "PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT": "",
+    "PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL": "",
     "PLEBIAN_OS_INSTALL_VOICE_MODEL": "1",
     "KILIX_VOICE_REF": "8" * 40,
     "KILIX_VOICE_LIB_VERSION": "0.3.45",
@@ -267,6 +280,22 @@ class ReleaseControlledClassificationTests(unittest.TestCase):
                 self.assertIn(f"provenance_kv {key}", update)
                 self.assertIn(f"manifest_kv {key}", remaster)
                 self.assertIn(f"env_kv {key}", remaster)
+
+        # Neuronte has no branch key: nothing can name a moving ref.
+        self.assertNotIn("NEURONTE_BRANCH", controlled + required_empty)
+        for suffix in ("REPO", "REF"):
+            key = f"NEURONTE_{suffix}"
+            with self.subTest(key=key, surface="neuronte"):
+                self.assertIn(key, required_values)
+                self.assertIn(key, controlled)
+                self.assertIn(f'write_session_default {key} "${key}"', provision)
+                self.assertIn(f"provenance_kv {key}", provision)
+                self.assertIn(f"provenance_kv {key}", update)
+                self.assertIn(f'"{key}=${key}"', update)
+                self.assertIn(f"manifest_kv {key}", remaster)
+                self.assertIn(f"env_kv {key}", remaster)
+        self.assertIn("provenance_kv NEURONTE_COMMIT", provision)
+        self.assertIn("provenance_kv NEURONTE_COMMIT", update)
 
         uv_bound = "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES"
         self.assertIn(uv_bound, controlled)

@@ -2,7 +2,7 @@
   "schema": "plebian-os.default-models-archive/v1",
   "bytes": 255638496,
   "sha256": "e00614bf726154d09668820c061cbbcb402239a445bde666b0568d36f01528a6",
-  "url": "https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.3-rc1/default-models-0221.tar.xz",
+  "url": "https://github.com/itsmygithubacct/plebian-os/releases/download/default-models-0221/default-models-0221.tar.xz",
   "assets": {
     "kilix-female-02": "075550906d308f9b9acdc51e3212e835bbe7594e9677e9813180697be5140c2e",
     "needle2": "5042266fed65210dd1deaaa80951445c3e9d86f4f4d7f8a3879ee3dfd38743bf",

@@ -38,6 +38,16 @@ if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_S
     exec /usr/bin/python3 "$_source_carrier_helper" run /bin/bash "${BASH_SOURCE[0]}" "$@"
 fi
 
+# Waydroid cleanup names. Assigned before the first die so an inherited
+# environment cannot choose a path for rm. Release removes a path only after
+# this run records it.
+WAYDROID_PRIVATE_STAGE=""
+WAYDROID_PUBLISH_TEMPS=""
+WAYDROID_RECORDED_PRIVATE_STAGE=""
+WAYDROID_RECORDED_STAGE_PARENT=""
+WAYDROID_RECORDED_PUBLISH_TEMPS=""
+WAYDROID_RECORDED_PUBLISH_DIR=""
+
 # ── what a release closure controls ──────────────────────────────────────────
 # This list is plebian-os-select-closure.sh's RELEASE_CONTROLLED_KEYS, which
 # UPGRADING.md defines: "the coordinated version/release mode, the four source
@@ -62,6 +72,8 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_REPO
     PLEBIAN_OS_BRANCH
     PLEBIAN_OS_REF
+    PLEBIAN_OS_RELEASE_TAG
+    PLEBIAN_OS_RELEASE_TAG_OBJECT
     PLEB_REPO
     PLEB_BRANCH
     PLEB_REF
@@ -89,6 +101,8 @@ RELEASE_CONTROLLED_KEYS=(
     KILIX_SECRETS_REPO
     KILIX_SECRETS_BRANCH
     KILIX_SECRETS_REF
+    NEURONTE_REPO
+    NEURONTE_REF
     PLEBIAN_OS_APT_SNAPSHOT
     PLEBIAN_OS_NATIVE_DEB_URL
     PLEBIAN_OS_NATIVE_DEB_SHA256
@@ -113,8 +127,17 @@ RELEASE_CONTROLLED_KEYS=(
     PLEBIAN_OS_BUILD_KILIX_FORK
     PLEBIAN_OS_KILIX_GO_MIN_VERSION
     PLEBIAN_OS_KILIX_GO_VERSION
+    PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION
     PLEBIAN_OS_KILIX_GO_SHA256_AMD64
     PLEBIAN_OS_KILIX_GO_SHA256_ARM64
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES
+    PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256
+    PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT
+    PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL
     PLEBIAN_OS_INSTALL_VOICE_MODEL
     KILIX_VOICE_REF
     KILIX_VOICE_LIB_VERSION
@@ -182,6 +205,7 @@ declare -A PERSISTED_KEY_VARS=(
     [PLEBIAN_OS_BUILD_KILIX_FORK]=BUILD_KILIX_FORK
     [PLEBIAN_OS_KILIX_GO_MIN_VERSION]=KILIX_GO_MIN_VERSION
     [PLEBIAN_OS_KILIX_GO_VERSION]=KILIX_GO_VERSION
+    [PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION]=KILIX_GO_DEBIAN_VERSION
     [PLEBIAN_OS_KILIX_GO_SHA256_AMD64]=KILIX_GO_SHA256_AMD64
     [PLEBIAN_OS_KILIX_GO_SHA256_ARM64]=KILIX_GO_SHA256_ARM64
     [PLEBIAN_OS_INSTALL_VOICE_MODEL]=INSTALL_VOICE_MODEL
@@ -422,8 +446,18 @@ KILIX_LAND_DESKTOP_AUDIO="${KILIX_LAND_DESKTOP_AUDIO:-}"
 BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
 KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+KILIX_GO_DEBIAN_VERSION="${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
 KILIX_GO_SHA256_AMD64="${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
 KILIX_GO_SHA256_ARM64="${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
+# Exact Debian Go package files and their fallback sources; empty without Debian Go.
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE:-}"
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES:-}"
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE="${PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES="${PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256="${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT="${PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT:-}"
+PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL="${PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL:-}"
 KILIX95_BRANCH="${KILIX95_BRANCH:-}"
 KILIX95_REF="${KILIX95_REF:-}"
 KILIX95_AUTO_INSTALL="${KILIX95_AUTO_INSTALL:-1}"
@@ -445,15 +479,25 @@ KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
 KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
 KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
 KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
+# Neuronte: the desktop faces Kilix 95 reads from $GPU_TERMINAL_SOURCE_HOME/neuronte.
+NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte-v2.git}"
+NEURONTE_REF="${NEURONTE_REF:-}"
 # Plebian-OS layer itself: where the provisioner/update-helper/deps script come
 # from, so `plebian-os-update` can refresh the OS layer (not just pleb/kilix).
 PLEBIAN_OS_REPO="${PLEBIAN_OS_REPO:-https://github.com/itsmygithubacct/plebian-os.git}"
 PLEBIAN_OS_BRANCH="${PLEBIAN_OS_BRANCH:-}"     # empty = repo default
 PLEBIAN_OS_REF="${PLEBIAN_OS_REF:-}"           # optional exact commit/tag
+# The exact release tag (v<x.y.z> or v<x.y.z>-rcN) and tag object an image was
+# built from, or that the last closure selection resolved. Empty when unknown.
+PLEBIAN_OS_RELEASE_TAG="${PLEBIAN_OS_RELEASE_TAG:-}"
+PLEBIAN_OS_RELEASE_TAG_OBJECT="${PLEBIAN_OS_RELEASE_TAG_OBJECT:-}"
 PLEBIAN_OS_DIR="${PLEBIAN_OS_DIR:-}"           # default after target user is known
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"   # resolved from the VERSION file below if empty
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
+# Held from configure_apt_snapshot through cleanup. install-deps reuses it,
+# Qt and mpv inherit it, and the final record copies its indexes.
+PROVISION_RELEASE_APT_CONFIG=""
 # Read indirectly by restore_persisted_policy through PERSISTED_POLICY.
 # shellcheck disable=SC2034
 PLEBIAN_OS_APT_SNAPSHOT_EXPLICIT="${PLEBIAN_OS_APT_SNAPSHOT+1}"
@@ -565,7 +609,79 @@ EOF
 
 log()  { printf '\033[1;36m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Drop a private Waydroid stage and any unpublished destination temps. Safe to
+# call more than once. die and cleanup both use it so a failed first boot does
+# not leave a temp that makes the transaction rmdir return 70.
+#
+# Only a path this run recorded is removed. The record is cleared at startup,
+# so a name inherited from the environment is not a record.
+waydroid_remove_recorded_publish_temp() {
+    local path="$1" base parent recorded
+    [ -n "$path" ] || return 0
+    case "$path" in
+        *$'\n'*|*$'\r'*) return 0 ;;
+    esac
+    recorded="${WAYDROID_RECORDED_PUBLISH_TEMPS:-}"
+    case $'\n'"$recorded"$'\n' in
+        *$'\n'"$path"$'\n'*) ;;
+        *) return 0 ;;
+    esac
+    parent="${path%/*}"
+    [ -n "${WAYDROID_RECORDED_PUBLISH_DIR:-}" ] || return 0
+    [ "$parent" = "$WAYDROID_RECORDED_PUBLISH_DIR" ] || return 0
+    base="${path##*/}"
+    case "$base" in
+        ".plebian-os-waydroid-setup.plebian-os-new.$$"|\
+        ".waydroid-closure.env.plebian-os-new.$$"|\
+        ".waydroid-closure.sha256.plebian-os-new.$$")
+            ;;
+        *) return 0 ;;
+    esac
+    [ -f "$path" ] && [ ! -L "$path" ] || return 0
+    rm -f -- "$path" || true
+}
+
+waydroid_remove_recorded_private_stage() {
+    local stage="${WAYDROID_PRIVATE_STAGE:-}" base parent
+    [ -n "$stage" ] || return 0
+    [ "$stage" = "${WAYDROID_RECORDED_PRIVATE_STAGE:-}" ] || return 0
+    case "$stage" in
+        *$'\n'*|*$'\r'*) return 0 ;;
+    esac
+    base="${stage##*/}"
+    parent="${stage%/*}"
+    [[ "$base" =~ ^plebian-os-waydroid\.[A-Za-z0-9]{6}$ ]] || return 0
+    [ -n "${WAYDROID_RECORDED_STAGE_PARENT:-}" ] || return 0
+    [ "$parent" = "$WAYDROID_RECORDED_STAGE_PARENT" ] || return 0
+    [ "$stage" = "$parent/$base" ] || return 0
+    [ -d "$stage" ] && [ ! -L "$stage" ] || return 0
+    rm -rf -- "$stage" || true
+}
+
+waydroid_release_private_stage() {
+    local path
+    if [ -n "${WAYDROID_PUBLISH_TEMPS:-}" ]; then
+        while IFS= read -r path; do
+            [ -z "$path" ] || waydroid_remove_recorded_publish_temp "$path"
+        done <<<"$WAYDROID_PUBLISH_TEMPS"
+    fi
+    WAYDROID_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_DIR=""
+    if [ -n "${WAYDROID_PRIVATE_STAGE:-}" ]; then
+        waydroid_remove_recorded_private_stage
+    fi
+    WAYDROID_PRIVATE_STAGE=""
+    WAYDROID_RECORDED_PRIVATE_STAGE=""
+    WAYDROID_RECORDED_STAGE_PARENT=""
+}
+
+die() {
+    waydroid_release_private_stage || true
+    printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2
+    exit 1
+}
 
 PLEBIAN_OS_OLLAMA_CARRIER_ARG=""
 OLLAMA_PREFLIGHT_SKIP=0
@@ -665,9 +781,18 @@ ollama_verify_carrier_pins() {
     [ "$actual_bytes" = "$expected_bytes" ] \
         || die "$label size does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 
-    actual_digest_output="$(sha256sum -- "$carrier" 2>/dev/null)" \
+    # Hash the file on stdin. GNU sha256sum prefixes the line with '\' when
+    # the name contains a backslash or a newline, and a split on the first
+    # space then treats that marker as part of the digest. A standalone path
+    # was refused before any change for that reason alone. Spaces, quotes and
+    # '$' stay in the name, which this check does not parse. A NUL cannot
+    # travel in an argument or in the environment, so this interface cannot
+    # name a path that contains one.
+    actual_digest_output="$(sha256sum < "$carrier" 2>/dev/null)" \
         || die "could not calculate $label SHA-256: $carrier"
     actual_digest="${actual_digest_output%% *}"
+    [[ "$actual_digest" =~ ^[0-9a-f]{64}$ ]] \
+        || die "could not read $label SHA-256: $carrier"
     [ "$actual_digest" = "$expected_digest" ] \
         || die "$label SHA-256 does not match the $PLEBIAN_OS_VERSION release manifest: $carrier"
 }
@@ -788,9 +913,14 @@ preflight_ollama_carrier() {
             || die "--ollama-carrier is not a regular non-symlink file: $cli_carrier"
         [ -f "$env_carrier" ] && [ ! -L "$env_carrier" ] \
             || die "PLEBIAN_OS_OLLAMA_CARRIER is not a regular non-symlink file: $env_carrier"
-        cli_real="$(readlink -e -- "$cli_carrier")" \
+        # readlink's ordinary newline delimiter cannot survive a name that
+        # itself ends in a newline. NUL-delimited output keeps every byte the
+        # argument or the environment was able to carry.
+        cli_real=""
+        IFS= read -r -d '' cli_real < <(readlink -e -z -- "$cli_carrier") \
             || die "could not resolve --ollama-carrier path: $cli_carrier"
-        env_real="$(readlink -e -- "$env_carrier")" \
+        env_real=""
+        IFS= read -r -d '' env_real < <(readlink -e -z -- "$env_carrier") \
             || die "could not resolve PLEBIAN_OS_OLLAMA_CARRIER path: $env_carrier"
         [ "$cli_real" = "$env_real" ] \
             || die "--ollama-carrier and PLEBIAN_OS_OLLAMA_CARRIER name different files"
@@ -923,7 +1053,13 @@ if [ "${PLEBIAN_OS_PROVISION_LOG_ACTIVE:-0}" != 1 ] \
         "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" >>"$PROVISION_LOG" 2>/dev/null || true
     # Marked in the environment so a nested invocation does not tee twice.
     export PLEBIAN_OS_PROVISION_LOG_ACTIVE=1
-    exec > >(tee -a -- "$PROVISION_LOG") 2>&1
+    # The tee outlives a stop. A TERM sent to the whole process group used to
+    # kill it with everything else, and the rollback that followed then wrote
+    # into a pipe nobody read: dpkg, removing a package for that rollback, died
+    # of SIGPIPE on its first line of output and left dpkg interrupted. Ignoring
+    # the stop signals keeps the rollback's output (and its dpkg) alive; tee
+    # still ends at end of input, and SIGKILL still ends it.
+    exec > >(trap '' INT TERM HUP; exec tee -a -- "$PROVISION_LOG") 2>&1
     log "provisioning output is also being written to $PROVISION_LOG"
 fi
 
@@ -1024,10 +1160,15 @@ restore_installed_closure() {
     while IFS=$'\t' read -r key state value; do
         case " ${candidates[*]} " in *" $key "*) ;; *) continue ;; esac
         if [ "$state" != set ]; then
+            [ "$key" != PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION ] || continue
+            [[ "$key" != PLEBIAN_OS_KILIX_GO_DEB_* ]] || continue
+            # A machine installed or selected before 0.2.3 records no release
+            # tag. Empty is the honest value: it is not a pin to default.
+            [[ "$key" != PLEBIAN_OS_RELEASE_TAG* ]] || continue
             missing+=("$key")
             continue
         fi
-        [ -n "$value" ] || [ "$key" = PLEBIAN_OS_APT_SNAPSHOT ] || continue
+        [ -n "$value" ] || [[ "$key" = PLEBIAN_OS_APT_SNAPSHOT || "$key" = PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION || "$key" = PLEBIAN_OS_KILIX_GO_SHA256_* || "$key" = PLEBIAN_OS_KILIX_GO_DEB_* ]] || continue
         # The machine answered for this key, so /etc/default must not answer for
         # it again below, even where the value matches what this run already had.
         PERSISTED_KEY_RESTORED["$key"]=1
@@ -1170,6 +1311,17 @@ rollback_mpv_runtime_transaction() {
 }
 
 mpv_runtime_command() {
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${PROVISION_RELEASE_APT_CONFIG:-}" ] || [ -L "$PROVISION_RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$PROVISION_RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        env PLEBIAN_OS_RELEASE_MODE=1 \
+            "PLEBIAN_OS_RELEASE_APT_CONFIG=$PROVISION_RELEASE_APT_CONFIG" \
+            /usr/local/sbin/plebian-os-mpv-runtime "$@"
+        return $?
+    fi
     /usr/local/sbin/plebian-os-mpv-runtime "$@"
 }
 
@@ -1218,6 +1370,17 @@ rollback_qt_runtime_transaction() {
 }
 
 qt_runtime_command() {
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${PROVISION_RELEASE_APT_CONFIG:-}" ] || [ -L "$PROVISION_RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$PROVISION_RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        env PLEBIAN_OS_RELEASE_MODE=1 \
+            "PLEBIAN_OS_RELEASE_APT_CONFIG=$PROVISION_RELEASE_APT_CONFIG" \
+            /usr/local/sbin/plebian-os-qt-runtime "$@"
+        return $?
+    fi
     /usr/local/sbin/plebian-os-qt-runtime "$@"
 }
 
@@ -1235,7 +1398,7 @@ native_download_archive() {
 }
 
 apply_selected_native_runtime() {
-    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual
+    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual rc=0
     [ -n "$version" ] || version="$PLEBIAN_OS_VERSION"
     validate_native_release_closure "$version" "$PLEBIAN_OS_RELEASE_MODE" || return 1
     [ -n "$PLEBIAN_OS_NATIVE_DEB_URL" ] || return 0
@@ -1264,11 +1427,22 @@ apply_selected_native_runtime() {
     # Dependency preparation is separate from the native package journal.
     # Legacy offers select no custom archives; byte-pinned installed runtimes
     # refuse replacement before any dependency download or mutation.
+    # The download above is not a package step. A script that records package
+    # windows opens one only around the command that can install packages, and
+    # closes it on both results. The provisioner does not record those windows.
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
     native_runtime_command install-dependencies \
         --artifact "$stage" --sha256 "$PLEBIAN_OS_NATIVE_DEB_SHA256" \
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
-        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || return 1
+        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
+    rc=0
     NATIVE_TRANSACTION_TOKEN="$(/usr/bin/python3 -I -B -c 'import secrets; print(secrets.token_hex(16))')" \
         || return 1
     [[ "$NATIVE_TRANSACTION_TOKEN" =~ ^[0-9a-f]{32}$ ]] || return 1
@@ -1282,7 +1456,14 @@ apply_selected_native_runtime() {
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
         --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" >/dev/null || return 1
-    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN"
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
+    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
 }
 
 rollback_native_runtime_transaction() {
@@ -1319,6 +1500,11 @@ release_requires_f120_roots() {
 }
 
 release_requires_secrets_root() {
+    [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.3 ]
+}
+
+# 0.2.3 installs the pinned Neuronte faces (owner decision 2026-11-13).
+release_requires_neuronte() {
     [ "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" = 0.2.3 ]
 }
 
@@ -1423,6 +1609,21 @@ validate_native_release_closure() {
     done
 }
 
+# The recorded release identity is both values or neither: a stable tag or a
+# numbered candidate of this VERSION, and a full tag-object SHA.
+validate_release_identity() {
+    local version="${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" tag="$PLEBIAN_OS_RELEASE_TAG" suffix
+    if [ -z "$tag" ] && [ -z "$PLEBIAN_OS_RELEASE_TAG_OBJECT" ]; then
+        return 0
+    fi
+    [[ "$PLEBIAN_OS_RELEASE_TAG_OBJECT" =~ ^[0-9a-f]{40}$ ]] \
+        || die "PLEBIAN_OS_RELEASE_TAG_OBJECT must be a full 40-character lowercase object SHA beside PLEBIAN_OS_RELEASE_TAG"
+    [ "$tag" = "v$version" ] && return 0
+    suffix="${tag#"v$version-rc"}"
+    [ -n "$tag" ] && [ "$suffix" != "$tag" ] && [[ "$suffix" =~ ^[1-9][0-9]*$ ]] \
+        || die "PLEBIAN_OS_RELEASE_TAG must be v$version or v$version-rcN (got '$tag')"
+}
+
 validate_release_inputs() {
     validate_mpv_release_closure || return 1
     validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-${PLEBIAN_OS_VERSION:-}}" "${PLEBIAN_OS_RELEASE_MODE:-0}" || return 1
@@ -1434,6 +1635,7 @@ validate_release_inputs() {
         [[ "${!key}" =~ ^[0-9a-fA-F]{40}$ ]] \
             || die "release mode requires $key to be a full 40-character commit SHA"
     done
+    validate_release_identity
     if release_requires_f120_roots; then
         for key in KILIX_SYSTEM_MONITOR_REF KILIX_DESKTOP_SDK_REF \
             KILIX_ICEWM_REF KILIX_MEDIA_SDK_REF KILIX_WAYDROID_REF; do
@@ -1463,12 +1665,37 @@ validate_release_inputs() {
         [ -z "$KILIX_SECRETS_BRANCH" ] \
             || die "release mode requires KILIX_SECRETS_BRANCH to be empty"
     fi
+    if release_requires_neuronte; then
+        [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
+            || die "release mode requires NEURONTE_REF to be a full 40-character lowercase commit SHA"
+        [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
+            || die "release mode requires the canonical NEURONTE_REPO"
+    fi
     for key in KILIX_PREBUILT_SHA256 KILIX_GO_SHA256_AMD64 KILIX_GO_SHA256_ARM64; do
+        if [[ "$key" == KILIX_GO_SHA256_* ]] && [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then continue; fi
         [[ "${!key}" =~ ^[0-9a-fA-F]{64}$ ]] \
             || die "release mode requires a 64-character $key"
     done
     [[ "$KILIX_GO_VERSION" =~ ^(go)?[0-9]+\.[0-9]+\.[0-9]+$ ]] \
         || die "release mode requires an exact PLEBIAN_OS_KILIX_GO_VERSION"
+    if [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then
+        [[ "$KILIX_GO_DEBIAN_VERSION" =~ ^1\.27\.[0-9]+-[0-9]+~bpo13\+[0-9]+$ ]] \
+            && [[ "$KILIX_GO_DEBIAN_VERSION" == "${KILIX_GO_VERSION#go}-"* ]] \
+            && [ -z "$PLEBIAN_OS_APT_SNAPSHOT" ] \
+            || die "Debian Go requires matching compiler/package pins and live trixie-backports"
+        [ "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE" = "golang-1.27-go_${KILIX_GO_DEBIAN_VERSION}_amd64.deb" ] \
+            && [ "$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE" = "golang-1.27-src_${KILIX_GO_DEBIAN_VERSION}_all.deb" ] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES" =~ ^[1-9][0-9]{0,9}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES" =~ ^[1-9][0-9]{0,9}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] \
+            && [[ "$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL" =~ ^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~%+-]+)*$ ]] \
+            || die "release mode requires exact Debian Go package file pins, a snapshot.debian.org timestamp and a release mirror URL"
+    else
+        [ -z "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL" ] \
+            || die "Debian Go package file pins require PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION"
+    fi
     if [ "$INSTALL_UV" = 1 ]; then
         [[ "$UV_VERSION_PIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
             || die "release mode requires an exact PLEBIAN_OS_UV_VERSION when uv is enabled"
@@ -1865,6 +2092,8 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
     /usr/local/sbin/plebian-os-passwd
     /etc/sudoers.d/plebian-os-passwd
+    /usr/local/sbin/plebian-os-ssh-server
+    /var/lib/plebian-os/ssh-server-offer
     /usr/local/bin/pleb-session
     /usr/local/bin/pleb-lock
     /usr/local/lib/pleb/displays.py
@@ -1874,6 +2103,9 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/lib/pleb/capture_screenshot.py
     /usr/local/lib/pleb/capture_worker.py
     /usr/local/lib/pleb/capture_portal.py
+    /usr/local/lib/pleb/displays_gui.py
+    /usr/local/lib/pleb/screenlock.py
+    /usr/local/lib/pleb/screenlock_gui.py
     /usr/local/lib/pleb/capture_transport.so
     /usr/local/share/xdg-desktop-portal/portals/pleb.portal
     /usr/local/share/dbus-1/services/org.freedesktop.impl.portal.desktop.pleb.service
@@ -1917,6 +2149,8 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/lib/pleb/.screensaver.py.new
     /usr/local/lib/pleb/session-bin/xdg-screensaver
     /usr/local/lib/pleb/session-bin/.xdg-screensaver.new
+    /usr/local/lib/pleb/notification_center.py
+    /usr/local/lib/pleb/.notification_center.py.new
 )
 
 # These fixed ancestors must already be safe. They are never removed by a
@@ -2378,6 +2612,9 @@ commit_provision_root_transaction() {
 cleanup() {
     local cleanup_failed=0
     if [ "$DRY_RUN" != 1 ]; then
+        # Drop a private Waydroid stage before rollback rmdir. Temps live in
+        # the destination directory; a leftover makes that rmdir fail.
+        waydroid_release_private_stage
         if ! rm -f "$SUDOERS"; then
             warn "could not remove temporary provisioning sudoers rule: $SUDOERS"
             cleanup_failed=1
@@ -2402,6 +2639,11 @@ cleanup() {
         elif [ "$PROVISION_ROOT_TRANSACTION_ACTIVE" = 1 ] \
                 && [ "$PROVISION_ROOT_TRANSACTION_COMMITTED" != 1 ]; then
             rollback_provision_root_transaction || cleanup_failed=1
+        fi
+        # After rollback: Qt and mpv restore still need this directory.
+        if [ -n "${PROVISION_RELEASE_APT_CONFIG:-}" ]; then
+            rm -rf -- "$PROVISION_RELEASE_APT_CONFIG"
+            PROVISION_RELEASE_APT_CONFIG=""
         fi
         if [ -n "${PROVISION_LOCK_FD:-}" ]; then
             flock -u "$PROVISION_LOCK_FD" 2>/dev/null || true
@@ -4172,21 +4414,85 @@ selected_desktop_wallpaper_state_dir() {
 }
 
 record_default_desktop() {
-    # Persist the image's desktop choice where every desktop reads and writes
-    # it. Firstboot knew which provider it was provisioning and kept that in
-    # its own environment, so the running system had no record a user could
-    # see or change: choosing another desktop meant editing a file the
-    # installer had written and nothing offered.
-    local provider="${KILIX_DESKTOP_PROVIDER:-auto}"
+    # The provisioner runs without the user's interactive terminal. Ask in the
+    # first desktop pane instead, and preserve any choice already completed.
     [ -x "$KILIX_DIR/kilix" ] || return 0
     if as_user env "${install_env[@]}" "$KILIX_DIR/kilix" \
-            default-desktop set "$provider" >/dev/null 2>&1; then
-        log "desktop    : default recorded as $provider"
+            default-desktop request >/dev/null 2>&1; then
+        log "desktop    : first-login choice requested (saved choices preserved)"
     else
-        # Not fatal: the session still starts with the provisioned provider,
-        # and the desktops can set it later.
-        log "desktop    : could not record the default ($provider)"
+        log "desktop    : could not request the first-login choice"
     fi
+}
+
+# SSH server opt-in (0.2.3). A fresh installation has no SSH server. The owner
+# is asked once, at the first desktop login, whether to turn one on: Kilix's
+# first-login chooser asks when this root-owned record names the account, and
+# the answer defaults to No. Only a fresh interactive installation gets the
+# record. An automated (preseeded) installation, a re-provision of a machine
+# that finished first boot, a shell-only session, and a machine that already
+# has openssh-server are never asked; the updater never runs this.
+# "Yes" runs `sudo plebian-os-ssh-server enable` in that terminal.
+SSH_SERVER_HELPER=/usr/local/sbin/plebian-os-ssh-server
+SSH_SERVER_OFFER=/var/lib/plebian-os/ssh-server-offer
+IDENTITY_PROFILE_NAME=""
+
+install_ssh_server_helper() {
+    local src="$PLEBIAN_OS_DIR/provision/plebian-os-ssh-server"
+    log "installing SSH server helper -> $SSH_SERVER_HELPER (SSH stays off)"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install -o root -g root -m 0755 $src $SSH_SERVER_HELPER"
+        return 0
+    fi
+    [ -f "$src" ] && [ ! -L "$src" ] \
+        || die "pinned Plebian-OS checkout has no SSH server helper"
+    /usr/bin/python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$src" \
+        || die "SSH server helper does not parse: $src"
+    install -o root -g root -m 0755 "$src" "$SSH_SERVER_HELPER" \
+        || die "could not install $SSH_SERVER_HELPER"
+}
+
+ssh_server_offer_skip_reason() {
+    if machine_already_provisioned; then
+        echo "this machine already finished first boot"
+    elif [ "$IDENTITY_PROFILE_NAME" != interactive-v1 ]; then
+        echo "not an interactive installation"
+    elif [ "$DESKTOP" != 1 ]; then
+        echo "no desktop session to ask in"
+    elif dpkg-query -W -f='${db:Status-Abbrev}' openssh-server 2>/dev/null | grep -q '^ii'; then
+        echo "openssh-server is already installed"
+    elif [ "$DRY_RUN" != 1 ] && [ ! -x "$SSH_SERVER_HELPER" ]; then
+        echo "the SSH server helper is missing"
+    fi
+}
+
+record_ssh_server_offer() {
+    local reason tmp
+    # Not in a command substitution: has_fresh_identity_profile sets the
+    # profile name and must be able to stop the run on a damaged record. A
+    # legacy machine has no record and so no profile name.
+    IDENTITY_PROFILE_NAME=""
+    has_fresh_identity_profile || true
+    reason="$(ssh_server_offer_skip_reason)"
+    if [ -n "$reason" ]; then
+        log "ssh server : no first-login question ($reason)"
+        return 0
+    fi
+    [[ "$TARGET_USER" =~ ^[a-z][-a-z0-9_]{0,31}$ ]] \
+        || die "unsafe target user for the SSH server question: $TARGET_USER"
+    log "ssh server : first-login question requested for $TARGET_USER (default: no)"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $SSH_SERVER_OFFER (ssh-server-offer/v1 $TARGET_USER, root 0644)"
+        return 0
+    fi
+    [ -d "${SSH_SERVER_OFFER%/*}" ] || install -d -m 0755 "${SSH_SERVER_OFFER%/*}" \
+        || die "could not create ${SSH_SERVER_OFFER%/*}"
+    tmp="$(mktemp "${SSH_SERVER_OFFER%/*}/.ssh-server-offer.XXXXXX")" \
+        || die "could not stage the SSH server question"
+    printf 'ssh-server-offer/v1 %s\n' "$TARGET_USER" >"$tmp" \
+        && chmod 0644 "$tmp" \
+        && mv -fT "$tmp" "$SSH_SERVER_OFFER" \
+        || { rm -f "$tmp"; die "could not record the SSH server question"; }
 }
 
 seed_selected_desktop_wallpaper_state() {
@@ -4380,6 +4686,7 @@ _active_apt_source_paths() {
     local out_name="$1" path
     local snapshot="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local managed_live="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local managed_backports="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian-backports.sources"
     # shellcheck disable=SC2178  # nameref intentionally targets an array
     local -n out="$out_name"
     local -a candidates
@@ -4392,10 +4699,13 @@ _active_apt_source_paths() {
     )
     shopt -u nullglob
     for path in "${candidates[@]}"; do
-        # Both managed Debian source files belong to this provisioner and are
-        # never inventoried as operator sources.
+        # Managed Debian source files belong to this provisioner and are
+        # never inventoried as operator sources. The backports file is one
+        # of them: snapshot mode must remove it, not disable it as an
+        # operator source, and it must not count as live Debian coverage.
         [ "$path" = "$snapshot" ] && continue
         [ "$path" = "$managed_live" ] && continue
+        [ "$path" = "$managed_backports" ] && continue
         [ -f "$path" ] || [ -L "$path" ] || continue
         case "$path" in *$'\n'*|*$'\r'*) die "invalid newline in apt source path" ;; esac
         out+=("$path")
@@ -4726,18 +5036,22 @@ _live_debian_coverage_complete() {
 # restored except the Debian Installer's snapshot sources.list, which is
 # retired; global validity overrides are removed; and the managed live Debian
 # source is written only when operator sources do not already provide it. The
-# move is one transaction and never finishes while replay protection is off.
+# managed backports source is written whenever live sources are in use. Apt's
+# default priority for that suite is 100, so nothing is selected from it
+# unless an install asks for the suite. The move is one transaction and never
+# finishes while replay protection is off.
 restore_live_apt_sources() {
     local apt_dir="$APT_ETC_ROOT/apt" state_dir="$APT_ETC_ROOT/plebian-os"
     local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
     local live_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local backports_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian-backports.sources"
     local aptconf="$APT_ETC_ROOT/apt/apt.conf"
     local retired="$APT_ETC_ROOT/apt/sources.list.plebian-os-installer-snapshot"
     local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
-    local live backup target txn codename live_tmp failed=0 rollback_ok=1 signal_rc=0
+    local live backup target txn codename live_tmp backports_tmp failed=0 rollback_ok=1 signal_rc=0
     local retire_mode=1 changed=0 staged=1 coverage
-    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 aptconf_old=0
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 backports_src_old=0 aptconf_old=0
     local -a managed=() moved_from=() moved_to=()
     log "leaving the apt snapshot; restoring disabled sources and ensuring live Debian sources"
     if [ "$DRY_RUN" = 1 ]; then
@@ -4746,6 +5060,7 @@ restore_live_apt_sources() {
         echo "    + retire the Debian Installer snapshot sources.list -> $retired"
         echo "    + also retire an active installer snapshot sources.list an earlier live switch restored"
         echo "    + ensure live Debian and security sources ($live_src unless operator sources already provide them)"
+        echo "    + ensure the Debian backports suite ($backports_src); apt's default priority leaves it unselected"
         echo "    + remove Plebian-OS's global Check-Valid-Until overrides; refuse live sources while a global Check-Valid-Until or Check-Date override remains, or an operator source disables apt checks"
         echo "    + apt-get update (a failure warns; apt retries on its daily timer)"
         return 0
@@ -4802,6 +5117,8 @@ restore_live_apt_sources() {
         || die "could not create apt restore transaction directory"
     live_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-live.XXXXXX")" \
         || _abort_apt_staging "$txn" "could not stage the live Debian source; apt was not changed"
+    backports_tmp="$(mktemp "$apt_dir/sources.list.d/.plebian-os-backports.XXXXXX")" \
+        || _abort_apt_staging "$txn" "could not stage the Debian backports source; apt was not changed" "$live_tmp"
     cat > "$live_tmp" <<EOF || staged=0
 # Managed by plebian-os-provision. Live Debian, including security updates, with
 # apt's replay protection. Removed when operator sources already provide it.
@@ -4817,15 +5134,27 @@ Suites: ${codename}-security
 Components: main contrib non-free non-free-firmware
 Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
 EOF
-    chmod 0644 "$live_tmp" || staged=0
+    cat > "$backports_tmp" <<EOF || staged=0
+# Managed by plebian-os-provision. Debian backports for this codename.
+# Apt's default priority for this suite is 100, so nothing here is selected
+# unless an install asks for it. Removed while apt is pinned to a snapshot.
+Types: deb
+URIs: https://deb.debian.org/debian
+Suites: ${codename}-backports
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+EOF
+    chmod 0644 "$live_tmp" "$backports_tmp" || staged=0
     if [ -e "$src" ] || [ -L "$src" ]; then src_old=1; cp -a "$src" "$txn/src" || staged=0; fi
     if [ -e "$cfg" ] || [ -L "$cfg" ]; then cfg_old=1; cp -a "$cfg" "$txn/cfg" || staged=0; fi
     if [ -e "$marker" ] || [ -L "$marker" ]; then marker_old=1; cp -a "$marker" "$txn/marker" || staged=0; fi
     if [ -e "$inventory" ] || [ -L "$inventory" ]; then inventory_old=1; cp -a "$inventory" "$txn/inventory" || staged=0; fi
     if [ -e "$live_src" ] || [ -L "$live_src" ]; then live_src_old=1; cp -a "$live_src" "$txn/live_src" || staged=0; fi
+    if [ -e "$backports_src" ] || [ -L "$backports_src" ]; then backports_src_old=1; cp -a "$backports_src" "$txn/backports_src" || staged=0; fi
     if [ -e "$aptconf" ] || [ -L "$aptconf" ]; then aptconf_old=1; cp -a "$aptconf" "$txn/aptconf" || staged=0; fi
     [ "$staged" = 1 ] \
-        || _abort_apt_staging "$txn" "could not stage the move to live Debian sources; apt was not changed" "$live_tmp"
+        || _abort_apt_staging "$txn" "could not stage the move to live Debian sources; apt was not changed" \
+            "$live_tmp" "$backports_tmp"
 
     # Defer termination only across the mutation window so every signal takes
     # the same rollback path as an ordinary command failure.
@@ -4874,10 +5203,13 @@ EOF
         esac
     fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
+        mv -fT "$backports_tmp" "$backports_src" || failed=1
+    fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then
         _assert_no_global_validity_override || failed=1
     fi
     [ "$signal_rc" = 0 ] || failed=1
-    rm -f "$live_tmp"
+    rm -f "$live_tmp" "$backports_tmp"
     if [ "$failed" != 0 ]; then
         for ((i=${#moved_to[@]}-1; i>=0; i--)); do
             mv -T "${moved_to[$i]}" "${moved_from[$i]}" 2>/dev/null || rollback_ok=0
@@ -4887,6 +5219,7 @@ EOF
         _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
         _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
         _restore_managed_apt_file "$live_src" "$txn/live_src" "$live_src_old" || rollback_ok=0
+        _restore_managed_apt_file "$backports_src" "$txn/backports_src" "$backports_src_old" || rollback_ok=0
         _restore_managed_apt_file "$aptconf" "$txn/aptconf" "$aptconf_old" || rollback_ok=0
         if [ "$rollback_ok" = 1 ]; then
             rm -rf "$txn"
@@ -4906,6 +5239,11 @@ EOF
     elif [ -e "$live_src" ]; then
         changed=1
     fi
+    if [ "$backports_src_old" = 1 ]; then
+        { [ -e "$backports_src" ] && cmp -s "$txn/backports_src" "$backports_src"; } || changed=1
+    elif [ -e "$backports_src" ]; then
+        changed=1
+    fi
     if [ "$aptconf_old" = 1 ]; then
         { [ -e "$aptconf" ] && cmp -s "$txn/aptconf" "$aptconf"; } || changed=1
     fi
@@ -4914,7 +5252,7 @@ EOF
     [ "$signal_rc" = 0 ] || exit "$signal_rc"
     # A network failure must not roll back: that would freeze the machine on the
     # snapshot again. apt's daily timer retries against the live sources.
-    if [ "$changed" = 1 ] && ! apt-get update -y; then
+    if [ "$changed" = 1 ] && ! apt-get -o DPkg::Lock::Timeout=600 update -y; then
         warn "apt-get update against live Debian failed; apt will retry on its daily timer"
     fi
 }
@@ -4945,6 +5283,7 @@ _configure_apt_snapshot() {
     local src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-snapshot.sources"
     local cfg="$APT_ETC_ROOT/apt/apt.conf.d/99plebian-os-snapshot"
     local live_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian.sources"
+    local backports_src="$APT_ETC_ROOT/apt/sources.list.d/plebian-os-debian-backports.sources"
     local aptconf="$APT_ETC_ROOT/apt/apt.conf"
     local marker="$state_dir/apt-snapshot" inventory="$state_dir/apt-snapshot-sources"
     [[ "$ts" =~ ^[0-9]{8}(T[0-9]{6}Z)?$ ]] \
@@ -4963,7 +5302,7 @@ _configure_apt_snapshot() {
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + disable every active apt source (inventoried in $inventory)"
         echo "    + write $src (deb822 snapshot sources for $ts, per-source Check-Valid-Until: no)"
-        echo "    + remove global Check-Valid-Until overrides and $live_src"
+        echo "    + remove global Check-Valid-Until overrides, $live_src, and $backports_src"
         echo "    + apt-get update"
         return 0
     fi
@@ -4972,7 +5311,7 @@ _configure_apt_snapshot() {
     # Inventory every source this provisioner disables. Existing inventories are
     # extended when an operator adds a source while snapshot mode is active.
     local d backup txn src_tmp marker_tmp inventory_tmp failed=0 rollback_ok=1 signal_rc=0 staged=1
-    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 aptconf_old=0
+    local src_old=0 cfg_old=0 marker_old=0 inventory_old=0 live_src_old=0 backports_src_old=0 aptconf_old=0
     local -a managed=() active=() moved=() combined=()
     _load_apt_snapshot_inventory "$inventory" managed
     if [ "${#managed[@]}" -eq 0 ] && [ ! -f "$inventory" ]; then
@@ -5035,6 +5374,7 @@ EOF
     if [ -e "$marker" ] || [ -L "$marker" ]; then marker_old=1; cp -a "$marker" "$txn/marker" || staged=0; fi
     if [ -e "$inventory" ] || [ -L "$inventory" ]; then inventory_old=1; cp -a "$inventory" "$txn/inventory" || staged=0; fi
     if [ -e "$live_src" ] || [ -L "$live_src" ]; then live_src_old=1; cp -a "$live_src" "$txn/live_src" || staged=0; fi
+    if [ -e "$backports_src" ] || [ -L "$backports_src" ]; then backports_src_old=1; cp -a "$backports_src" "$txn/backports_src" || staged=0; fi
     if [ -e "$aptconf" ] || [ -L "$aptconf" ]; then aptconf_old=1; cp -a "$aptconf" "$txn/aptconf" || staged=0; fi
     [ "$staged" = 1 ] \
         || _abort_apt_staging "$txn" "could not stage the apt snapshot configuration; apt was not changed" \
@@ -5052,11 +5392,11 @@ EOF
         fi
     done
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$src_tmp" "$src" || failed=1; fi
-    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then rm -f "$live_src" || failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then rm -f "$live_src" "$backports_src" || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then _remove_global_validity_overrides || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$marker_tmp" "$marker" || failed=1; fi
     if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ]; then mv -fT "$inventory_tmp" "$inventory" || failed=1; fi
-    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ] && ! apt-get update -y; then failed=1; fi
+    if [ "$failed" = 0 ] && [ "$signal_rc" = 0 ] && ! apt-get -o DPkg::Lock::Timeout=600 update -y; then failed=1; fi
     [ "$signal_rc" = 0 ] || failed=1
     if [ "$failed" != 0 ]; then
         _restore_managed_apt_file "$src" "$txn/src" "$src_old" || rollback_ok=0
@@ -5064,6 +5404,7 @@ EOF
         _restore_managed_apt_file "$marker" "$txn/marker" "$marker_old" || rollback_ok=0
         _restore_managed_apt_file "$inventory" "$txn/inventory" "$inventory_old" || rollback_ok=0
         _restore_managed_apt_file "$live_src" "$txn/live_src" "$live_src_old" || rollback_ok=0
+        _restore_managed_apt_file "$backports_src" "$txn/backports_src" "$backports_src_old" || rollback_ok=0
         _restore_managed_apt_file "$aptconf" "$txn/aptconf" "$aptconf_old" || rollback_ok=0
         for ((i=${#moved[@]}-1; i>=0; i--)); do
             d="${moved[$i]}"
@@ -5168,10 +5509,11 @@ validate_component_versions() {
 # must agree on both (a test holds their copies byte-identical). The run that
 # records a release install resolves every index from the exact install
 # snapshot; afterwards the machine tracks live Debian, and every index must still
-# come from the official Debian archive for its codename. Returns 2 for an empty
+# come from the official Debian archive for its codename. The codename's
+# backports suite counts only from deb.debian.org/debian. Returns 2 for an empty
 # index list and 1, naming the index, for any other violation.
 validate_release_apt_provenance() {
-    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release
+    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release suite_ok
     [ -s "$file" ] || return 2
     while IFS= read -r line || [ -n "$line" ]; do
         read -r site release _ <<<"$line"
@@ -5186,9 +5528,17 @@ validate_release_apt_provenance() {
                 fi
                 ;;
             lifetime)
-                if ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
-                    || { [ "$release" != "$codename" ] && [ "$release" != "$codename-updates" ] \
-                        && [ "$release" != "$codename-security" ]; }; then
+                # $codename-backports is part of the official archive only when
+                # it comes from deb.debian.org/debian. The same suite on the
+                # security or snapshot archive is not.
+                suite_ok=0
+                case "$release" in
+                    "$codename"|"$codename-updates"|"$codename-security") suite_ok=1 ;;
+                    "$codename-backports") suite_ok=2 ;;
+                esac
+                if [ "$suite_ok" = 0 ] \
+                    || ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
+                    || { [ "$suite_ok" = 2 ] && ! [[ "$site" =~ ^https?://deb\.debian\.org/debian/?$ ]]; }; then
                     printf 'apt index outside the Debian archive for %s: %s\n' "$codename" "$line" >&2
                     return 1
                 fi
@@ -5197,6 +5547,540 @@ validate_release_apt_provenance() {
         esac
     done <"$file"
     return 0
+}
+
+# Release apt operations use a private configuration. A source file is copied
+# into it only when every index that file contributes passes
+# validate_release_apt_provenance for this phase. Indexes come from
+# `apt-get update --print-uris` on that file alone, against an empty list
+# cache, so a target counts whether or not this machine has already downloaded
+# it and nothing is fetched while classifying. Any other file, including a
+# signed third-party repository, stays where the operator put it and is not
+# consulted. A private package-list cache keeps a higher version from that
+# repository from becoming a candidate, and the real dpkg status is what apt
+# reads, so a package already installed from the operator source is not removed
+# or downgraded. $1 is an absolute directory this function fills. $2 is install
+# or lifetime. $3 is the install snapshot id, empty outside that phase. $4 is
+# the codename. $5 is the operator apt directory, the one that contains
+# sources.list. On success, $1/indexes lists the release indexes. On failure,
+# $1/failure names the provenance refusal and the function returns 1.
+
+# Copy the one Plebian Qt pin into a private apt configuration.
+# $1 is the operator apt directory. $2 is the private configuration
+# directory; its preferences.d must already exist. A regular non-symlink
+# file owned by uid 0 and not group- or world-writable is copied, then
+# mode 0644. Anything else is left alone, including an absent file. A
+# qualifying file that cannot be copied is a failure. Operator pins and
+# the Qt verify hook are not copied.
+copy_release_qt_pin() {
+    local apt_dir="$1" dest="$2"
+    local qt_pin="" qt_owner="" qt_mode=""
+    qt_pin="$apt_dir/preferences.d/plebian-os-qt-runtime"
+    if [ -f "$qt_pin" ] && [ ! -L "$qt_pin" ]; then
+        qt_owner="$(stat -c '%u' -- "$qt_pin" 2>/dev/null || true)"
+        qt_mode="$(stat -c '%a' -- "$qt_pin" 2>/dev/null || true)"
+        case "$qt_mode" in
+            ''|*[!0-9]*) qt_mode="" ;;
+        esac
+        if [ "$qt_owner" = 0 ] && [ -n "$qt_mode" ] \
+                && [ $(( 8#$qt_mode & 022 )) -eq 0 ]; then
+            cp -- "$qt_pin" "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+            chmod 0644 -- "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+        fi
+    fi
+}
+prepare_release_apt_config() {
+    local dest="$1" phase="$2" snapshot="$3" codename="$4" apt_dir="$5"
+    local work="" reason_file="" file="" base="" rel="" staged=""
+    local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
+    local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
+    local main_ok=0 snapshot_only=0 trust_disabled=0
+    local proxy_line="" proxy_key="" proxy_value="" proxy_host="" proxy_ok=0
+    local proxy_userinfo=0 proxy_mode=0644
+    case "$dest" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "$apt_dir" in
+        /*) ;;
+        *) printf '%s\n' "apt source directory must be absolute" >"$dest/failure"
+           return 1 ;;
+    esac
+    case "$phase" in
+        install|lifetime) ;;
+        *) printf '%s\n' "unknown apt provenance phase" >"$dest/failure"
+           return 1 ;;
+    esac
+    [ -d "$dest" ] && [ ! -L "$dest" ] || return 1
+    case "$dest/" in
+        "$apt_dir"/*)
+            printf '%s\n' "release apt configuration must stay outside the operator apt directory" >"$dest/failure"
+            return 1 ;;
+    esac
+    work="$(mktemp -d)" || {
+        printf '%s\n' "could not stage the release apt configuration" >"$dest/failure"
+        return 1
+    }
+    case "$work" in
+        /*) ;;
+        *) work="$PWD/$work" ;;
+    esac
+    reason_file="$dest/failure"
+    mkdir -p -- "$dest/sources.list.d" "$dest/lists/partial" "$dest/archives/partial" \
+        "$dest/cache" "$dest/preferences.d" "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    : >"$dest/sources.list"
+    : >"$dest/preferences"
+    : >"$dest/extended_states"
+    : >"$dest/indexes"
+    # Apt's default Dir::Etc::main is /etc/apt/apt.conf even when APT_CONFIG
+    # names this file, and a command-line -o Dir::Etc::parts is applied after
+    # apt.conf.d has already been read. Set both in this file: main is
+    # /dev/null, and Parts is an empty directory, so the operator apt.conf and
+    # apt.conf.d snippets, including APT::Sources::With, are not part of this
+    # configuration. Validated proxy values are appended afterwards.
+    printf '%s\n' \
+        'Dir::Etc::main "/dev/null";' \
+        "Dir::Etc::Parts \"$dest/apt.conf.d\";" \
+        'APT::Get::AllowUnauthenticated "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowWeakRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'Acquire::Check-Valid-Until "true";' \
+        >"$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    # apt-config dump only parses the operator configuration. Copy string
+    # values of Acquire::{http,https,ftp}::Proxy and a per-host form whose
+    # host matches [A-Za-z0-9.-]+. The value must be DIRECT or an http://,
+    # https://, or socks5h:// URL, with an optional userinfo
+    # [A-Za-z0-9._~%!$&()*+,=:-]+@ before the host. Quotes, semicolons,
+    # braces, backslashes, and whitespace are dropped. The warning names the
+    # key and never prints the value. Any other key, including a proxy
+    # auto-detect program, is left out. A copied proxy cannot forge a
+    # package: the signed Release check still applies.
+    while IFS= read -r proxy_line || [ -n "$proxy_line" ]; do
+        [ -n "$proxy_line" ] || continue
+        case "$proxy_line" in
+            *$'\t'*) ;;
+            *) continue ;;
+        esac
+        proxy_key="${proxy_line%%$'\t'*}"
+        proxy_value="${proxy_line#*$'\t'}"
+        case "$proxy_key" in
+            Acquire::http::Proxy|Acquire::https::Proxy|Acquire::ftp::Proxy)
+                ;;
+            Acquire::http::Proxy::*|Acquire::https::Proxy::*|Acquire::ftp::Proxy::*)
+                proxy_host="${proxy_key#*::Proxy::}"
+                case "$proxy_host" in
+                    ''|*::*|*[!A-Za-z0-9.-]*)
+                        printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+                        continue
+                        ;;
+                esac
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        proxy_ok=0
+        case "$proxy_value" in
+            *"'"*|*'\"'*|*'"'*|*';'*|*'{'*|*'}'*|*[[:space:]]*|*\\*)
+                ;;
+            DIRECT)
+                proxy_ok=1
+                ;;
+            *)
+                if [[ "$proxy_value" =~ ^(http|https|socks5h)://([A-Za-z0-9._~%!$&()*+,=:-]+@)?[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?$ ]]; then
+                    proxy_ok=1
+                    # Group 2 is the optional userinfo, including its @. A
+                    # later @ in the path is not a credential.
+                    if [ -n "${BASH_REMATCH[2]:-}" ]; then
+                        proxy_userinfo=1
+                    fi
+                fi
+                ;;
+        esac
+        if [ "$proxy_ok" -ne 1 ]; then
+            printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+            continue
+        fi
+        printf '%s "%s";\n' "$proxy_key" "$proxy_value" >>"$dest/apt.conf" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done < <(LC_ALL=C env -u APT_CONFIG apt-config dump --no-empty --format '%f%N%v%n' 2>/dev/null || true)
+    # The Plebian Qt pin is part of the release closure. Copy that one
+    # root-owned file when it is a regular file and not group- or
+    # world-writable. Operator pins stay where they are. The updater
+    # copies the pin again after a Qt hop, before install-deps.
+    if ! copy_release_qt_pin "$apt_dir" "$dest"; then
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    fi
+    : >"$work/files"
+    : >"$work/accepted.idx"
+    : >"$work/all.idx"
+    if [ -f "$apt_dir/sources.list" ] && [ ! -L "$apt_dir/sources.list" ]; then
+        printf '%s\n' "$apt_dir/sources.list" >>"$work/files"
+    fi
+    if [ -d "$apt_dir/sources.list.d" ] && [ ! -L "$apt_dir/sources.list.d" ]; then
+        for file in "$apt_dir/sources.list.d"/*; do
+            if [ ! -f "$file" ] || [ -L "$file" ]; then
+                continue
+            fi
+            base="${file##*/}"
+            case "$base" in
+                .*|*~|*.disabled|*.dpkg-old|*.dpkg-new|*.dpkg-dist|*.dpkg-bak) continue ;;
+                *.list|*.sources) ;;
+                *) continue ;;
+            esac
+            printf '%s\n' "$file" >>"$work/files"
+        done
+    fi
+    LC_ALL=C sort -o "$work/files.sorted" "$work/files" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    while IFS= read -r file || [ -n "$file" ]; do
+        [ -n "$file" ] || continue
+        case "$file" in
+            "$apt_dir/sources.list"|"$apt_dir"/sources.list.d/*) ;;
+            *)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rel="${file#"$apt_dir"/}"
+        case "$rel" in
+            *'..'*|*$'\n'*)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rm -rf -- "$work/one"
+        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" \
+            "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        printf '%s\n' \
+            'Dir::Etc::main "/dev/null";' \
+            "Dir::Etc::Parts \"$work/one/apt.conf.d\";" \
+            >"$work/one/apt.conf" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            staged="$work/one/sources.list"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$staged"
+            parts_arg="$work/one/parts"
+        else
+            base="${file##*/}"
+            staged="$work/one/parts/$base"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$work/one/empty.list"
+            parts_arg="$work/one/parts"
+        fi
+        # mktemp is mode 0700. Classification runs apt-get, and a root
+        # caller fetches as the unprivileged _apt user, which cannot
+        # traverse 0700. These files are Debian source lines only.
+        chmod 0755 -- "$work" "$work/one" "$work/one/parts" "$work/one/lists" \
+            "$work/one/lists/partial" "$work/one/cache" "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        chmod 0644 -- "$staged" "$work/one/apt.conf" "$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        apt_rc=0
+        uris="$(env -u APT_CONFIG APT_CONFIG="$work/one/apt.conf" \
+            apt-get update --print-uris \
+            -o "Dir::Etc::SourceList=$list_arg" \
+            -o "Dir::Etc::SourceParts=$parts_arg" \
+            -o "Dir::State::lists=$work/one/lists" \
+            -o "Dir::Cache=$work/one/cache" \
+            -o "Dir::Cache::archives=$work/one/cache" \
+            2>"$work/one/err")" || apt_rc=$?
+        if [ "$apt_rc" != 0 ]; then
+            saw_failure=1
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        printf '%s\n' "$uris" >"$work/one/uris" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/idx"
+        parsed=0
+        bad_line=0
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] || continue
+            case "$line" in
+                \'*) ;;
+                *://*) bad_line=1; continue ;;
+                *) continue ;;
+            esac
+            uri="${line#\'}"
+            uri="${uri%%\'*}"
+            case "$uri" in
+                *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+            esac
+            case "$uri" in
+                *'/dists/'*)
+                    site="${uri%%/dists/*}"
+                    release="${uri#*/dists/}"
+                    release="${release%%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    case "$release" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s %s main amd64\n' "$site" "$release" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+                *)
+                    site="${uri%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s flat main amd64\n' "$site" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+            esac
+        done <"$work/one/uris"
+        if [ "$bad_line" = 1 ] || [ "$parsed" = 0 ]; then
+            if [ "$bad_line" = 1 ]; then
+                saw_failure=1
+                log "operator apt source $file is left unchanged and is not used to install release packages"
+            fi
+            continue
+        fi
+        LC_ALL=C sort -u -o "$work/one/sorted" "$work/one/idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        cat -- "$work/one/sorted" >>"$work/all.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        vrc=0
+        validate_release_apt_provenance "$work/one/sorted" "$phase" "$snapshot" "$codename" >/dev/null 2>&1 || vrc=$?
+        if [ "$vrc" != 0 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        # trusted=yes, allow-insecure, allow-weak, and allow-downgrade-to-insecure
+        # turn signature checks off. check-valid-until=no and check-date=no turn
+        # replay protection off. The install snapshot's own source is the one
+        # exception: its Release files are already expired, so the provisioner
+        # sets Check-Valid-Until: no on snapshot.debian.org and nowhere else.
+        trust_disabled=0
+        if grep -Eiq -e '(^|[^[:alnum:]_-])trusted[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-weak[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-downgrade-to-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            trust_disabled=1
+        elif grep -Eiq -e '(^|[^[:alnum:]_-])check-valid-until[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])check-date[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            snapshot_only=1
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] || continue
+                read -r site release _ <<<"$line"
+                case "$site" in
+                    http://snapshot.debian.org/*|https://snapshot.debian.org/*) ;;
+                    *) snapshot_only=0 ;;
+                esac
+            done <"$work/one/sorted"
+            [ "$snapshot_only" = 1 ] || trust_disabled=1
+        fi
+        if [ "$trust_disabled" = 1 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            if ! cp -a -- "$staged" "$dest/sources.list"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        else
+            if [ -e "$dest/sources.list.d/$base" ]; then
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1
+            fi
+            if ! cp -a -- "$staged" "$dest/sources.list.d/$base"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        fi
+        cat -- "$work/one/sorted" >>"$work/accepted.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done <"$work/files.sorted"
+    LC_ALL=C sort -u -o "$dest/indexes" "$work/accepted.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    LC_ALL=C sort -u -o "$work/all.sorted" "$work/all.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    rc=0
+    if [ ! -s "$dest/indexes" ]; then
+        rc=2
+    elif ! validate_release_apt_provenance "$dest/indexes" "$phase" "$snapshot" "$codename" >/dev/null 2>&1; then
+        rc=1
+    fi
+    if [ "$rc" != 0 ]; then
+        if [ -s "$work/all.sorted" ]; then
+            validate_release_apt_provenance "$work/all.sorted" "$phase" "$snapshot" "$codename" >/dev/null || rc=$?
+        elif [ "$saw_failure" = 1 ]; then
+            printf '%s\n' "could not list the configured apt indexes" >"$reason_file"
+            rm -rf -- "$work"
+            return 1
+        else
+            rc=2
+        fi
+        if [ "$rc" = 0 ]; then
+            rc=2
+        fi
+        if [ "$rc" = 2 ]; then
+            printf '%s\n' "release apt index provenance is empty" >"$reason_file"
+        elif [ "$phase" = install ]; then
+            printf '%s\n' "release install closure resolved from an index other than snapshot $snapshot" >"$reason_file"
+        else
+            printf '%s\n' "release apt provenance contains an index outside the Debian archive" >"$reason_file"
+        fi
+        rm -rf -- "$work"
+        return 1
+    fi
+    # Security alone must not pass. The accepted set has to include the
+    # codename's main suite, from the Debian archive in the lifetime phase and
+    # from the install snapshot in the install phase. A mixed file that was
+    # excluded can otherwise leave only trixie-security behind.
+    main_ok=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        read -r site release _ <<<"$line"
+        [ "$release" = "$codename" ] || continue
+        case "$phase" in
+            install)
+                [ "$site" = "https://snapshot.debian.org/archive/debian/$snapshot" ] && main_ok=1
+                ;;
+            lifetime)
+                case "$site" in
+                    http://deb.debian.org/debian|https://deb.debian.org/debian|http://deb.debian.org/debian/|https://deb.debian.org/debian/)
+                        main_ok=1 ;;
+                    http://snapshot.debian.org/archive/debian/*|https://snapshot.debian.org/archive/debian/*)
+                        main_ok=1 ;;
+                esac
+                ;;
+        esac
+    done <"$dest/indexes"
+    if [ "$main_ok" != 1 ]; then
+        printf 'release apt provenance is missing the %s main archive\n' "$codename" >"$reason_file"
+        rm -rf -- "$work"
+        return 1
+    fi
+    # The finished directory is handed to root apt. _apt must be able to
+    # traverse it. apt.conf is mode 0600 when a copied proxy contains
+    # userinfo, because that value is a credential. The other files stay
+    # mode 0644.
+    if [ "$proxy_userinfo" = 1 ]; then
+        proxy_mode=0600
+    fi
+    chmod 0755 -- "$dest" "$dest/sources.list.d" "$dest/lists" "$dest/lists/partial" \
+        "$dest/archives" "$dest/archives/partial" "$dest/cache" "$dest/preferences.d" \
+        "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod 0644 -- "$dest/sources.list" "$dest/preferences" "$dest/extended_states" \
+        "$dest/indexes" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod "$proxy_mode" -- "$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    for file in "$dest/sources.list.d"/*; do
+        if [ ! -f "$file" ] || [ -L "$file" ]; then
+            continue
+        fi
+        chmod 0644 -- "$file" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done
+    rm -rf -- "$work"
+    return 0
+}
+
+# apt-get for a configuration prepare_release_apt_config built. The operator's
+# sources, pins, and list cache are not on this command line.
+release_apt_get() {
+    local config="$1"
+    shift
+    env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
+    apt-get \
+        -o DPkg::Lock::Timeout=600 \
+        -o "Dir::Etc::SourceList=$config/sources.list" \
+        -o "Dir::Etc::SourceParts=$config/sources.list.d" \
+        -o "Dir::State::lists=$config/lists" \
+        -o "Dir::State::status=${PLEBIAN_OS_DPKG_STATUS:-/var/lib/dpkg/status}" \
+        -o "Dir::State::extended_states=${PLEBIAN_OS_APT_EXTENDED_STATES:-/var/lib/apt/extended_states}" \
+        -o "Dir::Cache=$config/cache" \
+        -o "Dir::Cache::archives=$config/archives" \
+        -o "Dir::Cache::pkgcache=$config/cache/pkgcache.bin" \
+        -o "Dir::Cache::srcpkgcache=$config/cache/srcpkgcache.bin" \
+        -o "Dir::Etc::Preferences=$config/preferences" \
+        -o "Dir::Etc::PreferencesParts=$config/preferences.d" \
+        "$@"
 }
 
 # Prints why the recorded apt indexes in $1 break this run's provenance phase
@@ -5281,7 +6165,7 @@ write_source_tool_manifest() {
         return 0
     fi
     local state=/var/lib/plebian-os versions_tmp sources_tmp
-    local plebian_os_commit pleb_commit kilix_commit kilix_source_commit kilix95_commit
+    local plebian_os_commit pleb_commit kilix_commit kilix_source_commit kilix95_commit neuronte_commit
     local pleb_version kilix_version kilix95_version go_version engine engine_version uv_version
     mkdir -p "$state"
     versions_tmp="$(mktemp "$state/.versions.env.XXXXXX")"
@@ -5292,6 +6176,7 @@ write_source_tool_manifest() {
     kilix_commit="$(as_user git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
     kilix_source_commit="$(as_user git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
     kilix95_commit="$(as_user git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
+    neuronte_commit="$(installed_neuronte_commit)"
     pleb_version="$(as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
     kilix_version="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
     if [ -f "$KILIX95_DIR/main.py" ]; then
@@ -5299,7 +6184,11 @@ write_source_tool_manifest() {
     else
         kilix95_version=""
     fi
-    go_version="$(as_user bash -lc 'go version' 2>/dev/null || true)"
+    if [ -n "${KILIX_GO_DEBIAN_VERSION:-}" ]; then
+        go_version="$(GOTOOLCHAIN=local /usr/lib/go-1.27/bin/go version 2>/dev/null || true)"
+    else
+        go_version="$(as_user bash -lc 'go version' 2>/dev/null || true)"
+    fi
     uv_version="$(/usr/local/bin/uv --version 2>/dev/null || true)"
     engine="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
     if [ -n "$engine" ] && [ -x "$engine" ]; then
@@ -5413,6 +6302,9 @@ write_source_tool_manifest() {
         provenance_kv KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
         provenance_kv KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
         provenance_kv KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+        provenance_kv NEURONTE_REPO "$NEURONTE_REPO"
+        provenance_kv NEURONTE_REF "$NEURONTE_REF"
+        provenance_kv NEURONTE_COMMIT "$neuronte_commit"
         # Waydroid is an optional catalog application. Its legacy system
         # archive exists only on machines that installed it before lazy delivery.
         if [ -e /usr/local/share/kilix-waydroid/source.tar ] \
@@ -5427,8 +6319,17 @@ write_source_tool_manifest() {
             provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "${waydroid_source_sha%% *}"
         fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "$KILIX_GO_DEBIAN_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE "$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT "$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL "$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
         provenance_kv GO_VERSION "$go_version"
         provenance_kv PLEBIAN_OS_INSTALL_UV "$INSTALL_UV"
         provenance_kv PLEBIAN_OS_UV_VERSION "$UV_VERSION_PIN"
@@ -5440,10 +6341,24 @@ write_source_tool_manifest() {
         provenance_kv KERNEL_VERSION "$(uname -srmo 2>/dev/null || true)"
     } > "$versions_tmp"
 
-    apt-get indextargets \
-        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
-        | sed '/^[[:space:]]*$/d' | sort -u > "$sources_tmp" \
-        || { rm -f "$versions_tmp" "$sources_tmp"; die "could not record final apt source indexes"; }
+    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
+        # The indexes this install actually used. Preparing again would
+        # classify the apt directory as it is now, which can differ.
+        if [ -z "${PROVISION_RELEASE_APT_CONFIG:-}" ] || [ -L "$PROVISION_RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$PROVISION_RELEASE_APT_CONFIG/indexes" ]; then
+            rm -f "$versions_tmp" "$sources_tmp"
+            die "release apt configuration is missing; refusing to record system apt indexes"
+        fi
+        cp -a -- "$PROVISION_RELEASE_APT_CONFIG/indexes" "$sources_tmp" || {
+            rm -f "$versions_tmp" "$sources_tmp"
+            die "could not record final apt source indexes"
+        }
+    else
+        apt-get indextargets \
+            --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
+            | sed '/^[[:space:]]*$/d' | sort -u > "$sources_tmp" \
+            || { rm -f "$versions_tmp" "$sources_tmp"; die "could not record final apt source indexes"; }
+    fi
     if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
         require_release_apt_provenance "$sources_tmp" "$versions_tmp"
         [ "$plebian_os_commit" = "${PLEBIAN_OS_REF,,}" ] \
@@ -5519,7 +6434,7 @@ has_fresh_identity_profile() {
     IFS= read -r profile < "$IDENTITY_PROFILE_RECORD" \
         || die "identity-profile record is empty"
     case "$profile" in
-        interactive-v1|automated-v1) return 0 ;;
+        interactive-v1|automated-v1) IDENTITY_PROFILE_NAME="$profile"; return 0 ;;
         *) die "unknown identity-profile record: $profile" ;;
     esac
 }
@@ -5795,6 +6710,18 @@ install_kilix_needle() {
         || die "required Needle application installation failed"
 }
 
+# Claudex is catalog-pinned and does not auto-install. The image installs that
+# pin explicitly. Agent logins and account checks stay out of this step.
+install_kilix_claudex() {
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install the catalog-pinned Claudex application as $TARGET_USER"
+        return 0
+    fi
+    as_user env "${install_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-claudex \
+        || die "required Claudex application installation failed"
+}
+
 # kilix-llm runs the optional qwen-0.8b-no-loop-02 chat model (LLM Chat and
 # Kilix Avatar rows). Kilix pins its revision; the installer places the
 # launcher and a shallow copy of the pinned llama.cpp source, so the rows'
@@ -5811,6 +6738,95 @@ install_kilix_llm() {
         || die "required kilix-llm installer is missing or unsafe: $installer"
     as_user env "${install_env[@]}" "$installer" \
         || die "required kilix-llm installation failed"
+}
+
+# The Neuronte faces Kilix 95 reads (releases/0.2.3.env NEURONTE_REF): the pinned
+# files listed in provision/neuronte-payload.json, with build/libneuronte.so built
+# from their C source, in the desktop user's $GPU_TERMINAL_SOURCE_HOME/neuronte.
+# The image carries them as /usr/local/share/plebian-os/neuronte-<ref>.tar.xz, so
+# an installation from it needs no network; without that archive (a bootstrap
+# onto plain Debian) the pinned files are fetched. Either way each file is checked
+# against its pinned git blob id before anything is built. A tree the installer
+# did not write, or one changed since, is refused, and NEURONTE_HOME naming the
+# destination leaves it alone. Every failure here fails the provision.
+NEURONTE_IMAGE_ARCHIVE_DIR=/usr/local/share/plebian-os
+install_neuronte() {
+    [ -n "$NEURONTE_REF" ] || return 0
+    [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Neuronte requires an exact NEURONTE_REF commit"
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
+        || die "Neuronte requires the canonical NEURONTE_REPO"
+    local file installer="$PLEBIAN_OS_DIR/provision/install-neuronte.py"
+    local manifest="$PLEBIAN_OS_DIR/provision/neuronte-payload.json"
+    local archive="$NEURONTE_IMAGE_ARCHIVE_DIR/neuronte-$NEURONTE_REF.tar.xz"
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would install Neuronte ${NEURONTE_REF:0:12} into $GPU_TERMINAL_SOURCE_HOME/neuronte as $TARGET_USER"
+        return 0
+    fi
+    for file in "$installer" "$manifest"; do
+        [ -f "$file" ] && [ ! -L "$file" ] \
+            || die "required Neuronte installer file is missing or unsafe: $file"
+    done
+    if [ -e "$archive" ] || [ -L "$archive" ]; then
+        [ -f "$archive" ] && [ ! -L "$archive" ] \
+            || die "the image's Neuronte archive is unsafe: $archive"
+        log "installing Neuronte ${NEURONTE_REF:0:12} from the image"
+    else
+        log "installing Neuronte ${NEURONTE_REF:0:12} from $NEURONTE_REPO"
+    fi
+    as_user env "${install_env[@]}" /usr/bin/python3 "$installer" install \
+        --manifest "$manifest" --ref "$NEURONTE_REF" --repo "$NEURONTE_REPO" \
+        --destination "$GPU_TERMINAL_SOURCE_HOME/neuronte" --archive "$archive" \
+        || die "required Neuronte installation failed"
+    # Kilix 95's caches are prepared once, by prepare_kilix95_caches, after
+    # the last step that installs desktop sources.
+}
+
+# Kilix 95's caches for the desktop user, written ahead of the first start:
+# its own, the Kilix SDK's and the SDK's pinned packages' bytecode (Kilix 95
+# keeps it in a private cache, so without this the first desktop start
+# compiles it, and each application its own on first open) and the two
+# start-up Neuronte letter caches. `main.py --prepare-cache` is Kilix 95's
+# entry point for both. It runs main.py's own storage bootstrap, so the cache
+# is the one the desktop reads, and it rewrites only stale files. KILIX_HOME
+# is computed the way the kilix launcher computes it for the desktop (the
+# directory of the resolved launcher), so the SDK paths in the cache are the
+# paths the desktop imports. It runs after install_neuronte, so the letter
+# caches are those of the installed Neuronte. It is a cache: every failure is
+# a warning, and a desktop that finds a file missing builds it, as it always
+# has. Release images run this on first boot, where provisioning holds the
+# greeter until it is done, so no session can start before it.
+KILIX95_PREPARE_CACHE_TIMEOUT=600s
+prepare_kilix95_caches() {
+    local main="$KILIX95_DIR/main.py" launcher
+    [ "$PLEB_INSTALL_KILIX95" = 1 ] || return 0
+    if [ "$DRY_RUN" = 1 ]; then
+        log "would prepare Kilix 95 bytecode and font caches for $TARGET_USER"
+        return 0
+    fi
+    if [ ! -f "$main" ] || [ -L "$main" ]; then
+        warn "Kilix 95 caches not prepared: $main is missing; the desktop will build them at launch"
+        return 0
+    fi
+    launcher="$(readlink -f -- "$KILIX_DIR/kilix" 2>/dev/null)" && [ -f "$launcher" ] || {
+        warn "Kilix 95 caches not prepared: no kilix launcher in $KILIX_DIR"
+        return 0
+    }
+    log "preparing Kilix 95 bytecode and font caches for $TARGET_USER"
+    as_user env "${install_env[@]}" "KILIX_HOME=${launcher%/*}" \
+        /usr/bin/timeout --signal=TERM --kill-after=10s "$KILIX95_PREPARE_CACHE_TIMEOUT" \
+        /usr/bin/python3 "$main" --prepare-cache \
+        || warn "Kilix 95 cache preparation did not complete; the desktop will retry at launch"
+    return 0
+}
+
+# The commit the installed Neuronte tree records, or nothing.
+installed_neuronte_commit() {
+    local record="$GPU_TERMINAL_SOURCE_HOME/neuronte/.plebian-os-neuronte.json"
+    [ -f "$record" ] && [ ! -L "$record" ] || return 0
+    python3 -I -c 'import json, re, sys
+commit = json.load(open(sys.argv[1])).get("commit", "")
+print(commit if re.fullmatch("[0-9a-f]{40}", str(commit)) else "")' "$record" 2>/dev/null || true
 }
 
 install_kilix_secrets() {
@@ -5902,6 +6918,429 @@ install_kilix_secrets() {
     rm -rf -- "$stage" || die "could not clean Kilix Secrets staging"
 }
 
+# True when root owns a real directory and neither group nor other can write
+# it. When traversable is 1, other users must also be able to execute it.
+# Returns 1 when the path is missing, a symlink, not owned by root, group- or
+# other-writable, or (when traversable is 1) not executable by other users.
+waydroid_directory_is_root_safe() {
+    local dir="$1" traversable="${2:-0}" owner mode
+    [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
+    owner="$(stat -c '%u' -- "$dir" 2>/dev/null)" || return 1
+    mode="$(stat -c '%a' -- "$dir" 2>/dev/null)" || return 1
+    [ "$owner" = 0 ] || return 1
+    (( (8#$mode & 8#022) == 0 )) || return 1
+    if [ "$traversable" = 1 ]; then
+        (( (8#$mode & 8#001) != 0 )) || return 1
+    fi
+    return 0
+}
+
+# Copy one user-owned source into a root-private file.
+#
+# Open the source exactly once with O_NOFOLLOW and copy from that descriptor.
+# A same-user replacement of the path cannot make this follow a symlink or
+# FIFO, and cannot change the bytes already read. The size bounds match the
+# updater's root deploy of these three files, except the pin bound is large
+# enough that a slightly long pin still fails the trailing-data check by name.
+waydroid_copy_owned_source() {
+    python3 - "$1" "$2" "$3" "$4" <<'PY'
+import errno
+import os
+import stat
+import sys
+
+source, destination, owner_text, limit_text = sys.argv[1:]
+owner = int(owner_text)
+limit = int(limit_text)
+read_flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW
+write_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW
+source_fd = None
+destination_fd = None
+try:
+    try:
+        source_fd = os.open(source, read_flags)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise SystemExit("Waydroid source is a symlink: " + source)
+        if exc.errno == errno.ENOENT:
+            raise SystemExit("Waydroid source is missing: " + source)
+        raise SystemExit("could not open Waydroid source: " + source)
+    info = os.fstat(source_fd)
+    if not stat.S_ISREG(info.st_mode):
+        raise SystemExit("Waydroid source is not a regular file: " + source)
+    if info.st_uid != owner:
+        raise SystemExit("Waydroid source is not owned by the target user: " + source)
+    if info.st_mode & 0o022:
+        raise SystemExit("Waydroid source is group or world writable: " + source)
+    if info.st_size > limit:
+        raise SystemExit("Waydroid source exceeds its copy limit: " + source)
+    try:
+        destination_fd = os.open(destination, write_flags, 0o600)
+    except OSError:
+        raise SystemExit("could not create Waydroid private copy: " + destination)
+    if os.geteuid() == 0:
+        os.fchown(destination_fd, 0, 0)
+    os.fchmod(destination_fd, 0o600)
+    total = 0
+    while True:
+        chunk = os.read(source_fd, min(1024 * 1024, limit + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise SystemExit("Waydroid source grew beyond its copy limit: " + source)
+        view = memoryview(chunk)
+        while view:
+            written = os.write(destination_fd, view)
+            view = view[written:]
+    os.fsync(destination_fd)
+except BaseException:
+    if destination_fd is not None:
+        os.close(destination_fd)
+        destination_fd = None
+        try:
+            os.unlink(destination)
+        except FileNotFoundError:
+            pass
+    raise
+finally:
+    if source_fd is not None:
+        os.close(source_fd)
+    if destination_fd is not None:
+        os.close(destination_fd)
+PY
+}
+
+# Stage the root-owned first-use helper from the Plebian-OS checkout.
+#
+# The updater always publishes these three files. A fresh install used to
+# publish them only when INSTALL_WAYDROID=1, and 0.2.3 leaves that flag at 0,
+# so kilix-waydroid had no helper until the first update. Staging is not the
+# application install and does not download Android. The closure is amd64-only,
+# so other architectures stay unstaged. The flag still means "do not install
+# the application": this function never calls install_waydroid_application.
+#
+# The checkout is owned by the target user. Copy each source once into a
+# root-private stage, verify that stage, then publish with mv -fT from a
+# temporary name in the destination directory. A symlink or FIFO swapped in
+# after verification is not what gets published, and the open does not block.
+#
+# Library fixtures may set PLEBIAN_OS_WAYDROID_HELPER_DEST,
+# PLEBIAN_OS_WAYDROID_FIXED_ROOT, PLEBIAN_OS_WAYDROID_STAGE_PARENT, and
+# PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE. The script returns before its main
+# steps when PLEBIAN_OS_PROVISION_LIB_ONLY=1, so a real provision run never
+# honors those variables.
+stage_waydroid_first_use_helper() {
+    local machine install_dir waydroid_root setup closure pin_source actual pinned
+    local parent dest name owner mode links stage_parent expected_owner
+    local staged_setup staged_closure staged_pin pin
+    local setup_new closure_new pin_new err stage_base
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64) ;;
+        *)
+            # refuse_amd64_only_inputs already exited on this combination.
+            # Repeat it so a direct call cannot stage the amd64 closure.
+            [ "$INSTALL_WAYDROID" != 1 ] \
+                || die "PLEBIAN_OS_INSTALL_WAYDROID=1 selects the amd64-only Waydroid closure, but this machine is $machine; set PLEBIAN_OS_INSTALL_WAYDROID=0 and an empty PLEBIAN_OS_WAYDROID_CLOSURE_SHA256"
+            return 0
+            ;;
+    esac
+
+    install_dir=/usr/lib/plebian-os/waydroid
+    waydroid_root=/
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+            && [ -n "${PLEBIAN_OS_WAYDROID_FIXED_ROOT:-}" ]; then
+        case "$PLEBIAN_OS_WAYDROID_FIXED_ROOT" in
+            *$'\n'*|*$'\r'*) die "unsafe Waydroid fixed-root test seam" ;;
+        esac
+        waydroid_root="$(realpath -m -- "$PLEBIAN_OS_WAYDROID_FIXED_ROOT")" \
+            || die "unsafe Waydroid fixed-root test seam"
+        case "$waydroid_root" in
+            /|/usr|/usr/lib|/usr/lib/plebian-os|/usr/lib/plebian-os/*)
+                die "Waydroid fixed-root test seam cannot replace a system path"
+                ;;
+            /*) ;;
+            *) die "Waydroid fixed-root test seam must be absolute" ;;
+        esac
+        install_dir="$waydroid_root/usr/lib/plebian-os/waydroid"
+    fi
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+            && [ -n "${PLEBIAN_OS_WAYDROID_HELPER_DEST:-}" ]; then
+        case "$PLEBIAN_OS_WAYDROID_HELPER_DEST" in
+            *$'\n'*|*$'\r'*) die "unsafe Waydroid helper test destination" ;;
+            /*) ;;
+            *) die "Waydroid helper test destination must be absolute" ;;
+        esac
+        # realpath would turn a symlink destination into its target. Keep the
+        # raw path so the directory symlink check below still sees it.
+        if [ -L "$PLEBIAN_OS_WAYDROID_HELPER_DEST" ]; then
+            install_dir="$PLEBIAN_OS_WAYDROID_HELPER_DEST"
+        else
+            install_dir="$(realpath -m -- "$PLEBIAN_OS_WAYDROID_HELPER_DEST")" \
+                || die "unsafe Waydroid helper test destination"
+            case "$install_dir" in
+            /usr/lib/plebian-os/waydroid|/|/usr|/usr/lib|/usr/lib/plebian-os)
+                    die "Waydroid helper test destination cannot replace a fixed system path"
+                    ;;
+                /usr/lib/plebian-os/*)
+                    die "Waydroid helper test destination is under /usr/lib/plebian-os"
+                    ;;
+                /*) ;;
+                *) die "unsafe Waydroid helper test destination" ;;
+            esac
+        fi
+    fi
+
+    setup="$PLEBIAN_OS_DIR/provision/plebian-os-waydroid-setup"
+    closure="$PLEBIAN_OS_DIR/provision/waydroid-closure.env"
+    pin_source="$PLEBIAN_OS_DIR/provision/waydroid-closure.sha256"
+    if [ -L "$setup" ]; then
+        die "Waydroid setup file is a symlink: $setup"
+    fi
+    if [ ! -e "$setup" ]; then
+        die "Waydroid setup file is missing: $setup"
+    fi
+    if [ ! -f "$setup" ]; then
+        die "Waydroid setup file is not a regular file: $setup"
+    fi
+    if [ ! -f "$setup" ] || [ -L "$setup" ] || [ ! -x "$setup" ]; then
+        die "Waydroid setup file is not executable: $setup"
+    fi
+    if [ -L "$closure" ]; then
+        die "Waydroid closure file is a symlink: $closure"
+    fi
+    if [ ! -e "$closure" ]; then
+        die "Waydroid closure file is missing: $closure"
+    fi
+    if [ ! -f "$closure" ]; then
+        die "Waydroid closure file is not a regular file: $closure"
+    fi
+    if [ -L "$pin_source" ]; then
+        die "Waydroid closure pin is a symlink: $pin_source"
+    fi
+    if [ ! -e "$pin_source" ]; then
+        die "Waydroid closure pin is missing: $pin_source"
+    fi
+    if [ ! -f "$pin_source" ]; then
+        die "Waydroid closure pin is not a regular file: $pin_source"
+    fi
+
+    if [ "$install_dir" = /usr/lib/plebian-os/waydroid ]; then
+        for parent in / /usr /usr/lib; do
+            waydroid_directory_is_root_safe "$parent" 1 \
+                || die "unsafe Waydroid first-use ancestor: $parent"
+        done
+        if [ -e /usr/lib/plebian-os ] || [ -L /usr/lib/plebian-os ]; then
+            waydroid_directory_is_root_safe /usr/lib/plebian-os 1 \
+                || die "unsafe Waydroid first-use parent: /usr/lib/plebian-os"
+        fi
+    elif [ "$waydroid_root" != / ] \
+            && [ "$install_dir" = "$waydroid_root/usr/lib/plebian-os/waydroid" ]; then
+        for parent in "$waydroid_root" "$waydroid_root/usr" "$waydroid_root/usr/lib"; do
+            waydroid_directory_is_root_safe "$parent" 1 \
+                || die "unsafe Waydroid first-use ancestor: $parent"
+        done
+        if [ -e "$waydroid_root/usr/lib/plebian-os" ] \
+                || [ -L "$waydroid_root/usr/lib/plebian-os" ]; then
+            waydroid_directory_is_root_safe "$waydroid_root/usr/lib/plebian-os" 1 \
+                || die "unsafe Waydroid first-use parent: $waydroid_root/usr/lib/plebian-os"
+        fi
+    else
+        parent="$(dirname -- "$install_dir")"
+        waydroid_directory_is_root_safe "$parent" 1 \
+            || die "unsafe Waydroid first-use parent: $parent"
+    fi
+
+    if [ -L "$install_dir" ]; then
+        die "Waydroid first-use directory is a symlink: $install_dir"
+    elif [ -e "$install_dir" ] && [ ! -d "$install_dir" ]; then
+        die "Waydroid first-use path is not a directory: $install_dir"
+    elif [ -d "$install_dir" ]; then
+        waydroid_directory_is_root_safe "$install_dir" 1 \
+            || die "unsafe Waydroid first-use directory: $install_dir"
+    fi
+    if [ -d "$install_dir" ]; then
+        for name in plebian-os-waydroid-setup waydroid-closure.env waydroid-closure.sha256; do
+            dest="$install_dir/$name"
+            if [ -L "$dest" ]; then
+                die "Waydroid first-use file is a symlink: $dest"
+            fi
+            if [ -e "$dest" ] && [ ! -f "$dest" ]; then
+                die "Waydroid first-use path is not a regular file: $dest"
+            fi
+        done
+    fi
+
+    log "staging the Plebian-OS Waydroid first-use closure"
+    case "${TARGET_UID:-}" in
+        ''|*[!0-9]*) die "Waydroid first-use staging requires the target user id" ;;
+    esac
+
+    stage_parent="${TMPDIR:-/tmp}"
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+            && [ -n "${PLEBIAN_OS_WAYDROID_STAGE_PARENT:-}" ]; then
+        stage_parent="$PLEBIAN_OS_WAYDROID_STAGE_PARENT"
+        waydroid_directory_is_root_safe "$stage_parent" 0 \
+            || die "unsafe Waydroid private-stage parent: $stage_parent"
+        [ "$(stat -c '%a' -- "$stage_parent")" = 700 ] \
+            || die "Waydroid private-stage parent is not mode 0700: $stage_parent"
+    fi
+    WAYDROID_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_DIR=""
+    WAYDROID_PRIVATE_STAGE="$(mktemp -d "$stage_parent/plebian-os-waydroid.XXXXXX")" \
+        || die "could not create the Waydroid private stage"
+    stage_base="${WAYDROID_PRIVATE_STAGE##*/}"
+    if [[ ! "$stage_base" =~ ^plebian-os-waydroid\.[A-Za-z0-9]{6}$ ]] \
+            || [ "$WAYDROID_PRIVATE_STAGE" != "$stage_parent/$stage_base" ] \
+            || [ -L "$WAYDROID_PRIVATE_STAGE" ] \
+            || [ ! -d "$WAYDROID_PRIVATE_STAGE" ]; then
+        WAYDROID_PRIVATE_STAGE=""
+        die "could not create the Waydroid private stage"
+    fi
+    WAYDROID_RECORDED_STAGE_PARENT="$stage_parent"
+    WAYDROID_RECORDED_PRIVATE_STAGE="$WAYDROID_PRIVATE_STAGE"
+    chmod 0700 -- "$WAYDROID_PRIVATE_STAGE" \
+        || die "could not restrict the Waydroid private stage"
+    expected_owner="$(id -u)"
+    [ "$(stat -c '%u:%a' -- "$WAYDROID_PRIVATE_STAGE")" = "${expected_owner}:700" ] \
+        || die "unsafe Waydroid private stage"
+    staged_setup="$WAYDROID_PRIVATE_STAGE/plebian-os-waydroid-setup"
+    staged_closure="$WAYDROID_PRIVATE_STAGE/waydroid-closure.env"
+    staged_pin="$WAYDROID_PRIVATE_STAGE/waydroid-closure.sha256"
+    if ! err="$(waydroid_copy_owned_source "$setup" "$staged_setup" "$TARGET_UID" 1048576 2>&1)"; then
+        die "${err:-could not copy the Waydroid setup file}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$closure" "$staged_closure" "$TARGET_UID" 65536 2>&1)"; then
+        die "${err:-could not copy the Waydroid closure}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$pin_source" "$staged_pin" "$TARGET_UID" 4096 2>&1)"; then
+        die "${err:-could not copy the Waydroid closure pin}"
+    fi
+
+    actual="$(sha256sum -- "$staged_closure" | awk '{print $1}')" \
+        || die "could not hash the Waydroid closure"
+    IFS= read -r pinned <"$staged_pin" \
+        || die "could not read the Waydroid closure pin"
+    pin="$staged_pin"
+    printf '%s\n' "$pinned" | cmp -s - "$pin" \
+        || die "Waydroid closure pin has trailing data"
+    if ! [[ "$pinned" =~ ^[0-9a-f]{64}$ ]] \
+            || [ "$actual" != "$pinned" ]; then
+        die "pinned Plebian-OS checkout has a mismatched Waydroid closure"
+    fi
+    if [ -n "$WAYDROID_CLOSURE_SHA256" ]; then
+        [ "$actual" = "$WAYDROID_CLOSURE_SHA256" ] \
+            || die "release Waydroid closure differs from the pinned checkout"
+    fi
+    # The private copy is created 0600. The flag-1 dry run executes it, so the
+    # owner needs the execute bit while it still lives in the 0700 stage.
+    chmod 0700 -- "$staged_setup" \
+        || die "could not set the staged Waydroid helper mode"
+    setup="$staged_setup"
+    bash -n "$setup" || die "invalid Waydroid first-use helper"
+
+    if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 ] \
+            && [ -n "${PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE:-}" ]; then
+        [[ "${PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] \
+            || die "unsafe Waydroid test hook"
+        "${PLEBIAN_OS_WAYDROID_TEST_AFTER_STAGE}" \
+            || die "Waydroid test hook failed"
+    fi
+
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + install root-owned first-use helper + closure -> $install_dir"
+        # Preview Android only when the application feature is selected. With
+        # the flag at 0 the plan is the helper copy and nothing else.
+        # set +e keeps a failing preview from skipping the stage release.
+        preview_rc=0
+        set +e
+        if [ "$INSTALL_WAYDROID" = 1 ]; then
+            env PLEBIAN_OS_WAYDROID_CLOSURE_SHA256="$actual" \
+                "$setup" --dry-run
+        fi
+        preview_rc=$?
+        set -e
+        waydroid_release_private_stage
+        [ "$preview_rc" = 0 ] || die "Waydroid first-use helper preview failed"
+        return 0
+    fi
+
+    [ "$(id -u)" = 0 ] || die "Waydroid first-use staging requires root"
+    if [ ! -d "$install_dir" ]; then
+        install -d -o root -g root -m 0755 -- "$install_dir" \
+            || die "could not create the Waydroid first-use directory"
+    fi
+    waydroid_directory_is_root_safe "$install_dir" 1 \
+        || die "unsafe Waydroid first-use directory: $install_dir"
+
+    setup_new="$install_dir/.plebian-os-waydroid-setup.plebian-os-new.$$"
+    closure_new="$install_dir/.waydroid-closure.env.plebian-os-new.$$"
+    pin_new="$install_dir/.waydroid-closure.sha256.plebian-os-new.$$"
+    WAYDROID_PUBLISH_TEMPS="$setup_new"$'\n'"$closure_new"$'\n'"$pin_new"
+    WAYDROID_RECORDED_PUBLISH_TEMPS="$WAYDROID_PUBLISH_TEMPS"
+    WAYDROID_RECORDED_PUBLISH_DIR="$install_dir"
+    if ! err="$(waydroid_copy_owned_source "$staged_setup" "$setup_new" 0 1048576 2>&1)"; then
+        die "${err:-could not publish the Waydroid setup file}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$staged_closure" "$closure_new" 0 65536 2>&1)"; then
+        die "${err:-could not publish the Waydroid closure}"
+    fi
+    if ! err="$(waydroid_copy_owned_source "$staged_pin" "$pin_new" 0 4096 2>&1)"; then
+        die "${err:-could not publish the Waydroid closure pin}"
+    fi
+    # Root owns the private copies. chmod then rename so a reader never sees a
+    # partial file under the published name. Match the updater's mv -fT.
+    chmod 0755 -- "$setup_new" \
+        || die "could not set the Waydroid helper mode"
+    chmod 0644 -- "$closure_new" \
+        || die "could not set the Waydroid closure mode"
+    chmod 0644 -- "$pin_new" \
+        || die "could not set the Waydroid closure pin mode"
+    mv -fT -- "$setup_new" "$install_dir/plebian-os-waydroid-setup" \
+        || die "could not publish the Waydroid first-use helper"
+    mv -fT -- "$closure_new" "$install_dir/waydroid-closure.env" \
+        || die "could not publish the Waydroid closure"
+    mv -fT -- "$pin_new" "$install_dir/waydroid-closure.sha256" \
+        || die "could not publish the Waydroid closure pin"
+    WAYDROID_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_TEMPS=""
+    WAYDROID_RECORDED_PUBLISH_DIR=""
+
+    cmp -s -- "$staged_setup" "$install_dir/plebian-os-waydroid-setup" \
+        || die "staged Waydroid helper bytes differ from the private stage"
+    cmp -s -- "$staged_closure" "$install_dir/waydroid-closure.env" \
+        || die "staged Waydroid closure bytes differ from the private stage"
+    cmp -s -- "$staged_pin" "$install_dir/waydroid-closure.sha256" \
+        || die "staged Waydroid closure pin differs from the private stage"
+    IFS= read -r pinned <"$install_dir/waydroid-closure.sha256" \
+        || die "could not read the staged Waydroid closure pin"
+    actual="$(sha256sum -- "$install_dir/waydroid-closure.env")" \
+        || die "could not hash the staged Waydroid closure"
+    [[ "$pinned" =~ ^[0-9a-f]{64}$ ]] \
+        && [ "${actual%% *}" = "$pinned" ] \
+        || die "Waydroid closure checksum mismatch"
+    bash -n "$install_dir/plebian-os-waydroid-setup" \
+        || die "invalid Waydroid first-use helper"
+    for name in plebian-os-waydroid-setup waydroid-closure.env waydroid-closure.sha256; do
+        dest="$install_dir/$name"
+        [ -f "$dest" ] && [ ! -L "$dest" ] \
+            || die "staged Waydroid first-use file is unsafe: $dest"
+        owner="$(stat -c '%u' -- "$dest")"
+        mode="$(stat -c '%a' -- "$dest")"
+        links="$(stat -c '%h' -- "$dest")"
+        case "$name" in
+            plebian-os-waydroid-setup) [ "$mode" = 755 ] || die "staged Waydroid helper mode is $mode" ;;
+            *) [ "$mode" = 644 ] || die "staged Waydroid closure mode is $mode" ;;
+        esac
+        [ "$owner" = 0 ] && [ "$links" = 1 ] \
+            || die "staged Waydroid first-use file is not a root-owned regular file: $dest"
+        mode="$(stat -c '%g' -- "$dest")"
+        [ "$mode" = 0 ] || die "staged Waydroid first-use file is not root-group: $dest"
+    done
+    waydroid_release_private_stage
+}
 install_waydroid_application() {
     [ "$INSTALL_WAYDROID" = 1 ] || return 0
     [[ "$KILIX_WAYDROID_REF" =~ ^[0-9a-f]{40}$ ]] \
@@ -6079,6 +7518,21 @@ pinned_go_provenance_ok() {
 }
 
 ensure_go_for_kilix_build() {
+    if [ -n "${KILIX_GO_DEBIAN_VERSION:-}" ]; then
+        local -a debian_go_file_env=()
+        local debian_go_key
+        for debian_go_key in "${RELEASE_CONTROLLED_KEYS[@]}"; do
+            [[ "$debian_go_key" == PLEBIAN_OS_KILIX_GO_DEB_* ]] || continue
+            debian_go_file_env+=("$debian_go_key=${!debian_go_key}")
+        done
+        # The pinned files let the installer fetch the exact bytes from
+        # snapshot.debian.org or the release mirror once backports moves on.
+        env "${debian_go_file_env[@]}" \
+            "$PLEB_DIR/scripts/install-debian-go.sh" "$KILIX_GO_VERSION" "$KILIX_GO_DEBIAN_VERSION" \
+            || die "Debian Go toolchain install failed"
+        install_env+=("PATH=/usr/lib/go-1.27/bin:/usr/local/bin:/usr/bin:/bin" "GOROOT=/usr/lib/go-1.27" "GOENV=off" "GOTOOLCHAIN=local")
+        return 0
+    fi
     local arch sha="" version_ok=0
     case "$(uname -m)" in
         x86_64|amd64) arch=amd64; sha="$KILIX_GO_SHA256_AMD64" ;;
@@ -6557,10 +8011,10 @@ verify_kilix_voice_install() {
     if [ "$carried_is_the_users" = 1 ]; then
         log "voice: read-aloud is ready; verified the release default bundle and left other existing dictation assets alone (${carried_paths[*]})"
     elif [ "$INSTALL_VOICE_MODEL" = 1 ]; then
-        # Deliberately no command to run. At KILIX_REF the pinned Kilix
-        # closure carries no first-use flow, so naming one here would send the
-        # user at something this image cannot execute. See releases/0.2.2-notes.md,
-        # "Known limitation: the first-use route is not in the pinned closure".
+        # Deliberately no command to run here. Optional dictation models are
+        # installed through the pinned Kilix closure's first-use flow, which
+        # shows the licence screen when the user asks for the model; this
+        # provisioning step never installs or names one.
         log "voice: read-aloud is ready; release default assets are installed in Content and optional dictation assets retain first-use setup"
     else
         log "voice: all read-aloud tools execute; dictation assets were explicitly skipped"
@@ -6645,7 +8099,11 @@ build_kilix_fork() {
 
     if [ "$DRY_RUN" = 1 ]; then
         echo "    + (as $TARGET_USER) git -C $KILIX_DIR submodule update --init --recursive"
-        echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
+        if [ -n "$KILIX_GO_DEBIAN_VERSION" ]; then
+            echo "    + ensure Debian Go $KILIX_GO_DEBIAN_VERSION from trixie-backports${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:+, else the pinned files from snapshot.debian.org or the release mirror}"
+        else
+            echo "    + ensure Go >= $KILIX_GO_MIN_VERSION${KILIX_GO_VERSION:+ (exactly $KILIX_GO_VERSION, sha256-pinned with root-owned .pleb-source stamp)} using $PLEB_DIR/scripts/install-go.sh if needed"
+        fi
         echo "    + (as $TARGET_USER) $KILIX_DIR/kilix --build"
         echo "    + verify fork + kitten, source-id, $KILIX_STATE_DIRECTORY/fork-built-ref, and $KILIX_DIR/kilix --which"
         return 0
@@ -6680,6 +8138,230 @@ reconcile_apt_sources_and_exit() {
         || die "refusing to leave the install snapshot before an install closure is recorded"
     finish_release_apt_install
     exit 0
+}
+
+# ── Ollama runtime: shared by first boot and the updater ─────────────────────
+# Defined before the library-only return so plebian-os-update can call them by
+# sourcing this file as root (see install_ollama_runtime_update there). First
+# boot calls install_ollama_runtime_from_carrier at its own place below.
+
+# The one download location a release manifest may name for the carrier: a
+# Plebian-OS release asset whose file name is the pinned runtime generation.
+OLLAMA_CARRIER_URL_PATTERN='^https://github\.com/itsmygithubacct/plebian-os/releases/download/[A-Za-z0-9._-]+/ollama-0\.32\.14-kilix-unix-vulkan-r1\.tar\.xz$'
+# Exit status of install_ollama_runtime_for_update when it changed nothing
+# because the carrier could not be obtained (EX_TEMPFAIL): the update warns
+# and the next one tries again.
+OLLAMA_CARRIER_UNAVAILABLE=75
+
+# Print the manifest's carrier URL; fail unless there is exactly one line and
+# it names the canonical release asset.
+ollama_carrier_url_from_manifest() {
+    local manifest="$1" count url
+    count="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL" { n++ } END { print n + 0 }' "$manifest")" \
+        || return 1
+    [ "$count" = 1 ] || return 1
+    url="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL" { print substr($0, index($0, "=") + 1) }' "$manifest")" \
+        || return 1
+    [[ "$url" =~ $OLLAMA_CARRIER_URL_PATTERN ]] || return 1
+    printf '%s\n' "$url"
+}
+
+# Fixed tools, no curlrc, HTTPS-only redirects, one bounded attempt. The kernel
+# file-size limit holds the file to the pinned size even when the response
+# announces no length, as for the Qt, mpv and native runtime downloads.
+ollama_download_carrier() {
+    local url="$1" bytes="$2" output="$3"
+    /usr/bin/prlimit --fsize="$bytes:$bytes" -- \
+        /usr/bin/timeout --signal=TERM --kill-after=5s 305s \
+        /usr/bin/curl --disable --fail --silent --show-error --location \
+        --proto '=https' --proto-redir '=https' --max-redirs 5 \
+        --connect-timeout 20 --max-time 300 --max-filesize "$bytes" \
+        --output "$output" --url "$url"
+}
+
+# The updater's Ollama step, as root: provisioning's own carrier install for a
+# machine that has no runtime (one installed from an ISO built before Ollama
+# shipped) or whose runtime no longer verifies.
+#   1. installed runtime verifies and its receipt matches the manifest: the
+#      service is enabled and started, nothing is read or downloaded;
+#   2. otherwise a retained carrier that verifies is installed;
+#   3. otherwise the manifest's pinned URL is downloaded into private root
+#      storage, held to the pinned size, checked for size and SHA-256, retained
+#      and installed.
+# A carrier that cannot be downloaded (or a manifest that names no URL) changes
+# nothing and returns OLLAMA_CARRIER_UNAVAILABLE. A downloaded carrier that
+# fails verification, or any failure of the install itself, dies.
+install_ollama_runtime_for_update() {
+    ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
+    local manifest=/usr/local/share/plebian-os/ollama-release.env
+    local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
+    local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
+    local staging_root=/var/lib/plebian-os/session
+    local url bytes work retained_tmp
+
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+        || die "the selected $PLEBIAN_OS_VERSION Ollama release manifest is missing or unsafe"
+    [ -f "$installer" ] && [ -x "$installer" ] && [ ! -L "$installer" ] \
+        || die "the installed Ollama runtime installer is missing or unsafe"
+
+    if python3 "$installer" --verify >/dev/null 2>&1 \
+        && ollama_carrier_receipt_matches_manifest "$receipt" "$manifest"; then
+        install_ollama_runtime_from_carrier
+        return 0
+    fi
+
+    if [ -f "$archive" ] && [ ! -L "$archive" ] \
+        && python3 "$installer" --manifest "$manifest" --expected-version "$PLEBIAN_OS_VERSION" \
+            --verify-carrier "$archive" >/dev/null 2>&1; then
+        log "installing the pinned Ollama runtime from the carrier retained at $archive"
+        install_ollama_runtime_from_carrier
+        return 0
+    fi
+
+    if ! url="$(ollama_carrier_url_from_manifest "$manifest")"; then
+        warn "the $PLEBIAN_OS_VERSION release manifest names no Ollama carrier download; the Ollama runtime was not installed"
+        return "$OLLAMA_CARRIER_UNAVAILABLE"
+    fi
+    bytes="$(awk -F= '$1 == "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES" { n++; value=substr($0, index($0, "=") + 1) } END { if (n == 1) print value }' "$manifest")"
+    [[ "$bytes" =~ ^[1-9][0-9]*$ ]] \
+        || die "the $PLEBIAN_OS_VERSION release manifest has no valid Ollama carrier byte pin"
+
+    install -d -o root -g root -m 0700 "$staging_root"
+    [ -d "$staging_root" ] && [ ! -L "$staging_root" ] \
+        && [ "$(stat -c '%u:%a' "$staging_root")" = 0:700 ] \
+        || die "Ollama carrier staging directory is not private root storage"
+    work="$(mktemp -d "$staging_root/ollama-download.XXXXXX")" \
+        || die "could not create private Ollama carrier download directory"
+    chmod 0700 "$work"
+    log "downloading the pinned Ollama runtime carrier ($bytes bytes) from $url"
+    if ! ollama_download_carrier "$url" "$bytes" "$work/carrier.tar.xz"; then
+        rm -rf -- "$work"
+        warn "could not download the Ollama runtime carrier; nothing was changed and the next update tries again"
+        return "$OLLAMA_CARRIER_UNAVAILABLE"
+    fi
+    if ! python3 "$installer" --manifest "$manifest" --expected-version "$PLEBIAN_OS_VERSION" \
+        --verify-carrier "$work/carrier.tar.xz"; then
+        rm -rf -- "$work"
+        die "the downloaded Ollama carrier does not match the $PLEBIAN_OS_VERSION release pins"
+    fi
+    retained_tmp="$(mktemp /usr/local/share/plebian-os/.ollama-runtime-carrier.XXXXXX)" \
+        || { rm -rf -- "$work"; die "could not stage the Ollama carrier for retention"; }
+    if ! install -o root -g root -m 0644 "$work/carrier.tar.xz" "$retained_tmp" \
+        || ! mv -fT -- "$retained_tmp" "$archive"; then
+        rm -f -- "$retained_tmp"
+        rm -rf -- "$work"
+        die "could not retain the verified Ollama carrier at $archive"
+    fi
+    rm -rf -- "$work"
+    install_ollama_runtime_from_carrier
+}
+
+install_ollama_runtime_from_carrier() {
+    ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
+    local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
+    local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
+    # The release manifest and helper arrive from the same remastered ISO.
+    # PLEBIAN_OS_DIR is cloned later in firstboot, after this runtime is needed.
+    local source_installer="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
+    local manifest=/usr/local/share/plebian-os/ollama-release.env
+    if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest" ] && [ ! -L "$manifest" ]; then
+        manifest=/usr/local/share/plebian-os/0.2.2.env
+    fi
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+        && awk -F= -v version="$PLEBIAN_OS_VERSION" '
+            $1 == "PLEBIAN_OS_VERSION" { n++; actual=substr($0, index($0, "=") + 1) }
+            END { exit !(n == 1 && actual == version) }
+        ' "$manifest" || die "Ollama release manifest version does not match PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
+    local staging_root=/var/lib/plebian-os/session
+    local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
+    local work receipt_tmp bytes digest
+
+    log "installing the pinned $PLEBIAN_OS_VERSION Ollama runtime from its offline carrier"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + verify the installed runtime and receipt against $manifest; enable the service and return when they match"
+        echo "    + otherwise verify the retained carrier size and SHA-256 against $manifest"
+        echo "    + safely extract into a private temporary directory"
+        echo "    + $installer --closure <verified temporary closure>"
+        echo "    + systemctl enable --now plebian-os-ollama.service"
+        echo "    + retain $archive for offline repair and write $receipt"
+        return 0
+    fi
+
+    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
+        || die "the selected $PLEBIAN_OS_VERSION release carrier manifest is missing or unsafe"
+    if [ ! -e "$installer" ] && [ ! -L "$installer" ] \
+        && [ -f "$source_installer" ] && [ ! -L "$source_installer" ]; then
+        install -m 0755 "$source_installer" "$installer" \
+            || die "could not stage the Ollama runtime installer"
+    fi
+    [ -x "$installer" ] && [ ! -L "$installer" ] \
+        || die "the installed Ollama runtime installer is missing or unsafe"
+    [ -f "$source_installer" ] && [ ! -L "$source_installer" ] \
+        && cmp -s -- "$installer" "$source_installer" \
+        || die "the installed Ollama installer does not match the release ISO payload"
+
+    if python3 "$installer" --verify >/dev/null 2>&1 \
+        && ollama_carrier_receipt_matches_manifest "$receipt" "$manifest"; then
+        log "the installed Ollama runtime and carrier receipt match the $PLEBIAN_OS_VERSION release pins"
+        if ! systemctl daemon-reload \
+            || ! systemctl enable --now plebian-os-ollama.service \
+            || ! systemctl is-active --quiet plebian-os-ollama.service; then
+            die "Ollama system service could not be enabled and started"
+        fi
+        return 0
+    fi
+
+    [ -f "$archive" ] && [ ! -L "$archive" ] \
+        || die "the offline Ollama carrier is missing or unsafe: $archive"
+
+    install -d -o root -g root -m 0700 "$staging_root"
+    [ -d "$staging_root" ] && [ ! -L "$staging_root" ] \
+        && [ "$(stat -c '%u:%a' "$staging_root")" = 0:700 ] \
+        || die "Ollama carrier staging directory is not private root storage"
+    work="$(mktemp -d "$staging_root/ollama-carrier.XXXXXX")" \
+        || die "could not create private Ollama carrier staging directory"
+    chmod 0700 "$work"
+
+    if ! python3 "$installer" --manifest "$manifest" --expected-version "$PLEBIAN_OS_VERSION" \
+        --extract-carrier "$archive" --destination "$work/closure"; then
+        rm -rf -- "$work"
+        die "Ollama carrier verification or safe extraction failed"
+    fi
+    if ! python3 "$installer" --closure "$work/closure"; then
+        rm -rf -- "$work"
+        die "offline Ollama runtime installation failed"
+    fi
+    if ! systemctl daemon-reload \
+        || ! systemctl enable --now plebian-os-ollama.service \
+        || ! systemctl is-active --quiet plebian-os-ollama.service; then
+        rm -rf -- "$work"
+        die "Ollama system service could not be enabled and started"
+    fi
+
+    install -d -o root -g root -m 0755 /var/lib/plebian-os
+    [ -d /var/lib/plebian-os ] && [ ! -L /var/lib/plebian-os ] \
+        && [ "$(stat -c '%u' /var/lib/plebian-os)" = 0 ] \
+        || die "Ollama carrier receipt directory is not root-controlled"
+    bytes="$(stat -c '%s' -- "$archive")" \
+        || die "could not record the verified Ollama carrier size"
+    digest="$(sha256sum -- "$archive" | cut -d' ' -f1)" \
+        || die "could not record the verified Ollama carrier digest"
+    receipt_tmp="$(mktemp /var/lib/plebian-os/.ollama-carrier-receipt.XXXXXX)" \
+        || die "could not stage the Ollama carrier receipt"
+    {
+        printf '%s\n' 'schema=plebian.ollama-runtime-carrier-install/v1'
+        printf 'carrier_bytes=%s\n' "$bytes"
+        printf 'carrier_sha256=%s\n' "$digest"
+        printf '%s\n' 'runtime=ollama-0.32.14-kilix-unix-vulkan-r1'
+        printf '%s\n' 'service=plebian-os-ollama.service'
+        printf '%s\n' 'service_active=yes' 'model_weights_carried=false'
+    } > "$receipt_tmp"
+    chown root:root "$receipt_tmp"
+    chmod 0644 "$receipt_tmp"
+    mv -fT "$receipt_tmp" "$receipt"
+    rm -rf -- "$work"
+    log "Ollama runtime installed offline; carrier retained at $archive; receipt: $receipt"
 }
 
 # Tests source the path-agnostic transaction/version helpers without running the
@@ -6902,6 +8584,26 @@ for cand in \
 done
 [ -n "$DEPS_SCRIPT" ] || die "dependency installer not found (plebian-os-install-deps / install-deps.sh)"
 configure_apt_snapshot
+# One private configuration for this release install, prepared after the
+# snapshot or live sources are in place. install-deps reuses the directory
+# instead of building a second one, and Qt and mpv inherit it.
+if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] && [ "$DRY_RUN" != 1 ]; then
+    PROVISION_RELEASE_APT_CONFIG="$(mktemp -d)" || die "could not prepare the release apt configuration"
+    if ! prepare_release_apt_config "$PROVISION_RELEASE_APT_CONFIG" "$APT_PROVENANCE_PHASE" \
+            "$PLEBIAN_OS_APT_SNAPSHOT" "$(_apt_codename)" "${APT_ETC_ROOT:-/etc}/apt"; then
+        release_apt_reason="$(cat -- "$PROVISION_RELEASE_APT_CONFIG/failure" 2>/dev/null || true)"
+        rm -rf -- "$PROVISION_RELEASE_APT_CONFIG"
+        PROVISION_RELEASE_APT_CONFIG=""
+        die "${release_apt_reason:-could not prepare the release apt configuration}"
+    fi
+fi
+# install-deps is a child process, so the release apt phase has to be exported
+# before it starts. APT_ETC_ROOT is set at startup; the default matches that.
+export PLEBIAN_OS_RELEASE_MODE APT_PROVENANCE_PHASE PLEBIAN_OS_APT_SNAPSHOT
+export PLEBIAN_OS_APT_SOURCES_ROOT="${APT_ETC_ROOT:-/etc}/apt"
+if [ -n "$PROVISION_RELEASE_APT_CONFIG" ]; then
+    export PLEBIAN_OS_RELEASE_APT_CONFIG="$PROVISION_RELEASE_APT_CONFIG"
+fi
 log "installing runtime dependencies via $DEPS_SCRIPT"
 export PLEBIAN_OS_UV_VERSION="$UV_VERSION_PIN"
 export PLEBIAN_OS_UV_INSTALLER_SHA256="$UV_INSTALLER_SHA256"
@@ -6912,113 +8614,6 @@ else
     bash "$DEPS_SCRIPT" --model-converters || die "dependency install failed (see the group summary above)"
 fi
 normalize_accounts_service_package_directory
-
-install_ollama_runtime_from_carrier() {
-    ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
-    local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
-    local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
-    # The release manifest and helper arrive from the same remastered ISO.
-    # PLEBIAN_OS_DIR is cloned later in firstboot, after this runtime is needed.
-    local source_installer="$SELF_DIR/plebian-os-install-kilix-ollama-runtime"
-    local manifest=/usr/local/share/plebian-os/ollama-release.env
-    if [ "$PLEBIAN_OS_VERSION" = 0.2.2 ] && [ ! -e "$manifest" ] && [ ! -L "$manifest" ]; then
-        manifest=/usr/local/share/plebian-os/0.2.2.env
-    fi
-    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
-        && awk -F= -v version="$PLEBIAN_OS_VERSION" '
-            $1 == "PLEBIAN_OS_VERSION" { n++; actual=substr($0, index($0, "=") + 1) }
-            END { exit !(n == 1 && actual == version) }
-        ' "$manifest" || die "Ollama release manifest version does not match PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
-    local staging_root=/var/lib/plebian-os/session
-    local receipt=/var/lib/plebian-os/ollama-runtime-carrier.receipt
-    local work receipt_tmp bytes digest
-
-    log "installing the pinned $PLEBIAN_OS_VERSION Ollama runtime from its offline carrier"
-    if [ "$DRY_RUN" = 1 ]; then
-        echo "    + verify the installed runtime and receipt against $manifest; enable the service and return when they match"
-        echo "    + otherwise verify the retained carrier size and SHA-256 against $manifest"
-        echo "    + safely extract into a private temporary directory"
-        echo "    + $installer --closure <verified temporary closure>"
-        echo "    + systemctl enable --now plebian-os-ollama.service"
-        echo "    + retain $archive for offline repair and write $receipt"
-        return 0
-    fi
-
-    [ -f "$manifest" ] && [ ! -L "$manifest" ] \
-        || die "the selected $PLEBIAN_OS_VERSION release carrier manifest is missing or unsafe"
-    if [ ! -e "$installer" ] && [ ! -L "$installer" ] \
-        && [ -f "$source_installer" ] && [ ! -L "$source_installer" ]; then
-        install -m 0755 "$source_installer" "$installer" \
-            || die "could not stage the Ollama runtime installer"
-    fi
-    [ -x "$installer" ] && [ ! -L "$installer" ] \
-        || die "the installed Ollama runtime installer is missing or unsafe"
-    [ -f "$source_installer" ] && [ ! -L "$source_installer" ] \
-        && cmp -s -- "$installer" "$source_installer" \
-        || die "the installed Ollama installer does not match the release ISO payload"
-
-    if python3 "$installer" --verify >/dev/null 2>&1 \
-        && ollama_carrier_receipt_matches_manifest "$receipt" "$manifest"; then
-        log "the installed Ollama runtime and carrier receipt match the $PLEBIAN_OS_VERSION release pins"
-        if ! systemctl daemon-reload \
-            || ! systemctl enable --now plebian-os-ollama.service \
-            || ! systemctl is-active --quiet plebian-os-ollama.service; then
-            die "Ollama system service could not be enabled and started"
-        fi
-        return 0
-    fi
-
-    [ -f "$archive" ] && [ ! -L "$archive" ] \
-        || die "the offline Ollama carrier is missing or unsafe: $archive"
-
-    install -d -o root -g root -m 0700 "$staging_root"
-    [ -d "$staging_root" ] && [ ! -L "$staging_root" ] \
-        && [ "$(stat -c '%u:%a' "$staging_root")" = 0:700 ] \
-        || die "Ollama carrier staging directory is not private root storage"
-    work="$(mktemp -d "$staging_root/ollama-carrier.XXXXXX")" \
-        || die "could not create private Ollama carrier staging directory"
-    chmod 0700 "$work"
-
-    if ! python3 "$installer" --manifest "$manifest" --expected-version "$PLEBIAN_OS_VERSION" \
-        --extract-carrier "$archive" --destination "$work/closure"; then
-        rm -rf -- "$work"
-        die "Ollama carrier verification or safe extraction failed"
-    fi
-    if ! python3 "$installer" --closure "$work/closure"; then
-        rm -rf -- "$work"
-        die "offline Ollama runtime installation failed"
-    fi
-    if ! systemctl daemon-reload \
-        || ! systemctl enable --now plebian-os-ollama.service \
-        || ! systemctl is-active --quiet plebian-os-ollama.service; then
-        rm -rf -- "$work"
-        die "Ollama system service could not be enabled and started"
-    fi
-
-    install -d -o root -g root -m 0755 /var/lib/plebian-os
-    [ -d /var/lib/plebian-os ] && [ ! -L /var/lib/plebian-os ] \
-        && [ "$(stat -c '%u' /var/lib/plebian-os)" = 0 ] \
-        || die "Ollama carrier receipt directory is not root-controlled"
-    bytes="$(stat -c '%s' -- "$archive")" \
-        || die "could not record the verified Ollama carrier size"
-    digest="$(sha256sum -- "$archive" | cut -d' ' -f1)" \
-        || die "could not record the verified Ollama carrier digest"
-    receipt_tmp="$(mktemp /var/lib/plebian-os/.ollama-carrier-receipt.XXXXXX)" \
-        || die "could not stage the Ollama carrier receipt"
-    {
-        printf '%s\n' 'schema=plebian.ollama-runtime-carrier-install/v1'
-        printf 'carrier_bytes=%s\n' "$bytes"
-        printf 'carrier_sha256=%s\n' "$digest"
-        printf '%s\n' 'runtime=ollama-0.32.14-kilix-unix-vulkan-r1'
-        printf '%s\n' 'service=plebian-os-ollama.service'
-        printf '%s\n' 'service_active=yes' 'model_weights_carried=false'
-    } > "$receipt_tmp"
-    chown root:root "$receipt_tmp"
-    chmod 0644 "$receipt_tmp"
-    mv -fT "$receipt_tmp" "$receipt"
-    rm -rf -- "$work"
-    log "Ollama runtime installed offline; carrier retained at $archive; receipt: $receipt"
-}
 
 install_ollama_runtime_from_carrier
 
@@ -7177,6 +8772,56 @@ if [ -f "$SELF_DIR/plebian-os-source-carrier" ]; then
     fi
 fi
 
+# RC9 and later: keep the user-facing command independent of the legacy raster
+# executable. A missing desktop payload produces an actionable error.
+if [ "$DRY_RUN" = 1 ]; then
+    echo "    + install Zell Neuronte launcher -> /usr/local/bin/zell"
+else
+    cat > /usr/local/bin/zell <<'ZELL_NEURONTE_LAUNCHER'
+#!/bin/sh
+# Stable command name for Zell Neuronte (Plebian-OS RC9 and later).
+set -eu
+runtime_root=${GPU_TERMINAL_HOME:-"$HOME/.local/gpu_terminal"}
+source_root=${GPU_TERMINAL_SOURCE_HOME:-"$HOME/gpu_terminal"}
+for app in "${ZELL_NEURONTE_HOME:-}" \
+    "$runtime_root/kilix/data/desktop-apps/kilix-zell" \
+    "$source_root/kilix-apps/kilix-zell" \
+    /usr/local/share/kilix-zell
+do
+    [ -n "$app" ] || continue
+    if [ -x "$app/zell-neuronte" ]; then
+        if [ -z "${ZELL_NEURONTE_WEIGHTS:-}" ] && [ -f "$app/weights/neuronte-split-v4.nrt" ]; then
+            ZELL_NEURONTE_WEIGHTS="$app/weights/neuronte-split-v4.nrt"
+            export ZELL_NEURONTE_WEIGHTS
+        fi
+        exec "$app/zell-neuronte" "$@"
+    fi
+done
+printf '%s\n' 'Zell Neuronte is not installed. Build kilix-apps/kilix-zell and run make install, or set ZELL_NEURONTE_HOME to its installed directory.' >&2
+exit 127
+ZELL_NEURONTE_LAUNCHER
+    chmod 0755 /usr/local/bin/zell
+fi
+
+# The RC9 carrier is pinned and fully verified before replacing the runtime.
+ZELL_CARRIER_DIR="$SELF_DIR"
+[ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ] || ZELL_CARRIER_DIR=/usr/local/share/plebian-os
+ZELL_ARCHIVE="$ZELL_CARRIER_DIR/bundles/zell-0.1.1-x86_64.tar.xz"
+[ -f "$ZELL_ARCHIVE" ] || ZELL_ARCHIVE="$ZELL_CARRIER_DIR/zell-0.1.1-x86_64.tar.xz"
+if [ -f "$ZELL_CARRIER_DIR/zell-runtime.json" ]; then
+    ZELL_INSTALLER="$SELF_DIR/install-zell-runtime.py"
+    [ -f "$ZELL_INSTALLER" ] || ZELL_INSTALLER=/usr/local/sbin/install-zell-runtime.py
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + verify and install pinned Zell 0.1.1 runtime from $ZELL_ARCHIVE"
+    else
+        python3 "$ZELL_INSTALLER" --archive "$ZELL_ARCHIVE" --pin "$ZELL_CARRIER_DIR/zell-runtime.json" \
+            --bin-dir /usr/local/bin --unit-dir /usr/local/lib/systemd/user \
+            || die "Zell runtime installation failed"
+    fi
+else
+    die "RC9 Zell runtime pin is missing"
+fi
+
 # The ISO path stages plebian-os-update via preseed late_command. The bootstrap
 # path runs this provisioner directly from the checkout, so install the same
 # helper here when the source file is available.
@@ -7274,48 +8919,15 @@ else
         || die "source root is not owned by $TARGET_USER: $GPU_TERMINAL_SOURCE_HOME"
 fi
 ensure_plebian_os_checkout
+install_ssh_server_helper
 
 # Stage the fixed, root-owned first-use helper from the exact Plebian-OS
-# checkout. INSTALL_WAYDROID enables this optional feature; the app is fetched
-# by the catalog only on request, and Android setup requires first-use consent.
-if [ "$INSTALL_WAYDROID" = 1 ]; then
-    WAYDROID_SETUP="$PLEBIAN_OS_DIR/provision/plebian-os-waydroid-setup"
-    WAYDROID_CLOSURE="$PLEBIAN_OS_DIR/provision/waydroid-closure.env"
-    WAYDROID_PIN="$PLEBIAN_OS_DIR/provision/waydroid-closure.sha256"
-    if [ ! -x "$WAYDROID_SETUP" ] || [ -L "$WAYDROID_SETUP" ] \
-            || [ ! -f "$WAYDROID_CLOSURE" ] || [ -L "$WAYDROID_CLOSURE" ] \
-            || [ ! -f "$WAYDROID_PIN" ] || [ -L "$WAYDROID_PIN" ]; then
-        die "pinned Plebian-OS checkout has no Waydroid setup closure"
-    fi
-    WAYDROID_ACTUAL_SHA256="$(sha256sum -- "$WAYDROID_CLOSURE" | awk '{print $1}')"
-    IFS= read -r WAYDROID_PINNED_SHA256 <"$WAYDROID_PIN" \
-        || die "could not read the Waydroid closure pin"
-    printf '%s\n' "$WAYDROID_PINNED_SHA256" | cmp -s - "$WAYDROID_PIN" \
-        || die "Waydroid closure pin has trailing data"
-    if ! [[ "$WAYDROID_PINNED_SHA256" =~ ^[0-9a-f]{64}$ ]] \
-            || [ "$WAYDROID_ACTUAL_SHA256" != "$WAYDROID_PINNED_SHA256" ]; then
-        die "pinned Plebian-OS checkout has a mismatched Waydroid closure"
-    fi
-    if [ -n "$WAYDROID_CLOSURE_SHA256" ]; then
-        [ "$WAYDROID_ACTUAL_SHA256" = "$WAYDROID_CLOSURE_SHA256" ] \
-            || die "release Waydroid closure differs from the pinned checkout"
-    fi
-    WAYDROID_INSTALL_DIR=/usr/lib/plebian-os/waydroid
-    log "staging the Plebian-OS Waydroid first-use closure"
-    if [ "$DRY_RUN" = 1 ]; then
-        echo "    + install root-owned first-use helper + closure -> $WAYDROID_INSTALL_DIR"
-        env PLEBIAN_OS_WAYDROID_CLOSURE_SHA256="$WAYDROID_ACTUAL_SHA256" \
-            "$WAYDROID_SETUP" --dry-run
-    else
-        install -d -o root -g root -m 0755 "$WAYDROID_INSTALL_DIR"
-        install -o root -g root -m 0755 "$WAYDROID_SETUP" \
-            "$WAYDROID_INSTALL_DIR/plebian-os-waydroid-setup"
-        install -o root -g root -m 0644 "$WAYDROID_CLOSURE" \
-            "$WAYDROID_INSTALL_DIR/waydroid-closure.env"
-        install -o root -g root -m 0644 "$WAYDROID_PIN" \
-            "$WAYDROID_INSTALL_DIR/waydroid-closure.sha256"
-    fi
-fi
+# checkout. This runs on a fresh amd64 install even when INSTALL_WAYDROID=0.
+# The application stays opt-in; Android setup still requires first-use consent.
+# The call sits inside the root transaction opened above, so a later first-boot
+# failure removes a helper this run created and restores one that was already
+# there.
+stage_waydroid_first_use_helper
 if [ -d "$PLEB_DIR/.git" ]; then
     log "pleb present at $PLEB_DIR — updating"
     update_pleb_checkout
@@ -7352,6 +8964,9 @@ install_env=(
     "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
     "GPU_TERMINAL_SETTINGS_FILE=$GPU_TERMINAL_SETTINGS_FILE"
     "PLEBIAN_OS_MANAGED_INSTALL=1"
+    "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"
+    # Same pin as the updater: pleb install must not be redirected onto system apt.
+    "PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"
     "PLEBIAN_OS_DIR=$PLEBIAN_OS_DIR"
     "PLEBIAN_OS_STORAGE_HOME=$PLEBIAN_OS_STORAGE_HOME"
     "PLEBIAN_OS_SESSION_HOME=$PLEBIAN_OS_SESSION_HOME"
@@ -7395,8 +9010,17 @@ install_env=(
     "PLEBIAN_OS_BUILD_KILIX_FORK=$BUILD_KILIX_FORK"
     "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$KILIX_GO_MIN_VERSION"
     "PLEBIAN_OS_KILIX_GO_VERSION=$KILIX_GO_VERSION"
+    "PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION=$KILIX_GO_DEBIAN_VERSION"
     "PLEBIAN_OS_KILIX_GO_SHA256_AMD64=$KILIX_GO_SHA256_AMD64"
     "PLEBIAN_OS_KILIX_GO_SHA256_ARM64=$KILIX_GO_SHA256_ARM64"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE=$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES=$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256=$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+    "PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT=$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+    "PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL=$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
     "KILIX_DESKTOP_PROVIDER=$KILIX_DESKTOP_PROVIDER"
     "KILIX_DESKTOP_COMMAND=$KILIX_DESKTOP_COMMAND"
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
@@ -7450,6 +9074,8 @@ install_env=(
     "KILIX_SECRETS_REPO=$KILIX_SECRETS_REPO"
     "KILIX_SECRETS_BRANCH=$KILIX_SECRETS_BRANCH"
     "KILIX_SECRETS_REF=$KILIX_SECRETS_REF"
+    "NEURONTE_REPO=$NEURONTE_REPO"
+    "NEURONTE_REF=$NEURONTE_REF"
 )
 [ -n "${PROVISION_LOCK_FD:-}" ] \
     && install_env+=("PLEB_UPDATE_LOCK_FD=$PROVISION_LOCK_FD")
@@ -7466,20 +9092,26 @@ record_voice_dictation_census
 as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
     || die "pleb install failed (see above)"
 install_kilix_needle
+install_kilix_claudex
 install_kilix_llm
-if [ "$DRY_RUN" != 1 ]; then
-    /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/stage-command-model.py" --offline \
-        || die "required offline command model staging failed"
-fi
+# The Kilix Ask command model (LFM2) is not on the installation media and a
+# fresh install does not stage or install it: Kilix Ask uses its grammar and
+# offers the download on first use and in the model wizard.
 as_user env "${install_env[@]}" /usr/bin/python3 \
     "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
     || die "required offline default model installation failed"
+if [ "$DRY_RUN" != 1 ]; then
+    /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/install-image-models.py" \
+        --install-paradee-runtime --offline \
+        || die "required offline Paradee runtime staging failed"
+fi
 as_user env "${install_env[@]}" /usr/bin/python3 \
     "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" --offline \
     || die "required offline image model installation failed"
 as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX_DIR/config/default_models.py" verify \
     || die "default model verification failed"
 PROVISION_DEFAULT_MODELS_VERIFIED=1
+install_neuronte
 # `pleb install` is the last step that installs packages, and it installs some
 # this repository does not name: its own runtime set, and whatever the pinned
 # Kilix's scripts/install-build-deps.sh pulls in. Either can re-enable a user
@@ -7539,6 +9171,8 @@ fi
 build_kilix_fork
 seed_selected_desktop_wallpaper_state
 record_default_desktop
+prepare_kilix95_caches
+record_ssh_server_offer
 
 # ── 4. make Pleb the session ────────────────────────────────────────────────
 # With no other desktop task installed, Pleb is the only /usr/share/xsessions
@@ -7694,8 +9328,17 @@ EOF
     write_session_default PLEBIAN_OS_BUILD_KILIX_FORK "$BUILD_KILIX_FORK"
     write_session_default PLEBIAN_OS_KILIX_GO_MIN_VERSION "$KILIX_GO_MIN_VERSION"
     write_session_default PLEBIAN_OS_KILIX_GO_VERSION "$KILIX_GO_VERSION"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "$KILIX_GO_DEBIAN_VERSION"
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$KILIX_GO_SHA256_AMD64"
     write_session_default PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$KILIX_GO_SHA256_ARM64"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE "$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT "$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+    write_session_default PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL "$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
     write_session_default PLEB_DESKTOP "$DESKTOP"
     write_session_default PLEB_WM "$PLEB_WM"
     write_session_default KILIX_RUN_ALIASES "$KILIX_RUN_ALIASES"
@@ -7754,6 +9397,8 @@ EOF
     write_session_default KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
     write_session_default KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
     write_session_default KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+    write_session_default NEURONTE_REPO "$NEURONTE_REPO"
+    write_session_default NEURONTE_REF "$NEURONTE_REF"
     write_session_default PLEBIAN_OS_VERSION "$PLEBIAN_OS_VERSION"
     write_session_default PLEBIAN_OS_RELEASE "$PLEBIAN_OS_RELEASE"
     write_session_default PLEBIAN_OS_RELEASE_MODE "$PLEBIAN_OS_RELEASE_MODE"
@@ -7774,6 +9419,8 @@ EOF
     write_session_default PLEBIAN_OS_REPO "$PLEBIAN_OS_REPO"
     write_session_default PLEBIAN_OS_BRANCH "$PLEBIAN_OS_BRANCH"
     write_session_default PLEBIAN_OS_REF "$PLEBIAN_OS_REF"
+    write_session_default PLEBIAN_OS_RELEASE_TAG "$PLEBIAN_OS_RELEASE_TAG"
+    write_session_default PLEBIAN_OS_RELEASE_TAG_OBJECT "$PLEBIAN_OS_RELEASE_TAG_OBJECT"
     write_session_default PLEBIAN_OS_DIR "$PLEBIAN_OS_DIR"
     write_session_default PLEBIAN_OS_STORAGE_HOME "$PLEBIAN_OS_STORAGE_HOME"
     write_session_default PLEBIAN_OS_SESSION_HOME "$PLEBIAN_OS_SESSION_HOME"

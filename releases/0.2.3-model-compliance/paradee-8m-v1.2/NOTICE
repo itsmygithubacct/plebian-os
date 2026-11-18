@@ -1,0 +1,13 @@
+Plebian-OS 0.2.3 conveyance notice for paradee-8m-v1.2.
+This file is written by Plebian-OS. It is not an upstream NOTICE file.
+Plebian-OS distributes these model bytes in a verified archive on installation media.
+
+Artifact: paradee-8m-v1.2 (provider paradee, version ed2934d4df8a4fd891e29584c5e1104649409765)
+Source: https://huggingface.co/sahilmahendrakar/Paradee-8M-v1.2/resolve/ed2934d4df8a4fd891e29584c5e1104649409765/config.json
+Upstream host: huggingface.co
+Download size: 8463946 bytes
+Installed member manifest digest: 99929f0a7f1811eb7b7cc5821526d9e486e0a46fbccbf178959ade25e3f3f967
+Licence(s): apache-2.0
+Licensor(s): Sahil Mahendrakar
+Licence, advisory and attribution texts: licence-texts/cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30.txt
+Owner determination: determinations/paradee-8m-v1.2/OWNER-DETERMINATION-paradee-8m-v1.2-20261110.md

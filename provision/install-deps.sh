@@ -48,6 +48,595 @@ PLEBIAN_OS_ROOT_SESSION_HOME="${PLEBIAN_OS_ROOT_SESSION_HOME:-/var/lib/plebian-o
 log()  { printf '\033[1;36m[deps]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[deps]\033[0m %s\n' "$*" >&2; }
 
+die()  { printf '\033[1;31m[deps] %s\033[0m\n' "$*" >&2; exit 1; }
+
+validate_release_apt_provenance() {
+    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release suite_ok
+    [ -s "$file" ] || return 2
+    while IFS= read -r line || [ -n "$line" ]; do
+        read -r site release _ <<<"$line"
+        [ -n "$site" ] || continue
+        case "$phase" in
+            install)
+                if [ -z "$snapshot" ] \
+                    || { [ "$site" != "https://snapshot.debian.org/archive/debian/$snapshot" ] \
+                        && [ "$site" != "https://snapshot.debian.org/archive/debian-security/$snapshot" ]; }; then
+                    printf 'apt index outside the install snapshot: %s\n' "$line" >&2
+                    return 1
+                fi
+                ;;
+            lifetime)
+                # $codename-backports is part of the official archive only when
+                # it comes from deb.debian.org/debian. The same suite on the
+                # security or snapshot archive is not.
+                suite_ok=0
+                case "$release" in
+                    "$codename"|"$codename-updates"|"$codename-security") suite_ok=1 ;;
+                    "$codename-backports") suite_ok=2 ;;
+                esac
+                if [ "$suite_ok" = 0 ] \
+                    || ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
+                    || { [ "$suite_ok" = 2 ] && ! [[ "$site" =~ ^https?://deb\.debian\.org/debian/?$ ]]; }; then
+                    printf 'apt index outside the Debian archive for %s: %s\n' "$codename" "$line" >&2
+                    return 1
+                fi
+                ;;
+            *) return 1 ;;
+        esac
+    done <"$file"
+    return 0
+}
+
+# Release apt operations use a private configuration. A source file is copied
+# into it only when every index that file contributes passes
+# validate_release_apt_provenance for this phase. Indexes come from
+# `apt-get update --print-uris` on that file alone, against an empty list
+# cache, so a target counts whether or not this machine has already downloaded
+# it and nothing is fetched while classifying. Any other file, including a
+# signed third-party repository, stays where the operator put it and is not
+# consulted. A private package-list cache keeps a higher version from that
+# repository from becoming a candidate. Hiding that source is not enough to
+# keep an installed package: the install itself has to refuse removals, because
+# apt would otherwise remove a package whose dependency only the hidden source
+# can satisfy. The private apt.conf sets Dir::Etc::main to /dev/null and
+# points Dir::Etc::Parts at an empty directory, so the operator apt.conf and
+# an apt.conf.d snippet cannot add a package either. Validated
+# Acquire::{http,https,ftp}::Proxy values, including a per-host DIRECT and an
+# optional userinfo, are copied into that file. A value with userinfo makes
+# the file mode 0600. A proxy auto-detect program is not. A copied proxy
+# cannot forge a package, because the signed Release check still applies.
+# $1 is an
+# absolute directory this function fills. $2 is install or lifetime. $3 is the
+# install snapshot id, empty outside that phase. $4 is the codename. $5 is the
+# operator apt directory, the one that contains sources.list. On success,
+# $1/indexes lists the release indexes. On failure, $1/failure names the
+# provenance refusal and the function returns 1.
+
+# Copy the one Plebian Qt pin into a private apt configuration.
+# $1 is the operator apt directory. $2 is the private configuration
+# directory; its preferences.d must already exist. A regular non-symlink
+# file owned by uid 0 and not group- or world-writable is copied, then
+# mode 0644. Anything else is left alone, including an absent file. A
+# qualifying file that cannot be copied is a failure. Operator pins and
+# the Qt verify hook are not copied.
+copy_release_qt_pin() {
+    local apt_dir="$1" dest="$2"
+    local qt_pin="" qt_owner="" qt_mode=""
+    qt_pin="$apt_dir/preferences.d/plebian-os-qt-runtime"
+    if [ -f "$qt_pin" ] && [ ! -L "$qt_pin" ]; then
+        qt_owner="$(stat -c '%u' -- "$qt_pin" 2>/dev/null || true)"
+        qt_mode="$(stat -c '%a' -- "$qt_pin" 2>/dev/null || true)"
+        case "$qt_mode" in
+            ''|*[!0-9]*) qt_mode="" ;;
+        esac
+        if [ "$qt_owner" = 0 ] && [ -n "$qt_mode" ] \
+                && [ $(( 8#$qt_mode & 022 )) -eq 0 ]; then
+            cp -- "$qt_pin" "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+            chmod 0644 -- "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+        fi
+    fi
+}
+
+prepare_release_apt_config() {
+    local dest="$1" phase="$2" snapshot="$3" codename="$4" apt_dir="$5"
+    local work="" reason_file="" file="" base="" rel="" staged=""
+    local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
+    local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
+    local main_ok=0 snapshot_only=0 trust_disabled=0
+    local proxy_line="" proxy_key="" proxy_value="" proxy_host="" proxy_ok=0
+    local proxy_userinfo=0 proxy_mode=0644
+    case "$dest" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "$apt_dir" in
+        /*) ;;
+        *) printf '%s\n' "apt source directory must be absolute" >"$dest/failure"
+           return 1 ;;
+    esac
+    case "$phase" in
+        install|lifetime) ;;
+        *) printf '%s\n' "unknown apt provenance phase" >"$dest/failure"
+           return 1 ;;
+    esac
+    [ -d "$dest" ] && [ ! -L "$dest" ] || return 1
+    case "$dest/" in
+        "$apt_dir"/*)
+            printf '%s\n' "release apt configuration must stay outside the operator apt directory" >"$dest/failure"
+            return 1 ;;
+    esac
+    work="$(mktemp -d)" || {
+        printf '%s\n' "could not stage the release apt configuration" >"$dest/failure"
+        return 1
+    }
+    case "$work" in
+        /*) ;;
+        *) work="$PWD/$work" ;;
+    esac
+    reason_file="$dest/failure"
+    mkdir -p -- "$dest/sources.list.d" "$dest/lists/partial" "$dest/archives/partial" \
+        "$dest/cache" "$dest/preferences.d" "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    : >"$dest/sources.list"
+    : >"$dest/preferences"
+    : >"$dest/extended_states"
+    : >"$dest/indexes"
+    # Apt's default Dir::Etc::main is /etc/apt/apt.conf even when APT_CONFIG
+    # names this file, and a command-line -o Dir::Etc::parts is applied after
+    # apt.conf.d has already been read. Set both in this file: main is
+    # /dev/null, and Parts is an empty directory, so the operator apt.conf and
+    # apt.conf.d snippets, including APT::Sources::With, are not part of this
+    # configuration. Validated proxy values are appended afterwards.
+    printf '%s\n' \
+        'Dir::Etc::main "/dev/null";' \
+        "Dir::Etc::Parts \"$dest/apt.conf.d\";" \
+        'APT::Get::AllowUnauthenticated "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowWeakRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'Acquire::Check-Valid-Until "true";' \
+        >"$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    # apt-config dump only parses the operator configuration. Copy string
+    # values of Acquire::{http,https,ftp}::Proxy and a per-host form whose
+    # host matches [A-Za-z0-9.-]+. The value must be DIRECT or an http://,
+    # https://, or socks5h:// URL, with an optional userinfo
+    # [A-Za-z0-9._~%!$&()*+,=:-]+@ before the host. Quotes, semicolons,
+    # braces, backslashes, and whitespace are dropped. The warning names the
+    # key and never prints the value. Any other key, including a proxy
+    # auto-detect program, is left out. A copied proxy cannot forge a
+    # package: the signed Release check still applies.
+    while IFS= read -r proxy_line || [ -n "$proxy_line" ]; do
+        [ -n "$proxy_line" ] || continue
+        case "$proxy_line" in
+            *$'\t'*) ;;
+            *) continue ;;
+        esac
+        proxy_key="${proxy_line%%$'\t'*}"
+        proxy_value="${proxy_line#*$'\t'}"
+        case "$proxy_key" in
+            Acquire::http::Proxy|Acquire::https::Proxy|Acquire::ftp::Proxy)
+                ;;
+            Acquire::http::Proxy::*|Acquire::https::Proxy::*|Acquire::ftp::Proxy::*)
+                proxy_host="${proxy_key#*::Proxy::}"
+                case "$proxy_host" in
+                    ''|*::*|*[!A-Za-z0-9.-]*)
+                        printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+                        continue
+                        ;;
+                esac
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        proxy_ok=0
+        case "$proxy_value" in
+            *"'"*|*'\"'*|*'"'*|*';'*|*'{'*|*'}'*|*[[:space:]]*|*\\*)
+                ;;
+            DIRECT)
+                proxy_ok=1
+                ;;
+            *)
+                if [[ "$proxy_value" =~ ^(http|https|socks5h)://([A-Za-z0-9._~%!$&()*+,=:-]+@)?[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?$ ]]; then
+                    proxy_ok=1
+                    # Group 2 is the optional userinfo, including its @. A
+                    # later @ in the path is not a credential.
+                    if [ -n "${BASH_REMATCH[2]:-}" ]; then
+                        proxy_userinfo=1
+                    fi
+                fi
+                ;;
+        esac
+        if [ "$proxy_ok" -ne 1 ]; then
+            printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+            continue
+        fi
+        printf '%s "%s";\n' "$proxy_key" "$proxy_value" >>"$dest/apt.conf" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done < <(LC_ALL=C env -u APT_CONFIG apt-config dump --no-empty --format '%f%N%v%n' 2>/dev/null || true)
+    # The Plebian Qt pin is part of the release closure. Copy that one
+    # root-owned file when it is a regular file and not group- or
+    # world-writable. Operator pins stay where they are. The updater
+    # copies the pin again after a Qt hop, before install-deps.
+    if ! copy_release_qt_pin "$apt_dir" "$dest"; then
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    fi
+    : >"$work/files"
+    : >"$work/accepted.idx"
+    : >"$work/all.idx"
+    if [ -f "$apt_dir/sources.list" ] && [ ! -L "$apt_dir/sources.list" ]; then
+        printf '%s\n' "$apt_dir/sources.list" >>"$work/files"
+    fi
+    if [ -d "$apt_dir/sources.list.d" ] && [ ! -L "$apt_dir/sources.list.d" ]; then
+        for file in "$apt_dir/sources.list.d"/*; do
+            if [ ! -f "$file" ] || [ -L "$file" ]; then
+                continue
+            fi
+            base="${file##*/}"
+            case "$base" in
+                .*|*~|*.disabled|*.dpkg-old|*.dpkg-new|*.dpkg-dist|*.dpkg-bak) continue ;;
+                *.list|*.sources) ;;
+                *) continue ;;
+            esac
+            printf '%s\n' "$file" >>"$work/files"
+        done
+    fi
+    LC_ALL=C sort -o "$work/files.sorted" "$work/files" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    while IFS= read -r file || [ -n "$file" ]; do
+        [ -n "$file" ] || continue
+        case "$file" in
+            "$apt_dir/sources.list"|"$apt_dir"/sources.list.d/*) ;;
+            *)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rel="${file#"$apt_dir"/}"
+        case "$rel" in
+            *'..'*|*$'\n'*)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rm -rf -- "$work/one"
+        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" \
+            "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        printf '%s\n' \
+            'Dir::Etc::main "/dev/null";' \
+            "Dir::Etc::Parts \"$work/one/apt.conf.d\";" \
+            >"$work/one/apt.conf" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            staged="$work/one/sources.list"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$staged"
+            parts_arg="$work/one/parts"
+        else
+            base="${file##*/}"
+            staged="$work/one/parts/$base"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$work/one/empty.list"
+            parts_arg="$work/one/parts"
+        fi
+        # mktemp is mode 0700. Classification runs apt-get, and a root
+        # caller fetches as the unprivileged _apt user, which cannot
+        # traverse 0700. These files are Debian source lines only.
+        chmod 0755 -- "$work" "$work/one" "$work/one/parts" "$work/one/lists" \
+            "$work/one/lists/partial" "$work/one/cache" "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        chmod 0644 -- "$staged" "$work/one/apt.conf" "$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        apt_rc=0
+        uris="$(env -u APT_CONFIG APT_CONFIG="$work/one/apt.conf" \
+            apt-get update --print-uris \
+            -o "Dir::Etc::SourceList=$list_arg" \
+            -o "Dir::Etc::SourceParts=$parts_arg" \
+            -o "Dir::State::lists=$work/one/lists" \
+            -o "Dir::Cache=$work/one/cache" \
+            -o "Dir::Cache::archives=$work/one/cache" \
+            2>"$work/one/err")" || apt_rc=$?
+        if [ "$apt_rc" != 0 ]; then
+            saw_failure=1
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        printf '%s\n' "$uris" >"$work/one/uris" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/idx"
+        parsed=0
+        bad_line=0
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] || continue
+            case "$line" in
+                \'*) ;;
+                *://*) bad_line=1; continue ;;
+                *) continue ;;
+            esac
+            uri="${line#\'}"
+            uri="${uri%%\'*}"
+            case "$uri" in
+                *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+            esac
+            case "$uri" in
+                *'/dists/'*)
+                    site="${uri%%/dists/*}"
+                    release="${uri#*/dists/}"
+                    release="${release%%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    case "$release" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s %s main amd64\n' "$site" "$release" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+                *)
+                    site="${uri%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s flat main amd64\n' "$site" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+            esac
+        done <"$work/one/uris"
+        if [ "$bad_line" = 1 ] || [ "$parsed" = 0 ]; then
+            if [ "$bad_line" = 1 ]; then
+                saw_failure=1
+                log "operator apt source $file is left unchanged and is not used to install release packages"
+            fi
+            continue
+        fi
+        LC_ALL=C sort -u -o "$work/one/sorted" "$work/one/idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        cat -- "$work/one/sorted" >>"$work/all.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        vrc=0
+        validate_release_apt_provenance "$work/one/sorted" "$phase" "$snapshot" "$codename" >/dev/null 2>&1 || vrc=$?
+        if [ "$vrc" != 0 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        # trusted=yes, allow-insecure, allow-weak, and allow-downgrade-to-insecure
+        # turn signature checks off. check-valid-until=no and check-date=no turn
+        # replay protection off. The install snapshot's own source is the one
+        # exception: its Release files are already expired, so the provisioner
+        # sets Check-Valid-Until: no on snapshot.debian.org and nowhere else.
+        trust_disabled=0
+        if grep -Eiq -e '(^|[^[:alnum:]_-])trusted[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-weak[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-downgrade-to-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            trust_disabled=1
+        elif grep -Eiq -e '(^|[^[:alnum:]_-])check-valid-until[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])check-date[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            snapshot_only=1
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] || continue
+                read -r site release _ <<<"$line"
+                case "$site" in
+                    http://snapshot.debian.org/*|https://snapshot.debian.org/*) ;;
+                    *) snapshot_only=0 ;;
+                esac
+            done <"$work/one/sorted"
+            [ "$snapshot_only" = 1 ] || trust_disabled=1
+        fi
+        if [ "$trust_disabled" = 1 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            if ! cp -a -- "$staged" "$dest/sources.list"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        else
+            if [ -e "$dest/sources.list.d/$base" ]; then
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1
+            fi
+            if ! cp -a -- "$staged" "$dest/sources.list.d/$base"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        fi
+        cat -- "$work/one/sorted" >>"$work/accepted.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done <"$work/files.sorted"
+    LC_ALL=C sort -u -o "$dest/indexes" "$work/accepted.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    LC_ALL=C sort -u -o "$work/all.sorted" "$work/all.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    rc=0
+    if [ ! -s "$dest/indexes" ]; then
+        rc=2
+    elif ! validate_release_apt_provenance "$dest/indexes" "$phase" "$snapshot" "$codename" >/dev/null 2>&1; then
+        rc=1
+    fi
+    if [ "$rc" != 0 ]; then
+        if [ -s "$work/all.sorted" ]; then
+            validate_release_apt_provenance "$work/all.sorted" "$phase" "$snapshot" "$codename" >/dev/null || rc=$?
+        elif [ "$saw_failure" = 1 ]; then
+            printf '%s\n' "could not list the configured apt indexes" >"$reason_file"
+            rm -rf -- "$work"
+            return 1
+        else
+            rc=2
+        fi
+        if [ "$rc" = 0 ]; then
+            rc=2
+        fi
+        if [ "$rc" = 2 ]; then
+            printf '%s\n' "release apt index provenance is empty" >"$reason_file"
+        elif [ "$phase" = install ]; then
+            printf '%s\n' "release install closure resolved from an index other than snapshot $snapshot" >"$reason_file"
+        else
+            printf '%s\n' "release apt provenance contains an index outside the Debian archive" >"$reason_file"
+        fi
+        rm -rf -- "$work"
+        return 1
+    fi
+    # Security alone must not pass. The accepted set has to include the
+    # codename's main suite, from the Debian archive in the lifetime phase and
+    # from the install snapshot in the install phase. A mixed file that was
+    # excluded can otherwise leave only trixie-security behind.
+    main_ok=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        read -r site release _ <<<"$line"
+        [ "$release" = "$codename" ] || continue
+        case "$phase" in
+            install)
+                [ "$site" = "https://snapshot.debian.org/archive/debian/$snapshot" ] && main_ok=1
+                ;;
+            lifetime)
+                case "$site" in
+                    http://deb.debian.org/debian|https://deb.debian.org/debian|http://deb.debian.org/debian/|https://deb.debian.org/debian/)
+                        main_ok=1 ;;
+                    http://snapshot.debian.org/archive/debian/*|https://snapshot.debian.org/archive/debian/*)
+                        main_ok=1 ;;
+                esac
+                ;;
+        esac
+    done <"$dest/indexes"
+    if [ "$main_ok" != 1 ]; then
+        printf 'release apt provenance is missing the %s main archive\n' "$codename" >"$reason_file"
+        rm -rf -- "$work"
+        return 1
+    fi
+    # The finished directory is handed to root apt. _apt must be able to
+    # traverse it. apt.conf is mode 0600 when a copied proxy contains
+    # userinfo, because that value is a credential. The other files stay
+    # mode 0644.
+    if [ "$proxy_userinfo" = 1 ]; then
+        proxy_mode=0600
+    fi
+    chmod 0755 -- "$dest" "$dest/sources.list.d" "$dest/lists" "$dest/lists/partial" \
+        "$dest/archives" "$dest/archives/partial" "$dest/cache" "$dest/preferences.d" \
+        "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod 0644 -- "$dest/sources.list" "$dest/preferences" "$dest/extended_states" \
+        "$dest/indexes" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod "$proxy_mode" -- "$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    for file in "$dest/sources.list.d"/*; do
+        if [ ! -f "$file" ] || [ -L "$file" ]; then
+            continue
+        fi
+        chmod 0644 -- "$file" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done
+    rm -rf -- "$work"
+    return 0
+}
+
+# apt-get for a configuration prepare_release_apt_config built. The operator's
+# sources, pins, list cache, and apt.conf snippets are not on this command.
+# The private apt.conf sets Dir::Etc::main to /dev/null, because APT_CONFIG
+# does not replace apt's default main file, and points Dir::Etc::Parts at an
+# empty directory so apt.conf.d is not read. Validated Acquire proxy values
+# from the operator configuration are the only settings copied into that file.
+# A copied value that contains userinfo is a credential, so that file is then
+# mode 0600.
+release_apt_get() {
+    local config="$1"
+    shift
+    env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
+    apt-get \
+        -o DPkg::Lock::Timeout=600 \
+        -o "Dir::Etc::SourceList=$config/sources.list" \
+        -o "Dir::Etc::SourceParts=$config/sources.list.d" \
+        -o "Dir::State::lists=$config/lists" \
+        -o "Dir::State::status=${PLEBIAN_OS_DPKG_STATUS:-/var/lib/dpkg/status}" \
+        -o "Dir::State::extended_states=${PLEBIAN_OS_APT_EXTENDED_STATES:-/var/lib/apt/extended_states}" \
+        -o "Dir::Cache=$config/cache" \
+        -o "Dir::Cache::archives=$config/archives" \
+        -o "Dir::Cache::pkgcache=$config/cache/pkgcache.bin" \
+        -o "Dir::Cache::srcpkgcache=$config/cache/srcpkgcache.bin" \
+        -o "Dir::Etc::Preferences=$config/preferences" \
+        -o "Dir::Etc::PreferencesParts=$config/preferences.d" \
+        "$@"
+}
+
 bounded_curl() {
     local output="$1" max_bytes="$2"
     shift 2
@@ -174,7 +763,7 @@ DEP_GROUPS=(
     # PDF Conversion uses this standard-library venv support with a
     # hash-locked pip install independently of uv. The coordinated 0.1.9
     # release also installs its required, verified uv pin as system tooling.
-    "kilix desktop + app providers (python)|python3-pil python3-xlib python3-websockets python3-venv python3-tk"
+    "kilix desktop + app providers (python)|python3-pil python3-numpy python3-scipy python3-xlib python3-websockets python3-venv python3-tk"
     # Playalong links SDL2 for output and libsndfile for stem decode. Keep the
     # runtime libraries explicit rather than relying on the -dev toolchain.
     # Kilix Amp links libfluidsynth in-process and reads a General MIDI
@@ -210,6 +799,11 @@ DEP_GROUPS=(
     # manager or desktop link handing off a PNG or JPEG needs a viewer present
     # on a fresh install. 3.10.3-1 is in the 0.2.2 apt snapshot.
     "images|feh"
+    # PDF Conversion's page OCR runs Debian's Tesseract as a program, beside
+    # RapidOCR in its own locked runtime. It reads scans when no Granite model
+    # is installed. tesseract-ocr depends on the eng and osd language data;
+    # eng is named because the converter requires it. Apache-2.0.
+    "page OCR|tesseract-ocr tesseract-ocr-eng"
     "session-log archiving|zstd"
     "optional diarization converter GCC runtimes|libgomp1 libgfortran5 libquadmath0"
     # F103 exposes the common archive formats from both its TUI and app. Keep
@@ -253,6 +847,11 @@ DEP_GROUPS=(
     # installed by this package group. Crypto headers remain in build toolchain.
     "F101 native codec dependencies|libonnxruntime1.21=1.21.0+dfsg-1 libonnxruntime-dev=1.21.0+dfsg-1 libsamplerate0=0.2.2-4+b2 libsamplerate0-dev=0.2.2-4+b2 libssl3t64=3.5.6-1~deb13u2"
     "disk management|gparted"
+    "Zell operating-system stations|upower bluez scrot brightnessctl power-profiles-daemon nftables wtmpdb"
+    # Redshift warms the display colour temperature at night. geoclue (its
+    # Recommends) is not installed, so it needs a location from -l LAT:LON or
+    # ~/.config/redshift.conf.
+    "desktop colour temperature|redshift"
     "app streaming (Xvfb/VNC)|xvfb tigervnc-standalone-server tigervnc-common x11-xkb-utils xfonts-base"
     # Native Wayland applications reuse Kilix's existing X surfaces through a
     # supervised Weston X11 backend. Waydroid itself is a separately pinned
@@ -264,7 +863,7 @@ DEP_GROUPS=(
     # relying on transitive packages makes a fresh --no-install-recommends
     # image fail one pkg-config check at a time on first selection.
     # kilix-secrets links libsodium 1.0.18 and libsystemd at provision time.
-    "build toolchain|build-essential cmake pkg-config golang-go nodejs npm python3-dev zlib1g-dev libsqlite3-dev libx11-dev libxres-dev libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libxcomposite-dev libxdamage-dev libxfixes-dev libimlib2-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev libsodium-dev libsystemd-dev"
+    "build toolchain|build-essential cmake pkg-config libavformat-dev libavcodec-dev libavfilter-dev libavutil-dev golang-go nodejs npm python3-dev zlib1g-dev libsqlite3-dev libx11-dev libxres-dev libxrandr-dev libxinerama-dev libxcursor-dev libxrender-dev libxcomposite-dev libxdamage-dev libxfixes-dev libimlib2-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb-xkb-dev libdbus-1-dev libgl1-mesa-dev libfontconfig-dev libxft-dev libxext-dev libpng-dev liblcms2-dev libcairo2-dev libglib2.0-dev libpoppler-glib-dev libharfbuzz-dev libssl-dev libxxhash-dev libsimde-dev libwayland-dev wayland-protocols libsdl2-dev libsdl2-image-dev libsndfile1-dev libfluidsynth-dev libsodium-dev libsystemd-dev"
     # F106's collector is read-only. dmidecode is invoked only through its
     # separately reviewed fixed privileged helper; no mutating hardware tools
     # or automatic sensors-detect run is part of provisioning.
@@ -342,11 +941,110 @@ if [ "$DRY_RUN" != 1 ] && [ "$(id -u)" -ne 0 ]; then
     warn "must run as root (try: sudo $0)"; exit 1
 fi
 
+# Release installs consult only the private Debian configuration. A development
+# run keeps the previous system apt command, including whatever the operator
+# configured. The updater passes the configuration it already prepared so every
+# later install, and the final provenance record, use that same directory.
+RELEASE_APT_CONFIG=""
+RELEASE_APT_CONFIG_OWNED=0
+cleanup_release_apt_config() {
+    [ "$RELEASE_APT_CONFIG_OWNED" = 1 ] || return 0
+    [ -n "$RELEASE_APT_CONFIG" ] || return 0
+    rm -rf -- "$RELEASE_APT_CONFIG"
+}
+if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+    if [ -n "${PLEBIAN_OS_RELEASE_APT_CONFIG:-}" ]; then
+        RELEASE_APT_CONFIG="$PLEBIAN_OS_RELEASE_APT_CONFIG"
+        if [ ! -d "$RELEASE_APT_CONFIG" ] || [ -L "$RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$RELEASE_APT_CONFIG/apt.conf" ] \
+                || [ ! -f "$RELEASE_APT_CONFIG/indexes" ]; then
+            die "release apt configuration is missing; refusing the system apt configuration"
+        fi
+    else
+        release_codename="${PLEBIAN_OS_APT_CODENAME:-}"
+        release_phase="${APT_PROVENANCE_PHASE:-lifetime}"
+        case "$release_phase" in
+            install|lifetime) ;;
+            *) die "unknown apt provenance phase" ;;
+        esac
+        if [ -z "$release_codename" ]; then
+            # shellcheck disable=SC1091
+            release_codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
+        fi
+        RELEASE_APT_CONFIG="$(mktemp -d)" || die "could not prepare the release apt configuration"
+        RELEASE_APT_CONFIG_OWNED=1
+        trap cleanup_release_apt_config EXIT
+        if ! prepare_release_apt_config "$RELEASE_APT_CONFIG" "$release_phase" \
+                "${PLEBIAN_OS_APT_SNAPSHOT:-}" "$release_codename" \
+                "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
+            release_reason="$(cat -- "$RELEASE_APT_CONFIG/failure" 2>/dev/null || true)"
+            die "${release_reason:-could not prepare the release apt configuration}"
+        fi
+    fi
+fi
+
+deps_apt() {
+    if [ -n "$RELEASE_APT_CONFIG" ]; then
+        release_apt_get "$RELEASE_APT_CONFIG" "$@"
+    else
+        apt-get "$@"
+    fi
+}
+
+deps_apt_plan() {
+    if [ -n "$RELEASE_APT_CONFIG" ]; then
+        echo "    + APT_CONFIG=$RELEASE_APT_CONFIG/apt.conf apt-get -o Dir::Etc::SourceList=$RELEASE_APT_CONFIG/sources.list -o Dir::Etc::SourceParts=$RELEASE_APT_CONFIG/sources.list.d $*"
+    else
+        echo "    + apt-get $*"
+    fi
+}
+
+# Release installs never remove a package. A hidden operator source can make
+# apt plan Remv for a package whose dependency only that source can upgrade.
+# Simulate first, name those packages, and leave them installed.
+release_install() {
+    local plan="" removals="" plan_rc=0
+    if [ -n "$RELEASE_APT_CONFIG" ]; then
+        # Simulate without --no-remove so a planned Remv is visible and can
+        # be named. The install itself still passes --no-remove.
+        plan="$(deps_apt -s -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "$@")" || plan_rc=$?
+        removals="$(printf '%s\n' "$plan" | sed -n 's/^Remv \([^ ]\{1,\}\).*/\1/p')"
+        if [ -n "$removals" ]; then
+            warn "installing release packages would remove: $(printf '%s\n' "$removals" | tr '\n' ' ')"
+            warn "those packages stay installed; the release packages were not changed"
+            return 1
+        fi
+        if [ "$plan_rc" != 0 ]; then
+            warn "could not plan the release package install"
+            [ -z "$plan" ] || printf '%s\n' "$plan" >&2
+            return 1
+        fi
+        deps_apt -o DPkg::Lock::Timeout=600 install -y --no-install-recommends --no-remove "$@"
+        return $?
+    fi
+    deps_apt -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "$@"
+}
+
+plan_install() {
+    if [ -n "$RELEASE_APT_CONFIG" ]; then
+        # shellcheck disable=SC2086,SC2048  # deliberate package-list splitting
+        deps_apt_plan install -y --no-install-recommends --no-remove $*
+    else
+        # shellcheck disable=SC2086,SC2048  # deliberate package-list splitting
+        deps_apt_plan install -y --no-install-recommends $*
+    fi
+}
+
 export DEBIAN_FRONTEND=noninteractive
 if [ "$DRY_RUN" = 1 ]; then
-    echo "    + apt-get update -y"
+    deps_apt_plan update -y
+elif [ -n "$RELEASE_APT_CONFIG" ]; then
+    # apt-get update exits 0 when a fetch fails. --error-on=any makes that
+    # failure visible. The message names no proxy value.
+    deps_apt -o DPkg::Lock::Timeout=600 update -y --error-on=any \
+        || die "could not reach the Debian archive; check the network connection and the apt proxy"
 else
-    apt-get -o DPkg::Lock::Timeout=600 update -y || warn "apt-get update failed (continuing; installs may still work)"
+    deps_apt -o DPkg::Lock::Timeout=600 update -y || warn "apt-get update failed (continuing; installs may still work)"
 fi
 
 failed=()
@@ -363,14 +1061,15 @@ for entry in "${DEP_GROUPS[@]}"; do
     done
     log "installing group: $name"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + apt-get install -y --no-install-recommends ${request[*]}"
+        # shellcheck disable=SC2086,SC2048
+        plan_install ${request[*]}
         for floor in "${floors[@]}"; do
             echo "    + require ${floor%%=*} >= ${floor#*=}"
         done
         continue
     fi
     # Wait for the dpkg lock rather than fail while unattended-upgrades holds it.
-    if ! apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends "${request[@]}"; then
+    if ! release_install "${request[@]}"; then
         warn "GROUP FAILED: $name"
         warn "    packages: $pkgs"
         failed+=("$name")
@@ -406,11 +1105,12 @@ install_package_group() {
     local heading="$1" name="$2" pkgs="$3"
     log "$heading: $name"
     if [ "$DRY_RUN" = 1 ]; then
-        echo "    + apt-get install -y --no-install-recommends $pkgs"
+        # shellcheck disable=SC2086  # deliberate package-list splitting
+        plan_install $pkgs
         return 0
     fi
     # shellcheck disable=SC2086  # deliberate package-list splitting
-    if ! apt-get install -y --no-install-recommends $pkgs; then
+    if ! release_install $pkgs; then
         warn "GROUP FAILED: $name"
         warn "    packages: $pkgs"
         failed+=("$name")
@@ -423,11 +1123,12 @@ if [ "$QUALIFICATION" -eq 1 ]; then
         pkgs=${entry#* :: }
         log "installing group: $name"
         if [ "$DRY_RUN" = 1 ]; then
-            echo "    + apt-get install -y --no-install-recommends $pkgs"
+            # shellcheck disable=SC2086  # deliberate package-list splitting
+            plan_install $pkgs
             continue
         fi
         # shellcheck disable=SC2086  # deliberate package-list splitting
-        if ! apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends $pkgs; then
+        if ! release_install $pkgs; then
             warn "GROUP FAILED: $name"
             warn "    packages: $pkgs"
             failed+=("$name")

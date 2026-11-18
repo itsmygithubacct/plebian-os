@@ -27,9 +27,13 @@ with tempfile.TemporaryDirectory(prefix='selector-owner-private-',dir='/tmp') as
     if request['mode']=='standalone': os.chown(config.parent,1000,1000)
     session=config/'session.env';closure=config/'closure.env';base=root/'recovery';base.mkdir()
     os.chown(base,original_owner,original_owner)
-    session.write_text('PLEBIAN_OS_VERSION=0.2.1\nPLEBIAN_OS_RELEASE_MODE=1\n');session.chmod(0o600)
-    os.chown(session,original_owner,original_owner)
-    original=(session.read_bytes(),session.stat().st_uid,session.stat().st_gid,session.stat().st_mode & 0o777)
+    session_text=request.get('session','PLEBIAN_OS_VERSION=0.2.1\nPLEBIAN_OS_RELEASE_MODE=1\n')
+    if session_text is not None:
+        session.write_text(session_text);session.chmod(0o600)
+        os.chown(session,original_owner,original_owner)
+        original=(session.read_bytes(),session.stat().st_uid,session.stat().st_gid,session.stat().st_mode & 0o777)
+    else:
+        original=None
     for name,text,key in [('session.env.new','selected profile\n','session'),
                           ('closure.env','selected pins\n','closure'),
                           ('plebian-os-select-closure','selector\n','selector'),
@@ -44,10 +48,18 @@ with tempfile.TemporaryDirectory(prefix='selector-owner-private-',dir='/tmp') as
                         input=request['body'],text=True,capture_output=True,env=env)
     metadata=lambda p: [p.stat().st_uid,p.stat().st_gid,p.stat().st_mode & 0o777]
     result={'status':done.returncode,'stderr':done.stderr,
-            'session_metadata':metadata(session),'closure_present':closure.exists(),
-            'old_profile_restored':(session.read_bytes(),*metadata(session))==original,
+            'closure_present':closure.exists(),
+            'session_present':session.exists(),
+            'old_profile_restored':(original is None and not session.exists())
+                or (session.exists() and (session.read_bytes(),*metadata(session))==original),
+            'records':sorted(p.name for p in base.iterdir()),
             'namespace':pathlib.Path('/proc/self/uid_map').read_text()}
     if closure.exists(): result['closure_metadata']=metadata(closure)
+    if session.exists(): result['session_metadata']=metadata(session)
+    if done.returncode==0:
+        record=pathlib.Path(done.stdout.strip())
+        result['release_metadata']=(record/'release-metadata.env').read_text()
+        result['record_metadata']=metadata(record)
     if request['mode']=='standalone' and done.returncode==0:
         read=subprocess.run(['setpriv','--reuid=1000','--regid=1000','--clear-groups',
                              'cat',str(session),str(closure)],capture_output=True,text=True)
@@ -73,11 +85,18 @@ class ElevatedOwnershipTests(unittest.TestCase):
     def transaction(self, mode="standalone", **extra):
         source = SELECT.read_text()
         body = source.split("<<'ROOT_SPLIT_APPLY'\n", 1)[1].split("\nROOT_SPLIT_APPLY\n", 1)[0]
-        # The elevated transaction receives this exact metadata reader from
-        # the parent through declare -f, before the here-document body.
-        reader = re.search(r"(?ms)^record_release_value\(\) \{.*?^\}", source)
-        self.assertIsNotNone(reader)
-        body = reader.group(0) + "\n" + body
+        # The elevated transaction receives these exact functions (the
+        # metadata reader and the recovery-record stamp) from the parent
+        # through declare -f, before the here-document body.
+        passed = re.search(r"declare -f ([A-Za-z_ ]+); cat <<'ROOT_SPLIT_APPLY'", source)
+        self.assertIsNotNone(passed)
+        self.assertIn("record_release_value", passed.group(1).split())
+        functions = []
+        for name in passed.group(1).split():
+            function = re.search(rf"(?ms)^{name}\(\) \{{.*?^\}}", source)
+            self.assertIsNotNone(function, name)
+            functions.append(function.group(0))
+        body = "\n".join(functions) + "\n" + body
         done = subprocess.run(self.command + [PRIVATE_CASE],
                               input=json.dumps({"body": body, "mode": mode, **extra}),
                               capture_output=True, text=True, timeout=15)
@@ -102,6 +121,35 @@ class ElevatedOwnershipTests(unittest.TestCase):
     def test_failed_commit_restores_original_user_metadata_and_absent_closure(self):
         result = self.transaction(fail_after="session")
         self.assertEqual(result["status"], 9, result)
+        self.assertTrue(result["old_profile_restored"], result)
+        self.assertFalse(result["closure_present"], result)
+
+    def test_first_selection_on_a_never_selected_machine(self):
+        for session in (None, "PLEB_RESPAWN=0\n"):
+            with self.subTest(session=session):
+                result = self.transaction(session=session)
+                self.assertEqual(result["status"], 0, result)
+                self.assertEqual(result["session_metadata"], [1000, 1000, 0o600])
+                self.assertEqual(result["closure_metadata"], [1000, 1000, 0o600])
+                self.assertEqual(result["user_read_status"], 0, result)
+                self.assertEqual(
+                    result["release_metadata"],
+                    "# No Plebian-OS release was selected before this record.\n")
+
+    def test_failed_first_selection_restores_the_unselected_machine(self):
+        for session in (None, "PLEB_RESPAWN=0\n"):
+            for boundary in ("session", "closure"):
+                with self.subTest(session=session, fail_after=boundary):
+                    result = self.transaction(session=session, fail_after=boundary)
+                    self.assertEqual(result["status"], 9, result)
+                    self.assertTrue(result["old_profile_restored"], result)
+                    self.assertEqual(result["session_present"], session is not None)
+                    self.assertFalse(result["closure_present"], result)
+                    self.assertEqual(result["records"], [], result)
+
+    def test_image_first_selection_without_release_metadata_still_refuses(self):
+        result = self.transaction(mode="image", session="PLEB_RESPAWN=0\n")
+        self.assertEqual(result["status"], 6, result)
         self.assertTrue(result["old_profile_restored"], result)
         self.assertFalse(result["closure_present"], result)
 

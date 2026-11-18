@@ -45,9 +45,15 @@ class OllamaManifestSelectionTests(unittest.TestCase):
         start = cls.updater.index('    install -m 0644 "$PLEBIAN_OS_DIR/VERSION" "$stage/VERSION"')
         end = cls.updater.index('    install -m 0644 "$PLEBIAN_OS_DIR/assets/desktop/', start)
         cls.stage_update = "stage_manifest() {\n" + cls.updater[start:end] + "\n}\nstage_manifest\n"
-        start = cls.updater.index("manifest_index=$((${#new_paths[@]} - 1))")
+        deploy = cls.updater.index("\ndeploy_staged_os_layer() {")
+        start = cls.updater.index("manifest_index=-1\n", deploy)
         end = cls.updater.index("\nPY_MANIFEST", start) + len("\nPY_MANIFEST")
         cls.root_validate = cls.updater[start:end]
+        # The root transaction's own deployment set, so the recheck is tested
+        # against the real position of the manifest and of VERSION.
+        start = cls.updater.index("\nnames=(\n", deploy) + 1
+        end = cls.updater.index("\n)\n", start) + 3
+        cls.deploy_names = cls.updater[start:end]
 
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
@@ -202,7 +208,15 @@ class OllamaManifestSelectionTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 selected = stage / "ollama-release.env"
                 original = selected.read_text()
-                prelude = 'new_paths=(a b c d e f "$version_file" "$manifest")\n'
+                prelude = (self.deploy_names
+                           + 'new_paths=("${names[@]}")\n'
+                           'for index in "${!names[@]}"; do\n'
+                           '    case "${names[$index]}" in\n'
+                           '        VERSION) new_paths[$index]="$version_file" ;;\n'
+                           '        ollama-release.env) new_paths[$index]="$manifest" ;;\n'
+                           '    esac\n'
+                           'done\n'
+                           '[ "${new_paths[6]}" = "$version_file" ] || exit 9\n')
                 cases = (original, original.replace(version, "9.9.9"),
                          original + "PLEBIAN_OS_VERSION=" + version + "\n",
                          re.sub(r"CARRIER_SHA256=.*", "CARRIER_SHA256=wrong", original),
@@ -212,6 +226,17 @@ class OllamaManifestSelectionTests(unittest.TestCase):
                     result = run_shell(prelude + self.root_validate, manifest=selected,
                                        version_file=stage / "VERSION")
                     self.assertEqual(result.returncode == 0, payload == original, result.stderr)
+
+    def test_root_recheck_finds_the_manifest_wherever_it_sits_in_the_set(self):
+        members = self.deploy_names.split()[1:-1]
+        self.assertEqual(members.count("ollama-release.env"), 1)
+        self.assertEqual(members[6], "VERSION")
+        self.assertEqual(members[30], "plebian-os-ssh-server")
+        self.assertIn('"${new_paths[24]}" "${new_paths[30]}" <<', self.updater)
+        # A set without the manifest fails through the rollback trap, not a bare exit.
+        result = run_shell("set -e\ntrap 'echo rolled-back; exit 1' ERR\n"
+                           "names=(VERSION other)\nnew_paths=(a b)\n" + self.root_validate)
+        self.assertEqual((result.returncode, result.stdout.strip()), (1, "rolled-back"), result.stderr)
 
     def test_updater_missing_selected_manifest_refuses_in_user_stage(self):
         fixture = self.fixture("0.2.3")

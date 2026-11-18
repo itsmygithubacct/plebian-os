@@ -1,0 +1,14 @@
+{
+  "schema": "plebian-os.espeak-ng-source/v1",
+  "since_release": "0.2.3-rc8",
+  "tag": "1.52.0",
+  "filename": "espeak-ng-1.52.0.tar.gz",
+  "url": "https://github.com/espeak-ng/espeak-ng/archive/refs/tags/1.52.0.tar.gz",
+  "bytes": 17739803,
+  "sha256": "bb4338102ff3b49a81423da8a1a158b420124b055b60fa76cfb4b18677130a23",
+  "wheel": "espeakng_loader-0.2.4-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+  "wheel_sha256": "08721baf27d13d461f6be6eed9a65277e70d68234ff484fd8b9897b222cdcb6d",
+  "loader_commit": "146599e29be31bf17d99f0bcb7dbb2f92aef3d95",
+  "loader_licence_sha256": "b05c73bb1335b4320ec97edff106b3991c12d0acdc6e899c96f061a15039119f",
+  "library_licence": "GPL-3.0-or-later"
+}

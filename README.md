@@ -10,11 +10,10 @@ screen-filling [Kilix](https://github.com/itsmygithubacct/kilix#readme), with th
 [Kilix 95](https://github.com/itsmygithubacct/kilix-95#readme) desktop as its
 first page, in place of a conventional desktop environment.
 
-**Status:** 0.2.2 is the latest published release (November 3, 2026), an AMD64
+**Status:** 0.2.3 is the latest published release (November 18, 2026), an AMD64
 installer ISO on the [Releases page](https://github.com/itsmygithubacct/plebian-os/releases).
-0.2.3 is in release-candidate testing: the current candidate is the
-`v0.2.3-rc6` tag, and its image, update and release acceptance are still open
-(see the [0.2.3 notes](releases/0.2.3-notes.md)). This repository is the
+The [0.2.3 notes](releases/0.2.3-notes.md) list its changes and known issues.
+This repository is the
 release root: its installer recipe, first-boot provisioner, updater and
 `releases/<version>.env` manifests decide which commit of every other
 repository a Plebian-OS user receives.
@@ -42,12 +41,12 @@ repository a Plebian-OS user receives.
 
 | | |
 |---|---|
-| Latest release | Plebian-OS 0.2.2 for Debian 13, AMD64: [installer ISO (964 MiB)](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/plebian-os-0.2.2-amd64.iso), [SHA256SUMS](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/SHA256SUMS), [release notes and known issues](https://github.com/itsmygithubacct/plebian-os/releases/tag/v0.2.2) |
-| Release candidate | 0.2.3, tag [`v0.2.3-rc6`](https://github.com/itsmygithubacct/plebian-os/tree/v0.2.3-rc6): [notes](releases/0.2.3-notes.md), [follow-ups](releases/0.2.3-followups.md); no release ISO is published |
+| Latest release | Plebian-OS 0.2.3 for Debian 13, AMD64: [installer ISO (1.5 GiB)](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.3/plebian-os-0.2.3-amd64.iso), [SHA256SUMS](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.3/SHA256SUMS), [release notes and known issues](releases/0.2.3-notes.md) |
+| Previous release | Plebian-OS 0.2.2: [release page](https://github.com/itsmygithubacct/plebian-os/releases/tag/v0.2.2) |
 | Reproducing a release | the immutable `vX.Y.Z` tag and its `releases/X.Y.Z.env` manifest ([RELEASING.md](RELEASING.md)) |
 
-The 0.2.2 qualification covers QEMU/KVM BIOS and EFI virtual machines.
-Bare-metal USB installation and physical GPU operation were not qualified.
+The 0.2.3 qualification covers QEMU/KVM BIOS and EFI virtual machines, plus
+one USB installation on a physical laptop.
 ARM64 is not a supported OS release target, and Windows is a separate preview
 (`windows-v0.2.2-preview.4`).
 
@@ -66,7 +65,7 @@ Boot it in a virtual machine, or write it to a USB stick with
 system disks and asks you to retype the device path:
 
 ```sh
-build/build_usb_image.py --iso plebian-os-0.2.2-amd64.iso --device /dev/sdX
+build/build_usb_image.py --iso plebian-os-0.2.3-amd64.iso --device /dev/sdX
 ```
 
 Install it like normal Debian. The installer asks for the hostname,
@@ -75,20 +74,20 @@ server is installed. The machine needs a network connection on first boot:
 `plebian-os-firstboot.service` provisions the stack before the greeter starts,
 then LightDM offers the **Pleb** session.
 
-| Installer menu (UEFI, 0.2.3 candidate) | Greeter |
+| Installer menu (UEFI, 0.2.3) | Greeter |
 |---|---|
 | ![The Plebian-OS UEFI installer menu: graphical install, install, advanced options, accessible dark contrast menu, install with speech synthesis](docs/images/plebian-os-installer-menu.jpg) | ![The LightDM greeter on the Plebian-OS wallpaper](docs/images/plebian-os-greeter.jpg) |
 
 ### Convert an existing Debian 13
 
 [`bootstrap.sh`](bootstrap.sh) runs the same provisioner on an installed Debian.
-For 0.2.2, first download the release asset
-[`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz`](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.2/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz)
+For 0.2.3, first download the release asset
+[`ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz`](https://github.com/itsmygithubacct/plebian-os/releases/download/v0.2.3/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz)
 and check it against the same `SHA256SUMS`; the bootstrap never downloads it.
 
 ```sh
 mkdir -p ~/.local/gpu_terminal/sources
-git clone --branch v0.2.2 https://github.com/itsmygithubacct/plebian-os ~/.local/gpu_terminal/sources/plebian-os
+git clone --branch v0.2.3 https://github.com/itsmygithubacct/plebian-os ~/.local/gpu_terminal/sources/plebian-os
 carrier="$HOME/Downloads/ollama-0.32.14-kilix-unix-vulkan-r1.tar.xz"
 ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$carrier" --dry-run
 sudo ~/.local/gpu_terminal/sources/plebian-os/bootstrap.sh --ollama-carrier "$carrier"
@@ -193,7 +192,7 @@ Kilix or Pleb.
 
 ## What ships
 
-The 0.2.3 candidate selects, through [`releases/0.2.3.env`](releases/0.2.3.env):
+Plebian-OS 0.2.3 selects, through [`releases/0.2.3.env`](releases/0.2.3.env):
 
 - **Session and desktop:** Pleb, Kilix (with its kitty fork engine and a
   pinned prebuilt kitty 0.48.2 fallback), and the external Kilix 95 provider in
@@ -213,9 +212,9 @@ The 0.2.3 candidate selects, through [`releases/0.2.3.env`](releases/0.2.3.env):
 - **Local inference:** the Ollama 0.32.14 CPU and Vulkan runtime, embedded in
   the ISO and run as `plebian-os-ollama.service` on `127.0.0.1:11434`, with no
   model weights.
-- **Models in the 0.2.3 image:** the nine-model default bundle, the LFM2 Kilix
-  Ask command model, Basic Pitch and Demucs. Other models, including the Help
-  adapter and the Whisper dictation models, are first-use downloads. Each
+- **Models in the 0.2.3 image:** the nine-model default bundle, Basic Pitch
+  and Demucs. Other models, including the LFM2 Kilix Ask command model, the
+  Help adapter and the Whisper dictation models, are first-use downloads. Each
   model's licence record and notices are under
   [`releases/0.2.3-model-compliance/`](releases/0.2.3-model-compliance/).
 - **Optional, never run automatically:** `plebian-os-nvidia-driver`, the

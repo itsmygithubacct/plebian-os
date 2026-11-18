@@ -732,8 +732,9 @@ test_fail_after_boundary "$boundary"
 
 
 class FirstbootBoundTests(unittest.TestCase):
-    def test_timeout_attempts_fit_inside_one_ordered_start_job(self):
-        self.assertIn("TimeoutStartSec=4h", FIRSTBOOT)
+    def test_bounded_attempts_fit_inside_one_ordered_start_job(self):
+        self.assertIn("TimeoutStartSec=5h45min", FIRSTBOOT)
+        self.assertIn("KillMode=mixed", FIRSTBOOT)
         self.assertNotIn("Restart=", FIRSTBOOT)
         self.assertIn(
             "ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run "
@@ -741,12 +742,13 @@ class FirstbootBoundTests(unittest.TestCase):
             FIRSTBOOT,
         )
         runner = ATTEMPT.read_text()
-        self.assertIn("PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT:-3600", runner)
+        self.assertIn("PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT:-1200", runner)
+        self.assertIn("PLEBIAN_OS_FIRSTBOOT_CEILING:-18000", runner)
         self.assertIn("PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY:-60", runner)
-        self.assertIn("timeout --signal=TERM --kill-after=30s", runner)
-        # Three maximum-length attempts plus the two intervening delays remain
-        # inside the four-hour outer service timeout.
-        self.assertGreater(4 * 3600, 3 * 3600 + 2 * 60)
+        self.assertNotIn("timeout --signal", runner)
+        # The five-hour ceiling covers every attempt and delay; the 35-minute
+        # dpkg-safe stop sequence after it stays inside the outer timeout.
+        self.assertGreater(5 * 3600 + 45 * 60, 18000 + 600 + 900 + 600)
         self.assertIn("ExecStopPost=-/bin/rm -f /etc/sudoers.d/plebian-os-provision",
                       FIRSTBOOT)
         self.assertIn("ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check",
@@ -777,7 +779,8 @@ class FirstbootBoundTests(unittest.TestCase):
                 **os.environ,
                 "PLEBIAN_OS_STATE_DIR": str(root / "state"),
                 "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "3",
-                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_POLL_INTERVAL": "0.2",
                 "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
                 "PLEBIAN_OS_TEMP_SUDOERS": str(root / "temporary-sudoers"),
             }
@@ -812,7 +815,8 @@ class FirstbootBoundTests(unittest.TestCase):
                 **os.environ,
                 "PLEBIAN_OS_STATE_DIR": str(root / "state"),
                 "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "3",
-                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT": "5",
+                "PLEBIAN_OS_FIRSTBOOT_POLL_INTERVAL": "0.2",
                 "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
                 "PLEBIAN_OS_TEMP_SUDOERS": str(temporary_sudoers),
             }
@@ -830,7 +834,7 @@ class FirstbootBoundTests(unittest.TestCase):
             self.assertFalse(temporary_sudoers.exists())
             self.assertIn("exhausted 3/3", result.stderr)
 
-    def test_retry_runner_enforces_each_attempt_timeout(self):
+    def test_retry_runner_stops_each_stalled_attempt(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             counter = root / "counter"
@@ -846,7 +850,8 @@ class FirstbootBoundTests(unittest.TestCase):
                 **os.environ,
                 "PLEBIAN_OS_STATE_DIR": str(root / "state"),
                 "PLEBIAN_OS_FIRSTBOOT_MAX_ATTEMPTS": "2",
-                "PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT": "1",
+                "PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT": "1",
+                "PLEBIAN_OS_FIRSTBOOT_POLL_INTERVAL": "0.2",
                 "PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY": "0",
                 "PLEBIAN_OS_TEMP_SUDOERS": str(root / "temporary-sudoers"),
             }
@@ -952,6 +957,18 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
             _shell_function(UPDATE, "validate_release_apt_provenance"),
         )
 
+    def test_release_apt_isolation_helpers_are_identical_in_every_script(self):
+        deps = (ROOT / "provision" / "install-deps.sh").read_text()
+        for name in (
+            "validate_release_apt_provenance",
+            "prepare_release_apt_config",
+            "release_apt_get",
+        ):
+            with self.subTest(name=name):
+                provision = _shell_function(PROVISION, name)
+                self.assertEqual(provision, _shell_function(UPDATE, name))
+                self.assertEqual(provision, _shell_function(deps, name))
+
     def test_release_apt_provenance_gate_rules(self):
         ts = self.SNAPSHOT
         cases = (
@@ -972,6 +989,12 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
             ("lifetime", ["https://dl.google.com/linux/chrome/deb stable main amd64"], 1),
             ("lifetime", ["https://deb.debian.org/debian sid main amd64"], 1),
             ("lifetime", ["http://deb.debian.org.evil.example/debian trixie main amd64"], 1),
+            ("lifetime", ["https://deb.debian.org/debian trixie-backports main amd64"], 0),
+            ("lifetime", ["http://deb.debian.org/debian/ trixie-backports main amd64"], 0),
+            ("lifetime", ["https://security.debian.org/debian-security trixie-backports main amd64"], 1),
+            ("lifetime", ["https://deb.debian.org/debian-security trixie-backports main amd64"], 1),
+            ("lifetime", [f"https://snapshot.debian.org/archive/debian/{ts} trixie-backports main amd64"], 1),
+            ("lifetime", ["https://deb.debian.org/debian bookworm-backports main amd64"], 1),
             ("lifetime", [], 2),
         )
         for phase, lines, expected in cases:
@@ -1081,8 +1104,11 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
         cases = (
             ([f"http://deb.debian.org/debian {codename} main amd64",
               f"https://deb.debian.org/debian {codename}-updates main amd64",
+              f"https://deb.debian.org/debian {codename}-backports main amd64",
               f"https://security.debian.org/debian-security {codename}-security main amd64"],
              None),
+            ([f"https://security.debian.org/debian-security {codename}-backports main amd64"],
+             "release apt provenance contains an index outside the Debian archive"),
             (["https://dl.google.com/linux/chrome/deb stable main amd64"],
              "release apt provenance contains an index outside the Debian archive"),
             ([], "release apt index provenance is empty"),
@@ -1115,6 +1141,7 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
                     "reconcile_release_apt_sources_after_commit() "
                     f'{{ echo reconcile >>"$calls"; return {reconcile_rc}; }}\n'
                     'seed_desktop_wallpaper_after_commit() { echo wallpaper >>"$calls"; }\n'
+                    'prepare_kilix95_caches_update() { echo prepare >>"$calls"; }\n'
                     'restart_session_after_commit() { echo restart >>"$calls"; }\n'
                     "restart_arg=--restart\n"
                     + tail
@@ -1124,7 +1151,7 @@ class ReleaseAptProvenanceTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, reconcile_rc, result.stderr)
                 self.assertEqual(calls.read_text().split(),
-                                 ["commit", "reconcile", "wallpaper", "restart"])
+                                 ["commit", "reconcile", "wallpaper", "prepare", "restart"])
 
     def test_updater_reconciles_apt_sources_only_after_commit(self):
         committed = UPDATE.index("\ncommit_stack_transaction\n")

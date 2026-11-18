@@ -79,10 +79,12 @@ class MixedModelDeliveryTests(unittest.TestCase):
         (self.root / 'DEFAULT-MODELS.json').unlink()
         self.assertNotEqual(self.guard().returncode, 0)
 
-    def command_fixture(self):
+    def command_fixture(self, mode='first-use-download'):
         command = {'asset_id': 'lfm2-kilix-commands', 'manifest_digest': 'd'*64,
-                   'sha256': 'e'*64, 'bytes': 1000, 'version': 'v8',
-                   'url': 'https://example.invalid/command.tar.gz'}
+                   'sha256': 'e'*64, 'bytes': 1000, 'version': 'v10',
+                   'url': 'https://example.invalid/command.tar.gz',
+                   'delivery': {'mode': mode, 'on_installation_media': False,
+                                'staged_by_upgrade': False}}
         expected = self.root / 'command-release.json'
         expected.write_text(json.dumps(command))
         (self.root / 'COMMAND-MODEL.json').write_text(json.dumps(command))
@@ -90,11 +92,11 @@ class MixedModelDeliveryTests(unittest.TestCase):
             'artifact_id': command['asset_id'], 'manifest_digest': command['manifest_digest'],
             'archive_sha256': command['sha256'], 'archive_bytes': command['bytes'],
             'version': command['version'], 'source_url': command['url'],
-            'delivery': 'bundled-command-model-archive'}
-        self.env['m_lfm2_kilix_commands_delivery'] = 'bundled-command-model-archive'
+            'delivery': 'first-use-upstream-download'}
+        self.env['m_lfm2_kilix_commands_delivery'] = 'first-use-upstream-download'
         return expected
 
-    def test_command_archive_has_distinct_delivery_and_exact_bindings(self):
+    def test_command_model_is_a_first_use_download_with_exact_bindings(self):
         expected = self.command_fixture()
         result = self.guard(expected)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -106,14 +108,25 @@ class MixedModelDeliveryTests(unittest.TestCase):
                 self.assertNotEqual(self.guard(expected).returncode, 0)
                 entry[key] = value
 
-    def test_command_archive_cannot_be_omitted_or_relabelled(self):
+    def test_command_model_cannot_be_omitted_or_claimed_on_the_media(self):
         expected = self.command_fixture()
         entry = self.carrier['models']['lfm2-kilix-commands']
-        for mode in ('first-use-upstream-download', 'bundled-default-model'):
-            entry['delivery'] = self.env['m_lfm2_kilix_commands_delivery'] = mode
-            self.assertNotEqual(self.guard(expected).returncode, 0)
+        # The retired label is refused outright, and no other label passes.
+        for mode in ('bundled-command-model-archive', 'bundled-default-model', 'image-offline-model'):
+            with self.subTest(mode=mode):
+                entry['delivery'] = self.env['m_lfm2_kilix_commands_delivery'] = mode
+                self.assertNotEqual(self.guard(expected).returncode, 0)
+        entry['delivery'] = self.env['m_lfm2_kilix_commands_delivery'] = 'first-use-upstream-download'
         del self.carrier['models']['lfm2-kilix-commands']
         self.assertNotEqual(self.guard(expected).returncode, 0)
+
+    def test_a_command_pin_that_is_not_a_first_use_download_is_refused(self):
+        for mode in ('bundled-command-model-archive', None):
+            with self.subTest(mode=mode):
+                expected = self.command_fixture(mode)
+                result = self.guard(expected)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('the command model must be a first-use download', result.stderr)
 
     def playalong_fixture(self):
         playalong = {'schema': 'plebian-os.playalong-default-models/v1', 'assets': {
@@ -132,6 +145,32 @@ class MixedModelDeliveryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         # Without the inventory the same entry is a false label.
         self.assertIn('delivery differs', self.guard().stderr)
+
+    def test_an_image_offline_model_keeps_its_delivery(self):
+        pin = {'asset_id': 'paradee-8m-v1.2', 'manifest_digest': '9' * 64}
+        (self.root / 'paradee-model.json').write_text(json.dumps(pin))
+        (self.root / 'en-core-web-sm-model.json').write_text(json.dumps(
+            {'asset_id': 'en-core-web-sm-3.8.0', 'manifest_digest': '8' * 64}))
+        self.carrier['models']['paradee-8m-v1.2'] = {
+            'artifact_id': 'paradee-8m-v1.2', 'manifest_digest': '9' * 64,
+            'delivery': 'image-offline-model'}
+        self.carrier['models']['en-core-web-sm-3.8.0'] = {
+            'artifact_id': 'en-core-web-sm-3.8.0', 'manifest_digest': '8' * 64,
+            'delivery': 'image-offline-model'}
+        self.env['m_paradee_8m_v1_2_delivery'] = 'image-offline-model'
+        self.env['m_en_core_web_sm_3_8_0_delivery'] = 'image-offline-model'
+        result = self.guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.carrier['models']['paradee-8m-v1.2']['delivery'] = 'first-use-upstream-download'
+        self.env['m_paradee_8m_v1_2_delivery'] = 'first-use-upstream-download'
+        self.assertIn('delivery differs', self.guard().stderr)
+        self.carrier['models']['paradee-8m-v1.2']['delivery'] = 'image-offline-model'
+        self.env['m_paradee_8m_v1_2_delivery'] = 'image-offline-model'
+        self.carrier['models']['paradee-8m-v1.2']['manifest_digest'] = '7' * 64
+        self.assertIn('image model manifest digest differs', self.guard().stderr)
+        self.carrier['models']['paradee-8m-v1.2']['manifest_digest'] = '9' * 64
+        del self.carrier['models']['en-core-web-sm-3.8.0']
+        self.assertIn('en-core-web-sm-3.8.0 is missing from the carrier', self.guard().stderr)
 
     def test_a_playalong_default_cannot_be_relabelled_or_drift(self):
         expected, playalong = self.playalong_fixture()

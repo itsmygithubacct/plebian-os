@@ -267,6 +267,8 @@ if rollback_native_runtime_transaction; then exit 99; fi
                 program = original
                 for selected, stub in zip(fixed, (identity, elevation, helper)):
                     program = program.replace(selected, shlex.quote(str(stub)))
+                program = (closure.shell_function(
+                    SCRIPTS[1], 'run_package_step_in_its_own_session') + '\n' + program)
                 self.events.unlink(missing_ok=True)
                 result = subprocess.run(['/bin/bash', '-euc',
                     program + '\nnative_runtime_command status\n'],

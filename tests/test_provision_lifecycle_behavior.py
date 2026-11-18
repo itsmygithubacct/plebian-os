@@ -67,6 +67,7 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "  done\n"
             "  exit 0\n"
             "fi\n"
+            "if [ \"${1:-}\" = -o ] && [ \"${2:-}\" = DPkg::Lock::Timeout=600 ]; then shift 2; fi\n"
             "if [ \"${1:-}\" = update ]; then\n"
             "  policy=\"$PLEBIAN_OS_APT_ETC_ROOT/apt/apt.conf.d/52plebian-os-security-upgrades\"\n"
             "  if [ -f \"$policy\" ]; then state=yes; else state=no; fi\n"
@@ -155,10 +156,12 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         apt = etc / "apt"
         self.assertFalse((apt / "sources.list").exists())
         self.assertFalse((apt / "sources.list.d" / "plebian-os-debian.sources").exists())
+        self.assertFalse((apt / "sources.list.d" / "plebian-os-debian-backports.sources").exists())
         self.assertFalse((apt / "sources.list.plebian-os-installer-snapshot").exists())
         self.assertEqual(list((etc / "plebian-os").glob(".apt-restore.*")), [])
         self.assertEqual(list((etc / "plebian-os").glob(".apt-coverage.*")), [])
         self.assertEqual(list((apt / "sources.list.d").glob(".plebian-os-live.*")), [])
+        self.assertEqual(list((apt / "sources.list.d").glob(".plebian-os-backports.*")), [])
 
     @staticmethod
     def _tree(root: Path) -> dict[str, bytes | None]:
@@ -172,8 +175,9 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         log = base / "apt.log"
         if not log.exists():
             return 0
+        # Every package step carries the dpkg lock wait; it is not the command.
         return sum(1 for line in log.read_text().splitlines()
-                   if line.split()[:1] == ["update"])
+                   if line.replace("-o DPkg::Lock::Timeout=600", "").split()[:1] == ["update"])
 
     def _run_library(self, body: str, env: dict[str, str]):
         return subprocess.run(
@@ -370,8 +374,21 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertEqual(list(etc.rglob("*.plebian-os-disabled")), [])
             self.assertEqual(live.read_text(), content)
             self.assertFalse((sources / "plebian-os-debian.sources").exists())
+            backports = sources / "plebian-os-debian-backports.sources"
+            backports_text = backports.read_text()
+            self.assertIn("Suites: trixie-backports\n", backports_text)
             self.assertIn("phase=lifetime", result.stdout)
-            self.assertEqual(self._apt_updates(base), 0)
+            # The new backports file is the one change, so apt updates once.
+            self.assertEqual(self._apt_updates(base), 1)
+            again = self._run_library(
+                self._release_body(base)
+                + "configure_apt_snapshot\n",
+                env,
+            )
+            self.assertEqual(again.returncode, 0, again.stderr)
+            self.assertEqual(backports.read_text(), backports_text)
+            self.assertFalse((sources / "plebian-os-debian.sources").exists())
+            self.assertEqual(self._apt_updates(base), 1)
 
     def test_fresh_live_release_keeps_live_sources_before_recording_install(self):
         for existing_sources in (False, True):
@@ -436,6 +453,11 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             ):
                 self.assertIn(expected, managed)
             self.assertNotIn("Check-Valid-Until", managed)
+            backports = (sources / "plebian-os-debian-backports.sources").read_text()
+            self.assertIn("Suites: trixie-backports\n", backports)
+            self.assertIn("URIs: https://deb.debian.org/debian\n", backports)
+            self.assertNotIn("Check-Valid-Until", backports)
+            self.assertNotIn("snapshot.debian.org", backports)
             self.assertEqual(self._apt_updates(base), 1)
 
     def test_operator_sources_disabled_by_the_snapshot_are_restored(self):
@@ -958,6 +980,10 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse((sources / "plebian-os-debian.sources").exists())
+            self.assertIn(
+                "Suites: trixie-backports\n",
+                (sources / "plebian-os-debian-backports.sources").read_text(),
+            )
 
     def test_operator_sources_without_point_release_updates_get_the_managed_source(self):
         with tempfile.TemporaryDirectory() as td:
@@ -981,6 +1007,59 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             self.assertEqual(operator.read_text(), content)
             self.assertIn("Suites: trixie trixie-updates\n",
                           (sources / "plebian-os-debian.sources").read_text())
+
+    def test_debian_backports_source_tracks_live_sources(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            etc, sources, env = self._apt_tree(base)
+            (etc / "os-release").write_text("VERSION_CODENAME=bookworm\n")
+            self._installer_snapshot_state(etc)
+            result = self._run_library(
+                self._release_body(base) + "configure_apt_snapshot\n", env
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            backports = sources / "plebian-os-debian-backports.sources"
+            text = backports.read_text()
+            self.assertIn("Suites: bookworm-backports\n", text)
+            self.assertNotIn("Check-Valid-Until", text)
+            self.assertIn(
+                "Suites: bookworm bookworm-updates\n",
+                (sources / "plebian-os-debian.sources").read_text(),
+            )
+            apt = base / "bin" / "apt-get"
+            script = apt.read_text()
+            self.assertTrue(script.endswith("exit 0\n"))
+            apt.write_text(script[:-len("exit 0\n")] + "exit 1\n")
+            failed = self._run_library(
+                "PLEBIAN_OS_RELEASE_MODE=0\n"
+                "PLEBIAN_OS_APT_SNAPSHOT=20260712T000000Z\n"
+                "configure_apt_snapshot\n",
+                env,
+            )
+            self.assertNotEqual(failed.returncode, 0)
+            self.assertIn("restored the previous apt configuration", failed.stderr)
+            self.assertEqual(backports.read_text(), text)
+            self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
+            apt.write_text(script)
+            pinned = self._run_library(
+                "PLEBIAN_OS_RELEASE_MODE=0\n"
+                "PLEBIAN_OS_APT_SNAPSHOT=20260712T000000Z\n"
+                "configure_apt_snapshot\n",
+                env,
+            )
+            self.assertEqual(pinned.returncode, 0, pinned.stderr)
+            self.assertFalse(backports.exists())
+            snapshot = (sources / "plebian-os-snapshot.sources").read_text()
+            self.assertNotIn("backports", snapshot)
+            self.assertEqual(snapshot.count("\nCheck-Valid-Until: no\n"), 2)
+            restored = self._run_library(
+                "PLEBIAN_OS_RELEASE_MODE=0\nPLEBIAN_OS_APT_SNAPSHOT=\n"
+                "configure_apt_snapshot\n",
+                env,
+            )
+            self.assertEqual(restored.returncode, 0, restored.stderr)
+            self.assertEqual(backports.read_text(), text)
+            self.assertFalse((sources / "plebian-os-snapshot.sources").exists())
 
     def test_live_switch_refuses_when_apt_config_is_unavailable(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1006,14 +1085,23 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             first = self._run_library(body, env)
             self.assertEqual(first.returncode, 0, first.stderr)
             content = managed.read_bytes()
-            self.assertEqual([path.name for path in sources.iterdir()], [managed.name])
-            # Handed to apt, the managed file would read as complete coverage.
+            backports = sources / "plebian-os-debian-backports.sources"
+            backports_content = backports.read_bytes()
+            self.assertEqual(
+                sorted(path.name for path in sources.iterdir()),
+                ["plebian-os-debian-backports.sources", "plebian-os-debian.sources"],
+            )
+            # Handed to apt, either managed file would read as complete coverage.
+            # Both are excluded from the operator inventory, so the second run
+            # still writes the live file and coverage stays incomplete.
             self._index_targets(base, managed.name, LIVE_DEBIAN_TARGETS)
+            self._index_targets(base, backports.name, LIVE_DEBIAN_TARGETS)
             (base / "apt.log").unlink()
 
             second = self._run_library(body, env)
             self.assertEqual(second.returncode, 0, second.stderr)
             self.assertEqual(managed.read_bytes(), content)
+            self.assertEqual(backports.read_bytes(), backports_content)
             self.assertEqual(self._apt_updates(base), 0)
             coverage = self._run_library(
                 '_live_debian_coverage_complete trixie || exit "$?"\n', env
@@ -2311,6 +2399,8 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
             "KILIX95_REF": ref,
             # Release mode needs Kilix Secrets in the closure since be1bd99.
             "KILIX_SECRETS_REF": ref,
+            # ... and, for 0.2.3, the pinned Neuronte faces.
+            "NEURONTE_REF": ref,
             "KILIX_PREBUILT_SHA256": digest,
             "PLEBIAN_OS_KILIX_GO_VERSION": "go1.26.5",
             "PLEBIAN_OS_KILIX_GO_SHA256_AMD64": digest,

@@ -1,0 +1,975 @@
+#!/usr/bin/python3 -I
+"""plebian-os-ssh-server - turn this computer's SSH server on or off.
+
+A fresh Plebian-OS installation has no SSH server. This helper is the one
+privileged path that adds or removes it, for the first-login question, the
+desktop's System menu, and anyone at a terminal:
+
+    sudo plebian-os-ssh-server enable    install openssh-server if needed, then
+                                         enable and start ssh.service
+    sudo plebian-os-ssh-server disable   stop and disable ssh.service (and
+                                         ssh.socket); the package and its host
+                                         keys stay, so the fingerprints do not
+                                         change if it is turned on again
+    plebian-os-ssh-server status         say whether it is on, where to connect,
+                                         and the host key fingerprints
+
+It takes exactly one of those words and nothing else, so sudo grants nothing
+wider than this. It does not change sshd's configuration: Debian's defaults
+apply, so every account that has a password can log in over SSH with it, and
+root cannot log in with a password.
+
+`enable` refuses while any account still has the public Plebian-OS 0.2.0
+starter password (or when it cannot check), before anything is installed:
+the fix is to change or lock that password first. It never claims a state it
+did not verify. Every change ends by reading the real state back, and an
+install that fails after Debian's postinst already started sshd is turned off
+again (or, if that fails too, reported as ON with the warning).
+
+`disable` also masks the extra sockets systemd-ssh-generator binds when sshd
+is installed (AF_VSOCK in a VM, the local AF_UNIX socket, a container's
+export socket), so nothing accepts SSH logins until `enable` runs again.
+
+openssh-server is installed only from the official Debian archive. apt runs
+with a source list this helper writes itself (deb.debian.org for the release
+and its updates, security.debian.org for security updates, all signed by
+debian-archive-keyring) and its own index directory, so no other configured
+source can supply the package or its dependencies, and nothing is removed.
+"""
+import ctypes
+import fcntl
+import json
+import os
+import pathlib
+import pwd
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+
+PROG = "plebian-os-ssh-server"
+PACKAGE = "openssh-server"
+SERVICE = "ssh.service"
+SOCKET = "ssh.socket"
+SSH_DIR = pathlib.Path("/etc/ssh")
+LOCK_PATH = "/run/plebian-os-ssh-server.lock"
+LOG_PATH = "/var/log/plebian-os-ssh-server.log"
+WORK_PARENT = "/var/lib/plebian-os"
+KEYRING = "/usr/share/keyrings/debian-archive-keyring.gpg"
+OS_RELEASE = "/etc/os-release"
+SHADOW_PATH = "/etc/shadow"
+SYSTEMD_ETC = pathlib.Path("/etc/systemd/system")
+MASK_RECORD = "/var/lib/plebian-os/ssh-server-masked-sockets"
+# Plebian-OS 0.2.0 shipped one shared password. An account still using it must
+# never become reachable by password over SSH through this helper.
+STARTER_PASSWORD = "plebian"
+# Sockets systemd-ssh-generator (systemd 256+) binds once sshd is installed.
+GENERATED_SOCKETS = ("sshd-vsock.socket", "sshd-unix-local.socket", "sshd-unix-export.socket")
+GENERATED_SOCKET_RE = re.compile(r"^sshd-[a-z0-9-]{1,40}\.socket$")
+# Units this helper may mask and later unmask: the generator's sockets, and
+# ssh.service/ssh.socket while openssh-server is only half installed.
+MASKABLE_RE = re.compile(r"^(ssh\.service|ssh\.socket|sshd-[a-z0-9-]{1,40}\.socket)$")
+# dpkg's current-state letter (second of ${db:Status-Abbrev}) for a package
+# that is neither fully installed (i) nor absent (n, or c for config files).
+HALF_STATES = "HUFWt"
+LOCAL_BRIDGES = ("docker", "veth", "br-", "virbr", "lxcbr", "lxdbr", "podman", "cni")
+ACTIONS = ("enable", "disable", "status", "help")
+ACCOUNT_RE = re.compile(r"^[a-z][-a-z0-9_]{0,31}$")
+CODENAME_RE = re.compile(r"^[a-z]{3,20}$")
+# Children never inherit the caller's environment: APT_CONFIG, DEBIAN_FRONTEND
+# overrides, proxies set by a user and similar cannot reach apt or dpkg.
+CLEAN_ENV = {
+    "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "DEBIAN_FRONTEND": "noninteractive",
+    "DEBCONF_NONINTERACTIVE_SEEN": "true",
+}
+APT_SAFETY = (
+    "-o", "Acquire::AllowInsecureRepositories=false",
+    "-o", "Acquire::AllowWeakRepositories=false",
+    "-o", "Acquire::AllowDowngradeToInsecureRepositories=false",
+    "-o", "APT::Get::AllowUnauthenticated=false",
+    "-o", "Acquire::Check-Valid-Until=true",
+    "-o", "Acquire::Languages=none",
+    "-o", "Acquire::Retries=3",
+    "-o", "Acquire::http::Timeout=60",
+    "-o", "Acquire::https::Timeout=60",
+    "-o", "DPkg::Lock::Timeout=300",
+)
+DPKG_OPTIONS = (
+    "-o", "Dpkg::Options::=--force-confdef",
+    "-o", "Dpkg::Options::=--force-confold",
+)
+
+USAGE = f"""usage: sudo {PROG} enable | disable
+       {PROG} status
+
+  enable   install openssh-server from Debian if needed, then turn SSH on
+  disable  turn SSH off (the package and host keys stay)
+  status   show whether SSH is on, the address to connect to, and the
+           host key fingerprints
+"""
+
+_log_stream = None
+
+
+class Refused(Exception):
+    """A request this helper will not carry out (exit 2)."""
+
+
+class Failed(Exception):
+    """A step that did not complete (exit 1)."""
+
+
+def say(text=""):
+    """Print for the person, and copy to the log when one is open. A closed
+    terminal must not stop a package step, so write errors are ignored."""
+    for stream in (sys.stdout, _log_stream):
+        if stream is None:
+            continue
+        try:
+            stream.write(text + "\n")
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+
+
+def is_root():
+    return os.geteuid() == 0
+
+
+SHIELDED_SIGNALS = (signal.SIGINT, signal.SIGHUP, signal.SIGTERM, signal.SIGQUIT)
+
+
+def child_signal_defaults():
+    """Children start with default signal handling. The helper ignores the
+    terminal's signals during a change; apt, dpkg and maintainer scripts must
+    not inherit that (they are kept away from the terminal by their own
+    session instead)."""
+    for number in SHIELDED_SIGNALS:
+        signal.signal(number, signal.SIG_DFL)
+
+
+def run(argv, *, check=False, env=None, errors=None):
+    """Run a fixed command with the clean environment, capturing output.
+
+    Apt calls pass env so APT_CONFIG names this helper's own apt.conf.
+    Everything else keeps CLEAN_ENV, which has no APT_CONFIG at all.
+    """
+    result = subprocess.run(list(argv), env=CLEAN_ENV if env is None else env,
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                            errors=errors, preexec_fn=child_signal_defaults)
+    if check and result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise Failed(f"{argv[0]} {' '.join(argv[1:3])} failed: {detail}")
+    return result
+
+
+def run_shielded(argv, *, env=None):
+    """Run an apt step whose dpkg must never be cut off half way.
+
+    The child gets its own session, so the terminal's Ctrl-C or hang-up never
+    reaches apt or dpkg, and this helper ignores those signals while it waits
+    and keeps reading the child's output even if its own terminal has gone.
+    Returns the exit status."""
+    previous = {}
+    for number in SHIELDED_SIGNALS:
+        previous[number] = signal.signal(number, signal.SIG_IGN)
+    try:
+        child = subprocess.Popen(list(argv), env=CLEAN_ENV if env is None else env,
+                                 stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                 text=True, errors="replace",
+                                 start_new_session=True,
+                                 preexec_fn=child_signal_defaults)
+        with child.stdout:
+            for line in child.stdout:
+                say("  " + line.rstrip("\n"))
+        return child.wait()
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+def audit(message):
+    """One line to the system journal (auth facility) and to the log file."""
+    caller = os.environ.get("SUDO_USER") or "root"
+    if caller != "root" and not ACCOUNT_RE.fullmatch(caller):
+        caller = "unknown"
+    # One entry is one line, in the log and the journal.
+    message = " | ".join(part.strip() for part in str(message).splitlines() if part.strip())
+    line = f"{message} (requested by {caller})"
+    if is_root():
+        run(["logger", "-t", PROG, "-p", "auth.notice", "--", line])
+    if _log_stream is not None:
+        try:
+            _log_stream.write(line + "\n")
+            _log_stream.flush()
+        except (OSError, ValueError):
+            pass
+
+
+def open_log():
+    global _log_stream
+    try:
+        fd = os.open(LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o640)
+    except OSError as error:
+        raise Failed(f"cannot open {LOG_PATH}: {error}")
+    _log_stream = os.fdopen(fd, "a")
+
+
+def take_lock():
+    try:
+        fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as error:
+        raise Failed(f"cannot create {LOCK_PATH}: {error}")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        raise Refused("another plebian-os-ssh-server run is in progress")
+    return fd
+
+
+# ---- state ------------------------------------------------------------------
+
+def package_state():
+    """dpkg's state for openssh-server, two letters ("ii", "iU", "iF", "rc",
+    ...), or "" when dpkg has no record of it."""
+    result = run(["dpkg-query", "-W", "-f=${db:Status-Abbrev}", PACKAGE])
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()[:2]
+
+
+def package_installed():
+    return package_state() == "ii"
+
+
+def package_half_installed(state=None):
+    """Unpacked but not configured, half-configured, awaiting triggers...: a
+    later `dpkg --configure -a` would run the postinst, which starts sshd."""
+    state = package_state() if state is None else state
+    return len(state) == 2 and state[1] in HALF_STATES
+
+
+def package_present(state=None):
+    """Installed or half installed: anything but not-installed or config-files."""
+    state = package_state() if state is None else state
+    return len(state) == 2 and state[1] not in "nc"
+
+
+def unit_state(verb, unit):
+    """`systemctl is-enabled|is-active UNIT`, as its one-word answer."""
+    result = run(["systemctl", verb, unit])
+    word = (result.stdout.strip().splitlines() or [""])[0]
+    return word or "unknown"
+
+
+def generated_sockets():
+    """The generator's fixed socket names plus any other sshd-*.socket systemd
+    has loaded (systemd.ssh_listen= or the ssh.listen credential)."""
+    names = list(GENERATED_SOCKETS)
+    result = run(["systemctl", "list-units", "--all", "--plain", "--no-legend",
+                  "--type=socket", "sshd-*.socket"])
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if fields and GENERATED_SOCKET_RE.fullmatch(fields[0]) and fields[0] not in names:
+            names.append(fields[0])
+    return names
+
+
+def sshd_listening():
+    """Local addresses an sshd process listens on (needs root to see owners)."""
+    if not is_root():
+        return []
+    result = run(["ss", "-H", "-l", "-t", "-n", "-p"])
+    rows = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if '(("sshd",' in line and len(fields) >= 4:
+            rows.append(fields[3])
+    return rows
+
+
+class State:
+    """What can accept an SSH login now, or will after the next boot."""
+
+    def __init__(self):
+        units = (SERVICE, SOCKET)
+        self.enabled = [u for u in units if unit_state("is-enabled", u) == "enabled"]
+        self.active = [u for u in units if unit_state("is-active", u) == "active"]
+        self.extra = [u for u in generated_sockets() if unit_state("is-active", u) == "active"]
+        self.listening = sshd_listening()
+
+    @property
+    def on(self):
+        return bool(self.enabled or self.active or self.extra or self.listening)
+
+    @property
+    def fully_on(self):
+        return SERVICE in self.enabled and SERVICE in self.active
+
+    def describe(self):
+        parts = []
+        if self.enabled:
+            parts.append("enabled at boot: " + ", ".join(self.enabled))
+        if self.active:
+            parts.append("running: " + ", ".join(self.active))
+        if self.extra:
+            parts.append("listening (systemd-ssh-generator): " + ", ".join(self.extra))
+        if self.listening:
+            parts.append("sshd listening on " + ", ".join(self.listening))
+        return "; ".join(parts) or "nothing accepts SSH logins"
+
+
+# ---- passwords ----------------------------------------------------------------
+
+def load_crypt():
+    try:
+        library = ctypes.CDLL("libcrypt.so.1", use_errno=True)
+    except OSError as error:
+        raise Refused(f"cannot check account passwords (libcrypt: {error}); SSH was not turned on")
+    library.crypt.restype = ctypes.c_char_p
+    library.crypt.argtypes = (ctypes.c_char_p, ctypes.c_char_p)
+    return library.crypt
+
+
+def password_accounts():
+    """(accounts that have a usable password, accounts whose password is the
+    public starter password). Fails closed: anything it cannot check refuses."""
+    try:
+        with open(SHADOW_PATH, encoding="utf-8", errors="strict") as stream:
+            lines = stream.read().splitlines()
+    except (OSError, UnicodeError) as error:
+        raise Refused(f"cannot read {SHADOW_PATH} to check account passwords ({error}); "
+                      "SSH was not turned on")
+    crypt = None
+    usable, starter = [], []
+    for line in lines:
+        fields = line.split(":")
+        if len(fields) < 2 or not fields[0]:
+            continue
+        name, stored = fields[0], fields[1]
+        # Empty (sshd refuses empty passwords by default), locked (!) or no
+        # password (*): no password login is possible for these.
+        if not stored or stored[0] in "!*":
+            continue
+        usable.append(name)
+        if crypt is None:
+            crypt = load_crypt()
+        try:
+            computed = crypt(STARTER_PASSWORD.encode(), stored.encode())
+        except (ValueError, TypeError) as error:
+            raise Refused(f"cannot check the password of {name!r} ({error}); SSH was not turned on")
+        if computed is None or computed.startswith(b"*"):
+            raise Refused(f"cannot check the password of {name!r} (unknown hash); "
+                          "SSH was not turned on")
+        if computed.decode("utf-8", "replace") == stored:
+            starter.append(name)
+    return usable, starter
+
+
+def refuse_starter_passwords():
+    usable, starter = password_accounts()
+    if not starter:
+        return usable
+    shown = ", ".join(starter)
+    lines = [
+        f"{'account ' + shown + ' still uses' if len(starter) == 1 else 'accounts ' + shown + ' still use'} "
+        "the public Plebian-OS starter password.",
+        "Anyone could log in with it over SSH, so SSH was not turned on and nothing was installed.",
+        "Change it first, then run this again:",
+    ]
+    for name in starter:
+        if name == os.environ.get("SUDO_USER"):
+            lines.append(f"  passwd                  (your own account, {name})")
+        else:
+            lines.append(f"  sudo passwd {name:<12}(or lock it: sudo passwd -l {name})")
+    raise Refused("\n".join(lines))
+
+
+def debian_codename():
+    try:
+        text = pathlib.Path(OS_RELEASE).read_text()
+    except OSError as error:
+        raise Failed(f"cannot read {OS_RELEASE}: {error}")
+    values = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip().strip('"')
+    if values.get("ID") != "debian":
+        raise Refused("this helper only installs from Debian, and this is not a Debian system")
+    codename = values.get("VERSION_CODENAME", "")
+    if not CODENAME_RE.fullmatch(codename):
+        raise Failed(f"cannot tell the Debian release from {OS_RELEASE}")
+    return codename
+
+
+def debian_sources(codename):
+    """The only apt source the install sees: Debian main, its point-release
+    updates and its security suite, each pinned to the Debian archive key."""
+    return (
+        "# Written by plebian-os-ssh-server for one openssh-server install.\n"
+        "Types: deb\n"
+        "URIs: https://deb.debian.org/debian\n"
+        f"Suites: {codename} {codename}-updates\n"
+        "Components: main\n"
+        f"Signed-By: {KEYRING}\n"
+        "\n"
+        "Types: deb\n"
+        "URIs: https://security.debian.org/debian-security\n"
+        f"Suites: {codename}-security\n"
+        "Components: main\n"
+        f"Signed-By: {KEYRING}\n"
+    )
+
+
+def apt_options(work):
+    sources = work / "sources.list.d"
+    return (
+        "-o", "Dir::Etc::SourceList=/dev/null",
+        "-o", f"Dir::Etc::SourceParts={sources}",
+        "-o", f"Dir::State::Lists={work / 'lists'}",
+        "-o", "Dir::Cache::pkgcache=",
+        "-o", "Dir::Cache::srcpkgcache=",
+        *APT_SAFETY,
+    )
+
+
+def apt_env(work):
+    """CLEAN_ENV plus this helper's apt.conf.
+
+    Dir::Etc::main in that file is /dev/null, and Dir::Etc::Parts is applied
+    before apt.conf.d is read, so the host apt.conf and a snippet such as
+    APT::Sources::With cannot add a package; only validated proxy values are
+    copied in (operator_proxies). The caller's APT_CONFIG is not in CLEAN_ENV.
+    """
+    env = dict(CLEAN_ENV)
+    env["APT_CONFIG"] = str(work / "apt.conf")
+    return env
+
+
+# The operator's apt proxy, ported rule for rule from the shared
+# prepare_release_apt_config (install-deps.sh, plebian-os-update.sh,
+# plebian-os-provision.sh); test_ssh_server_optin feeds both one table of
+# inputs so they cannot drift. Dir::Etc::main is /dev/null in this helper's
+# apt.conf, so without this a proxy debian-installer wrote to /etc/apt/apt.conf
+# would be lost. Keys: Acquire::{http,https,ftp}::Proxy and their per-host
+# form with a host of [A-Za-z0-9.-]+. Value: DIRECT, or an http://, https://
+# or socks5h:// URL, with an optional userinfo [A-Za-z0-9._~%!$&()*+,=:-]+@
+# before the host, and no quotes, semicolons, braces, backslashes or
+# whitespace. A dropped setting is reported by its key, never its value. The
+# private apt.conf is mode 0600 when a copied value has userinfo. Anything
+# else, including a proxy auto-detect program, is left out (apt-config dump
+# only parses, it runs nothing). A proxy cannot forge a package: the signed
+# Release check still applies.
+PROXY_KEYS = ("Acquire::http::Proxy", "Acquire::https::Proxy", "Acquire::ftp::Proxy")
+PROXY_HOST_BAD_RE = re.compile(r"[^A-Za-z0-9.-]", re.ASCII)
+PROXY_VALUE_BAD = set("'\";{}\\") | set(" \t\n\v\f\r")
+# Group 2 is the optional userinfo with its @; an @ later, in the path, is
+# not a credential.
+PROXY_URL_RE = re.compile(
+    r"(http|https|socks5h)://([A-Za-z0-9._~%!$&()*+,=:-]+@)?[A-Za-z0-9.-]+(:[0-9]{1,5})?"
+    r"(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?",
+    re.ASCII)
+
+
+def proxy_lines(dump):
+    """(apt.conf lines, carries userinfo) for the validated proxies in
+    `apt-config dump --no-empty --format '%f%N%v%n'` output, in order. Dropped
+    keys are reported; values never are."""
+    lines = []
+    userinfo = False
+    for line in dump.split("\n"):
+        if not line or "\t" not in line:
+            continue
+        key, value = line.split("\t", 1)
+        if key not in PROXY_KEYS:
+            if not key.startswith(tuple(k + "::" for k in PROXY_KEYS)):
+                continue
+            host = key.split("::Proxy::", 1)[1]
+            if not host or "::" in host or PROXY_HOST_BAD_RE.search(host):
+                sys.stderr.write(f"{PROG}: dropping proxy setting {key}\n")
+                continue
+        match = None
+        if PROXY_VALUE_BAD.intersection(value):
+            ok = False
+        elif value == "DIRECT":
+            ok = True
+        else:
+            match = PROXY_URL_RE.fullmatch(value)
+            ok = match is not None
+        if not ok:
+            sys.stderr.write(f"{PROG}: dropping proxy setting {key}\n")
+            continue
+        if match and match.group(2):
+            userinfo = True
+        lines.append(f'{key} "{value}";\n')
+    return lines, userinfo
+
+
+def operator_proxies():
+    """The validated proxies of the operator apt configuration, read without
+    the caller's APT_CONFIG (CLEAN_ENV has none)."""
+    env = dict(CLEAN_ENV, LANG="C", LC_ALL="C")
+    try:
+        # Bytes that are not UTF-8 stay as surrogates, which no rule accepts,
+        # as the shell's C-locale patterns reject them.
+        result = run(["apt-config", "dump", "--no-empty", "--format", "%f%N%v%n"],
+                     env=env, errors="surrogateescape")
+    except OSError:
+        return [], False  # as the shell's `|| true`: no operator proxy
+    return proxy_lines(result.stdout or "")
+
+
+def prepare_apt_work(codename):
+    if not os.path.isfile(KEYRING):
+        raise Failed(f"the Debian archive keyring is missing ({KEYRING})")
+    os.makedirs(WORK_PARENT, mode=0o755, exist_ok=True)
+    work = pathlib.Path(tempfile.mkdtemp(prefix=".ssh-server-apt.", dir=WORK_PARENT))
+    # apt downloads as its unprivileged _apt user, which must reach lists/partial
+    # (apt hands that directory to _apt itself). Only apt.conf can hold a
+    # secret (a proxy password), and it is 0600 then.
+    work.chmod(0o755)
+    (work / "sources.list.d").mkdir(mode=0o755)
+    (work / "apt.conf.d").mkdir(mode=0o755)
+    (work / "lists" / "partial").mkdir(mode=0o755, parents=True)
+    (work / "sources.list.d" / "debian.sources").write_text(debian_sources(codename))
+    proxies, userinfo = operator_proxies()
+    # Created 0600, so a proxy password is never readable by others, even
+    # briefly; apt reads it as root and hands its methods the configuration.
+    conf = work / "apt.conf"
+    fd = os.open(conf, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        stream.write('Dir::Etc::main "/dev/null";\n'
+                     f'Dir::Etc::Parts "{work / "apt.conf.d"}";\n'
+                     + "".join(proxies))
+    os.chmod(conf, 0o600 if userinfo else 0o644)
+    return work
+
+
+# Without --error-on=any, apt-get update exits 0 when a source cannot be
+# fetched (it only warns), and the failure would surface later as "no
+# installation candidate". trixie's apt (3.0) has the option.
+APT_UPDATE = ("update", "--error-on=any")
+NETWORK_HINT = ("could not read the Debian package lists (apt's messages above say why). "
+                "Check the network connection, and the proxy setting if this computer "
+                "uses one (Acquire::http::Proxy in /etc/apt/apt.conf)")
+
+INST_RE = re.compile(r"^(Inst|Conf|Remv|Purg) (\S+)")
+
+
+def check_plan(options, env):
+    """Simulate first: refuse a plan that would remove anything or install a
+    package from anywhere but the Debian sources above (apt cannot see any
+    other source, so that would mean apt itself was misconfigured)."""
+    result = run(["apt-get", "-s", *options, "--no-remove", "install", PACKAGE], env=env)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        raise Failed(f"apt could not plan the install: {detail}")
+    installs = []
+    for line in result.stdout.splitlines():
+        match = INST_RE.match(line)
+        if not match:
+            continue
+        kind, name = match.groups()
+        if kind in ("Remv", "Purg"):
+            raise Refused(f"installing {PACKAGE} would remove {name}; nothing was changed")
+        if kind == "Inst":
+            if not re.search(r"\((\S+) (Debian|Debian-Security):", line):
+                raise Refused(f"apt planned {name} from a source that is not Debian: {line}")
+            installs.append(name)
+    return installs
+
+
+def install_package():
+    codename = debian_codename()
+    work = prepare_apt_work(codename)
+    try:
+        options = apt_options(work)
+        env = apt_env(work)
+        say(f"Reading the Debian package lists for {codename} (deb.debian.org, security.debian.org)...")
+        status = run_shielded(["apt-get", *options, *APT_UPDATE], env=env)
+        if status != 0:
+            raise Failed(NETWORK_HINT)
+        installs = check_plan(options, env)
+        say(f"Installing from Debian: {', '.join(installs) if installs else PACKAGE}")
+        status = run_shielded(["apt-get", *options, *DPKG_OPTIONS, "-y", "--no-remove",
+                               "install", PACKAGE], env=env)
+        if status != 0:
+            raise Failed(f"apt-get install {PACKAGE} exited with status {status}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if not package_installed():
+        raise Failed(f"{PACKAGE} is not installed after apt-get finished")
+
+
+# ---- what to tell the person --------------------------------------------------
+
+def host_fingerprints():
+    rows = []
+    for path in sorted(SSH_DIR.glob("ssh_host_*_key.pub")):
+        result = run(["ssh-keygen", "-l", "-E", "sha256", "-f", str(path)])
+        if result.returncode != 0:
+            continue
+        fields = result.stdout.split()
+        # "<bits> SHA256:<hash> <comment> (<TYPE>)"
+        if len(fields) >= 2:
+            kind = fields[-1].strip("()") if fields[-1].startswith("(") else path.name
+            rows.append((kind, fields[1]))
+    return rows
+
+
+def listen_port():
+    if is_root() and os.path.exists("/usr/sbin/sshd"):
+        result = run(["/usr/sbin/sshd", "-T"])
+        for line in result.stdout.splitlines():
+            key, _, value = line.partition(" ")
+            if key == "port" and value.strip().isdigit():
+                return int(value.strip())
+    # Without root sshd -T cannot run; read a plain Port line the way sshd
+    # would see it first (Debian includes sshd_config.d/*.conf at the top).
+    candidates = sorted((SSH_DIR / "sshd_config.d").glob("*.conf")) + [SSH_DIR / "sshd_config"]
+    for path in candidates:
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            match = re.match(r"^\s*Port\s+(\d+)\s*$", line, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+            if re.match(r"^\s*Match\s", line, re.IGNORECASE):
+                break
+    return 22
+
+
+def addresses():
+    result = run(["ip", "-j", "address", "show", "scope", "global"])
+    rows = []
+    try:
+        links = json.loads(result.stdout or "[]")
+    except ValueError:
+        return rows
+    for link in links:
+        name = link.get("ifname", "?")
+        # Container and VM bridges are reachable only from this computer.
+        if name.startswith(LOCAL_BRIDGES):
+            continue
+        for info in link.get("addr_info", []):
+            family, local = info.get("family"), info.get("local")
+            if local and family in ("inet", "inet6"):
+                rows.append((name, family, local))
+    return rows
+
+
+def login_name():
+    user = os.environ.get("SUDO_USER") or ""
+    if not user and not is_root():
+        try:
+            user = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError:
+            user = ""
+    if not ACCOUNT_RE.fullmatch(user) or user == "root":
+        user = "<your-user-name>"
+    return user
+
+
+def report_on(headline="SSH server: ON", detail=""):
+    user = login_name()
+    port = listen_port()
+    port_flag = "" if port == 22 else f" -p {port}"
+    say("")
+    say(headline)
+    if detail:
+        say(f"  ({detail})")
+    say("")
+    say("This computer accepts SSH logins from the network for every account on it")
+    say("that has a password, not only yours. Anyone who can reach it and knows or")
+    say("guesses one of those passwords can log in as that account. Root cannot log")
+    say("in with a password (Debian's default).")
+    if is_root():
+        try:
+            usable, _ = password_accounts()
+        except Refused:
+            usable = []
+        named = [name for name in usable if name != "root"]
+        if named:
+            say("Accounts with a password here: " + ", ".join(named))
+    say("")
+    say("Connect from another computer with:")
+    rows = addresses()
+    hostname = run(["hostname"]).stdout.strip()
+    for name, family, local in rows:
+        host = f"[{local}]" if family == "inet6" and port_flag else local
+        say(f"  ssh{port_flag} {user}@{host}    ({name})")
+    if hostname:
+        say(f"  ssh{port_flag} {user}@{hostname}    (if your network resolves this name)")
+    if not rows:
+        say("  (no network address yet; run `plebian-os-ssh-server status` once connected)")
+    say("")
+    say("Host key fingerprints. The first time you connect, check that ssh shows")
+    say("one of these before you answer yes:")
+    prints = host_fingerprints()
+    for kind, value in prints:
+        say(f"  {kind:<8} {value}")
+    if not prints:
+        say("  (no host keys found in /etc/ssh)")
+    say("")
+    say(f"Turn it off again with:  sudo {PROG} disable")
+    say("Optional: logins with an SSH key instead of a password are safer. Add your")
+    say("public key to ~/.ssh/authorized_keys, check that it works, then set")
+    say("'PasswordAuthentication no' in a file under /etc/ssh/sshd_config.d/.")
+    say("This helper does not do that for you.")
+
+
+def half_installed_note(dpkg_state):
+    """What the next package repair will do with a half-installed server."""
+    say("")
+    if unit_state("is-enabled", SERVICE) == "masked":
+        say(f"{PACKAGE} is only half installed (dpkg state {dpkg_state}). ssh.service and")
+        say("ssh.socket are masked, so the next package repair (`sudo dpkg --configure -a`,")
+        say("which the updater asks for) finishes the install without starting SSH.")
+        say(f"To turn SSH on:  sudo {PROG} enable")
+        say(f"To remove it:    sudo apt-get purge {PACKAGE}")
+    else:
+        say(f"WARNING: {PACKAGE} is only half installed (dpkg state {dpkg_state}) and")
+        say("ssh.service is not masked: the next package repair (`sudo dpkg --configure -a`)")
+        say(f"will start SSH. Run  sudo {PROG} disable  first.")
+
+
+def report_final(failed):
+    """The last thing every enable/disable run prints: the state read back
+    from systemd and the socket table, never the state the run intended."""
+    state = State()
+    if state.on:
+        headline = "SSH server: ON"
+        if failed:
+            headline += " -- this run reported an error (above), and SSH is still on"
+        report_on(headline, state.describe())
+    else:
+        say("")
+        say("SSH server: OFF" + (" -- nothing accepts SSH logins" if failed else ""))
+    dpkg_state = package_state()
+    if package_half_installed(dpkg_state):
+        half_installed_note(dpkg_state)
+    return state
+
+
+# ---- generator sockets --------------------------------------------------------
+
+def read_mask_record():
+    try:
+        text = pathlib.Path(MASK_RECORD).read_text()
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        raise Failed(f"cannot read {MASK_RECORD}: {error}")
+    return [line for line in text.splitlines() if MASKABLE_RE.fullmatch(line)]
+
+
+def write_mask_record(units):
+    os.makedirs(WORK_PARENT, mode=0o755, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".ssh-server-masked.", dir=WORK_PARENT)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write("".join(unit + "\n" for unit in units))
+        os.chmod(temporary, 0o644)
+        os.replace(temporary, MASK_RECORD)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def masked_by_link(unit):
+    link = SYSTEMD_ETC / unit
+    return link.is_symlink() and os.readlink(link) == "/dev/null"
+
+
+def unmask_recorded():
+    """Undo only the masks this helper added (the generator's sockets, and
+    ssh.service/ssh.socket held while the package was half installed), so they
+    are back to the Debian/systemd default (bound again at the next boot)."""
+    recorded = read_mask_record()
+    for unit in recorded:
+        if masked_by_link(unit):
+            run(["systemctl", "unmask", unit], check=True)
+    if recorded:
+        os.unlink(MASK_RECORD)
+
+
+# ---- actions ------------------------------------------------------------------
+
+def turn_off(hold=False):
+    """Stop and disable everything that accepts SSH logins. With `hold` (the
+    package is half installed) also mask ssh.service and ssh.socket, so the
+    postinst a later `dpkg --configure -a` runs cannot start them (its
+    deb-systemd-helper unmask leaves masks it did not make). Returns problems."""
+    problems = []
+    for unit in (SOCKET, SERVICE):
+        result = run(["systemctl", "disable", "--now", unit])
+        if result.returncode != 0 and unit_state("is-enabled", unit) not in ("not-found", "disabled", "masked"):
+            problems.append(f"{unit}: {(result.stderr or result.stdout).strip()}")
+    recorded = read_mask_record()
+    added = []
+    for unit in ((SERVICE, SOCKET) if hold else ()) + tuple(generated_sockets()):
+        if unit_state("is-enabled", unit) == "masked":
+            continue  # already masked (by an earlier disable, or the owner)
+        result = run(["systemctl", "mask", "--now", unit])
+        if result.returncode != 0 and unit_state("is-enabled", unit) != "masked":
+            problems.append(f"{unit}: {(result.stderr or result.stdout).strip()}")
+        elif unit not in recorded:
+            added.append(unit)
+    if added:
+        write_mask_record(recorded + added)
+    return problems
+
+
+def cmd_enable():
+    audit("enable")
+    refuse_starter_passwords()
+    was_on = State().on
+    try:
+        if not package_installed():
+            install_package()
+        else:
+            say(f"{PACKAGE} is already installed.")
+        if not any(SSH_DIR.glob("ssh_host_*_key")):
+            run(["ssh-keygen", "-A"], check=True)
+        unmask_recorded()
+        # ssh.service checks the configuration itself (ExecStartPre=sshd -t)
+        # once its runtime directory exists, so a bad configuration fails here.
+        result = run(["systemctl", "enable", "--now", SERVICE])
+        if result.returncode != 0:
+            raise Failed(f"could not enable {SERVICE}: "
+                         + (result.stderr or result.stdout).strip()
+                         + f"; see `journalctl -u {SERVICE}`")
+        if not State().fully_on:
+            raise Failed(f"{SERVICE} is not running after it was enabled; see "
+                         f"`journalctl -u {SERVICE}`")
+    except (Failed, Refused, OSError):
+        # Debian's postinst enables and starts ssh.service during the install,
+        # so a failure after that point can leave it on. Unless it was on
+        # before this run, put it back off; report_final then says what is true.
+        dpkg_state = package_state()
+        if not was_on and package_present(dpkg_state):
+            problems = turn_off(hold=package_half_installed(dpkg_state))
+            audit("enable failed; could not turn SSH off again: " + "; ".join(problems)
+                  if problems else "enable failed; turned SSH off again")
+        raise
+    audit("enabled: ssh.service is enabled and running")
+    report_on()
+    return 0
+
+
+def cmd_disable():
+    audit("disable")
+    dpkg_state = package_state()
+    if not package_present(dpkg_state) and not State().on:
+        say("SSH server: OFF (openssh-server is not installed). Nothing to change.")
+        return 0
+    half = package_half_installed(dpkg_state)
+    problems = turn_off(hold=half)
+    state = State()
+    if problems or state.on:
+        raise Failed("SSH could not be turned off completely: "
+                     + ("; ".join(problems) or state.describe()))
+    audit("disabled: ssh.service, ssh.socket and the generator's sockets are off"
+          + (f" (package half installed, dpkg state {dpkg_state}: ssh.service and ssh.socket masked)"
+             if half else ""))
+    say("SSH server: OFF")
+    if half:
+        half_installed_note(dpkg_state)
+        return 0
+    say("")
+    say("New SSH logins are refused. Sessions that are already open keep running")
+    say("until they end. openssh-server and its host keys stay installed, so the")
+    say("fingerprints are the same if you turn it on again with:")
+    say(f"  sudo {PROG} enable")
+    return 0
+
+
+def cmd_status():
+    dpkg_state = package_state()
+    state = State()
+    if not package_present(dpkg_state) and not state.on:
+        say("SSH server: OFF (openssh-server is not installed)")
+        say(f"Turn it on with:  sudo {PROG} enable")
+        return 0
+    if state.fully_on:
+        report_on()
+        if state.extra:
+            say("Also listening (systemd-ssh-generator): " + ", ".join(state.extra))
+    else:
+        if state.on:
+            say("SSH server: ON, partly (" + state.describe() + ")")
+        else:
+            say("SSH server: OFF")
+        if package_half_installed(dpkg_state):
+            half_installed_note(dpkg_state)
+        say(f"Turn it on with:  sudo {PROG} enable")
+        say(f"Turn it off with: sudo {PROG} disable")
+    return 0
+
+
+def main(argv):
+    if len(argv) != 1 or argv[0] not in ACTIONS:
+        sys.stderr.write(USAGE)
+        return 2
+    action = argv[0]
+    if action == "help":
+        sys.stdout.write(USAGE)
+        return 0
+    changing = False
+    try:
+        if action == "status":
+            return cmd_status()
+        if not is_root():
+            raise Refused(f"`{action}` needs root: run  sudo {PROG} {action}")
+        os.umask(0o022)
+        # A change, once started, runs to the end: the terminal's Ctrl-C,
+        # hang-up or quit, or a stray TERM, never leaves openssh-server half
+        # installed or ssh.service half changed. Every step is bounded (apt
+        # timeouts); children get default handling back (child_signal_defaults).
+        for number in SHIELDED_SIGNALS:
+            signal.signal(number, signal.SIG_IGN)
+        lock = take_lock()
+        try:
+            changing = True
+            open_log()
+            return cmd_enable() if action == "enable" else cmd_disable()
+        finally:
+            os.close(lock)
+    except Refused as error:
+        if is_root() and action != "status":
+            audit(f"refused: {error}")
+        sys.stderr.write(f"{PROG}: refused: {error}\n")
+        if changing:
+            final_state_after_error(failed=False)
+        return 2
+    except (Failed, OSError) as error:
+        if is_root() and action != "status":
+            audit(f"failed: {error}")
+        sys.stderr.write(f"{PROG}: {error}\n")
+        if changing:
+            final_state_after_error(failed=True)
+        return 1
+
+
+def final_state_after_error(failed):
+    try:
+        sys.stderr.flush()
+        state = report_final(failed)
+        audit("final state: " + ("ON (" + state.describe() + ")" if state.on else "OFF"))
+    except Exception as error:  # noqa: BLE001 - say so rather than guess
+        sys.stderr.write(f"{PROG}: could not read the SSH server state back: {error}\n"
+                         f"Check it with:  {PROG} status\n")
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

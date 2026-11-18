@@ -171,11 +171,11 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         source = (ROOT / 'provision/plebian-os-provision.sh').read_text()
         start = source.rindex('\nnormalize_accounts_service_package_directory\n')
         end = source.index('# Ship only the small source-closure installer', start)
-        ollama_start = source.index('install_ollama_runtime_from_carrier() {', start)
-        ollama_end = source.index('# The first-run wizard requires this software', ollama_start)
-        sequence = (source[start:ollama_start] + source[ollama_end:end]).replace(
+        # The Ollama install is defined with the library functions and stubbed here.
+        sequence = source[start:end].replace(
             '/usr/local/sbin/' + HELPER.name, str(root / 'installed-helper'))
         stubs = ''.join(name + '() { :; }\n' for name in (
+            'install_ollama_runtime_from_carrier',
             'normalize_accounts_service_package_directory', 'install_no_beep_defaults',
             'disable_audio_holding_user_units', 'install_quiet_console_defaults',
             'install_lid_defaults', 'install_desktop_wallpaper', 'install_version_marker',

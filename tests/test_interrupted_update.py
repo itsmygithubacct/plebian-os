@@ -1,9 +1,13 @@
 """An update killed mid-transaction is detected, and --recover-interrupted undoes it."""
 import os
 from pathlib import Path
+import pty
+import shutil
 import subprocess
 import tempfile
 import unittest
+
+from test_package_addition_rollback import APT, DPKG
 
 ROOT = Path(__file__).resolve().parents[1]
 UPDATE_PATH = ROOT / "provision" / "plebian-os-update.sh"
@@ -33,7 +37,7 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.log = self.tmp / "log"
         self.log.write_text("")
 
-    def run_lib(self, body, **extra):
+    def run_lib(self, body, tty=None, **extra):
         env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
         env.update({"HOME": str(self.tmp / "home"), "LOG": str(self.log),
                     # never this machine's own installation record
@@ -45,8 +49,21 @@ class InterruptedUpdateTests(unittest.TestCase):
             f"source {str(UPDATE_PATH)!r}\n"
             f"PLEB_STATE_HOME={str(self.state)!r}\n"
             + STUBS + body)
-        return subprocess.run(["bash", "-c", script], env=env, text=True,
-                              capture_output=True, check=False, timeout=60)
+        if tty is None:
+            return subprocess.run(["bash", "-c", script], env=env, text=True,
+                                  capture_output=True, check=False, timeout=60)
+        # tty="dead": the terminal hung up, so every write to it fails with EIO.
+        master, slave = pty.openpty()
+        try:
+            if tty == "dead":
+                os.close(master)
+                master = None
+            return subprocess.run(["bash", "-c", script], env=env, stdin=slave,
+                                  stdout=slave, stderr=slave, check=False, timeout=60)
+        finally:
+            os.close(slave)
+            if master is not None:
+                os.close(master)
 
     DEAD = "pid=999999\nstart=1\nboot=gone\n"
 
@@ -61,6 +78,81 @@ class InterruptedUpdateTests(unittest.TestCase):
 
     def boot_id(self):
         return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+
+    def test_an_interrupt_on_a_hung_up_terminal_still_exits_with_its_signal_status(self):
+        # The warning cannot be written (EIO); set -e must not turn 129 into 1.
+        result = self.run_lib("acknowledge_update_interrupt 129\n", tty="dead")
+        self.assertEqual(result.returncode, 129)
+
+    def test_the_rollback_leaves_a_hung_up_terminal_but_keeps_a_live_one(self):
+        body = (
+            'rollback_stack_transaction() {\n'
+            '    echo "fd0=$(readlink /proc/$$/fd/0) fd1=$(readlink /proc/$$/fd/1) fd2=$(readlink /proc/$$/fd/2)" >>"$LOG"\n'
+            '    warn "rolling back"\n'
+            '}\n'
+            '_STACK_TXN_ACTIVE=1\n_STACK_TXN_DIR=' + str(self.state / "stack-rollback.Now001") + '\n'
+            'mkdir -p "$_STACK_TXN_DIR"\n'
+            'stack_transaction_cleanup\n')
+        for tty, detached in (("dead", True), ("live", False)):
+            with self.subTest(tty=tty):
+                self.log.write_text("")
+                result = self.run_lib(body, tty=tty)
+                self.assertEqual(result.returncode, 1)   # an uncommitted update exits non-zero
+                line = [x for x in self.log.read_text().splitlines() if x.startswith("fd0=")][0]
+                self.assertEqual(line == "fd0=/dev/null fd1=/dev/null fd2=/dev/null", detached, line)
+
+    def test_a_retained_failed_rollback_is_named_but_never_blocks(self):
+        """What a dropped terminal can leave: the updater's rollback stopped at
+        the Qt restore, its transaction directory kept with a failure note and a
+        dead owner. The next update and --recover-interrupted say so, neither
+        refuses, and a rollback that finished is not mentioned."""
+        root = "/var/lib/plebian-os/update-rollback.Fixture9"
+        kept = self.orphan(
+            "stack-rollback.Kept01", active="", root_transaction=root + "\n",
+            failure_reason="exit-status: 129\nrollback-complete: no\nrecover-with: x\n")
+        self.orphan("stack-rollback.Done01", failure_reason="rollback-complete: yes\n")
+        # The note file is user-writable; a path that only looks like the root
+        # snapshot is never turned into a command.
+        self.orphan("stack-rollback.Odd001", active="",
+                    root_transaction="/var/lib/plebian-os/update-rollback.x/../../etc\n",
+                    failure_reason="rollback-complete: no\n")
+        live = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(live.wait)
+        self.addCleanup(live.kill)
+        start = Path(f"/proc/{live.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+        self.orphan("stack-rollback.Live01",
+                    owner=f"pid={live.pid}\nstart={start}\nboot={self.boot_id()}\n",
+                    failure_reason="rollback-complete: no\n")
+        result = self.run_lib("note_retained_failed_rollbacks\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"{kept} and {root}", result.stderr)
+        self.assertNotIn("Done01", result.stderr)
+        self.assertNotIn("Live01", result.stderr)
+        self.assertIn("reconciled from the selected closure", result.stderr)
+        self.assertIn(f"  rm -rf -- {kept}", result.stderr)
+        self.assertIn(f"  sudo rm -rf -- {root}", result.stderr)
+        self.assertEqual(result.stderr.count("sudo rm -rf"), 1, result.stderr)
+        self.assertNotIn("../..", result.stderr.split("remove it with")[-1])
+        # A root snapshot that a running update's transaction names is not offered.
+        live = subprocess.Popen(["sleep", "60"])
+        self.addCleanup(live.wait)
+        self.addCleanup(live.kill)
+        start2 = Path(f"/proc/{live.pid}/stat").read_text().rsplit(") ", 1)[1].split()[19]
+        self.orphan("stack-rollback.Run001", root_transaction=root + "\n",
+                    owner=f"pid={live.pid}\nstart={start2}\nboot={self.boot_id()}\n")
+        result = self.run_lib("note_retained_failed_rollbacks\n")
+        self.assertNotIn("sudo rm -rf", result.stderr)
+        self.assertIn("belongs to a running update", result.stderr)
+        self.assertIn(f"  rm -rf -- {kept}", result.stderr)
+        shutil.rmtree(self.state / "stack-rollback.Run001")
+        # Not an interrupted update, so nothing refuses and nothing is recovered.
+        result = self.run_lib("refuse_interrupted_stack_transaction\necho CONTINUED\n")
+        self.assertEqual((result.returncode, result.stdout), (0, "CONTINUED\n"), result.stderr)
+        result = self.run_lib("recover_interrupted_stack_transaction\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no interrupted update to recover", result.stdout)
+        self.assertIn(str(kept), result.stderr)
+        self.assertTrue(kept.is_dir(), "the retained data is kept")
 
     def test_only_transactions_whose_owner_is_gone_count_as_interrupted(self):
         live = subprocess.Popen(["sleep", "60"])
@@ -276,8 +368,10 @@ class InterruptedUpdateTests(unittest.TestCase):
                 self.assertIn("but release 0.2.2 (Plebian-OS 111111111111) is installed (differs: PLEBIAN_OS_REF KILIX_REF)", split.stderr)
                 self.assertIn("plebian-os-update --revalidate-current   installs the selected release",
                               split.stderr)
-                self.assertIn("plebian-os-select-closure --rollback     selects the previous closure again",
+                self.assertIn("pleb update --rollback                   puts the previous closure back",
                               split.stderr)
+                self.assertIn("a manual --rollback restores the newest", split.stderr)
+                self.assertNotIn("no closure to roll back to", split.stderr)
         self.orphan("stack-rollback.NoVer1", root_transaction=ROOT_TXN + "\n")
         unknown = self.recover_with_installed(newer, installed=None)
         self.assertIn("could not compare /etc/pleb/closure.env with the installation", unknown.stderr)
@@ -517,6 +611,76 @@ class InterruptedUpdateTests(unittest.TestCase):
         self.assertLess(text.index("\nrefuse_interrupted_stack_transaction\n", main),
                         text.index("\nselect_latest_release_if_needed\n", main))
         self.assertIn("--recover-interrupted) recover_interrupted=1 ;;", text)
+
+    def test_recover_does_not_remove_packages_from_a_foreign_window(self):
+        bin_ = self.tmp / "bin"
+        bin_.mkdir()
+        (bin_ / "dpkg-query").write_text(DPKG)
+        (bin_ / "apt-get").write_text(APT)
+        (bin_ / "id").write_text("#!/bin/sh\nprintf '0\\n'\n")
+        (bin_ / "sudo").write_text("#!/bin/sh\nexec \"$@\"\n")
+        for path in bin_.iterdir():
+            path.chmod(0o755)
+        db = self.tmp / "packages"
+        db.write_text("bash\nstepdep\noperator-tool\n")
+        aptlog = self.tmp / "apt.log"
+        codename = "trixie"
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if line.startswith("VERSION_CODENAME="):
+                codename = line.split("=", 1)[1].strip().strip('"')
+        apt = self.tmp / "apt"
+        apt.mkdir()
+        (apt / "sources.list").write_text(
+            f"deb https://deb.debian.org/debian {codename} main\n")
+        updater = self.tmp / "updater.sh"
+        text = UPDATE_PATH.read_text()
+        text = text.replace("/usr/bin/id", str(bin_ / "id"))
+        text = text.replace("/usr/bin/sudo", str(bin_ / "sudo"))
+        updater.write_text(text)
+        orphan = self.orphan(
+            root_transaction=ROOT_TXN + "\n", active="",
+            apt_installed_before="bash\n",
+            apt_window_before="bash\n",
+            apt_window_open="")
+        script = (
+            "set -euo pipefail\n"
+            "export PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY=1\n"
+            f"PLEB_STATE_HOME={str(self.state)!r}\n"
+            f"source {str(updater)!r}\n"
+            f"PLEB_STATE_HOME={str(self.state)!r}\n"
+            + STUBS
+            + "rollback_stack_transaction() {\n"
+            + "    remove_transaction_package_additions\n"
+            + "    echo \"rollback dir=$_STACK_TXN_DIR\" >>\"$LOG\"\n"
+            + "}\n"
+            + "recover_interrupted_stack_transaction\n")
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PLEBIAN_OS_")}
+        env.update({
+            "HOME": str(self.tmp / "home"),
+            "LOG": str(self.log),
+            "PATH": f"{bin_}:/usr/bin:/bin",
+            "TMPDIR": str(self.tmp),
+            "PKGDB": str(db),
+            "APT_LOG": str(aptlog),
+            "APT_CODENAME": codename,
+            "PLEBIAN_OS_APT_SOURCES_ROOT": str(apt),
+            "PLEBIAN_OS_INSTALLED_VERSIONS": str(self.tmp / "no-versions.env"),
+        })
+        result = subprocess.run(
+            ["bash", "-c", script], env=env, text=True,
+            capture_output=True, check=False, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("another process", result.stderr)
+        self.assertIn("package additions were not tracked", result.stderr)
+        self.assertEqual(db.read_text().splitlines(),
+                         ["bash", "stepdep", "operator-tool"])
+        self.assertFalse(orphan.exists())
+        if aptlog.exists():
+            removed = [
+                line.split()[-1] for line in aptlog.read_text().splitlines()
+                if "remove" in line.split() and "-s" not in line.split()]
+            self.assertNotIn("operator-tool", removed)
+            self.assertNotIn("stepdep", removed)
 
 
 if __name__ == "__main__":

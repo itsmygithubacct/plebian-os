@@ -117,6 +117,10 @@ DEFAULT_PDF_VIEWER_PACKAGES = {"okular", "evince"}
 # only to the browser.
 DEFAULT_IMAGE_VIEWER_PACKAGES = {"feh"}
 
+# PDF Conversion's page OCR runs the Tesseract program with English data on
+# both install paths, so a scan converts without a first-use model.
+PDF_PAGE_OCR_PACKAGES = {"tesseract-ocr", "tesseract-ocr-eng"}
+
 # Pleb preinstalls the catalog-pinned terminal viewer. These packages let its
 # native Poppler/Cairo core build during provisioning; the wrapper retains
 # Evince and CPU-rendering fallbacks if GPU presentation is unavailable.
@@ -235,6 +239,61 @@ def qualification_packages():
     return additive_packages("QUAL_GROUPS")
 
 
+def _release_pins() -> dict[str, str]:
+    pins = {}
+    for line in (ROOT / "releases" / "0.2.3.env").read_text().splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        pins[key] = value
+    return pins
+
+
+def _git_show(repo: str, rev: str, path: str) -> str | None:
+    """Return a file at a local commit. None when that commit is not present."""
+    kind = subprocess.run(
+        ["git", "-C", repo, "cat-file", "-t", rev],
+        capture_output=True, text=True,
+    )
+    if kind.returncode != 0 or kind.stdout.strip() != "commit":
+        return None
+    shown = subprocess.run(
+        ["git", "-C", repo, "show", f"{rev}:{path}"],
+        capture_output=True, text=True,
+    )
+    if shown.returncode != 0:
+        raise AssertionError(f"could not read {rev}:{path} from {repo}: {shown.stderr}")
+    return shown.stdout
+
+
+def _pleb_runtime_packages(text: str) -> list[str]:
+    chunk = text[text.index("ensure_system_deps()"):]
+    body = chunk[chunk.index("deps=(") + len("deps=("):]
+    depth = 1
+    end = None
+    for index, char in enumerate(body):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end is None:
+        raise AssertionError("pleb deps array did not close")
+    names = []
+    for line in body[:end].splitlines():
+        names.extend(line.split("#", 1)[0].split())
+    return names
+
+
+def _kilix_debian_packages(text: str) -> list[str]:
+    chunk = text[text.index("debian_install()"):]
+    rest = chunk[chunk.index('local pkgs="') + len('local pkgs="'):]
+    body = rest[:rest.index('"')].replace("\\", " ")
+    return [token for token in body.split() if token != "$jack_dev"]
+
+
 class DependencyManifestTests(unittest.TestCase):
     def test_capture_has_a_video_session_manager_on_both_install_paths(self):
         for packages in (preseed_packages(), install_deps_packages()):
@@ -326,7 +385,9 @@ class DependencyManifestTests(unittest.TestCase):
         # These entries carry an exact version, while the base and preseed sets
         # carry bare names. Compare on the name alone: comparing the versioned
         # strings would be disjoint from anything and could never fail.
-        optional_names = {item.split("=", 1)[0] for item in converter | build}
+        # Zell uses NumPy in the base image. The model-conversion toolchain
+        # and its pinned versions still belong to the optional closure.
+        optional_names = {item.split("=", 1)[0] for item in converter | build} - {"python3-numpy"}
         for other in (install_deps_packages(), preseed_packages(),
                       qualification_packages()):
             # Strip on both sides. A base set may itself carry a versioned
@@ -406,15 +467,50 @@ class DependencyManifestTests(unittest.TestCase):
             sudo.chmod(0o755)
             function = function.replace("/usr/local/sbin/plebian-os-install-deps",
                                         str(helper))
+            qt = Path(td) / "qt-runtime"
+            qt.write_text("#!/bin/sh\nprintf '%s\\n' \"qt-runtime $*\"\n")
+            qt.chmod(0o755)
+            function = function.replace("/usr/local/sbin/plebian-os-qt-runtime", str(qt))
+            # Release mode classifies apt sources before the dry run. Point it
+            # at a Debian fixture so the host's own sources are not read.
+            suite = subprocess.run(
+                ["bash", "-c",
+                 '. /etc/os-release 2>/dev/null; printf %s "${VERSION_CODENAME:-trixie}"'],
+                text=True, capture_output=True, check=True,
+            ).stdout
+            apt = Path(td) / "apt"
+            (apt / "sources.list.d").mkdir(parents=True)
+            (apt / "sources.list").write_text("")
+            (apt / "sources.list.d" / "debian.sources").write_text(
+                "Types: deb\n"
+                "URIs: https://deb.debian.org/debian\n"
+                f"Suites: {suite} {suite}-updates\n"
+                "Components: main\n"
+                "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+                "\n"
+                "Types: deb\n"
+                "URIs: https://security.debian.org/debian-security\n"
+                f"Suites: {suite}-security\n"
+                "Components: main\n"
+                "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg\n"
+            )
             env = {"PATH": td + ":/usr/bin:/bin", "LC_ALL": "C",
                    "PLEBIAN_OS_RELEASE_MODE": "1", "PLEBIAN_OS_INSTALL_UV": "0",
                    "PLEBIAN_OS_UV_VERSION": "", "PLEBIAN_OS_UV_INSTALLER_SHA256": "",
-                   "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": ""}
+                   "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES": "",
+                   "PLEBIAN_OS_APT_SOURCES_ROOT": str(apt),
+                   "PLEBIAN_OS_APT_CODENAME": suite}
             result = subprocess.run(
-                ["bash", "-euc", "log() { :; }\ndie() { exit 1; }\n" +
+                ["bash", "-euc",
+                 "log() { :; }\n"
+                 "die() { exit 1; }\n"
+                 # The extracted function calls the shield. The shield is not
+                 # part of that function; run its command in this shell.
+                 "run_package_step_in_its_own_session() { \"$@\"; }\n" +
                  function + "\nrefresh_os_dependencies"],
                 env=env, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("qt-runtime --verify", result.stdout)
             for package in VULKAN_TTS_CONVERTER_PACKAGES:
                 self.assertIn(package, result.stdout)
             for package in VULKAN_TTS_BUILD_PACKAGES:
@@ -461,6 +557,18 @@ class DependencyManifestTests(unittest.TestCase):
         # shellcheck is a default from 0.2.2 RC3 onward, so local checks match CI.
         self.assertIn("shellcheck", install_deps_packages())
         self.assertIn("shellcheck", preseed_packages())
+
+    def test_colour_temperature_tool_is_on_both_paths(self):
+        # redshift is a default from 0.2.3 RC9 onward (owner, 2026-11-13). The
+        # updater runs the same install-deps, so upgrades get it too.
+        self.assertIn("redshift", install_deps_packages())
+        self.assertIn("redshift", preseed_packages())
+        plan = subprocess.run(
+            ["bash", str(ROOT / "provision" / "install-deps.sh"), "--dry-run"],
+            check=True, capture_output=True, text=True, timeout=30).stdout
+        installs = [line.split() for line in plan.splitlines()
+                    if "apt-get install " in line]
+        self.assertTrue(any("redshift" in command for command in installs))
 
     def test_process_viewer_is_on_both_paths(self):
         # htop is a default from 0.2.2 RC3 onward (owner, 2026-09-29).
@@ -637,6 +745,12 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(DEFAULT_IMAGE_VIEWER_PACKAGES,
                              preseed_packages())
 
+    def test_pdf_page_ocr_is_installed_on_both_paths(self):
+        self.assertLessEqual(PDF_PAGE_OCR_PACKAGES,
+                             install_deps_packages())
+        self.assertLessEqual(PDF_PAGE_OCR_PACKAGES,
+                             preseed_packages())
+
     def test_native_pdf_viewer_builds_on_both_paths(self):
         self.assertLessEqual(PDF_VIEWER_BUILD_PACKAGES,
                              install_deps_packages())
@@ -723,6 +837,59 @@ class DependencyManifestTests(unittest.TestCase):
         pkgs = preseed_packages()
         self.assertNotIn("boolean", pkgs)
         self.assertNotIn("base-installer/install-recommends", pkgs)
+
+    def test_pleb_and_kilix_release_packages_stay_inside_the_closure(self):
+        """Pleb and Kilix release package lists are inside the install-deps closure.
+
+        Direct names come from DEP_GROUPS. Five more are dependencies of that
+        set, recorded from an offline amd64 simulation (empty status,
+        --no-install-recommends, no apt-get update). Seat B found the same
+        consumer lists covered on arm64; the only arm64 gaps are two DEP_GROUPS
+        names, committed here because this host has no arm64 package lists.
+        mbrola-us1 is not a closure package and is not a required consumer.
+        """
+        closure = {token.split("=", 1)[0] for token in install_deps_packages()}
+        fixture = ROOT / "tests" / "fixtures" / "release-closure"
+
+        def names(filename):
+            rows = []
+            for line in (fixture / filename).read_text().splitlines():
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    rows.append(line)
+            return rows
+
+        pleb = names("pleb-runtime.txt")
+        kilix = names("kilix-debian.txt")
+        dependencies = set(names("closure-dependencies.txt"))
+        arm64_gaps = set(names("arm64-no-candidate.txt"))
+        self.assertEqual(len(pleb), 92)
+        self.assertEqual(len(kilix), 42)
+        self.assertTrue(arm64_gaps <= closure)
+        self.assertTrue(arm64_gaps.isdisjoint(pleb))
+        self.assertTrue(arm64_gaps.isdisjoint(kilix))
+        self.assertNotIn("mbrola-us1", closure)
+        self.assertNotIn("mbrola-us1", pleb)
+        self.assertNotIn("mbrola-us1", kilix)
+        covered = closure | dependencies
+        missing = [name for name in pleb + kilix + ["libjack-dev"] if name not in covered]
+        self.assertEqual(missing, [])
+        # The dependency fixture is the gap, not a second copy of DEP_GROUPS.
+        self.assertTrue(dependencies.isdisjoint(closure))
+        # The hand copies are the package lists at the release pins. Skip when
+        # the repos are unset so the default suite stays offline. A missing
+        # object is also a skip: this check does not fetch.
+        pleb_repo = os.environ.get("PLEBIAN_OS_PLEB_REPO", "")
+        kilix_repo = os.environ.get("PLEBIAN_OS_KILIX_REPO", "")
+        if not pleb_repo or not kilix_repo:
+            return
+        pins = _release_pins()
+        pleb_text = _git_show(pleb_repo, pins["PLEB_REF"], "lib/install.sh")
+        kilix_text = _git_show(kilix_repo, pins["KILIX_REF"], "scripts/install-build-deps.sh")
+        if pleb_text is None or kilix_text is None:
+            return
+        self.assertEqual(_pleb_runtime_packages(pleb_text), pleb)
+        self.assertEqual(_kilix_debian_packages(kilix_text), kilix)
 
 
 if __name__ == "__main__":

@@ -197,7 +197,7 @@ Inside the VM, edit **`/etc/pleb/session.env`**:
 - `PLEB_DESKTOP=1` → the main screen-filling Kilix instance with visible chrome
   and `kilix desktop` running as page 1's program (the default);
   `0` → put a bare shell in page 1 instead.
-- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|xp|cap|tui|command|none` selects
+- `KILIX_DESKTOP_PROVIDER=auto|builtin|external|xp|cap|tui|land|icewm|zell|command|none` selects
   what `kilix desktop` runs. `cap` downloads and builds Kilix Cap; `tui`
   installs the text-native Kilix TUI desktop from Kilix’s pinned
   `kilix-tui-utils` checkout. `command` uses `KILIX_DESKTOP_COMMAND` and is the
@@ -246,13 +246,13 @@ first provisioning run, so it stays an unconditional absence check: the
 allowance for a model the machine already carried belongs to
 `plebian-os-provision.sh`'s re-provision path and never to a build.
 
-The rc1 Kilix and content pins carry the first-use flow and the covering
-receipt gate. The builder still installs read-aloud only and must ship no model
-weights or Vosk library. First-use acquisition belongs to the installed user's
-accepted action, not image construction. The current notes record that no VM
-or ISO has yet exercised this flow and that required qualification and artifact
-acceptance remain open. A supplied `--from DIR` installation records
-acceptance, but does not establish the provenance of the supplied files.
+The 0.2.3 Kilix and content pins carry the first-use flow and the covering
+receipt gate. The builder still installs read-aloud only and must ship no
+dictation weights or Vosk library. First-use acquisition belongs to the
+installed user's accepted action, not image construction. The release notes
+record which installed images exercised this flow. A supplied `--from DIR`
+installation records acceptance, but does not establish the provenance of the
+supplied files.
 
 Fresh guests default all coordinated checkouts to siblings under
 `~/.local/gpu_terminal/sources/` and all runtime state to siblings under

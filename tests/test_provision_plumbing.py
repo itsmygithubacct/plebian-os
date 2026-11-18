@@ -511,12 +511,12 @@ class ProvisionPlumbingTests(unittest.TestCase):
             "/usr/local/sbin/plebian-os-provision",
             text,
         )
-        self.assertIn("TimeoutStartSec=4h", text)
+        self.assertIn("TimeoutStartSec=5h45min", text)
         self.assertNotIn("Restart=", text)
         runner = (ROOT / "provision" / "plebian-os-firstboot-attempt").read_text()
-        self.assertIn("PLEBIAN_OS_FIRSTBOOT_ATTEMPT_TIMEOUT:-3600", runner)
+        self.assertIn("PLEBIAN_OS_FIRSTBOOT_STALL_TIMEOUT:-1200", runner)
         self.assertIn("PLEBIAN_OS_FIRSTBOOT_RETRY_DELAY:-60", runner)
-        self.assertIn("timeout --signal=TERM --kill-after=30s", runner)
+        self.assertIn("recover_package_state", runner)
 
     def test_firstboot_builds_and_verifies_kilix_fork(self):
         text = (ROOT / "provision" / "plebian-os-provision.sh").read_text()

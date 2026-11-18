@@ -1928,6 +1928,29 @@ def guest_hostname_command(hostname: str, hostname_path: str = "/etc/hostname") 
             f'test "$stored" = {expected} && test "$active" = {expected}')
 
 
+def neuronte_contract(ref: str) -> str:
+    """The image's archive is on disk, the installed tree records the pinned
+    commit, and Kilix 95's own loader opens the library, a small face and the
+    flame from $GPU_TERMINAL_SOURCE_HOME/neuronte."""
+    probe = (
+        "import json, os, sys\n"
+        "root, ref = sys.argv[1:]\n"
+        "record = json.load(open(os.path.join(root, '.plebian-os-neuronte.json')))\n"
+        "assert record['commit'] == ref, record['commit']\n"
+        "import neuronte_face, neuronte_flame\n"
+        "assert neuronte_face._ROOT == root, neuronte_face._ROOT\n"
+        "assert neuronte_face._library() is not None, 'no library'\n"
+        "assert neuronte_face.open_size(12) is not None, 'no 12 px face'\n"
+        "assert neuronte_flame.image(32) is not None, 'no flame'\n")
+    return (
+        '. /etc/pleb/session.env 2>/dev/null; '
+        f'test -f /usr/local/share/plebian-os/neuronte-{ref}.tar.xz && '
+        'root="${GPU_TERMINAL_SOURCE_HOME:-$HOME/.local/gpu_terminal/sources}/neuronte" && '
+        'cd "$KILIX95_DIR" && env -u NEURONTE_HOME -u NEURONTE_LIB PYTHONDONTWRITEBYTECODE=1 '
+        f'python3 -c {shlex.quote(probe)} "$root" {shlex.quote(ref)}'
+    )
+
+
 def verify_provisioning(cfg: Config, askpass: str) -> None:
     """Prove the real installer→firstboot→session boundary: check the markers a
     correctly provisioned Plebian-OS leaves behind. Dies (nonzero) on any miss."""
@@ -2173,7 +2196,7 @@ if default is not None:
     first_page_desktop = (
         "grep -Fq 'DESKTOP_ARGS=(env KILIX_IN_OVERLAY=1' "
         "/usr/local/bin/pleb-session && "
-        "grep -Fq '\"$KILIX\" desktop)' /usr/local/bin/pleb-session"
+        "grep -Fq '\"$KILIX\" desktop --session-start)' /usr/local/bin/pleb-session"
     )
     coordinated_checkouts = (kdir +
         ' o="${PLEBIAN_OS_DIR:-$s/plebian-os}";'
@@ -2368,8 +2391,11 @@ if default is not None:
         checks.append(("selected terminal player", "sudo -n /usr/local/sbin/plebian-os-mpv-runtime --verify"))
     if os.environ.get("PLEBIAN_OS_QT_RUNTIME_URL"):
         checks.append(("selected Qt runtime", "/usr/local/sbin/plebian-os-qt-runtime --verify"))
+    neuronte_ref = os.environ.get("NEURONTE_REF", "")
+    if neuronte_ref:
+        checks.append(("Neuronte faces", neuronte_contract(neuronte_ref)))
     if cfg.desktop:
-        checks.append(("first-page Kilix desktop", first_page_desktop))
+        checks.append(("desktop session-start wiring", first_page_desktop))
     # The clickable fork engine only exists when fork-building is on (the default);
     # with it off, provisioning ships the prebuilt engine, so check that instead.
     fork_on = os.environ.get("PLEBIAN_OS_BUILD_KILIX_FORK", "1") not in ("0", "no", "false", "off")
@@ -2497,6 +2523,7 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "PLEB_REF",
         "KILIX_REF",
         "KILIX95_REF",
+        "NEURONTE_REF",
         *F120_ROOT_KEYS,
         "PLEBIAN_OS_NETINST_URL",
         "PLEBIAN_OS_NETINST_SHA256",
@@ -2510,8 +2537,17 @@ def acceptance_report_initial(cfg: Config, args) -> dict:
         "KILIX_PREBUILT_VERSION",
         "KILIX_PREBUILT_SHA256",
         "PLEBIAN_OS_KILIX_GO_VERSION",
+        "PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION",
         "PLEBIAN_OS_KILIX_GO_SHA256_AMD64",
         "PLEBIAN_OS_KILIX_GO_SHA256_ARM64",
+        "PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE",
+        "PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES",
+        "PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256",
+        "PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE",
+        "PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES",
+        "PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256",
+        "PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT",
+        "PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL",
         "KILIX_VOICE_REF",
         "KILIX_VOICE_LIB_VERSION",
         "KILIX_VOICE_LIB_SHA256",

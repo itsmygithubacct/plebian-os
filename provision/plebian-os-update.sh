@@ -12,8 +12,8 @@
 # checkout. Updates are
 # serialized; participating checkouts must be clean and pinned refs resolve to
 # the fetched commit. One outer recovery transaction covers the deployed OS
-# layer, checkout positions, engine artifacts, shared settings, and `pleb
-# install` outputs.
+# layer, checkout positions, engine artifacts, shared settings, `pleb
+# install` outputs, and the catalog Claudex checkout.
 # Disable OS-layer refresh with PLEBIAN_OS_SELF_UPDATE=0.
 #
 # Usage: plebian-os-update [--restart] [--revalidate-current]
@@ -47,13 +47,104 @@ valid_release_tag() {
 }
 
 
-log()  { printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }
+# The terminal is not the record. A Ctrl-C kills a `tee` in the same foreground
+# group and drops whatever that pipe had not flushed. Every line is appended
+# here first, then written to the terminal. `_UPDATE_LOG_FD` is empty until
+# open_updater_log runs.
+_update_record() {
+    [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' now)" "$*" \
+        2>/dev/null 1>&"$_UPDATE_LOG_FD" || true
+}
+# A hung-up terminal fails every write with EIO. The line is in the log above;
+# losing it on the terminal must not end a rollback that set -e would abort.
+log()  { _update_record "$*"; printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*" || true; }
+warn() { _update_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2 || true; }
 # `exit` does not trigger the ERR trap, so a die() -- the convention at 152 call
 # sites here -- would otherwise reach the EXIT-trap cleanup with no record of
 # what went wrong, and the retained failure-reason would read "<not captured>".
 # The message die() is already printing IS the diagnosis; keep it.
-die()  { _STACK_FAIL_COMMAND="die: $*"; printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2; exit 1; }
+discard_release_apt_config() {
+    [ -n "${RELEASE_APT_CONFIG:-}" ] || return 0
+    rm -rf -- "$RELEASE_APT_CONFIG"
+    RELEASE_APT_CONFIG=""
+}
+die()  {
+    # Rollback still has to remove packages through this configuration.
+    # The transaction cleanup discards it after that rollback. A failure
+    # before the transaction starts discards it here.
+    if [ "${_STACK_TXN_ACTIVE:-0}" != 1 ]; then
+        discard_release_apt_config
+    fi
+    _STACK_FAIL_COMMAND="die: $*"
+    _update_record "$*"
+    printf '\033[1;31m[plebian-os] %s\033[0m\n' "$*" >&2 || true
+    exit 1
+}
+
+# After the terminal hangs up, every child that writes to it (apt, dpkg, the
+# helper scripts) fails or dies on EIO in the middle of the rollback. The log
+# keeps every line, so point the dead descriptors at /dev/null. Standard input
+# counts: a child that reads a hung-up terminal gets EIO. A hung-up terminal
+# is still named /dev/pts/N or /dev/ttyN but no longer answers isatty.
+# Anything else, and a terminal that still answers, is left alone, so output
+# on a live terminal is unchanged.
+detach_dead_terminal() {
+    local fd target
+    for fd in 0 1 2; do
+        target="$(readlink "/proc/$$/fd/$fd" 2>/dev/null)" || continue
+        case "$target" in /dev/pts/*|/dev/tty*) ;; *) continue ;; esac
+        [ -t "$fd" ] && continue
+        case "$fd" in 0) exec 0</dev/null ;; 1) exec 1>/dev/null ;; *) exec 2>/dev/null ;; esac
+    done
+    return 0
+}
+
+# Own log for this updater. A test may name PLEBIAN_OS_UPDATE_LOG; otherwise a
+# real run uses the private Pleb state directory. Library-only loads stay quiet
+# unless a test asked for the file.
+open_updater_log() {
+    local path dir old_umask bytes
+    if [ -n "${PLEBIAN_OS_UPDATE_LOG:-}" ]; then
+        path="$PLEBIAN_OS_UPDATE_LOG"
+    elif [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        return 0
+    else
+        [ -n "${PLEB_STATE_HOME:-}" ] || return 0
+        path="${PLEB_STATE_HOME}/update.log"
+    fi
+    case "$path" in
+        *[$'\n\r']*) return 0 ;;
+    esac
+    # Append would follow a symlink and would keep a pre-existing mode.
+    if [ -L "$path" ] || [ -L "$path.1" ]; then
+        printf '%s\n' "updater log path is a symlink; not writing it" >&2
+        return 0
+    fi
+    if [ -e "$path" ] && [ ! -f "$path" ]; then
+        return 0
+    fi
+    dir="$(dirname -- "$path")"
+    mkdir -p -- "$dir" 2>/dev/null || return 0
+    # One older generation, so a long-lived machine does not grow this file
+    # without a bound. The check is the file we are about to append to.
+    if [ -f "$path" ]; then
+        bytes="$(wc -c < "$path" 2>/dev/null | tr -d '[:space:]' || printf '0')"
+        if [ "${bytes:-0}" -gt 1048576 ]; then
+            mv -f -- "$path" "$path.1" 2>/dev/null || return 0
+        fi
+    fi
+    old_umask="$(umask)"
+    umask 077
+    exec {_UPDATE_LOG_FD}>>"$path" || { umask "$old_umask"; return 0; }
+    umask "$old_umask"
+    [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
+    chmod 0600 -- "$path" 2>/dev/null || true
+    # The package-step helper is a child of this shell. It writes the
+    # interrupt line here, so the descriptor stays inheritable.
+    export PLEBIAN_OS_UPDATE_LOG_FD="$_UPDATE_LOG_FD"
+    return 0
+}
 
 require_unprivileged_updater() {
     [ "${1:-$EUID}" -ne 0 ] \
@@ -497,6 +588,12 @@ GPU_TERMINAL_SETTINGS_FILE="${GPU_TERMINAL_SETTINGS_FILE:-$GPU_TERMINAL_HOME/set
 PLEB_STORAGE_HOME="${PLEB_STORAGE_HOME:-$GPU_TERMINAL_HOME/pleb}"
 PLEB_CONFIG_HOME="${PLEB_CONFIG_HOME:-$PLEB_STORAGE_HOME/config}"
 PLEB_STATE_HOME="${PLEB_STATE_HOME:-$PLEB_STORAGE_HOME/state}"
+# --check-source-checkouts must not create the data tree. The log lives under
+# PLEB_STATE_HOME, which is inside GPU_TERMINAL_HOME.
+if [ "$check_source_checkouts" != 1 ]; then
+    open_updater_log
+    detach_dead_terminal
+fi
 PLEB_CACHE_HOME="${PLEB_CACHE_HOME:-$PLEB_STORAGE_HOME/cache}"
 PLEB_SESSION_HOME="${PLEB_SESSION_HOME:-$PLEB_STORAGE_HOME/session}"
 PLEB_DATA_HOME="${PLEB_DATA_HOME:-$PLEB_STORAGE_HOME/data}"
@@ -541,8 +638,17 @@ PLEBIAN_OS_WAYDROID_CLOSURE_SHA256="${PLEBIAN_OS_WAYDROID_CLOSURE_SHA256:-}"
 PLEBIAN_OS_BUILD_KILIX_FORK="${PLEBIAN_OS_BUILD_KILIX_FORK:-1}"
 PLEBIAN_OS_KILIX_GO_MIN_VERSION="${PLEBIAN_OS_KILIX_GO_MIN_VERSION:-1.26}"
 PLEBIAN_OS_KILIX_GO_VERSION="${PLEBIAN_OS_KILIX_GO_VERSION:-}"
+PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION="${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}"
 PLEBIAN_OS_KILIX_GO_SHA256_AMD64="${PLEBIAN_OS_KILIX_GO_SHA256_AMD64:-}"
 PLEBIAN_OS_KILIX_GO_SHA256_ARM64="${PLEBIAN_OS_KILIX_GO_SHA256_ARM64:-}"
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE:-}"
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES:-}"
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256="${PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE="${PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES="${PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256="${PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256:-}"
+PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT="${PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT:-}"
+PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL="${PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL:-}"
 KILIX_DESKTOP_PROVIDER="${KILIX_DESKTOP_PROVIDER:-auto}"
 KILIX_DESKTOP_COMMAND="${KILIX_DESKTOP_COMMAND:-}"
 KILIX_DESKTOP_NAME="${KILIX_DESKTOP_NAME:-desktop}"
@@ -620,6 +726,8 @@ KILIX_WAYDROID_REF="${KILIX_WAYDROID_REF:-}"
 KILIX_SECRETS_REPO="${KILIX_SECRETS_REPO:-https://github.com/itsmygithubacct/kilix-secrets.git}"
 KILIX_SECRETS_BRANCH="${KILIX_SECRETS_BRANCH:-}"
 KILIX_SECRETS_REF="${KILIX_SECRETS_REF:-}"
+NEURONTE_REPO="${NEURONTE_REPO:-https://github.com/itsmygithubacct/neuronte-v2.git}"
+NEURONTE_REF="${NEURONTE_REF:-}"
 PLEB_DESKTOP="${PLEB_DESKTOP:-1}"
 PLEB_WM="${PLEB_WM:-openbox}"
 KILIX_RUN_ALIASES="${KILIX_RUN_ALIASES:-1}"
@@ -671,6 +779,11 @@ PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-}"
 [ -n "$PLEBIAN_OS_VERSION" ] || PLEBIAN_OS_VERSION="$(cat "$PLEBIAN_OS_DIR/VERSION" 2>/dev/null || echo unknown)"
 PLEBIAN_OS_RELEASE="${PLEBIAN_OS_RELEASE:-}"
 PLEBIAN_OS_RELEASE_MODE="${PLEBIAN_OS_RELEASE_MODE:-0}"
+# Held from the release preflight until the process exits. Every release apt
+# install uses this directory, and the final provenance record copies its
+# indexes, so the record cannot claim Debian-only while a step used another
+# configuration.
+RELEASE_APT_CONFIG=""
 PLEBIAN_OS_APT_SNAPSHOT="${PLEBIAN_OS_APT_SNAPSHOT:-}"
 PLEBIAN_OS_INSTALL_UV="${PLEBIAN_OS_INSTALL_UV:-0}"
 PLEBIAN_OS_UV_VERSION="${PLEBIAN_OS_UV_VERSION:-}"
@@ -1230,6 +1343,72 @@ managed_dirs=(
     /etc/pleb
     /usr/local/lib/pleb/session-bin
 )
+# Keep Zell's keys separate from the older numeric snapshot layout, including
+# snapshots made before Zell was managed by the updater.
+zell_paths=(
+    /usr/local/bin/zell
+    /usr/local/share/kilix-zell
+    /usr/local/sbin/install-zell-runtime.py
+    /usr/local/share/plebian-os/zell-runtime.json
+    /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+    /usr/local/lib/systemd/user/kilix-secrets.service
+    /usr/local/lib/systemd/user/kilix-secrets.socket
+)
+zell_dirs=(
+    /usr/local/bin
+    /usr/local/sbin
+    /usr/local/lib/systemd
+    /usr/local/lib/systemd/user
+)
+# Named keys keep recovery of snapshots from older updaters unchanged. Zell
+# already owns the two shared user units; record each destination only once.
+secrets_paths=(
+    /usr/local/bin/kilix-secrets
+    /usr/local/bin/kilix-secretsd
+    /usr/local/include/kilix_secrets.h
+    /usr/local/lib/libkilix-secrets.a
+    /usr/local/lib/libkilix-secrets.so.0
+    /usr/local/lib/libkilix-secrets.so
+    /usr/local/lib/pkgconfig/kilix-secrets.pc
+    /usr/local/share/doc/kilix-secrets/DEPENDENCIES.md
+    /usr/local/share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+    /usr/local/share/doc/kilix-secrets/LICENSE
+    /usr/local/share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+    /usr/local/share/kilix-secrets/source.tar
+    /usr/local/share/kilix-secrets/provenance.env
+    /etc/systemd/user/sockets.target.wants/kilix-secrets.socket
+)
+secrets_dirs=(
+    /usr/local/include
+    /usr/local/lib/pkgconfig
+    /usr/local/share/doc/kilix-secrets
+    /usr/local/share/kilix-secrets
+    /etc/systemd/user/sockets.target.wants
+)
+path_keys=("${!paths[@]}")
+dir_keys=()
+for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
+for i in "${!zell_paths[@]}"; do
+    paths+=("${zell_paths[$i]}")
+    path_keys+=("zell.$i")
+done
+for i in "${!zell_dirs[@]}"; do
+    managed_dirs+=("${zell_dirs[$i]}")
+    dir_keys+=("zell-dir.$i")
+done
+for i in "${!secrets_paths[@]}"; do
+    paths+=("${secrets_paths[$i]}")
+    path_keys+=("secrets.$i")
+done
+for i in "${!secrets_dirs[@]}"; do
+    managed_dirs+=("${secrets_dirs[$i]}")
+    dir_keys+=("secrets-dir.$i")
+done
+# Named keys preserve the numeric layout of pre-notification snapshots.
+paths+=(/usr/local/lib/pleb/notification_center.py /usr/local/lib/pleb/.notification_center.py.new)
+path_keys+=(notifications.0 notifications.1)
+paths+=(/usr/local/sbin/plebian-os-ssh-server)
+path_keys+=(ssh-server.0)
 cleanup() {
     rc=$?
     trap - EXIT
@@ -1259,15 +1438,19 @@ for i in "${!managed_dirs[@]}"; do
         dir_mode="$(stat -c '%a' "$dir")"
         (( (8#$dir_mode & 8#22) == 0 )) \
             && (( (8#$dir_mode & 8#1) != 0 )) || exit 2
-        : >"$txn/dir.$i.present"
+        : >"$txn/${dir_keys[$i]}.present"
     fi
 done
 for i in "${!paths[@]}"; do
     if [ -e "${paths[$i]}" ] || [ -L "${paths[$i]}" ]; then
-        : >"$txn/$i.present"
-        cp -a -- "${paths[$i]}" "$txn/items/$i"
+        : >"$txn/${path_keys[$i]}.present"
+        cp -a -- "${paths[$i]}" "$txn/items/${path_keys[$i]}"
     fi
 done
+: >"$txn/zell-runtime"
+: >"$txn/kilix-secrets"
+: >"$txn/pleb-notifications"
+: >"$txn/ssh-server-helper"
 printf '%s\n' "$txn"
 ROOT_SNAPSHOT
 }
@@ -1426,6 +1609,92 @@ managed_dirs=(
     /etc/pleb
     /usr/local/lib/pleb/session-bin
 )
+# Keep Zell's keys separate from the older numeric snapshot layout, including
+# snapshots made before Zell was managed by the updater.
+zell_paths=(
+    /usr/local/bin/zell
+    /usr/local/share/kilix-zell
+    /usr/local/sbin/install-zell-runtime.py
+    /usr/local/share/plebian-os/zell-runtime.json
+    /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+    /usr/local/lib/systemd/user/kilix-secrets.service
+    /usr/local/lib/systemd/user/kilix-secrets.socket
+)
+zell_dirs=(
+    /usr/local/bin
+    /usr/local/sbin
+    /usr/local/lib/systemd
+    /usr/local/lib/systemd/user
+)
+secrets_paths=(
+    /usr/local/bin/kilix-secrets
+    /usr/local/bin/kilix-secretsd
+    /usr/local/include/kilix_secrets.h
+    /usr/local/lib/libkilix-secrets.a
+    /usr/local/lib/libkilix-secrets.so.0
+    /usr/local/lib/libkilix-secrets.so
+    /usr/local/lib/pkgconfig/kilix-secrets.pc
+    /usr/local/share/doc/kilix-secrets/DEPENDENCIES.md
+    /usr/local/share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+    /usr/local/share/doc/kilix-secrets/LICENSE
+    /usr/local/share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+    /usr/local/share/kilix-secrets/source.tar
+    /usr/local/share/kilix-secrets/provenance.env
+    /etc/systemd/user/sockets.target.wants/kilix-secrets.socket
+)
+secrets_dirs=(
+    /usr/local/include
+    /usr/local/lib/pkgconfig
+    /usr/local/share/doc/kilix-secrets
+    /usr/local/share/kilix-secrets
+    /etc/systemd/user/sockets.target.wants
+)
+path_keys=("${!paths[@]}")
+dir_keys=()
+for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
+if [ -f "$txn/zell-runtime" ]; then
+    for dir in /usr/local/lib /usr/local/share/plebian-os "${zell_dirs[@]}"; do
+        if [ -e "$dir" ] || [ -L "$dir" ]; then
+            [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+            dir_mode="$(stat -c '%a' "$dir")"
+            (( (8#$dir_mode & 8#22) == 0 )) && (( (8#$dir_mode & 8#1) != 0 )) || exit 2
+        fi
+    done
+    for i in "${!zell_paths[@]}"; do
+        paths+=("${zell_paths[$i]}")
+        path_keys+=("zell.$i")
+    done
+    for i in "${!zell_dirs[@]}"; do
+        managed_dirs+=("${zell_dirs[$i]}")
+        dir_keys+=("zell-dir.$i")
+    done
+fi
+if [ -f "$txn/kilix-secrets" ]; then
+    for dir in /usr/local/share/doc /etc/systemd/user "${secrets_dirs[@]}"; do
+        if [ -e "$dir" ] || [ -L "$dir" ]; then
+            [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+            dir_mode="$(stat -c '%a' "$dir")"
+            (( (8#$dir_mode & 8#22) == 0 )) && (( (8#$dir_mode & 8#1) != 0 )) || exit 2
+        fi
+    done
+    for i in "${!secrets_paths[@]}"; do
+        paths+=("${secrets_paths[$i]}")
+        path_keys+=("secrets.$i")
+    done
+    for i in "${!secrets_dirs[@]}"; do
+        managed_dirs+=("${secrets_dirs[$i]}")
+        dir_keys+=("secrets-dir.$i")
+    done
+fi
+if [ -f "$txn/pleb-notifications" ]; then
+    paths+=(/usr/local/lib/pleb/notification_center.py /usr/local/lib/pleb/.notification_center.py.new)
+    path_keys+=(notifications.0 notifications.1)
+fi
+# A snapshot from before 0.2.3's SSH server helper never recorded it.
+if [ -f "$txn/ssh-server-helper" ]; then
+    paths+=(/usr/local/sbin/plebian-os-ssh-server)
+    path_keys+=(ssh-server.0)
+fi
 new_paths=()
 cleanup_new() {
     local path cleanup_failed=0
@@ -1439,16 +1708,21 @@ cleanup_new() {
 trap cleanup_new EXIT
 # Prepare every old object beside its destination before changing any path.
 for i in "${!paths[@]}"; do
-    [ -f "$txn/$i.present" ] || continue
+    [ -f "$txn/${path_keys[$i]}.present" ] || continue
     dest="${paths[$i]}"
     mkdir -p -- "$(dirname "$dest")"
     new="$(dirname "$dest")/.$(basename "$dest").plebian-os-restore.$$"
-    cp -a -- "$txn/items/$i" "$new"
+    cp -a -- "$txn/items/${path_keys[$i]}" "$new"
     new_paths[$i]="$new"
 done
 for i in "${!paths[@]}"; do
     dest="${paths[$i]}"
-    if [ -f "$txn/$i.present" ]; then
+    if [ -f "$txn/${path_keys[$i]}.present" ]; then
+        # A populated runtime directory cannot be replaced by mv -T. Its old
+        # tree is fully staged above and remains in the recovery snapshot.
+        if [ "$dest" = /usr/local/share/kilix-zell ] && [ -d "$dest" ] && [ ! -L "$dest" ]; then
+            rm -rf -- "$dest"
+        fi
         mv -fT -- "${new_paths[$i]}" "$dest"
         new_paths[$i]=""
     else
@@ -1456,7 +1730,7 @@ for i in "${!paths[@]}"; do
     fi
 done
 for ((i=${#managed_dirs[@]}-1; i>=0; i--)); do
-    [ -f "$txn/dir.$i.present" ] && continue
+    [ -f "$txn/${dir_keys[$i]}.present" ] && continue
     dir="${managed_dirs[$i]}"
     if [ -d "$dir" ] && [ ! -L "$dir" ]; then
         rmdir -- "$dir"
@@ -1472,6 +1746,7 @@ if [ -x /usr/sbin/sshd ] && [ -f /etc/ssh/sshd_config ] \
     fi
 fi
 systemctl daemon-reload
+[ ! -f "$txn/kilix-secrets-installed" ] || ldconfig
 trap - EXIT
 cleanup_new
 ROOT_RESTORE
@@ -2160,9 +2435,24 @@ rollback_mpv_runtime_transaction() {
 }
 
 mpv_runtime_command() {
-    local -a elevate=()
+    local -a elevate=() prefix=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" /usr/local/sbin/plebian-os-mpv-runtime "$@"
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${RELEASE_APT_CONFIG:-}" ] || [ ! -d "$RELEASE_APT_CONFIG" ] \
+                || [ -L "$RELEASE_APT_CONFIG" ] || [ ! -f "$RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        # sudo does not forward arbitrary environment variables.
+        prefix=(env "PLEBIAN_OS_RELEASE_MODE=1" "PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG")
+        if [ -n "${PLEBIAN_OS_DPKG_STATUS:-}" ]; then
+            prefix+=("PLEBIAN_OS_DPKG_STATUS=$PLEBIAN_OS_DPKG_STATUS")
+        fi
+        if [ -n "${PLEBIAN_OS_APT_EXTENDED_STATES:-}" ]; then
+            prefix+=("PLEBIAN_OS_APT_EXTENDED_STATES=$PLEBIAN_OS_APT_EXTENDED_STATES")
+        fi
+    fi
+    "${elevate[@]}" "${prefix[@]}" /usr/local/sbin/plebian-os-mpv-runtime "$@"
 }
 
 mpv_runtime_snapshot_probe() {
@@ -2223,9 +2513,24 @@ rollback_qt_runtime_transaction() {
 }
 
 qt_runtime_command() {
-    local -a elevate=()
+    local -a elevate=() prefix=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" /usr/local/sbin/plebian-os-qt-runtime "$@"
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        if [ -z "${RELEASE_APT_CONFIG:-}" ] || [ ! -d "$RELEASE_APT_CONFIG" ] \
+                || [ -L "$RELEASE_APT_CONFIG" ] || [ ! -f "$RELEASE_APT_CONFIG/apt.conf" ]; then
+            warn "release apt configuration is missing; refusing the system apt configuration"
+            return 1
+        fi
+        # sudo does not forward arbitrary environment variables.
+        prefix=(env "PLEBIAN_OS_RELEASE_MODE=1" "PLEBIAN_OS_RELEASE_APT_CONFIG=$RELEASE_APT_CONFIG")
+        if [ -n "${PLEBIAN_OS_DPKG_STATUS:-}" ]; then
+            prefix+=("PLEBIAN_OS_DPKG_STATUS=$PLEBIAN_OS_DPKG_STATUS")
+        fi
+        if [ -n "${PLEBIAN_OS_APT_EXTENDED_STATES:-}" ]; then
+            prefix+=("PLEBIAN_OS_APT_EXTENDED_STATES=$PLEBIAN_OS_APT_EXTENDED_STATES")
+        fi
+    fi
+    "${elevate[@]}" "${prefix[@]}" /usr/local/sbin/plebian-os-qt-runtime "$@"
 }
 
 qt_runtime_snapshot_probe() {
@@ -2250,7 +2555,7 @@ native_download_archive() {
 }
 
 apply_selected_native_runtime() {
-    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual
+    local outer="$1" dry_run="$2" version="$PLEBIAN_OS_RELEASE" stage actual rc=0
     [ -n "$version" ] || version="$PLEBIAN_OS_VERSION"
     validate_native_release_closure "$version" "$PLEBIAN_OS_RELEASE_MODE" || return 1
     [ -n "$PLEBIAN_OS_NATIVE_DEB_URL" ] || return 0
@@ -2279,11 +2584,22 @@ apply_selected_native_runtime() {
     # Dependency preparation is separate from the native package journal.
     # Legacy offers select no custom archives; byte-pinned installed runtimes
     # refuse replacement before any dependency download or mutation.
+    # The download above is not a package step. A script that records package
+    # windows opens one only around the command that can install packages, and
+    # closes it on both results. The provisioner does not record those windows.
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
     native_runtime_command install-dependencies \
         --artifact "$stage" --sha256 "$PLEBIAN_OS_NATIVE_DEB_SHA256" \
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
-        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || return 1
+        --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
+    rc=0
     NATIVE_TRANSACTION_TOKEN="$(/usr/bin/python3 -I -B -c 'import secrets; print(secrets.token_hex(16))')" \
         || return 1
     [[ "$NATIVE_TRANSACTION_TOKEN" =~ ^[0-9a-f]{32}$ ]] || return 1
@@ -2297,7 +2613,14 @@ apply_selected_native_runtime() {
         --bytes "$PLEBIAN_OS_NATIVE_DEB_BYTES" \
         --source-commit "$PLEBIAN_OS_NATIVE_SOURCE_REF" \
         --content-commit "$PLEBIAN_OS_NATIVE_CONTENT_REF" >/dev/null || return 1
-    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN"
+    if declare -F begin_package_addition_window >/dev/null 2>&1; then
+        begin_package_addition_window
+    fi
+    native_runtime_command apply "$NATIVE_TRANSACTION_TOKEN" || rc=$?
+    if declare -F end_package_addition_window >/dev/null 2>&1; then
+        end_package_addition_window || true
+    fi
+    [ "$rc" = 0 ] || return "$rc"
 }
 
 rollback_native_runtime_transaction() {
@@ -2328,12 +2651,432 @@ finish_native_runtime_transaction() {
 native_runtime_command() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" /usr/local/sbin/plebian-os-native-runtime "$@"
+    # Own session, terminal signals ignored: see the note below.
+    run_package_step_in_its_own_session \
+    "${elevate[@]}" /usr/bin/setsid --wait /bin/bash -c \
+        'trap "" INT HUP QUIT; exec "$@"' plebian-os-package-step \
+        /usr/local/sbin/plebian-os-native-runtime "$@"
+}
+
+# Bash does not run its INT trap until the foreground command returns, and a
+# shielded apt/dpkg step can run for a long time. This process is that
+# foreground command: it says the update was interrupted as soon as the signal
+# arrives, writes that line to the updater log first, then waits until the
+# shielded step finishes so dpkg is not killed. The command is sys.argv[1:].
+# PLEBIAN_OS_PACKAGE_STEP_IGNORE_SIGNAL=1 returns the child's own status, which
+# a rollback removal needs so a second Ctrl-C is not reported as a failed remove.
+run_package_step_in_its_own_session() {
+    if [ "${PLEBIAN_OS_PACKAGE_STEP_IGNORE_SIGNAL:-0}" = 1 ]; then
+        "$@"
+        return $?
+    fi
+    /usr/bin/python3 -I -c '
+import os, signal, subprocess, sys, time
+signalled = []
+def note(number, frame):
+    signalled.append(number)
+signal.signal(signal.SIGINT, note)
+signal.signal(signal.SIGTERM, note)
+signal.signal(signal.SIGHUP, note)
+child = subprocess.Popen(sys.argv[1:])
+status = 1
+while True:
+    try:
+        status = child.wait()
+        break
+    except KeyboardInterrupt:
+        signalled.append(signal.SIGINT)
+if signalled:
+    number = signalled[0]
+    codes = {int(signal.SIGINT): 130, int(signal.SIGTERM): 143, int(signal.SIGHUP): 129}
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    record = stamp + " interrupted; rolling back\n"
+    fd = os.environ.get("PLEBIAN_OS_UPDATE_LOG_FD", "")
+    if fd.isdigit():
+        try:
+            os.write(int(fd), record.encode())
+        except OSError:
+            pass
+    try:
+        os.write(2, b"interrupted; rolling back\n")
+    except OSError:
+        pass
+    raise SystemExit(codes.get(number, 130))
+if status < 0:
+    status = 128 + (-status)
+raise SystemExit(status)
+' "$@"
+}
+
+# The phrase for status 130, 143, and 129. A shielded step may already have
+# printed it; saying it again when this trap runs is the path for every other
+# foreground command, which cannot be interrupted until it returns.
+acknowledge_update_interrupt() {
+    local status="$1"
+    _STACK_TXN_EXIT_STATUS="$status"
+    trap '' INT TERM HUP
+    case "$status" in
+        130|143|129) ;;
+        *) status=1 ;;
+    esac
+    if [ "${_UPDATE_INTERRUPT_SAID:-0}" != 1 ]; then
+        _UPDATE_INTERRUPT_SAID=1
+        warn "interrupted; rolling back"
+    fi
+    exit "$status"
+}
+
+# Apt packages this transaction newly installs. The baseline is every package
+# installed when the transaction opens. Each later package step records only
+# the names that appeared while its window was open, so a package the operator
+# installs between steps is not this transaction's. pleb install and pleb
+# update also build software, and their windows cover the whole step, so a
+# package installed during those steps is recorded with them. The native
+# runtime window covers only the commands that install packages. Rollback
+# removes the recorded names in reverse order, and only when apt would remove
+# nothing else. If this transaction also removed a package that was already
+# installed, the new packages are kept, because rollback does not reinstall
+# what it removed. Debian upgrades are not names that newly appear, so they
+# stay. A missing dpkg-query records nothing and removes nothing. A window is
+# closed only by the process that opened it; recovery in another process
+# marks that window untracked and removes nothing.
+_package_name_is_safe() {
+    [[ "$1" =~ ^[a-z0-9][a-z0-9+.-]*$ ]]
+}
+
+_installed_package_names() {
+    dpkg-query -W -f '${Package}\t${db:Status-Status}\n' 2>/dev/null \
+        | awk -F '\t' '$2 == "installed" { print $1 }' \
+        | LC_ALL=C sort -u
+}
+
+_mark_package_additions_untracked() {
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    : >"$_STACK_TXN_DIR/apt-additions-untracked" 2>/dev/null || true
+    return 0
+}
+
+record_transaction_package_baseline() {
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    if ! command -v dpkg-query >/dev/null 2>&1; then
+        _mark_package_additions_untracked
+        return 0
+    fi
+    if ! _installed_package_names >"$_STACK_TXN_DIR/apt-installed-before"; then
+        rm -f -- "$_STACK_TXN_DIR/apt-installed-before"
+        _mark_package_additions_untracked
+    fi
+    return 0
+}
+
+# pid, start ticks and boot id of the process that opened the window. Another
+# process, including --recover-interrupted after a kill or a reboot, does not
+# match and must not treat packages installed since then as this update's.
+_package_window_identity() {
+    local start boot
+    start="$(process_start_ticks "$$")" || return 1
+    boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" || return 1
+    printf 'pid=%s\nstart=%s\nboot=%s\n' "$$" "$start" "$boot"
+}
+
+_package_window_owner_matches() {
+    local pid start boot now
+    [ -f "$_STACK_TXN_DIR/apt-window-open" ] || return 1
+    pid="$(sed -n 's/^pid=\([0-9]\+\)$/\1/p' "$_STACK_TXN_DIR/apt-window-open")"
+    start="$(sed -n 's/^start=\([0-9]\+\)$/\1/p' "$_STACK_TXN_DIR/apt-window-open")"
+    boot="$(sed -n 's/^boot=\(.*\)$/\1/p' "$_STACK_TXN_DIR/apt-window-open")"
+    [ -n "$pid" ] && [ -n "$start" ] && [ "$pid" = "$$" ] || return 1
+    [ "$boot" = "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" ] || return 1
+    now="$(process_start_ticks "$pid")" || return 1
+    [ "$now" = "$start" ]
+}
+
+begin_package_addition_window() {
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    [ ! -e "$_STACK_TXN_DIR/apt-additions-untracked" ] || return 0
+    command -v dpkg-query >/dev/null 2>&1 || return 0
+    rm -f -- "$_STACK_TXN_DIR/apt-window-open"
+    if _installed_package_names >"$_STACK_TXN_DIR/apt-window-before"; then
+        _package_window_identity >"$_STACK_TXN_DIR/apt-window-open" || {
+            rm -f -- "$_STACK_TXN_DIR/apt-window-before" "$_STACK_TXN_DIR/apt-window-open"
+            _mark_package_additions_untracked
+            return 0
+        }
+    else
+        rm -f -- "$_STACK_TXN_DIR/apt-window-before"
+        _mark_package_additions_untracked
+    fi
+    return 0
+}
+
+end_package_addition_window() {
+    local now name
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    [ -f "$_STACK_TXN_DIR/apt-window-open" ] || return 0
+    if ! _package_window_owner_matches; then
+        rm -f -- "$_STACK_TXN_DIR/apt-window-open" "$_STACK_TXN_DIR/apt-window-before"
+        _mark_package_additions_untracked
+        warn "package window was left open by another process; leaving installed packages in place"
+        return 0
+    fi
+    rm -f -- "$_STACK_TXN_DIR/apt-window-open"
+    [ ! -e "$_STACK_TXN_DIR/apt-additions-untracked" ] || return 0
+    [ -f "$_STACK_TXN_DIR/apt-window-before" ] || return 0
+    if ! command -v dpkg-query >/dev/null 2>&1; then
+        _mark_package_additions_untracked
+        return 0
+    fi
+    now="$(mktemp "${TMPDIR:-/tmp}/plebian-os-apt-now.XXXXXX")" || {
+        _mark_package_additions_untracked
+        return 0
+    }
+    if ! _installed_package_names >"$now"; then
+        rm -f -- "$now"
+        _mark_package_additions_untracked
+        return 0
+    fi
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        _package_name_is_safe "$name" || continue
+        if [ -f "$_STACK_TXN_DIR/apt-installed-before" ] \
+            && grep -Fxq -- "$name" "$_STACK_TXN_DIR/apt-installed-before"; then
+            continue
+        fi
+        if [ -f "$_STACK_TXN_DIR/apt-additions" ] \
+            && grep -Fxq -- "$name" "$_STACK_TXN_DIR/apt-additions"; then
+            continue
+        fi
+        printf '%s\n' "$name" >>"$_STACK_TXN_DIR/apt-additions"
+    done < <(LC_ALL=C comm -13 "$_STACK_TXN_DIR/apt-window-before" "$now")
+    rm -f -- "$now" "$_STACK_TXN_DIR/apt-window-before"
+    return 0
+}
+
+_transaction_removed_baseline_names() {
+    local name state pkg removed="" listing
+    local -A state_of=()
+    [ -f "$_STACK_TXN_DIR/apt-installed-before" ] || return 0
+    # One listing. A query per baseline name is thousands of processes.
+    if listing="$(dpkg-query -W -f '${Package}\t${db:Status-Status}\n' 2>/dev/null)"; then
+        while IFS=$'\t' read -r pkg state; do
+            [ -n "$pkg" ] || continue
+            state_of["$pkg"]="$state"
+        done <<<"$listing"
+    else
+        # A failed listing is the same as a failed per-name query: unknown
+        # status counts as gone, and the caller keeps the new packages.
+        while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            _package_name_is_safe "$name" || continue
+            removed="${removed:+$removed }$name"
+        done <"$_STACK_TXN_DIR/apt-installed-before"
+        printf '%s\n' "$removed"
+        return 0
+    fi
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        _package_name_is_safe "$name" || continue
+        [ "${state_of[$name]:-}" = installed ] && continue
+        removed="${removed:+$removed }$name"
+    done <"$_STACK_TXN_DIR/apt-installed-before"
+    printf '%s\n' "$removed"
+}
+
+# The child is a new session. It builds the release apt configuration in its
+# own mktemp directory, which is root-owned when this step is elevated, and
+# removes it before returning. The function text is an argument. A file the
+# caller can rewrite is not sourced, and apt does not read a configuration
+# from a directory the caller created.
+_run_release_apt() {
+    local fn sources snapshot codename
+    fn="$(declare -f _update_record
+        declare -f log
+        declare -f validate_release_apt_provenance
+        declare -f copy_release_qt_pin
+        declare -f prepare_release_apt_config
+        declare -f release_apt_get)"
+    sources="${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"
+    snapshot="${PLEBIAN_OS_APT_SNAPSHOT:-}"
+    codename="$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")"
+    "${_REMOVAL_ELEVATE[@]}" /usr/bin/setsid --wait /bin/bash -c \
+        'trap "" INT HUP QUIT
+         eval "$1" || exit 1
+         shift
+         sources="$1"
+         shift
+         snapshot="$1"
+         shift
+         codename="$1"
+         shift
+         config="$(mktemp -d /tmp/plebian-os-removal-apt.XXXXXX)" || exit 1
+         trap "rm -rf -- \"\$config\"" EXIT
+         prepare_release_apt_config "$config" lifetime "$snapshot" "$codename" "$sources" || exit 1
+         release_apt_get "$config" "$@"
+        ' \
+        plebian-os-removal \
+        "$fn" \
+        "$sources" \
+        "$snapshot" \
+        "$codename" \
+        "$@"
+}
+
+_apt_simulated_removals() {
+    local pkg="$1" sim status=0
+    sim="$(_run_release_apt -s remove -y --no-install-recommends "$pkg" 2>&1)" && status=0 || status=$?
+    printf '%s\n' "$sim" | sed -n 's/^Remv \([^ ]\{1,\}\) \[.*/\1/p'
+    return "$status"
+}
+
+_drop_recorded_addition() {
+    local name="$1" next
+    [ -f "$_STACK_TXN_DIR/apt-still" ] || return 0
+    next="$(mktemp "${TMPDIR:-/tmp}/plebian-os-apt-still.XXXXXX")" || return 0
+    grep -Fxv -- "$name" "$_STACK_TXN_DIR/apt-still" >"$next" || true
+    mv -f -- "$next" "$_STACK_TXN_DIR/apt-still"
+    return 0
+}
+
+remove_transaction_package_additions() {
+    local -a packages=()
+    local i pkg removals sim_ok extra other removed="" uid state short
+    local removed_names
+    [ -n "${_STACK_TXN_DIR:-}" ] || return 0
+    end_package_addition_window || true
+    if [ -e "$_STACK_TXN_DIR/apt-additions-untracked" ]; then
+        warn "package additions were not tracked; leaving installed packages in place"
+        return 0
+    fi
+    [ -f "$_STACK_TXN_DIR/apt-additions" ] || return 0
+    [ -f "$_STACK_TXN_DIR/apt-installed-before" ] || {
+        warn "package additions were not tracked; leaving installed packages in place"
+        return 0
+    }
+    if ! command -v dpkg-query >/dev/null 2>&1 || ! command -v apt-get >/dev/null 2>&1; then
+        warn "package additions were not tracked; leaving installed packages in place"
+        return 0
+    fi
+    removed_names="$(_transaction_removed_baseline_names)"
+    if [ -n "$removed_names" ]; then
+        warn "keeping packages this update installed: the update also removed $removed_names, and rollback does not reinstall removed packages"
+        return 0
+    fi
+    cp -f -- "$_STACK_TXN_DIR/apt-additions" "$_STACK_TXN_DIR/apt-still" || {
+        warn "package additions could not be read; leaving installed packages in place"
+        return 0
+    }
+    mapfile -t packages < "$_STACK_TXN_DIR/apt-additions"
+    [ "${#packages[@]}" -gt 0 ] || return 0
+    # A second Ctrl-C must not kill the shell, or turn a finished remove into
+    # status 130, while these packages are being taken back.
+    trap '' INT TERM HUP
+    export PLEBIAN_OS_PACKAGE_STEP_IGNORE_SIGNAL=1
+    uid="$(/usr/bin/id -u 2>/dev/null || true)"
+    _REMOVAL_ELEVATE=()
+    [ "$uid" = 0 ] || _REMOVAL_ELEVATE=(/usr/bin/sudo)
+    for ((i=${#packages[@]}-1; i>=0; i--)); do
+        pkg="${packages[$i]}"
+        [ -n "$pkg" ] || continue
+        _package_name_is_safe "$pkg" || continue
+        grep -Fxq -- "$pkg" "$_STACK_TXN_DIR/apt-still" || continue
+        grep -Fxq -- "$pkg" "$_STACK_TXN_DIR/apt-installed-before" && continue
+        state="$(dpkg-query -W -f '${db:Status-Status}' -- "$pkg" 2>/dev/null || true)"
+        [ "$state" = installed ] || continue
+        removals="$(_apt_simulated_removals "$pkg")" && sim_ok=0 || sim_ok=$?
+        if [ "$sim_ok" -ne 0 ]; then
+            warn "keeping $pkg: removing it is not safe; it is still installed"
+            continue
+        fi
+        printf '%s\n' "$removals" | sed 's/:.*//' | grep -Fxq -- "$pkg" || {
+            warn "keeping $pkg: apt would not remove it; it is still installed"
+            continue
+        }
+        extra=""
+        while IFS= read -r other; do
+            short="${other%%:*}"
+            [ -n "$short" ] || continue
+            grep -Fxq -- "$short" "$_STACK_TXN_DIR/apt-additions" && continue
+            extra="${extra:+$extra, }$short"
+        done <<<"$removals"
+        if [ -n "$extra" ]; then
+            warn "keeping $pkg: removing it would also remove $extra, which this update did not install"
+            continue
+        fi
+        if ! _run_release_apt remove -y --no-install-recommends "$pkg"; then
+            warn "keeping $pkg: apt remove failed; it is still installed"
+            continue
+        fi
+        while IFS= read -r other; do
+            short="${other%%:*}"
+            [ -n "$short" ] || continue
+            _drop_recorded_addition "$short"
+        done <<<"$removals"
+        removed="${removed:+$removed }$pkg"
+    done
+    [ -z "$removed" ] || log "removed packages this update had installed: $removed"
+    return 0
+}
+
+# A Ctrl-C signals every process in the terminal's foreground group, and a
+# dpkg killed while unpacking leaves half-installed packages that no rollback
+# here can repair. Until now apt and dpkg were outside that group only because
+# sudo's default use_pty runs its command on another terminal; with !use_pty,
+# with no terminal, or when the updater already runs as root, the signal reached
+# dpkg directly. So every step that can run apt or dpkg is started in its own
+# session, with the terminal's signals ignored, and is always left to finish.
+# The updater itself still takes the signal. run_package_step_in_its_own_session
+# says "interrupted; rolling back" immediately and records it, then waits for
+# the shielded step. The INT trap runs when that step returns and rolls the
+# stack back. The shield is spelled out at each call (native_runtime_command,
+# refresh_os_dependencies) because it has to run on the root side of sudo,
+# where no function of this script exists.
+
+# An update must not start on, or silently roll back onto, a package database
+# an earlier interruption left half-installed. `dpkg --audit` prints nothing
+# when every package is fully installed.
+package_database_faults() {
+    command -v dpkg >/dev/null 2>&1 || return 0
+    LC_ALL=C dpkg --audit 2>&1 || true
+}
+
+require_consistent_package_database() {
+    local faults
+    faults="$(package_database_faults)"
+    [ -z "$faults" ] && return 0
+    warn "dpkg reports packages that an earlier run left half-installed:"
+    while IFS= read -r line; do warn "  $line"; done <<<"$faults"
+    die "repair the package database first: sudo dpkg --configure -a (then sudo apt-get -f install), and run the update again"
+}
+
+_announce_stack_rollback() {
+    [ "${_STACK_ROLLBACK_SAID:-0}" = 1 ] && return 0
+    _STACK_ROLLBACK_SAID=1
+    case "${_STACK_TXN_EXIT_STATUS:-1}" in
+        130|143|129)
+            warn "interrupted; rolling back" ;;
+        *)
+            warn "stack update failed; restoring the previous coherent installation" ;;
+    esac
 }
 
 rollback_stack_transaction() {
     local failed=0 kilix_rollback_ready=0
-    warn "stack update failed; restoring the previous coherent installation"
+    # Say why before any package command, so a sudo prompt or apt's own output
+    # is not the first thing the operator sees. The case below says it again
+    # only when this announcement did not run.
+    _announce_stack_rollback
+    # Close a package window a die() skipped, then remove only this
+    # transaction's new packages. A removal that is not safe is reported and
+    # kept; it does not fail the stack rollback. No transaction directory means
+    # there is nothing to remove.
+    remove_transaction_package_additions || true
+    case "${_STACK_TXN_EXIT_STATUS:-1}" in
+        *)
+            _announce_stack_rollback ;;
+    esac
+    if [ -n "$(package_database_faults)" ]; then
+        warn "dpkg reports half-installed packages; after this rollback run: sudo dpkg --configure -a"
+    fi
     rollback_mpv_runtime_transaction || return 1
     rollback_qt_runtime_transaction || return 1
     rollback_native_runtime_transaction || {
@@ -2388,10 +3131,12 @@ rollback_stack_transaction() {
     restore_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection file || failed=1
     restore_stack_path \
         "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build || failed=1
+    restore_stack_path "$GPU_TERMINAL_SOURCE_HOME/neuronte" neuronte || failed=1
+    restore_kilix_claudex_install || failed=1
     restore_root_stack_snapshot "$_STACK_ROOT_TXN_DIR" || failed=1
 
     if [ "$failed" = 0 ]; then
-        log "restored the pre-update OS layer, checkout positions, engine, shared settings, and Pleb install outputs"
+        log "restored the pre-update OS layer, checkout positions, engine, shared settings, Pleb install outputs, and Claudex checkout"
         # The stack rolled back, but the closure selection did not: it was
         # committed before this transaction opened. Saying "restored" and
         # stopping would tell the operator the machine is coherent when it is
@@ -2399,7 +3144,8 @@ rollback_stack_transaction() {
         if [ -n "${PLEBIAN_OS_RELEASE_HOP_FROM:-}" ]; then
             warn "this run had already advanced the selected closure from ${PLEBIAN_OS_RELEASE_HOP_FROM} before it failed"
             warn "the stack is back on ${PLEBIAN_OS_RELEASE_HOP_FROM}, but /etc/pleb/session.env still names the target"
-            warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
+            warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update --to <version>' to go forward); a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'"
+            warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
         fi
     else
         warn "automatic stack rollback was incomplete; recovery data retained at $_STACK_TXN_DIR and $_STACK_ROOT_TXN_DIR"
@@ -2409,8 +3155,9 @@ rollback_stack_transaction() {
         # pinned-new -- and the operator is left with no stated next step.
         # Say which command restores coherence.
         warn "the selected closure was NOT rolled back; /etc/pleb/session.env may still name the target"
-        warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
-        warn "then 'plebian-os-update --restart' to put the machine back on it"
+        warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update --to <version>' to go forward); a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'"
+        warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
+        warn "then 'plebian-os-update --revalidate-current' to put the machine back on it"
     fi
     return "$failed"
 }
@@ -2425,11 +3172,13 @@ stack_transaction_cleanup() {
     trap - EXIT INT TERM HUP PIPE
     trap '' PIPE
     set +e
+    detach_dead_terminal
     [ -z "${_OS_LAYER_STAGE:-}" ] || rm -rf -- "$_OS_LAYER_STAGE"
     [ -z "${_PROVENANCE_STAGE:-}" ] || rm -rf -- "$_PROVENANCE_STAGE"
     if [ "${_STACK_TXN_ACTIVE:-0}" = 1 ] \
         && [ "${_STACK_TXN_COMMITTED:-0}" != 1 ]; then
         [ "$rc" -ne 0 ] || rc=1
+        _STACK_TXN_EXIT_STATUS="$rc"
         rollback_stack_transaction || rollback_ok=0
     fi
     if [ "$rollback_ok" = 1 ] && [ "${_STACK_TXN_RETAIN:-0}" != 1 ]; then
@@ -2451,7 +3200,8 @@ stack_transaction_cleanup() {
                 printf 'failing-command: %s\n' "${_STACK_FAIL_COMMAND:-<not captured>}"
                 printf 'rollback-complete: %s\n' \
                     "$([ "$rollback_ok" = 1 ] && echo yes || echo no)"
-                printf 'recover-with: plebian-os-select-closure --rollback\n'
+                printf 'recover-with: pleb update --rollback (or pleb update --to <version> to go forward; a 0.2.3 or later Pleb also recovers it with a plain pleb update)\n'
+                printf 'check-first: plebian-os-select-closure --show; a manual --rollback can restore an older hop\n'
                 printf 'then: plebian-os-update --revalidate-current --restart\n'
             } > "$_STACK_TXN_DIR/failure-reason" 2>/dev/null || true
             warn "why it stopped: $_STACK_TXN_DIR/failure-reason"
@@ -2460,6 +3210,7 @@ stack_transaction_cleanup() {
         [ "$rollback_ok" = 1 ] || rc=70
     fi
     release_kilix_transaction_lock
+    discard_release_apt_config
     exit "$rc"
 }
 
@@ -2583,6 +3334,57 @@ note_legacy_stack_leftovers() {
     return 0
 }
 
+# A rollback that could not finish retains its recovery data, and the failure
+# note it writes says so (rollback-complete: no). Such a directory has its own
+# procedure and never blocks an update: the installation is reconciled from the
+# selected closure, not restored from that data. Nothing else says the data is
+# still there once the terminal that showed the first warning is gone, so say it
+# at the start of the next update and of --recover-interrupted.
+root_snapshot_in_use() {
+    local live
+    for live in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$live" ] && [ ! -L "$live" ] || continue
+        stack_transaction_owner_alive "$live" || continue
+        [ "$(head -n 1 -- "$live/root-transaction" 2>/dev/null || true)" != "$1" ] || return 0
+    done
+    return 1
+}
+
+note_retained_failed_rollbacks() {
+    local dir root noted=0
+    local -a removals=()
+    for dir in "$PLEB_STATE_HOME"/stack-rollback.*; do
+        [ -d "$dir" ] && [ ! -L "$dir" ] || continue
+        [ "$(stat -c '%u' -- "$dir" 2>/dev/null)" = "$EUID" ] || continue
+        [ -f "$dir/failure-reason" ] && [ ! -L "$dir/failure-reason" ] || continue
+        grep -qx -- 'rollback-complete: no' "$dir/failure-reason" 2>/dev/null || continue
+        ! stack_transaction_owner_alive "$dir" || continue
+        if [ "$noted" = 0 ]; then
+            warn "an earlier update's rollback did not finish; its recovery data is retained and does not block updates:"
+            noted=1
+        fi
+        root="$(head -n 1 -- "$dir/root-transaction" 2>/dev/null || true)"
+        warn "  $dir${root:+ and $root}"
+        removals+=("rm -rf -- $(printf '%q' "$dir")")
+        # The note file is user-writable. A root path is offered as a command
+        # only if it has exactly the shape mktemp gives the root snapshot and no
+        # running update's transaction names it.
+        if [[ "$root" =~ ^/var/lib/plebian-os/update-rollback\.[A-Za-z0-9]+$ ]]; then
+            if root_snapshot_in_use "$root"; then
+                warn "  ($root belongs to a running update; leave it)"
+            else
+                removals+=("sudo rm -rf -- $(printf '%q' "$root")")
+            fi
+        fi
+    done
+    if [ "$noted" = 1 ]; then
+        warn "the installation is reconciled from the selected closure, not from that data."
+        warn "Once an update has completed and --recover-interrupted finds nothing, remove it with:"
+        for dir in "${removals[@]}"; do warn "  $dir"; done
+    fi
+    return 0
+}
+
 refuse_interrupted_stack_transaction() {
     local found
     found="$(interrupted_stack_transactions)"
@@ -2629,7 +3431,9 @@ report_selection_against_installation() {
         warn "could not compare /etc/pleb/closure.env with the installation; if they differ, choose one:"
     fi
     warn "  plebian-os-update --revalidate-current   installs the selected release"
-    warn "  plebian-os-select-closure --rollback     selects the previous closure again"
+    warn "  pleb update --rollback                   puts the previous closure back (it names the hop it undoes)"
+    warn "  plebian-os-select-closure --show         shows the closure that is selected; a manual --rollback restores the newest"
+    warn "                                           record not yet restored, which can be an older hop"
 }
 
 recover_interrupted_stack_transaction() {
@@ -2637,6 +3441,7 @@ recover_interrupted_stack_transaction() {
     local orphan root token
     acquire_kilix_transaction_lock
     note_legacy_stack_leftovers
+    note_retained_failed_rollbacks
     mapfile -t owned < <(interrupted_stack_transactions)
     if [ "${#owned[@]}" -eq 0 ]; then
         log "no interrupted update to recover"
@@ -2695,7 +3500,8 @@ recover_interrupted_stack_transaction() {
                 printf 'when: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)"
                 printf 'failing-command: plebian-os-update --recover-interrupted\n'
                 printf 'rollback-complete: no\n'
-                printf 'recover-with: plebian-os-select-closure --rollback\n'
+                printf 'recover-with: pleb update --rollback (or pleb update --to <version> to go forward; a 0.2.3 or later Pleb also recovers it with a plain pleb update)\n'
+                printf 'check-first: plebian-os-select-closure --show; a manual --rollback can restore an older hop\n'
                 printf 'then: plebian-os-update --revalidate-current --restart\n'
             } >"$orphan/failure-reason" 2>/dev/null || true
             warn "recovery was incomplete; recovery data retained at $orphan${root:+ and $root}"
@@ -2747,10 +3553,11 @@ begin_stack_transaction() {
         || die "could not create stack rollback state"
     chmod 0700 "$_STACK_TXN_DIR"
     trap stack_transaction_cleanup EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    trap 'exit 129' HUP
+    trap 'acknowledge_update_interrupt 130' INT
+    trap 'acknowledge_update_interrupt 143' TERM
+    trap 'acknowledge_update_interrupt 129' HUP
     trap 'exit 141' PIPE
+    record_transaction_package_baseline
     record_stack_transaction_owner "$_STACK_TXN_DIR" \
         || die "could not record the stack transaction owner"
     # Renamed into place at commit, so marking the commit needs no free space.
@@ -2783,6 +3590,11 @@ begin_stack_transaction() {
     acquire_voicebox_delivery_lock
     snapshot_stack_path "$KILIX_DATA_HOME/voicebox/selection.json" kilix-voicebox-selection
     snapshot_stack_path "$KILIX_PTY_BROKER_BUILD" kilix-pty-broker-build
+    # The default Neuronte tree (install_neuronte_update replaces or creates it):
+    # a later failure puts the previous tree back, or removes one this update made.
+    snapshot_stack_path "$GPU_TERMINAL_SOURCE_HOME/neuronte" neuronte
+    # Claudex checkout, entrypoint, and git bookkeeping, including absence.
+    snapshot_kilix_claudex_install
     _STACK_ROOT_TXN_DIR="$(begin_root_stack_snapshot)" \
         || die "could not snapshot the installed OS/Pleb layer"
     validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
@@ -3002,17 +3814,23 @@ KILIX_VOICE_LIB_SHA256 KILIX_VOICE_LIB_URL KILIX_VOICE_LIB_VERSION
 KILIX_VOICE_MODEL_SHA256 KILIX_VOICE_MODEL_URL KILIX_VOICE_REF
 KILIX_WAYDROID_BRANCH KILIX_WAYDROID_REF KILIX_WAYDROID_REPO
 KILIX_SECRETS_BRANCH KILIX_SECRETS_REF KILIX_SECRETS_REPO
+NEURONTE_REF NEURONTE_REPO
 PLEBIAN_OS_APT_SNAPSHOT PLEBIAN_OS_BRANCH PLEBIAN_OS_BUILD_KILIX_FORK
 PLEBIAN_OS_DIR PLEBIAN_OS_INSTALL_UV PLEBIAN_OS_INSTALL_VOICE_MODEL
 PLEBIAN_OS_INSTALL_WAYDROID PLEBIAN_OS_KILIX_GO_MIN_VERSION
 PLEBIAN_OS_KILIX_GO_SHA256_AMD64 PLEBIAN_OS_KILIX_GO_SHA256_ARM64
-PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_MANAGED_INSTALL
+PLEBIAN_OS_KILIX_GO_VERSION PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION PLEBIAN_OS_MANAGED_INSTALL
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES
+PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE
+PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256
+PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL
 PLEBIAN_OS_NATIVE_CONTENT_REF PLEBIAN_OS_NATIVE_DEB_BYTES
 PLEBIAN_OS_NATIVE_DEB_SHA256 PLEBIAN_OS_NATIVE_DEB_URL
 PLEBIAN_OS_QT_RUNTIME_URL PLEBIAN_OS_QT_RUNTIME_SHA256 PLEBIAN_OS_QT_RUNTIME_BYTES
 PLEBIAN_OS_MPV_URL PLEBIAN_OS_MPV_SHA256 PLEBIAN_OS_MPV_BYTES PLEBIAN_OS_MPV_VERSION PLEBIAN_OS_MPV_SOURCE_REF PLEBIAN_OS_MPV_LAUNCHER_REF
 PLEBIAN_OS_NATIVE_SOURCE_REF PLEBIAN_OS_REF PLEBIAN_OS_RELEASE
-PLEBIAN_OS_RELEASE_MODE PLEBIAN_OS_REPO PLEBIAN_OS_SESSION_HOME
+PLEBIAN_OS_RELEASE_MODE PLEBIAN_OS_RELEASE_TAG PLEBIAN_OS_RELEASE_TAG_OBJECT
+PLEBIAN_OS_REPO PLEBIAN_OS_SESSION_HOME
 PLEBIAN_OS_STORAGE_HOME PLEBIAN_OS_UV_INSTALLER_MAX_BYTES
 PLEBIAN_OS_UV_INSTALLER_SHA256 PLEBIAN_OS_UV_VERSION PLEBIAN_OS_VERSION
 PLEBIAN_OS_WAYDROID_CLOSURE_SHA256 PLEB_AUTO_LOCK PLEB_BG PLEB_BRANCH
@@ -3355,6 +4173,20 @@ latest_published_release() {
     printf '%s\n' "$latest"
 }
 
+# The exact candidate tag the selected closure records, or nothing. Selectors
+# from 0.2.3 on record PLEBIAN_OS_RELEASE_TAG and its tag object; a closure
+# written earlier records neither and is judged by PLEBIAN_OS_VERSION alone.
+recorded_release_candidate_tag() {
+    local version="$1" tag="${PLEBIAN_OS_RELEASE_TAG:-}"
+    local object="${PLEBIAN_OS_RELEASE_TAG_OBJECT:-}"
+    [ -n "$tag" ] || return 0
+    if ! valid_release_tag "$version" "$tag" || [[ ! "$object" =~ ^[0-9a-f]{40}$ ]]; then
+        warn "ignoring recorded release tag '$tag': it does not identify a tag object of release $version"
+        return 0
+    fi
+    [ "$tag" = "v$version" ] || printf '%s\n' "$tag"
+}
+
 release_is_newer() {
     local candidate="$1" installed="$2" highest
     [[ "$candidate" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] || return 1
@@ -3418,6 +4250,9 @@ local_candidate_matches_selected_closure() {
         # manifest, not a manifest pin. Its exact equality to version was
         # already required above.
         [ "$key" != PLEBIAN_OS_RELEASE ] || continue
+        # The selection records the tag it resolved and that tag's object; a
+        # manifest never pins either. The tag binding was checked above.
+        case "$key" in PLEBIAN_OS_RELEASE_TAG|PLEBIAN_OS_RELEASE_TAG_OBJECT) continue ;; esac
         value="${!key-}"
         # Closure selection resolves pins before writing the root-owned
         # session file. For the OS candidate, the selected value is therefore
@@ -3472,12 +4307,13 @@ warn_release_hop_split_state() {
     [ "${1:-0}" -eq 0 ] && return 0
     warn "the selected closure was already advanced ${_RELEASE_HOP_FROM:-?} -> ${_RELEASE_HOP_TO:-?} before this failure"
     warn "the previous release is still installed; /etc/pleb/session.env now names the target"
-    warn "to put the previous closure back, run: plebian-os-select-closure --rollback"
+    warn "to put the previous closure back, run 'pleb update --rollback' (or 'pleb update --to <version>' to go forward); a 0.2.3 or later Pleb also recovers the hop with a plain 'pleb update'"
+    warn "or look at 'plebian-os-select-closure --show' first: a manual --rollback restores the newest record not yet restored, which can be an older hop"
     return 0
 }
 
 select_latest_release_if_needed() {
-    local latest target_commit stage selector rc release_keys key
+    local latest target_commit stage selector rc release_keys key candidate_tag
     local -a relaunch_args=() relaunch_env=(env)
     [ "$select_latest_release" = 1 ] || {
         log "explicitly revalidating selected release $PLEBIAN_OS_VERSION"
@@ -3486,11 +4322,15 @@ select_latest_release_if_needed() {
     [[ "$PLEBIAN_OS_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$ ]] \
         || die "selected PLEBIAN_OS_VERSION '$PLEBIAN_OS_VERSION' is not a release version; use --revalidate-current only for recovery"
     latest="$(latest_published_release)"
-    if [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
+    candidate_tag="$(recorded_release_candidate_tag "$PLEBIAN_OS_VERSION")"
+    if [ "$latest" = "$PLEBIAN_OS_VERSION" ] && [ -n "$candidate_tag" ]; then
+        # Same VERSION, but the closure records a candidate and the final is
+        # published: select it through the final's own selector below.
+        log "release candidate $candidate_tag is selected and final release v$latest is published"
+    elif [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
         log "Plebian-OS $PLEBIAN_OS_VERSION is the latest published release"
         return 0
-    fi
-    if ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
+    elif ! release_is_newer "$latest" "$PLEBIAN_OS_VERSION"; then
         if [ "$restart_arg" = --restart ] \
             && local_candidate_matches_selected_closure "$PLEBIAN_OS_VERSION"; then
             log "unpublished candidate v$PLEBIAN_OS_VERSION matches the selected release closure; continuing update"
@@ -3499,7 +4339,11 @@ select_latest_release_if_needed() {
         die "published release $latest is not newer than selected release $PLEBIAN_OS_VERSION; refusing an implicit downgrade"
     fi
 
-    log "new published release found: $PLEBIAN_OS_VERSION -> $latest"
+    if [ -n "$candidate_tag" ] && [ "$latest" = "$PLEBIAN_OS_VERSION" ]; then
+        log "new published release found: $candidate_tag -> v$latest"
+    else
+        log "new published release found: $PLEBIAN_OS_VERSION -> $latest"
+    fi
     ensure_os_source_checkout_for_selection
     git -C "$PLEBIAN_OS_DIR" fetch --force origin "refs/tags/v$latest" \
         || die "could not fetch target release tag v$latest"
@@ -3594,6 +4438,7 @@ stage_and_validate_os_layer() {
         "$prov/lightdm-gtk-greeter.conf"
         "$prov/plebian-os-select-closure.sh"
         "$prov/plebian-os-nvidia-driver"
+        "$prov/plebian-os-ssh-server"
     )
     for file in "${required[@]}"; do
         [ -f "$file" ] || die "OS-layer checkout is incomplete; required file missing: $file"
@@ -3632,6 +4477,8 @@ stage_and_validate_os_layer() {
         install -m 0644 "$prov/$file" "$stage/$file"
     done
     install -m 0755 "$prov/plebian-os-passwd" "$stage/plebian-os-passwd"
+    [ ! -L "$prov/plebian-os-ssh-server" ] || die "unsafe SSH server helper symlink"
+    install -m 0755 "$prov/plebian-os-ssh-server" "$stage/plebian-os-ssh-server"
     install -m 0755 "$prov/plebian-os-update.sh" "$stage/plebian-os-update"
     install -m 0644 "$prov/plebian-os-firstboot.service" "$stage/plebian-os-firstboot.service"
     install -m 0755 "$prov/plebian-os-firstboot-attempt" "$stage/plebian-os-firstboot-attempt"
@@ -3688,6 +4535,7 @@ stage_and_validate_os_layer() {
         bash -n "$file" || die "staged OS-layer shell validation failed: $file"
     done
     python3 - "$stage/plebian-os-qt-runtime" "$stage/plebian-os-source-carrier" "$stage/plebian-os-mpv-runtime" "$stage/plebian-os-passwd" \
+        "$stage/plebian-os-ssh-server" \
         "$stage/plebian-os-install-ollama-converter" \
         "$stage/plebian-os-install-diarization-converter" \
         "$stage/plebian-os-install-encodec-converter" \
@@ -3875,6 +4723,7 @@ names=(
     waydroid-closure.env
     waydroid-closure.sha256
     ollama-release.env
+    plebian-os-ssh-server
 )
 dests=(
     /usr/local/sbin/plebian-os-provision
@@ -3907,9 +4756,10 @@ dests=(
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
     /usr/local/share/plebian-os/ollama-release.env
+    /usr/local/sbin/plebian-os-ssh-server
 )
-modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644 0644)
-max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65 65536)
+modes=(0755 0755 0755 0755 0644 0755 0644 0644 0644 0644 0644 0755 0755 0755 0755 0755 0755 0755 0755 0644 0644 0644 0644 0755 0755 0755 0755 0644 0644 0644 0755)
+max_sizes=(33554432 33554432 33554432 33554432 33554432 33554432 33554432 33554432 1048576 1048576 1048576 33554432 1048576 1048576 1048576 1048576 1048576 131072 131072 131072 131072 131072 131072 131072 131072 131072 1048576 65536 65 65536 131072)
 new_paths=() backup_paths=() existed=() changed=() created_dirs=()
 [ "${#expected_hashes[@]}" -eq "${#names[@]}" ] || exit 2
 [ "${#dests[@]}" -eq "${#names[@]}" ] || exit 2
@@ -4094,7 +4944,7 @@ done
 python3 - "${new_paths[2]}" "${new_paths[12]}" "${new_paths[13]}" "${new_paths[14]}" \
     "${new_paths[15]}" "${new_paths[16]}" "${new_paths[18]}" \
     "${new_paths[19]}" "${new_paths[20]}" "${new_paths[21]}" \
-    "${new_paths[22]}" "${new_paths[23]}" "${new_paths[24]}" <<'PY'
+    "${new_paths[22]}" "${new_paths[23]}" "${new_paths[24]}" "${new_paths[30]}" <<'PY'
 import pathlib
 import sys
 for name in sys.argv[1:]:
@@ -4106,9 +4956,14 @@ grep -q '^\[Unit\]$' "${new_paths[4]}" \
     && grep -q '^ExecStart=/usr/local/sbin/plebian-os-firstboot-attempt run /usr/local/sbin/plebian-os-provision$' "${new_paths[4]}" \
     && grep -q '^ExecCondition=/usr/local/sbin/plebian-os-firstboot-attempt check$' "${new_paths[4]}"
 grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(\.[1-9][0-9]*)?$' "${new_paths[6]}"
-# The manifest is the final member of the fixed deployment set. Validate its
-# inert data here; never execute a caller-supplied helper with root privileges.
-manifest_index=$((${#new_paths[@]} - 1))
+# Find the manifest in the fixed deployment set by name: the set grows, and its
+# last member is not always the manifest. Validate its inert data here; never
+# execute a caller-supplied helper with root privileges.
+manifest_index=-1
+for index in "${!names[@]}"; do
+    [ "${names[$index]}" != ollama-release.env ] || manifest_index=$index
+done
+[ "$manifest_index" -ge 0 ] || false
 python3 "-" "${new_paths[$manifest_index]}" "${new_paths[6]}" <<'PY_MANIFEST'
 import pathlib
 import re
@@ -4120,9 +4975,11 @@ if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.[1-9][0-9]*)?", version):
 values = {}
 required = {"PLEBIAN_OS_VERSION", "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_BYTES",
             "PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_SHA256"}
+# Optional: 0.2.2 manifests and the earliest 0.2.3 candidates name no download.
+optional = {"PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL"}
 for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
     key, separator, value = line.partition("=")
-    if separator and key in required:
+    if separator and key in required | optional:
         if key in values:
             raise SystemExit("duplicate selected Ollama manifest field")
         values[key] = value
@@ -4134,6 +4991,11 @@ if not re.fullmatch(r"[1-9][0-9]{0,8}", size) or int(size) > 64 * 1024 * 1024:
     raise SystemExit("invalid selected Ollama carrier byte pin")
 if not re.fullmatch(r"[0-9a-f]{64}", digest):
     raise SystemExit("invalid selected Ollama carrier SHA-256 pin")
+url = values.get("PLEBIAN_OS_OLLAMA_RUNTIME_CARRIER_URL")
+if url is not None and not re.fullmatch(
+        r"https://github\.com/itsmygithubacct/plebian-os/releases/download/"
+        r"[A-Za-z0-9._-]+/ollama-0\.32\.14-kilix-unix-vulkan-r1\.tar\.xz", url):
+    raise SystemExit("invalid selected Ollama carrier URL pin")
 PY_MANIFEST
 python3 - "${new_paths[7]}" <<'PY'
 import pathlib
@@ -4254,6 +5116,7 @@ self_update_os_layer() {
         waydroid-closure.env
         waydroid-closure.sha256
         ollama-release.env
+        plebian-os-ssh-server
     )
     mkdir -p "$PLEBIAN_OS_SESSION_HOME"
     stage="$(mktemp -d "$PLEBIAN_OS_SESSION_HOME/os-layer.XXXXXX")"
@@ -4358,11 +5221,12 @@ reconcile_legacy_remote_login() {
 
 # Apply the dependency policy shipped by the selected target. The selector
 # installs the target updater before this command starts, and the OS-layer
-# refresh deploys the matching dependency helper before it is invoked here. Apt package
-# additions are permitted rollback residue; the two system uv binaries are
-# included in the root snapshot because they are directly selected on PATH.
-# Debian package upgrades pulled in by live sources are residue as well; apt
-# source changes happen only after commit.
+# refresh deploys the matching dependency helper before it is invoked here.
+# Packages this transaction newly installs are removed on rollback when apt can
+# remove them without taking anything else. Packages already installed,
+# packages the operator installs between steps, and Debian upgrades stay. The
+# two system uv binaries are included in the root snapshot because they are
+# directly selected on PATH. Apt source changes happen only after commit.
 install_model_setup_software() {
     local helper
     local -a elevate=()
@@ -4380,10 +5244,835 @@ install_model_setup_software() {
     done
 }
 
+# The pinned Ollama runtime (no model weights) on a machine that has none: one
+# installed from an ISO built before Ollama shipped has the installer and the
+# manifest but no runtime, no carrier and no service, so the wizard's
+# system-local LLM cannot install. The provisioner this update just deployed
+# does the work as root, with first boot's own install function, sourced in
+# library mode exactly as the lid defaults below (same safety gate, same
+# elevation): an installed runtime whose receipt matches is only enabled and
+# started; otherwise a retained carrier that verifies is installed; otherwise
+# the manifest's pinned release asset is downloaded, held to the pinned size,
+# verified for size and SHA-256, retained and installed.
+#
+# A download that fails changes nothing: the update warns and carries on, and
+# the next update tries again (the wizard reports the missing Ollama with the
+# reason and a command that declines the page). A downloaded carrier that fails
+# verification, or a failed install, fails the update. The stack snapshot
+# restores the installer and the manifest; the runtime generation, launcher,
+# unit, PATH client, account, retained carrier and receipt stay installed after
+# a rollback, like the Ollama converter beside them. Apt packages this
+# transaction newly installed are removed when that is safe. The bytes that
+# stay are the ones 0.2.2 and every 0.2.3 candidate pin.
+OLLAMA_RUNTIME_UNAVAILABLE=75
+
+install_ollama_runtime_update() {
+    local provisioner="$AUDIO_HOLDOFF_PROVISIONER" test_mode=0 rc=0
+    local -a elevate=()
+    if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        test_mode=1
+        provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-$provisioner}"
+    fi
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        log "would install the pinned Ollama runtime when this machine has none (no model weights)"
+        return 0
+    fi
+    audio_holdoff_provisioner_is_safe "$provisioner" "$test_mode" \
+        || die "installed provisioner is missing or unsafe: $provisioner"
+    if ! grep -q '^install_ollama_runtime_for_update() {' "$provisioner" \
+        || ! grep -q '^if \[ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" = 1 \]; then' \
+            "$provisioner"; then
+        rc=98
+    else
+        [ "$(id -u)" = 0 ] || elevate=(sudo)
+        log "checking the pinned Ollama runtime (installed from its carrier when missing; no model weights)"
+        # $0 is the provisioner, so its SELF_DIR is the directory it was deployed to.
+        "${elevate[@]}" env PLEBIAN_OS_PROVISION_LIB_ONLY=1 \
+            PLEBIAN_OS_PROVISION_LOG_ACTIVE=1 \
+            "PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION" bash -c '
+            set -uo pipefail
+            . "$0" || exit 97
+            declare -F install_ollama_runtime_for_update >/dev/null || exit 98
+            DRY_RUN=0
+            install_ollama_runtime_for_update
+        ' "$provisioner" || rc=$?
+    fi
+    case "$rc" in
+        0) return 0 ;;
+        "$OLLAMA_RUNTIME_UNAVAILABLE")
+            warn "the Ollama runtime is not installed (see above); this update carries on and the next one tries again"
+            return 0
+            ;;
+        98)
+            warn "the installed provisioner ($provisioner) cannot install the Ollama"
+            warn "  runtime on upgrade; the runtime was not checked by this update"
+            return 0
+            ;;
+        97) die "the installed provisioner could not be loaded to install the Ollama runtime: $provisioner" ;;
+        *) die "the Ollama runtime installation failed (exit $rc): see its message above" ;;
+    esac
+}
+
+# Install the exact Secrets source selected by the closure, as provisioning
+# does. The root transaction owns all package files and socket enablement.
+# Run before Zell so its bundled daemon keeps the same unit precedence as a
+# fresh installation. Neither step restarts an existing user's vault daemon.
+install_kilix_secrets_update() {
+    [ -n "$KILIX_SECRETS_REF" ] || return 0
+    [[ "$KILIX_SECRETS_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Kilix Secrets requires an exact KILIX_SECRETS_REF commit"
+    [ -z "$KILIX_SECRETS_BRANCH" ] \
+        || die "Kilix Secrets does not accept a mutable branch"
+    [ "$KILIX_SECRETS_REPO" = https://github.com/itsmygithubacct/kilix-secrets.git ] \
+        || die "Kilix Secrets requires the canonical KILIX_SECRETS_REPO"
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        log "would build exact Kilix Secrets $KILIX_SECRETS_REF into /usr/local"
+        return 0
+    fi
+    validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
+        || die "Kilix Secrets installation requires the stack recovery snapshot"
+    local -a elevate=()
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    log "installing exact Kilix Secrets $KILIX_SECRETS_REF (needs root)"
+    "${elevate[@]}" bash -s -- "$_STACK_ROOT_TXN_DIR" "$KILIX_SECRETS_REF" \
+        "$KILIX_SECRETS_REPO" <<'ROOT_SECRETS_INSTALL'
+set -euo pipefail
+umask 022
+txn="$1"; ref="$2"; repo="$3"
+case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
+[ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
+[ "$(stat -c '%a' "$txn")" = 700 ] \
+    && [ -f "$txn/kilix-secrets" ] && [ -f "$txn/zell-runtime" ] || exit 2
+[[ "$ref" =~ ^[0-9a-f]{40}$ ]] || exit 2
+[ "$repo" = https://github.com/itsmygithubacct/kilix-secrets.git ] || exit 2
+for dir in / /usr /usr/local /usr/local/bin /usr/local/include /usr/local/lib \
+    /usr/local/lib/pkgconfig /usr/local/lib/systemd /usr/local/lib/systemd/user \
+    /usr/local/share /usr/local/share/doc /usr/local/share/doc/kilix-secrets \
+    /usr/local/share/kilix-secrets /etc /etc/systemd /etc/systemd/user \
+    /etc/systemd/user/sockets.target.wants; do
+    if [ -e "$dir" ] || [ -L "$dir" ]; then
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+        mode="$(stat -c '%a' "$dir")"
+        (( (8#$mode & 8#22) == 0 )) && (( (8#$mode & 8#1) != 0 )) || exit 2
+    fi
+done
+package_files=(
+    bin/kilix-secrets
+    bin/kilix-secretsd
+    include/kilix_secrets.h
+    lib/libkilix-secrets.a
+    lib/libkilix-secrets.so.0
+    lib/pkgconfig/kilix-secrets.pc
+    lib/systemd/user/kilix-secrets.service
+    lib/systemd/user/kilix-secrets.socket
+    share/doc/kilix-secrets/DEPENDENCIES.md
+    share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+    share/doc/kilix-secrets/LICENSE
+    share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+)
+for file in "${package_files[@]}" share/kilix-secrets/source.tar share/kilix-secrets/provenance.env; do
+    [ ! -L "/usr/local/$file" ] \
+        && { [ ! -e "/usr/local/$file" ] || [ -f "/usr/local/$file" ]; } || exit 2
+done
+[ ! -d /usr/local/lib/libkilix-secrets.so ] || exit 2
+stage="$(mktemp -d "$txn/kilix-secrets.XXXXXX")"
+trap 'rm -rf -- "$stage"' EXIT
+git init -q "$stage/repo"
+git -C "$stage/repo" fetch --depth=1 "$repo" "$ref"
+actual="$(git -C "$stage/repo" rev-parse 'FETCH_HEAD^{commit}')"
+[ "$actual" = "$ref" ] || { echo 'Kilix Secrets commit mismatch' >&2; exit 2; }
+git -C "$stage/repo" archive --format=tar "$actual" >"$stage/source.tar"
+mkdir "$stage/source"
+tar -xf "$stage/source.tar" -C "$stage/source"
+make -j2 -C "$stage/source" all PREFIX=/usr/local
+make -C "$stage/source" install DESTDIR="$stage/package" PREFIX=/usr/local
+printf '%s\n' "${package_files[@]}" | LC_ALL=C sort >"$stage/expected"
+(cd "$stage/package/usr/local" && find . -type f -printf '%P\n' | LC_ALL=C sort) >"$stage/actual"
+cmp -s "$stage/expected" "$stage/actual" \
+    || { echo 'unexpected Kilix Secrets package layout' >&2; exit 2; }
+link="$stage/package/usr/local/lib/libkilix-secrets.so"
+[ -L "$link" ] && [ "$(readlink -- "$link")" = libkilix-secrets.so.0 ] || exit 2
+[ "$(find "$stage/package" -type l -print)" = "$link" ] || exit 2
+[ -z "$(find "$stage/package" ! -type f ! -type d ! -type l -print -quit)" ] || exit 2
+: >"$txn/kilix-secrets-installed"
+for file in "${package_files[@]}"; do
+    case "$file" in
+        bin/*|lib/libkilix-secrets.so.0) mode=0755 ;;
+        *) mode=0644 ;;
+    esac
+    install -D -o root -g root -m "$mode" "$stage/package/usr/local/$file" "/usr/local/$file"
+done
+ln -sfn libkilix-secrets.so.0 /usr/local/lib/libkilix-secrets.so
+source_sha="$(sha256sum "$stage/source.tar")"; source_sha="${source_sha%% *}"
+printf 'KILIX_SECRETS_REF=%s\nKILIX_SECRETS_SOURCE_SHA256=%s\n' \
+    "$actual" "$source_sha" >"$stage/provenance.env"
+install -D -o root -g root -m 0644 "$stage/source.tar" /usr/local/share/kilix-secrets/source.tar
+install -D -o root -g root -m 0644 "$stage/provenance.env" /usr/local/share/kilix-secrets/provenance.env
+ldconfig
+systemctl daemon-reload
+systemctl --global enable kilix-secrets.socket
+ROOT_SECRETS_INSTALL
+}
+
+# Install the same offline Zell carrier used by provisioning. The outer root
+# snapshot owns the runtime, launcher, helper, pin, archive and global user
+# units. Keep this step independent of other desktop runtime installers.
+install_zell_runtime() {
+    local prov="$PLEBIAN_OS_DIR/provision" file digest
+    local -a elevate=() hashes=()
+    local -a sources=(install-zell-runtime.py zell-runtime.json bundles/zell-0.1.1-x86_64.tar.xz)
+    for file in "${sources[@]}"; do
+        [ -f "$prov/$file" ] && [ ! -L "$prov/$file" ] \
+            || die "Zell carrier is missing or unsafe: $prov/$file"
+        digest="$(sha256sum "$prov/$file")" || die "could not hash Zell carrier: $file"
+        hashes+=("${digest%% *}")
+    done
+    validate_root_transaction_dir "$_STACK_ROOT_TXN_DIR" \
+        || die "Zell installation requires the stack recovery snapshot"
+    log "installing the selected Zell runtime and launcher (needs root)"
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    "${elevate[@]}" bash -s -- "$_STACK_ROOT_TXN_DIR" "$prov" "${hashes[@]}" <<'ROOT_ZELL_INSTALL'
+set -euo pipefail
+umask 022
+txn="$1"; prov="$2"; shift 2
+expected=("$@")
+files=(bin/zell install-zell-runtime.py zell-runtime.json zell-0.1.1-x86_64.tar.xz
+       units/kilix-secrets.service units/kilix-secrets.socket)
+dests=(/usr/local/bin/zell /usr/local/sbin/install-zell-runtime.py
+       /usr/local/share/plebian-os/zell-runtime.json
+       /usr/local/share/plebian-os/zell-0.1.1-x86_64.tar.xz
+       /usr/local/lib/systemd/user/kilix-secrets.service
+       /usr/local/lib/systemd/user/kilix-secrets.socket)
+modes=(0755 0755 0644 0644 0644 0644)
+case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
+[ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
+[ "$(stat -c '%a' "$txn")" = 700 ] && [ -f "$txn/zell-runtime" ] || exit 2
+[ "${#expected[@]}" = 3 ] || exit 2
+# Validate parents before creating directories or publishing any object. Leaf
+# files are replaced by rename, so a previous launcher/unit symlink is not followed.
+for dir in / /usr /usr/local /usr/local/bin /usr/local/sbin /usr/local/share \
+    /usr/local/share/plebian-os /usr/local/lib /usr/local/lib/systemd /usr/local/lib/systemd/user; do
+    if [ -e "$dir" ] || [ -L "$dir" ]; then
+        [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
+        mode="$(stat -c '%a' "$dir")"
+        (( (8#$mode & 8#22) == 0 )) && (( (8#$mode & 8#1) != 0 )) || exit 2
+    fi
+done
+for dest in "${dests[@]}"; do
+    [ ! -e "$dest" ] || [ -f "$dest" ] || [ -L "$dest" ] || exit 2
+done
+stage="$(mktemp -d "$txn/zell-install.XXXXXX")"
+sources=(install-zell-runtime.py zell-runtime.json bundles/zell-0.1.1-x86_64.tar.xz)
+names=(install-zell-runtime.py zell-runtime.json zell-0.1.1-x86_64.tar.xz)
+for i in "${!sources[@]}"; do
+    [[ "${expected[$i]}" =~ ^[0-9a-f]{64}$ ]] || exit 2
+    install -m 0600 -- "$prov/${sources[$i]}" "$stage/${names[$i]}"
+    actual="$(sha256sum "$stage/${names[$i]}")"
+    [ "${actual%% *}" = "${expected[$i]}" ] || exit 2
+done
+# Only the root-owned, hash-bound copies run with privilege. The helper verifies
+# the complete carrier before replacing the app; ancillary files are staged here.
+python3 -I "$stage/install-zell-runtime.py" \
+    --archive "$stage/zell-0.1.1-x86_64.tar.xz" --pin "$stage/zell-runtime.json" \
+    --destination /usr/local/share/kilix-zell --bin-dir "$stage/bin" --unit-dir "$stage/units"
+for i in "${!files[@]}"; do
+    mkdir -p -- "$(dirname "${dests[$i]}")"
+    chmod "${modes[$i]}" -- "$stage/${files[$i]}"
+    mv -fT -- "$stage/${files[$i]}" "${dests[$i]}"
+done
+ROOT_ZELL_INSTALL
+}
+
 install_kilix_needle() {
     env "${stack_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
         "$KILIX_DIR/kilix" app install kilix-needle \
         || die "required Needle application installation failed"
+}
+
+# `kilix app install kilix-claudex` writes one managed git checkout at
+# $KILIX_DATA_HOME/desktop-apps/kilix-claudex. The entrypoint is that tree's
+# `claudex` file. The bookkeeping is its `.git` directory (origin and HEAD).
+# Stage directories are the short-lived `.kilix-claudex.install-*` siblings.
+# `.kilix-claudex.lock` is the catalog installer's flock mutex, not checkout
+# data. Snapshot and restore take that mutex nonblocking and never copy,
+# replace, or delete a lock they do not own. The mutex is released before
+# `kilix app install` runs. Other applications, model assets, user config,
+# browser profiles, credentials, and usage state are not part of this set.
+# Snapshot the owned checkout and abandoned stages, including original
+# absence. A transaction recorded before this snapshot exists has no
+# kilix-claudex-managed marker and is left untouched.
+kilix_claudex_refuse() {
+    printf 'refusing unsafe Claudex installation path: %s\n' "$*" >&2
+}
+
+kilix_claudex_require_user_dir() {
+    local path="$1" label="$2" resolved owner mode
+    resolved="$(readlink -m -- "$path" 2>/dev/null)" || {
+        kilix_claudex_refuse "could not resolve $label: $path"
+        return 1
+    }
+    [ "$resolved" = "$path" ] || {
+        kilix_claudex_refuse "$label must not contain symlinks or non-normal components: $path"
+        return 1
+    }
+    [ -d "$path" ] && [ ! -L "$path" ] || {
+        kilix_claudex_refuse "$label is not a safe directory: $path"
+        return 1
+    }
+    owner="$(stat -c '%u' -- "$path" 2>/dev/null)" || {
+        kilix_claudex_refuse "could not inspect $label: $path"
+        return 1
+    }
+    mode="$(stat -c '%a' -- "$path" 2>/dev/null)" || {
+        kilix_claudex_refuse "could not inspect $label mode: $path"
+        return 1
+    }
+    if ! { [ "$owner" = "$EUID" ] && (( (8#$mode & 8#22) == 0 )); }; then
+        kilix_claudex_refuse "$label must be user-owned and not group/world writable: $path"
+        return 1
+    fi
+}
+
+kilix_claudex_install_paths_are_safe() {
+    local data root checkout lock stage base count owner mode links
+    data="${KILIX_DATA_HOME:-}"
+    case "$data" in
+        /*) ;;
+        *) kilix_claudex_refuse "KILIX_DATA_HOME must be absolute: $data"; return 1 ;;
+    esac
+    case "$data" in
+        *$'\n'*|*$'\r'*) kilix_claudex_refuse "KILIX_DATA_HOME contains a break"; return 1 ;;
+    esac
+    kilix_claudex_require_user_dir "$data" "KILIX_DATA_HOME" || return 1
+    root="$data/desktop-apps"
+    checkout="$root/kilix-claudex"
+    lock="$root/.kilix-claudex.lock"
+    if [ -e "$root" ] || [ -L "$root" ]; then
+        kilix_claudex_require_user_dir "$root" "Claudex install parent" || return 1
+    fi
+    if [ -e "$checkout" ] || [ -L "$checkout" ]; then
+        kilix_claudex_require_user_dir "$checkout" "Claudex checkout" || return 1
+    fi
+    if [ -e "$lock" ] || [ -L "$lock" ]; then
+        if [ ! -f "$lock" ] || [ -L "$lock" ]; then
+            kilix_claudex_refuse "Claudex install lock is not a regular file: $lock"
+            return 1
+        fi
+        owner="$(stat -c '%u' -- "$lock" 2>/dev/null)" || {
+            kilix_claudex_refuse "could not inspect Claudex install lock: $lock"
+            return 1
+        }
+        mode="$(stat -c '%a' -- "$lock" 2>/dev/null)" || {
+            kilix_claudex_refuse "could not inspect Claudex install lock mode: $lock"
+            return 1
+        }
+        links="$(stat -c '%h' -- "$lock" 2>/dev/null)" || {
+            kilix_claudex_refuse "could not inspect Claudex install lock links: $lock"
+            return 1
+        }
+        if [ "$owner" != "$EUID" ] || [ "$links" != 1 ] \
+            || ! (( (8#$mode & 8#22) == 0 )); then
+            kilix_claudex_refuse "Claudex install lock must be one user-owned, unshared, non-writable link: $lock"
+            return 1
+        fi
+    fi
+    count=0
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        while IFS= read -r -d '' stage; do
+            base="${stage##*/}"
+            [[ "$base" =~ ^\.kilix-claudex\.install-[A-Za-z0-9._-]+$ ]] || {
+                kilix_claudex_refuse "Claudex staging name is not owned: $base"
+                return 1
+            }
+            [ "$stage" = "$root/$base" ] || {
+                kilix_claudex_refuse "Claudex staging path escapes its parent: $stage"
+                return 1
+            }
+            kilix_claudex_require_user_dir "$stage" "Claudex install stage" || return 1
+            count=$((count + 1))
+            [ "$count" -le 32 ] || {
+                kilix_claudex_refuse "too many Claudex install staging directories"
+                return 1
+            }
+        done < <(find "$root" -mindepth 1 -maxdepth 1 -name '.kilix-claudex.install-*' -print0)
+    fi
+}
+
+# Drop a guard-created mutex inode while its flock is still held. A mutex that
+# already existed is left untouched. Replies are only "unlinked" or "kept".
+kilix_claudex_guard_unlink_created() {
+    local reply
+    [[ "${_KILIX_CLAUDEX_GUARD_W:-}" =~ ^[0-9]+$ ]] || return 1
+    [[ "${_KILIX_CLAUDEX_GUARD_R:-}" =~ ^[0-9]+$ ]] || return 1
+    printf 'unlink-created\n' >&"$_KILIX_CLAUDEX_GUARD_W" || return 1
+    IFS= read -r -t 5 reply <&"$_KILIX_CLAUDEX_GUARD_R" || return 1
+    case "$reply" in
+        unlinked|kept) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# Stop one child without waiting forever. A zombie is already gone for lock
+# purposes; wait collects it. A live process gets SIGTERM, then SIGKILL.
+# Always return 0: a failing wait must not replace the callback's exit status.
+kilix_claudex_guard_kill() {
+    local pid="$1" i state
+    [ -n "$pid" ] || return 0
+    i=0
+    while [ "$i" -lt 10 ]; do
+        [ -d "/proc/$pid" ] || break
+        state="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+        case "$state" in
+            *') Z'*) break ;;
+        esac
+        sleep 0.05
+        i=$((i + 1))
+    done
+    if [ -d "/proc/$pid" ]; then
+        state="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+        case "$state" in
+            *') Z'*) ;;
+            *)
+                kill -TERM "$pid" 2>/dev/null || true
+                sleep 0.05
+                if [ -d "/proc/$pid" ]; then
+                    state="$(cat "/proc/$pid/stat" 2>/dev/null || true)"
+                    case "$state" in
+                        *') Z'*) ;;
+                        *) kill -KILL "$pid" 2>/dev/null || true ;;
+                    esac
+                fi
+                ;;
+        esac
+    fi
+    wait "$pid" 2>/dev/null || true
+    return 0
+}
+
+# Release the guardian. Close the control descriptors before waiting so a
+# helper blocked on its stdin sees EOF, then bound the reap. Safe to call
+# more than once, including from the private subshell's EXIT trap.
+kilix_claudex_guard_finish() {
+    local w r pid watch
+    [ "${_KILIX_CLAUDEX_GUARD_REAPED:-0}" = 1 ] && return 0
+    _KILIX_CLAUDEX_GUARD_REAPED=1
+    watch="${_KILIX_CLAUDEX_GUARD_WATCH:-}"
+    if [[ "$watch" =~ ^[0-9]+$ ]]; then
+        kill -TERM "$watch" 2>/dev/null || true
+        wait "$watch" 2>/dev/null || true
+    fi
+    _KILIX_CLAUDEX_GUARD_WATCH=
+    w="${_KILIX_CLAUDEX_GUARD_W:-}"
+    r="${_KILIX_CLAUDEX_GUARD_R:-}"
+    if [ "${_KILIX_CLAUDEX_GUARD_HELD:-0}" = 1 ] && [[ "$w" =~ ^[0-9]+$ ]]; then
+        printf 'release\n' 1>&"$w" 2>/dev/null || true
+    fi
+    _KILIX_CLAUDEX_GUARD_HELD=0
+    if [[ "$w" =~ ^[0-9]+$ ]]; then
+        eval "exec ${w}>&-"
+        _KILIX_CLAUDEX_GUARD_W=
+    fi
+    if [[ "$r" =~ ^[0-9]+$ ]]; then
+        eval "exec ${r}>&-"
+        _KILIX_CLAUDEX_GUARD_R=
+    fi
+    pid="${_KILIX_CLAUDEX_GUARD_PID:-}"
+    _KILIX_CLAUDEX_GUARD_PID=
+    kilix_claudex_guard_kill "$pid" || true
+    if [ -n "${_KILIX_CLAUDEX_GUARD_DIR:-}" ]; then
+        rm -rf -- "$_KILIX_CLAUDEX_GUARD_DIR" || true
+        _KILIX_CLAUDEX_GUARD_DIR=
+    fi
+    return 0
+}
+
+# The helper is exec'd so the background pid is the Python process itself.
+# It closes inherited control descriptors, so the parent's later close is
+# what produces EOF. A dead parent also delivers SIGTERM.
+kilix_claudex_guard_helper() {
+    # Drop traps inherited from the private guard subshell before exec.
+    # The helper must not run that subshell's cleanup, and exec itself
+    # does not run an EXIT trap.
+    trap - EXIT INT TERM HUP PIPE
+    exec /usr/bin/python3 -I -B -u /dev/fd/3 "$1" 3<<'PY'
+import ctypes
+import fcntl
+import os
+import signal
+import stat
+import sys
+
+def close_inherited_descriptors():
+    try:
+        names = os.listdir("/proc/self/fd")
+    except OSError:
+        names = []
+    for name in names:
+        try:
+            number = int(name)
+        except ValueError:
+            continue
+        if number > 2:
+            try:
+                os.close(number)
+            except OSError:
+                pass
+
+close_inherited_descriptors()
+
+lock_path = sys.argv[1]
+state = {"fd": None, "created": False}
+
+def same_inode(fd, path):
+    try:
+        current = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    owned = os.fstat(fd)
+    return (
+        stat.S_ISREG(current.st_mode)
+        and (current.st_dev, current.st_ino) == (owned.st_dev, owned.st_ino)
+    )
+
+def drop_lock():
+    fd = state["fd"]
+    if fd is None:
+        return
+    if state["created"] and same_inode(fd, lock_path):
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    state["fd"] = None
+
+def on_signal(_signum, _frame):
+    drop_lock()
+    raise SystemExit(0)
+
+signal.signal(signal.SIGTERM, on_signal)
+signal.signal(signal.SIGHUP, on_signal)
+try:
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.prctl.argtypes = [
+        ctypes.c_int,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+        ctypes.c_ulong,
+    ]
+    libc.prctl.restype = ctypes.c_int
+    libc.prctl(1, signal.SIGTERM, 0, 0, 0)
+except (AttributeError, OSError):
+    pass
+if os.getppid() == 1:
+    on_signal(signal.SIGTERM, None)
+
+if (
+    not lock_path.startswith("/")
+    or lock_path != os.path.abspath(lock_path)
+    or not lock_path.endswith("/.kilix-claudex.lock")
+    or "\n" in lock_path
+    or ".." in lock_path.split("/")
+):
+    print("error", flush=True)
+    raise SystemExit(0)
+
+def lock_is_valid(fd):
+    owned = os.fstat(fd)
+    if not stat.S_ISREG(owned.st_mode):
+        return False
+    if owned.st_nlink != 1 or owned.st_uid != os.geteuid():
+        return False
+    if owned.st_mode & 0o022:
+        return False
+    return same_inode(fd, lock_path)
+
+def acquire():
+    for _attempt in (1, 2):
+        try:
+            before = os.lstat(lock_path)
+        except FileNotFoundError:
+            before = None
+        if before is not None and stat.S_ISLNK(before.st_mode):
+            print("error", flush=True)
+            raise SystemExit(0)
+        try:
+            fd = os.open(
+                lock_path,
+                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError:
+            print("error", flush=True)
+            raise SystemExit(0)
+        owned = os.fstat(fd)
+        created = before is None or (
+            (before.st_dev, before.st_ino) != (owned.st_dev, owned.st_ino)
+        )
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            print("busy", flush=True)
+            raise SystemExit(0)
+        except OSError:
+            os.close(fd)
+            print("error", flush=True)
+            raise SystemExit(0)
+        if not same_inode(fd, lock_path):
+            os.close(fd)
+            continue
+        if not lock_is_valid(fd):
+            state["fd"] = fd
+            state["created"] = created
+            drop_lock()
+            print("error", flush=True)
+            raise SystemExit(0)
+        return fd, created
+    print("error", flush=True)
+    raise SystemExit(0)
+
+fd, created = acquire()
+state["fd"] = fd
+state["created"] = created
+print("owned", flush=True)
+while True:
+    line = sys.stdin.readline()
+    if not line:
+        break
+    command = line.strip()
+    if command == "unlink-created":
+        if created and same_inode(fd, lock_path):
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                print("kept", flush=True)
+                continue
+            created = False
+            state["created"] = False
+            print("unlinked", flush=True)
+        else:
+            print("kept", flush=True)
+    elif command == "release":
+        break
+    else:
+        print("error", flush=True)
+        break
+drop_lock()
+PY
+}
+
+# Run one fixed callback while the install mutex is held. The action is only
+# snapshot or restore; it is not read from the environment. The guardian
+# receives the lock path and the words unlink-created and release.
+# The callback runs in a private subshell. die/exit inside snapshot_stack_path
+# leaves that subshell only, and its EXIT trap reaps the guardian. The trap
+# command must succeed: a failing EXIT trap would replace the callback status.
+# These traps do not replace the updater traps in the caller.
+kilix_claudex_guard_run() {
+    local action="$1" root lock
+    case "$action" in
+        snapshot|restore) ;;
+        *) printf 'refusing Claudex guard action\n' >&2; return 1 ;;
+    esac
+    [ -x /usr/bin/python3 ] || {
+        printf 'could not lock the Claudex installation\n' >&2
+        return 1
+    }
+    root="$KILIX_DATA_HOME/desktop-apps"
+    lock="$root/.kilix-claudex.lock"
+    # Record parent absence before the guard can create the directory.
+    # The private subshell inherits the record.
+    _KILIX_CLAUDEX_PARENT_WAS_PRESENT=0
+    _KILIX_CLAUDEX_PARENT_CREATED=0
+    _KILIX_CLAUDEX_GUARD_HELD=0
+    _KILIX_CLAUDEX_GUARD_PID=
+    _KILIX_CLAUDEX_GUARD_W=
+    _KILIX_CLAUDEX_GUARD_R=
+    _KILIX_CLAUDEX_GUARD_DIR=
+    _KILIX_CLAUDEX_GUARD_WATCH=
+    _KILIX_CLAUDEX_GUARD_REAPED=0
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        kilix_claudex_require_user_dir "$root" "Claudex install parent" || return 1
+        _KILIX_CLAUDEX_PARENT_WAS_PRESENT=1
+    elif [ -e "$root" ] || [ -L "$root" ]; then
+        kilix_claudex_refuse "Claudex install parent is not a safe directory: $root"
+        return 1
+    else
+        mkdir -m 0700 -- "$root" || {
+            kilix_claudex_require_user_dir "$root" "Claudex install parent" || return 1
+            _KILIX_CLAUDEX_PARENT_WAS_PRESENT=1
+        }
+        if [ "$_KILIX_CLAUDEX_PARENT_WAS_PRESENT" != 1 ]; then
+            _KILIX_CLAUDEX_PARENT_CREATED=1
+        fi
+    fi
+    # Bash does not update PPID inside a subshell, so record the caller here.
+    # SIGKILL of this process does not run its traps; the watcher uses this pid.
+    _KILIX_CLAUDEX_GUARD_PARENT=$BASHPID
+    (
+        trap 'kilix_claudex_guard_finish || true' EXIT
+        trap 'kilix_claudex_guard_finish || true; exit 130' INT
+        trap 'kilix_claudex_guard_finish || true; exit 143' TERM
+        trap 'kilix_claudex_guard_finish || true; exit 129' HUP
+        trap 'kilix_claudex_guard_finish || true; exit 141' PIPE
+        _KILIX_CLAUDEX_GUARD_REAPED=0
+        _KILIX_CLAUDEX_GUARD_HELD=0
+        _KILIX_CLAUDEX_GUARD_PID=
+        _KILIX_CLAUDEX_GUARD_W=
+        _KILIX_CLAUDEX_GUARD_R=
+        _KILIX_CLAUDEX_GUARD_WATCH=
+        dir="$(mktemp -d "${TMPDIR:-/tmp}/kilix-claudex-guard.XXXXXX")" || exit 1
+        _KILIX_CLAUDEX_GUARD_DIR=$dir
+        mkfifo "$dir/ctl" "$dir/status" "$dir/tick" || exit 1
+        exec {_KILIX_CLAUDEX_GUARD_W}<>"$dir/ctl" || exit 1
+        exec {_KILIX_CLAUDEX_GUARD_R}<>"$dir/status" || exit 1
+        # Held open so the watcher's timed read blocks instead of seeing EOF.
+        exec {_KILIX_CLAUDEX_GUARD_TICK}<>"$dir/tick" || exit 1
+        kilix_claudex_guard_helper "$lock" <"$dir/ctl" >"$dir/status" &
+        _KILIX_CLAUDEX_GUARD_PID=$!
+        # This subshell's own pid. The caller pid was saved before the fork.
+        _KILIX_CLAUDEX_GUARD_SHELL=$BASHPID
+        (
+            trap - EXIT INT TERM HUP PIPE
+            set +e
+            set +u
+            if [[ "${_KILIX_CLAUDEX_GUARD_W:-}" =~ ^[0-9]+$ ]] \
+                && [ "$_KILIX_CLAUDEX_GUARD_W" -gt 2 ]; then
+                eval "exec ${_KILIX_CLAUDEX_GUARD_W}>&-"
+            fi
+            if [[ "${_KILIX_CLAUDEX_GUARD_R:-}" =~ ^[0-9]+$ ]] \
+                && [ "$_KILIX_CLAUDEX_GUARD_R" -gt 2 ]; then
+                eval "exec ${_KILIX_CLAUDEX_GUARD_R}>&-"
+            fi
+            while [ -d "/proc/${_KILIX_CLAUDEX_GUARD_PARENT}" ]; do
+                state="$(cat "/proc/${_KILIX_CLAUDEX_GUARD_PARENT}/stat" 2>/dev/null || true)"
+                case "$state" in
+                    *') Z'*) break ;;
+                esac
+                read -r -t 0.05 _guard_wait <&"${_KILIX_CLAUDEX_GUARD_TICK}" || true
+            done
+            kill -TERM "$_KILIX_CLAUDEX_GUARD_SHELL" 2>/dev/null || true
+        ) &
+        _KILIX_CLAUDEX_GUARD_WATCH=$!
+        status=error
+        IFS= read -r -t 5 status <&"$_KILIX_CLAUDEX_GUARD_R" || status=error
+        if [ "$status" != owned ]; then
+            if [ "$status" = busy ]; then
+                printf 'Claudex install lock is held: %s\n' "$lock" >&2
+            else
+                printf 'could not lock the Claudex installation: %s\n' "$lock" >&2
+            fi
+            # Drop a guard-created lock before removing an empty parent we made.
+            kilix_claudex_guard_finish || true
+            if [ "$_KILIX_CLAUDEX_PARENT_CREATED" = 1 ]; then
+                rmdir -- "$root" 2>/dev/null || true
+            fi
+            exit 1
+        fi
+        _KILIX_CLAUDEX_GUARD_HELD=1
+        rc=0
+        # The callback is selected here, from the fixed action, while the guardian
+        # still holds the mutex. It is not a command string from the caller.
+        case "$action" in
+            snapshot) kilix_claudex_snapshot_locked || rc=$? ;;
+            restore) kilix_claudex_restore_locked || rc=$? ;;
+        esac
+        exit "$rc"
+    )
+}
+kilix_claudex_snapshot_locked() {
+    local root stage base index
+    kilix_claudex_install_paths_are_safe || return 1
+    root="$KILIX_DATA_HOME/desktop-apps"
+    if [ "${_KILIX_CLAUDEX_PARENT_WAS_PRESENT:-0}" = 1 ]; then
+        : >"$_STACK_TXN_DIR/kilix-claudex-parent.present" || return 1
+    fi
+    snapshot_stack_path "$root/kilix-claudex" kilix-claudex-checkout
+    : >"$_STACK_TXN_DIR/kilix-claudex-stages" || return 1
+    index=0
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        while IFS= read -r -d '' stage; do
+            base="${stage##*/}"
+            printf '%s\n' "$base" >>"$_STACK_TXN_DIR/kilix-claudex-stages" \
+                || return 1
+            snapshot_stack_path "$stage" "kilix-claudex-stage-$index"
+            index=$((index + 1))
+        done < <(find "$root" -mindepth 1 -maxdepth 1 -name '.kilix-claudex.install-*' -print0)
+    fi
+    printf '%s\n' "$index" >"$_STACK_TXN_DIR/kilix-claudex-stage.count" \
+        || return 1
+    : >"$_STACK_TXN_DIR/kilix-claudex-managed" || return 1
+}
+
+kilix_claudex_restore_locked() {
+    local root checkout count recorded base found keep index
+    kilix_claudex_install_paths_are_safe || return 1
+    root="$KILIX_DATA_HOME/desktop-apps"
+    checkout="$root/kilix-claudex"
+    count="$(cat "$_STACK_TXN_DIR/kilix-claudex-stage.count" 2>/dev/null)" || return 1
+    [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -le 32 ] || return 1
+    recorded=0
+    if [ -s "$_STACK_TXN_DIR/kilix-claudex-stages" ]; then
+        recorded="$(grep -c '' "$_STACK_TXN_DIR/kilix-claudex-stages")" || return 1
+    fi
+    [ "$recorded" = "$count" ] || return 1
+    restore_stack_path "$checkout" kilix-claudex-checkout || return 1
+    if [ -d "$root" ] && [ ! -L "$root" ]; then
+        while IFS= read -r -d '' found; do
+            base="${found##*/}"
+            [[ "$base" =~ ^\.kilix-claudex\.install-[A-Za-z0-9._-]+$ ]] || return 1
+            [ "$found" = "$root/$base" ] || return 1
+            [ -d "$found" ] && [ ! -L "$found" ] || return 1
+            keep=0
+            if [ "$count" -gt 0 ] && grep -Fxq -- "$base" "$_STACK_TXN_DIR/kilix-claudex-stages"; then
+                keep=1
+            fi
+            if [ "$keep" = 0 ]; then
+                rm -rf -- "$found" || return 1
+            fi
+        done < <(find "$root" -mindepth 1 -maxdepth 1 -name '.kilix-claudex.install-*' -print0)
+    fi
+    index=0
+    while IFS= read -r base || [ -n "$base" ]; do
+        [ -n "$base" ] || continue
+        [[ "$base" =~ ^\.kilix-claudex\.install-[A-Za-z0-9._-]+$ ]] || return 1
+        restore_stack_path "$root/$base" "kilix-claudex-stage-$index" || return 1
+        index=$((index + 1))
+    done <"$_STACK_TXN_DIR/kilix-claudex-stages"
+    [ "$index" = "$count" ] || return 1
+    if [ ! -f "$_STACK_TXN_DIR/kilix-claudex-parent.present" ] \
+        && [ -d "$root" ] && [ ! -L "$root" ]; then
+        kilix_claudex_guard_unlink_created || return 1
+        if [ -z "$(find "$root" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+            rmdir -- "$root" || return 1
+        fi
+    fi
+}
+
+snapshot_kilix_claudex_install() {
+    kilix_claudex_install_paths_are_safe \
+        || die "refusing unsafe Claudex installation path"
+    kilix_claudex_guard_run snapshot \
+        || die "could not snapshot the Claudex installation"
+}
+
+restore_kilix_claudex_install() {
+    # An older updater never wrote this marker. Do not delete a checkout it
+    # did not snapshot, and do not take the install mutex to do so.
+    [ -f "$_STACK_TXN_DIR/kilix-claudex-managed" ] || return 0
+    kilix_claudex_install_paths_are_safe || return 1
+    kilix_claudex_guard_run restore
+}
+
+install_kilix_claudex() {
+    env "${stack_env[@]}" KILIX_APP_AUTO_INSTALL=1 \
+        "$KILIX_DIR/kilix" app install kilix-claudex \
+        || die "required Claudex application installation failed"
 }
 
 # The same kilix-llm closure provisioning installs: the launcher and pinned
@@ -4395,6 +6084,67 @@ install_kilix_llm() {
         || die "required kilix-llm installer is missing or unsafe: $installer"
     env "${stack_env[@]}" "$installer" \
         || die "required kilix-llm installation failed"
+}
+
+# Kilix 95's bytecode and font caches for the updated Kilix 95, Kilix SDK and
+# Neuronte, as the desktop user (this updater already runs as that user):
+# provisioning's prepare_kilix95_caches. It runs after the stack transaction
+# has committed, so the caches match the committed sources and a failure here
+# cannot touch the update. Every failure is a warning; the next desktop start
+# builds whatever is missing.
+KILIX95_PREPARE_CACHE_TIMEOUT=600s
+prepare_kilix95_caches_update() {
+    local main="$KILIX95_DIR/main.py" launcher
+    [ -f "$main" ] && [ ! -L "$main" ] || return 0
+    launcher="$(readlink -f -- "$KILIX_DIR/kilix" 2>/dev/null)" && [ -f "$launcher" ] || {
+        warn "Kilix 95 caches not prepared: no kilix launcher in $KILIX_DIR"
+        return 0
+    }
+    log "preparing Kilix 95 bytecode and font caches"
+    env "${stack_env[@]}" "KILIX_HOME=${launcher%/*}" \
+        /usr/bin/timeout --signal=TERM --kill-after=10s "$KILIX95_PREPARE_CACHE_TIMEOUT" \
+        /usr/bin/python3 "$main" --prepare-cache \
+        || warn "Kilix 95 cache preparation did not complete; the desktop will retry at launch"
+    return 0
+}
+
+# The Neuronte faces at the selected NEURONTE_REF, as the desktop user, in
+# $GPU_TERMINAL_SOURCE_HOME/neuronte: provisioning's install_neuronte, for a
+# machine installed before 0.2.3 or one whose pin moved. The image's archive is
+# used when this machine has the one for this ref; otherwise only the pinned
+# files are fetched (blob-less, runtime files only) and each is checked against its
+# pinned git blob id. A failed download leaves the installed tree as it is and
+# the next update tries again; a refused or failed install fails the update.
+install_neuronte_update() {
+    [ -n "$NEURONTE_REF" ] || return 0
+    [[ "$NEURONTE_REF" =~ ^[0-9a-f]{40}$ ]] \
+        || die "Neuronte requires an exact NEURONTE_REF commit"
+    [ "$NEURONTE_REPO" = https://github.com/itsmygithubacct/neuronte-v2.git ] \
+        || die "Neuronte requires the canonical NEURONTE_REPO"
+    local file installer="$PLEBIAN_OS_DIR/provision/install-neuronte.py"
+    local manifest="$PLEBIAN_OS_DIR/provision/neuronte-payload.json"
+    for file in "$installer" "$manifest"; do
+        [ -f "$file" ] && [ ! -L "$file" ] \
+            || die "required Neuronte installer file is missing or unsafe: $file"
+    done
+    log "installing Neuronte ${NEURONTE_REF:0:12} in $GPU_TERMINAL_SOURCE_HOME/neuronte"
+    env "${stack_env[@]}" /usr/bin/python3 "$installer" install \
+        --manifest "$manifest" --ref "$NEURONTE_REF" --repo "$NEURONTE_REPO" \
+        --destination "$GPU_TERMINAL_SOURCE_HOME/neuronte" \
+        --archive "/usr/local/share/plebian-os/neuronte-$NEURONTE_REF.tar.xz" \
+        --fetch-failure warn \
+        || die "required Neuronte installation failed"
+    # Kilix 95's caches are prepared once, by prepare_kilix95_caches_update,
+    # after the stack transaction has committed.
+}
+
+# The commit the installed Neuronte tree records, or nothing.
+installed_neuronte_commit() {
+    local record="$GPU_TERMINAL_SOURCE_HOME/neuronte/.plebian-os-neuronte.json"
+    [ -f "$record" ] && [ ! -L "$record" ] || return 0
+    python3 -I -c 'import json, re, sys
+commit = json.load(open(sys.argv[1])).get("commit", "")
+print(commit if re.fullmatch("[0-9a-f]{40}", str(commit)) else "")' "$record" 2>/dev/null || true
 }
 
 run_encodec_converter_installer() {
@@ -4411,15 +6161,44 @@ refresh_os_dependencies() {
     fi
     [ "$(id -u)" = 0 ] || elevate=(sudo)
     log "reconciling the selected OS dependency closure (needs root)"
+    run_package_step_in_its_own_session \
     "${elevate[@]}" env \
         "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE" \
+        "APT_PROVENANCE_PHASE=lifetime" \
+        "PLEBIAN_OS_APT_SNAPSHOT=${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+        "PLEBIAN_OS_APT_SOURCES_ROOT=${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}" \
         "PLEBIAN_OS_INSTALL_UV=$PLEBIAN_OS_INSTALL_UV" \
         "PLEBIAN_OS_UV_VERSION=$PLEBIAN_OS_UV_VERSION" \
         "PLEBIAN_OS_UV_INSTALLER_SHA256=$PLEBIAN_OS_UV_INSTALLER_SHA256" \
         "PLEBIAN_OS_UV_INSTALLER_MAX_BYTES=$PLEBIAN_OS_UV_INSTALLER_MAX_BYTES" \
+        ${PLEBIAN_OS_RELEASE_APT_CONFIG:+"PLEBIAN_OS_RELEASE_APT_CONFIG=$PLEBIAN_OS_RELEASE_APT_CONFIG"} \
         PLEBIAN_OS_ROOT_SESSION_HOME=/var/lib/plebian-os/session \
+        /usr/bin/setsid --wait /bin/bash -c \
+        'trap "" INT HUP QUIT; exec "$@"' plebian-os-package-step \
         "$helper" --model-converters \
         || die "selected OS dependency closure could not be installed"
+    if [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ]; then
+        # The state directory is root-only. The updater is unprivileged, so
+        # this verify has to be elevated or every release update fails here
+        # and rolls back. The same elevate array already ran install-deps.
+        if ! "${elevate[@]}" /usr/local/sbin/plebian-os-qt-runtime --verify; then
+            die "Plebian Qt runtime verification failed after the release dependency install"
+        fi
+    fi
+}
+
+# The private Qt pin is taken when the release apt configuration is prepared.
+# A hop that changes Qt rewrites the operator pin later. Copy that one file
+# again, with the same owner and mode checks, before install-deps. This does
+# not rebuild the private sources. An absent pin is not an error. A qualifying
+# pin that cannot be copied fails the stage.
+refresh_release_qt_pin() {
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
+    if [ -z "${RELEASE_APT_CONFIG:-}" ] || [ ! -d "$RELEASE_APT_CONFIG" ] \
+            || [ -L "$RELEASE_APT_CONFIG" ]; then
+        return 1
+    fi
+    copy_release_qt_pin "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}" "$RELEASE_APT_CONFIG"
 }
 
 # An update installs packages at four sites — the OS dependency closure above,
@@ -4476,9 +6255,9 @@ refresh_os_dependencies() {
 # is one such grep, and misses the second line.
 #
 # Only on the success path. An update that fails after refresh_os_dependencies
-# and before this step rolls back the OS layer and the checkouts but keeps the
-# packages it installed ("Apt package additions are permitted rollback
-# residue"), and with them any enablement link a postinst wrote; nothing on the
+# rolls back the OS layer and the checkouts, and removes apt packages this
+# transaction newly installed when that removal is safe. A package apt would
+# not remove by itself is kept, enablement link included, and nothing on the
 # rollback path re-checks the card. The next update that completes, or a
 # reprovision, runs this step and clears it. Running the rule from the rollback
 # path itself was not done: it would source a provisioner the rollback has just
@@ -4683,6 +6462,9 @@ stack_env=(
     "PLEBIAN_OS_VERSION=$PLEBIAN_OS_VERSION"
     "PLEBIAN_OS_RELEASE=$PLEBIAN_OS_RELEASE"
     "PLEBIAN_OS_RELEASE_MODE=$PLEBIAN_OS_RELEASE_MODE"
+    # Plebs and Kilix refuse system apt only on an installed Plebian OS. Pin the
+    # marker so a caller cannot point it at another file and fall back to system apt.
+    "PLEBIAN_OS_MACHINE_MARKER=/etc/plebian-os/build-info.env"
     "PLEBIAN_OS_APT_SNAPSHOT=$PLEBIAN_OS_APT_SNAPSHOT"
     "PLEBIAN_OS_INSTALL_UV=$PLEBIAN_OS_INSTALL_UV"
     "PLEBIAN_OS_UV_VERSION=$PLEBIAN_OS_UV_VERSION"
@@ -4733,8 +6515,17 @@ stack_env=(
     "PLEBIAN_OS_BUILD_KILIX_FORK=$PLEBIAN_OS_BUILD_KILIX_FORK"
     "PLEBIAN_OS_KILIX_GO_MIN_VERSION=$PLEBIAN_OS_KILIX_GO_MIN_VERSION"
     "PLEBIAN_OS_KILIX_GO_VERSION=$PLEBIAN_OS_KILIX_GO_VERSION"
+    "PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION=$PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION"
     "PLEBIAN_OS_KILIX_GO_SHA256_AMD64=$PLEBIAN_OS_KILIX_GO_SHA256_AMD64"
     "PLEBIAN_OS_KILIX_GO_SHA256_ARM64=$PLEBIAN_OS_KILIX_GO_SHA256_ARM64"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+    "PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256=$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE=$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES=$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+    "PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256=$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+    "PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT=$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+    "PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL=$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
     "KILIX_DESKTOP_PROVIDER=$KILIX_DESKTOP_PROVIDER"
     "KILIX_DESKTOP_COMMAND=$KILIX_DESKTOP_COMMAND"
     "KILIX_DESKTOP_NAME=$KILIX_DESKTOP_NAME"
@@ -4793,16 +6584,19 @@ stack_env=(
     "KILIX_SECRETS_REPO=$KILIX_SECRETS_REPO"
     "KILIX_SECRETS_BRANCH=$KILIX_SECRETS_BRANCH"
     "KILIX_SECRETS_REF=$KILIX_SECRETS_REF"
+    "NEURONTE_REPO=$NEURONTE_REPO"
+    "NEURONTE_REF=$NEURONTE_REF"
 )
 
 # Release apt index provenance has two phases, and the provisioner and updater
 # must agree on both (a test holds their copies byte-identical). The run that
 # records a release install resolves every index from the exact install
 # snapshot; afterwards the machine tracks live Debian, and every index must still
-# come from the official Debian archive for its codename. Returns 2 for an empty
+# come from the official Debian archive for its codename. The codename's
+# backports suite counts only from deb.debian.org/debian. Returns 2 for an empty
 # index list and 1, naming the index, for any other violation.
 validate_release_apt_provenance() {
-    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release
+    local file="$1" phase="$2" snapshot="$3" codename="$4" line site release suite_ok
     [ -s "$file" ] || return 2
     while IFS= read -r line || [ -n "$line" ]; do
         read -r site release _ <<<"$line"
@@ -4817,9 +6611,17 @@ validate_release_apt_provenance() {
                 fi
                 ;;
             lifetime)
-                if ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
-                    || { [ "$release" != "$codename" ] && [ "$release" != "$codename-updates" ] \
-                        && [ "$release" != "$codename-security" ]; }; then
+                # $codename-backports is part of the official archive only when
+                # it comes from deb.debian.org/debian. The same suite on the
+                # security or snapshot archive is not.
+                suite_ok=0
+                case "$release" in
+                    "$codename"|"$codename-updates"|"$codename-security") suite_ok=1 ;;
+                    "$codename-backports") suite_ok=2 ;;
+                esac
+                if [ "$suite_ok" = 0 ] \
+                    || ! [[ "$site" =~ ^https?://(deb\.debian\.org/debian|deb\.debian\.org/debian-security|security\.debian\.org/debian-security|snapshot\.debian\.org/archive/debian(-security)?/[0-9]{8}(T[0-9]{6}Z)?)/?$ ]] \
+                    || { [ "$suite_ok" = 2 ] && ! [[ "$site" =~ ^https?://deb\.debian\.org/debian/?$ ]]; }; then
                     printf 'apt index outside the Debian archive for %s: %s\n' "$codename" "$line" >&2
                     return 1
                 fi
@@ -4830,55 +6632,610 @@ validate_release_apt_provenance() {
     return 0
 }
 
+# Release apt operations use a private configuration. A source file is copied
+# into it only when every index that file contributes passes
+# validate_release_apt_provenance for this phase. Indexes come from
+# `apt-get update --print-uris` on that file alone, against an empty list
+# cache, so a target counts whether or not this machine has already downloaded
+# it and nothing is fetched while classifying. Any other file, including a
+# signed third-party repository, stays where the operator put it and is not
+# consulted. A private package-list cache keeps a higher version from that
+# repository from becoming a candidate, and the real dpkg status is what apt
+# reads, so a package already installed from the operator source is not removed
+# or downgraded. $1 is an absolute directory this function fills. $2 is install
+# or lifetime. $3 is the install snapshot id, empty outside that phase. $4 is
+# the codename. $5 is the operator apt directory, the one that contains
+# sources.list. On success, $1/indexes lists the release indexes. On failure,
+# $1/failure names the provenance refusal and the function returns 1.
+
+# Copy the one Plebian Qt pin into a private apt configuration.
+# $1 is the operator apt directory. $2 is the private configuration
+# directory; its preferences.d must already exist. A regular non-symlink
+# file owned by uid 0 and not group- or world-writable is copied, then
+# mode 0644. Anything else is left alone, including an absent file. A
+# qualifying file that cannot be copied is a failure. Operator pins and
+# the Qt verify hook are not copied.
+copy_release_qt_pin() {
+    local apt_dir="$1" dest="$2"
+    local qt_pin="" qt_owner="" qt_mode=""
+    qt_pin="$apt_dir/preferences.d/plebian-os-qt-runtime"
+    if [ -f "$qt_pin" ] && [ ! -L "$qt_pin" ]; then
+        qt_owner="$(stat -c '%u' -- "$qt_pin" 2>/dev/null || true)"
+        qt_mode="$(stat -c '%a' -- "$qt_pin" 2>/dev/null || true)"
+        case "$qt_mode" in
+            ''|*[!0-9]*) qt_mode="" ;;
+        esac
+        if [ "$qt_owner" = 0 ] && [ -n "$qt_mode" ] \
+                && [ $(( 8#$qt_mode & 022 )) -eq 0 ]; then
+            cp -- "$qt_pin" "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+            chmod 0644 -- "$dest/preferences.d/plebian-os-qt-runtime" || return 1
+        fi
+    fi
+}
+prepare_release_apt_config() {
+    local dest="$1" phase="$2" snapshot="$3" codename="$4" apt_dir="$5"
+    local work="" reason_file="" file="" base="" rel="" staged=""
+    local list_arg="" parts_arg="" uris="" line="" uri="" site="" release=""
+    local apt_rc=0 vrc=0 rc=0 parsed=0 bad_line=0 saw_failure=0
+    local main_ok=0 snapshot_only=0 trust_disabled=0
+    local proxy_line="" proxy_key="" proxy_value="" proxy_host="" proxy_ok=0
+    local proxy_userinfo=0 proxy_mode=0644
+    case "$dest" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+    case "$apt_dir" in
+        /*) ;;
+        *) printf '%s\n' "apt source directory must be absolute" >"$dest/failure"
+           return 1 ;;
+    esac
+    case "$phase" in
+        install|lifetime) ;;
+        *) printf '%s\n' "unknown apt provenance phase" >"$dest/failure"
+           return 1 ;;
+    esac
+    [ -d "$dest" ] && [ ! -L "$dest" ] || return 1
+    case "$dest/" in
+        "$apt_dir"/*)
+            printf '%s\n' "release apt configuration must stay outside the operator apt directory" >"$dest/failure"
+            return 1 ;;
+    esac
+    work="$(mktemp -d)" || {
+        printf '%s\n' "could not stage the release apt configuration" >"$dest/failure"
+        return 1
+    }
+    case "$work" in
+        /*) ;;
+        *) work="$PWD/$work" ;;
+    esac
+    reason_file="$dest/failure"
+    mkdir -p -- "$dest/sources.list.d" "$dest/lists/partial" "$dest/archives/partial" \
+        "$dest/cache" "$dest/preferences.d" "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    : >"$dest/sources.list"
+    : >"$dest/preferences"
+    : >"$dest/extended_states"
+    : >"$dest/indexes"
+    # Apt's default Dir::Etc::main is /etc/apt/apt.conf even when APT_CONFIG
+    # names this file, and a command-line -o Dir::Etc::parts is applied after
+    # apt.conf.d has already been read. Set both in this file: main is
+    # /dev/null, and Parts is an empty directory, so the operator apt.conf and
+    # apt.conf.d snippets, including APT::Sources::With, are not part of this
+    # configuration. Validated proxy values are appended afterwards.
+    printf '%s\n' \
+        'Dir::Etc::main "/dev/null";' \
+        "Dir::Etc::Parts \"$dest/apt.conf.d\";" \
+        'APT::Get::AllowUnauthenticated "false";' \
+        'Acquire::AllowInsecureRepositories "false";' \
+        'Acquire::AllowWeakRepositories "false";' \
+        'Acquire::AllowDowngradeToInsecureRepositories "false";' \
+        'Acquire::Check-Valid-Until "true";' \
+        >"$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    # apt-config dump only parses the operator configuration. Copy string
+    # values of Acquire::{http,https,ftp}::Proxy and a per-host form whose
+    # host matches [A-Za-z0-9.-]+. The value must be DIRECT or an http://,
+    # https://, or socks5h:// URL, with an optional userinfo
+    # [A-Za-z0-9._~%!$&()*+,=:-]+@ before the host. Quotes, semicolons,
+    # braces, backslashes, and whitespace are dropped. The warning names the
+    # key and never prints the value. Any other key, including a proxy
+    # auto-detect program, is left out. A copied proxy cannot forge a
+    # package: the signed Release check still applies.
+    while IFS= read -r proxy_line || [ -n "$proxy_line" ]; do
+        [ -n "$proxy_line" ] || continue
+        case "$proxy_line" in
+            *$'\t'*) ;;
+            *) continue ;;
+        esac
+        proxy_key="${proxy_line%%$'\t'*}"
+        proxy_value="${proxy_line#*$'\t'}"
+        case "$proxy_key" in
+            Acquire::http::Proxy|Acquire::https::Proxy|Acquire::ftp::Proxy)
+                ;;
+            Acquire::http::Proxy::*|Acquire::https::Proxy::*|Acquire::ftp::Proxy::*)
+                proxy_host="${proxy_key#*::Proxy::}"
+                case "$proxy_host" in
+                    ''|*::*|*[!A-Za-z0-9.-]*)
+                        printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+                        continue
+                        ;;
+                esac
+                ;;
+            *)
+                continue
+                ;;
+        esac
+        proxy_ok=0
+        case "$proxy_value" in
+            *"'"*|*'\"'*|*'"'*|*';'*|*'{'*|*'}'*|*[[:space:]]*|*\\*)
+                ;;
+            DIRECT)
+                proxy_ok=1
+                ;;
+            *)
+                if [[ "$proxy_value" =~ ^(http|https|socks5h)://([A-Za-z0-9._~%!$&()*+,=:-]+@)?[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?#@!$&()*+,=%-]*)?$ ]]; then
+                    proxy_ok=1
+                    # Group 2 is the optional userinfo, including its @. A
+                    # later @ in the path is not a credential.
+                    if [ -n "${BASH_REMATCH[2]:-}" ]; then
+                        proxy_userinfo=1
+                    fi
+                fi
+                ;;
+        esac
+        if [ "$proxy_ok" -ne 1 ]; then
+            printf 'release apt: dropping proxy setting %s\n' "$proxy_key" >&2
+            continue
+        fi
+        printf '%s "%s";\n' "$proxy_key" "$proxy_value" >>"$dest/apt.conf" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done < <(LC_ALL=C env -u APT_CONFIG apt-config dump --no-empty --format '%f%N%v%n' 2>/dev/null || true)
+    # The Plebian Qt pin is part of the release closure. Copy that one
+    # root-owned file when it is a regular file and not group- or
+    # world-writable. Operator pins stay where they are. The updater
+    # copies the pin again after a Qt hop, before install-deps.
+    if ! copy_release_qt_pin "$apt_dir" "$dest"; then
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    fi
+    : >"$work/files"
+    : >"$work/accepted.idx"
+    : >"$work/all.idx"
+    if [ -f "$apt_dir/sources.list" ] && [ ! -L "$apt_dir/sources.list" ]; then
+        printf '%s\n' "$apt_dir/sources.list" >>"$work/files"
+    fi
+    if [ -d "$apt_dir/sources.list.d" ] && [ ! -L "$apt_dir/sources.list.d" ]; then
+        for file in "$apt_dir/sources.list.d"/*; do
+            if [ ! -f "$file" ] || [ -L "$file" ]; then
+                continue
+            fi
+            base="${file##*/}"
+            case "$base" in
+                .*|*~|*.disabled|*.dpkg-old|*.dpkg-new|*.dpkg-dist|*.dpkg-bak) continue ;;
+                *.list|*.sources) ;;
+                *) continue ;;
+            esac
+            printf '%s\n' "$file" >>"$work/files"
+        done
+    fi
+    LC_ALL=C sort -o "$work/files.sorted" "$work/files" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    while IFS= read -r file || [ -n "$file" ]; do
+        [ -n "$file" ] || continue
+        case "$file" in
+            "$apt_dir/sources.list"|"$apt_dir"/sources.list.d/*) ;;
+            *)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rel="${file#"$apt_dir"/}"
+        case "$rel" in
+            *'..'*|*$'\n'*)
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1 ;;
+        esac
+        rm -rf -- "$work/one"
+        mkdir -p -- "$work/one/parts" "$work/one/lists/partial" "$work/one/cache" \
+            "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        printf '%s\n' \
+            'Dir::Etc::main "/dev/null";' \
+            "Dir::Etc::Parts \"$work/one/apt.conf.d\";" \
+            >"$work/one/apt.conf" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            staged="$work/one/sources.list"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$staged"
+            parts_arg="$work/one/parts"
+        else
+            base="${file##*/}"
+            staged="$work/one/parts/$base"
+            if ! cp -a -- "$file" "$staged"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+            list_arg="$work/one/empty.list"
+            parts_arg="$work/one/parts"
+        fi
+        # mktemp is mode 0700. Classification runs apt-get, and a root
+        # caller fetches as the unprivileged _apt user, which cannot
+        # traverse 0700. These files are Debian source lines only.
+        chmod 0755 -- "$work" "$work/one" "$work/one/parts" "$work/one/lists" \
+            "$work/one/lists/partial" "$work/one/cache" "$work/one/apt.conf.d" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        chmod 0644 -- "$staged" "$work/one/apt.conf" "$work/one/empty.list" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        apt_rc=0
+        uris="$(env -u APT_CONFIG APT_CONFIG="$work/one/apt.conf" \
+            apt-get update --print-uris \
+            -o "Dir::Etc::SourceList=$list_arg" \
+            -o "Dir::Etc::SourceParts=$parts_arg" \
+            -o "Dir::State::lists=$work/one/lists" \
+            -o "Dir::Cache=$work/one/cache" \
+            -o "Dir::Cache::archives=$work/one/cache" \
+            2>"$work/one/err")" || apt_rc=$?
+        if [ "$apt_rc" != 0 ]; then
+            saw_failure=1
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        printf '%s\n' "$uris" >"$work/one/uris" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        : >"$work/one/idx"
+        parsed=0
+        bad_line=0
+        while IFS= read -r line || [ -n "$line" ]; do
+            [ -n "$line" ] || continue
+            case "$line" in
+                \'*) ;;
+                *://*) bad_line=1; continue ;;
+                *) continue ;;
+            esac
+            uri="${line#\'}"
+            uri="${uri%%\'*}"
+            case "$uri" in
+                *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+            esac
+            case "$uri" in
+                *'/dists/'*)
+                    site="${uri%%/dists/*}"
+                    release="${uri#*/dists/}"
+                    release="${release%%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    case "$release" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s %s main amd64\n' "$site" "$release" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+                *)
+                    site="${uri%/*}"
+                    case "$site" in
+                        *[[:space:]]*|*$'\n'*|'') bad_line=1; continue ;;
+                    esac
+                    printf '%s flat main amd64\n' "$site" >>"$work/one/idx"
+                    parsed=1
+                    ;;
+            esac
+        done <"$work/one/uris"
+        if [ "$bad_line" = 1 ] || [ "$parsed" = 0 ]; then
+            if [ "$bad_line" = 1 ]; then
+                saw_failure=1
+                log "operator apt source $file is left unchanged and is not used to install release packages"
+            fi
+            continue
+        fi
+        LC_ALL=C sort -u -o "$work/one/sorted" "$work/one/idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        cat -- "$work/one/sorted" >>"$work/all.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+        vrc=0
+        validate_release_apt_provenance "$work/one/sorted" "$phase" "$snapshot" "$codename" >/dev/null 2>&1 || vrc=$?
+        if [ "$vrc" != 0 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        # trusted=yes, allow-insecure, allow-weak, and allow-downgrade-to-insecure
+        # turn signature checks off. check-valid-until=no and check-date=no turn
+        # replay protection off. The install snapshot's own source is the one
+        # exception: its Release files are already expired, so the provisioner
+        # sets Check-Valid-Until: no on snapshot.debian.org and nowhere else.
+        trust_disabled=0
+        if grep -Eiq -e '(^|[^[:alnum:]_-])trusted[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-weak[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])allow-downgrade-to-insecure[[:space:]]*[:=][[:space:]]*(yes|true|on|with|enable|1)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            trust_disabled=1
+        elif grep -Eiq -e '(^|[^[:alnum:]_-])check-valid-until[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -e '(^|[^[:alnum:]_-])check-date[[:space:]]*[:=][[:space:]]*(no|false|off|without|disable|0)([^[:alnum:]_-]|$)' \
+                -- "$staged"; then
+            snapshot_only=1
+            while IFS= read -r line || [ -n "$line" ]; do
+                [ -n "$line" ] || continue
+                read -r site release _ <<<"$line"
+                case "$site" in
+                    http://snapshot.debian.org/*|https://snapshot.debian.org/*) ;;
+                    *) snapshot_only=0 ;;
+                esac
+            done <"$work/one/sorted"
+            [ "$snapshot_only" = 1 ] || trust_disabled=1
+        fi
+        if [ "$trust_disabled" = 1 ]; then
+            log "operator apt source $file is left unchanged and is not used to install release packages"
+            continue
+        fi
+        if [ "$file" = "$apt_dir/sources.list" ]; then
+            if ! cp -a -- "$staged" "$dest/sources.list"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        else
+            if [ -e "$dest/sources.list.d/$base" ]; then
+                rm -rf -- "$work"
+                printf '%s\n' "refusing an apt source path outside the operator apt directory" >"$reason_file"
+                return 1
+            fi
+            if ! cp -a -- "$staged" "$dest/sources.list.d/$base"; then
+                rm -rf -- "$work"
+                printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+                return 1
+            fi
+        fi
+        cat -- "$work/one/sorted" >>"$work/accepted.idx" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done <"$work/files.sorted"
+    LC_ALL=C sort -u -o "$dest/indexes" "$work/accepted.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    LC_ALL=C sort -u -o "$work/all.sorted" "$work/all.idx" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    rc=0
+    if [ ! -s "$dest/indexes" ]; then
+        rc=2
+    elif ! validate_release_apt_provenance "$dest/indexes" "$phase" "$snapshot" "$codename" >/dev/null 2>&1; then
+        rc=1
+    fi
+    if [ "$rc" != 0 ]; then
+        if [ -s "$work/all.sorted" ]; then
+            validate_release_apt_provenance "$work/all.sorted" "$phase" "$snapshot" "$codename" >/dev/null || rc=$?
+        elif [ "$saw_failure" = 1 ]; then
+            printf '%s\n' "could not list the configured apt indexes" >"$reason_file"
+            rm -rf -- "$work"
+            return 1
+        else
+            rc=2
+        fi
+        if [ "$rc" = 0 ]; then
+            rc=2
+        fi
+        if [ "$rc" = 2 ]; then
+            printf '%s\n' "release apt index provenance is empty" >"$reason_file"
+        elif [ "$phase" = install ]; then
+            printf '%s\n' "release install closure resolved from an index other than snapshot $snapshot" >"$reason_file"
+        else
+            printf '%s\n' "release apt provenance contains an index outside the Debian archive" >"$reason_file"
+        fi
+        rm -rf -- "$work"
+        return 1
+    fi
+    # Security alone must not pass. The accepted set has to include the
+    # codename's main suite, from the Debian archive in the lifetime phase and
+    # from the install snapshot in the install phase. A mixed file that was
+    # excluded can otherwise leave only trixie-security behind.
+    main_ok=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ -n "$line" ] || continue
+        read -r site release _ <<<"$line"
+        [ "$release" = "$codename" ] || continue
+        case "$phase" in
+            install)
+                [ "$site" = "https://snapshot.debian.org/archive/debian/$snapshot" ] && main_ok=1
+                ;;
+            lifetime)
+                case "$site" in
+                    http://deb.debian.org/debian|https://deb.debian.org/debian|http://deb.debian.org/debian/|https://deb.debian.org/debian/)
+                        main_ok=1 ;;
+                    http://snapshot.debian.org/archive/debian/*|https://snapshot.debian.org/archive/debian/*)
+                        main_ok=1 ;;
+                esac
+                ;;
+        esac
+    done <"$dest/indexes"
+    if [ "$main_ok" != 1 ]; then
+        printf 'release apt provenance is missing the %s main archive\n' "$codename" >"$reason_file"
+        rm -rf -- "$work"
+        return 1
+    fi
+    # The finished directory is handed to root apt. _apt must be able to
+    # traverse it. apt.conf is mode 0600 when a copied proxy contains
+    # userinfo, because that value is a credential. The other files stay
+    # mode 0644.
+    if [ "$proxy_userinfo" = 1 ]; then
+        proxy_mode=0600
+    fi
+    chmod 0755 -- "$dest" "$dest/sources.list.d" "$dest/lists" "$dest/lists/partial" \
+        "$dest/archives" "$dest/archives/partial" "$dest/cache" "$dest/preferences.d" \
+        "$dest/apt.conf.d" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod 0644 -- "$dest/sources.list" "$dest/preferences" "$dest/extended_states" \
+        "$dest/indexes" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    chmod "$proxy_mode" -- "$dest/apt.conf" || {
+        rm -rf -- "$work"
+        printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+        return 1
+    }
+    for file in "$dest/sources.list.d"/*; do
+        if [ ! -f "$file" ] || [ -L "$file" ]; then
+            continue
+        fi
+        chmod 0644 -- "$file" || {
+            rm -rf -- "$work"
+            printf '%s\n' "could not stage the release apt configuration" >"$reason_file"
+            return 1
+        }
+    done
+    rm -rf -- "$work"
+    return 0
+}
+
+# apt-get for a configuration prepare_release_apt_config built. The operator's
+# sources, pins, and list cache are not on this command line.
+release_apt_get() {
+    local config="$1"
+    shift
+    env -u APT_CONFIG APT_CONFIG="$config/apt.conf" \
+    apt-get \
+        -o DPkg::Lock::Timeout=600 \
+        -o "Dir::Etc::SourceList=$config/sources.list" \
+        -o "Dir::Etc::SourceParts=$config/sources.list.d" \
+        -o "Dir::State::lists=$config/lists" \
+        -o "Dir::State::status=${PLEBIAN_OS_DPKG_STATUS:-/var/lib/dpkg/status}" \
+        -o "Dir::State::extended_states=${PLEBIAN_OS_APT_EXTENDED_STATES:-/var/lib/apt/extended_states}" \
+        -o "Dir::Cache=$config/cache" \
+        -o "Dir::Cache::archives=$config/archives" \
+        -o "Dir::Cache::pkgcache=$config/cache/pkgcache.bin" \
+        -o "Dir::Cache::srcpkgcache=$config/cache/srcpkgcache.bin" \
+        -o "Dir::Etc::Preferences=$config/preferences" \
+        -o "Dir::Etc::PreferencesParts=$config/preferences.d" \
+        "$@"
+}
+
 # A machine being updated already has a recorded install closure, so its apt
 # indexes are held to the lifetime phase: the official Debian archive only.
 require_lifetime_release_apt_provenance() {
-    local rc=0 refused line site host file
+    local rc=0 refused
     refused="$(validate_release_apt_provenance "$1" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
         "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
         2>&1 >/dev/null)" || rc=$?
     [ "$rc" != 2 ] || die "release apt index provenance is empty"
     if [ "$rc" != 0 ]; then
         [ -z "$refused" ] || printf '%s\n' "$refused" >&2
-        # There is deliberately no override: a release records Debian-only
-        # package provenance. Say which file to set aside, and for how long.
-        while IFS= read -r line; do
-            site="${line#*: }"
-            site="${site%% *}"
-            host="${site#*://}"
-            host="${host%/}"
-            [ -n "$host" ] || continue
-            while IFS= read -r file; do
-                warn "apt source $site is configured in $file"
-            done < <(grep -rlF -- "$host" "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}/sources.list" \
-                "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}/sources.list.d" 2>/dev/null | LC_ALL=C sort -u)
-        done <<<"$refused"
-        warn "release updates install only from the Debian archive; disable each source above for this run"
-        warn "(rename the file so it no longer ends in .list/.sources, or add 'Enabled: no' to a .sources file),"
-        warn "rerun plebian-os-update, then re-enable the source afterwards"
+        # Operator sources are left in place. There is no rename step: a file
+        # that is outside the archive is simply not copied into the release
+        # configuration, and a release set that itself fails the gate refuses.
         die "release apt provenance contains an index outside the Debian archive"
     fi
 }
 
 # The lifetime gate above runs again when the final provenance is written, at
-# the very end of the update. Check the configured sources before the release
-# hop and the stack transaction too, so a third-party repository is refused up
-# front rather than after the whole stack has been rebuilt and rolled back.
+# the very end of the update. Check the release apt configuration before the
+# release hop and the stack transaction too. An operator source that is not
+# copied into that configuration does not block the update; a release set that
+# is empty or itself outside the Debian archive still refuses up front.
 # (Only the update lock and private storage directories exist by then.)
-preflight_release_apt_provenance() {
-    local listing rc=0
-    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
-    listing="$(mktemp)" || die "could not list the configured apt indexes"
-    apt-get indextargets \
-        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
-        | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u >"$listing" || rc=$?
-    if [ "$rc" != 0 ]; then
-        rm -f -- "$listing"
-        die "could not list the configured apt indexes"
+# Prepare the private configuration once and keep it until the update exits.
+# Later installs, rollbacks, and the final provenance record all use this
+# directory. Re-reading the operator tree at the end would be a different
+# configuration from the one that installed the packages.
+ensure_release_apt_config() {
+    local reason=""
+    [ "${PLEBIAN_OS_RELEASE_MODE:-0}" = 1 ] || return 0
+    if [ -n "${RELEASE_APT_CONFIG:-}" ] && [ -d "$RELEASE_APT_CONFIG" ] \
+            && [ ! -L "$RELEASE_APT_CONFIG" ] \
+            && [ -f "$RELEASE_APT_CONFIG/apt.conf" ] \
+            && [ -f "$RELEASE_APT_CONFIG/indexes" ]; then
+        export PLEBIAN_OS_RELEASE_APT_CONFIG="$RELEASE_APT_CONFIG"
+        return 0
     fi
-    ( require_lifetime_release_apt_provenance "$listing" ) || rc=$?
-    rm -f -- "$listing"
-    [ "$rc" = 0 ] || exit "$rc"
+    RELEASE_APT_CONFIG="$(mktemp -d)" || return 1
+    export PLEBIAN_OS_RELEASE_APT_CONFIG="$RELEASE_APT_CONFIG"
+    if ! prepare_release_apt_config "$RELEASE_APT_CONFIG" lifetime "${PLEBIAN_OS_APT_SNAPSHOT:-}" \
+            "$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-trixie}")" \
+            "${PLEBIAN_OS_APT_SOURCES_ROOT:-/etc/apt}"; then
+        reason="$(cat -- "$RELEASE_APT_CONFIG/failure" 2>/dev/null || true)"
+        discard_release_apt_config
+        printf '%s\n' "${reason:-could not prepare the release apt configuration}" >&2
+        return 1
+    fi
+}
+
+preflight_release_apt_provenance() {
+    local rc=0
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    ensure_release_apt_config || die "could not prepare the release apt configuration"
+    ( require_lifetime_release_apt_provenance "$RELEASE_APT_CONFIG/indexes" ) || rc=$?
+    if [ "$rc" != 0 ]; then
+        discard_release_apt_config
+        exit "$rc"
+    fi
+}
+
+# Fill the private list cache before the stack transaction. A failure here
+# refuses the update before anything is installed. Qt, mpv, and install-deps
+# then resolve dependencies from these lists, not from the operator cache.
+warm_release_apt_indexes() {
+    [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || return 0
+    ensure_release_apt_config || die "could not prepare the release apt configuration"
+    # apt-get update exits 0 when a fetch fails. --error-on=any makes that
+    # failure visible. The message names no proxy value.
+    release_apt_get "$RELEASE_APT_CONFIG" update --error-on=any \
+        || die "could not reach the Debian archive; check the network connection and the apt proxy"
 }
 
 # Build the same final source/tool manifest as the provisioner, but only after
@@ -4890,7 +7247,7 @@ preflight_release_apt_provenance() {
 stage_final_provenance() {
     local stage="$1"
     local plebian_os_commit pleb_commit kilix_commit kilix_source_commit
-    local kilix95_commit pleb_version kilix_version kilix95_version
+    local kilix95_commit pleb_version kilix_version kilix95_version neuronte_commit
     local go_version engine engine_version uv_version
 
     command -v dpkg-query >/dev/null 2>&1 \
@@ -4906,6 +7263,7 @@ stage_final_provenance() {
     kilix_commit="$(git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
     kilix_source_commit="$(git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
     kilix95_commit="$(git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
+    neuronte_commit="$(installed_neuronte_commit)"
     pleb_version="$(env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
     kilix_version="$(env "${stack_env[@]}" "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
     if [ -f "$KILIX95_DIR/main.py" ]; then
@@ -4913,7 +7271,11 @@ stage_final_provenance() {
     else
         kilix95_version=""
     fi
-    go_version="$(bash -lc 'go version' 2>/dev/null || true)"
+    if [ -n "${PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION:-}" ]; then
+        go_version="$(GOTOOLCHAIN=local /usr/lib/go-1.27/bin/go version 2>/dev/null || true)"
+    else
+        go_version="$(bash -lc 'go version' 2>/dev/null || true)"
+    fi
     uv_version="$(/usr/local/bin/uv --version 2>/dev/null || true)"
     engine="$(env "${stack_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
     if [ -n "$engine" ] && [ -x "$engine" ]; then
@@ -5027,6 +7389,9 @@ stage_final_provenance() {
         provenance_kv KILIX_SECRETS_REPO "$KILIX_SECRETS_REPO"
         provenance_kv KILIX_SECRETS_BRANCH "$KILIX_SECRETS_BRANCH"
         provenance_kv KILIX_SECRETS_REF "$KILIX_SECRETS_REF"
+        provenance_kv NEURONTE_REPO "$NEURONTE_REPO"
+        provenance_kv NEURONTE_REF "$NEURONTE_REF"
+        provenance_kv NEURONTE_COMMIT "$neuronte_commit"
         # Lazy catalog delivery has no system source archive until requested.
         # Preserve provenance for legacy system installs, checking hash failure
         # directly rather than hiding it inside provenance_kv's arguments.
@@ -5042,8 +7407,17 @@ stage_final_provenance() {
             provenance_kv KILIX_WAYDROID_SOURCE_SHA256 "${waydroid_source_sha%% *}"
         fi
         provenance_kv PLEBIAN_OS_KILIX_GO_VERSION "$PLEBIAN_OS_KILIX_GO_VERSION"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION "$PLEBIAN_OS_KILIX_GO_DEBIAN_VERSION"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_AMD64 "$PLEBIAN_OS_KILIX_GO_SHA256_AMD64"
         provenance_kv PLEBIAN_OS_KILIX_GO_SHA256_ARM64 "$PLEBIAN_OS_KILIX_GO_SHA256_ARM64"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_FILE"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_BYTES"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_AMD64_SHA256"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE "$PLEBIAN_OS_KILIX_GO_DEB_SRC_FILE"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES "$PLEBIAN_OS_KILIX_GO_DEB_SRC_BYTES"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256 "$PLEBIAN_OS_KILIX_GO_DEB_SRC_SHA256"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT "$PLEBIAN_OS_KILIX_GO_DEB_SNAPSHOT"
+        provenance_kv PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL "$PLEBIAN_OS_KILIX_GO_DEB_MIRROR_URL"
         provenance_kv GO_VERSION "$go_version"
         provenance_kv PLEBIAN_OS_INSTALL_UV "$PLEBIAN_OS_INSTALL_UV"
         provenance_kv PLEBIAN_OS_UV_VERSION "$PLEBIAN_OS_UV_VERSION"
@@ -5055,11 +7429,23 @@ stage_final_provenance() {
         provenance_kv KERNEL_VERSION "$(uname -srmo 2>/dev/null || true)"
     } >"$stage/versions.env"
 
-    apt-get indextargets \
-        --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
-        | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u \
-        >"$stage/apt-sources.list" \
-        || die "could not record final apt source indexes"
+    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
+        # Record the indexes this update actually used. Do not prepare a
+        # second configuration from the operator tree, and do not fall back
+        # to the system list cache.
+        if [ -z "${RELEASE_APT_CONFIG:-}" ] || [ -L "$RELEASE_APT_CONFIG" ] \
+                || [ ! -f "$RELEASE_APT_CONFIG/indexes" ]; then
+            die "release apt configuration is missing; refusing to record system apt indexes"
+        fi
+        cp -a -- "$RELEASE_APT_CONFIG/indexes" "$stage/apt-sources.list" \
+            || die "could not record final apt source indexes"
+    else
+        apt-get indextargets \
+            --format '$(SITE) $(RELEASE) $(COMPONENT) $(ARCHITECTURE)' 2>/dev/null \
+            | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u \
+            >"$stage/apt-sources.list" \
+            || die "could not record final apt source indexes"
+    fi
 
     if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ]; then
         require_lifetime_release_apt_provenance "$stage/apt-sources.list"
@@ -5298,12 +7684,16 @@ fi
 # Before the release hop below: that already changes the selected closure.
 if [ "$recover_interrupted" = 1 ]; then
     recover_interrupted_stack_transaction
-    exit $?
+    rc=$?
+    discard_release_apt_config
+    exit "$rc"
 fi
 note_legacy_stack_leftovers
 refuse_interrupted_stack_transaction
+note_retained_failed_rollbacks
 refuse_per_user_source_layout
 preflight_release_apt_provenance
+warm_release_apt_indexes
 select_latest_release_if_needed
 validate_mpv_release_closure || die "invalid mpv closure"
 validate_qt_release_closure "${PLEBIAN_OS_RELEASE:-$PLEBIAN_OS_VERSION}" "$PLEBIAN_OS_RELEASE_MODE" || die "invalid Qt runtime closure"
@@ -5342,6 +7732,7 @@ fi
 # deployed file is changed. The inherited fd keeps Pleb's nested component
 # transaction under the same serialization lock.
 refuse_amd64_only_stack_inputs
+require_consistent_package_database
 begin_stack_transaction
 
 # Refresh the OS layer itself (provisioner/deps/update helper) first, then pleb.
@@ -5350,18 +7741,35 @@ reconcile_legacy_remote_login
 test_fail_after_boundary os-layer
 apply_selected_qt_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected Qt runtime could not be installed/verified"
+refresh_release_qt_pin \
+    || die "could not copy the selected Qt pin into the release apt configuration"
 test_fail_after_boundary qt-runtime
 apply_selected_mpv_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected mpv runtime could not be installed/verified"
 test_fail_after_boundary mpv-runtime
+begin_package_addition_window
 refresh_os_dependencies
+end_package_addition_window
 test_fail_after_boundary dependencies
-# Like apt dependencies, this verified software remains available after a
-# later stack rollback; it carries no models, receipts or active selection.
+install_kilix_secrets_update
+test_fail_after_boundary kilix-secrets
+install_zell_runtime
+test_fail_after_boundary zell-runtime
+# This verified software remains available after a later stack rollback; it
+# carries no models, receipts or active selection. Apt packages the installer
+# newly adds are tracked with the other package steps.
+begin_package_addition_window
 run_encodec_converter_installer \
     || die "required EnCodec converter installation failed"
+end_package_addition_window
+begin_package_addition_window
 install_model_setup_software
+end_package_addition_window
 test_fail_after_boundary model-setup-software
+begin_package_addition_window
+install_ollama_runtime_update
+end_package_addition_window
+test_fail_after_boundary ollama-runtime
 apply_selected_native_runtime "$_STACK_TXN_DIR" 0 \
     || die "selected native runtime could not be prepared/applied"
 test_fail_after_boundary native-runtime
@@ -5375,37 +7783,58 @@ if [ -x "$PLEB_DIR/bin/pleb" ]; then
     # The freshly updated Pleb may learn about a submodule that the pre-update
     # Kilix commit does not have yet. Defer only this build until the immediately
     # following component update advances Kilix to its pinned broker commit.
+    begin_package_addition_window
     env "${stack_env[@]}" PLEB_DEFER_PTY_BROKER=1 \
         "$PLEB_DIR/bin/pleb" install
+    end_package_addition_window
     test_fail_after_boundary pleb-install
     log "updating kilix, submodules, fork engine, and optional desktop provider"
+    begin_package_addition_window
     env "${stack_env[@]}" "$PLEB_DIR/bin/pleb" update --no-restart
+    end_package_addition_window
     test_fail_after_boundary component-update
     install_kilix_needle
     test_fail_after_boundary needle
+    install_kilix_claudex
+    test_fail_after_boundary claudex
     install_kilix_llm
     test_fail_after_boundary kilix-llm
-    # The OS update stages the shared command archive with its admin context.
-    # The following image-model install records local licence coverage for the
-    # desktop user. It does not rewrite an existing Ask selection, and old
-    # archives survive rollback. It also installs Kilix Playalong's missing
-    # default models unless the machine declined them, downloading Whisper
-    # medium.en (and Demucs, when the image did not supply it) from their pinned
-    # sources; a failed download does not fail the update.
+    # The Kilix Ask command model (LFM2) is a first-use download: the update
+    # neither downloads nor stages it. The desktop user's image-model step
+    # below installs the current delivery from an installed v9 without a
+    # download, when v9 and its receipt are there; otherwise Kilix Ask offers
+    # the download on first use. It does not rewrite an existing Ask
+    # selection, and an earlier delivery's directory, any archive an earlier
+    # release staged, and its licence documents stay for rollback. That step
+    # also installs Kilix Playalong's missing default models unless the machine
+    # declined them, downloading Whisper medium.en (and Demucs, when the image
+    # did not supply it) from their pinned sources; a failed download does not
+    # fail the update.
     command_model_elevate=()
     [ "$(id -u)" = 0 ] || command_model_elevate=(sudo)
-    "${command_model_elevate[@]}" /usr/bin/python3 \
-        "$PLEBIAN_OS_DIR/provision/stage-command-model.py" \
-        || die "required command model staging failed"
-    test_fail_after_boundary command-model
     env "${stack_env[@]}" /usr/bin/python3 \
         "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" \
         || die "required default model installation failed"
     test_fail_after_boundary default-models
+    # A machine installed without the image's Paradee and en_core_web_sm
+    # archives, as one installed from 0.2.2 is, gets them here: as root, the
+    # pinned files and wheels are downloaded, built into the same archives and
+    # checked against the image pins before anything is placed. A failed
+    # download changes nothing, and the next update tries again. The same
+    # step adds the espeak-ng source and the espeakng-loader texts the image
+    # installs beside libespeak-ng. It runs under umask 0022, so a 0077 umask
+    # kept by sudo cannot leave the runtime root-only.
+    "${command_model_elevate[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-image-models.py" --install-paradee-runtime \
+        --no-ollama-runtime \
+        || die "required Paradee runtime staging failed"
+    test_fail_after_boundary paradee-runtime
     env "${stack_env[@]}" /usr/bin/python3 \
         "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" \
         || die "required image model installation failed"
     test_fail_after_boundary image-models
+    install_neuronte_update
+    test_fail_after_boundary neuronte
     # Last, after every step above that can install a package. See the
     # function's own header for why an update needs this at all.
     reapply_audio_holdoff
@@ -5436,6 +7865,7 @@ reconcile_release_apt_sources_after_commit || apt_reconcile_rc=1
 if ! seed_desktop_wallpaper_after_commit; then
     warn "stack committed, but wallpaper state seeding failed; existing state was not changed"
 fi
+prepare_kilix95_caches_update
 log "Plebian-OS stack updated."
 restart_session_after_commit
 if [ "$restart_arg" = --no-restart ]; then
@@ -5443,5 +7873,11 @@ if [ "$restart_arg" = --no-restart ]; then
         notify_system_voice_update_complete || warn "stack updated, but the system voice notice could not be recorded"
     fi
     log "restart the session to load the changes when ready:  sudo systemctl restart lightdm"
+fi
+# Inlined so a test that executes this tail without the function still
+# releases the directory, and so set -u is safe when it was never created.
+if [ -n "${RELEASE_APT_CONFIG:-}" ]; then
+    rm -rf -- "$RELEASE_APT_CONFIG"
+    RELEASE_APT_CONFIG=""
 fi
 exit "$apt_reconcile_rc"

@@ -181,6 +181,16 @@ assert m.children() == set()
     def test_cancel_reaps_resistant_escaped_child(self):
         self.assertIn('operation canceled', self.run_case('cancel')['error'])
 
+    def test_time_spent_waiting_for_a_lock_is_not_charged_to_the_budget(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('native_process_budget', MODULE)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        runner = module.Runner(seconds=1)
+        before = runner.deadline
+        runner.extend(30)
+        self.assertEqual(runner.deadline, before + 30)
+
     def test_held_lock_revocation_refuses_and_reaps(self):
         self.assertIn('held-lock revocation', self.run_case('guard')['error'])
 
