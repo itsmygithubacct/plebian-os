@@ -66,10 +66,14 @@ POLL_SECONDS = 2
 # bundles no reader here opens and the learned video helpers (bound to an
 # earlier terminal bundle) are not in it.
 #
-# neuronte-v2 2.4.0. Kilix 95 draws 1 to 16 px with a hand-drawn face per em,
+# neuronte-v2 2.5.0. Kilix 95 draws 1 to 16 px with a hand-drawn face per em,
 # 17 to 32 px with the one scaled face (its italic is the upright letter
 # sheared and stepped by the italic advances), and above 32 px with the large
-# face; only the per-em faces read a header in font/. Kilix draws the symbols
+# face; only the per-em faces read a header in font/, the Latin-1 drawing
+# beside each -v2 face. Every desktop face draws ASCII, the ellipsis and all
+# of Latin-1 (192 characters): neuronte-uiN-v2 and -italic-v2,
+# neuronte-ui-scaled-latin1-v1 with its italic advances -v1, and
+# neuronte-ui-large-latin1-v2, in place of 2.4.0's -v1, -v0 and -v1. Kilix draws the symbols
 # on its own bars with the kilix-chrome bundles (one cell and two cells), the
 # moons of term-rest-v1, the sun and cloud of term-dingbat-v1 and the idle dot
 # of split-v9, and the weather widget in colour with weather-colour-v1. The
@@ -77,15 +81,15 @@ POLL_SECONDS = 2
 SMALL_FACES = {(em, italic) for em in range(1, 17) for italic in (False, True)
                if not italic or em >= 3}
 RUNTIME_MODELS = {
-    'weights/neuronte-ui%d%s-v1.nrt' % (em, '-italic' if italic else '')
+    'weights/neuronte-ui%d%s-v2.nrt' % (em, '-italic' if italic else '')
     for em, italic in SMALL_FACES
 } | {'weights/neuronte-%s' % name for name in (
-    'ui-scaled-latin1-v0.nrt', 'ui-scaled-latin1-italic-advances-v0.nrt',
-    'ui-large-latin1-v1.nrt', 'flame-v1.nrt', 'emoji-v1.nrt', 'icon-v2.nrt',
+    'ui-scaled-latin1-v1.nrt', 'ui-scaled-latin1-italic-advances-v1.nrt',
+    'ui-large-latin1-v2.nrt', 'flame-v1.nrt', 'emoji-v1.nrt', 'icon-v2.nrt',
     'pointer-v1.nrt', 'video-masks-v0.nrt', 'split-v9.nrt',
     'kilix-chrome-v1.nrt', 'kilix-chrome-v2.nrt', 'term-rest-v1.nrt',
     'term-dingbat-v1.nrt', 'weather-colour-v1.nrt')}
-HEADERS = {'font/ui-%d%s.txt' % (em, '-italic' if italic else '')
+HEADERS = {'font/ui-%d-latin1%s.txt' % (em, '-italic' if italic else '')
            for em, italic in SMALL_FACES}
 # The characters or symbols each bar bundle was trained on, beside it: a
 # program that builds one table reads them, and a file without its list of
