@@ -15,8 +15,10 @@ plebian-os (0.2.3+packaging7) UNRELEASED; urgency=medium
     Rollback is the previous frozen suite.
   * The release image installs task-pleb-desktop from the disc and first
     boot uses the packaged pleb and kilix session.
+  * A packaged first boot skips the build toolchain. The disc package
+    list matches that runtime set. Checkout installs still get the compilers.
 
- -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 22:13:00 +0000
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 23:26:46 +0000
 
 plebian-os (0.2.3+packaging6) UNRELEASED; urgency=medium
 

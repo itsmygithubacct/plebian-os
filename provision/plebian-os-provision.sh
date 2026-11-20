@@ -8677,6 +8677,9 @@ export PLEBIAN_OS_UV_INSTALLER_SHA256="$UV_INSTALLER_SHA256"
 export PLEBIAN_OS_UV_INSTALLER_MAX_BYTES="$UV_INSTALLER_MAX_BYTES"
 if [ "$DRY_RUN" = 1 ]; then
     bash "$DEPS_SCRIPT" --dry-run --model-converters
+elif packages_provide_pleb_and_kilix; then
+    log "packaged Pleb and Kilix are installed. Skipping the build toolchain."
+    bash "$DEPS_SCRIPT" --model-converters --packaged-runtime || die "dependency install failed (see the group summary above)"
 else
     bash "$DEPS_SCRIPT" --model-converters || die "dependency install failed (see the group summary above)"
 fi

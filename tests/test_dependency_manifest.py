@@ -28,10 +28,7 @@ VOICE_ARCHIVE_PREREQUISITE_PACKAGES = {
     "unzip",
 }
 
-# The model store compiles its CPU inference runtime on the machine that runs
-# it, and that build is CMake's. Shipping the toolchain without CMake left the
-# store offering a build it could not finish, so this belongs in the image
-# rather than in an apt prompt the first time somebody opens a chat.
+# The checkout build of the model store's CPU inference runtime uses CMake.
 LOCAL_BUILD_PREREQUISITE_PACKAGES = {
     "build-essential",
     "cmake",
@@ -40,12 +37,22 @@ LOCAL_BUILD_PREREQUISITE_PACKAGES = {
 PLAYALONG_RUNTIME_PACKAGES = {"libsdl2-2.0-0", "libsndfile1"}
 PLAYALONG_BUILD_PACKAGES = {"libsdl2-dev", "libsndfile1-dev", "pkg-config"}
 
+# These share install-deps groups with runtime packages. The rest of the
+# checkout build dependencies come from the group named "build toolchain".
+BUILD_PACKAGES_OUTSIDE_TOOLCHAIN = {
+    "libssh2-1-dev", "libbrotli-dev", "libpipewire-0.3-dev",
+    "libonnxruntime-dev", "libsamplerate0-dev",
+    "gcc", "clang", "autoconf", "autoconf-archive", "automake", "bison",
+    "ccache", "device-tree-compiler", "flex", "libconfuse-dev", "libncurses-dev",
+    "libtool", "ninja-build", "scons",
+}
+
 BASE_BROWSER_PACKAGES = {"chromium"}
 LAZY_BROWSER_PACKAGES = {"firefox-esr"}
 DESKTOP_SCREENSHOT_PACKAGES = {"xfce4-screenshooter"}
 DISPLAY_ARRANGER_PACKAGES = {"python3-tk", "python3-xlib", "x11-xserver-utils"}
 DESKTOP_CAPTURE_PACKAGES = {
-    "pipewire", "pipewire-bin", "wireplumber", "libpipewire-0.3-dev", "gstreamer1.0-pipewire", "gstreamer1.0-x",
+    "pipewire", "pipewire-bin", "wireplumber", "gstreamer1.0-pipewire", "gstreamer1.0-x",
     "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gir1.2-gst-plugins-base-1.0", "gir1.2-gtk-3.0", "python3-gi-cairo",
 }
 DESKTOP_SERVICE_PACKAGES = {
@@ -121,9 +128,7 @@ DEFAULT_IMAGE_VIEWER_PACKAGES = {"feh"}
 # both install paths, so a scan converts without a first-use model.
 PDF_PAGE_OCR_PACKAGES = {"tesseract-ocr", "tesseract-ocr-eng"}
 
-# Pleb preinstalls the catalog-pinned terminal viewer. These packages let its
-# native Poppler/Cairo core build during provisioning; the wrapper retains
-# Evince and CPU-rendering fallbacks if GPU presentation is unavailable.
+# The checkout installer builds the terminal viewer's native Poppler/Cairo core.
 PDF_VIEWER_BUILD_PACKAGES = {
     "build-essential",
     "pkg-config",
@@ -133,9 +138,7 @@ PDF_VIEWER_BUILD_PACKAGES = {
     "libpoppler-glib-dev",
 }
 
-# Kilix NVR is catalog-pinned and built on the target. Its database is linked
-# through SQLite's C interface, so the release image must ship the development
-# header and linker input rather than relying on a host's incidental package.
+# The checkout build of Kilix NVR links its database through SQLite's C interface.
 NVR_BUILD_PACKAGES = {"libsqlite3-dev", "zlib1g-dev"}
 
 COMPRESSION_PREREQUISITE_PACKAGES = {
@@ -168,9 +171,7 @@ HARDWARE_DISCOVERY_PACKAGES = {
 
 PERFORMANCE_QUALIFICATION_PACKAGES = {"linux-perf"}
 
-# Kilix IceWM is built on first selection. Plebian-OS 0.2.0 must provide the
-# complete, explicit pkg-config closure used by the pinned IceWM configuration
-# on both fresh-install paths; transitive dependencies are not this contract.
+# The checkout installer supplies the pkg-config modules used to build pinned IceWM.
 ICEWM_BUILD_PACKAGES = {
     "build-essential",
     "cmake",
@@ -191,25 +192,29 @@ ICEWM_BUILD_PACKAGES = {
 
 def preseed_packages():
     text = (ROOT / "preseed" / "preseed.cfg").read_text()
-    match = re.search(
-        r"^d-i pkgsel/include string (?P<body>.*?)^d-i pkgsel/upgrade",
-        text,
-        flags=re.MULTILINE | re.DOTALL,
-    )
+    match = re.search(r"^d-i pkgsel/include string (.+)$",
+                      text.replace("\\\n", " "), flags=re.MULTILINE)
     if not match:
         raise AssertionError("preseed pkgsel/include block not found")
-    body = match.group("body").replace("\\\n", " ")
-    return set(body.split())
+    return set(match.group(1).split())
 
 
-def install_deps_packages():
+def install_deps_packages(group=None):
     text = (ROOT / "provision" / "install-deps.sh").read_text()
-    pkgs = set()
-    for match in re.finditer(r'^\s*"[^"|]+\|([^"]+)"', text, flags=re.MULTILINE):
-        pkgs.update(match.group(1).split())
-    if not pkgs:
+    block = re.search(r"^DEP_GROUPS=\(\n(.*?)^\)$", text, re.MULTILINE | re.DOTALL)
+    if not block:
         raise AssertionError("install-deps DEP_GROUPS not found")
+    pkgs = set()
+    for label, packages in re.findall(r'^[ \t]*"([^"|]+)\|([^"]+)"', block.group(1), re.MULTILINE):
+        if group is None or label == group:
+            pkgs.update(packages.split())
+    if not pkgs:
+        raise AssertionError(f"No packages found in DEP_GROUPS for {group!r}")
     return pkgs
+
+
+def package_names(packages):
+    return {token.partition("=")[0] for token in packages}
 
 
 def additive_packages(array_name):
@@ -441,12 +446,13 @@ class DependencyManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             helper = Path(td) / 'deps'
             helper.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
-            for dry in ('0', '1'):
+            for dry, packaged in (('0', '0'), ('0', '1'), ('1', '0')):
                 env = {"PATH": "/usr/bin:/bin", "DEPS_SCRIPT": str(helper),
-                       "DRY_RUN": dry, "UV_VERSION_PIN": "", "UV_INSTALLER_SHA256": "",
+                       "DRY_RUN": dry, "PACKAGED": packaged, "UV_VERSION_PIN": "", "UV_INSTALLER_SHA256": "",
                        "UV_INSTALLER_MAX_BYTES": ""}
                 result = subprocess.run(
-                    ['bash', '-c', 'set -eu\nlog() { :; }\ndie() { exit 1; }\n' + source[start:end]],
+                    ['bash', '-c', 'set -eu\nlog() { :; }\ndie() { exit 1; }\n'
+                     'packages_provide_pleb_and_kilix() { [ "$PACKAGED" = 1 ]; }\n' + source[start:end]],
                     env=env, text=True, capture_output=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn('--model-converters', result.stdout.splitlines())
@@ -528,7 +534,18 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertIn("usage:", result.stderr)
 
     def test_preseed_and_install_deps_package_sets_match(self):
-        self.assertEqual(preseed_packages(), install_deps_packages())
+        checkout = package_names(install_deps_packages())
+        disc = package_names(preseed_packages())
+        toolchain = package_names(install_deps_packages("build toolchain"))
+        omitted = toolchain | BUILD_PACKAGES_OUTSIDE_TOOLCHAIN
+        self.assertLessEqual(omitted, checkout)
+        self.assertEqual(disc, checkout - omitted)
+
+    def test_runtime_libraries_and_system_tools_stay_on_both_paths(self):
+        required = {"libfluidsynth3", "libgomp1", "libgfortran5", "libquadmath0",
+                    "wget", "openssh-client", "file", "e2fsprogs", "parted", "gparted"}
+        for packages in (preseed_packages(), install_deps_packages()):
+            self.assertLessEqual(required, package_names(packages))
 
     def test_browser_classification_matches_the_installer_decision(self):
         for packages in (install_deps_packages(), preseed_packages()):
@@ -710,15 +727,23 @@ class DependencyManifestTests(unittest.TestCase):
                 else:
                     self.assertNotIn("GROUP FAILED", result.stderr)
 
-    def test_local_build_prerequisites_are_installed(self):
-        self.assertLessEqual(LOCAL_BUILD_PREREQUISITE_PACKAGES,
-                             install_deps_packages())
+    def test_application_build_prerequisites_are_checkout_only(self):
+        checkout = package_names(install_deps_packages())
+        disc = package_names(preseed_packages())
+        for feature, required in (
+            ("local builds", LOCAL_BUILD_PREREQUISITE_PACKAGES),
+            ("Playalong", PLAYALONG_BUILD_PACKAGES),
+            ("PDF viewer", PDF_VIEWER_BUILD_PACKAGES),
+            ("NVR", NVR_BUILD_PACKAGES),
+            ("IceWM", ICEWM_BUILD_PACKAGES),
+        ):
+            with self.subTest(feature=feature):
+                self.assertLessEqual(required, checkout)
+                self.assertEqual(required & disc, set())
 
-    def test_playalong_builds_and_runs_on_both_paths(self):
-        for packages in (PLAYALONG_BUILD_PACKAGES,
-                         PLAYALONG_RUNTIME_PACKAGES):
-            self.assertLessEqual(packages, install_deps_packages())
-            self.assertLessEqual(packages, preseed_packages())
+    def test_playalong_runtime_is_on_both_paths(self):
+        for packages in (preseed_packages(), install_deps_packages()):
+            self.assertLessEqual(PLAYALONG_RUNTIME_PACKAGES, package_names(packages))
 
     def test_f100_sandbox_versions_are_explicit_on_both_paths(self):
         self.assertLessEqual(F100_SANDBOX_PACKAGES,
@@ -751,29 +776,19 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(PDF_PAGE_OCR_PACKAGES,
                              preseed_packages())
 
-    def test_native_pdf_viewer_builds_on_both_paths(self):
-        self.assertLessEqual(PDF_VIEWER_BUILD_PACKAGES,
-                             install_deps_packages())
-        self.assertLessEqual(PDF_VIEWER_BUILD_PACKAGES,
-                             preseed_packages())
-
-    def test_nvr_builds_on_both_paths(self):
-        self.assertLessEqual(NVR_BUILD_PACKAGES, install_deps_packages())
-        self.assertLessEqual(NVR_BUILD_PACKAGES, preseed_packages())
-
-    def test_f101_native_dependency_closure_is_explicit_on_both_paths(self):
-        expected = {
+    def test_f101_native_runtime_on_both_paths_and_headers_in_checkout(self):
+        runtime = {
             "libonnxruntime1.21=1.21.0+dfsg-1",
-            "libonnxruntime-dev=1.21.0+dfsg-1",
             "libsamplerate0=0.2.2-4+b2",
-            "libsamplerate0-dev=0.2.2-4+b2",
             "libssl3t64=3.5.6-1~deb13u2",
         }
-        self.assertLessEqual(expected, install_deps_packages())
-        self.assertLessEqual(expected, preseed_packages())
-        self.assertIn("libssl-dev", install_deps_packages())
+        headers = {"libonnxruntime-dev=1.21.0+dfsg-1", "libsamplerate0-dev=0.2.2-4+b2", "libssl-dev"}
+        disc = preseed_packages()
+        self.assertLessEqual(runtime | headers, install_deps_packages())
+        self.assertLessEqual(runtime, disc)
+        self.assertEqual(package_names(headers) & package_names(disc), set())
         # These are ordinary native packages, never converter/model payloads.
-        for item in expected:
+        for item in runtime | headers:
             self.assertNotIn("python3-onnxruntime", item)
 
     def test_021_compression_prerequisites_are_on_both_paths(self):
@@ -793,10 +808,6 @@ class DependencyManifestTests(unittest.TestCase):
                              install_deps_packages())
         self.assertLessEqual(PERFORMANCE_QUALIFICATION_PACKAGES,
                              preseed_packages())
-
-    def test_kilix_icewm_builds_on_both_paths(self):
-        self.assertLessEqual(ICEWM_BUILD_PACKAGES, install_deps_packages())
-        self.assertLessEqual(ICEWM_BUILD_PACKAGES, preseed_packages())
 
     def test_shell_lesson_prerequisites_are_installed(self):
         self.assertLessEqual(SHELL_LESSON_PREREQ_PACKAGES, install_deps_packages())
@@ -820,9 +831,7 @@ class DependencyManifestTests(unittest.TestCase):
         self.assertLessEqual(required, install_deps_packages())
 
     def test_recommends_policy_matches_across_paths(self):
-        # Both provisioning paths must resolve the same closure: install-deps.sh
-        # uses --no-install-recommends, so the preseed must disable recommends too
-        # (otherwise the two "in sync" paths install materially different systems).
+        # Use the same recommends policy for the runtime packages on both paths.
         install = (ROOT / "provision" / "install-deps.sh").read_text()
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         self.assertIn("--no-install-recommends", install)

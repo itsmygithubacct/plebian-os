@@ -10,6 +10,7 @@
 #
 #   sudo plebian-os-install-deps            # install everything
 #   plebian-os-install-deps --dry-run       # just print what it would do
+#   plebian-os-install-deps --packaged-runtime # dependencies for packaged Pleb and Kilix
 #   plebian-os-install-deps --qualification # add qualification-only packages
 #   plebian-os-install-deps --vulkan        # add the Mesa Vulkan runtime
 #   plebian-os-install-deps --vulkan-nouveau # add Mesa Vulkan + Nouveau firmware
@@ -18,11 +19,12 @@
 #   plebian-os-install-deps --qualification --vulkan
 #                                           # also add vulkaninfo for qualification
 #
-# NOTE: preseed/preseed.cfg's pkgsel/include mirrors these packages for the
-# Debian-installer path (d-i can't call a script); keep the two in sync.
+# preseed/preseed.cfg's pkgsel/include mirrors the packaged runtime set.
+# The checkout path also installs the build toolchain and LicheeRV host compilers.
 set -uo pipefail
 
 DRY_RUN=0
+PACKAGED_RUNTIME=0
 QUALIFICATION=0
 VULKAN=0
 VULKAN_NOUVEAU=0
@@ -31,13 +33,14 @@ MODEL_CONVERTERS=0
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=1 ;;
+        --packaged-runtime) PACKAGED_RUNTIME=1 ;;
         --qualification) QUALIFICATION=1 ;;
         --vulkan) VULKAN=1 ;;
         --vulkan-nouveau) VULKAN=1; VULKAN_NOUVEAU=1 ;;
         --vulkan-tts) VULKAN=1; VULKAN_TTS=1 ;;
         --model-converters) MODEL_CONVERTERS=1 ;;
         *)
-            printf 'usage: %s [--dry-run] [--qualification] [--vulkan|--vulkan-nouveau] [--vulkan-tts] [--model-converters]\n' \
+            printf 'usage: %s [--dry-run] [--packaged-runtime] [--qualification] [--vulkan|--vulkan-nouveau] [--vulkan-tts] [--model-converters]\n' \
                 "$0" >&2
             exit 2
             ;;
@@ -1026,12 +1029,34 @@ release_install() {
 
 plan_install() {
     if [ -n "$RELEASE_APT_CONFIG" ]; then
-        # shellcheck disable=SC2086,SC2048  # deliberate package-list splitting
-        deps_apt_plan install -y --no-install-recommends --no-remove $*
+        deps_apt_plan install -y --no-install-recommends --no-remove "$@"
     else
-        # shellcheck disable=SC2086,SC2048  # deliberate package-list splitting
-        deps_apt_plan install -y --no-install-recommends $*
+        deps_apt_plan install -y --no-install-recommends "$@"
     fi
+}
+
+# Keep version pins on the selected tokens. Base groups use them as floors,
+# while optional groups pass exact versions to apt.
+select_group_packages() {
+    local group="$1" token
+    local -n selected="$3"
+    local -a candidates
+    selected=()
+    if [ "$PACKAGED_RUNTIME" = 1 ] && [ "$group" = "build toolchain" ]; then
+        return 1
+    fi
+    read -r -a candidates <<< "$2"
+    for token in "${candidates[@]}"; do
+        if [ "$PACKAGED_RUNTIME" = 1 ]; then
+            case "${token%%=*}" in
+                libssh2-1-dev|libbrotli-dev|libpipewire-0.3-dev|libonnxruntime-dev|libsamplerate0-dev|\
+                gcc|clang|autoconf|autoconf-archive|automake|bison|ccache|device-tree-compiler|\
+                flex|libconfuse-dev|libncurses-dev|libtool|ninja-build|scons) continue ;;
+            esac
+        fi
+        selected+=("$token")
+    done
+    [ "${#selected[@]}" -gt 0 ]
 }
 
 export DEBIAN_FRONTEND=noninteractive
@@ -1048,20 +1073,19 @@ fi
 
 failed=()
 for entry in "${DEP_GROUPS[@]}"; do
-    name="${entry%%|*}"; pkgs="${entry#*|}"
+    name="${entry%%|*}"
+    select_group_packages "$name" "${entry#*|}" packages || continue
     # A name=version token is a release floor: apt installs the current Debian
     # build, which must be at least that version. Background security upgrades
     # therefore never turn a re-run into a refused downgrade.
     request=(); floors=()
-    # shellcheck disable=SC2086  # deliberate word-splitting of the package list
-    for pkg in $pkgs; do
+    for pkg in "${packages[@]}"; do
         request+=("${pkg%%=*}")
         [ "$pkg" = "${pkg%%=*}" ] || floors+=("$pkg")
     done
     log "installing group: $name"
     if [ "$DRY_RUN" = 1 ]; then
-        # shellcheck disable=SC2086,SC2048
-        plan_install ${request[*]}
+        plan_install "${request[@]}"
         for floor in "${floors[@]}"; do
             echo "    + require ${floor%%=*} >= ${floor#*=}"
         done
@@ -1070,7 +1094,7 @@ for entry in "${DEP_GROUPS[@]}"; do
     # Wait for the dpkg lock rather than fail while unattended-upgrades holds it.
     if ! release_install "${request[@]}"; then
         warn "GROUP FAILED: $name"
-        warn "    packages: $pkgs"
+        warn "    packages: ${packages[*]}"
         failed+=("$name")
         continue
     fi
@@ -1097,21 +1121,19 @@ for entry in "${DEP_GROUPS[@]}"; do
     done
 done
 
-# The additive groups below share one installer so a new optional lane cannot
-# drift from the base loop's dry-run, failure-reporting and word-splitting
-# behaviour. The base and qualification loops above are left as they are.
+# Qualification and optional groups pass their selected tokens directly to apt.
 install_package_group() {
-    local heading="$1" name="$2" pkgs="$3"
+    local heading="$1" name="$2"
+    local -a packages
+    select_group_packages "$name" "$3" packages || return 0
     log "$heading: $name"
     if [ "$DRY_RUN" = 1 ]; then
-        # shellcheck disable=SC2086  # deliberate package-list splitting
-        plan_install $pkgs
+        plan_install "${packages[@]}"
         return 0
     fi
-    # shellcheck disable=SC2086  # deliberate package-list splitting
-    if ! release_install $pkgs; then
+    if ! release_install "${packages[@]}"; then
         warn "GROUP FAILED: $name"
-        warn "    packages: $pkgs"
+        warn "    packages: ${packages[*]}"
         failed+=("$name")
     fi
 }
@@ -1120,18 +1142,7 @@ if [ "$QUALIFICATION" -eq 1 ]; then
     for entry in "${QUAL_GROUPS[@]}"; do
         name=${entry%% :: *}
         pkgs=${entry#* :: }
-        log "installing group: $name"
-        if [ "$DRY_RUN" = 1 ]; then
-            # shellcheck disable=SC2086  # deliberate package-list splitting
-            plan_install $pkgs
-            continue
-        fi
-        # shellcheck disable=SC2086  # deliberate package-list splitting
-        if ! release_install $pkgs; then
-            warn "GROUP FAILED: $name"
-            warn "    packages: $pkgs"
-            failed+=("$name")
-        fi
+        install_package_group "installing group" "$name" "$pkgs"
     done
     if [ "$VULKAN" -eq 1 ]; then
         for entry in "${QUAL_VULKAN_GROUPS[@]}"; do
