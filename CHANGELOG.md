@@ -4,6 +4,11 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
+## Unreleased
+
+- First boot and upgrades share one EnCodec runtime between the 24 and 48 kHz
+  converter commands. On an existing amd64 install this frees about 1.15 GB.
+
 ## [0.2.3] — 2026-11-16
 
 Final release. See [releases/0.2.3-notes.md](releases/0.2.3-notes.md) for

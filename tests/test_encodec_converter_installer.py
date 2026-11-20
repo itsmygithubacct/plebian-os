@@ -68,10 +68,12 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'SHA-256'):
             self.ns['verify_archive'](self.destination / 'amd64-copied', selections[1])
 
-    def archive(self, extra=()):
+    def archive(self, extra=(), *, compact=False):
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w") as archive:
             for name in ("bin/kilix-encodec-convert-24khz", ".converter/runtime.tar", ".converter/receipt.json", "bin/kilix-encodec-convert-48khz", ".converter-48khz/runtime.tar", ".converter-48khz/receipt.json", "BUILD.json", "source.tar.gz"):
+                if compact and name == ".converter/runtime.tar":
+                    continue
                 info = tarfile.TarInfo(name)
                 info.size = 4
                 info.mode = 0o7777  # Privileged/untrusted modes must not survive.
@@ -82,14 +84,15 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         return stream
 
     def test_extracts_ordinary_files_and_discards_privileged_modes(self):
-        self.ns["extract_payload"](self.archive(), self.destination)
+        self.ns["extract_payload"](self.archive(), self.destination, hashlib.sha256(b"test").hexdigest())
+        self.assertFalse((self.destination / ".converter/runtime.tar").exists())
         self.assertEqual((self.destination / "BUILD.json").read_bytes(), b"test")
         self.assertEqual((self.destination / "BUILD.json").stat().st_mode & 0o7777, 0o755)
 
     def test_private_root_umask_does_not_hide_installed_software(self):
         previous = os.umask(0o077)
         try:
-            self.ns["extract_payload"](self.archive(), self.destination)
+            self.ns["extract_payload"](self.archive(compact=True), self.destination)
         finally:
             os.umask(previous)
         self.assertEqual((self.destination / ".converter").stat().st_mode & 0o777, 0o755)
@@ -103,7 +106,17 @@ class EncodecConverterInstallerTests(unittest.TestCase):
                 info.type = kind
                 info.linkname = "../../escape"
                 with self.assertRaises(ValueError):
-                    self.ns["extract_payload"](self.archive((info,)), Path(directory))
+                    self.ns["extract_payload"](self.archive((info,), compact=True), Path(directory))
+
+    def test_discarded_runtime_is_still_authenticated(self):
+        with self.assertRaisesRegex(ValueError, "discarded mono runtime checksum"):
+            self.ns["extract_payload"](self.archive(), self.destination, "0" * 64)
+        self.assertFalse((self.destination / ".converter/runtime.tar").exists())
+
+    def test_compact_archive_requires_only_the_shared_runtime(self):
+        self.ns["extract_payload"](self.archive(compact=True), self.destination)
+        self.assertTrue((self.destination / ".converter-48khz/runtime.tar").is_file())
+        self.assertFalse((self.destination / ".converter/runtime.tar").exists())
 
     def test_unpacked_limit_is_enforced_before_copy(self):
         extract = self.ns["extract_payload"]

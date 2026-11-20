@@ -1,3 +1,10 @@
+plebian-os (0.2.3+packaging5) UNRELEASED; urgency=medium
+
+  * Install one EnCodec runtime for both converter profiles. Reuse the
+    existing runtime during upgrades and release the space used by the second copy.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 19:41:00 +0000
+
 plebian-os (0.2.3+packaging4) UNRELEASED; urgency=medium
 
   * Record the republished Qt GUI library pin in plebian-desktop-base.
