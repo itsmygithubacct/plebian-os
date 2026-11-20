@@ -1877,6 +1877,30 @@ def _transcript_acceptance_command() -> str:
     )
 
 
+def _encodec_acceptance_command(version: str, root: str = "/usr/lib/plebian-os/kilix-encodec") -> str:
+    """Check the installed profile bindings, including explicitly selected older images."""
+    release = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:$|[.+-])", version)
+    require_shared = release and tuple(map(int, release.groups())) >= (0, 2, 4)
+    probe = """import json, os, sys
+from pathlib import Path
+mono = json.loads(Path('.converter/receipt.json').read_bytes())
+stereo = json.loads(Path('.converter-48khz/receipt.json').read_bytes())
+runtime = Path('.converter-48khz/runtime.tar')
+legacy = Path('.converter/runtime.tar')
+assert runtime.is_file() and runtime.stat().st_size == stereo['runtime_tar_bytes']
+if 'shared_runtime' in mono or sys.argv[1] == 'require-shared':
+    assert mono['shared_runtime'] == str(runtime) and not os.path.lexists(legacy)
+    assert mono['runtime_tar_sha256'] == stereo['runtime_tar_sha256']
+    assert mono['runtime_tar_bytes'] == stereo['runtime_tar_bytes']
+else:
+    assert legacy.is_file() and legacy.stat().st_size == mono['runtime_tar_bytes']
+"""
+    layout = "require-shared" if require_shared else "allow-legacy"
+    return (f"cd {shlex.quote(root)} && python3 -I -c {shlex.quote(probe)} {layout} && "
+            "timeout 30 bin/kilix-encodec-convert-24khz --help >/dev/null && "
+            "timeout 30 bin/kilix-encodec-convert-48khz --help >/dev/null")
+
+
 def source_provenance_command(values: dict[str, str], path: str = "/var/lib/plebian-os/versions.env") -> str:
     """Compare the writer's Bash %q records without evaluating their contents."""
     commands = []
@@ -2308,16 +2332,7 @@ if default is not None:
             "--dry-run | grep -Fqx '  sha256: "
             "8759ab3d3a92d86ba3ba24fab7e6adde08eaf2f941e6c79118373e4f41e0af8c'",
         ),
-        (
-            "required EnCodec converter runtime",
-            "test -r /usr/lib/plebian-os/kilix-encodec/.converter/runtime.tar && "
-            "test -r /usr/lib/plebian-os/kilix-encodec/.converter/receipt.json && "
-            "timeout 30 /usr/lib/plebian-os/kilix-encodec/bin/kilix-encodec-convert-24khz "
-            "--help >/dev/null && "
-            "test -r /usr/lib/plebian-os/kilix-encodec/.converter-48khz/runtime.tar && "
-            "timeout 30 /usr/lib/plebian-os/kilix-encodec/bin/kilix-encodec-convert-48khz "
-            "--help >/dev/null",
-        ),
+        ("required EnCodec converter runtime", _encodec_acceptance_command(expected_version)),
         (
             "optional diarization converter installer",
             f"test -x {PLEBIAN_OS_SBINDIR}/plebian-os-install-diarization-converter && "

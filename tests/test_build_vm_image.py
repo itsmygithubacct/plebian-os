@@ -431,6 +431,42 @@ class OllamaReleaseDispositionTests(unittest.TestCase):
         self.assertNotEqual(self.run_acceptance(doc).returncode, 0, "no closure")
 
 
+class EnCodecAcceptanceTests(unittest.TestCase):
+    def test_current_and_legacy_image_layouts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (".converter", ".converter-48khz", "bin"):
+                (root / name).mkdir()
+            for rate in (24, 48):
+                command = root / "bin" / f"kilix-encodec-convert-{rate}khz"
+                command.write_text('#!/bin/sh\ntest "$1" = --help\n')
+                command.chmod(0o755)
+
+            def accepts(version):
+                command = vm._encodec_acceptance_command(version, directory)
+                return subprocess.run(["sh", "-c", command], capture_output=True).returncode == 0
+
+            stereo = root / ".converter-48khz/runtime.tar"
+            mono = root / ".converter/runtime.tar"
+            stereo.write_bytes(b"both")
+            mono.write_bytes(b"one")
+            receipt = {"runtime_tar_bytes": 4, "runtime_tar_sha256": hashlib.sha256(b"both").hexdigest()}
+            (stereo.parent / "receipt.json").write_text(json.dumps(receipt))
+            mono_receipt = mono.parent / "receipt.json"
+            mono_receipt.write_text(json.dumps({"runtime_tar_bytes": 3}))
+            self.assertTrue(accepts("0.2.3"))
+            self.assertFalse(accepts("0.2.4"))
+
+            shared = {**receipt, "shared_runtime": ".converter-48khz/runtime.tar"}
+            mono_receipt.write_text(json.dumps(shared))
+            self.assertFalse(accepts("0.2.4"), "redundant runtime")
+            mono.unlink()
+            self.assertTrue(accepts("0.2.3"))
+            self.assertTrue(accepts("0.2.4"))
+            mono_receipt.write_text(json.dumps({**shared, "runtime_tar_sha256": "0" * 64}))
+            self.assertFalse(accepts("0.2.4"), "profile binding differs")
+
+
 class OllamaApiVersionPredicateTests(unittest.TestCase):
     def test_generated_predicate_accepts_only_installer_metadata_version(self):
         predicate = vm.ollama_api_version_predicate()
