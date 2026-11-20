@@ -9296,12 +9296,15 @@ fi
 # interface it implements, and Pleb for its user-selected X11 captures.
 # WirePlumber's video-only profile keeps PulseAudio in charge of audio.
 PORTALS_CONF=/etc/xdg-desktop-portal/pleb-portals.conf
-log "declaring the portal backends for the Pleb desktop"
-if [ "$DRY_RUN" = 1 ]; then
-    echo "    + write $PORTALS_CONF ([preferred] default=gtk, captures=pleb)"
+if [ "$PACKAGED_PLEB" = 1 ]; then
+    log "plebian-desktop-base already owns $PORTALS_CONF"
 else
-    mkdir -p "$(dirname "$PORTALS_CONF")"
-    cat > "$PORTALS_CONF" <<EOF
+    log "declaring the portal backends for the Pleb desktop"
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + write $PORTALS_CONF ([preferred] default=gtk, captures=pleb)"
+    else
+        mkdir -p "$(dirname "$PORTALS_CONF")"
+        cat > "$PORTALS_CONF" <<EOF
 # Managed by plebian-os-provision. Portal backends for XDG_CURRENT_DESKTOP=Pleb.
 # gtk implements FileChooser, AppChooser, Print, Notification, Inhibit, Access,
 # Account, Email, DynamicLauncher, Lockdown and Settings. Pleb provides capture.
@@ -9310,6 +9313,7 @@ default=gtk
 org.freedesktop.impl.portal.ScreenCast=pleb
 org.freedesktop.impl.portal.Screenshot=pleb
 EOF
+    fi
 fi
 
 # System defaults leave explicit per-user associations in charge.

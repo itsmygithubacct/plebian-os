@@ -4,7 +4,7 @@ debian/install-map is the only list debian/rules installs from. The updater
 carries its own list of the same files. These tests hold the two equal, with
 the installed locations written here as literals, so neither list can move a
 file or change a mode without the other. The packages also install the
-archive key, Qt pin, desktop defaults and one-way converter.
+archive key, Qt pin, desktop defaults, tasksel descriptor and one-way converter.
 """
 import hashlib
 import re
@@ -35,11 +35,14 @@ PACKAGES = {
     "plebian-archive-keyring",
 }
 METAPACKAGES = {"pleb-desktop", "task-pleb-desktop"}
+WIREPLUMBER_PROFILE = "/etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf"
+TASKSEL_DESC = "/usr/share/tasksel/descs/pleb-desktop.desc"
 DROPINS = {
     "/etc/lightdm/lightdm.conf.d/50-plebian-os.conf":
         "debian/desktop/lightdm-session.conf",
     "/etc/xdg-desktop-portal/pleb-portals.conf":
         "debian/desktop/pleb-portals.conf",
+    WIREPLUMBER_PROFILE: "debian/desktop/50pleb-video-only.conf",
     "/etc/xdg/mimeapps.list":
         "debian/desktop/mimeapps.list",
     "/etc/systemd/logind.conf.d/50-plebian-lid.conf":
@@ -91,14 +94,14 @@ class DebianPackagingTests(unittest.TestCase):
         self.assertEqual([row for row in rows if row[3] == converter], [
             ("plebian-os-tools", "0755", "provision/plebian-os-convert-0.2.3", converter),
         ])
-        extra = {QT_PIN, converter, *DROPINS}
+        extra = {QT_PIN, TASKSEL_DESC, converter, *DROPINS}
         core = [row for row in rows
                 if row[0] != KEYRING and row[3] not in extra]
         packaged = {(destination, mode) for _, mode, _, destination in core}
         self.assertEqual(packaged, updater_deploy_set())
         self.assertEqual(len(packaged), len(core), "duplicate destination")
         self.assertEqual(len(packaged), 31)
-        self.assertEqual(len(rows), 40)
+        self.assertEqual(len(rows), 42)
 
     def test_desktop_base_records_the_qualified_qt_pin(self):
         rows = [row for row in install_map() if row[3] == QT_PIN]
@@ -118,7 +121,7 @@ class DebianPackagingTests(unittest.TestCase):
         pinned = (ROOT / rows[0][2]).read_text()
         self.assertEqual(pinned, namespace["preferences"](records))
 
-    def test_desktop_base_installs_the_six_dropins(self):
+    def test_desktop_base_installs_the_desktop_dropins(self):
         provisioner = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
         rows = {destination: (package, mode, source)
                 for package, mode, source, destination in install_map()}
@@ -129,9 +132,13 @@ class DebianPackagingTests(unittest.TestCase):
                              ("plebian-desktop-base", "0644", source))
             text = (ROOT / source).read_text()
             self.assertTrue(text.endswith("\n"))
-            if destination != "/etc/xdg/mimeapps.list":
-                self.assertIn(text.strip("\n"), provisioner)
-            else:
+            if destination == WIREPLUMBER_PROFILE:
+                self.assertEqual(
+                    text,
+                    "# Plebian-OS keeps PulseAudio as its audio server. PipeWire handles video.\n"
+                    "context.properties = {\n    wireplumber.profile = video-only\n}\n",
+                )
+            elif destination == "/etc/xdg/mimeapps.list":
                 self.assertEqual(
                     text,
                     "[Default Applications]\n"
@@ -139,6 +146,37 @@ class DebianPackagingTests(unittest.TestCase):
                 )
                 self.assertIn("application/pdf", provisioner)
                 self.assertIn("org.gnome.Evince.desktop;", provisioner)
+            else:
+                self.assertIn(text.strip("\n"), provisioner)
+
+    def test_desktop_task_installs_its_tasksel_descriptor(self):
+        rows = [row for row in install_map() if row[0] == "task-pleb-desktop"]
+        self.assertEqual(rows, [
+            ("task-pleb-desktop", "0644", "debian/desktop/pleb-desktop.desc", TASKSEL_DESC),
+        ])
+        self.assertEqual((ROOT / rows[0][2]).read_text(),
+                         "Task: pleb-desktop\nParent: desktop\nRelevance: 2\n"
+                         "Key:\n  task-pleb-desktop\nSection: user\n")
+
+    def test_provisioner_preserves_the_packaged_portal_configuration(self):
+        provisioner = (ROOT / "provision/plebian-os-provision.sh").read_text()
+        destination = "/etc/xdg-desktop-portal/pleb-portals.conf"
+        assignment = f"PORTALS_CONF={destination}\n"
+        start = provisioner.index(assignment) + len(assignment)
+        end = provisioner.index("\n# System defaults", start)
+        script = 'PORTALS_CONF=$1 PACKAGED_PLEB=$2 DRY_RUN=$3\nlog() { echo "$*"; }\n' + provisioner[start:end]
+        default = (ROOT / DROPINS[destination]).read_text()
+        with tempfile.TemporaryDirectory() as tmp:
+            portal = Path(tmp) / "pleb-portals.conf"
+            for packaged, dry_run in (("1", "0"), ("1", "1"), ("0", "1"), ("0", "0")):
+                with self.subTest(packaged=packaged, dry_run=dry_run):
+                    portal.write_text("local choice\n")
+                    result = subprocess.run(["bash", "-euc", script, "sh", str(portal), packaged, dry_run],
+                                            capture_output=True, text=True, check=True)
+                    if packaged == "1":
+                        self.assertIn("plebian-desktop-base already owns", result.stdout)
+                    expected = default if (packaged, dry_run) == ("0", "0") else "local choice\n"
+                    self.assertEqual(portal.read_text(), expected)
 
     def test_the_keyring_package_ships_only_the_public_archive_key(self):
         rows = [row for row in install_map() if row[0] == KEYRING]
@@ -195,7 +233,7 @@ class DebianPackagingTests(unittest.TestCase):
         control = (DEBIAN / "control").read_text()
         declared = set(re.findall(r"^Package: (\S+)$", control, flags=re.MULTILINE))
         self.assertEqual(declared, PACKAGES | METAPACKAGES)
-        self.assertEqual({package for package, _, _, _ in install_map()}, PACKAGES)
+        self.assertEqual({package for package, _, _, _ in install_map()}, PACKAGES | {"task-pleb-desktop"})
         self.assertIn("Depends: kilix-multiplexer, pleb, plebian-desktop-base (= ${binary:Version}),",
                       control)
         self.assertIn("Depends: pleb-desktop (= ${binary:Version}), ${misc:Depends}",
@@ -207,7 +245,7 @@ class DebianPackagingTests(unittest.TestCase):
             debian, build, output = (root / name for name in ("debian", "build", "output"))
             for directory in (debian, build, output):
                 directory.mkdir()
-            package = "task-pleb-desktop"
+            package = "pleb-desktop"
             (debian / "control").write_text(f"Source: fixture\n\nPackage: {package}\n")
             (debian / "install-map").write_text("")
             checker = build / "check-debs.py"

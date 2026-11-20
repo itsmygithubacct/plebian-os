@@ -1,3 +1,15 @@
+plebian-os (0.2.3+packaging7) UNRELEASED; urgency=medium
+
+  * Ship the WirePlumber video-only profile and the tasksel descriptor in
+    the desktop packages. A packaged install leaves the portal file to
+    plebian-desktop-base.
+  * When task-pleb-desktop is installed, plebian-os-update uses apt.
+    Rollback is the previous frozen suite.
+  * The release image installs task-pleb-desktop from the disc and first
+    boot uses the packaged pleb and kilix session.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 22:13:00 +0000
+
 plebian-os (0.2.3+packaging6) UNRELEASED; urgency=medium
 
   * Allow first boot to finish a progressing EnCodec download on slower

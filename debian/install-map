@@ -1,6 +1,6 @@
 # What each binary package installs: PACKAGE MODE SOURCE DESTINATION.
 # debian/rules installs exactly these rows and nothing else.
-# The converter, archive key, Qt pin and desktop drop-ins are package-only files.
+# The converter, archive key, Qt pin, desktop drop-ins and tasksel descriptor are package-only files.
 # @VERSION@ is the content of the top-level VERSION file.
 
 plebian-os-release   0644 VERSION                                             /usr/share/plebian-os/VERSION
@@ -41,9 +41,12 @@ plebian-desktop-base 0644 provision/lightdm-gtk-greeter.conf                  /e
 plebian-desktop-base 0644 debian/plebian-os-qt-runtime.pref                    /etc/apt/preferences.d/plebian-os-qt-runtime
 plebian-desktop-base 0644 debian/desktop/lightdm-session.conf                  /etc/lightdm/lightdm.conf.d/50-plebian-os.conf
 plebian-desktop-base 0644 debian/desktop/pleb-portals.conf                     /etc/xdg-desktop-portal/pleb-portals.conf
+plebian-desktop-base 0644 debian/desktop/50pleb-video-only.conf                /etc/wireplumber/wireplumber.conf.d/50pleb-video-only.conf
 plebian-desktop-base 0644 debian/desktop/mimeapps.list                         /etc/xdg/mimeapps.list
 plebian-desktop-base 0644 debian/desktop/50-plebian-lid.conf                   /etc/systemd/logind.conf.d/50-plebian-lid.conf
 plebian-desktop-base 0644 debian/desktop/50-plebian-os-quiet-console.conf      /etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
 plebian-desktop-base 0644 debian/desktop/plebian-os-no-beep.conf               /etc/modprobe.d/plebian-os-no-beep.conf
 
 plebian-archive-keyring 0644 debian/keyring/plebian-archive-keyring.gpg     /usr/share/keyrings/plebian-archive-keyring.gpg
+
+task-pleb-desktop    0644 debian/desktop/pleb-desktop.desc                    /usr/share/tasksel/descs/pleb-desktop.desc

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # plebian-os-update.sh — refresh the whole Plebian-OS software stack.
 #
-# Pulls or pins kilix, optional desktop provider, AND pleb, then re-runs
-# `pleb install`. This is MORE than `pleb update` (which updates from the pleb
-# side): it also updates the pleb repo itself and re-applies the install — the
-# kilix/pleb command symlinks, the pleb-session launcher, and the xsession entry
+# With task-pleb-desktop installed, apt updates the packaged stack. To roll
+# back, install the previous release's frozen suite.
+#
+# On a checkout installation, this script pulls or pins kilix, the optional
+# desktop provider, and pleb, then re-runs `pleb install`. It updates the pleb
+# repo itself and re-applies the install — the kilix/pleb command symlinks,
+# the pleb-session launcher, and the xsession entry
 # — so a change to any of those lands too. It ALSO refreshes the Plebian-OS layer
 # itself (the provisioner, dependency installer, password helper, systemd unit,
 # version marker, branded desktop/greeter wallpaper configuration, artwork
@@ -137,13 +140,92 @@ open_updater_log() {
     return 0
 }
 
+restart_lightdm_session() {
+    local -a elevate=()
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    log "stack committed; restarting LightDM to load it"
+    if command -v systemd-run >/dev/null 2>&1; then
+        # $svc is intentionally expanded by the detached root shell.
+        # shellcheck disable=SC2016
+        if ! "${elevate[@]}" systemd-run \
+            --unit="plebian-os-restart-lightdm-$$" --collect \
+            --description="Restart LightDM after Plebian-OS update" \
+            /bin/sh -c '
+svc=lightdm
+systemctl stop "$svc" --no-block >/dev/null 2>&1 || true
+sleep 2
+systemctl kill -s KILL "$svc" >/dev/null 2>&1 || true
+systemctl reset-failed "$svc" >/dev/null 2>&1 || true
+systemctl start "$svc"
+'; then
+            warn "stack updated, but the requested LightDM restart could not be scheduled"
+        fi
+    elif ! "${elevate[@]}" systemctl restart lightdm; then
+        warn "stack updated, but the requested LightDM restart failed"
+    fi
+}
+
+package_is_installed() {
+    local status
+    status="$(dpkg-query -W -f '${db:Status-Status}' "$1" 2>/dev/null)" && [ "$status" = installed ]
+}
+
+packaged_os_update() {
+    local rollback="To roll back, install the previous release's frozen suite. Only checkout updates create a recovery snapshot."
+    local package restart=0
+    local -a installed_packages=() elevate=()
+
+    if [ "$#" -gt 1 ]; then
+        printf 'Unsupported packaged update options: %s\n' "$*" >&2
+        return 2
+    fi
+    if [ "$#" -eq 1 ]; then
+        case "$1" in
+            --check-source-checkouts) echo "apt owns updates on this packaged installation."; return 0 ;;
+            --recover-interrupted) echo "$rollback" >&2; return 1 ;;
+            --restart) restart=1 ;;
+            --revalidate-current) echo "--revalidate-current requires a checkout installation." >&2; return 1 ;;
+            --version|-V) printf 'plebian-os-update '; cat "$PLEBIAN_OS_DATADIR/VERSION"; return ;;
+            -h|--help)
+                echo "Usage: plebian-os-update [--restart | --check-source-checkouts]"
+                echo "$rollback"
+                return 0 ;;
+            *) printf 'unknown packaged update option: %s\n' "$1" >&2; return 2 ;;
+        esac
+    fi
+
+    for package in task-pleb-desktop pleb-desktop pleb kilix; do
+        if package_is_installed "$package"; then
+            installed_packages+=("$package")
+        fi
+    done
+    if [ "${#installed_packages[@]}" -eq 0 ]; then
+        echo "No installed Pleb desktop packages found." >&2
+        return 1
+    fi
+    [ "$(id -u)" = 0 ] || elevate=(sudo)
+    "${elevate[@]}" apt-get update || return
+    LC_ALL=C apt-cache policy "${installed_packages[@]}" || return
+    echo "apt-get upgrade can also upgrade other installed Debian packages."
+    # Preserve apt's automatic-install marks on the named dependencies.
+    "${elevate[@]}" apt-get upgrade --only-upgrade "${installed_packages[@]}" || return
+    echo "$rollback"
+    if [ "$restart" = 1 ]; then
+        restart_lightdm_session
+    fi
+}
+
 require_unprivileged_updater() {
     [ "${1:-$EUID}" -ne 0 ] \
         || die "run plebian-os-update without sudo (it elevates only bounded system steps)"
 }
-# The library-only hook lets focused tests load functions as root.  Every real
-# invocation rejects root before config loading, allocation, locking, or writes.
+# Dispatch before any checkout configuration, source carrier, lock or recovery
+# state. Only the checkout updater needs an unprivileged session.
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ]; then
+    if package_is_installed task-pleb-desktop; then
+        packaged_os_update "$@"
+        exit $?
+    fi
     require_unprivileged_updater "$EUID"
 fi
 
@@ -3661,28 +3743,7 @@ VOICE_UPDATE_NOTICE
 
 restart_session_after_commit() {
     [ "$restart_arg" = --restart ] || return 0
-    local -a elevate=()
-    [ "$(id -u)" = 0 ] || elevate=(sudo)
-    log "stack committed; restarting LightDM to load it"
-    if command -v systemd-run >/dev/null 2>&1; then
-        # $svc is intentionally expanded by the detached root shell.
-        # shellcheck disable=SC2016
-        if ! "${elevate[@]}" systemd-run \
-            --unit="plebian-os-restart-lightdm-$$" --collect \
-            --description="Restart LightDM after Plebian-OS update" \
-            /bin/sh -c '
-svc=lightdm
-systemctl stop "$svc" --no-block >/dev/null 2>&1 || true
-sleep 2
-systemctl kill -s KILL "$svc" >/dev/null 2>&1 || true
-systemctl reset-failed "$svc" >/dev/null 2>&1 || true
-systemctl start "$svc"
-'; then
-            warn "stack updated, but the requested LightDM restart could not be scheduled"
-        fi
-    elif ! "${elevate[@]}" systemctl restart lightdm; then
-        warn "stack updated, but the requested LightDM restart failed"
-    fi
+    restart_lightdm_session
 }
 
 # /etc/pleb/session.env is operator-editable root configuration, so the window
