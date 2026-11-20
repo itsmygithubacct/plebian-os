@@ -1,12 +1,12 @@
 # What each binary package installs: PACKAGE MODE SOURCE DESTINATION.
 # debian/rules installs exactly these rows and nothing else.
-# tests/test_debian_packaging.py holds the updater's deploy set equal to
-# these rows, apart from the archive key and the Qt pin.
+# The converter, archive key, Qt pin and desktop drop-ins are package-only files.
 # @VERSION@ is the content of the top-level VERSION file.
 
 plebian-os-release   0644 VERSION                                             /usr/share/plebian-os/VERSION
 plebian-os-release   0644 releases/@VERSION@.env                              /usr/share/plebian-os/ollama-release.env
 
+plebian-os-tools     0755 provision/plebian-os-convert-0.2.3                  /usr/sbin/plebian-os-convert-0.2.3
 plebian-os-tools     0755 provision/plebian-os-update.sh                      /usr/bin/plebian-os-update
 plebian-os-tools     0755 provision/plebian-os-select-closure.sh              /usr/bin/plebian-os-select-closure
 plebian-os-tools     0755 provision/plebian-os-nvidia-driver                  /usr/bin/plebian-os-nvidia-driver

@@ -23,7 +23,7 @@ PLEBIAN_OS_NOTICEDIR = "/usr/share/plebian-os/notices"
 PLEBIAN_OS_PAYLOADDIR = "/var/lib/plebian-os/payloads"
 PLEBIAN_OS_UNITDIR = "/usr/lib/systemd/system"
 
-DEFAULT = Path(PLEBIAN_OS_DATADIR) / "source-carrier" / "manifest.json"
+DEFAULT = Path(PLEBIAN_OS_PAYLOADDIR) / "source-carrier" / "manifest.json"
 
 
 def read(root, relative, limit):

@@ -270,6 +270,41 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             self.assertEqual(list(paths["state"].glob("provision-rollback.*")), [])
             self.assertIn("restored the pre-provision", result.stdout)
 
+    def test_kilix_secrets_mid_install_restores_previous_binary_and_socket_link(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            setup, paths = self._layout(root)
+            binary = root / "usr/local/bin/kilix-secrets"
+            link = root / "etc/systemd/user/sockets.target.wants/kilix-secrets.socket"
+            binary.parent.mkdir(parents=True)
+            link.parent.mkdir(parents=True)
+            binary.write_text("previous client\n")
+            binary.chmod(0o750)
+            result = self._run(
+                'production_paths=("${PROVISION_ROOT_TRANSACTION_PATHS[@]}")\n'
+                + setup
+                + f'root={self._quoted(root)}\n'
+                + f'PROVISION_ROOT_TRANSACTION_TRUSTED_DIRS+=({self._quoted(binary.parent)} {self._quoted(link.parent)})\n'
+                + '''
+for file in "${production_paths[@]}"; do
+    case "$file" in
+        /usr/local/bin/kilix-secrets|/etc/systemd/user/sockets.target.wants/kilix-secrets.socket)
+            PROVISION_ROOT_TRANSACTION_PATHS+=("$root$file") ;;
+    esac
+done
+begin_provision_root_transaction
+printf 'new client' >"$root/usr/local/bin/kilix-secrets"
+chmod 0755 "$root/usr/local/bin/kilix-secrets"
+ln -s /usr/local/lib/systemd/user/kilix-secrets.socket "$root/etc/systemd/user/sockets.target.wants/kilix-secrets.socket"
+exit 42
+'''
+            )
+            self.assertEqual(result.returncode, 42, result.stderr)
+            self.assertEqual(binary.read_text(), "previous client\n")
+            self.assertEqual(binary.stat().st_mode & 0o777, 0o750)
+            self.assertFalse(os.path.lexists(link))
+            self.assertEqual(list(paths["state"].glob("provision-rollback.*")), [])
+
     def test_each_induced_failure_boundary_rolls_back_prior_writes(self):
         for boundary in ("assets", "helpers", "session"):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as td:
@@ -316,6 +351,41 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             self.assertEqual(paths["new"].read_text(), "kept\n")
             self.assertEqual(list(paths["state"].glob("provision-rollback.*")), [])
             self.assertIn("committed the root filesystem transaction", result.stdout)
+
+    def test_integrity_mismatch_at_native_finish_fails_outer_commit_and_keeps_recovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            setup, paths = self._layout(root)
+            result = self._run(
+                setup
+                + f'installed={self._quoted(root / "installed-native")}\n'
+                + f'expected={self._quoted(root / "committed-native")}\n'
+                + f'outer={self._quoted(paths["existing"])}\n'
+                + '''
+begin_provision_root_transaction
+printf 'new root files' >"$outer"
+printf 'selected native package' >"$installed"
+NATIVE_TRANSACTION_STARTED=1
+NATIVE_TRANSACTION_TOKEN=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+native_runtime_command() {
+    case "$1" in
+        commit) cp "$installed" "$expected" ;;
+        finish)
+            printf 'changed after commit' >"$installed"
+            cmp -s "$expected" "$installed" ;;
+        *) return 97 ;;
+    esac
+}
+commit_provision_root_transaction
+printf 'unexpected success'
+'''
+            )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertNotIn("unexpected success", result.stdout)
+            self.assertIn("Root recovery data remains", result.stderr)
+            self.assertEqual(paths["existing"].read_text(), "new root files")
+            recovery, = paths["state"].glob("provision-rollback.*")
+            self.assertEqual((recovery / "items" / "0").read_text(), "before\n")
 
     def test_uncommitted_clean_exit_is_rolled_back_and_cannot_report_success(self):
         with tempfile.TemporaryDirectory() as td:
@@ -376,6 +446,22 @@ class ProvisionRootTransactionTests(unittest.TestCase):
             "/usr/local/bin/pleb-session",
             "/usr/share/xsessions/pleb.desktop",
             "/usr/local/bin/kilix",
+            "/usr/local/bin/kilix-secrets",
+            "/usr/local/bin/kilix-secretsd",
+            "/usr/local/include/kilix_secrets.h",
+            "/usr/local/lib/libkilix-secrets.a",
+            "/usr/local/lib/libkilix-secrets.so.0",
+            "/usr/local/lib/libkilix-secrets.so",
+            "/usr/local/lib/pkgconfig/kilix-secrets.pc",
+            "/usr/local/lib/systemd/user/kilix-secrets.service",
+            "/usr/local/lib/systemd/user/kilix-secrets.socket",
+            "/etc/systemd/user/sockets.target.wants/kilix-secrets.socket",
+            "/usr/local/share/doc/kilix-secrets/DEPENDENCIES.md",
+            "/usr/local/share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md",
+            "/usr/local/share/doc/kilix-secrets/LICENSE",
+            "/usr/local/share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md",
+            "/usr/local/share/kilix-secrets/source.tar",
+            "/usr/local/share/kilix-secrets/provenance.env",
             "/usr/local/bin/pleb",
             "/etc/lightdm/lightdm.conf.d/50-plebian-os.conf",
             "/etc/lightdm/lightdm.conf.d/50-pleb-autologin.conf",

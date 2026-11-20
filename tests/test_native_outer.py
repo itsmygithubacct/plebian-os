@@ -207,7 +207,7 @@ native_runtime_command() {
                     + f'printf "changed\\n" >{existing}\n'
                     + 'NATIVE_TRANSACTION_STARTED=1\nNATIVE_TRANSACTION_TOKEN=' + 'b' * 32 + '\n'
                     + callback + 'commit_provision_root_transaction\n')
-                self.assertEqual(result.returncode, 1 if failure == 'commit' else 0, result.stderr)
+                self.assertEqual(result.returncode, 1 if failure else 0, result.stderr)
                 self.assertEqual(paths['existing'].read_text(), 'before\n' if failure == 'commit' else 'changed\n')
                 self.assertEqual(len(list(paths['state'].glob('provision-rollback.*'))), 1 if failure == 'finish' else 0)
 

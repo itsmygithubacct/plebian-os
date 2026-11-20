@@ -1,11 +1,14 @@
-"""The installer installs the core from the signed packages on the disc.
+"""The installer installs the OS packages and desktop task from the signed disc.
 
 These checks are literals: the package names, the copied destinations, the
 removal of the disc source, and the temporary directory that holds the
 signing key.
 """
+import hashlib
+import itertools
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -26,6 +29,8 @@ DISC_ONLY = (
 )
 INSTALL = "in-target apt-get install -y --no-install-recommends " + DISC_ONLY
 LOCK = ROOT / "build" / "disc-apt-closure.lock"
+PROJECT_LOCK = ROOT / "build" / "disc-project-debs.lock"
+PROJECT_POOL = "https://itsmygithubacct.github.io/plebian-apt/pool/main/"
 FETCH = ROOT / "build" / "fetch-disc-closure.sh"
 REMOVE = (
     "rm -f /target/etc/apt/sources.list.d/plebian-os-installer.list "
@@ -46,12 +51,21 @@ def late_command():
     return PRESEED.read_text().split("d-i preseed/late_command string", 1)[1]
 
 
-def copy_segments(late):
-    segments = []
-    for piece in late.replace("\\\n", "\n").split(";"):
-        if re.search(r"(^|\s)cp(\s|$)", piece):
-            segments.append(piece)
-    return segments
+def write_destinations(late):
+    """Literal cp/mv destinations and shell output redirections in late_command."""
+    shell = shlex.shlex(late.replace("\\\n", " "), posix=True, punctuation_chars=";&|<>")
+    shell.whitespace_split = True
+    shell.commenters = ""
+    command = []
+    for token in itertools.chain(shell, [";"]):
+        if token in (">", ">>", ">|"):
+            yield next(shell)
+        elif token in (";", "&&", "||", "|"):
+            if "cp" in command or "mv" in command:
+                yield command[-1]
+            command.clear()
+        else:
+            command.append(token)
 
 
 class InstallerPackageTests(unittest.TestCase):
@@ -74,17 +88,32 @@ class InstallerPackageTests(unittest.TestCase):
                 "plebian-os-firstboot",
                 "plebian-desktop-base",
                 "plebian-archive-keyring",
+                "pleb-desktop",
+                "task-pleb-desktop",
             ],
         )
 
-    def test_late_command_does_not_copy_packaged_destinations(self):
+    def test_late_command_leaves_packaged_files_to_dpkg(self):
         late = late_command()
-        segments = copy_segments(late)
         self.assertNotIn("cp /cdrom/plebian-os/$native_module", late)
-        for _, _, _, destination in test_debian_packaging.install_map():
-            needle = "/target" + destination
-            for segment in segments:
-                self.assertNotIn(needle, segment, destination)
+        packaged = {"/target" + dst for _, _, _, dst in test_debian_packaging.install_map()}
+        self.assertEqual(packaged.intersection(write_destinations(late)), set())
+
+    def test_copy_printf_and_rename_destinations_are_checked(self):
+        dst = "/target/etc/systemd/logind.conf.d/50-plebian-lid.conf"
+        for command in (f"cp /cdrom/file '{dst}'", f"printf '%s;' value >'{dst}'",
+                        f"mv -f /target/staged '{dst}'"):
+            with self.subTest(command=command):
+                self.assertIn(dst, list(write_destinations(command)))
+
+    def test_optional_source_carrier_is_copied_into_the_payload_directory(self):
+        late = late_command()
+        carrier = "/target/var/lib/plebian-os/payloads/source-carrier"
+        self.assertIn("if [ -d /cdrom/plebian-os/source-carrier ];", late)
+        self.assertIn("cp -R /cdrom/plebian-os/source-carrier/. " + carrier + "/", late)
+        self.assertIn("chown -R root:root " + carrier, late)
+        self.assertIn("chmod -R a+rX,go-w " + carrier, late)
+        self.assertNotIn("/target/usr/share/plebian-os/source-carrier", late)
 
     def test_disc_source_and_key_are_removed_before_firstboot_is_enabled(self):
         preseed = PRESEED.read_text()
@@ -269,14 +298,27 @@ def lock_rows(path=LOCK):
 
 
 class DiscClosureTests(unittest.TestCase):
-    def test_lock_carries_every_outside_dependency(self):
-        wanted = outside_dependencies()
-        self.assertEqual(
-            wanted,
-            {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"},
+    def test_locks_cover_debian_and_project_dependencies_separately(self):
+        debian = {row[0].split("_", 1)[0] for row in lock_rows()}
+        project = {row[0].split("_", 1)[0] for row in lock_rows(PROJECT_LOCK)}
+        direct = {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"}
+        self.assertEqual(outside_dependencies(), direct | {"kilix-multiplexer"})
+        self.assertLessEqual(direct, debian)
+        self.assertLessEqual(
+            {"kilix-multiplexer", "libkilix-encodec", "libonnxruntime1.21", "libonnxruntime-dev"},
+            project,
         )
-        carried = {row[0].split("_", 1)[0] for row in lock_rows()}
-        self.assertEqual(wanted - carried, set())
+        self.assertFalse(debian & project)
+
+    def test_project_lock_pins_amd64_or_all_debs_from_the_project_pool(self):
+        rows = lock_rows(PROJECT_LOCK)
+        for name, digest, size, url in rows:
+            self.assertRegex(name, r"^[a-z0-9][a-z0-9.+-]*_[^_/]+_(amd64|all)\.deb$")
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+            self.assertRegex(size, r"^[1-9][0-9]*$")
+            self.assertTrue(url.startswith(PROJECT_POOL), url)
+            self.assertEqual(url.rsplit("/", 1)[-1], name)
+        self.assertEqual(len({row[0].split("_", 1)[0] for row in rows}), len(rows))
 
     def test_lock_rows_are_pinned_to_a_dated_snapshot(self):
         rows = lock_rows()
@@ -296,46 +338,51 @@ class DiscClosureTests(unittest.TestCase):
         remaster = REMASTER.read_text()
         build = remaster.index('"$HERE/build/build-debs.sh" "$pkg_debs"')
         fetch = remaster.index('"$HERE/build/fetch-disc-closure.sh" "$pkg_debs"')
+        project = remaster.index('"$HERE/build/fetch-disc-closure.sh" --project "$pkg_debs"')
         sign = remaster.index('"$HERE/build/write-disc-apt.sh" "$pkg_debs"')
         self.assertLess(build, fetch)
-        self.assertLess(fetch, sign)
+        self.assertLess(fetch, project)
+        self.assertLess(project, sign)
 
-    def _fetch(self, tmp, content, recorded):
+    def _fetch(self, tmp, content, recorded, project=False):
         tmp = Path(tmp)
         cache, dest = tmp / "cache", tmp / "dest"
         cache.mkdir()
-        digest = __import__("hashlib").sha256(recorded).hexdigest()
+        digest = hashlib.sha256(recorded).hexdigest()
         (cache / (digest + ".deb")).write_bytes(content)
         lock = tmp / "lock"
-        lock.write_text(
-            "# test\ndemo_1_all.deb %s %d https://snapshot.debian.org/archive/"
-            "debian/20260101T000000Z/pool/main/d/demo/demo_1_all.deb\n"
-            % (digest, len(recorded))
-        )
+        pool = PROJECT_POOL if project else "https://snapshot.debian.org/archive/debian/20260101T000000Z/pool/main/"
+        lock.write_text(f"demo_1_all.deb {digest} {len(recorded)} {pool}d/demo/demo_1_all.deb\n")
         env = dict(
             os.environ,
             PLEBIAN_OS_DISC_CLOSURE_LOCK=str(lock),
+            PLEBIAN_OS_DISC_PROJECT_LOCK=str(lock),
             PLEBIAN_OS_DISC_CLOSURE_CACHE=str(cache),
             PLEBIAN_OS_DISC_CLOSURE_OFFLINE="1",
         )
+        args = ["bash", str(FETCH)]
+        if project:
+            args.append("--project")
         result = subprocess.run(
-            ["bash", str(FETCH), str(dest)],
+            [*args, str(dest)],
             env=env, capture_output=True, text=True, timeout=30,
         )
         return result, dest / "demo_1_all.deb"
 
     def test_fetch_delivers_a_cached_file_that_matches_the_lock(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result, delivered = self._fetch(tmp, b"right bytes", b"right bytes")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(delivered.read_bytes(), b"right bytes")
+        for project in (False, True):
+            with self.subTest(project=project), tempfile.TemporaryDirectory() as tmp:
+                result, delivered = self._fetch(tmp, b"right bytes", b"right bytes", project)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(delivered.read_bytes(), b"right bytes")
 
     def test_fetch_refuses_a_file_that_does_not_match_the_lock(self):
         # Same length, different bytes: only the digest can tell them apart.
-        with tempfile.TemporaryDirectory() as tmp:
-            result, delivered = self._fetch(tmp, b"wrong bytes", b"right bytes")
-            self.assertEqual(result.returncode, 1, result.stderr)
-            self.assertFalse(delivered.exists())
+        for project in (False, True):
+            with self.subTest(project=project), tempfile.TemporaryDirectory() as tmp:
+                result, delivered = self._fetch(tmp, b"wrong bytes", b"right bytes", project)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertFalse(delivered.exists())
 
 
 if __name__ == "__main__":

@@ -80,12 +80,11 @@ class LidDefault(unittest.TestCase):
 
     def test_preseed_installs_the_same_values(self):
         text = PRESEED.read_text()
-        self.assertIn("/target/etc/systemd/logind.conf.d/" + NAME, text)
-        line = next(l for l in text.splitlines() if "printf" in l and "HandleLidSwitch=" in l)
-        values = dict(re.findall(r"'(HandleLidSwitch\w*)=(\w+)'", line))
+        packaged = (ROOT / "debian" / "desktop" / NAME).read_text()
+        self.assertNotIn("/target/etc/systemd/logind.conf.d/" + NAME, text)
+        self.assertNotIn("HandleLidSwitch=", text)
+        values = parse(packaged)["Login"]
         self.assertEqual(values, EXPECTED)
-        self.assertIn("'[Login]'", line)
-        self.assertIn("chmod 0644 /target/etc/systemd/logind.conf.d/." + NAME + ".new", text)
         self.assertNotIn("10-no-sleep-on-ac", text + PROVISION.read_text())
 
     def test_logind_is_not_restarted(self):

@@ -2,14 +2,12 @@
 # refresh-disc-closure.sh SNAPSHOT
 #
 # Rewrite build/disc-apt-closure.lock: the Debian packages the installer disc
-# carries so the core packages install with no mirror. SNAPSHOT is a
-# snapshot.debian.org timestamp such as 20261116T000000Z; the archive state at
-# that moment decides every version, so the same argument gives the same lock.
+# carries so the OS packages and desktop task install with no mirror.
+# SNAPSHOT selects the Debian archive state, e.g. 20261116T000000Z.
 #
 # The set is what apt would add to a minimal Debian 13 system to satisfy the
-# Depends of debian/control (Recommends are not followed). A minimal system
-# has less than the installer's base system, so the set is a superset of what
-# an install needs. This is a maintainer command: a build never runs it.
+# dependencies of debian/control and the locked project debs, without
+# Recommends. The installer can also use this set on a larger base system.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -20,11 +18,18 @@ if [ "$#" -ne 1 ] || ! [[ "$1" =~ ^[0-9]{8}T[0-9]{6}Z$ ]]; then
 fi
 snapshot="$1"
 
-# Every dependency of the binary packages that this source does not build.
-wanted="$(python3 - "$HERE/debian/control" <<'PY'
+work="$(mktemp -d "${TMPDIR:-/tmp}/disc-closure.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
+"$HERE/build/fetch-disc-closure.sh" --project "$work/project"
+
+# Pass project debs to apt as local files. Ask the snapshot only for Debian
+# packages, including whatever the control records of those local debs need.
+wanted="$(python3 - "$HERE/debian/control" "$work/project" <<'PY'
 import re, sys
+from pathlib import Path
 text = open(sys.argv[1]).read()
 ours = set(re.findall(r"^Package: (\S+)$", text, flags=re.M))
+project = {p.name.split("_", 1)[0] for p in Path(sys.argv[2]).glob("*.deb")}
 names = []
 for field in re.findall(r"^Depends:((?:.*\n(?:[ \t].*\n)*))", text, flags=re.M):
     for item in field.replace("\n", " ").split(","):
@@ -34,7 +39,7 @@ for field in re.findall(r"^Depends:((?:.*\n(?:[ \t].*\n)*))", text, flags=re.M):
         if "|" in item:
             sys.exit(f"alternative dependency needs a decision: {item}")
         name = re.sub(r"\s*\(.*\)$", "", item).split(":")[0]
-        if name not in ours and name not in names:
+        if name not in ours and name not in project and name not in names:
             names.append(name)
 print(" ".join(sorted(names)))
 PY
@@ -43,10 +48,8 @@ PY
 
 runtime=docker
 command -v docker >/dev/null 2>&1 || runtime=podman
-out="$(mktemp "${TMPDIR:-/tmp}/disc-closure.XXXXXX")"
-trap 'rm -f "$out"' EXIT
-
-"$runtime" run --rm -e "SNAPSHOT=$snapshot" -e "WANTED=$wanted" debian:trixie bash -ec '
+"$runtime" run --rm --platform linux/amd64 -v "$work/project:/project:ro" \
+    -e "SNAPSHOT=$snapshot" -e "WANTED=$wanted" debian:trixie bash -euo pipefail -c '
     rm -f /etc/apt/sources.list.d/*
     base=http://snapshot.debian.org/archive
     {
@@ -54,19 +57,21 @@ trap 'rm -f "$out"' EXIT
         echo "deb [check-valid-until=no] $base/debian/$SNAPSHOT trixie-updates main"
         echo "deb [check-valid-until=no] $base/debian-security/$SNAPSHOT trixie-security main"
     } > /etc/apt/sources.list
-    apt-get -q update >&2
+    apt-get -q --error-on=any update >&2
     # apt checks each download against the signed index; the digests below
     # are then taken from the files it accepted.
-    apt-get install -y --no-install-recommends --print-uris $WANTED \
+    read -ra packages <<< "$WANTED"
+    packages+=(/project/*.deb)
+    apt-get install -y --no-install-recommends --print-uris "${packages[@]}" \
         | grep -E "^.https?://" > /tmp/uris
-    apt-get install -y --no-install-recommends --download-only $WANTED >&2
+    apt-get install -y --no-install-recommends --download-only "${packages[@]}" >&2
     while read -r url file _; do
         url=${url#?}; url=${url%?}
         echo "$url $(stat -c %s /var/cache/apt/archives/$file) $(sha256sum /var/cache/apt/archives/$file | cut -d" " -f1)"
     done < /tmp/uris
-' > "$out"
+' > "$work/debian-uris"
 
-python3 - "$out" "$LOCK" "$snapshot" "$wanted" <<'PY'
+python3 - "$work/debian-uris" "$LOCK" "$snapshot" "$wanted" <<'PY'
 import os, re, sys, urllib.parse
 rows = []
 for line in open(sys.argv[1]):

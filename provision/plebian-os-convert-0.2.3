@@ -1,0 +1,225 @@
+#!/usr/bin/python3 -I
+"""Convert a checkout-installed Plebian-OS 0.2.3 machine to Debian packages."""
+
+import argparse
+from contextlib import contextmanager
+import hashlib
+import os
+from pathlib import Path
+import stat
+import subprocess
+import sys
+import tempfile
+
+
+RECOVERY = "This is a one-way conversion with no transactional rollback. Restore a backup or VM snapshot for recovery."
+ARCHIVE = "https://itsmygithubacct.github.io/plebian-apt"
+KEY = Path("usr/share/keyrings/plebian-archive-keyring.gpg")
+KEY_SHA256 = "d03801e1d0eb12c4b810e124481b8b1be40e9920a2abebab738b04826d668bd1"
+SOURCE = Path("etc/apt/sources.list.d/plebian.sources")
+SOURCE_BYTES = f"Types: deb\nURIs: {ARCHIVE}\nSuites: trixie\nComponents: main\nSigned-By: /{KEY}\n".encode()
+VERSION = Path("usr/local/share/plebian-os/VERSION")
+
+# From the 0.2.3 updater's ROOT_DEPLOY and the installer's late_command.
+# These are individual OS files. Their parents also contain third-party software.
+PACKAGED_COPIES = (
+    "usr/local/bin/plebian-os-update",
+    "usr/local/bin/plebian-os-select-closure",
+    "usr/local/bin/plebian-os-nvidia-driver",
+    "usr/local/sbin/plebian-os-provision",
+    "usr/local/sbin/plebian-os-install-deps",
+    "usr/local/sbin/plebian-os-firstboot-attempt",
+    "usr/local/sbin/plebian-os-passwd",
+    "usr/local/sbin/plebian-os-ssh-server",
+    "usr/local/sbin/plebian-os-source-carrier",
+    "usr/local/sbin/plebian-os-native-runtime",
+    "usr/local/sbin/plebian-os-qt-runtime",
+    "usr/local/sbin/plebian-os-mpv-runtime",
+    "usr/local/sbin/plebian-os-install-ollama-converter",
+    "usr/local/sbin/plebian-os-install-diarization-converter",
+    "usr/local/sbin/plebian-os-install-encodec-converter",
+    "usr/local/sbin/plebian-os-install-kilix-vulkan-tts",
+    "usr/local/sbin/plebian-os-install-kilix-ollama-runtime",
+    "usr/local/libexec/plebian-os/native_package.py",
+    "usr/local/libexec/plebian-os/native_process.py",
+    "usr/local/libexec/plebian-os/native_runtime.py",
+    "usr/local/libexec/plebian-os/native_state.py",
+    "usr/local/share/plebian-os/ollama-release.env",
+    "usr/local/share/plebian-os/wallpapers/plebian-os.png",
+    "usr/local/share/doc/plebian-os/COPYING.GPL-2",
+    "usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md",
+)
+
+# The ISO supplies these separately from the packages. Preserve a usable copy.
+ZELL_HELPER = Path("usr/local/sbin/install-zell-runtime.py")
+ZELL_SHA256 = "7dde588b0257548f5956425a785af107712a3da4e81838eaf28ed5a97d2d883b"
+ISO_COPIES = {
+    ZELL_HELPER: Path("usr/sbin/install-zell-runtime.py"),
+    Path("usr/local/share/plebian-os/zell-runtime.json"): Path("usr/share/plebian-os/zell-runtime.json"),
+}
+for notice in ("espeak-ng-1.52.0.tar.gz", "espeakng-loader-0.2.4-LICENSE",
+               "espeakng-loader-0.2.4-build.txt", "espeakng-loader-0.2.4-build.sh"):
+    ISO_COPIES[Path("usr/local/share/doc/plebian-os/espeak-ng") / notice] = (
+        Path("usr/share/plebian-os/notices/espeak-ng") / notice)
+
+FIRSTBOOT = Path("etc/systemd/system/plebian-os-firstboot.service")
+VENDOR_UNIT = "/usr/lib/systemd/system/plebian-os-firstboot.service"
+STOCK_FIRSTBOOT_SHA256 = "5140f1e5ff3f2144d41a7bb3726ae50a1ae98f44b9c63d3db3cf00452c6d4465"
+
+
+@contextmanager
+def parent_dir(root, path, *, create=False):
+    """Walk fixed relative paths without following directory symlinks."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(root, flags)
+    try:
+        for part in path.parent.parts:
+            created = False
+            if create:
+                try:
+                    os.mkdir(part, 0o755, dir_fd=directory)
+                    created = True
+                except FileExistsError:
+                    pass
+            child = os.open(part, flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+            if create:
+                info = os.fstat(directory)
+                if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+                    raise ValueError(f"unsafe parent of /{path}")
+                if created:
+                    os.fchmod(directory, 0o755)
+        yield directory
+    finally:
+        os.close(directory)
+
+
+@contextmanager
+def protected_file(parent, path):
+    fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            raise ValueError(f"expected a protected regular file at /{path}")
+        yield stream
+
+
+def read_regular(root, path):
+    try:
+        with parent_dir(root, path) as parent, protected_file(parent, path) as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return None
+
+
+def install_bytes(root, path, content, mode=0o644):
+    with parent_dir(root, path, create=True) as parent:
+        try:
+            with protected_file(parent, path) as existing:
+                if existing.read() != content:
+                    raise ValueError(f"existing /{path} differs, preserving it")
+                info = os.fstat(existing.fileno())
+                if stat.S_IMODE(info.st_mode) != mode:
+                    if info.st_nlink != 1:
+                        raise ValueError(f"preserving the mode of multiply linked /{path}")
+                    os.fchmod(existing.fileno(), mode)
+                return
+        except FileNotFoundError:
+            pass
+        with tempfile.NamedTemporaryFile(dir=f"/proc/self/fd/{parent}") as staged:
+            staged.write(content)
+            staged.flush()
+            os.fchmod(staged.fileno(), mode)
+            # Publish a complete file and preserve any intervening installation.
+            os.link(Path(staged.name).name, path.name, src_dir_fd=parent, dst_dir_fd=parent)
+
+
+def remove_copy(root, path):
+    try:
+        with parent_dir(root, path) as parent:
+            kind = os.stat(path.name, dir_fd=parent, follow_symlinks=False).st_mode
+            if not (stat.S_ISREG(kind) or stat.S_ISLNK(kind)):
+                raise ValueError(f"expected a legacy file at /{path}, preserving it")
+            os.unlink(path.name, dir_fd=parent)
+    except FileNotFoundError:
+        pass
+
+
+def migrate_stock_firstboot(root, run):
+    # An enabled 0.2.3 unit can have wants links pointing to the old /etc
+    # location. Forward the stock file to the package and keep those links valid.
+    try:
+        with parent_dir(root, FIRSTBOOT) as parent:
+            info = os.stat(FIRSTBOOT.name, dir_fd=parent, follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                if os.readlink(FIRSTBOOT.name, dir_fd=parent) != VENDOR_UNIT:
+                    return
+            elif stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() and not info.st_mode & 0o022:
+                with protected_file(parent, FIRSTBOOT) as old:
+                    if hashlib.file_digest(old, "sha256").hexdigest() != STOCK_FIRSTBOOT_SHA256:
+                        return
+                with tempfile.TemporaryDirectory(dir=f"/proc/self/fd/{parent}") as stage:
+                    link = Path(stage) / FIRSTBOOT.name
+                    link.symlink_to(VENDOR_UNIT)
+                    os.replace(link, FIRSTBOOT.name, dst_dir_fd=parent)
+            else:
+                return
+    except FileNotFoundError:
+        return
+    # Retrying after a failed reload also reaches here via the vendor link.
+    run(["/usr/bin/systemctl", "daemon-reload"], check=True)
+
+
+def convert(root, run):
+    if (read_regular(root, VERSION) or b"").strip() != b"0.2.3":
+        raise ValueError(f"expected a 0.2.3 installation at /{VERSION}")
+
+    key = read_regular(root, KEY)
+    if key is None:
+        key = run(["/usr/bin/curl", "-q", "--fail", "--silent", "--show-error", "--location",
+                   "--proto", "=https", "--proto-redir", "=https", "--max-time", "120", "--max-filesize", "65536",
+                   f"{ARCHIVE}/{KEY.name}"], check=True, stdout=subprocess.PIPE).stdout
+    if hashlib.sha256(key).hexdigest() != KEY_SHA256:
+        raise ValueError("archive keyring differs from the pinned release key")
+    install_bytes(root, KEY, key)
+    install_bytes(root, SOURCE, SOURCE_BYTES)
+    run(["/usr/bin/apt-get", "-o", "APT::Update::Error-Mode=any", "update"], check=True)
+    run(["/usr/bin/apt-get", "-y", "--no-remove", "--no-install-recommends",
+         "-o", "Dpkg::Options::=--force-confold", "install", "plebian-archive-keyring",
+         "plebian-os-firstboot", "plebian-os-tools", "task-pleb-desktop"], check=True)
+
+    for old, new in ISO_COPIES.items():
+        data = read_regular(root, old)
+        if data is None:
+            continue
+        if old == ZELL_HELPER and hashlib.sha256(data).hexdigest() != ZELL_SHA256:
+            raise ValueError(f"legacy /{old} differs from the shipped helper, preserving it")
+        install_bytes(root, new, data, 0o755 if old == ZELL_HELPER else 0o644)
+        remove_copy(root, old)
+
+    migrate_stock_firstboot(root, run)
+    for copy in PACKAGED_COPIES:
+        remove_copy(root, Path(copy))
+    # Leave the version marker through any partial failure so conversion can resume.
+    remove_copy(root, VERSION)
+
+
+def main(argv):
+    parser = argparse.ArgumentParser(description=RECOVERY, allow_abbrev=False)
+    parser.add_argument("--acknowledge-backup", action="store_true", help="confirm that a recovery copy exists")
+    args = parser.parse_args(argv)
+    print(RECOVERY, file=sys.stderr)
+    if not args.acknowledge_backup:
+        parser.exit(2, "Pass --acknowledge-backup to begin.\n")
+    if os.geteuid() != 0:
+        parser.exit(1, "Run the conversion as root.\n")
+    try:
+        convert(Path("/"), subprocess.run)
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        parser.exit(1, f"Could not complete the conversion ({exc}).\n")
+    print("Plebian-OS package conversion complete.")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

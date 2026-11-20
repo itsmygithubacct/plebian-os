@@ -275,10 +275,8 @@ class LinkedDestinationWrite(unittest.TestCase):
 
     def test_preseed_publishes_by_rename_not_redirection(self):
         text = (ROOT / "preseed" / "preseed.cfg").read_text()
-        self.assertNotRegex(text, r"> /target/etc/systemd/logind\.conf\.d/50-plebian-lid\.conf")
-        self.assertIn("mv -f /target/etc/systemd/logind.conf.d/.50-plebian-lid.conf.new "
-                      "/target/etc/systemd/logind.conf.d/50-plebian-lid.conf", text)
-        self.assertIn("chown root:root /target/etc/systemd/logind.conf.d/.50-plebian-lid.conf.new", text)
+        self.assertNotIn("/target/etc/systemd/logind.conf.d/50-plebian-lid.conf", text)
+        self.assertNotIn(".50-plebian-lid.conf.new", text)
 
 
 OLD = b'if [ -z "${PLEB_IDLE_LOCK_SECONDS+x}" ]; then PLEB_IDLE_LOCK_SECONDS=600; fi\n'

@@ -152,7 +152,7 @@ fi
 # The helper owns its temporary source pool for this invocation and cleans it.
 if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
     && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
-         || [ -e $PLEBIAN_OS_DATADIR/source-carrier/manifest.json ]; }; then
+         || [ -e "$PLEBIAN_OS_PAYLOADDIR/source-carrier/manifest.json" ]; }; then
     _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
     [ -f "$_source_carrier_helper" ] || _source_carrier_helper=$PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
     [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
@@ -1349,7 +1349,7 @@ managed_dirs=(
 zell_paths=(
     /usr/local/bin/zell
     /usr/local/share/kilix-zell
-    /usr/local/sbin/install-zell-runtime.py
+    $PLEBIAN_OS_SBINDIR/install-zell-runtime.py
     $PLEBIAN_OS_DATADIR/zell-runtime.json
     $PLEBIAN_OS_PAYLOADDIR/zell-0.1.1-x86_64.tar.xz
     /usr/local/lib/systemd/user/kilix-secrets.service
@@ -1357,7 +1357,6 @@ zell_paths=(
 )
 zell_dirs=(
     /usr/local/bin
-    /usr/local/sbin
     /usr/local/lib/systemd
     /usr/local/lib/systemd/user
 )
@@ -1450,6 +1449,7 @@ for i in "${!paths[@]}"; do
     fi
 done
 : >"$txn/zell-runtime"
+: >"$txn/zell-usr-sbin"
 : >"$txn/kilix-secrets"
 : >"$txn/pleb-notifications"
 : >"$txn/ssh-server-helper"
@@ -1628,7 +1628,7 @@ managed_dirs=(
 zell_paths=(
     /usr/local/bin/zell
     /usr/local/share/kilix-zell
-    /usr/local/sbin/install-zell-runtime.py
+    $PLEBIAN_OS_SBINDIR/install-zell-runtime.py
     $PLEBIAN_OS_DATADIR/zell-runtime.json
     $PLEBIAN_OS_PAYLOADDIR/zell-0.1.1-x86_64.tar.xz
     /usr/local/lib/systemd/user/kilix-secrets.service
@@ -1636,7 +1636,6 @@ zell_paths=(
 )
 zell_dirs=(
     /usr/local/bin
-    /usr/local/sbin
     /usr/local/lib/systemd
     /usr/local/lib/systemd/user
 )
@@ -1667,6 +1666,11 @@ path_keys=("${!paths[@]}")
 dir_keys=()
 for i in "${!managed_dirs[@]}"; do dir_keys+=("dir.$i"); done
 if [ -f "$txn/zell-runtime" ]; then
+    # Previous Zell snapshots recorded a different helper and directory layout.
+    [ -f "$txn/zell-usr-sbin" ] || {
+        echo "Zell snapshot predates the helper move. Use its matching updater for recovery." >&2
+        exit 2
+    }
     for dir in /usr/local/lib "$PLEBIAN_OS_DATADIR" "$PLEBIAN_OS_PAYLOADDIR" "${zell_dirs[@]}"; do
         if [ -e "$dir" ] || [ -L "$dir" ]; then
             [ -d "$dir" ] && [ ! -L "$dir" ] && [ "$(stat -c '%u' "$dir")" = 0 ] || exit 2
@@ -5408,7 +5412,7 @@ txn="$1"; prov="$2"; shift 2
 expected=("$@")
 files=(bin/zell install-zell-runtime.py zell-runtime.json zell-0.1.1-x86_64.tar.xz
        units/kilix-secrets.service units/kilix-secrets.socket)
-dests=(/usr/local/bin/zell /usr/local/sbin/install-zell-runtime.py
+dests=(/usr/local/bin/zell $PLEBIAN_OS_SBINDIR/install-zell-runtime.py
        $PLEBIAN_OS_DATADIR/zell-runtime.json
        $PLEBIAN_OS_PAYLOADDIR/zell-0.1.1-x86_64.tar.xz
        /usr/local/lib/systemd/user/kilix-secrets.service
@@ -5416,11 +5420,12 @@ dests=(/usr/local/bin/zell /usr/local/sbin/install-zell-runtime.py
 modes=(0755 0755 0644 0644 0644 0644)
 case "$txn" in /var/lib/plebian-os/update-rollback.*) ;; *) exit 2 ;; esac
 [ -d "$txn" ] && [ ! -L "$txn" ] && [ "$(stat -c '%u' "$txn")" = 0 ] || exit 2
-[ "$(stat -c '%a' "$txn")" = 700 ] && [ -f "$txn/zell-runtime" ] || exit 2
+[ "$(stat -c '%a' "$txn")" = 700 ] \
+    && [ -f "$txn/zell-runtime" ] && [ -f "$txn/zell-usr-sbin" ] || exit 2
 [ "${#expected[@]}" = 3 ] || exit 2
 # Validate parents before creating directories or publishing any object. Leaf
 # files are replaced by rename, so a previous launcher/unit symlink is not followed.
-for dir in / /usr /usr/share /usr/local /usr/local/bin /usr/local/sbin /usr/local/share \
+for dir in / /usr "$PLEBIAN_OS_SBINDIR" /usr/share /usr/local /usr/local/bin /usr/local/share \
     "$PLEBIAN_OS_DATADIR" /var /var/lib /var/lib/plebian-os "$PLEBIAN_OS_PAYLOADDIR" \
     /usr/local/lib /usr/local/lib/systemd /usr/local/lib/systemd/user; do
     if [ -e "$dir" ] || [ -L "$dir" ]; then

@@ -246,6 +246,18 @@ class TransactionTests(unittest.TestCase):
         self.assertIsNone(self.manager.read_json(runtime.ACTIVE, missing=True))
         self.assertEqual(self.journal(token)['phase'], 'rolled-back')
 
+    def test_finish_mismatch_retains_committed_journal_and_active_token(self):
+        token = self.prepare()
+        self.manager.apply(token)
+        self.manager.commit(token)
+        committed = self.journal(token)
+        self.backend.damage = 'changed after commit'
+        with self.assertRaisesRegex(runtime.state.UnsafeState, 'installed identity differs'):
+            self.manager.finish(token)
+        self.assertEqual(self.journal(token), committed)
+        self.assertEqual(self.manager.read_json(runtime.ACTIVE), {'transaction': token})
+        self.assertEqual(self.manager.read_json(runtime.CURRENT), committed['new'])
+
     def test_finished_install_and_exact_old_package_upgrade_rollback(self):
         self.seed()
         old = self.manager.read_json(runtime.CURRENT)

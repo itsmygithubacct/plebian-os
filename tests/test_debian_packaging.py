@@ -3,11 +3,15 @@
 debian/install-map is the only list debian/rules installs from. The updater
 carries its own list of the same files. These tests hold the two equal, with
 the installed locations written here as literals, so neither list can move a
-file or change a mode without the other. The archive key and the Qt pin are
-packaged files the updater does not deploy.
+file or change a mode without the other. The packages also install the
+archive key, Qt pin, desktop defaults and one-way converter.
 """
 import hashlib
 import re
+import shutil
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -81,16 +85,20 @@ def updater_deploy_set():
 
 class DebianPackagingTests(unittest.TestCase):
     def test_packages_install_exactly_what_the_updater_deploys(self):
-        # The archive key and the Qt pin are packaged files the updater never
-        # deployed. The pin names the qualified GUI library versions.
-        extra = {QT_PIN, *DROPINS}
-        core = [row for row in install_map()
+        # Only the tools package deploys the one-way converter.
+        converter = "/usr/sbin/plebian-os-convert-0.2.3"
+        rows = install_map()
+        self.assertEqual([row for row in rows if row[3] == converter], [
+            ("plebian-os-tools", "0755", "provision/plebian-os-convert-0.2.3", converter),
+        ])
+        extra = {QT_PIN, converter, *DROPINS}
+        core = [row for row in rows
                 if row[0] != KEYRING and row[3] not in extra]
         packaged = {(destination, mode) for _, mode, _, destination in core}
         self.assertEqual(packaged, updater_deploy_set())
         self.assertEqual(len(packaged), len(core), "duplicate destination")
         self.assertEqual(len(packaged), 31)
-        self.assertEqual(len(install_map()), 39)
+        self.assertEqual(len(rows), 40)
 
     def test_desktop_base_records_the_qualified_qt_pin(self):
         rows = [row for row in install_map() if row[3] == QT_PIN]
@@ -192,6 +200,44 @@ class DebianPackagingTests(unittest.TestCase):
                       control)
         self.assertIn("Depends: pleb-desktop (= ${binary:Version}), ${misc:Depends}",
                       control)
+
+    def test_checker_visits_metapackages_and_rejects_unmapped_members(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            debian, build, output = (root / name for name in ("debian", "build", "output"))
+            for directory in (debian, build, output):
+                directory.mkdir()
+            package = "task-pleb-desktop"
+            (debian / "control").write_text(f"Source: fixture\n\nPackage: {package}\n")
+            (debian / "install-map").write_text("")
+            checker = build / "check-debs.py"
+            shutil.copyfile(ROOT / "build" / checker.name, checker)
+            stage = root / "package"
+            control = stage / "DEBIAN/control"
+            control.parent.mkdir(parents=True)
+            control.parent.chmod(0o755)
+            control.write_text(
+                f"Package: {package}\nVersion: 1\nArchitecture: all\n"
+                "Maintainer: Test <test@example.invalid>\nDescription: test fixture\n"
+            )
+            doc = stage / "usr/share/doc" / package / "copyright"
+            doc.parent.mkdir(parents=True)
+            doc.write_text("fixture\n")
+
+            for member in (None, "opt", "opt/unlisted"):
+                with self.subTest(member=member):
+                    if member == "opt":
+                        (stage / member).mkdir()
+                    elif member:
+                        (stage / member).touch()
+                    built = subprocess.run(["dpkg-deb", "--root-owner-group", "--build", stage, output],
+                                           text=True, capture_output=True)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    result = subprocess.run([sys.executable, checker, output],
+                                            text=True, capture_output=True)
+                    self.assertEqual(result.returncode, int(member is not None), result.stdout)
+                    if member:
+                        self.assertIn(f"{package}: unlisted file /{member}", result.stdout)
 
     def test_first_boot_files_are_in_the_first_boot_package_only(self):
         owner = {destination: package for package, _, _, destination in install_map()}

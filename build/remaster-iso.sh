@@ -2466,12 +2466,13 @@ fi
 # and UEFI countdown even when the source image omitted one.
 configure_boot_menu_policy "$EXTRACT" "${PLEBIAN_OS_AUTOBOOT:-0}"
 
-echo "==> building the core packages"
+echo "==> building the Plebian-OS packages"
 pkg_debs="$WORK/core-debs"
 mkdir -p "$pkg_debs"
 "$HERE/build/build-debs.sh" "$pkg_debs"
-echo "==> adding the pinned Debian packages the core depends on"
+echo "==> adding the pinned Debian and project dependencies"
 "$HERE/build/fetch-disc-closure.sh" "$pkg_debs"
+"$HERE/build/fetch-disc-closure.sh" --project "$pkg_debs"
 echo "==> signing the installer package repository"
 "$HERE/build/write-disc-apt.sh" "$pkg_debs" "$EXTRACT/plebian-os/apt"
 

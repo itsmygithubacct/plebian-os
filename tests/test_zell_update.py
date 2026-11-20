@@ -20,7 +20,7 @@ UPDATE = (ROOT / 'provision/plebian-os-update.sh').read_text()
 ARCHIVE = 'zell-0.1.1-x86_64.tar.xz'
 LEAVES = (
     'usr/local/bin/zell',
-    'usr/local/sbin/install-zell-runtime.py',
+    'usr/sbin/install-zell-runtime.py',
     'usr/share/plebian-os/zell-runtime.json',
     'var/lib/plebian-os/payloads/' + ARCHIVE,
     'usr/local/lib/systemd/user/kilix-secrets.service',

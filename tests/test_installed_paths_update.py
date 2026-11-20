@@ -4,7 +4,9 @@ The expected locations are literals. Nothing here reads them back out of
 provision/plebian-os-paths.sh, so a copied block cannot agree with itself
 by construction. Worker A covers the installer in tests/test_installed_paths.py.
 """
+import hashlib
 import re
+import runpy
 import stat
 import subprocess
 import unittest
@@ -66,6 +68,7 @@ PYTHON_WITH_CONSTANTS = (
 )
 OLD_PATH = re.compile(
     r"/usr/local/sbin/plebian-os-"
+    r"|/usr/local/sbin/install-zell-runtime\.py"
     r"|/usr/local/bin/plebian-os-"
     r"|/usr/local/libexec/plebian-os"
     r"|/usr/local/share/plebian-os"
@@ -108,6 +111,14 @@ def array_entries(text, name):
 
 
 class InstalledPathUpdateTests(unittest.TestCase):
+    def run_root_block(self, fx, name, *args):
+        update = (ROOT / "provision/plebian-os-update.sh").read_text()
+        body = dict(heredocs(update))[name]
+        return subprocess.run(
+            ["bash", "-s", "--", *map(str, args)],
+            input="systemctl() { :; }\nset -euo pipefail\n" + as_user(under(body, fx.root)),
+            env={"PATH": "/usr/bin:/bin", "HOME": str(fx.tmp)}, capture_output=True, text=True, timeout=60)
+
     def test_shell_blocks_match_the_canonical_literals(self):
         seen = 0
         for relative in OWNED:
@@ -135,6 +146,16 @@ class InstalledPathUpdateTests(unittest.TestCase):
             text = (ROOT / relative).read_text()
             self.assertIsNone(OLD_PATH.search(text), relative)
 
+    def test_source_carrier_default_and_bootstraps_use_the_installed_payload(self):
+        expected = Path("/var/lib/plebian-os/payloads/source-carrier/manifest.json")
+        helper = runpy.run_path(str(ROOT / "provision/plebian-os-source-carrier"))
+        self.assertEqual(helper["DEFAULT"], expected)
+        for script in ("plebian-os-provision.sh", "plebian-os-update.sh"):
+            with self.subTest(script=script):
+                source = (ROOT / "provision" / script).read_text()
+                self.assertIn('[ -e "$PLEBIAN_OS_PAYLOADDIR/source-carrier/manifest.json" ]', source)
+                self.assertNotIn("DATADIR/source-carrier", source)
+
     def test_shared_directories_are_not_snapshot_directories(self):
         update = (ROOT / "provision/plebian-os-update.sh").read_text()
         for name, body in heredocs(update):
@@ -159,18 +180,14 @@ class InstalledPathUpdateTests(unittest.TestCase):
         foreign_sbin = fx.root / "usr/sbin/not-ours"
         foreign_bin = fx.root / "usr/bin/not-ours"
         ours = fx.root / "usr/sbin/plebian-os-passwd"
+        zell_helper = fx.root / "usr/sbin/install-zell-runtime.py"
+        zell_helper.write_text("previous Zell helper\n")
         foreign_sbin.write_text("foreign-sbin\n")
         foreign_bin.write_text("foreign-bin\n")
         ours.write_text("ours-before\n")
-        for path in (foreign_sbin, foreign_bin, ours):
+        for path in (foreign_sbin, foreign_bin, ours, zell_helper):
             path.chmod(0o755)
-        text = (ROOT / "provision/plebian-os-update.sh").read_text()
-        snap = next(body for name, body in heredocs(text) if name == "ROOT_SNAPSHOT")
-        rest = next(body for name, body in heredocs(text) if name == "ROOT_RESTORE")
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(fx.tmp)}
-        taken = subprocess.run(
-            ["bash", "-c", "set -euo pipefail\n" + as_user(under(snap, fx.root))],
-            env=env, capture_output=True, text=True)
+        taken = self.run_root_block(fx, "ROOT_SNAPSHOT")
         self.assertEqual(taken.returncode, 0, taken.stderr)
         txn = Path(taken.stdout.strip().splitlines()[-1])
         copied_names = {path.name for path in txn.rglob("*") if path.is_file()}
@@ -178,18 +195,49 @@ class InstalledPathUpdateTests(unittest.TestCase):
         copied_text = [path.read_text(errors="replace") for path in (txn / "items").iterdir() if path.is_file()]
         self.assertIn("ours-before\n", copied_text)
         ours.write_text("ours-after\n")
+        zell_helper.write_text("updated Zell helper\n")
         foreign_sbin.write_text("foreign-sbin-after\n")
         foreign_bin.write_text("foreign-bin-after\n")
-        restored = subprocess.run(
-            ["bash", "-s", "--", str(txn)],
-            input="systemctl() { :; }\nset -euo pipefail\n" + as_user(under(rest, fx.root)),
-            env=env, capture_output=True, text=True)
+        # A pre-move journal has the old helper's bytes under the same numeric key.
+        marker = txn / "zell-usr-sbin"
+        marker.unlink()
+        refused = self.run_root_block(fx, "ROOT_RESTORE", txn)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("predates the helper move", refused.stderr)
+        self.assertEqual(zell_helper.read_text(), "updated Zell helper\n")
+        self.assertEqual(ours.read_text(), "ours-after\n")
+        marker.touch()
+        restored = self.run_root_block(fx, "ROOT_RESTORE", txn)
         self.assertEqual(restored.returncode, 0, restored.stderr)
         self.assertEqual(ours.read_text(), "ours-before\n")
+        self.assertEqual(zell_helper.read_text(), "previous Zell helper\n")
+        self.assertEqual(stat.S_IMODE(zell_helper.stat().st_mode), 0o755)
         self.assertEqual(foreign_sbin.read_text(), "foreign-sbin-after\n")
         self.assertEqual(foreign_bin.read_text(), "foreign-bin-after\n")
         self.assertEqual(stat.S_IMODE(foreign_sbin.stat().st_mode), 0o755)
         self.assertEqual(stat.S_IMODE(foreign_bin.stat().st_mode), 0o755)
+
+    def test_zell_publishes_in_usr_sbin_and_restores_original_absence(self):
+        fx = Fixture(self)
+        previous = fx.root / "usr/local/sbin/install-zell-runtime.py"
+        previous.write_bytes(b"legacy copy")
+        helper = fx.root / "usr/sbin/install-zell-runtime.py"
+        taken = self.run_root_block(fx, "ROOT_SNAPSHOT")
+        self.assertEqual(taken.returncode, 0, taken.stderr)
+        txn = Path(taken.stdout.strip())
+        provision = ROOT / "provision"
+        inputs = ("install-zell-runtime.py", "zell-runtime.json", "bundles/zell-0.1.1-x86_64.tar.xz")
+        digests = [hashlib.sha256((provision / name).read_bytes()).hexdigest() for name in inputs]
+        for _ in range(2):
+            installed = self.run_root_block(fx, "ROOT_ZELL_INSTALL", txn, provision, *digests)
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            self.assertEqual(helper.read_bytes(), (provision / inputs[0]).read_bytes())
+            self.assertEqual(stat.S_IMODE(helper.stat().st_mode), 0o755)
+            self.assertEqual(previous.read_bytes(), b"legacy copy")
+        restored = self.run_root_block(fx, "ROOT_RESTORE", txn)
+        self.assertEqual(restored.returncode, 0, restored.stderr)
+        self.assertFalse(helper.exists())
+        self.assertEqual(previous.read_bytes(), b"legacy copy")
 
 
 if __name__ == "__main__":

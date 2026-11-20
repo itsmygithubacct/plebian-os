@@ -43,7 +43,7 @@ PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
 # The helper owns its temporary source pool for this invocation and cleans it.
 if [ "${PLEBIAN_OS_PROVISION_LIB_ONLY:-0}" != 1 ] && [ "${KILIX_SOURCE_CARRIER_SESSION:-0}" != 1 ] \
     && { [ -n "${KILIX_SOURCE_CARRIER_MANIFEST:-}${KILIX_SOURCE_CARRIER_SHA256:-}" ] \
-         || [ -e /usr/share/plebian-os/source-carrier/manifest.json ]; }; then
+         || [ -e "$PLEBIAN_OS_PAYLOADDIR/source-carrier/manifest.json" ]; }; then
     _source_carrier_helper="$(dirname "${BASH_SOURCE[0]}")/plebian-os-source-carrier"
     [ -f "$_source_carrier_helper" ] || _source_carrier_helper=$PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
     [ -f "$_source_carrier_helper" ] || { echo 'source carrier bootstrap is missing' >&2; exit 1; }
@@ -2080,6 +2080,21 @@ PROVISION_ROOT_TRANSACTION_COMMITTED=0
 PROVISION_ROOT_TRANSACTION_BUILDING=0
 PROVISION_VOICEBOX_SNAPSHOT_READY=0
 PROVISION_VOICEBOX_ROOT=""
+KILIX_SECRETS_PACKAGE_FILES=(
+    bin/kilix-secrets
+    bin/kilix-secretsd
+    include/kilix_secrets.h
+    lib/libkilix-secrets.a
+    lib/libkilix-secrets.so.0
+    lib/pkgconfig/kilix-secrets.pc
+    lib/systemd/user/kilix-secrets.service
+    lib/systemd/user/kilix-secrets.socket
+    share/doc/kilix-secrets/DEPENDENCIES.md
+    share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
+    share/doc/kilix-secrets/LICENSE
+    share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
+)
+KILIX_SECRETS_INSTALL_STARTED=0
 PROVISION_ROOT_TRANSACTION_PATHS=(
     /etc/modprobe.d/plebian-os-no-beep.conf
     /etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf
@@ -2165,7 +2180,15 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     /usr/local/lib/pleb/.screensaver.py.new
     /usr/local/lib/pleb/session-bin/xdg-screensaver
     /usr/local/lib/pleb/session-bin/.xdg-screensaver.new
+    /usr/local/lib/libkilix-secrets.so
+    /usr/local/share/kilix-secrets/source.tar
+    /usr/local/share/kilix-secrets/provenance.env
+    /etc/systemd/user/sockets.target.wants/kilix-secrets.socket
 )
+for secrets_file in "${KILIX_SECRETS_PACKAGE_FILES[@]}"; do
+    PROVISION_ROOT_TRANSACTION_PATHS+=("/usr/local/$secrets_file")
+done
+unset secrets_file
 
 # These fixed ancestors must already be safe. They are never removed by a
 # rollback. Tests that source this file replace the arrays with an isolated
@@ -2235,6 +2258,13 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /var/lib/AccountsService
     /var/lib/AccountsService/users
     /usr/local/lib/pleb/session-bin
+    /usr/local/include
+    /usr/local/lib/pkgconfig
+    /usr/local/lib/systemd
+    /usr/local/lib/systemd/user
+    /usr/local/share/doc/kilix-secrets
+    /usr/local/share/kilix-secrets
+    /etc/systemd/user/sockets.target.wants
 )
 
 validate_provision_transaction_directory() {
@@ -2573,6 +2603,9 @@ restore_provision_root_transaction() {
             && command -v timeout >/dev/null 2>&1; then
         timeout 15s systemctl daemon-reload >/dev/null 2>&1 || true
     fi
+    if [ "$failed" = 0 ] && [ "$KILIX_SECRETS_INSTALL_STARTED" = 1 ]; then
+        /sbin/ldconfig || return 1
+    fi
     [ "$failed" = 0 ]
 }
 
@@ -2615,8 +2648,8 @@ commit_provision_root_transaction() {
     PROVISION_ROOT_TRANSACTION_COMMITTED=1
     PROVISION_ROOT_TRANSACTION_ACTIVE=0
     finish_native_runtime_transaction || {
-        warn "coherent provision committed; retaining root recovery data at $txn"
-        return 0
+        warn "native finalization failed after commit. Root recovery data remains at $txn"
+        return 1
     }
     if remove_provision_root_transaction "$txn"; then
         PROVISION_ROOT_TRANSACTION_DIR=""
@@ -6860,20 +6893,6 @@ install_kilix_secrets() {
     validate_provision_root_transaction_dir "$PROVISION_ROOT_TRANSACTION_DIR" \
         || die "Kilix Secrets installation requires an active root transaction"
     local stage actual file mode source_sha link
-    local -a package_files=(
-        bin/kilix-secrets
-        bin/kilix-secretsd
-        include/kilix_secrets.h
-        lib/libkilix-secrets.a
-        lib/libkilix-secrets.so.0
-        lib/pkgconfig/kilix-secrets.pc
-        lib/systemd/user/kilix-secrets.service
-        lib/systemd/user/kilix-secrets.socket
-        share/doc/kilix-secrets/DEPENDENCIES.md
-        share/doc/kilix-secrets/F113-CUSTODY-INTERFACE.md
-        share/doc/kilix-secrets/LICENSE
-        share/doc/kilix-secrets/THIRD_PARTY_NOTICES.md
-    )
     stage="$(mktemp -d "$PROVISION_ROOT_TRANSACTION_DIR/kilix-secrets.XXXXXX")" \
         || die "could not stage Kilix Secrets"
     git init -q "$stage/repo" || die "could not initialize Kilix Secrets source staging"
@@ -6891,7 +6910,7 @@ install_kilix_secrets() {
         || die "could not build Kilix Secrets"
     make -C "$stage/source" install DESTDIR="$stage/package" PREFIX=/usr/local \
         || die "could not package Kilix Secrets"
-    printf '%s\n' "${package_files[@]}" | LC_ALL=C sort >"$stage/expected"
+    printf '%s\n' "${KILIX_SECRETS_PACKAGE_FILES[@]}" | LC_ALL=C sort >"$stage/expected"
     (cd "$stage/package/usr/local" && find . -type f -printf '%P\n' | LC_ALL=C sort) >"$stage/actual"
     cmp -s "$stage/expected" "$stage/actual" || die "unexpected Kilix Secrets package layout"
     link="$stage/package/usr/local/lib/libkilix-secrets.so"
@@ -6899,7 +6918,7 @@ install_kilix_secrets() {
         || die "Kilix Secrets shared library link is not libkilix-secrets.so.0"
     [ -z "$(find "$stage/package" ! -type f ! -type d ! -type l -print -quit)" ] \
         || die "Kilix Secrets package contains an unexpected object"
-    for file in "${package_files[@]}" \
+    for file in "${KILIX_SECRETS_PACKAGE_FILES[@]}" \
             share/kilix-secrets/source.tar \
             share/kilix-secrets/provenance.env; do
         [ ! -L "/usr/local/$file" ] \
@@ -6908,7 +6927,8 @@ install_kilix_secrets() {
     done
     [ ! -d /usr/local/lib/libkilix-secrets.so ] \
         || die "unsafe Kilix Secrets shared library path"
-    for file in "${package_files[@]}"; do
+    KILIX_SECRETS_INSTALL_STARTED=1
+    for file in "${KILIX_SECRETS_PACKAGE_FILES[@]}"; do
         case "$file" in
             bin/*|lib/libkilix-secrets.so.0) mode=0755 ;;
             *) mode=0644 ;;

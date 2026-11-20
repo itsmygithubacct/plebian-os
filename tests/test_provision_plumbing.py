@@ -548,10 +548,11 @@ class ProvisionPlumbingTests(unittest.TestCase):
         preseed = (ROOT / "preseed" / "preseed.cfg").read_text()
         firstboot = (ROOT / "provision" / "plebian-os-firstboot.service").read_text()
 
+        packaged = (ROOT / "debian" / "desktop" / "50-plebian-os-quiet-console.conf").read_text()
         self.assertIn("50-plebian-os-quiet-console.conf", provision)
         self.assertIn("ShowStatus=no", provision)
-        self.assertIn("50-plebian-os-quiet-console.conf", preseed)
-        self.assertIn("ShowStatus=no", preseed)
+        self.assertNotIn("50-plebian-os-quiet-console.conf", preseed)
+        self.assertIn("ShowStatus=no", packaged)
         self.assertIn("StandardOutput=journal", firstboot)
         self.assertIn("StandardError=journal", firstboot)
         self.assertNotIn("journal+console", firstboot)
