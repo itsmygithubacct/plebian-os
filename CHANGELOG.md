@@ -10,8 +10,10 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   converter commands. Upgrading the previous two-runtime installation offline
   freed 1.15 GB on amd64 and 809 MB on arm64. On a provisioned 20 GiB amd64
   VM, fresh installs from the existing public download and the compact archive
-  each started with 2.20 GB available and left 1.03 GB free.
-  Kilix `0.2.3+packaging7` recognizes both system commands in the install catalog.
+  each started with 2.20 GB available and left 1.03 GB free. A blank 20 GiB
+  amd64 VM installed from 0.2.3 media with the candidate converter completed
+  first boot with 6.38 GB free. Before and after provisioning, a new user
+  selected both system commands with Kilix `0.2.3+packaging7` without a build.
 
 ## [0.2.3] — 2026-11-16
 
