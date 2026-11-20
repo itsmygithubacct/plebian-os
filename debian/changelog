@@ -1,3 +1,9 @@
+plebian-os (0.2.3+packaging4) UNRELEASED; urgency=medium
+
+  * Record the republished Qt GUI library pin in plebian-desktop-base.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 12:30:00 +0000
+
 plebian-os (0.2.3+packaging3) UNRELEASED; urgency=medium
 
   * Install the six desktop drop-ins in plebian-desktop-base, and add

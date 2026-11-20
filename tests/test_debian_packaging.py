@@ -103,9 +103,9 @@ class DebianPackagingTests(unittest.TestCase):
         exec(compile(source, "plebian-os-qt-runtime", "exec"), namespace)
         records = [
             {"Package": "libqt5gui5t64",
-             "Version": "5.15.15+dfsg-6+deb13u1+plebianrc6.1"},
+             "Version": "5.15.15+dfsg-6+deb13u1+plebianrc6.2"},
             {"Package": "libqt6gui6",
-             "Version": "6.8.2+dfsg-9+deb13u2+plebianrc6.1"},
+             "Version": "6.8.2+dfsg-9+deb13u2+plebianrc6.2"},
         ]
         pinned = (ROOT / rows[0][2]).read_text()
         self.assertEqual(pinned, namespace["preferences"](records))
