@@ -2,8 +2,10 @@ plebian-os (0.2.3+packaging6) UNRELEASED; urgency=medium
 
   * Allow first boot to finish a progressing EnCodec download on slower
     connections and stop a stalled transfer early.
+  * Make pleb-desktop depend on the published pleb package, so the desktop
+    task installs pleb and kilix.
 
- -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 20:38:00 +0000
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 20:57:19 +0000
 
 plebian-os (0.2.3+packaging5) UNRELEASED; urgency=medium
 
