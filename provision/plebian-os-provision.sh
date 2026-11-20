@@ -4,24 +4,11 @@
 # Plebian-OS is a regular Debian install whose desktop session is Pleb — a
 # single screen-filling Kilix with visible chrome as the whole "desktop" — in
 # place of XFCE/GNOME.
-# The OS ships none of that; this script pulls it from GitHub on first boot:
-#
-#   1. apt-installs the runtime deps (Xorg, LightDM, git/curl/tar, GL, fonts)
-#   2. clones  github.com/itsmygithubacct/pleb  into ~/.local/gpu_terminal/sources/pleb
-#   3. runs    pleb install  — which itself clones github.com/itsmygithubacct/kilix
-#      into ~/.local/gpu_terminal/sources/kilix, optionally clones github.com/itsmygithubacct/kilix-95
-#      into ~/.local/gpu_terminal/sources/kilix-desktops/kilix-95, fetches a prebuilt kitty
-#      engine, and
-#      registers "Pleb" as a
-#      LightDM session (/usr/share/xsessions/pleb.desktop) + puts kilix and pleb
-#      on PATH. This provisioner then builds and verifies the kilix fork so the
-#      first boot uses the clickable-chrome engine instead of the fallback.
-#   4. (optional) enables Pleb autologin — a hard kiosk that boots straight in
-#   5. (optional) grants the target user passwordless sudo (--nopasswd-sudo)
-#
-# It is idempotent: re-running updates the checkouts, reconciles apt (a release
-# uses signed Debian sources, with an optional historical install snapshot)
-# and kiosk/sudo state, re-asserts the session, and rewrites final provenance.
+# First boot installs runtime dependencies and configures the Pleb session.
+# With the pleb and kilix Debian packages installed, it uses their launchers
+# and kilix-engine. Otherwise it clones or updates Pleb, runs pleb install
+# to set up Kilix and the session, and builds and verifies the checkout engine.
+# Both paths reconcile autologin, sudo policy, and final provenance on reruns.
 # Run as root (the firstboot service does) or via sudo. --dry-run prints the
 # plan without touching anything.
 set -euo pipefail
@@ -391,8 +378,8 @@ readonly PROVISION_VOICE_WEIGHTS=0
 # Two pieces of evidence separate them, and both are things this codebase can
 # honestly check.
 #
-#   1. The census. record_voice_dictation_census runs immediately before
-#      `pleb install`, and records the dictation assets already on the machine.
+#   1. The census. record_voice_dictation_census records existing dictation
+#      assets before first boot chooses the package or checkout path.
 #      Anything present afterwards that was not in the census was installed by
 #      this provisioning run, and is refused whatever else is true. That is the
 #      direct check of "provisioning performs no unattended model download".
@@ -557,6 +544,7 @@ TARGET_USER_EXPLICIT="${PLEBIAN_OS_USER:+1}"
 INSTALLED_USER_RECORD="${PLEBIAN_OS_INSTALLED_USER_RECORD:-/etc/plebian-os/installed-user}"
 IDENTITY_PROFILE_RECORD="${PLEBIAN_OS_IDENTITY_PROFILE_RECORD:-/etc/plebian-os/identity-profile}"
 DRY_RUN=0
+PACKAGED_PLEB=0
 PLEB_BRANCH_EXPLICIT=0                         # 1 = --branch given on the command line
 
 # Stable, distribution-owned wallpaper path shared by the builtin Kilix desktop
@@ -4466,8 +4454,9 @@ selected_desktop_wallpaper_state_dir() {
 record_default_desktop() {
     # The provisioner runs without the user's interactive terminal. Ask in the
     # first desktop pane instead, and preserve any choice already completed.
-    [ -x "$KILIX_DIR/kilix" ] || return 0
-    if as_user env "${install_env[@]}" "$KILIX_DIR/kilix" \
+    local launcher="${KILIX_LAUNCHER:-$KILIX_DIR/kilix}"
+    [ -x "$launcher" ] || return 0
+    if as_user env "${install_env[@]}" "$launcher" \
             default-desktop request >/dev/null 2>&1; then
         log "desktop    : first-login choice requested (saved choices preserved)"
     else
@@ -5546,13 +5535,15 @@ provenance_kv() {
 }
 
 validate_component_versions() {
-    local pleb_version="$1" kilix_version="$2" kilix95_version="$3"
+    local pleb_version="$1" kilix_version="$2"
     [ "$pleb_version" = "pleb $PLEBIAN_OS_VERSION" ] \
         || die "pleb reports '$pleb_version', expected exactly 'pleb $PLEBIAN_OS_VERSION'"
     [ "$kilix_version" = "$PLEBIAN_OS_VERSION" ] \
         || die "kilix reports '$kilix_version', expected exactly '$PLEBIAN_OS_VERSION'"
-    [ "$kilix95_version" = "kilix-95 $PLEBIAN_OS_VERSION" ] \
-        || die "kilix 95 reports '$kilix95_version', expected exactly 'kilix-95 $PLEBIAN_OS_VERSION'"
+    if [ "$#" -ge 3 ]; then
+        [ "$3" = "kilix-95 $PLEBIAN_OS_VERSION" ] \
+            || die "kilix 95 reports '$3', expected exactly 'kilix-95 $PLEBIAN_OS_VERSION'"
+    fi
 }
 
 # Release apt index provenance has two phases, and the provisioner and updater
@@ -6194,6 +6185,10 @@ restore_provision_voicebox_selection() {
 install_optional_voicebox() {
     local package="${KILIX_VOICEBOX_PACKAGE:-}" digest="${KILIX_VOICEBOX_PACKAGE_SHA256:-}"
     [ -n "$package$digest" ] || return 0
+    if [ "$PACKAGED_PLEB" = 1 ] && [ "$KILIX_CHECKOUT_STEPS" = 0 ]; then
+        log "packaged install has no kilix checkout. Skipping the optional Voicebox checkout installer."
+        return 0
+    fi
     [[ "$package" == /* && "$digest" =~ ^[0-9a-f]{64}$ ]] \
         || die "Voicebox requires an explicit absolute offline package and SHA256"
     [ -f "$package" ] && [ ! -L "$package" ] \
@@ -6214,20 +6209,24 @@ write_source_tool_manifest() {
         return 0
     fi
     local state=/var/lib/plebian-os versions_tmp sources_tmp
-    local plebian_os_commit pleb_commit kilix_commit kilix_source_commit kilix95_commit neuronte_commit
+    local plebian_os_commit pleb_commit="" kilix_commit="" kilix_source_commit="" kilix95_commit neuronte_commit
     local pleb_version kilix_version kilix95_version go_version engine engine_version uv_version
     mkdir -p "$state"
     versions_tmp="$(mktemp "$state/.versions.env.XXXXXX")"
     sources_tmp="$(mktemp "$state/.apt-sources.list.XXXXXX")"
 
     plebian_os_commit="$(as_user git -C "$PLEBIAN_OS_DIR" rev-parse HEAD 2>/dev/null || true)"
-    pleb_commit="$(as_user git -C "$PLEB_DIR" rev-parse HEAD 2>/dev/null || true)"
-    kilix_commit="$(as_user git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
-    kilix_source_commit="$(as_user git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
+    # packages.list records installed Debian revisions. Only claim Git commits
+    # for Pleb and Kilix when this run actually selects the checkouts.
+    if [ "$PACKAGED_PLEB" = 0 ]; then
+        pleb_commit="$(as_user git -C "$PLEB_DIR" rev-parse HEAD 2>/dev/null || true)"
+        kilix_commit="$(as_user git -C "$KILIX_DIR" rev-parse HEAD 2>/dev/null || true)"
+        kilix_source_commit="$(as_user git -C "$KILIX_DIR/src" rev-parse HEAD 2>/dev/null || true)"
+    fi
     kilix95_commit="$(as_user git -C "$KILIX95_DIR" rev-parse HEAD 2>/dev/null || true)"
     neuronte_commit="$(installed_neuronte_commit)"
-    pleb_version="$(as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" --version 2>/dev/null || true)"
-    kilix_version="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --kilix-version 2>/dev/null || true)"
+    pleb_version="$(as_user env "${install_env[@]}" "$PLEB_LAUNCHER" --version 2>/dev/null || true)"
+    kilix_version="$(as_user env "${install_env[@]}" "$KILIX_LAUNCHER" --kilix-version 2>/dev/null || true)"
     if [ -f "$KILIX95_DIR/main.py" ]; then
         kilix95_version="$(as_user env "${install_env[@]}" python3 "$KILIX95_DIR/main.py" --version 2>/dev/null || true)"
     else
@@ -6239,7 +6238,7 @@ write_source_tool_manifest() {
         go_version="$(as_user bash -lc 'go version' 2>/dev/null || true)"
     fi
     uv_version="$(/usr/local/bin/uv --version 2>/dev/null || true)"
-    engine="$(as_user env "${install_env[@]}" "$KILIX_DIR/kilix" --which 2>/dev/null | head -1 || true)"
+    engine="$(as_user env "${install_env[@]}" "$KILIX_LAUNCHER" --which 2>/dev/null | head -1 || true)"
     if [ -n "$engine" ] && [ -x "$engine" ]; then
         engine_version="$(as_user env "${install_env[@]}" "$engine" --version 2>/dev/null | head -1 || true)"
     else
@@ -6412,13 +6411,17 @@ write_source_tool_manifest() {
         require_release_apt_provenance "$sources_tmp" "$versions_tmp"
         [ "$plebian_os_commit" = "${PLEBIAN_OS_REF,,}" ] \
             || die "resolved plebian-os commit $plebian_os_commit does not match PLEBIAN_OS_REF=$PLEBIAN_OS_REF"
-        [ "$pleb_commit" = "${PLEB_REF,,}" ] \
-            || die "resolved pleb commit $pleb_commit does not match PLEB_REF=$PLEB_REF"
-        [ "$kilix_commit" = "${KILIX_REF,,}" ] \
-            || die "resolved kilix commit $kilix_commit does not match KILIX_REF=$KILIX_REF"
-        [ "$kilix95_commit" = "${KILIX95_REF,,}" ] \
-            || die "resolved kilix 95 commit $kilix95_commit does not match KILIX95_REF=$KILIX95_REF"
-        validate_component_versions "$pleb_version" "$kilix_version" "$kilix95_version"
+        if [ "$PACKAGED_PLEB" = 1 ]; then
+            validate_component_versions "$pleb_version" "$kilix_version"
+        else
+            [ "$pleb_commit" = "${PLEB_REF,,}" ] \
+                || die "resolved pleb commit $pleb_commit does not match PLEB_REF=$PLEB_REF"
+            [ "$kilix_commit" = "${KILIX_REF,,}" ] \
+                || die "resolved kilix commit $kilix_commit does not match KILIX_REF=$KILIX_REF"
+            [ "$kilix95_commit" = "${KILIX95_REF,,}" ] \
+                || die "resolved kilix 95 commit $kilix95_commit does not match KILIX95_REF=$KILIX95_REF"
+            validate_component_versions "$pleb_version" "$kilix_version" "$kilix95_version"
+        fi
         if [ "$INSTALL_UV" = 1 ]; then
             uv_version_matches_pin "$uv_version" "$UV_VERSION_PIN" \
                 || die "release uv provenance mismatch: expected 'uv $UV_VERSION_PIN', got '${uv_version:-<missing>}'"
@@ -7463,6 +7466,13 @@ ensure_plebian_os_checkout() {
     fi
 }
 
+packages_provide_pleb_and_kilix() {
+    [ "$DRY_RUN" != 1 ] || return 1
+    command -v dpkg-query >/dev/null 2>&1 || return 1
+    dpkg-query -W -f='${db:Status-Abbrev}' pleb 2>/dev/null | grep -q '^ii' \
+        && dpkg-query -W -f='${db:Status-Abbrev}' kilix 2>/dev/null | grep -q '^ii'
+}
+
 update_pleb_checkout() {
     validate_checkout "$PLEB_DIR" "$PLEB_REPO" "pleb"
     if [ -n "$PLEB_REF" ]; then
@@ -7680,9 +7690,8 @@ voice_dictation_asset_paths() {
     } | LC_ALL=C sort
 }
 
-# Called immediately before `pleb install`. What it records is the "before"
-# half of the only evidence that distinguishes weights this run installed from
-# weights that were already here.
+# Take this baseline before selecting the desktop install path. The verifier
+# compares it to the later census to identify weights added during this run.
 record_voice_dictation_census() {
     PROVISION_VOICE_ASSETS_BEFORE=()
     if [ -n "${KILIX_DATA_HOME:-}" ]; then
@@ -7855,6 +7864,13 @@ if default not in {item[0] for item in expected} or selected != [default]:
 # the weights — that provisioning installed none of them and left no model path
 # behind — while still proving that the read-aloud closure is real and that the
 # advertised first-use pull is fully pinned.
+report_voice_verification_problems() {
+    if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || [ "$INSTALL_VOICE_MODEL" = 1 ]; then
+        die "Kilix Voice verification failed: $1"
+    fi
+    warn "Kilix Voice is unavailable: $1 (run 'kilix voice doctor' after login)"
+}
+
 verify_kilix_voice_install() {
     local tool path stamp stt_report="" model_catalog="" library_root
     local models_root asset stamp_value carried_is_the_users=0
@@ -7864,63 +7880,65 @@ verify_kilix_voice_install() {
     library_root="$KILIX_DATA_HOME/voice/lib/current"
     models_root="$KILIX_DATA_HOME/voice/models"
 
-    # The pinned Kilix Voice checkout is source code, not weights, and
-    # `kilix voice install` makes it on the read-aloud leg too, so it is
-    # verified whenever a ref is pinned rather than only when dictation was
-    # advertised.
-    if [ -n "$KILIX_VOICE_REF" ]; then
-        voice_source="$GPU_TERMINAL_SOURCE_HOME/.kilix-voice-sources/kilix-voice-$KILIX_VOICE_REF"
-        if [ ! -d "$voice_source/.git" ] || [ -L "$voice_source" ]; then
-            problems+=("missing or unsafe pinned Kilix Voice checkout $voice_source")
-        else
-            voice_head="$(as_user git -C "$voice_source" rev-parse --verify HEAD 2>/dev/null)" \
-                || problems+=("could not resolve the installed Kilix Voice checkout")
-            [ "${voice_head,,}" = "${KILIX_VOICE_REF,,}" ] \
-                || problems+=("installed Kilix Voice checkout does not match the requested ref")
-            voice_version="$(
-                as_user git -C "$voice_source" show "${KILIX_VOICE_REF}:VERSION" 2>/dev/null
-            )" || problems+=("pinned Kilix Voice commit has no VERSION")
-            [[ "$voice_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-                || problems+=("pinned Kilix Voice VERSION is not semantic")
-            [ "$(as_user cat "$voice_source/VERSION" 2>/dev/null)" = "$voice_version" ] \
-                || problems+=("Kilix Voice working VERSION differs from its pinned commit")
+    if [ "$PACKAGED_PLEB" = 0 ]; then
+        # The pinned Kilix Voice checkout is source code, not weights, and
+        # `kilix voice install` makes it on the read-aloud leg too, so it is
+        # verified whenever a ref is pinned rather than only when dictation was
+        # advertised.
+        if [ -n "$KILIX_VOICE_REF" ]; then
+            voice_source="$GPU_TERMINAL_SOURCE_HOME/.kilix-voice-sources/kilix-voice-$KILIX_VOICE_REF"
+            if [ ! -d "$voice_source/.git" ] || [ -L "$voice_source" ]; then
+                problems+=("missing or unsafe pinned Kilix Voice checkout $voice_source")
+            else
+                voice_head="$(as_user git -C "$voice_source" rev-parse --verify HEAD 2>/dev/null)" \
+                    || problems+=("could not resolve the installed Kilix Voice checkout")
+                [ "${voice_head,,}" = "${KILIX_VOICE_REF,,}" ] \
+                    || problems+=("installed Kilix Voice checkout does not match the requested ref")
+                voice_version="$(
+                    as_user git -C "$voice_source" show "${KILIX_VOICE_REF}:VERSION" 2>/dev/null
+                )" || problems+=("pinned Kilix Voice commit has no VERSION")
+                [[ "$voice_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+                    || problems+=("pinned Kilix Voice VERSION is not semantic")
+                [ "$(as_user cat "$voice_source/VERSION" 2>/dev/null)" = "$voice_version" ] \
+                    || problems+=("Kilix Voice working VERSION differs from its pinned commit")
+            fi
         fi
-    fi
 
-    for tool in kilix-tts kilix-stt kilix-voiced; do
-        path="$USER_HOME/.local/bin/$tool"
-        if [ ! -x "$path" ]; then
-            problems+=("missing executable $path")
-        elif ! version_report="$(run_voice_tool "$path" --version 2>/dev/null)"; then
-            problems+=("$tool --version could not execute")
-        elif ! [[ "$version_report" =~ ^${tool}\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            problems+=("$tool --version returned an invalid version")
-        elif [ -n "$voice_version" ] \
-                && [ "$version_report" != "$tool $voice_version" ]; then
-            problems+=("$tool --version does not match Kilix Voice $voice_version")
+        for tool in kilix-tts kilix-stt kilix-voiced; do
+            path="$USER_HOME/.local/bin/$tool"
+            if [ ! -x "$path" ]; then
+                problems+=("missing executable $path")
+            elif ! version_report="$(run_voice_tool "$path" --version 2>/dev/null)"; then
+                problems+=("$tool --version could not execute")
+            elif ! [[ "$version_report" =~ ^${tool}\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                problems+=("$tool --version returned an invalid version")
+            elif [ -n "$voice_version" ] \
+                    && [ "$version_report" != "$tool $voice_version" ]; then
+                problems+=("$tool --version does not match Kilix Voice $voice_version")
+            fi
+        done
+        if [ -x "$USER_HOME/.local/bin/kilix-tts" ]; then
+            run_voice_tool "$USER_HOME/.local/bin/kilix-tts" --print >/dev/null 2>&1 \
+                || problems+=("kilix-tts --print could not execute")
         fi
-    done
-    if [ -x "$USER_HOME/.local/bin/kilix-tts" ]; then
-        run_voice_tool "$USER_HOME/.local/bin/kilix-tts" --print >/dev/null 2>&1 \
-            || problems+=("kilix-tts --print could not execute")
-    fi
-    if [ -x "$USER_HOME/.local/bin/kilix-stt" ]; then
-        stt_report="$(run_voice_tool "$USER_HOME/.local/bin/kilix-stt" --print 2>/dev/null)" \
-            || problems+=("kilix-stt --print could not execute")
-        # `dictation=ready` is no longer required, and must not be: the image
-        # installs no weights, so a fresh system reports dictation as available
-        # to install rather than ready. The report still has to be a report.
-        [ -n "$stt_report" ] \
-            || problems+=("kilix-stt --print produced no dictation report")
-        model_catalog="$(
-            run_voice_tool "$USER_HOME/.local/bin/kilix-stt" --models --json 2>/dev/null
-        )" || problems+=("kilix-stt --models --json could not execute")
-        if [ -n "$model_catalog" ]; then
-            printf '%s\n' "$model_catalog" \
-                | validate_voice_model_catalog >/dev/null 2>&1 \
-                || problems+=("kilix-stt model catalog does not match kilix.speech.models/v1")
-        else
-            problems+=("kilix-stt returned an empty speech-model catalog")
+        if [ -x "$USER_HOME/.local/bin/kilix-stt" ]; then
+            stt_report="$(run_voice_tool "$USER_HOME/.local/bin/kilix-stt" --print 2>/dev/null)" \
+                || problems+=("kilix-stt --print could not execute")
+            # `dictation=ready` is no longer required, and must not be: the image
+            # installs no weights, so a fresh system reports dictation as available
+            # to install rather than ready. The report still has to be a report.
+            [ -n "$stt_report" ] \
+                || problems+=("kilix-stt --print produced no dictation report")
+            model_catalog="$(
+                run_voice_tool "$USER_HOME/.local/bin/kilix-stt" --models --json 2>/dev/null
+            )" || problems+=("kilix-stt --models --json could not execute")
+            if [ -n "$model_catalog" ]; then
+                printf '%s\n' "$model_catalog" \
+                    | validate_voice_model_catalog >/dev/null 2>&1 \
+                    || problems+=("kilix-stt model catalog does not match kilix.speech.models/v1")
+            else
+                problems+=("kilix-stt returned an empty speech-model catalog")
+            fi
         fi
     fi
 
@@ -7973,6 +7991,30 @@ verify_kilix_voice_install() {
         fi
     fi
 
+    if [ "$INSTALL_VOICE_MODEL" = 1 ]; then
+        # The advertisement has to be complete and reachable, because it is
+        # what the first-use install verifies the download against.
+        for path in KILIX_VOICE_REF KILIX_VOICE_LIB_VERSION KILIX_VOICE_LIB_URL \
+                KILIX_VOICE_LIB_SHA256 KILIX_VOICE_MODEL_URL \
+                KILIX_VOICE_MODEL_SHA256; do
+            [ -n "${!path}" ] \
+                || problems+=("advertised first-use dictation pull is missing $path")
+        done
+        [[ "$KILIX_VOICE_MODEL_URL" == https://* ]] \
+            || problems+=("the advertised first-use model source must be an HTTPS upstream URL")
+        [[ "$KILIX_VOICE_MODEL_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
+            || problems+=("the advertised first-use model digest must be a full SHA-256")
+    fi
+
+    if [ "$PACKAGED_PLEB" = 1 ]; then
+        if [ "${#problems[@]}" -gt 0 ]; then
+            report_voice_verification_problems "${problems[*]}"
+        else
+            log "verified the packaged install's dictation asset census and first-use policy"
+        fi
+        return 0
+    fi
+
     # The stamp is the same in both policies, because provisioning takes the
     # same leg in both: read-aloud installed, dictation assets skipped.
     # `skipped` is the installer's own word for "this run fetched neither the
@@ -8019,29 +8061,11 @@ verify_kilix_voice_install() {
         fi
     fi
 
-    if [ "$INSTALL_VOICE_MODEL" = 1 ]; then
-        # The advertisement has to be complete and reachable, because it is
-        # what the first-use install verifies the download against.
-        for path in KILIX_VOICE_REF KILIX_VOICE_LIB_VERSION KILIX_VOICE_LIB_URL \
-                KILIX_VOICE_LIB_SHA256 KILIX_VOICE_MODEL_URL \
-                KILIX_VOICE_MODEL_SHA256; do
-            [ -n "${!path}" ] \
-                || problems+=("advertised first-use dictation pull is missing $path")
-        done
-        [[ "$KILIX_VOICE_MODEL_URL" == https://* ]] \
-            || problems+=("the advertised first-use model source must be an HTTPS upstream URL")
-        [[ "$KILIX_VOICE_MODEL_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] \
-            || problems+=("the advertised first-use model digest must be a full SHA-256")
-    fi
-
     run_voice_read_aloud_smoke >/dev/null 2>&1 \
         || problems+=("espeak read-aloud smoke test failed")
 
     if [ "${#problems[@]}" -gt 0 ]; then
-        if [ "$PLEBIAN_OS_RELEASE_MODE" = 1 ] || [ "$INSTALL_VOICE_MODEL" = 1 ]; then
-            die "Kilix Voice verification failed: ${problems[*]}"
-        fi
-        warn "Kilix Voice is unavailable: ${problems[*]} (run 'kilix voice doctor' after login)"
+        report_voice_verification_problems "${problems[*]}"
         return 0
     fi
     if [ "$carried_is_the_users" = 1 ]; then
@@ -8590,7 +8614,7 @@ log "target user : $TARGET_USER ($USER_HOME)"
 log "source root : $GPU_TERMINAL_SOURCE_HOME"
 log "data root   : $GPU_TERMINAL_HOME"
 log "pleb repo   : $PLEB_REPO ${PLEB_BRANCH:+(branch $PLEB_BRANCH)}"
-log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (cloned by pleb)"
+log "kilix repo  : $KILIX_REPO -> $KILIX_DIR (checkout installs)"
 if [ "$DESKTOP" = 1 ]; then
     log "desktop    : provider=$KILIX_DESKTOP_PROVIDER name=$KILIX_DESKTOP_NAME"
     if [ "$KILIX_DESKTOP_PROVIDER" = cap ]; then
@@ -8602,7 +8626,7 @@ if [ "$DESKTOP" = 1 ]; then
     fi
 fi
 if [ "$PLEB_INSTALL_KILIX95" = 1 ]; then
-    log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (cloned by pleb)"
+    log "kilix 95   : $KILIX95_REPO -> $KILIX95_DIR (checkout installs)"
 fi
 log "kiosk       : $([ "$KIOSK" = 1 ] && echo 'yes (autologin)' || echo 'no (greeter)')"
 log "session     : $([ "$DESKTOP" = 1 ] && echo "kilix desktop ($KILIX_DESKTOP_PROVIDER)" || echo 'plain kilix shell')"
@@ -8978,37 +9002,8 @@ install_ssh_server_helper
 # failure removes a helper this run created and restores one that was already
 # there.
 stage_waydroid_first_use_helper
-if [ -d "$PLEB_DIR/.git" ]; then
-    log "pleb present at $PLEB_DIR — updating"
-    update_pleb_checkout
-else
-    log "cloning pleb -> $PLEB_DIR"
-    clone_args=()
-    [ -n "$PLEB_BRANCH" ] && clone_args=(--branch "$PLEB_BRANCH")
-    as_user git clone "${clone_args[@]}" "$PLEB_REPO" "$PLEB_DIR" \
-        || die "git clone of pleb failed ($PLEB_REPO)"
-    if [ -n "$PLEB_REF" ]; then
-        checkout_pinned_ref "$PLEB_DIR" "$PLEB_REF" "pleb"
-    fi
-fi
 
-# ── 3. run `pleb install` (clones kilix + engine, registers the Pleb session) ─
-# pleb does its system writes through sudo; grant the user passwordless sudo for
-# the duration of provisioning, then revoke it (leaves the system as it found it).
-# Remove the temporary grant on normal exit AND on signals: a SIGTERM window
-# (e.g. the firstboot TimeoutStartSec) must never leave passwordless sudo behind.
-# SIGKILL can't be trapped, so the firstboot unit's ExecStartPre also clears any
-# stale file before each attempt.
-if [ "$DRY_RUN" = 1 ]; then
-    echo "    + echo '$TARGET_USER ALL=(ALL) NOPASSWD:ALL' > $SUDOERS  (temporary)"
-else
-    printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET_USER" > "$SUDOERS"
-    chmod 0440 "$SUDOERS"
-    visudo -cf "$SUDOERS" >/dev/null 2>&1 \
-        || { rm -f "$SUDOERS"; die "temporary sudoers validation failed"; }
-fi
-
-log "running 'pleb install' (clones kilix + optional desktop provider, adds the Pleb session)"
+# ── 3. select the Pleb installation and configure the desktop ────────────────
 install_env=(
     "GPU_TERMINAL_SOURCE_HOME=$GPU_TERMINAL_SOURCE_HOME"
     "GPU_TERMINAL_HOME=$GPU_TERMINAL_HOME"
@@ -9134,34 +9129,82 @@ install_env=(
         "KILIX_TRANSACTION_LOCK_FD=$KILIX_PROVISION_LOCK_FD"
         "KILIX_TRANSACTION_LOCK_PATH=$KILIX_PROVISION_LOCK_PATH"
     )
-# Before the one step that could install anything: what dictation assets were
-# already here. verify_kilix_voice_install compares against this, so a model
-# that appears during `pleb install` is caught as a fetch no matter what the
-# machine looked like beforehand.
+PLEB_LAUNCHER="$PLEB_DIR/bin/pleb"
+KILIX_LAUNCHER="$KILIX_DIR/kilix"
+# Take the baseline on both paths before any checkout installer can run.
 record_voice_dictation_census
-as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
-    || die "pleb install failed (see above)"
-install_kilix_needle
-install_kilix_claudex
-install_kilix_llm
-# The Kilix Ask command model (LFM2) is not on the installation media and a
-# fresh install does not stage or install it: Kilix Ask uses its grammar and
-# offers the download on first use and in the model wizard.
-as_user env "${install_env[@]}" /usr/bin/python3 \
-    "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
-    || die "required offline default model installation failed"
+if packages_provide_pleb_and_kilix; then
+    PACKAGED_PLEB=1
+    log "packaged pleb and kilix are installed. Skipping the pleb clone and pleb install."
+    PLEB_LAUNCHER="$PLEBIAN_OS_BINDIR/pleb"
+    KILIX_LAUNCHER="$PLEBIAN_OS_BINDIR/kilix"
+    for launcher in "$PLEB_LAUNCHER" "$KILIX_LAUNCHER"; do
+        [ -f "$launcher" ] && [ -x "$launcher" ] || die "installed command is missing or not executable: $launcher"
+    done
+else
+    if [ -d "$PLEB_DIR/.git" ]; then
+        log "pleb present at $PLEB_DIR — updating"
+        update_pleb_checkout
+    else
+        log "cloning pleb -> $PLEB_DIR"
+        clone_args=()
+        [ -n "$PLEB_BRANCH" ] && clone_args=(--branch "$PLEB_BRANCH")
+        as_user git clone "${clone_args[@]}" "$PLEB_REPO" "$PLEB_DIR" \
+            || die "git clone of pleb failed ($PLEB_REPO)"
+        if [ -n "$PLEB_REF" ]; then
+            checkout_pinned_ref "$PLEB_DIR" "$PLEB_REF" "pleb"
+        fi
+    fi
+
+    # pleb does its system writes through sudo; grant the user passwordless sudo for
+    # the duration of provisioning, then revoke it (leaves the system as it found it).
+    # Remove the temporary grant on normal exit AND on signals: a SIGTERM window
+    # (e.g. the firstboot TimeoutStartSec) must never leave passwordless sudo behind.
+    # SIGKILL can't be trapped, so the firstboot unit's ExecStartPre also clears any
+    # stale file before each attempt.
+    if [ "$DRY_RUN" = 1 ]; then
+        echo "    + echo '$TARGET_USER ALL=(ALL) NOPASSWD:ALL' > $SUDOERS  (temporary)"
+    else
+        printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TARGET_USER" > "$SUDOERS"
+        chmod 0440 "$SUDOERS"
+        visudo -cf "$SUDOERS" >/dev/null 2>&1 \
+            || { rm -f "$SUDOERS"; die "temporary sudoers validation failed"; }
+    fi
+
+    log "running 'pleb install' (clones kilix + optional desktop provider, adds the Pleb session)"
+    as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" install \
+        || die "pleb install failed (see above)"
+fi
+
+KILIX_CHECKOUT_STEPS=1
+if [ "$PACKAGED_PLEB" = 1 ] && { [ ! -f "$KILIX_DIR/kilix" ] || [ ! -x "$KILIX_DIR/kilix" ]; }; then
+    KILIX_CHECKOUT_STEPS=0
+    log "packaged install has no kilix checkout. Skipping Needle, Claudex, kilix-llm, offline default and image models, default model verification, and Neuronte."
+else
+    install_kilix_needle
+    install_kilix_claudex
+    install_kilix_llm
+    # The Kilix Ask command model (LFM2) is not on the installation media and a
+    # fresh install does not stage or install it: Kilix Ask uses its grammar and
+    # offers the download on first use and in the model wizard.
+    as_user env "${install_env[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-default-models.py" --kilix "$KILIX_DIR" --offline \
+        || die "required offline default model installation failed"
+fi
 if [ "$DRY_RUN" != 1 ]; then
     /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/install-image-models.py" \
         --install-paradee-runtime --offline \
         || die "required offline Paradee runtime staging failed"
 fi
-as_user env "${install_env[@]}" /usr/bin/python3 \
-    "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" --offline \
-    || die "required offline image model installation failed"
-as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX_DIR/config/default_models.py" verify \
-    || die "default model verification failed"
-PROVISION_DEFAULT_MODELS_VERIFIED=1
-install_neuronte
+if [ "$KILIX_CHECKOUT_STEPS" = 1 ]; then
+    as_user env "${install_env[@]}" /usr/bin/python3 \
+        "$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" --offline \
+        || die "required offline image model installation failed"
+    as_user env "${install_env[@]}" /usr/bin/python3 "$KILIX_DIR/config/default_models.py" verify \
+        || die "default model verification failed"
+    PROVISION_DEFAULT_MODELS_VERIFIED=1
+    install_neuronte
+fi
 # `pleb install` is the last step that installs packages, and it installs some
 # this repository does not name: its own runtime set, and whatever the pinned
 # Kilix's scripts/install-build-deps.sh pulls in. Either can re-enable a user
@@ -9169,7 +9212,7 @@ install_neuronte
 # everything that can add one. This late call is the one that decides the
 # image; the earlier one only keeps a partial provision honest.
 disable_audio_holding_user_units
-if [ "$DRY_RUN" != 1 ]; then
+if [ "$DRY_RUN" != 1 ] && [ "$PACKAGED_PLEB" = 0 ]; then
     if [ ! -f "$GPU_TERMINAL_SETTINGS_FILE" ] \
             || [ -L "$GPU_TERMINAL_SETTINGS_FILE" ] \
             || [ "$(stat -c '%u:%a' -- "$GPU_TERMINAL_SETTINGS_FILE" 2>/dev/null)" \
@@ -9213,12 +9256,17 @@ print('on' if settings.transcript_enabled() else 'off')
             || ! as_user "$_pty_broker" version >/dev/null 2>&1; then
         die "Pleb did not build Kilix's pinned persistent PTY manager"
     fi
-    # Import and execute every installed entrypoint. An enabled dictation
-    # policy is a required release closure, so Pleb's intentionally graceful
-    # read-aloud fallback must not let a release image pass firstboot.
+fi
+if [ "$DRY_RUN" != 1 ]; then
+    # Check the dictation census on both paths. Checkout installations also
+    # verify the private entrypoints and stamps produced by pleb install.
     verify_kilix_voice_install
 fi
-build_kilix_fork
+if [ "$PACKAGED_PLEB" = 1 ]; then
+    log "using the packaged kilix-engine. Skipping the checkout fork build."
+else
+    build_kilix_fork
+fi
 seed_selected_desktop_wallpaper_state
 record_default_desktop
 prepare_kilix95_caches
@@ -9360,7 +9408,7 @@ EOF
     write_session_default KILIX_DATA_HOME "$KILIX_DATA_HOME"
     write_session_default KILIX_DESKTOP_DIR "$KILIX_DESKTOP_DIR"
     write_session_default KILIX_PREBUILT_HOME "$KILIX_PREBUILT_HOME"
-    write_session_default KILIX "$KILIX_DIR/kilix"
+    write_session_default KILIX "$KILIX_LAUNCHER"
     write_session_default KILIX_REPO "$KILIX_REPO"
     write_session_default KILIX_BRANCH "$KILIX_BRANCH"
     write_session_default KILIX_REF "$KILIX_REF"
@@ -9509,15 +9557,27 @@ EOF
     mv -fT "$PLEB_ENV_TMP" "$PLEB_ENV"
 fi
 
-if [ "$KIOSK" = 1 ]; then
+if [ "$PACKAGED_PLEB" = 1 ]; then
+    # This command edits a system LightDM drop-in. Use the packaged executable
+    # as root without importing the desktop user's paths or granting sudo.
+    autologin_args=(off)
+    if [ "$KIOSK" = 1 ]; then
+        autologin_args=(on "$TARGET_USER")
+    fi
+    log "applying packaged Pleb autologin ${autologin_args[0]}"
+    /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
+        "$PLEB_LAUNCHER" autologin "${autologin_args[@]}" || die "packaged pleb autologin failed"
+elif [ "$KIOSK" = 1 ]; then
     log "enabling autologin into Pleb (kiosk)"
     as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" autologin on "$TARGET_USER" \
         || die "pleb autologin failed; requested kiosk state was not applied"
-    pin_remembered_session
 else
     log "ensuring Pleb autologin is disabled (non-kiosk mode)"
     as_user env "${install_env[@]}" "$PLEB_DIR/bin/pleb" autologin off \
         || die "could not disable Pleb autologin; refusing to report reconciled state"
+fi
+if [ "$KIOSK" = 1 ]; then
+    pin_remembered_session
 fi
 
 # Passwordless sudo for the owner. Plebian-OS is a single-user appliance and the
@@ -9545,8 +9605,7 @@ else
     fi
 fi
 
-# Capture the final state only now: dependency installation, pleb install, Go
-# setup, Kilix fork compilation, and all optional providers have completed.
+# Capture package and tool versions after the selected desktop path completes.
 write_package_manifest
 install_optional_voicebox
 write_source_tool_manifest

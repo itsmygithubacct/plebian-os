@@ -301,12 +301,16 @@ class DiscClosureTests(unittest.TestCase):
     def test_locks_cover_debian_and_project_dependencies_separately(self):
         debian = {row[0].split("_", 1)[0] for row in lock_rows()}
         project = {row[0].split("_", 1)[0] for row in lock_rows(PROJECT_LOCK)}
-        direct = {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"}
-        self.assertEqual(outside_dependencies(), direct | {"kilix-multiplexer"})
-        self.assertLessEqual(direct, debian)
-        self.assertLessEqual(
-            {"kilix-multiplexer", "libkilix-encodec", "libonnxruntime1.21", "libonnxruntime-dev"},
+        direct_debian = {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"}
+        direct_project = {"kilix-multiplexer", "pleb"}
+        self.assertEqual(outside_dependencies(), direct_debian | direct_project)
+        self.assertLessEqual(direct_debian, debian)
+        self.assertEqual(
             project,
+            direct_project | {
+                "kilix", "kilix-engine", "kilix-native",
+                "libkilix-encodec", "libonnxruntime1.21", "libonnxruntime-dev",
+            },
         )
         self.assertFalse(debian & project)
 

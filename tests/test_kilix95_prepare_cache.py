@@ -174,11 +174,11 @@ class PrepareCachePlacementTests(unittest.TestCase):
 
     def test_provision_runs_it_after_the_last_step_that_installs_desktop_sources(self):
         text = PROVISION.read_text()
-        self.assertIn('build_kilix_fork\nseed_selected_desktop_wallpaper_state\n'
+        self.assertIn('seed_selected_desktop_wallpaper_state\n'
                       'record_default_desktop\nprepare_kilix95_caches\n', text)
         main = text.index('\nprepare_kilix95_caches\n')
-        for step in ('"$PLEB_DIR/bin/pleb" install', '\ninstall_neuronte\n',
-                     '\nbuild_kilix_fork\n'):
+        for step in ('"$PLEB_DIR/bin/pleb" install', '\n    install_neuronte\n',
+                     '\n    build_kilix_fork\n'):
             self.assertLess(text.index(step), main, step)
 
     def test_each_runs_it_once(self):

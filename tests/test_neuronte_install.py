@@ -652,7 +652,7 @@ class HookTests(unittest.TestCase):
 
     def test_first_boot_installs_after_the_models_and_fails_closed(self):
         text = PROVISION.read_text()
-        self.assertIn('PROVISION_DEFAULT_MODELS_VERIFIED=1\ninstall_neuronte\n', text)
+        self.assertIn('    PROVISION_DEFAULT_MODELS_VERIFIED=1\n    install_neuronte\n', text)
         body = text[text.index('install_neuronte() {'):text.index('\n}\n', text.index('install_neuronte() {'))]
         self.assertIn('as_user env "${install_env[@]}" /usr/bin/python3 "$installer" install', body)
         self.assertIn('--archive "$archive"', body)

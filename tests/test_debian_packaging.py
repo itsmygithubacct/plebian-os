@@ -196,7 +196,7 @@ class DebianPackagingTests(unittest.TestCase):
         declared = set(re.findall(r"^Package: (\S+)$", control, flags=re.MULTILINE))
         self.assertEqual(declared, PACKAGES | METAPACKAGES)
         self.assertEqual({package for package, _, _, _ in install_map()}, PACKAGES)
-        self.assertIn("Depends: kilix-multiplexer, plebian-desktop-base (= ${binary:Version}),",
+        self.assertIn("Depends: kilix-multiplexer, pleb, plebian-desktop-base (= ${binary:Version}),",
                       control)
         self.assertIn("Depends: pleb-desktop (= ${binary:Version}), ${misc:Depends}",
                       control)

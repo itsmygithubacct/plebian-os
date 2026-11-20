@@ -906,7 +906,7 @@ class ProvisioningLifecycleTests(unittest.TestCase):
     def test_final_provenance_is_written_after_builds(self):
         package_call = PROVISION.rindex("\nwrite_package_manifest\n")
         source_call = PROVISION.rindex("\nwrite_source_tool_manifest\n")
-        build_call = PROVISION.rindex("\nbuild_kilix_fork\n")
+        build_call = PROVISION.rindex("\n    build_kilix_fork\n")
         self.assertGreater(package_call, build_call)
         self.assertGreater(source_call, package_call)
         for artifact in ("packages.list", "versions.env", "apt-sources.list"):
