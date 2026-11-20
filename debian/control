@@ -36,8 +36,9 @@ Package: plebian-desktop-base
 Architecture: all
 Depends: ${misc:Depends}
 Description: Plebian-OS desktop artwork and login defaults
- The Plebian-OS wallpaper, the login greeter settings that use it, and the
- attribution and licence notices for the artwork.
+ The Plebian-OS wallpaper, the login greeter settings that use it, the
+ attribution and licence notices for the artwork, and the apt pin for the
+ qualified Qt GUI libraries.
 
 Package: plebian-archive-keyring
 Architecture: all

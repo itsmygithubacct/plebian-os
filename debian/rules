@@ -1,5 +1,6 @@
 #!/usr/bin/make -f
 # Every installed file is a row of debian/install-map.
+export DEB_BUILD_OPTIONS := noautodbgsym
 VERSION := $(shell cat VERSION)
 
 %:

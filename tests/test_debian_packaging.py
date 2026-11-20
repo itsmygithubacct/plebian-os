@@ -3,7 +3,8 @@
 debian/install-map is the only list debian/rules installs from. The updater
 carries its own list of the same files. These tests hold the two equal, with
 the installed locations written here as literals, so neither list can move a
-file or change a mode without the other.
+file or change a mode without the other. The archive key and the Qt pin are
+packaged files the updater does not deploy.
 """
 import hashlib
 import re
@@ -31,6 +32,7 @@ PACKAGES = {
 }
 KEYRING = "plebian-archive-keyring"
 KEY_FINGERPRINT = "1730239E771FE87ED7AB9BCFEDC605E76D3B99B0"
+QT_PIN = "/etc/apt/preferences.d/plebian-os-qt-runtime"
 
 
 def install_map():
@@ -64,13 +66,33 @@ def updater_deploy_set():
 
 class DebianPackagingTests(unittest.TestCase):
     def test_packages_install_exactly_what_the_updater_deploys(self):
-        # The archive key is the one packaged file the updater never deployed.
-        core = [row for row in install_map() if row[0] != KEYRING]
+        # The archive key and the Qt pin are packaged files the updater never
+        # deployed. The pin names the qualified GUI library versions.
+        core = [row for row in install_map()
+                if row[0] != KEYRING and row[3] != QT_PIN]
         packaged = {(destination, mode) for _, mode, _, destination in core}
         self.assertEqual(packaged, updater_deploy_set())
         self.assertEqual(len(packaged), len(core), "duplicate destination")
         self.assertEqual(len(packaged), 31)
-        self.assertEqual(len(install_map()), 32)
+        self.assertEqual(len(install_map()), 33)
+
+    def test_desktop_base_records_the_qualified_qt_pin(self):
+        rows = [row for row in install_map() if row[3] == QT_PIN]
+        self.assertEqual(rows, [(
+            "plebian-desktop-base", "0644",
+            "debian/plebian-os-qt-runtime.pref", QT_PIN,
+        )])
+        source = (ROOT / "provision" / "plebian-os-qt-runtime").read_text()
+        namespace = {}
+        exec(compile(source, "plebian-os-qt-runtime", "exec"), namespace)
+        records = [
+            {"Package": "libqt5gui5t64",
+             "Version": "5.15.15+dfsg-6+deb13u1+plebianrc6.1"},
+            {"Package": "libqt6gui6",
+             "Version": "6.8.2+dfsg-9+deb13u2+plebianrc6.1"},
+        ]
+        pinned = (ROOT / rows[0][2]).read_text()
+        self.assertEqual(pinned, namespace["preferences"](records))
 
     def test_the_keyring_package_ships_only_the_public_archive_key(self):
         rows = [row for row in install_map() if row[0] == KEYRING]

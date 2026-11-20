@@ -1,0 +1,8 @@
+Package: libqt5gui5t64
+Pin: version 5.15.15+dfsg-6+deb13u1+plebianrc6.1
+Pin-Priority: 1001
+
+Package: libqt6gui6
+Pin: version 6.8.2+dfsg-9+deb13u2+plebianrc6.1
+Pin-Priority: 1001
+
