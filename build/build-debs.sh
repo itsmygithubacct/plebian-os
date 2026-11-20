@@ -28,6 +28,12 @@ fi
 export SOURCE_DATE_EPOCH="$epoch"
 export TZ=UTC
 export LC_ALL=C
+# An ISO build of this tree must not publish debug-symbol packages.
+case " ${DEB_BUILD_OPTIONS:-} " in
+    *" noautodbgsym "*) ;;
+    *) DEB_BUILD_OPTIONS="${DEB_BUILD_OPTIONS:+$DEB_BUILD_OPTIONS }noautodbgsym" ;;
+esac
+export DEB_BUILD_OPTIONS
 
 on_trixie_with_debhelper() {
     [ -r /etc/os-release ] || return 1
@@ -79,6 +85,7 @@ else
         "$runtime" run --rm --user "$uid:$gid" \
             -e HOME=/tmp/home \
             -e SOURCE_DATE_EPOCH \
+            -e DEB_BUILD_OPTIONS \
             -e TZ=UTC \
             -e LC_ALL=C \
             -v "$stage:/work" -w /work/src \
@@ -88,6 +95,7 @@ else
         # debian:trixie has the operating system and not the packaging tools.
         "$runtime" run --rm \
             -e SOURCE_DATE_EPOCH \
+            -e DEB_BUILD_OPTIONS \
             -e TZ=UTC \
             -e LC_ALL=C \
             -e "HOST_UID=$uid" \

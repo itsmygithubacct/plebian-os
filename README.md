@@ -401,9 +401,9 @@ See [UPGRADING.md](UPGRADING.md) for the machine-readable release policy and
 operator contract.
 
 Because pleb is the source of truth for "kilix as a session", Plebian-OS is a
-thin wrapper: it decides *which repos to pull and when*, and pleb does the rest.
-Nothing here forks or vendors kilix/pleb — they come straight from GitHub, so the
-installed system tracks upstream.
+thin wrapper around it. A release image installs pleb and kilix from the signed
+repository on the disc. A machine without those packages still follows the
+checkout. Nothing here forks or vendors kilix/pleb.
 
 ## Quick start
 
@@ -674,7 +674,9 @@ Plebian-OS for a desktop-shaped one.
 - A GPU with a KMS/DRM driver for hardware GL, or llvmpipe software GL as a
   fallback (kilix is a GPU terminal). No graphics at all → the greeter still
   works; the Pleb session falls back to a screen-filled kilix or a plain xterm.
-- A wired network on first boot (it clones from GitHub). A machine with only
+- A wired network on first boot. The release image installs pleb and kilix
+  from the disc; first boot still uses the network for payloads that are not
+  packages. A machine with only
   wireless networking cannot join a network before provisioning.
 - Go for the Kilix fork build. 0.2.3 builds the engine with Debian's
   `golang-1.27-go` and `golang-1.27-src` 1.27.4-1~bpo13+1, pinned by file

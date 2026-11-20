@@ -1251,7 +1251,7 @@ def ssh(cfg: Config, command: str, askpass: tuple[str, str], timeout: int = 15,
 def wait_for_provisioning(cfg: Config, timeout_s: int,
                           askpass: tuple[str, str]) -> None:
     info("waiting for the unattended install + first-boot provisioning …")
-    info("  (installs Debian, reboots, then pulls pleb + kilix from GitHub)")
+    info("  (installs Debian, reboots, then uses the packaged pleb and kilix)")
     # Always exits 0 so we can read stdout even while provisioning is mid-flight.
     status_cmd = (
         "s=$(systemctl is-active plebian-os-firstboot.service 2>/dev/null); "

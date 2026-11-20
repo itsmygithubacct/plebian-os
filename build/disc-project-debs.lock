@@ -1,6 +1,6 @@
-# Plebian-OS trixie main/binary-amd64/Packages, 2026-11-20.
-# Signed index SHA256: 42ff4aa163f424d30c6738dc9ca8e38f28f1f8d03b84b7dee7638d80a2c8d233
-# Packages.gz SHA256: db7a42fbe34c0816334105b168e92f23f69546dc3372dfef0c1676526870620d
+# Plebian-OS trixie main/binary-amd64/Packages, rechecked 2026-11-20.
+# Packages SHA256: 22035fc1f7d4b10f0d53fe0c4b9c2303c2dfe425cce7859b99c845cd01298b2c
+# Packages.gz SHA256: 69b166cc6393e9d7b23795126d9feb3b1bd3603bbaa12a5ef8bd5d6c78452f05
 # pleb depends on kilix, which requires kilix-engine and kilix-native.
 # The multiplexer requires EnCodec and the patched ONNX Runtime. A target
 # that installed Debian's matching -dev package can upgrade it with the runtime.

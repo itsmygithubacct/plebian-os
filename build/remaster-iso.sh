@@ -10,8 +10,10 @@
 # The source netinst is optional: with no argument it is downloaded (and
 # signature/hash-verified) from the Debian mirror automatically and cached.
 # Refuses to run without xorriso. The result installs like a regular Debian
-# system and, on first boot, pulls pleb + kilix from GitHub and comes up as the
-# Pleb session (see preseed.cfg). Plebian-OS 0.2.2 also requires its explicitly
+# system. The disc carries a signed repository of the core packages, and the
+# installer installs task-pleb-desktop from it. First boot uses the installed
+# pleb and kilix packages and comes up as the Pleb session. It does not clone
+# them (see preseed.cfg). Plebian-OS 0.2.2 also requires its explicitly
 # supplied offline Ollama carrier.
 set -euo pipefail
 
@@ -2443,8 +2445,9 @@ KEYMAP="$(sed -n 's/^d-i keyboard-configuration\/xkb-keymap select //p' "$PRESEE
 # auto-selected its wireless interface, was never shown the available networks,
 # and went straight to a passphrase prompt for an empty ESSID, reporting
 # "invalid passphrase" with no way to choose a network. An installer that
-# cannot reach the network cannot run firstboot, which is where the whole stack
-# is fetched from.
+# cannot reach the network cannot finish first boot. The packages are already
+# on the disc; first boot still needs the network for payloads that are not
+# packages.
 BOOTARGS="auto=true priority=high locale=$LOCALE keymap=$KEYMAP file=/cdrom/preseed.cfg"
 echo "    boot args: $BOOTARGS"
 
@@ -2533,5 +2536,5 @@ actual_volume_id="$(xorriso -indev "$OUT_TMP" -pvd_info 2>&1 \
 mv -f "$OUT_TMP" "$OUT_ISO"
 
 echo "==> done: $OUT_ISO"
-echo "    install it like normal Debian; first boot pulls pleb + kilix and"
-echo "    comes up as the Pleb (screen-filling Kilix with visible chrome) session."
+echo "    install it like normal Debian; the disc installs task-pleb-desktop"
+echo "    and first boot uses the packaged pleb and kilix session."

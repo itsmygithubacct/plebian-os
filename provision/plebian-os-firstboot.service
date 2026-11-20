@@ -1,11 +1,12 @@
-# plebian-os-firstboot.service — provision Plebian-OS on the first boot after a
-# regular Debian install: pull deps + the pleb/kilix repos from GitHub and bring
-# up the Pleb session. Installed + enabled by the preseed's late_command (or by
-# bootstrap.sh). Runs once, then disables itself.
+# plebian-os-firstboot.service — finish Plebian-OS on the first boot after a
+# regular Debian install. The installer has already installed pleb and kilix
+# from the disc. This unit brings up the Pleb session and does not clone them.
+# Installed + enabled by the preseed's late_command (or by bootstrap.sh).
+# Runs once, then disables itself.
 [Unit]
-Description=Plebian-OS first-boot provisioning (pull kilix + pleb, set up the Pleb session)
+Description=Plebian-OS first-boot provisioning (packaged pleb and kilix, Pleb session)
 Documentation=https://github.com/itsmygithubacct/plebian-os
-# Needs the network (clones from GitHub) and a settled base system.
+# Needs the network for payloads that are not packages, and a settled base system.
 After=network-online.target systemd-user-sessions.service
 Wants=network-online.target
 # Hold the login greeter until provisioning finishes, so the very first boot
@@ -21,7 +22,7 @@ Before=display-manager.service
 Before=apt-daily.service apt-daily-upgrade.service
 # Don't run if provisioning already completed.
 ConditionPathExists=!/var/lib/plebian-os/provisioned
-# First boot depends on network, mirrors, and GitHub. The attempt runner keeps
+# First boot depends on the network for payloads that are not packages. The attempt runner keeps
 # this one start job activating across up to three attempts. An attempt is
 # stopped only after 20 minutes without progress (no output and no I/O by any
 # of its processes), so a slow but progressing link is not cut off, and all

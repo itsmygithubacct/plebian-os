@@ -43,9 +43,9 @@ replacement of an existing QEMU VM; choose a fresh name for each run.
 - **ssh** — used to detect when the install + provisioning have finished
 - Run it from inside a Plebian-OS checkout (it uses `preseed/` and `build/`).
 
-Internet access is required: the installer pulls packages from the Debian
-mirror, and first boot clones pleb + kilix plus any selected external desktop
-provider from GitHub.
+Internet access is required: the installer pulls Debian packages from the
+mirror. pleb and kilix come from the signed repository on the disc. First
+boot does not clone them.
 
 ## Quick start
 

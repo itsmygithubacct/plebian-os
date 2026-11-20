@@ -15,7 +15,8 @@ installer is just the ISO dd'd to the stick.
 By default the finished stick boots to the Debian installer MENU with its normal
 pause — a deliberate gate on physical hardware. Pick the install entry and the
 installer asks you to confirm the target disk before first-boot provisioning
-pulls pleb + kilix. Pass --unattended-disk to preseed partitioning too; pass
+uses the packaged pleb and kilix session. Pass --unattended-disk to preseed
+partitioning too; pass
 --autoboot for a hands-off stick that auto-selects the install after a timeout
 and erases without another prompt (see the flag's warning).
 
