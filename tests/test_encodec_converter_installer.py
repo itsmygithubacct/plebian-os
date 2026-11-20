@@ -23,6 +23,21 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.destination = Path(self.temp.name)
 
+    def test_download_allows_a_slow_connection_and_bounds_stalled_transfers(self):
+        selected = self.ns["archive_for"]("amd64")
+        with mock.patch("shutil.disk_usage") as space, mock.patch("subprocess.run") as run:
+            space.return_value.free = selected["size"] + selected["installed_bytes"]
+            run.side_effect = OSError("test stopped before transfer")
+            with self.assertRaisesRegex(OSError, "before transfer"):
+                self.ns["stage_download"](self.destination, self.destination, selected, None)
+        argv = run.call_args.args[0]
+        options = {flag: int(argv[argv.index(flag) + 1]) for flag in
+                   ("--connect-timeout", "--max-time", "--speed-limit", "--speed-time", "--max-filesize")}
+        self.assertGreaterEqual(options["--max-time"] * 256 * 1024, options["--max-filesize"])
+        self.assertLessEqual(options["--max-time"], 3600)
+        self.assertEqual((options["--connect-timeout"], options["--speed-limit"], options["--speed-time"]),
+                         (20, 1024, 120))
+
     def test_supported_dry_run_selects_exact_architecture_without_install_action(self):
         for machine, filename in (
                 ('x86_64', 'kilix-encodec-converters_5e813b1d894e_amd64.tar.zst'),

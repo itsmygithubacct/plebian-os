@@ -1,3 +1,10 @@
+plebian-os (0.2.3+packaging6) UNRELEASED; urgency=medium
+
+  * Allow first boot to finish a progressing EnCodec download on slower
+    connections and stop a stalled transfer early.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 20:38:00 +0000
+
 plebian-os (0.2.3+packaging5) UNRELEASED; urgency=medium
 
   * Install one EnCodec runtime for both converter profiles. Reuse the
