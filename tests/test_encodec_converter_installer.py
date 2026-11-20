@@ -26,7 +26,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
     def test_download_allows_a_slow_connection_and_bounds_stalled_transfers(self):
         selected = self.ns["archive_for"]("amd64")
         with mock.patch("shutil.disk_usage") as space, mock.patch("subprocess.run") as run:
-            space.return_value.free = selected["size"] + selected["installed_bytes"]
+            space.return_value.free = selected["compact"]["size"] + selected["installed_bytes"]
             run.side_effect = OSError("test stopped before transfer")
             with self.assertRaisesRegex(OSError, "before transfer"):
                 self.ns["stage_download"](self.destination, self.destination, selected, None)
@@ -35,15 +35,17 @@ class EncodecConverterInstallerTests(unittest.TestCase):
                    ("--connect-timeout", "--max-time", "--speed-limit", "--speed-time", "--max-filesize")}
         self.assertGreaterEqual(options["--max-time"] * 256 * 1024, options["--max-filesize"])
         self.assertLessEqual(options["--max-time"], 3600)
+        self.assertEqual(options["--max-filesize"], selected["compact"]["size"])
+        self.assertEqual(argv[-1], selected["compact"]["url"])
         self.assertEqual((options["--connect-timeout"], options["--speed-limit"], options["--speed-time"]),
                          (20, 1024, 120))
 
     def test_supported_dry_run_selects_exact_architecture_without_install_action(self):
         for machine, filename in (
-                ('x86_64', 'kilix-encodec-converters_5e813b1d894e_amd64.tar.zst'),
-                ('amd64', 'kilix-encodec-converters_5e813b1d894e_amd64.tar.zst'),
-                ('aarch64', 'kilix-encodec-converters_eaf11af26271_arm64.tar.zst'),
-                ('arm64', 'kilix-encodec-converters_eaf11af26271_arm64.tar.zst')):
+                ('x86_64', 'kilix-encodec-converters_shared_amd64.tar.zst'),
+                ('amd64', 'kilix-encodec-converters_shared_amd64.tar.zst'),
+                ('aarch64', 'kilix-encodec-converters_shared_arm64.tar.zst'),
+                ('arm64', 'kilix-encodec-converters_shared_arm64.tar.zst')):
             output = io.StringIO()
             with self.subTest(machine=machine), \
                     mock.patch('platform.machine', return_value=machine), \
@@ -52,9 +54,19 @@ class EncodecConverterInstallerTests(unittest.TestCase):
                     mock.patch('os.geteuid') as privilege, \
                     contextlib.redirect_stdout(output):
                 self.ns['main']()
-            self.assertIn(filename, output.getvalue())
+            self.assertIn('releases/download/converters-0.2.4-rc.1/' + filename, output.getvalue())
             command.assert_not_called()
             privilege.assert_not_called()
+
+    def test_explicit_archive_can_still_select_either_pinned_format(self):
+        supplied = self.destination / 'offline.tar.zst'
+        for machine in ('amd64', 'arm64'):
+            selected = self.ns['archive_for'](machine)
+            for transfer in (selected, selected['compact']):
+                with self.subTest(machine=machine, size=transfer['size']):
+                    with supplied.open('wb') as stream:
+                        stream.truncate(transfer['size'])
+                    self.assertIs(self.ns['transfer_for'](selected, supplied), transfer)
 
     def test_unsupported_architecture_refuses_before_any_install_action(self):
         with mock.patch('platform.machine', return_value='riscv64'), \

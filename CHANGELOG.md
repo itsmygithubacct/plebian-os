@@ -9,11 +9,14 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - First boot and upgrades share one EnCodec runtime between the 24 and 48 kHz
   converter commands. Upgrading the previous two-runtime installation offline
   freed 1.15 GB on amd64 and 809 MB on arm64. On a provisioned 20 GiB amd64
-  VM, fresh installs from the existing public download and the compact archive
+  VM, fresh installs from the original download and the compact archive
   each started with 2.20 GB available and left 1.03 GB free. A blank 20 GiB
   amd64 VM installed from 0.2.3 media with the candidate converter completed
   first boot with 6.38 GB free. Before and after provisioning, a new user
   selected both system commands with Kilix `0.2.3+packaging7` without a build.
+  First boot now downloads the published compact archive (239 MB on amd64,
+  173 MB on arm64). The installer pins Kilix packaging7 from the signed
+  UNRELEASED apt suite.
 
 ## [0.2.3] — 2026-11-16
 

@@ -1,3 +1,11 @@
+plebian-os (0.2.3+packaging8) UNRELEASED; urgency=medium
+
+  * Fetch the compact EnCodec converter archive on first boot. Pin the signed
+    Kilix packaging7 build on installer media so both commands are available
+    to new users without a local build.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Fri, 20 Nov 2026 23:18:00 +0000
+
 plebian-os (0.2.3+packaging7) UNRELEASED; urgency=medium
 
   * Ship the WirePlumber video-only profile and the tasksel descriptor in
