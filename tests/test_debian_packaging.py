@@ -30,6 +30,21 @@ PACKAGES = {
     "plebian-desktop-base",
     "plebian-archive-keyring",
 }
+METAPACKAGES = {"pleb-desktop", "task-pleb-desktop"}
+DROPINS = {
+    "/etc/lightdm/lightdm.conf.d/50-plebian-os.conf":
+        "debian/desktop/lightdm-session.conf",
+    "/etc/xdg-desktop-portal/pleb-portals.conf":
+        "debian/desktop/pleb-portals.conf",
+    "/etc/xdg/mimeapps.list":
+        "debian/desktop/mimeapps.list",
+    "/etc/systemd/logind.conf.d/50-plebian-lid.conf":
+        "debian/desktop/50-plebian-lid.conf",
+    "/etc/systemd/system.conf.d/50-plebian-os-quiet-console.conf":
+        "debian/desktop/50-plebian-os-quiet-console.conf",
+    "/etc/modprobe.d/plebian-os-no-beep.conf":
+        "debian/desktop/plebian-os-no-beep.conf",
+}
 KEYRING = "plebian-archive-keyring"
 KEY_FINGERPRINT = "1730239E771FE87ED7AB9BCFEDC605E76D3B99B0"
 QT_PIN = "/etc/apt/preferences.d/plebian-os-qt-runtime"
@@ -68,13 +83,14 @@ class DebianPackagingTests(unittest.TestCase):
     def test_packages_install_exactly_what_the_updater_deploys(self):
         # The archive key and the Qt pin are packaged files the updater never
         # deployed. The pin names the qualified GUI library versions.
+        extra = {QT_PIN, *DROPINS}
         core = [row for row in install_map()
-                if row[0] != KEYRING and row[3] != QT_PIN]
+                if row[0] != KEYRING and row[3] not in extra]
         packaged = {(destination, mode) for _, mode, _, destination in core}
         self.assertEqual(packaged, updater_deploy_set())
         self.assertEqual(len(packaged), len(core), "duplicate destination")
         self.assertEqual(len(packaged), 31)
-        self.assertEqual(len(install_map()), 33)
+        self.assertEqual(len(install_map()), 39)
 
     def test_desktop_base_records_the_qualified_qt_pin(self):
         rows = [row for row in install_map() if row[3] == QT_PIN]
@@ -93,6 +109,28 @@ class DebianPackagingTests(unittest.TestCase):
         ]
         pinned = (ROOT / rows[0][2]).read_text()
         self.assertEqual(pinned, namespace["preferences"](records))
+
+    def test_desktop_base_installs_the_six_dropins(self):
+        provisioner = (ROOT / "provision" / "plebian-os-provision.sh").read_text()
+        rows = {destination: (package, mode, source)
+                for package, mode, source, destination in install_map()}
+        self.assertEqual(set(DROPINS), set(DROPINS.keys()) & set(rows))
+        for destination, source in DROPINS.items():
+            package, mode, mapped = rows[destination]
+            self.assertEqual((package, mode, mapped),
+                             ("plebian-desktop-base", "0644", source))
+            text = (ROOT / source).read_text()
+            self.assertTrue(text.endswith("\n"))
+            if destination != "/etc/xdg/mimeapps.list":
+                self.assertIn(text.strip("\n"), provisioner)
+            else:
+                self.assertEqual(
+                    text,
+                    "[Default Applications]\n"
+                    "application/pdf=org.gnome.Evince.desktop;\n\n",
+                )
+                self.assertIn("application/pdf", provisioner)
+                self.assertIn("org.gnome.Evince.desktop;", provisioner)
 
     def test_the_keyring_package_ships_only_the_public_archive_key(self):
         rows = [row for row in install_map() if row[0] == KEYRING]
@@ -148,8 +186,12 @@ class DebianPackagingTests(unittest.TestCase):
     def test_the_map_and_the_control_file_name_the_same_packages(self):
         control = (DEBIAN / "control").read_text()
         declared = set(re.findall(r"^Package: (\S+)$", control, flags=re.MULTILINE))
-        self.assertEqual(declared, PACKAGES)
+        self.assertEqual(declared, PACKAGES | METAPACKAGES)
         self.assertEqual({package for package, _, _, _ in install_map()}, PACKAGES)
+        self.assertIn("Depends: kilix-multiplexer, plebian-desktop-base (= ${binary:Version}),",
+                      control)
+        self.assertIn("Depends: pleb-desktop (= ${binary:Version}), ${misc:Depends}",
+                      control)
 
     def test_first_boot_files_are_in_the_first_boot_package_only(self):
         owner = {destination: package for package, _, _, destination in install_map()}

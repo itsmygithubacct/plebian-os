@@ -37,8 +37,9 @@ Architecture: all
 Depends: ${misc:Depends}
 Description: Plebian-OS desktop artwork and login defaults
  The Plebian-OS wallpaper, the login greeter settings that use it, the
- attribution and licence notices for the artwork, and the apt pin for the
- qualified Qt GUI libraries.
+ attribution and licence notices for the artwork, the apt pin for the
+ qualified Qt GUI libraries, and the session, portal, application,
+ lid, console, and speaker drop-ins.
 
 Package: plebian-archive-keyring
 Architecture: all
@@ -47,3 +48,17 @@ Description: Plebian-OS archive signing key
  The public key that signs the Plebian-OS package repository. It is installed
  where an apt source can name it with Signed-By, and is trusted for no other
  repository.
+
+Package: pleb-desktop
+Architecture: all
+Depends: kilix-multiplexer, plebian-desktop-base (= ${binary:Version}),
+ ${misc:Depends}
+Description: Pleb desktop
+ The Pleb desktop. It depends on kilix-multiplexer and on
+ plebian-desktop-base.
+
+Package: task-pleb-desktop
+Architecture: all
+Depends: pleb-desktop (= ${binary:Version}), ${misc:Depends}
+Description: Pleb desktop task
+ The task package for the Pleb desktop. It depends on pleb-desktop.
