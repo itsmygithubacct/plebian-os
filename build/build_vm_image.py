@@ -1877,11 +1877,12 @@ def _transcript_acceptance_command() -> str:
     )
 
 
-def _encodec_acceptance_command(version: str, root: str = "/usr/lib/plebian-os/kilix-encodec") -> str:
-    """Check the installed profile bindings, including explicitly selected older images."""
+def _encodec_acceptance_command(version: str, root: str = "/usr/lib/plebian-os/kilix-encodec",
+                               kilix: str = "/usr/bin/kilix") -> str:
+    """Check both bindings and the new user's catalog view on packaged releases."""
     release = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:$|[.+-])", version)
     require_shared = release and tuple(map(int, release.groups())) >= (0, 2, 4)
-    probe = """import json, os, sys
+    probe = """import json, os, subprocess, sys, tempfile
 from pathlib import Path
 mono = json.loads(Path('.converter/receipt.json').read_bytes())
 stereo = json.loads(Path('.converter-48khz/receipt.json').read_bytes())
@@ -1894,9 +1895,20 @@ if 'shared_runtime' in mono or sys.argv[1] == 'require-shared':
     assert mono['runtime_tar_bytes'] == stereo['runtime_tar_bytes']
 else:
     assert legacy.is_file() and legacy.stat().st_size == mono['runtime_tar_bytes']
+if sys.argv[1] == 'require-shared':
+    with tempfile.TemporaryDirectory(dir=Path.home()) as home:
+        storage = os.path.join(home, 'storage')
+        env = {'HOME': home, 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8',
+               'KILIX_STORAGE_HOME': storage, 'KILIX_DATA_HOME': os.path.join(storage, 'data'),
+               'PYTHONDONTWRITEBYTECODE': '1'}
+        catalog = json.loads(subprocess.check_output([sys.argv[2], 'install', '--list', '--json'],
+                                                     env=env, timeout=30))
+        ready = {row['id'] for row in catalog if row['installed']}
+        missing = {'kilix-encodec-convert-24khz', 'kilix-encodec-convert-48khz'} - ready
+        assert not missing, 'Kilix does not recognize the system converters: ' + ', '.join(sorted(missing))
 """
     layout = "require-shared" if require_shared else "allow-legacy"
-    return (f"cd {shlex.quote(root)} && python3 -I -c {shlex.quote(probe)} {layout} && "
+    return (f"cd {shlex.quote(root)} && python3 -I -c {shlex.quote(probe)} {layout} {shlex.quote(kilix)} && "
             "timeout 30 bin/kilix-encodec-convert-24khz --help >/dev/null && "
             "timeout 30 bin/kilix-encodec-convert-48khz --help >/dev/null")
 

@@ -441,10 +441,17 @@ class EnCodecAcceptanceTests(unittest.TestCase):
                 command = root / "bin" / f"kilix-encodec-convert-{rate}khz"
                 command.write_text('#!/bin/sh\ntest "$1" = --help\n')
                 command.chmod(0o755)
+            catalog = root / "catalog.json"
+            rows = [{"id": f"kilix-encodec-convert-{rate}khz", "installed": True} for rate in (24, 48)]
+            catalog.write_text(json.dumps(rows))
+            cli = root / "kilix"
+            cli.write_text('#!/bin/sh\n[ "$*" = "install --list --json" ] && cat catalog.json\n')
+            cli.chmod(0o755)
 
             def accepts(version):
-                command = vm._encodec_acceptance_command(version, directory)
-                return subprocess.run(["sh", "-c", command], capture_output=True).returncode == 0
+                command = vm._encodec_acceptance_command(version, directory, str(cli))
+                return subprocess.run(["sh", "-c", command], env={**os.environ, "HOME": directory},
+                                      capture_output=True).returncode == 0
 
             stereo = root / ".converter-48khz/runtime.tar"
             mono = root / ".converter/runtime.tar"
@@ -463,6 +470,9 @@ class EnCodecAcceptanceTests(unittest.TestCase):
             mono.unlink()
             self.assertTrue(accepts("0.2.3"))
             self.assertTrue(accepts("0.2.4"))
+            catalog.write_text(json.dumps([rows[0], {**rows[1], "installed": False}]))
+            self.assertFalse(accepts("0.2.4"), "catalog would rebuild the stereo tool")
+            catalog.write_text(json.dumps(rows))
             mono_receipt.write_text(json.dumps({**shared, "runtime_tar_sha256": "0" * 64}))
             self.assertFalse(accepts("0.2.4"), "profile binding differs")
 
