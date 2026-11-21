@@ -1,6 +1,6 @@
-# Plebian-OS trixie main/binary-amd64/Packages, rechecked 2026-11-20.
-# Packages SHA256: b9773108881e762b6a91cc4be3643344eec31bae45aba0a8a8f8a5c839a6056a
-# Packages.gz SHA256: 5d2a662e3dd553dd62ea71aa606fa256366ca67340c64cc8f0baa74b4658f0bb
+# Plebian-OS trixie main/binary-amd64/Packages, rechecked 2026-11-21.
+# Packages SHA256: 38e65e089057522bba2a6a323f72ca34c0aa2fcf0962cc59363ba6f54932728b
+# Packages.gz SHA256: 3d8d6ce5eabb1e776bf10a51766aba93c7b85302a364a58d11825dbee54e6328
 # pleb depends on kilix, which requires kilix-engine and kilix-native.
 # The multiplexer requires EnCodec and the patched ONNX Runtime. A target
 # that installed Debian's matching -dev package can upgrade it with the runtime.
@@ -12,4 +12,4 @@ kilix-native_0.2.3+packaging5_amd64.deb 0d34fe8424adea3e78694e5583485d44f8155248
 libkilix-encodec_0.1.5+git320ce65ba2e4.d9a1335db520_amd64.deb 217ac761a022067deedf993aabdc11219358fe5eacdea6a66eb8bab13bee4bed 773612 https://itsmygithubacct.github.io/plebian-apt/pool/main/l/libkilix-encodec/libkilix-encodec_0.1.5+git320ce65ba2e4.d9a1335db520_amd64.deb
 libonnxruntime-dev_1.21.0+dfsg-1+kilix1_amd64.deb b0ce49106fc12e73a07c62ed27e4d119c36cb58102e51310c416d235a91b7026 96548 https://itsmygithubacct.github.io/plebian-apt/pool/main/l/libonnxruntime-dev/libonnxruntime-dev_1.21.0+dfsg-1+kilix1_amd64.deb
 libonnxruntime1.21_1.21.0+dfsg-1+kilix1_amd64.deb 8e0fbcd748da21a7f35c467c02d04b0a62cc37d3de48249a99f5bd14d5f46fa3 4037280 https://itsmygithubacct.github.io/plebian-apt/pool/main/l/libonnxruntime1.21/libonnxruntime1.21_1.21.0+dfsg-1+kilix1_amd64.deb
-pleb_0.2.3+packaging2_amd64.deb 3235e4a909df48904bf297dc540b5bdab6bc14b6594d865deba41f6508f85c04 1882204 https://itsmygithubacct.github.io/plebian-apt/pool/main/p/pleb/pleb_0.2.3+packaging2_amd64.deb
+pleb_0.2.3+packaging3_amd64.deb 6a5a48a542d5f22b8b2928e780453e6dcf08d10bf0c295a4f0ded668eb34476a 1882300 https://itsmygithubacct.github.io/plebian-apt/pool/main/p/pleb/pleb_0.2.3+packaging3_amd64.deb

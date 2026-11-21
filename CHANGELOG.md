@@ -16,7 +16,7 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   selected both system commands with Kilix `0.2.3+packaging7` without a build.
   First boot now downloads the published compact archive (239 MB on amd64,
   173 MB on arm64). Installer media pins Kilix 0.2.3+packaging10 and pleb
-  0.2.3+packaging2 from the signed trixie index.
+  0.2.3+packaging3 from the signed trixie index.
 
 ## [0.2.3] — 2026-11-16
 
