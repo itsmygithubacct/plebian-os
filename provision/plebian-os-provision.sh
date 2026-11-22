@@ -1291,9 +1291,16 @@ apply_selected_mpv_runtime() {
         return 0
     fi
     [ "$MPV_TRANSACTION_STARTED" = 0 ] || return 1
-    stage="$(mktemp "$outer/mpv-runtime.XXXXXX")" || return 1
-    chmod 0600 -- "$stage" || return 1
-    mpv_download_archive "$stage" || return 1
+    local arch
+    arch="$(dpkg --print-architecture)" || return 1
+    stage="/var/lib/plebian-os/mpv-runtime/packages/kilix-mpv_${PLEBIAN_OS_MPV_VERSION}_${arch}.deb"
+    if [ -f "$stage" ] && [ ! -L "$stage" ]; then
+        log "verifying the cached kilix-mpv package against the selected release"
+    else
+        stage="$(mktemp "$outer/mpv-runtime.XXXXXX")" || return 1
+        chmod 0600 -- "$stage" || return 1
+        mpv_download_archive "$stage" || return 1
+    fi
     # Snapshot packages before installation. The root helper checks held bundle
     # bytes independently; the outer transaction retains the prior packages.
     mpv_runtime_command --snapshot "$PROVISION_ROOT_TRANSACTION_DIR/mpv-runtime" || return 1
@@ -1529,9 +1536,10 @@ validate_mpv_release_closure() {
     # its complete selection mandatory for the newly integrated release.
     [ "$present" != 0 ] || return 0
     [ "$present" = 6 ] || { echo 'mpv closure requires all six exact fields' >&2; return 1; }
-    [[ "$PLEBIAN_OS_MPV_URL" =~ ^https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb$ ]] \
+    [[ "$PLEBIAN_OS_MPV_URL" =~ ^https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb$ ||
+           "$PLEBIAN_OS_MPV_URL" = "https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-mpv/kilix-mpv_${PLEBIAN_OS_MPV_VERSION}_amd64.deb" ]] \
         && [ "${#PLEBIAN_OS_MPV_URL}" -le 2048 ] \
-        || { echo 'mpv package must use its immutable HTTPS release asset URL' >&2; return 1; }
+        || { echo 'mpv package must use a versioned project package URL' >&2; return 1; }
     [[ "$PLEBIAN_OS_MPV_SHA256" =~ ^[0-9a-f]{64}$ ]] \
         || { echo 'invalid mpv package SHA-256' >&2; return 1; }
     [[ "$PLEBIAN_OS_MPV_BYTES" =~ ^[1-9][0-9]{0,6}$ ]] && [ "$PLEBIAN_OS_MPV_BYTES" -le 8388608 ] \

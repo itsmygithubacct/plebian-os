@@ -42,6 +42,12 @@ class MpvClosureTests(unittest.TestCase):
         self.boundary(VALUES)
         self.boundary({})
 
+    def test_disc_archive_must_name_the_selected_mpv_version(self):
+        url = ("https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-mpv/"
+               "kilix-mpv_0.40.0+kilix.4_amd64.deb")
+        self.boundary({**VALUES, 'PLEBIAN_OS_MPV_URL': url})
+        self.boundary({**VALUES, 'PLEBIAN_OS_MPV_URL': url.replace('kilix.4', 'kilix.9')}, False)
+
     def test_partial_selection_refused_at_every_boundary(self):
         for key in VALUES:
             self.boundary({k: v for k, v in VALUES.items() if k != key}, False)

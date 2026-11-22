@@ -380,9 +380,10 @@ def validate_mpv_release_closure(values: dict[str, str]) -> None:
     if not all(selected):
         die('mpv closure requires all six exact fields')
     url, digest, size, version, source, launcher = selected
-    if len(url) > 2048 or not re.fullmatch(
-            r'https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb', url):
-        die('mpv package must use its immutable HTTPS release asset URL')
+    archive_url = 'https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-mpv/kilix-mpv_' + version + '_amd64.deb'
+    if len(url) > 2048 or (url != archive_url and not re.fullmatch(
+            r'https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb', url)):
+        die('mpv package must use a versioned project package URL')
     if not re.fullmatch(r'[0-9a-f]{64}', digest):
         die('invalid mpv package SHA-256')
     if not re.fullmatch(r'[1-9][0-9]{0,6}', size) or int(size) > 8388608:
