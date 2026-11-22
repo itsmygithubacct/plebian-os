@@ -8,6 +8,9 @@ Description=Plebian-OS first-boot provisioning (packaged pleb and kilix, Pleb se
 Documentation=https://github.com/itsmygithubacct/plebian-os
 # Needs the network for payloads that are not packages, and a settled base system.
 After=network-online.target systemd-user-sessions.service
+# The target pulls in firstboot. Let it finish before dpkg starts services
+# ordered after multi-user.target, including power-profiles-daemon.
+After=multi-user.target
 Wants=network-online.target
 # Hold the login greeter until provisioning finishes, so the very first boot
 # never flashes a bare "Default Xsession" (Pleb isn't installed yet) at the

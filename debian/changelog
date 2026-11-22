@@ -1,3 +1,11 @@
+plebian-os (0.2.4~alpha3+ask5) UNRELEASED; urgency=medium
+
+  * Allow multi-user startup to finish before provisioning installs services
+    that wait for that target. Keep the login greeter ordered after first boot.
+  * Include the Needle pane and tab courtesy-word fix.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 17:55:00 +0000
+
 plebian-os (0.2.4~alpha3+ask4) UNRELEASED; urgency=medium
 
   * Retry transient archive errors before deferring a connected first boot.

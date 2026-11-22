@@ -190,6 +190,16 @@ def seconds(value):
 
 
 class UnitConsistencyTests(unittest.TestCase):
+    def test_target_can_start_before_provisioning_installs_services(self):
+        lines = UNIT.read_text().splitlines()
+        def ordering(key):
+            return {name for line in lines if line.startswith(key + "=")
+                    for name in line.split("=", 1)[1].split()}
+
+        self.assertIn("multi-user.target", ordering("WantedBy"))
+        self.assertIn("multi-user.target", ordering("After"))
+        self.assertIn("display-manager.service", ordering("Before"))
+
     def test_unit_timeouts_cover_the_ceiling_and_the_stop_sequence(self):
         runner = RUNNER.read_text()
         unit = UNIT.read_text()

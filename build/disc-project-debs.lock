@@ -1,6 +1,6 @@
 # Plebian-OS trixie main/binary-amd64/Packages, rechecked 2026-11-22.
-# Packages SHA256: 153a1d589acea85c2e22a83840e25927a0fcc6fff3806051b8552fdd479a47b8
-# Packages.gz SHA256: abb6e3311c07b36cc7dfbfe6790bf755ffb902233e6eaed3f7aef99f9a6ee269
+# Packages SHA256: a36fbc4e80613935a3f207ba4071c3105e366f35d4e48e31070aa594b5123900
+# Packages.gz SHA256: 2ac3d42c00d9a23d5e72d61d1910540138aeafdd7b90245b3b51c5a2ef6fcfd8
 # The desktop installs Kilix 95, Amp, and the Kilix Ask runtime and catalog.
 # Kilix also requires its engine, native helpers and terminal utilities.
 # The multiplexer uses EnCodec and the patched ONNX Runtime.
@@ -13,7 +13,7 @@ kilix-ml_0.1.0+packaging1_all.deb ee66be9af7d558de7fcbd440c9f961b79c89cb354b5653
 kilix-mpv_0.40.0+kilix.11_amd64.deb dbf7b3355f79ac8f3278893fdfccaa2cc0af4dbafa3e924b5f5d936d88c66b45 888116 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-mpv/kilix-mpv_0.40.0+kilix.11_amd64.deb
 kilix-multiplexer_0.2.3+packaging5_amd64.deb 3065fec9c065ecb886ffd1ec6fd51ee60e68a18a61bb17b5539759bed60ae075 98472 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-multiplexer/kilix-multiplexer_0.2.3+packaging5_amd64.deb
 kilix-native_0.2.3+packaging5_amd64.deb 0d34fe8424adea3e78694e5583485d44f81552484f0198575863e3e96d0fa56a 74756 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-native/kilix-native_0.2.3+packaging5_amd64.deb
-kilix-needle_0.20261116+packaging4_all.deb f3b6fa45f49ec6f406a0e236a766deddc469d466d9e022ebf758b80a4c6bf6fe 323332 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-needle/kilix-needle_0.20261116+packaging4_all.deb
+kilix-needle_0.20261116+packaging5_all.deb ad5ac30a15e9a035939a856aa3a7c23fd1ec563dbda514d67fac8295618f0196 323448 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-needle/kilix-needle_0.20261116+packaging5_all.deb
 kilix-transcript-clean_0.1.0+packaging1_all.deb 46b37a74684a2979dbb9b9bd1a596c752646118c211a9f2fda472fe4410432d8 17968 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-transcript-clean/kilix-transcript-clean_0.1.0+packaging1_all.deb
 kilix-tui-utils_0.3.1+packaging2_all.deb 8069646bd492f6264b956ed59c40b8daa440a63265b0770a86beced45fdd5157 278840 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-tui-utils/kilix-tui-utils_0.3.1+packaging2_all.deb
 kilix_0.2.3+packaging14_all.deb d9bb6b8d695de74ac0f8e35034993f4bfa7a4d9ed9072a24b092e28a72bb35cb 2428644 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix/kilix_0.2.3+packaging14_all.deb
