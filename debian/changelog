@@ -1,3 +1,10 @@
+plebian-os (0.2.4~alpha3+ask6) UNRELEASED; urgency=medium
+
+  * Include Needle's verified shell input requirement on fresh installations
+    and desktop task upgrades.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 22:34:00 +0000
+
 plebian-os (0.2.4~alpha3+ask5) UNRELEASED; urgency=medium
 
   * Allow multi-user startup to finish before provisioning installs services
