@@ -1783,6 +1783,24 @@ installed_tool_fingerprint() {
     fi
 }
 
+# Older records only name the UTC second before mktemp's random suffix.
+# Within that second compare when the snapshot saved its metadata. New names
+# also include nanoseconds so lexical order breaks ties on coarse filesystems.
+newer_recovery_record() {
+    local candidate="$1" previous="$2" candidate_time previous_time
+    local candidate_stamp="${1##*/closure-rollback.}" previous_stamp="${2##*/closure-rollback.}"
+    [ -n "$previous" ] || return 0
+    if [[ "${candidate_stamp%%.*}" != "${previous_stamp%%.*}" ]]; then
+        [[ "${candidate_stamp%%.*}" > "${previous_stamp%%.*}" ]]
+        return
+    fi
+    candidate_time="$candidate/meta"
+    previous_time="$previous/meta"
+    [[ -f "$candidate_time" && ! -L "$candidate_time" ]] || candidate_time="$candidate"
+    [[ -f "$previous_time" && ! -L "$previous_time" ]] || previous_time="$previous"
+    [[ ! "$previous_time" -nt "$candidate_time" ]]
+}
+
 # Read only literal numeric release metadata; never execute saved configuration.
 # Guarded defaults keep the first value; plain/export assignments replace it.
 # Status 3 means the record parses and assigns the key nowhere (a standalone
@@ -1934,7 +1952,7 @@ if [ "$EUID" = 0 ]; then
     base_mode="$(stat -c '%a' -- "$base")"
     (( (8#$base_mode & 8#22) == 0 )) || exit 2
 fi
-record="$(mktemp -d "$base/closure-rollback.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+record="$(mktemp -d "$base/closure-rollback.$(date -u +%Y%m%dT%H%M%SZ.%N).XXXXXX")"
 env_tmp="" env_moved=0
 restore_copy() {
     local src="$1" dst="$2" tmp
@@ -2144,7 +2162,7 @@ for i in "${!paths[@]}"; do
     [ "$(sha256sum "$stage/${stage_names[$i]}" | awk '{print $1}')" = "${expected[$i]}" ] || exit 3
     moved[$i]=0
 done
-record="$(mktemp -d "$base/closure-rollback.$(date -u +%Y%m%dT%H%M%SZ).XXXXXX")"
+record="$(mktemp -d "$base/closure-rollback.$(date -u +%Y%m%dT%H%M%SZ.%N).XXXXXX")"
 restore_copy() {
     local src="$1" dst="$2" tmp
     tmp="$(mktemp "$(dirname -- "$dst")/.plebian-os-restore.XXXXXX")" || return 1
@@ -2308,7 +2326,7 @@ rollback_previous_closure() {
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
         "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" \
         "${REQUIRE_OWN_RECORD:-0}" \
-        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record; cat <<'ROOT_ROLLBACK'
+        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record newer_recovery_record; cat <<'ROOT_ROLLBACK'
 set -euo pipefail
 
 # >>> plebian-os-paths
@@ -2341,7 +2359,7 @@ for candidate in "$base"/closure-rollback.*; do
     [ -d "$candidate" ] && [ ! -L "$candidate" ] || continue
     [ -f "$candidate/session.env" ] || continue
     if [ -e "$candidate/restored" ]; then continue; fi
-    record="$candidate"                    # timestamped names sort oldest first
+    if newer_recovery_record "$candidate" "$record"; then record="$candidate"; fi
 done
 [ -n "$record" ] || exit 4
 refuse_unrelated_recovery_record "$record" "$require_own" "$trusted_tag"
@@ -2566,7 +2584,7 @@ rollback_split_closure() {
         "${PLEBIAN_OS_SELECT_TEST_FAIL_AFTER:-}" \
         "${PLEBIAN_OS_TRUSTED_TAG_OBJECT_SHA:-}" \
         "${REQUIRE_OWN_RECORD:-0}" \
-        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record; cat <<'ROOT_SPLIT_ROLLBACK'
+        >"$STAGE/record" < <(declare -f record_release_value refuse_unrelated_recovery_record newer_recovery_record; cat <<'ROOT_SPLIT_ROLLBACK'
 set -euo pipefail
 umask 077
 session_path="$1"; closure_path="$2"; selector_path="$3"; updater_path="$4"
@@ -2578,7 +2596,7 @@ for candidate in "$base"/closure-rollback.*; do
     [ -d "$candidate" ] && [ ! -L "$candidate" ] || continue
     [ -f "$candidate/session.existed" ] && [ -f "$candidate/closure.existed" ] || continue
     [ ! -e "$candidate/restored" ] || continue
-    record="$candidate"
+    if newer_recovery_record "$candidate" "$record"; then record="$candidate"; fi
 done
 [ -n "$record" ] || exit 4
 refuse_unrelated_recovery_record "$record" "$require_own" "$trusted_tag"

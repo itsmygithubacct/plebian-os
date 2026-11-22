@@ -2230,40 +2230,27 @@ class ProvisionLifecycleBehaviorTests(unittest.TestCase):
         self.assertIn("regular non-root account", result.stderr)
 
     def test_release_uv_requires_exact_pins_even_in_dry_run(self):
-        invalid = subprocess.run(
-            ["bash", str(DEPS), "--dry-run"],
-            env={
-                **os.environ,
-                "PLEBIAN_OS_INSTALL_UV": "1",
-                "PLEBIAN_OS_RELEASE_MODE": "1",
-                "PLEBIAN_OS_UV_VERSION": "",
-                "PLEBIAN_OS_UV_INSTALLER_SHA256": "",
-            },
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertNotEqual(invalid.returncode, 0)
-        self.assertIn("uv (release-required)", invalid.stderr)
+        with tempfile.TemporaryDirectory() as td:
+            # Supply a Debian source so a developer's host repositories cannot
+            # decide whether this dry run reaches the uv pin checks.
+            root = Path(td)
+            (root / "sources.list").write_text("deb https://deb.debian.org/debian trixie main\n")
+            env = {**os.environ, "PLEBIAN_OS_INSTALL_UV": "1", "PLEBIAN_OS_RELEASE_MODE": "1",
+                   "PLEBIAN_OS_APT_SOURCES_ROOT": td, "PLEBIAN_OS_APT_CODENAME": "trixie",
+                   "PLEBIAN_OS_RELEASE_APT_CONFIG": "", "APT_PROVENANCE_PHASE": "lifetime"}
 
-        valid = subprocess.run(
-            ["bash", str(DEPS), "--dry-run"],
-            env={
-                **os.environ,
-                "PLEBIAN_OS_INSTALL_UV": "1",
-                "PLEBIAN_OS_RELEASE_MODE": "1",
-                "PLEBIAN_OS_UV_VERSION": "0.9.0",
-                "PLEBIAN_OS_UV_INSTALLER_SHA256": "a" * 64,
-            },
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(valid.returncode, 0, valid.stderr)
-        self.assertIn(
-            "verify staged uv --version reports pinned uv 0.9.0",
-            valid.stdout,
-        )
+            def dry_run(version, digest):
+                return subprocess.run(
+                    ["bash", str(DEPS), "--dry-run"],
+                    env={**env, "PLEBIAN_OS_UV_VERSION": version, "PLEBIAN_OS_UV_INSTALLER_SHA256": digest},
+                    text=True, capture_output=True, check=False)
+
+            invalid = dry_run("", "")
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertIn("uv (release-required)", invalid.stderr)
+            valid = dry_run("0.9.0", "a" * 64)
+            self.assertEqual(valid.returncode, 0, valid.stderr)
+            self.assertIn("verify staged uv --version reports pinned uv 0.9.0", valid.stdout)
 
     def test_verified_kilix_build_requires_one_coherent_canonical_identity(self):
         with tempfile.TemporaryDirectory() as td:

@@ -73,6 +73,7 @@ class SelectorRecordsReleaseTagTests(unittest.TestCase):
             show = self.fx._run(base, "--show")
             self.assertIn("  PLEBIAN_OS_RELEASE_TAG=v0.2.1-rc1\n", show.stdout)
             after_rc = self._pair(base)
+            first, = self.fx._recovery_records(base)
 
             final = self.fx._run(base, "0.2.1", "--offline")
             self.assertEqual(final.returncode, 0, final.stdout + final.stderr)
@@ -81,6 +82,14 @@ class SelectorRecordsReleaseTagTests(unittest.TestCase):
             self.assertEqual(values["PLEBIAN_OS_RELEASE_TAG"], "v0.2.1")
             self.assertEqual(values["PLEBIAN_OS_RELEASE_TAG_OBJECT"], ids["final"])
             self.assertEqual(values["PLEBIAN_OS_REF"], ids["final_commit"])
+
+            # Reproduce two snapshots in one second with their random suffixes
+            # in reverse order. The second selection must roll back to the RC.
+            second, = set(self.fx._recovery_records(base)) - {first}
+            for number, (record, suffix) in enumerate(((first, "zzzzzz"), (second, "aaaaaa"))):
+                record = record.rename(record.with_name("closure-rollback.20261116T000000Z." + suffix))
+                stamp = 1_794_787_200_000_000_000 + number * 100_000_000
+                os.utime(record / "meta", ns=(stamp, stamp))
 
             back = self.fx._run(base, "--rollback")
             self.assertEqual(back.returncode, 0, back.stdout + back.stderr)

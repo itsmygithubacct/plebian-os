@@ -2315,9 +2315,16 @@ Path(listing).write_text("\n".join(lines) + "\n")
 PY
 while IFS="$(printf '\t')" read -r wheel_bytes wheel_url wheel_name; do
     [ -n "$wheel_name" ] || continue
-    _bounded_download "$wheel_bytes" 600 "$WORK/paradee-wheels/$wheel_name" \
-        -fsSL --proto '=https' "$wheel_url" \
-        || { echo "could not download Paradee wheel $wheel_name" >&2; exit 1; }
+    if [ -n "${PLEBIAN_OS_PARADEE_MEDIA_DIR:-}" ]; then
+        wheel_source="$PLEBIAN_OS_PARADEE_MEDIA_DIR/paradee-wheels/$wheel_name"
+        [ -f "$wheel_source" ] && [ ! -L "$wheel_source" ] && [ "$(stat -c %s -- "$wheel_source")" = "$wheel_bytes" ] \
+            || { echo "missing or invalid Paradee wheel $wheel_name" >&2; exit 1; }
+        install -m 0644 -- "$wheel_source" "$WORK/paradee-wheels/$wheel_name"
+    else
+        _bounded_download "$wheel_bytes" 600 "$WORK/paradee-wheels/$wheel_name" \
+            -fsSL --proto '=https' "$wheel_url" \
+            || { echo "could not download Paradee wheel $wheel_name" >&2; exit 1; }
+    fi
 done < "$WORK/paradee-wheel-downloads.tsv"
 python3 "$HERE/provision/install-image-models.py" \
     --verify-paradee-wheels "$WORK/paradee-wheels"
@@ -2327,10 +2334,17 @@ python3 "$HERE/provision/install-image-models.py" \
 espeak_pin="$HERE/provision/espeak-ng-source.json"
 espeak_url="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["url"])' "$espeak_pin")"
 espeak_bytes="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["bytes"])' "$espeak_pin")"
-echo "==> fetching the espeak-ng 1.52.0 source for the bundled libespeak-ng"
-_bounded_download "$espeak_bytes" 600 "$WORK/espeak-ng-1.52.0.tar.gz" \
-    -fsSL --proto '=https' "$espeak_url" \
-    || { echo "could not download the espeak-ng source" >&2; exit 1; }
+if [ -n "${PLEBIAN_OS_PARADEE_MEDIA_DIR:-}" ]; then
+    espeak_source="$PLEBIAN_OS_PARADEE_MEDIA_DIR/espeak-ng-1.52.0.tar.gz"
+    [ -f "$espeak_source" ] && [ ! -L "$espeak_source" ] && [ "$(stat -c %s -- "$espeak_source")" = "$espeak_bytes" ] \
+        || { echo "missing or invalid espeak-ng source" >&2; exit 1; }
+    install -m 0644 -- "$espeak_source" "$WORK/espeak-ng-1.52.0.tar.gz"
+else
+    echo "==> fetching the espeak-ng 1.52.0 source for the bundled libespeak-ng"
+    _bounded_download "$espeak_bytes" 600 "$WORK/espeak-ng-1.52.0.tar.gz" \
+        -fsSL --proto '=https' "$espeak_url" \
+        || { echo "could not download the espeak-ng source" >&2; exit 1; }
+fi
 python3 - "$espeak_pin" "$WORK/espeak-ng-1.52.0.tar.gz" << 'PY'
 import hashlib, json, sys
 pin = json.load(open(sys.argv[1]))

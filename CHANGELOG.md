@@ -22,6 +22,8 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   Ask offers its optional command model on first use. On older desktops with
   a Kilix checkout, first boot can still install Needle from the catalog when
   the Needle package is missing.
+- Closure rollback now selects the most recent snapshot when two releases
+  were selected within the same second.
 
 ## [0.2.3] — 2026-11-16
 

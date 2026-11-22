@@ -1,3 +1,10 @@
+plebian-os (0.2.3+packaging12) UNRELEASED; urgency=medium
+
+  * Restore the most recent closure when two selections occur in the same
+    second, including snapshots written by older selectors.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 11:53:52 +0000
+
 plebian-os (0.2.3+packaging11) UNRELEASED; urgency=medium
 
   * Check the installed Needle package before using it for Kilix Ask.

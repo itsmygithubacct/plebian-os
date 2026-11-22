@@ -200,7 +200,7 @@ class InstallerPackageTests(unittest.TestCase):
             update = self._apt_update(repo, root / "apt")
             if wrong:
                 self.assertNotEqual(update.returncode, 0, update.stderr)
-                self.assertIn("Missing key", update.stderr)
+                self.assertRegex(update.stderr, r"Missing key|NO_PUBKEY [0-9A-F]+")
             else:
                 self.assertEqual(update.returncode, 0, update.stderr)
 
@@ -273,7 +273,7 @@ class InstallerPackageTests(unittest.TestCase):
                 "-o", "APT::Get::List-Cleanup=false",
                 "update",
             ],
-            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "LC_ALL": "C"}, capture_output=True, text=True, timeout=30,
         )
 
 

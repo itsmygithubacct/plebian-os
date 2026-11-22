@@ -1342,7 +1342,7 @@ write_reboot_verifier "$report/verify.sh"
             def check():
                 return subprocess.run(
                     ["bash", "-euo", "pipefail", "-c", helper +
-                     '\nassert_recorded_selection_tag "$1" "$2"',
+                     '\nsudo() { return 1; }\nassert_recorded_selection_tag "$1" "$2"',
                      "bash", str(root), expected],
                     capture_output=True, text=True, check=False,
                 )
