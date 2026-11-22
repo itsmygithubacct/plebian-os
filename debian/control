@@ -51,11 +51,12 @@ Description: Plebian-OS archive signing key
 
 Package: pleb-desktop
 Architecture: all
-Depends: kilix-multiplexer, pleb, plebian-desktop-base (= ${binary:Version}),
- ${misc:Depends}
+Depends: kilix (>= 0.2.3+packaging11), kilix-content (>= 0.4.0+packaging3),
+ kilix-multiplexer, kilix-needle (>= 0.20261116+packaging3), pleb,
+ plebian-desktop-base (= ${binary:Version}), ${misc:Depends}
 Description: Pleb desktop
- This metapackage installs pleb, kilix-multiplexer, and the desktop defaults
- from plebian-desktop-base.
+ This metapackage installs the Pleb desktop, the Kilix terminal and
+ multiplexer, and the Needle runtime and content catalog for Kilix Ask.
 
 Package: task-pleb-desktop
 Architecture: all

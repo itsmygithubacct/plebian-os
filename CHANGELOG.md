@@ -15,8 +15,11 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   first boot with 6.38 GB free. Before and after provisioning, a new user
   selected both system commands with Kilix `0.2.3+packaging7` without a build.
   First boot now downloads the published compact archive (239 MB on amd64,
-  173 MB on arm64). Installer media pins Kilix 0.2.3+packaging10 and pleb
-  0.2.3+packaging3 from the signed trixie index.
+  173 MB on arm64).
+- The installer now carries Kilix 0.2.3+packaging11, TUI Utils
+  0.3.1+packaging2, Needle 0.20261116+packaging3 and Content 0.4.0+packaging3.
+  The desktop installs Ask and its runtime dependencies from the disc.
+  Ask offers its optional command model on first use.
 
 ## [0.2.3] — 2026-11-16
 

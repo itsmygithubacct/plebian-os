@@ -1,3 +1,10 @@
+plebian-os (0.2.3+packaging10) UNRELEASED; urgency=medium
+
+  * Install the packaged Needle runtime and matching Kilix Ask catalog
+    with the desktop. Carry their dependencies on the installer disc.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 09:43:56 +0000
+
 plebian-os (0.2.3+packaging9) UNRELEASED; urgency=medium
 
   * A packaged first boot skips the build toolchain. The disc package

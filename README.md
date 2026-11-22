@@ -499,6 +499,12 @@ build/remaster-iso.sh                          # auto-download the netinst, buil
 build/remaster-iso.sh my-netinst.iso out.iso   # …or point it at a local netinst
 ```
 
+When building a development ISO from a published packaging branch, set
+`PLEBIAN_OS_REF=$(git rev-parse HEAD)` and `PLEBIAN_OS_REPO` to the repository
+that serves that commit. First boot fetches OS helpers from that ref, so they
+use the same payload paths as the installer. Export both before running the
+remaster.
+
 For publishable, version-bound installation media, follow
 [`RELEASING.md`](RELEASING.md) rather than copying the newest ISO from an
 artifacts directory. Automated VM images are isolated under

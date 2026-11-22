@@ -9179,12 +9179,17 @@ else
         || die "pleb install failed (see above)"
 fi
 
+if [ "$PACKAGED_PLEB" = 1 ]; then
+    log "using the packaged Needle runtime for Kilix Ask"
+else
+    install_kilix_needle
+fi
+
 KILIX_CHECKOUT_STEPS=1
 if [ "$PACKAGED_PLEB" = 1 ] && { [ ! -f "$KILIX_DIR/kilix" ] || [ ! -x "$KILIX_DIR/kilix" ]; }; then
     KILIX_CHECKOUT_STEPS=0
-    log "packaged install has no kilix checkout. Skipping Needle, Claudex, kilix-llm, offline default and image models, default model verification, and Neuronte."
+    log "packaged install has no kilix checkout. Skipping Claudex, kilix-llm, offline default and image models, default model verification, and Neuronte."
 else
-    install_kilix_needle
     install_kilix_claudex
     install_kilix_llm
     # The Kilix Ask command model (LFM2) is not on the installation media and a

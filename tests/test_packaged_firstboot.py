@@ -108,7 +108,7 @@ class PackagedFirstbootTests(unittest.TestCase):
         result = self.shell(INSTALL + CHECKS_AND_ENGINE + AUTOLOGIN +
                             'echo "census=$PROVISION_VOICE_CENSUS_TAKEN models=$PROVISION_DEFAULT_MODELS_VERIFIED"\n')
         self.assertEqual(result.returncode, 0, result.stderr)
-        for message in ("packaged install has no kilix checkout", "Paradee stage --install-paradee-runtime --offline",
+        for message in ("using the packaged Needle runtime", "packaged install has no kilix checkout", "Paradee stage --install-paradee-runtime --offline",
                         "packaged kilix-engine", "package command autologin off", "census=1 models=0"):
             self.assertIn(message, result.stdout)
         for action in ("as_user git clone", "checkout-build-called", "needle-called", "claudex-called",
@@ -125,11 +125,11 @@ class PackagedFirstbootTests(unittest.TestCase):
         launcher.touch(mode=0o755)
         result = self.shell(INSTALL + CHECKS_AND_ENGINE + 'KIOSK=1\n' + AUTOLOGIN)
         self.assertEqual(result.returncode, 0, result.stderr)
-        for action in ("needle-called", "claudex-called", "llm-called", "neuronte-called",
+        for action in ("using the packaged Needle runtime", "claudex-called", "llm-called", "neuronte-called",
                        "install-default-models.py --kilix", "install-image-models.py --kilix",
                        "default_models.py verify", "package command autologin on desktop", "pin-session"):
             self.assertIn(action, result.stdout)
-        for action in ("update_pleb_checkout", "as_user git clone", "checkout-build-called"):
+        for action in ("needle-called", "update_pleb_checkout", "as_user git clone", "checkout-build-called"):
             self.assertNotIn(action, result.stdout)
         self.assertFalse((self.root / "sudoers").exists())
 

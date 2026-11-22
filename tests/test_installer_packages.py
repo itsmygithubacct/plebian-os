@@ -302,13 +302,15 @@ class DiscClosureTests(unittest.TestCase):
         debian = {row[0].split("_", 1)[0] for row in lock_rows()}
         project = {row[0].split("_", 1)[0] for row in lock_rows(PROJECT_LOCK)}
         direct_debian = {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"}
-        direct_project = {"kilix-multiplexer", "pleb"}
+        direct_project = {"kilix", "kilix-content", "kilix-multiplexer", "kilix-needle", "pleb"}
         self.assertEqual(outside_dependencies(), direct_debian | direct_project)
         self.assertLessEqual(direct_debian, debian)
+        self.assertLessEqual({"python3-numpy", "python3-numpy-dev", "libblas3",
+                              "liblapack3", "libgfortran5"}, debian)
         self.assertEqual(
             project,
             direct_project | {
-                "kilix", "kilix-engine", "kilix-native",
+                "kilix-engine", "kilix-ml", "kilix-native", "kilix-transcript-clean", "kilix-tui-utils",
                 "libkilix-encodec", "libonnxruntime1.21", "libonnxruntime-dev",
             },
         )
