@@ -7446,6 +7446,12 @@ install_waydroid_application() {
 
 ensure_plebian_os_checkout() {
     local clone_args=()
+    # The packaged script reads the disc payloads. Cloning the public default
+    # branch runs an installer that looks beside the old shared data directory.
+    if packages_provide_pleb_and_kilix; then
+        log "packaged install does not clone plebian-os source"
+        return 0
+    fi
     if [ -d "$PLEBIAN_OS_DIR/.git" ]; then
         log "plebian-os source present at $PLEBIAN_OS_DIR"
         validate_checkout "$PLEBIAN_OS_DIR" "$PLEBIAN_OS_REPO" "plebian-os"
@@ -9195,9 +9201,18 @@ else
         || die "required offline default model installation failed"
 fi
 if [ "$DRY_RUN" != 1 ]; then
-    /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/install-image-models.py" \
-        --install-paradee-runtime --offline \
-        || die "required offline Paradee runtime staging failed"
+    if [ "$PACKAGED_PLEB" = 1 ]; then
+        [ -f "$PLEBIAN_OS_LIBEXECDIR/image-models/install-image-models.py" ] \
+            && [ ! -L "$PLEBIAN_OS_LIBEXECDIR/image-models/install-image-models.py" ] \
+            || die "installed image-model installer is missing: $PLEBIAN_OS_LIBEXECDIR/image-models/install-image-models.py"
+        /usr/bin/python3 "$PLEBIAN_OS_LIBEXECDIR/image-models/install-image-models.py" \
+            --install-paradee-runtime --offline \
+            || die "required offline Paradee runtime staging failed"
+    else
+        /usr/bin/python3 "$PLEBIAN_OS_DIR/provision/install-image-models.py" \
+            --install-paradee-runtime --offline \
+            || die "required offline Paradee runtime staging failed"
+    fi
 fi
 if [ "$KILIX_CHECKOUT_STEPS" = 1 ]; then
     as_user env "${install_env[@]}" /usr/bin/python3 \

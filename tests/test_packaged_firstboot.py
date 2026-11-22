@@ -21,6 +21,7 @@ AUTOLOGIN = section('if [ "$PACKAGED_PLEB" = 1 ]; then\n    # This command edits
 SETUP = r'''
 source "$1"
 PLEBIAN_OS_BINDIR="$2/bin"
+PLEBIAN_OS_LIBEXECDIR="$2/libexec"
 PLEB_DIR="$2/pleb"
 KILIX_DIR="$2/kilix"
 PLEBIAN_OS_DIR="$2/os"
@@ -70,6 +71,9 @@ class PackagedFirstbootTests(unittest.TestCase):
         stage = self.root / "os/provision/install-image-models.py"
         stage.parent.mkdir(parents=True)
         stage.write_text('import sys\nprint("Paradee stage", *sys.argv[1:])\n')
+        installed = self.root / "libexec/image-models/install-image-models.py"
+        installed.parent.mkdir(parents=True)
+        installed.write_text(stage.read_text())
 
     def shell(self, body, *, pleb="ii ", kilix="ii ", dry=False):
         return subprocess.run(
@@ -105,6 +109,10 @@ class PackagedFirstbootTests(unittest.TestCase):
         self.assertNotEqual(missing.returncode, 0)
 
     def test_packaged_without_checkouts_runs_shared_steps_and_uses_installed_commands(self):
+        checkout = self.shell("ensure_plebian_os_checkout")
+        self.assertEqual(checkout.returncode, 0, checkout.stderr)
+        self.assertIn("packaged install does not clone plebian-os source", checkout.stdout)
+        self.assertNotIn("as_user git clone", checkout.stdout)
         result = self.shell(INSTALL + CHECKS_AND_ENGINE + AUTOLOGIN +
                             'echo "census=$PROVISION_VOICE_CENSUS_TAKEN models=$PROVISION_DEFAULT_MODELS_VERIFIED"\n')
         self.assertEqual(result.returncode, 0, result.stderr)

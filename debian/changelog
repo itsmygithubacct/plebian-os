@@ -1,3 +1,10 @@
+plebian-os (0.2.3+packaging10) UNRELEASED; urgency=medium
+
+  * A packaged first boot stages Paradee from the disc payload with the
+    image copy of the installer. It does not clone plebian-os source.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 11:28:51 +0000
+
 plebian-os (0.2.3+packaging9) UNRELEASED; urgency=medium
 
   * A packaged first boot skips the build toolchain. The disc package
