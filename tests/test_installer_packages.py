@@ -310,7 +310,10 @@ class DiscClosureTests(unittest.TestCase):
     def test_locks_cover_debian_and_project_dependencies_separately(self):
         debian = {row[0].split("_", 1)[0] for row in lock_rows()}
         project = {row[0].split("_", 1)[0] for row in lock_rows(PROJECT_LOCK)}
-        direct_debian = {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"}
+        direct_debian = {
+            "accountsservice", "ca-certificates", "curl", "git", "lightdm", "lightdm-gtk-greeter",
+            "pulseaudio", "pulseaudio-utils", "python3", "python3-venv", "sudo", "systemd", "xserver-xorg",
+        }
         direct_project = {
             "kilix", "kilix-95", "kilix-amp", "kilix-content", "kilix-multiplexer", "kilix-needle", "pleb",
         }
