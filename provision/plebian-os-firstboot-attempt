@@ -363,6 +363,20 @@ EOF
 
 case "${1:-}" in
     check)
+        # Only media that installed the offline desktop writes this marker.
+        # The skipped unit stays enabled. A later connected boot runs the
+        # normal provisioner without losing an attempt to an unplugged link.
+        if [ -f "$state_dir/offline-desktop-ready" ]; then
+            archive=https://deb.debian.org/debian/dists/trixie/InRelease
+            if [ -n "${PLEBIAN_OS_APT_SNAPSHOT:-}" ]; then
+                archive="https://snapshot.debian.org/archive/debian/$PLEBIAN_OS_APT_SNAPSHOT/dists/trixie/InRelease"
+            fi
+            if ! curl --fail --silent --show-error --location --head \
+                    --connect-timeout 3 --max-time 8 "$archive" >/dev/null; then
+                say "offline desktop available; provisioning will retry on a connected boot"
+                exit 1
+            fi
+        fi
         read_attempts || exit 1
         if [ "$n" -ge "$max" ]; then
             echo "firstboot provisioning exhausted $n/$max attempts; remove $attempt_file after fixing the cause" >&2

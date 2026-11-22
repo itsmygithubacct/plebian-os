@@ -6,8 +6,8 @@
 # The netinst media carries Debian's base system but not the preseed's
 # pkgsel/include list (Xorg, LightDM, NetworkManager, the toolchain ...), so
 # without a network source that step stops the install with "Installation step
-# failed". First-boot provisioning installs the same package groups from the
-# network (provision/install-deps.sh), so an offline install can defer them.
+# failed". The signed on-disc task installs the graphical desktop. A connected
+# first boot installs the remaining package groups from provision/install-deps.sh.
 #
 #   (no argument)  pkgsel pre-hook. The release preseed's early_command
 #                  installs this file as /usr/lib/pre-pkgsel.d/05plebian-os-offline;
@@ -16,7 +16,7 @@
 #                  it clears pkgsel/include and records the offline install.
 #                  With a network source it changes nothing.
 #   late           Called from late_command. On a recorded offline install it
-#                  writes a wired DHCP service and a NetworkManager hold into
+#                  seeds the desktop and writes a wired DHCP service and NetworkManager hold into
 #                  the target (see below). Otherwise it changes nothing.
 #
 # Why a service of its own: Debian Installer writes only the loopback stanza
@@ -78,7 +78,7 @@ pkgsel_hook() {
     tmp="$marker.new"
     cat > "$tmp" <<'EOF'
 # Written by the Plebian-OS installer: no network package source was configured,
-# so the desktop, NetworkManager and toolchain packages were left to first-boot
+# so package groups outside the signed disc repository were left to first-boot
 # provisioning, and wired interfaces use plebian-os-offline-network.service
 # until provisioning hands them to NetworkManager.
 PLEBIAN_OS_OFFLINE_INSTALL=1
@@ -92,6 +92,28 @@ late() {
     if [ ! -f "$marker" ]; then
         log "not an offline install; nothing to do"
         return 0
+    fi
+    # The desktop task and offline speech runtime are already installed. Set
+    # the session defaults from the build manifest for the media that online
+    # provisioning reads. Keep any site-supplied session file.
+    session="$target/etc/pleb/session.env"
+    if [ ! -e "$session" ] && [ ! -L "$session" ]; then
+        mkdir -p "$target/etc/pleb"
+        profile="$target/etc/plebian-os/build-info.env"
+        if [ -f "$profile" ]; then
+            # The remaster shell-quotes these assignments. Copy their literal
+            # values without evaluating the profile in the installer.
+            sed -n -e 's/^PLEBIAN_OS_DESKTOP=/PLEB_DESKTOP=/p' \
+                -e '/^KILIX_DESKTOP_\(PROVIDER\|COMMAND\|NAME\|FLAVOR\)=/p' \
+                "$profile" > "$session.new"
+        else
+            : > "$session.new"
+        fi
+        if ! grep -q '^PLEB_DESKTOP=' "$session.new"; then
+            echo 'PLEB_DESKTOP=1' >> "$session.new"
+        fi
+        chmod 0644 "$session.new"
+        mv -f "$session.new" "$session"
     fi
     unit_dir="$target/etc/systemd/system"
     wants="$unit_dir/multi-user.target.wants"
@@ -145,7 +167,9 @@ unmanaged-devices=interface-name:en*;interface-name:eth*
 EOF
     chmod 0644 "$hold_dir/$hold_name.new"
     mv -f "$hold_dir/$hold_name.new" "$hold_dir/$hold_name"
-    log "offline install: enabled $unit_name and the NetworkManager hold"
+    mkdir -p "$target/var/lib/plebian-os"
+    touch "$target/var/lib/plebian-os/offline-desktop-ready"
+    log "offline desktop ready; enabled $unit_name until NetworkManager is provisioned"
 }
 
 case "${1:-}" in

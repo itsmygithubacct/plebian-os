@@ -241,6 +241,8 @@ class DebianPackagingTests(unittest.TestCase):
             "kilix (>= 0.2.3+packaging13)", "kilix-95 (>= 0.2.3+packaging3)",
             "kilix-amp (>= 0.20261029+packaging3)", "kilix-content (>= 0.4.0+packaging3)",
             "kilix-multiplexer", "kilix-needle (>= 0.20261116+packaging3)", "pleb",
+            "accountsservice", "lightdm", "lightdm-gtk-greeter", "pulseaudio",
+            "pulseaudio-utils", "python3-venv", "xserver-xorg",
             "plebian-desktop-base (= ${binary:Version})", "${misc:Depends}",
         })
         self.assertIn("Depends: pleb-desktop (= ${binary:Version}), ${misc:Depends}",

@@ -32,6 +32,11 @@ descriptor-backed video buffers. Pleb documents bounded Firefox ESR and Chromium
 capture evidence, including user consent and Stop sharing. The release notes
 record which of these were checked on installed images and physical desktops.
 
+On a fresh offline install, the signed package repository on the disc provides
+the Pleb session, graphical login and audio. The installer also sets up the
+bundled Paradee runtime. When the Debian archive is unreachable, the desktop
+starts and network provisioning stays pending until a connected boot.
+
 ## 0.2.3
 
 Plebian-OS 0.2.3 is the current release. The

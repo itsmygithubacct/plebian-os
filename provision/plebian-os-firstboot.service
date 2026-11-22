@@ -39,6 +39,8 @@ RemainAfterExit=yes
 # PLEBIAN_OS_USER. Normal media resolves the account from the root-owned Debian
 # Installer record instead. The leading '-' makes this file optional.
 EnvironmentFile=-/etc/default/plebian-os
+# Media with a ready offline desktop defers this job until its Debian archive
+# is reachable, without consuming an attempt or delaying the graphical login.
 # A persistent counter makes the three-attempt bound survive reboots. When it
 # is exhausted ExecCondition skips the unit without marking success; the display
 # manager can start, and an operator can inspect the journal/fix the network.

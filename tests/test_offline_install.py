@@ -189,6 +189,40 @@ class LateCommand(unittest.TestCase):
             for rel in (self.UNIT, self.WANTS, self.HOLD):
                 self.assertFalse((fx.target / rel).exists(), rel)
 
+    def test_offline_desktop_preserves_profile_and_operator_choice(self):
+        with tempfile.TemporaryDirectory() as td:
+            fx = Fixture(Path(td))
+            fx.sources_list(OFFLINE_SOURCES_LIST)
+            self.assertEqual(fx.run().returncode, 0)
+            profile = fx.target / "etc/plebian-os/build-info.env"
+            profile.parent.mkdir(parents=True, exist_ok=True)
+            profile.write_text('PLEBIAN_OS_DESKTOP="0"\nKILIX_DESKTOP_FLAVOR="95"\nOTHER=unused\n')
+            self.assertEqual(fx.run("late").returncode, 0)
+            session = fx.target / "etc/pleb/session.env"
+            self.assertEqual(session.read_text(), 'PLEB_DESKTOP="0"\nKILIX_DESKTOP_FLAVOR="95"\n')
+            self.assertTrue((fx.target / "var/lib/plebian-os/offline-desktop-ready").is_file())
+            session.write_text("# local session choice\n")
+            self.assertEqual(fx.run("late").returncode, 0)
+            self.assertEqual(session.read_text(), "# local session choice\n")
+
+    def test_disconnected_boot_preserves_provisioning_attempt_for_reconnection(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            state = root / "state"
+            state.mkdir()
+            (state / "offline-desktop-ready").touch()
+            curl = root / "curl"
+            curl.write_text("#!/bin/sh\nexit 7\n")
+            curl.chmod(0o755)
+            env = dict(os.environ, PLEBIAN_OS_STATE_DIR=str(state), PATH=f"{root}:/usr/bin:/bin")
+            args = [str(HELPER.with_name("plebian-os-firstboot-attempt")), "check"]
+            first = subprocess.run(args, env=env, capture_output=True, text=True)
+            self.assertEqual(first.returncode, 1)
+            self.assertIn("connected boot", first.stderr)
+            self.assertFalse((state / "firstboot-attempts").exists())
+            curl.write_text("#!/bin/sh\nexit 0\n")
+            self.assertEqual(subprocess.run(args, env=env).returncode, 0)
+
     def test_offline_install_gets_wired_dhcp_and_a_networkmanager_hold(self):
         with tempfile.TemporaryDirectory() as td:
             fx = Fixture(Path(td))
