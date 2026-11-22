@@ -126,6 +126,14 @@ class PackagedFirstbootTests(unittest.TestCase):
         self.assertFalse((self.root / "pleb").exists())
         self.assertFalse((self.root / "kilix").exists())
 
+    def test_existing_kilix_checkout_keeps_the_source_only_model_helpers(self):
+        launcher = self.root / "kilix/kilix"
+        launcher.parent.mkdir()
+        launcher.touch(mode=0o755)
+        result = self.shell('PLEBIAN_OS_DIR="$2/os-checkout"\nensure_plebian_os_checkout')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("as_user git clone", result.stdout)
+
     def test_packaged_with_checkouts_runs_checkout_extras_without_updating_pleb_or_building(self):
         (self.root / "pleb/.git").mkdir(parents=True)
         launcher = self.root / "kilix/kilix"
