@@ -1,3 +1,10 @@
+plebian-os (0.2.4~alpha5) UNRELEASED; urgency=medium
+
+  * Include the desktop file association and first-use model dialog in the
+    signed installer repository.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 23:30:00 +0000
+
 plebian-os (0.2.4~alpha4) UNRELEASED; urgency=medium
 
   * Install EnCodec conversion software on explicit request and refresh it

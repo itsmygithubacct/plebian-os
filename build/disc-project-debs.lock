@@ -1,11 +1,11 @@
 # Plebian-OS trixie main/binary-amd64/Packages, rechecked 2026-11-22.
-# Packages SHA256: e7f432dd683e9d80fbb41f3832115b5ff1eee5a657de9986c12f1f9f881298e2
-# Packages.gz SHA256: cde43af397adee5c90a7cc6aeb1ebcb95e42ca411d4e29fa1fa2a73e45b9d830
+# Packages SHA256: 21a07395ca81fb21aca83e48bd1e90ff18e7a69af9dbf58be9e9b12138950c8b
+# Packages.gz SHA256: 3cd67c9e1dba216326557df184819bc49974a30cc4f5e7f3faa003781864caf1
 # The desktop installs Kilix 95 and Amp. Amp supplies the mpv dependency.
 # Kilix also requires its engine, native helpers and terminal utilities.
 # The multiplexer uses EnCodec and the patched ONNX Runtime.
 # FILE SHA256 BYTES URL
-kilix-95_0.2.3+packaging4_all.deb e5956a832ad4263bb2412a022bf1092816a2e0ee22dbf3e79dffded61f0a8a8c 25626504 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-95/kilix-95_0.2.3+packaging4_all.deb
+kilix-95_0.2.3+packaging6_all.deb e84a723f4427ada66a39318bd6074ff2d2cd320efdbf77afeeb78e7f7e41c0f1 25626796 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-95/kilix-95_0.2.3+packaging6_all.deb
 kilix-amp_0.20261029+packaging4_amd64.deb b7f5397d6f6be61701c8ef70bfa6a2cdfb82e052dda42132655be7bc5711405e 2775760 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-amp/kilix-amp_0.20261029+packaging4_amd64.deb
 kilix-engine_0.48.2+git20261112.f8a7dccf-1_amd64.deb 0d2c9f3c4810125652843ca7a1bafa7a5571a7c0734fad04b149075acbe25bea 10198468 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-engine/kilix-engine_0.48.2+git20261112.f8a7dccf-1_amd64.deb
 kilix-mpv_0.40.0+kilix.11_amd64.deb dbf7b3355f79ac8f3278893fdfccaa2cc0af4dbafa3e924b5f5d936d88c66b45 888116 https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-mpv/kilix-mpv_0.40.0+kilix.11_amd64.deb
