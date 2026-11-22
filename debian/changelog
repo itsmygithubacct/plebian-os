@@ -2,6 +2,8 @@ plebian-os (0.2.4~alpha2) UNRELEASED; urgency=medium
 
   * Use the Paradee installer from the same disc on first boot of the
     packaged Media Player desktop.
+  * Include the Kilix private GUI bus supervisor and the virtual X server
+    required by the docked player.
 
  -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 12:49:32 +0000
 

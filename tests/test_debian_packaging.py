@@ -238,7 +238,7 @@ class DebianPackagingTests(unittest.TestCase):
                        if block.startswith("Package: pleb-desktop\n"))
         deps = re.search(r"^Depends: (.*(?:\n [^\n]*)*)", desktop, re.MULTILINE)
         self.assertEqual({item.strip() for item in deps[1].split(",")}, {
-            "kilix-95 (>= 0.2.3+packaging2)", "kilix-amp (>= 0.20261029+packaging3)",
+            "kilix-95 (>= 0.2.3+packaging3)", "kilix-amp (>= 0.20261029+packaging3)",
             "kilix-multiplexer", "pleb", "plebian-desktop-base (= ${binary:Version})",
             "${misc:Depends}",
         })

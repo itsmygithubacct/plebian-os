@@ -51,7 +51,7 @@ Description: Plebian-OS archive signing key
 
 Package: pleb-desktop
 Architecture: all
-Depends: kilix-95 (>= 0.2.3+packaging2), kilix-amp (>= 0.20261029+packaging3),
+Depends: kilix-95 (>= 0.2.3+packaging3), kilix-amp (>= 0.20261029+packaging3),
  kilix-multiplexer, pleb, plebian-desktop-base (= ${binary:Version}),
  ${misc:Depends}
 Description: Pleb desktop
