@@ -1,3 +1,11 @@
+plebian-os (0.2.4~alpha1) UNRELEASED; urgency=medium
+
+  * Include the docked Media Player, its mpv backend and the packaged Kilix
+    desktop launcher in the installer. Retain the player archive for offline
+    verification and package rollback on first boot.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 11:31:20 +0000
+
 plebian-os (0.2.3+packaging9) UNRELEASED; urgency=medium
 
   * A packaged first boot skips the build toolchain. The disc package
