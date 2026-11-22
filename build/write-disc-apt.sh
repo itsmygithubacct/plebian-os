@@ -67,7 +67,8 @@ done
         -o APT::FTPArchive::Release::Codename=trixie \
         -o APT::FTPArchive::Release::Architectures=amd64 \
         -o APT::FTPArchive::Release::Components=main \
-        release dists/trixie > dists/trixie/Release
+        release dists/trixie > Release.tmp
+    mv Release.tmp dists/trixie/Release
 )
 
 sign_uid='Plebian-OS per-image installer key'

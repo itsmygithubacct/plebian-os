@@ -4,7 +4,7 @@ All notable changes to Plebian-OS — and its coordinated
 pleb / kilix / kilix-95 release — are recorded here. The stack uses a single
 shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
-## Unreleased
+## [0.2.4] — Unreleased
 
 - First boot and upgrades share one EnCodec runtime between the 24 and 48 kHz
   converter commands. Upgrading the previous two-runtime installation offline
@@ -16,9 +16,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
   selected both system commands with Kilix `0.2.3+packaging7` without a build.
   First boot now downloads the published compact archive (239 MB on amd64,
   173 MB on arm64).
-- The installer now carries Kilix 0.2.3+packaging11, TUI Utils
+- The installer now carries Kilix 0.2.3+packaging13, TUI Utils
   0.3.1+packaging2, Needle 0.20261116+packaging3 and Content 0.4.0+packaging3.
-  The desktop installs Ask and its runtime dependencies from the disc.
+  The desktop installs Ask, its runtime dependencies and the docked Media Player from the disc.
   Ask offers its optional command model on first use. On older desktops with
   a Kilix checkout, first boot can still install Needle from the catalog when
   the Needle package is missing.

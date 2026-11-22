@@ -234,10 +234,12 @@ class DebianPackagingTests(unittest.TestCase):
         declared = set(re.findall(r"^Package: (\S+)$", control, flags=re.MULTILINE))
         self.assertEqual(declared, PACKAGES | METAPACKAGES)
         self.assertEqual({package for package, _, _, _ in install_map()}, PACKAGES | {"task-pleb-desktop"})
-        desktop = next(p for p in control.split("\n\n") if p.startswith("Package: pleb-desktop\n"))
-        depends = re.search(r"^Depends: (.*(?:\n [^\n]*)*)", desktop, flags=re.MULTILINE)[1]
-        self.assertEqual({d.strip() for d in depends.replace("\n", " ").split(",")}, {
-            "kilix (>= 0.2.3+packaging11)", "kilix-content (>= 0.4.0+packaging3)",
+        desktop = next(block for block in control.split("\n\n")
+                       if block.startswith("Package: pleb-desktop\n"))
+        deps = re.search(r"^Depends: (.*(?:\n [^\n]*)*)", desktop, re.MULTILINE)
+        self.assertEqual({item.strip() for item in deps[1].split(",")}, {
+            "kilix (>= 0.2.3+packaging13)", "kilix-95 (>= 0.2.3+packaging3)",
+            "kilix-amp (>= 0.20261029+packaging3)", "kilix-content (>= 0.4.0+packaging3)",
             "kilix-multiplexer", "kilix-needle (>= 0.20261116+packaging3)", "pleb",
             "plebian-desktop-base (= ${binary:Version})", "${misc:Depends}",
         })

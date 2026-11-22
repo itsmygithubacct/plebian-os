@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from source_release import source_release
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -20,11 +22,15 @@ class ReleaseVersioningTests(unittest.TestCase):
         return (ROOT / "VERSION").read_text().strip()
 
     @property
+    def source_version(self):
+        return source_release(ROOT)
+
+    @property
     def manifest(self):
-        path = ROOT / "releases" / f"{self.version}.env"
+        path = ROOT / "releases" / f"{self.source_version}.env"
         if not path.exists():
             self.skipTest(
-                f"coordinated {self.version} pin manifest is finalized only "
+                f"coordinated {self.source_version} pin manifest is finalized only "
                 "after all component release commits exist"
             )
         return path.read_text()
@@ -32,6 +38,31 @@ class ReleaseVersioningTests(unittest.TestCase):
     def test_version_file_is_release_version(self):
         self.assertRegex((ROOT / "VERSION").read_text().strip(), r"^\d+\.\d+\.\d+(?:\.[1-9][0-9]*)?$")
         self.assertIn(f"## [{self.version}]", _read("CHANGELOG.md"))
+
+    def test_development_manifest_is_refused_by_release_builders(self):
+        # The packaged alpha and the published source release have different
+        # provenance. A release label must never promote a development manifest.
+        import sys
+        from unittest import mock
+        sys.path.insert(0, str(ROOT / "build"))
+        import build_vm_image as vm
+        shell = _read("build", "remaster-iso.sh")
+        loader = shell[shell.index("load_release_manifest() {"):shell.index('[ -n "${PLEBIAN_OS_RELEASE:-}" ]')]
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "VERSION").write_text("9.8.7\n")
+            releases = repo / "releases"
+            releases.mkdir()
+            (releases / "9.8.7.env").write_text("PLEBIAN_OS_VERSION=9.8.7\nPLEBIAN_OS_RELEASE_MODE=0\n")
+            (releases / "9.8.7.requirements").write_text("# fixture\n")
+            shell_check = subprocess.run(
+                ["bash", "-ec", loader + '\nHERE="$1"; load_release_manifest 9.8.7', "test", td],
+                text=True, capture_output=True)
+            self.assertNotEqual(shell_check.returncode, 0)
+            self.assertIn("must set PLEBIAN_OS_RELEASE_MODE=1", shell_check.stderr)
+            with mock.patch.object(vm, "REPO", repo), mock.patch.dict(os.environ, {}, clear=True):
+                with self.assertRaises(SystemExit):
+                    vm.apply_release_manifest("9.8.7")
 
     def test_0_1_9_release_notes_document_the_upgrade_path(self):
         notes_path = ROOT / "releases" / "0.1.9-notes.md"
@@ -100,7 +131,7 @@ class ReleaseVersioningTests(unittest.TestCase):
     def test_release_manifest_pins_refs(self):
         m = self.manifest
         self.assertIn("PLEBIAN_OS_RELEASE_MODE=1", m)
-        self.assertIn(f"PLEBIAN_OS_REF=v{self.version}", m)
+        self.assertIn(f"PLEBIAN_OS_REF=v{self.source_version}", m)
         for key in ("PLEB_REF", "KILIX_REF", "KILIX95_REF"):
             self.assertRegex(m, rf"(?m)^{key}=[0-9a-f]{{40}}$")
 
@@ -399,7 +430,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertTrue((ROOT / "CHANGELOG.md").exists())
         self.assertTrue((ROOT / "UPGRADING.md").exists())
         self.assertTrue(
-            (ROOT / "releases" / f"{self.version}-notes.md").exists()
+            (ROOT / "releases" / f"{self.source_version}-notes.md").exists()
         )
 
     def test_notes_closure_table_mirrors_every_pin_in_the_manifest(self):
@@ -409,7 +440,7 @@ class ReleaseVersioningTests(unittest.TestCase):
         # must appear with its exact value, and no row may name a pin the
         # manifest does not have.
         manifest = self.manifest
-        notes = _read("releases", f"{self.version}-notes.md")
+        notes = _read("releases", f"{self.source_version}-notes.md")
         refs = dict(re.findall(r"(?m)^([A-Z0-9_]+_REF)=(\S+)$", manifest))
         rows = dict(re.findall(r"(?m)^\| `([A-Z0-9_]+_REF)` \| `([^`]+)` \|$", notes))
         self.assertTrue(refs, "manifest declares no *_REF keys")
@@ -418,20 +449,20 @@ class ReleaseVersioningTests(unittest.TestCase):
         self.assertEqual(set(rows) - set(refs), set(), "rows naming pins the manifest lacks")
 
     def test_current_release_notes_track_the_exact_source_closure(self):
-        notes = _read("releases", f"{self.version}-notes.md")
+        notes = _read("releases", f"{self.source_version}-notes.md")
         manifest = self.manifest
         for key in ("PLEB_REF", "KILIX_REF", "KILIX95_REF"):
             match = re.search(rf"(?m)^{key}=([0-9a-f]{{40}})$", manifest)
             self.assertIsNotNone(match, key)
             self.assertIn(match.group(1), notes)
-        self.assertIn(f"`v{self.version}`", notes)
+        self.assertIn(f"`v{self.source_version}`", notes)
         self.assertIn("fresh-install baseline", notes)
         self.assertIn("attached provenance record is the final artifact\nacceptance record", notes)
         self.assertIn("earlier local candidate ISO", notes)
 
         changelog = _read("CHANGELOG.md")
         heading = re.search(
-            rf"(?m)^## \[{re.escape(self.version)}\](?: — ([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}))?$",
+            rf"(?m)^## \[{re.escape(self.source_version)}\](?: — ([0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}))?$",
             changelog,
         )
         self.assertIsNotNone(heading)

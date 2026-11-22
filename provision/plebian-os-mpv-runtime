@@ -241,8 +241,9 @@ def install(path, expected_sha, expected_bytes, version, source, launcher):
             raise ValueError('refusing different player bytes under an existing version')
         if not target.exists():
             os.replace(held, target)
-        apt_run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
-                 '--no-install-recommends', '--no-remove', 'install', str(target)], check=True)
+        if installed_version() != version:
+            apt_run(['/usr/bin/apt-get', '-o', 'DPkg::Lock::Timeout=600', '--yes',
+                     '--no-install-recommends', '--no-remove', 'install', str(target)], check=True)
         verify(record)
         atomic_json(STATE / 'RUNTIME.json', record)
 

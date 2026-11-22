@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from email.parser import Parser
 from pathlib import Path
 
 import test_debian_packaging
@@ -192,6 +193,14 @@ class InstallerPackageTests(unittest.TestCase):
             self.assertTrue((repo / "dists/trixie/main/binary-amd64/Packages.gz").is_file())
             inrelease = (repo / "dists/trixie/InRelease").read_text()
             self.assertIn("BEGIN PGP SIGNED MESSAGE", inrelease)
+            suite = repo / "dists/trixie"
+            checksums = Parser().parsestr((suite / "Release").read_text())["SHA256"]
+            self.assertTrue(checksums)
+            for row in checksums.strip().splitlines():
+                digest, size, name = row.split()
+                contents = (suite / name).read_bytes()
+                self.assertEqual(len(contents), int(size), name)
+                self.assertEqual(hashlib.sha256(contents).hexdigest(), digest, name)
             names = {path.name for path in repo.rglob("*")}
             for forbidden in ("private-keys-v1.d", "trustdb.gpg", "pubring.kbx"):
                 self.assertNotIn(forbidden, names)
@@ -302,15 +311,18 @@ class DiscClosureTests(unittest.TestCase):
         debian = {row[0].split("_", 1)[0] for row in lock_rows()}
         project = {row[0].split("_", 1)[0] for row in lock_rows(PROJECT_LOCK)}
         direct_debian = {"python3", "git", "sudo", "curl", "ca-certificates", "systemd"}
-        direct_project = {"kilix", "kilix-content", "kilix-multiplexer", "kilix-needle", "pleb"}
+        direct_project = {
+            "kilix", "kilix-95", "kilix-amp", "kilix-content", "kilix-multiplexer", "kilix-needle", "pleb",
+        }
         self.assertEqual(outside_dependencies(), direct_debian | direct_project)
-        self.assertLessEqual(direct_debian, debian)
+        self.assertLessEqual(direct_debian | {"xauth", "xvfb", "libsdl2-image-2.0-0"}, debian)
         self.assertLessEqual({"python3-numpy", "python3-numpy-dev", "libblas3",
                               "liblapack3", "libgfortran5"}, debian)
         self.assertEqual(
             project,
             direct_project | {
-                "kilix-engine", "kilix-ml", "kilix-native", "kilix-transcript-clean", "kilix-tui-utils",
+                "kilix-engine", "kilix-ml", "kilix-mpv", "kilix-native", "kilix-transcript-clean",
+                "kilix-tui-utils",
                 "libkilix-encodec", "libonnxruntime1.21", "libonnxruntime-dev",
             },
         )

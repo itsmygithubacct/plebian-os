@@ -169,13 +169,11 @@ never logged and is expired after verification.
 
 The first publishable version is **0.1.1**. The existing `v0.1.0` tags identify
 an incomplete candidate and must never be moved or used for a published image.
-The last published coordinated release is **0.2.2**. Its published tags and
-artifacts remain immutable. The next planned release is
-**0.2.3**, the final after nine published release candidates (`v0.2.3-rc1`
-through `v0.2.3-rc9`) built on the patched 0.2.2.1 sources. The 0.2.2.1 work
-was a local source candidate; it did not produce a published release. Once
-`v0.2.3` is published, the release after it is 0.2.4, whose candidates record
-their release tag and so move to the 0.2.4 final on a plain update.
+The last published coordinated release is **0.2.3**, following nine release
+candidates. Its tags and artifacts remain immutable. The next planned release is
+**0.2.4**. Its development media install the desktop and Kilix Ask from signed
+Debian packages. The development manifest is marked with
+`PLEBIAN_OS_RELEASE_MODE=0`. Release builds require a qualified manifest.
 
 A maintenance release may append one positive decimal component without leading
 zeroes: `MAJOR.MINOR.PATCH.MAINTENANCE`. Thus `0.2.2 < 0.2.2.1 < 0.2.3`.

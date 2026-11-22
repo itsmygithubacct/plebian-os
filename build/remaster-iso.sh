@@ -242,6 +242,19 @@ load_release_manifest() {
 # A named release manifest is authoritative; without one, an explicit value
 # takes precedence over the repo VERSION file.
 PLEBIAN_OS_VERSION="${PLEBIAN_OS_VERSION:-$(cat "$HERE/VERSION" 2>/dev/null || echo 0.0.0-dev)}"
+development_manifest="$HERE/releases/$PLEBIAN_OS_VERSION.env"
+if [ -z "${PLEBIAN_OS_RELEASE:-}" ] && [ -f "$development_manifest" ] \
+        && grep -qx 'PLEBIAN_OS_RELEASE_MODE=0' "$development_manifest" \
+        && [ -z "${PLEBIAN_OS_MPV_URL:-}${PLEBIAN_OS_MPV_VERSION:-}${PLEBIAN_OS_MPV_BYTES:-}" ] \
+        && [ -z "${PLEBIAN_OS_MPV_SHA256:-}${PLEBIAN_OS_MPV_SOURCE_REF:-}${PLEBIAN_OS_MPV_LAUNCHER_REF:-}" ]; then
+    while IFS='=' read -r key value; do
+        case "$key" in
+            PLEBIAN_OS_MPV_URL|PLEBIAN_OS_MPV_VERSION|PLEBIAN_OS_MPV_BYTES|\
+            PLEBIAN_OS_MPV_SHA256|PLEBIAN_OS_MPV_SOURCE_REF|PLEBIAN_OS_MPV_LAUNCHER_REF)
+                export "$key=$value" ;;
+        esac
+    done < "$development_manifest"
+fi
 # The release manifest names its model compliance carrier relative to this
 # checkout; the validator (inside the tested slice) only accepts an absolute path.
 PLEBIAN_OS_VOICE_CARRIER_DIR="${PLEBIAN_OS_VOICE_CARRIER_DIR:-}"
@@ -600,9 +613,10 @@ validate_mpv_release_closure() {
     # its complete selection mandatory for the newly integrated release.
     [ "$present" != 0 ] || return 0
     [ "$present" = 6 ] || { echo 'mpv closure requires all six exact fields' >&2; return 1; }
-    [[ "$PLEBIAN_OS_MPV_URL" =~ ^https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb$ ]] \
+    [[ "$PLEBIAN_OS_MPV_URL" =~ ^https://github\.com/itsmygithubacct/kilix-mpv/releases/download/[A-Za-z0-9._+-]+/[A-Za-z0-9._%+-]+\.deb$ ||
+           "$PLEBIAN_OS_MPV_URL" = "https://itsmygithubacct.github.io/plebian-apt/pool/main/k/kilix-mpv/kilix-mpv_${PLEBIAN_OS_MPV_VERSION}_amd64.deb" ]] \
         && [ "${#PLEBIAN_OS_MPV_URL}" -le 2048 ] \
-        || { echo 'mpv package must use its immutable HTTPS release asset URL' >&2; return 1; }
+        || { echo 'mpv package must use a versioned project package URL' >&2; return 1; }
     [[ "$PLEBIAN_OS_MPV_SHA256" =~ ^[0-9a-f]{64}$ ]] \
         || { echo 'invalid mpv package SHA-256' >&2; return 1; }
     [[ "$PLEBIAN_OS_MPV_BYTES" =~ ^[1-9][0-9]{0,6}$ ]] && [ "$PLEBIAN_OS_MPV_BYTES" -le 8388608 ] \
@@ -2404,6 +2418,34 @@ fi
 
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
+# Packaged first boot runs this copy against the disc payloads. The public
+# default branch still resolves those archives beside the old shared data directory.
+mkdir -p "$EXTRACT/plebian-os/image-models/bundles"
+install -m 0644 "$HERE/provision/install-image-models.py" \
+    "$EXTRACT/plebian-os/image-models/install-image-models.py"
+for image_model_pin in \
+    basic-pitch-model.json \
+    command-model.json \
+    demucs-model.json \
+    paradee-model.json \
+    en-core-web-sm-model.json \
+    playalong-models.json \
+    pp-ocrv6-small-det-model.json \
+    pp-ocrv6-small-rec-model.json \
+    paradee-wheels.json \
+    espeak-ng-source.json
+do
+    install -m 0644 "$HERE/provision/$image_model_pin" \
+        "$EXTRACT/plebian-os/image-models/$image_model_pin"
+done
+for image_model_notice in \
+    espeakng-loader-0.2.4-LICENSE \
+    espeakng-loader-0.2.4-build.txt \
+    espeakng-loader-0.2.4-build.sh
+do
+    install -m 0644 "$HERE/provision/bundles/$image_model_notice" \
+        "$EXTRACT/plebian-os/image-models/bundles/$image_model_notice"
+done
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/install-deps.sh"             "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-ollama-converter" "$EXTRACT/plebian-os/"

@@ -1,3 +1,34 @@
+plebian-os (0.2.4~alpha3+ask1) UNRELEASED; urgency=medium
+
+  * Install Kilix Ask, its catalog and its runtime dependencies alongside
+    the docked Media Player on the 0.2.4 desktop disc.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 14:20:08 +0000
+
+plebian-os (0.2.4~alpha3) UNRELEASED; urgency=medium
+
+  * Verify the installed SSH and Waydroid helpers on a packaged first boot.
+    Preserve the OS checkout for installations using source-only Kilix extras.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 14:02:00 +0000
+
+plebian-os (0.2.4~alpha2) UNRELEASED; urgency=medium
+
+  * Use the Paradee installer from the same disc on first boot of the
+    packaged Media Player desktop.
+  * Include the Kilix private GUI bus supervisor and the virtual X server
+    required by the docked player.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 12:49:32 +0000
+
+plebian-os (0.2.4~alpha1) UNRELEASED; urgency=medium
+
+  * Include the docked Media Player, its mpv backend and the packaged Kilix
+    desktop launcher in the installer. Retain the player archive for offline
+    verification and package rollback on first boot.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 11:31:20 +0000
+
 plebian-os (0.2.3+packaging12) UNRELEASED; urgency=medium
 
   * Restore the most recent closure when two selections occur in the same
@@ -16,10 +47,10 @@ plebian-os (0.2.3+packaging11) UNRELEASED; urgency=medium
 
 plebian-os (0.2.3+packaging10) UNRELEASED; urgency=medium
 
-  * Install the packaged Needle runtime and matching Kilix Ask catalog
-    with the desktop. Carry their dependencies on the installer disc.
+  * A packaged first boot stages Paradee from the disc payload with the
+    image copy of the installer. It does not clone plebian-os source.
 
- -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 09:43:56 +0000
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 11:28:51 +0000
 
 plebian-os (0.2.3+packaging9) UNRELEASED; urgency=medium
 

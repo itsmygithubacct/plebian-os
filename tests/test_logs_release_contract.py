@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import unittest
 
+from source_release import source_release
 from test_voice_release_contract import (
     _git, _manifest, _repo_candidates, kilix_content_repo_candidates,
     kilix_repo_candidates, repo_holding,
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class LogsReleaseContractTests(unittest.TestCase):
     def test_selected_reader_preserves_full_history_paging_and_session_discovery(self):
-        version = (ROOT / "VERSION").read_text().strip()
+        version = source_release(ROOT)
         pins = _manifest(ROOT / "releases" / (version + ".env"))
         host_ref = pins["KILIX_REF"]
         host = repo_holding(kilix_repo_candidates(), host_ref)

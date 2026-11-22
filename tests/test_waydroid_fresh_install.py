@@ -232,6 +232,29 @@ class WaydroidFreshInstallTests(unittest.TestCase):
         self.assertLess(called, committed)
         self.assertNotIn("\ninstall_waydroid_application\n", source[begun:])
 
+    def test_packaged_first_boot_verifies_installed_helpers_without_a_checkout(self):
+        result = self.run_root(r"""
+mkdir -m 755 "$DEST"
+install -m 755 "$CHECKOUT/provision/plebian-os-waydroid-setup" "$DEST/"
+install -m 644 "$CHECKOUT/provision/"waydroid-closure.{env,sha256} "$DEST/"
+SSH_SERVER_HELPER="$WORK/plebian-os-ssh-server"
+install -m 755 "$CHECKOUT/provision/plebian-os-ssh-server" "$SSH_SERVER_HELPER"
+PLEBIAN_OS_DIR="$WORK/absent"
+packages_provide_pleb_and_kilix() { return 0; }
+before=$(stat -c '%i:%Z' "$SSH_SERVER_HELPER" "$DEST"/*)
+install_ssh_server_helper
+stage_waydroid_first_use_helper
+[ "$before" = "$(stat -c '%i:%Z' "$SSH_SERVER_HELPER" "$DEST"/*)" ]
+[ ! -e "$PLEBIAN_OS_DIR" ]
+echo changed >> "$DEST/waydroid-closure.env"
+if (stage_waydroid_first_use_helper); then exit 1; fi
+chmod 777 "$SSH_SERVER_HELPER"
+if (install_ssh_server_helper); then exit 1; fi
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Waydroid closure checksum mismatch", result.stderr)
+        self.assertIn("packaged SSH server helper is missing or unsafe", result.stderr)
+
     def test_fresh_amd64_install_stages_the_helper_when_the_flag_is_off(self):
         result = self.run_root(r"""
 stage_waydroid_first_use_helper

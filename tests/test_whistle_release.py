@@ -9,6 +9,7 @@ import tarfile
 import tempfile
 import unittest
 
+from source_release import source_release
 import test_voice_release_contract as contract
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,11 +19,11 @@ import build_vm_image as vm
 
 class WhistleReleaseCatalogTests(unittest.TestCase):
     def test_pinned_voice_catalog_passes_provision_and_vm_acceptance(self):
-        # The release this tree builds. Its Kilix installs the pinned Voice
+        # The source release installs the pinned Voice
         # and adds whisper-medium-en to the staged library with
         # scripts/patch-whisper-medium-model.py, so the producer is that
         # patched library, not the bare Voice commit.
-        version = (ROOT/'VERSION').read_text().strip()
+        version = source_release(ROOT)
         pins = contract._manifest(ROOT/f'releases/{version}.env')
         ref = pins['KILIX_VOICE_REF']
         repo = contract.repo_holding(contract._repo_candidates(

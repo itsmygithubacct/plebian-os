@@ -37,7 +37,7 @@ jobs:
           fetch kilix-content 7543aa30bd0c7ff60b7d7953e3290b87da10583c
           fetch kilix-voice dacfcaa98e58faffef8876873e7cb5b306890eec
           # Leave the current host materialized for the Voicebox SDK imports.
-          for version in 0.2.2 "$(cat VERSION)"; do
+          for version in 0.2.2 "$(python3 tests/source_release.py)"; do
             manifest="releases/$version.env"
             kilix_ref="$(pin KILIX_REF)"
             fetch kilix "$kilix_ref"

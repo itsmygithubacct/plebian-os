@@ -124,12 +124,16 @@ class OllamaCarrierWrapperTests(unittest.TestCase):
             env.update({
                 "HOME": td,
                 "PLEBIAN_OS_OLLAMA_CARRIER": str(carrier),
-                # The builders require the release to match checkout VERSION.
-                "PLEBIAN_OS_RELEASE": (ROOT / "VERSION").read_text().strip(),
                 "PLEBIAN_OS_ARTIFACTS": str(root / "artifacts"),
                 "PLEBIAN_OS_CACHE": str(root / "cache"),
                 "PLEBIAN_OS_SESSION_HOME": str(root / "session"),
             })
+            version = (ROOT / "VERSION").read_text().strip()
+            manifest = (ROOT / "releases" / f"{version}.env").read_text().splitlines()
+            if "PLEBIAN_OS_RELEASE_MODE=1" in manifest:
+                env["PLEBIAN_OS_RELEASE"] = version
+            else:
+                env.pop("PLEBIAN_OS_RELEASE", None)
             env.pop("PLEBIAN_OS_VM_PASSWORD", None)
 
             usb = subprocess.run(

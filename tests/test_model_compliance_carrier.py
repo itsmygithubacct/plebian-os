@@ -28,6 +28,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from source_release import source_release
+
 import test_voice_release_contract as voice_contract  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,7 +86,7 @@ def determination_gaps(model: str, text: str, entry: dict) -> list[str]:
     return gaps
 
 
-VERSION = (ROOT / "VERSION").read_text().strip()
+VERSION = source_release(ROOT)
 CARRIER = ROOT / "releases" / f"{VERSION}-model-compliance"
 GENERATOR = ROOT / "build" / "generate-model-compliance.py"
 REFUSAL = (f"Plebian-OS {VERSION} release mode refuses "
@@ -151,7 +153,18 @@ def regenerate(content: Path, license_: Path, out: Path,
         args += ["--determination", f"{determination.parent.name}={determination}"]
     for seat in sorted((source / "seats").glob("*")):
         args += ["--seat", str(seat)]
-    return subprocess.run(args, text=True, capture_output=True)
+    # Reproduce the historical carrier using the current generator and
+    # provisions, with the VERSION and manifest that its receipt binds.
+    with tempfile.TemporaryDirectory() as td:
+        checkout = Path(td)
+        (checkout / "build").mkdir()
+        script = checkout / "build" / GENERATOR.name
+        shutil.copyfile(GENERATOR, script)
+        (checkout / "VERSION").write_text(VERSION + "\n")
+        for directory in ("provision", "releases"):
+            (checkout / directory).symlink_to(ROOT / directory, target_is_directory=True)
+        args[1] = str(script)
+        return subprocess.run(args, text=True, capture_output=True)
 
 
 def image_offline_inventory() -> dict[str, str]:
