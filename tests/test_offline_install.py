@@ -4,11 +4,13 @@ The 0.2.3 offline persona failed three ways: pkgsel stopped the install because
 its package list needs a mirror, nothing configured the network when it was
 restored, and the enabled CD-ROM apt entry failed every provisioning attempt.
 """
+import http.server
 import os
 import stat
 import subprocess
 import tempfile
 import textwrap
+import threading
 import unittest
 from pathlib import Path
 
@@ -222,6 +224,39 @@ class LateCommand(unittest.TestCase):
             self.assertFalse((state / "firstboot-attempts").exists())
             curl.write_text("#!/bin/sh\nexit 0\n")
             self.assertEqual(subprocess.run(args, env=env).returncode, 0)
+
+    def test_reconnected_boot_retries_a_transient_archive_failure(self):
+        responses = [503, 200]
+
+        class Archive(http.server.BaseHTTPRequestHandler):
+            def do_HEAD(self):
+                self.send_response(responses.pop(0))
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        with tempfile.TemporaryDirectory() as td, http.server.HTTPServer(("127.0.0.1", 0), Archive) as server:
+            root = Path(td)
+            (root / "offline-desktop-ready").touch()
+            # Preserve all curl options and substitute the local test archive.
+            curl = root / "curl"
+            curl.write_text("#!/usr/bin/python3\nimport os, sys\n"
+                            "os.execv('/usr/bin/curl', ['curl', *sys.argv[1:-1], os.environ['TEST_ARCHIVE']])\n")
+            curl.chmod(0o755)
+            env = dict(os.environ, PLEBIAN_OS_STATE_DIR=td, PATH=f"{td}:/usr/bin:/bin",
+                       TEST_ARCHIVE=f"http://127.0.0.1:{server.server_port}/InRelease", no_proxy="127.0.0.1")
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                run = subprocess.run([HELPER.with_name("plebian-os-firstboot-attempt"), "check"],
+                                     env=env, capture_output=True, text=True, timeout=15)
+            finally:
+                server.shutdown()
+                thread.join()
+            self.assertEqual(run.returncode, 0, run.stderr)
+            self.assertEqual(responses, [])
+            self.assertFalse((root / "firstboot-attempts").exists())
 
     def test_offline_install_gets_wired_dhcp_and_a_networkmanager_hold(self):
         with tempfile.TemporaryDirectory() as td:

@@ -372,6 +372,7 @@ case "${1:-}" in
                 archive="https://snapshot.debian.org/archive/debian/$PLEBIAN_OS_APT_SNAPSHOT/dists/trixie/InRelease"
             fi
             if ! curl --fail --silent --show-error --location --head \
+                    --retry 2 --retry-delay 1 --retry-max-time 12 \
                     --connect-timeout 3 --max-time 8 "$archive" >/dev/null; then
                 say "offline desktop available; provisioning will retry on a connected boot"
                 exit 1

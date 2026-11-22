@@ -1,3 +1,9 @@
+plebian-os (0.2.4~alpha3+ask4) UNRELEASED; urgency=medium
+
+  * Retry transient archive errors before deferring a connected first boot.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 17:02:23 +0000
+
 plebian-os (0.2.4~alpha3+ask3) UNRELEASED; urgency=medium
 
   * Carry the Ask model-verification output and system grammar label fixes.
