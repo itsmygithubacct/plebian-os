@@ -6188,7 +6188,7 @@ print(commit if re.fullmatch("[0-9a-f]{40}", str(commit)) else "")' "$record" 2>
 run_encodec_converter_installer() {
     local -a elevate=()
     [ "$(/usr/bin/id -u)" = 0 ] || elevate=(/usr/bin/sudo)
-    "${elevate[@]}" $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
+    "${elevate[@]}" "$PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter" --refresh
 }
 
 refresh_os_dependencies() {
@@ -7796,7 +7796,7 @@ test_fail_after_boundary zell-runtime
 # newly adds are tracked with the other package steps.
 begin_package_addition_window
 run_encodec_converter_installer \
-    || die "required EnCodec converter installation failed"
+    || die "could not refresh the requested EnCodec converter"
 end_package_addition_window
 begin_package_addition_window
 install_model_setup_software

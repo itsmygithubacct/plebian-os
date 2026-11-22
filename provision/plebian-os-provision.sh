@@ -8726,25 +8726,17 @@ normalize_accounts_service_package_directory
 
 install_ollama_runtime_from_carrier
 
-# The first-run wizard requires this software before any model is selected.
-# Like APT dependencies, prepare it before the root configuration snapshot.
-# Its independently installed payload remains available if later configuration
-# fails; the root rollback must not try to remove its populated parent.
-# Installation carries no model weights and creates no licence receipts.
+# Model Setup invokes this helper after the user chooses an EnCodec model.
 ENCODEC_CONVERTER_INSTALLER_SRC=""
 for cand in "$SELF_DIR/plebian-os-install-encodec-converter" \
     $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter; do
     [ -r "$cand" ] && ENCODEC_CONVERTER_INSTALLER_SRC="$cand" && break
 done
 [ -n "$ENCODEC_CONVERTER_INSTALLER_SRC" ] || die "required EnCodec converter installer is missing"
-if [ "$DRY_RUN" = 1 ]; then
-    log "installing required EnCodec conversion software (no models)"
-else
-    if [ "$ENCODEC_CONVERTER_INSTALLER_SRC" != $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter ]; then
-        install -m 0755 "$ENCODEC_CONVERTER_INSTALLER_SRC" $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
-    fi
-    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter || die "required EnCodec converter installation failed"
+if [ "$DRY_RUN" != 1 ] && [ "$ENCODEC_CONVERTER_INSTALLER_SRC" != "$PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter" ]; then
+    install -m 0755 "$ENCODEC_CONVERTER_INSTALLER_SRC" "$PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter"
 fi
+log "EnCodec model conversion is available on demand in Model Setup"
 
 begin_provision_root_transaction
 install_kilix_secrets

@@ -1,3 +1,10 @@
+plebian-os (0.2.4~alpha4) UNRELEASED; urgency=medium
+
+  * Install EnCodec conversion software on explicit request and refresh it
+    on opted-in systems. Keep its verified installer available on first boot.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 22:49:00 +0000
+
 plebian-os (0.2.4~alpha3) UNRELEASED; urgency=medium
 
   * Verify the installed SSH and Waydroid helpers on a packaged first boot.

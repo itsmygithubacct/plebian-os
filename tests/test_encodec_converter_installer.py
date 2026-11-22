@@ -172,7 +172,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, re.escape(package)):
                     main()
 
-    def test_fresh_provision_installs_and_runs_required_software(self):
+    def test_fresh_provision_ships_helper_without_invoking_it(self):
         source = (ROOT / "provision/plebian-os-provision.sh").read_text()
         start = source.index('ENCODEC_CONVERTER_INSTALLER_SRC=""')
         end = source.index("\nfi\n", start) + len("\nfi\n")
@@ -190,15 +190,57 @@ class EncodecConverterInstallerTests(unittest.TestCase):
             result = subprocess.run(["bash", "-c", prelude + f"DRY_RUN={dry_run}\n" + block],
                                     text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(calls.exists(), not dry_run)
-        self.assertEqual(calls.read_text(), "invoked\n")
-        helper.write_text("#!/bin/sh\nexit 7\n")
-        result = subprocess.run(["bash", "-c", prelude + "DRY_RUN=0\n" + block],
-                                text=True, capture_output=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("required EnCodec converter installation failed", result.stderr)
+            self.assertFalse(calls.exists())
+        self.assertEqual(installed.read_bytes(), helper.read_bytes())
 
-    def test_configuration_rollback_preserves_prepared_converter_dependency(self):
+    def test_refresh_without_an_explicit_request_has_no_install_side_effects(self):
+        marker = self.destination / 'requested'
+        with mock.patch.dict(self.ns['main'].__globals__, REQUESTED=marker), \
+                mock.patch('sys.argv', [str(HELPER), '--refresh']), \
+                mock.patch('subprocess.run', return_value=subprocess.CompletedProcess([], 1, '', '')) as command, \
+                mock.patch('platform.machine', side_effect=AssertionError('unexpected installation')):
+            self.ns['main']()
+        self.assertEqual(command.call_count, 1)
+        self.assertFalse(marker.exists())
+
+    def test_size_report_touches_neither_opt_in_nor_network(self):
+        for machine in ('amd64', 'arm64'):
+            output = io.StringIO()
+            with self.subTest(machine=machine), mock.patch('platform.machine', return_value=machine), \
+                    mock.patch('sys.argv', [str(HELPER), '--download-bytes']), \
+                    mock.patch('subprocess.run') as run, mock.patch('os.open') as create, \
+                    contextlib.redirect_stdout(output):
+                self.ns['main']()
+            self.assertEqual(int(output.getvalue()), self.ns['archive_for'](machine)['compact']['size'])
+            run.assert_not_called()
+            create.assert_not_called()
+
+    def test_explicit_install_records_success_only_and_refresh_reuses_it(self):
+        from types import SimpleNamespace
+        import stat
+        marker = self.destination / 'requested'
+        dest = self.destination / 'payload'
+        main = self.ns['main']
+        with mock.patch.dict(main.__globals__, REQUESTED=marker, DESTINATION=dest,
+                             secure_directory=mock.Mock()), \
+                mock.patch('os.geteuid', return_value=0), \
+                mock.patch('os.fstat', return_value=SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o600)), \
+                mock.patch('subprocess.run', return_value=subprocess.CompletedProcess([], 0, 'installed', '')), \
+                mock.patch('sys.argv', [str(HELPER)]):
+            with mock.patch.dict(main.__globals__, install_locked=mock.Mock(side_effect=ValueError('failed'))):
+                with self.assertRaisesRegex(ValueError, 'failed'):
+                    main()
+            self.assertFalse(marker.exists())
+            action = mock.Mock()
+            with mock.patch.dict(main.__globals__, install_locked=action):
+                main()
+                self.assertTrue(marker.is_file())
+                with mock.patch.object(Path, 'lstat', return_value=SimpleNamespace(
+                        st_uid=0, st_mode=stat.S_IFREG | 0o644)), mock.patch('sys.argv', [str(HELPER), '--refresh']):
+                    main()
+                self.assertEqual(action.call_count, 2)
+
+    def test_configuration_rollback_does_not_acquire_converter(self):
         from test_provision_transaction import ProvisionRootTransactionTests
         fixture = ProvisionRootTransactionTests()
         root = self.destination
@@ -227,7 +269,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
                               + shlex.quote(str(paths['existing'])) + '\nexit 19\n')
         self.assertEqual(result.returncode, 19, result.stderr)
         self.assertEqual(paths['existing'].read_text(), 'before\n')
-        self.assertEqual(payload.read_text(), 'software only\n')
+        self.assertFalse(payload.exists())
         self.assertEqual(list(paths['state'].iterdir()), [])
 
     def test_update_installer_elevates_and_propagates_failure(self):
@@ -240,7 +282,7 @@ class EncodecConverterInstallerTests(unittest.TestCase):
         calls = self.destination / "calls"
         identity.write_text("#!/bin/sh\necho 1000\n")
         sudo.write_text("#!/bin/sh\necho elevated >> " + shlex.quote(str(calls)) + '\nexec "$@"\n')
-        helper.write_text("#!/bin/sh\nexit 7\n")
+        helper.write_text('#!/bin/sh\n[ "$1" = --refresh ] || exit 9\nexit 7\n')
         for path in (identity, sudo, helper):
             path.chmod(0o755)
         function = function.replace("/usr/bin/id", str(identity)).replace("/usr/bin/sudo", str(sudo))

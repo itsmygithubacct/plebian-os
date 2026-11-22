@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -IB
-"""Install the required, pinned EnCodec conversion software (no models)."""
+"""Install the optional, pinned EnCodec conversion software (no models)."""
 
 import argparse
 import ctypes
@@ -32,6 +32,7 @@ PAYLOAD_FILES = {
     "source.tar.gz": "bdabac8f3c72e491b8d5a1e94163a63af2f94be87dcd66d623cf5d8f9f7fab7d"
 }
 DESTINATION = Path("/usr/lib/plebian-os/kilix-encodec")
+REQUESTED = Path("/var/lib/plebian-os/encodec-converter-requested")
 MONO_COMMAND = "bin/kilix-encodec-convert-24khz"
 MONO_RUNTIME = ".converter/runtime.tar"
 MONO_RECEIPT = ".converter/receipt.json"
@@ -350,17 +351,50 @@ def install_locked(selected, supplied):
     print(f"Installed shared converter at {DESTINATION}")
 
 
+def explicitly_requested():
+    try:
+        info = REQUESTED.lstat()
+    except FileNotFoundError:
+        # An explicitly installed Debian converter package also owns this choice.
+        package = subprocess.run(
+            ["/usr/bin/dpkg-query", "-W", "-f=${db:Status-Status}", "kilix-encodec-converter"],
+            capture_output=True, text=True)
+        return package.returncode == 0 and package.stdout == "installed"
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+        raise ValueError("unsafe EnCodec opt-in record")
+    return True
+
+
+def record_request():
+    secure_directory(REQUESTED.parent)
+    try:
+        fd = os.open(REQUESTED, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except FileExistsError:
+        explicitly_requested()  # Validate the existing record.
+    else:
+        os.close(fd)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--archive", type=Path, help="use a local copy of the exact pinned archive")
-    parser.add_argument("--dry-run", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--dry-run", action="store_true")
+    modes.add_argument("--download-bytes", action="store_true", help="print the pinned download size without installing")
+    modes.add_argument("--refresh", action="store_true", help="update only an explicitly requested converter")
     args = parser.parse_args()
+    if args.refresh and not explicitly_requested():
+        print("EnCodec conversion is available on demand")
+        return
     selected = archive_for(platform.machine())
     if selected["size"] <= 0 or len(selected["sha256"]) != 64:
         raise ValueError("converter release archive has not been selected")
+    if args.download_bytes:
+        print(transfer_for(selected, args.archive)["size"])
+        return
     if args.dry_run:
         transfer = transfer_for(selected, args.archive)
-        print(f"Required conversion software; no model weights or licence receipts.\n"
+        print(f"Optional conversion software; no model weights or licence receipts.\n"
               f"{args.archive or transfer['url']}\nbytes={transfer['size']} sha256={transfer['sha256']}\n"
               f"Installed bytes={selected['installed_bytes']} at {DESTINATION}")
         return
@@ -382,7 +416,10 @@ def main():
             raise ValueError("unsafe converter installation lock")
         fcntl.flock(lock, fcntl.LOCK_EX)
         install_locked(selected, args.archive)
-    print("Next, as your normal user: kilix models install encodec-24khz-stateful")
+        if not args.refresh:
+            record_request()
+    if not args.refresh:
+        print("EnCodec conversion is ready.")
 
 
 if __name__ == "__main__":
