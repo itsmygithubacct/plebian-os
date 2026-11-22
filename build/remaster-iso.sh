@@ -2404,6 +2404,34 @@ fi
 
 cp "$HERE/provision/plebian-os-provision.sh"     "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-firstboot.service" "$EXTRACT/plebian-os/"
+# Packaged first boot runs this copy against the disc payloads. The public
+# default branch still resolves those archives beside the old shared data directory.
+mkdir -p "$EXTRACT/plebian-os/image-models/bundles"
+install -m 0644 "$HERE/provision/install-image-models.py" \
+    "$EXTRACT/plebian-os/image-models/install-image-models.py"
+for image_model_pin in \
+    basic-pitch-model.json \
+    command-model.json \
+    demucs-model.json \
+    paradee-model.json \
+    en-core-web-sm-model.json \
+    playalong-models.json \
+    pp-ocrv6-small-det-model.json \
+    pp-ocrv6-small-rec-model.json \
+    paradee-wheels.json \
+    espeak-ng-source.json
+do
+    install -m 0644 "$HERE/provision/$image_model_pin" \
+        "$EXTRACT/plebian-os/image-models/$image_model_pin"
+done
+for image_model_notice in \
+    espeakng-loader-0.2.4-LICENSE \
+    espeakng-loader-0.2.4-build.txt \
+    espeakng-loader-0.2.4-build.sh
+do
+    install -m 0644 "$HERE/provision/bundles/$image_model_notice" \
+        "$EXTRACT/plebian-os/image-models/bundles/$image_model_notice"
+done
 cp "$HERE/provision/plebian-os-firstboot-attempt" "$EXTRACT/plebian-os/"
 cp "$HERE/provision/install-deps.sh"             "$EXTRACT/plebian-os/"
 cp "$HERE/provision/plebian-os-install-ollama-converter" "$EXTRACT/plebian-os/"

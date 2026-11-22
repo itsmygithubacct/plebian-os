@@ -1850,7 +1850,7 @@ class ImageWiringTests(unittest.TestCase):
                         provision.index('install-image-models.py'))
         self.assertIn(
             'as_user env "${install_env[@]}" /usr/bin/python3 \\\n'
-            '    "$PLEBIAN_OS_DIR/provision/install-image-models.py" '
+            '        "$PLEBIAN_OS_DIR/provision/install-image-models.py" '
             '--kilix "$KILIX_DIR" --offline', provision)
         self.assertLess(update.index('install-default-models.py'),
                         update.index('install-image-models.py'))
@@ -1948,7 +1948,16 @@ class ImageWiringTests(unittest.TestCase):
         # root and before the desktop user's step, downloads what the image did not supply.
         self.assertIn(
             '"$PLEBIAN_OS_DIR/provision/install-image-models.py" \\\n'
-            '        --install-paradee-runtime --offline', provision)
+            '            --install-paradee-runtime --offline', provision)
+        self.assertIn(
+            '"$PLEBIAN_OS_LIBEXECDIR/image-models/install-image-models.py" \\\n'
+            '            --install-paradee-runtime --offline', provision)
+        self.assertIn(
+            'cp -a /cdrom/plebian-os/image-models/. '
+            '/target/usr/libexec/plebian-os/image-models/', preseed)
+        self.assertIn(
+            'install -m 0644 "$HERE/provision/install-image-models.py" \\\n'
+            '    "$EXTRACT/plebian-os/image-models/install-image-models.py"', remaster)
         self.assertLess(provision.index('--install-paradee-runtime'),
                         provision.index('install-image-models.py" --kilix "$KILIX_DIR" --offline'))
         update = (ROOT / 'provision/plebian-os-update.sh').read_text()
