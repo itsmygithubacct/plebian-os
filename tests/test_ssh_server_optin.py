@@ -1378,7 +1378,7 @@ class WiringTests(unittest.TestCase):
     def test_both_root_paths_are_inside_the_provisioning_rollback(self):
         start = self.provision.index("PROVISION_ROOT_TRANSACTION_PATHS=(")
         paths = self.provision[start:self.provision.index("\n)\n", start)]
-        self.assertIn("$PLEBIAN_OS_SBINDIR/plebian-os-ssh-server\n", paths)
+        self.assertIn('"$PLEBIAN_OS_SBINDIR/plebian-os-ssh-server"\n', paths)
         self.assertIn("/var/lib/plebian-os/ssh-server-offer\n", paths)
 
     def test_provisioning_never_installs_or_starts_an_ssh_server(self):

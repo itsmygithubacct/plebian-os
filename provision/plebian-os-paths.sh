@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Plebian-OS installed paths.
 #
 # This is the one definition of where the files of this repository live on an
@@ -10,6 +11,9 @@
 # The values are fixed on purpose. A root helper must not take its install
 # locations from the caller's environment.
 
+# Each consumer carries the full installed-path table.
+# shellcheck disable=SC2034
+{
 # >>> plebian-os-paths
 PLEBIAN_OS_SBINDIR=/usr/sbin
 PLEBIAN_OS_BINDIR=/usr/bin
@@ -20,3 +24,4 @@ PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
 PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
 PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
 # <<< plebian-os-paths
+}

@@ -1,6 +1,9 @@
 #!/bin/sh
 # Fixed root-owned entry point. No caller-selected import path or alternate root.
 set -eu
+# Each consumer carries the full installed-path table.
+# shellcheck disable=SC2034
+{
 # >>> plebian-os-paths
 PLEBIAN_OS_SBINDIR=/usr/sbin
 PLEBIAN_OS_BINDIR=/usr/bin
@@ -11,4 +14,5 @@ PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
 PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
 PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
 # <<< plebian-os-paths
+}
 exec /usr/bin/python3 -I -B "$PLEBIAN_OS_LIBEXECDIR/native_runtime.py" "$@"

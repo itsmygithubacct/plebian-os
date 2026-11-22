@@ -73,6 +73,9 @@
 # /usr/bin elevate through sudo.
 set -euo pipefail
 
+# Each consumer carries the full installed-path table.
+# shellcheck disable=SC2034
+{
 # >>> plebian-os-paths
 PLEBIAN_OS_SBINDIR=/usr/sbin
 PLEBIAN_OS_BINDIR=/usr/bin
@@ -83,6 +86,7 @@ PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
 PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
 PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
 # <<< plebian-os-paths
+}
 
 # The published Pleb that starts a hop records `selecting` and then execs this
 # selector. If that parent dies, this process must stop with it. Otherwise a

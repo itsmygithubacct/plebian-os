@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import stat
@@ -1849,9 +1850,9 @@ class ImageWiringTests(unittest.TestCase):
         self.assertLess(provision.index('install-default-models.py'),
                         provision.index('install-image-models.py'))
         self.assertIn(
-            'as_user env "${install_env[@]}" /usr/bin/python3 \\\n'
-            '    "$PLEBIAN_OS_DIR/provision/install-image-models.py" '
-            '--kilix "$KILIX_DIR" --offline', provision)
+            'as_user env "${install_env[@]}" /usr/bin/python3 '
+            '"$PLEBIAN_OS_DIR/provision/install-image-models.py" --kilix "$KILIX_DIR" --offline',
+            re.sub(r'[ \t]*\\\n[ \t]*', ' ', provision))
         self.assertLess(update.index('install-default-models.py'),
                         update.index('install-image-models.py'))
         self.assertIn(

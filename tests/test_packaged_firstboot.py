@@ -33,10 +33,11 @@ PLEB_REF=test-pin
 DRY_RUN="$TEST_DRY_RUN"
 install_env=(TEST_ENV=shared)
 dpkg-query() {
-    [ "$1" = -W ] && [ "$2" = '-f=${db:Status-Abbrev}' ] || return 1
-    case "$3" in
+    [ "$1" = -W ] && [ "$2" = -f ] && [ "$3" = '${db:Status-Status}' ] || return 1
+    case "$4" in
         pleb) printf '%s' "$PLEB_STATUS" ;;
         kilix) printf '%s' "$KILIX_STATUS" ;;
+        kilix-needle) printf '%s' "$NEEDLE_STATUS" ;;
         *) return 1 ;;
     esac
 }
@@ -71,17 +72,15 @@ class PackagedFirstbootTests(unittest.TestCase):
         stage.parent.mkdir(parents=True)
         stage.write_text('import sys\nprint("Paradee stage", *sys.argv[1:])\n')
 
-    def shell(self, body, *, pleb="ii ", kilix="ii ", dry=False):
+    def shell(self, body, *, pleb="installed", kilix="installed", needle="installed", dry=False):
         return subprocess.run(
             ["/bin/bash", "-c", SETUP + body, "test-packaged-firstboot", str(PROVISION), str(self.root)],
             env={"PATH": "/usr/bin:/bin", "TMPDIR": str(self.root), "PLEBIAN_OS_PROVISION_LIB_ONLY": "1",
-                 "PLEB_STATUS": pleb, "KILIX_STATUS": kilix, "TEST_DRY_RUN": str(int(dry)),
+                 "PLEB_STATUS": pleb, "KILIX_STATUS": kilix, "NEEDLE_STATUS": needle,
+                 "TEST_DRY_RUN": str(int(dry)),
                  "PYTHONDONTWRITEBYTECODE": "1"}, capture_output=True, text=True, timeout=20)
 
     def test_source_preserves_package_detection_and_checkout_commands(self):
-        helper = section("packages_provide_pleb_and_kilix() {", "update_pleb_checkout() {")
-        for package in ("pleb", "kilix"):
-            self.assertIn(f"dpkg-query -W -f='${{db:Status-Abbrev}}' {package} 2>/dev/null | grep -q '^ii'", helper)
         self.assertIn("record_voice_dictation_census\nif packages_provide_pleb_and_kilix; then", INSTALL)
         self.assertLess(SOURCE.index("\ninstall_env=("), SOURCE.index("\nrecord_voice_dictation_census\n"))
         packaged, checkout = INSTALL.split("\nelse\n", 1)
@@ -96,8 +95,8 @@ class PackagedFirstbootTests(unittest.TestCase):
         self.assertLess(SOURCE.index("    build_kilix_fork\n"), SOURCE.index("\nprepare_kilix95_caches\n"))
 
     def test_dpkg_status_missing_query_and_dry_run(self):
-        for pleb, kilix, dry, expected in (("ii ", "ii ", False, 0), ("rc ", "ii ", False, 1),
-                                          ("ii ", "iU ", False, 1), ("ii ", "ii ", True, 1)):
+        for pleb, kilix, dry, expected in (("installed", "installed", False, 0), ("config-files", "installed", False, 1),
+                                          ("installed", "unpacked", False, 1), ("installed", "installed", True, 1)):
             with self.subTest(pleb=pleb, kilix=kilix, dry=dry):
                 result = self.shell("packages_provide_pleb_and_kilix", pleb=pleb, kilix=kilix, dry=dry)
                 self.assertEqual(result.returncode, expected, result.stderr)
@@ -133,6 +132,21 @@ class PackagedFirstbootTests(unittest.TestCase):
             self.assertNotIn(action, result.stdout)
         self.assertFalse((self.root / "sudoers").exists())
 
+    def test_older_packaged_install_uses_checkout_needle_when_available(self):
+        result = self.shell(INSTALL, needle="config-files")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Install the kilix-needle package", result.stderr)
+        self.assertNotIn("using the packaged Needle", result.stdout)
+        self.assertNotIn("needle-called", result.stdout)
+
+        launcher = self.root / "kilix/kilix"
+        launcher.parent.mkdir()
+        launcher.touch(mode=0o755)
+        result = self.shell(INSTALL, needle="config-files")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("needle-called", result.stdout)
+        self.assertNotIn("using the packaged Needle", result.stdout)
+
     def test_packaged_missing_or_nonexecutable_command_fails_before_checkout(self):
         for name in ("pleb", "kilix"):
             with self.subTest(name=name):
@@ -154,7 +168,7 @@ class PackagedFirstbootTests(unittest.TestCase):
             with self.subTest(existing=existing):
                 if existing:
                     (self.root / "pleb/.git").mkdir(parents=True)
-                result = self.shell(INSTALL, kilix="rc ")
+                result = self.shell(INSTALL, kilix="config-files")
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("update_pleb_checkout" if existing else "as_user git clone", result.stdout)
                 if not existing:

@@ -84,7 +84,8 @@ DRY_RUN=$2
 pleb_status=$3
 kilix_status=$4
 dpkg-query() {
-    case "$3" in
+    [ "$2" = -f ] && [ "$3" = '${db:Status-Status}' ] || return 1
+    case "$4" in
         pleb) printf '%s' "$pleb_status" ;;
         kilix) printf '%s' "$kilix_status" ;;
         *) return 1 ;;
@@ -95,13 +96,14 @@ UV_VERSION_PIN= UV_INSTALLER_SHA256= UV_INSTALLER_MAX_BYTES=
 log() { echo "$*"; }
 bash() { printf 'child %s\n' "$*"; }
 '''
-        cases = (("0", "ii", "ii"), ("0", "rc", "ii"), ("0", "ii", "rc"), ("1", "ii", "ii"))
+        cases = (("0", "installed", "installed"), ("0", "config-files", "installed"),
+                 ("0", "installed", "unpacked"), ("1", "installed", "installed"))
         for dry, pleb, kilix in cases:
             with self.subTest(dry=dry, pleb=pleb, kilix=kilix):
                 result = run_bash("-s", "--", PROVISIONER, dry, pleb, kilix, script=setup + source[start:end])
                 self.assertEqual(result.returncode, 0, result.stderr)
                 calls = [line.split()[1:] for line in result.stdout.splitlines() if line.startswith("child ")]
-                packaged = (dry, pleb, kilix) == ("0", "ii", "ii")
+                packaged = (dry, pleb, kilix) == ("0", "installed", "installed")
                 expected = ["install-deps", "--model-converters"]
                 if packaged:
                     expected.append("--packaged-runtime")

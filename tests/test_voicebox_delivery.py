@@ -32,7 +32,7 @@ class VoiceboxDeliveryTests(unittest.TestCase):
         script.write_text('#!/bin/sh\nprintf "%s\\n" "$@" >> "$LOG"\nexit "${FIXTURE_RC:-0}"\n')
         script.chmod(0o700)
 
-    def run_hook(self, hook, package=True, digest=True, code=0, dry=0):
+    def run_hook(self, *, package=True, digest=True, code=0, dry=0):
         env = {'PATH': os.environ['PATH'], 'HOME': str(self.base), 'LOG': str(self.log),
             'FIXTURE_RC': str(code), 'KILIX_VOICEBOX_PACKAGE': str(self.package) if package else '',
             'KILIX_VOICEBOX_PACKAGE_SHA256': self.digest if digest else ''}
@@ -42,34 +42,34 @@ class VoiceboxDeliveryTests(unittest.TestCase):
         # This unit checks argument/refusal forwarding only. The complete real
         # root transaction, snapshot and lock are covered in the adjacent suite.
         body += 'begin_provision_voicebox_selection() { KILIX_VOICEBOX_TRANSACTION_FD=999; }\n'
-        body += 'install_env=()\n'
+        body += 'install_env=()\nPACKAGED_PLEB=0\nKILIX_CHECKOUT_STEPS=1\n'
         body += 'KILIX_DIR=' + repr(str(self.host)) + '\nKILIX_DATA_HOME=' + repr(str(self.base / 'data')) + '\n'
         body += 'DRY_RUN=' + str(dry) + '\ninstall_optional_voicebox\n'
         return subprocess.run(['/bin/bash', '-c', body], env=env, capture_output=True, text=True, timeout=15)
 
     def test_default_provision_does_not_install_optional_program_or_models(self):
-        result = self.run_hook('provision', package=False, digest=False)
+        result = self.run_hook(package=False, digest=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
 
     def test_explicit_offline_package_calls_the_host_once_with_exact_digest(self):
-        result = self.run_hook('provision')
+        result = self.run_hook()
         self.assertEqual(result.returncode, 0, result.stderr)
         args = self.log.read_text().splitlines()
         self.assertEqual(args, ['voicebox', 'prepare', '--root', str(self.base / 'data/voicebox'),
                                '--package', str(self.package), '--sha256', self.digest])
 
     def test_partial_selection_missing_package_and_refusal_abort_provision(self):
-        self.assertEqual(self.run_hook('provision', digest=False).returncode, 7)
+        self.assertEqual(self.run_hook(digest=False).returncode, 7)
         self.assertFalse(self.log.exists())
         self.package.unlink()
-        self.assertEqual(self.run_hook('provision').returncode, 7)
+        self.assertEqual(self.run_hook().returncode, 7)
         self.assertFalse(self.log.exists())
         self.package.write_bytes(b'restored synthetic fixture')
-        self.assertEqual(self.run_hook('provision', code=2).returncode, 7)
+        self.assertEqual(self.run_hook(code=2).returncode, 7)
 
     def test_dry_run_does_not_execute_host(self):
-        self.assertEqual(self.run_hook('provision', dry=1).returncode, 0)
+        self.assertEqual(self.run_hook(dry=1).returncode, 0)
         self.assertFalse(self.log.exists())
 
     def test_outer_update_snapshots_and_restores_only_selection(self):

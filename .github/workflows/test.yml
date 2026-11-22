@@ -14,37 +14,51 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install test tools
-        run: sudo apt-get update && sudo apt-get install -y shellcheck cpio gzip xorriso
+        run: sudo apt-get update && sudo apt-get install -y shellcheck cpio gzip uidmap xorriso
       - name: Fetch the pinned trees the release contracts inspect
-        # test_voice_release_contract and test_model_compliance_carrier read the
-        # exact KILIX_REF, its kilix-content gitlink, KILIX_VOICE_REF, the native
-        # content ref, KILIX_LICENSE_REF and KILIX_REF's kilix-bonsai from sibling
-        # checkouts. Materialize the exact trees too: the Voicebox transaction
-        # tests import kilix_sdk from the selected host's config directory.
         run: |
-          manifest="releases/$(cat VERSION).env"
           pin() { sed -n "s/^$1=\([0-9a-f]\{40\}\)\$/\1/p" "$manifest"; }
+          upstream=https://github.com/itsmygithubacct
           fetch() {
             # An empty or partial ref would fetch the default branch instead.
-            [[ "$3" =~ ^[0-9a-f]{40}$ ]] \
-              || { echo "no exact pinned commit for $1: '$3'" >&2; exit 1; }
-            git init -q "$1"
-            git -C "$1" fetch -q --depth 1 "$2" "$3"
-            git -C "$1" checkout -q --detach FETCH_HEAD
+            [[ "$2" =~ ^[0-9a-f]{40}$ ]] \
+              || { echo "no exact pinned commit for $1: '$2'" >&2; exit 1; }
+            git init -q "../$1"
+            git -C "../$1" fetch -q --depth 1 "$upstream/$1.git" "$2"
+            git -C "../$1" checkout -q --detach "$2"
           }
-          kilix_ref="$(pin KILIX_REF)"
-          voice_ref="$(pin KILIX_VOICE_REF)"
-          fetch ../kilix https://github.com/itsmygithubacct/kilix.git "$kilix_ref"
-          content_ref="$(git -C ../kilix rev-parse "$kilix_ref:third_party/kilix-content")"
-          fetch ../kilix-content https://github.com/itsmygithubacct/kilix-content.git "$content_ref"
-          needle_ref="$(python3 -c 'import json; from pathlib import Path; c=json.loads(Path("../kilix-content/src/kilix_content/catalog/plebian.json").read_text()); print(next(x["source"]["ref"] for x in c["content"] if x["id"] == "kilix-needle"))')"
-          fetch ../kilix-needle https://github.com/itsmygithubacct/kilix-needle.git "$needle_ref"
-          fetch ../kilix-voice https://github.com/itsmygithubacct/kilix-voice.git "$voice_ref"
+          catalog_ref() {
+            python3 -c 'import json, sys
+          with open("../kilix-content/src/kilix_content/catalog/plebian.json") as source:
+              entries = json.load(source)[sys.argv[1]]
+          print(next(entry["source"]["ref"] for entry in entries if entry["id"] == sys.argv[2]))' "$@"
+          }
+          # Real first-use and receipt-gate fixtures predating the release.
+          fetch kilix-content 7543aa30bd0c7ff60b7d7953e3290b87da10583c
+          fetch kilix-voice dacfcaa98e58faffef8876873e7cb5b306890eec
+          # Leave the current host materialized for the Voicebox SDK imports.
+          for version in 0.2.2 "$(cat VERSION)"; do
+            manifest="releases/$version.env"
+            kilix_ref="$(pin KILIX_REF)"
+            fetch kilix "$kilix_ref"
+            fetch kilix-content "$(git -C ../kilix rev-parse "$kilix_ref:third_party/kilix-content")"
+            fetch kilix-needle "$(catalog_ref content kilix-needle)"
+            fetch kilix-voice "$(pin KILIX_VOICE_REF)"
+          done
+          fetch kilix-tui-utils "$(catalog_ref packages kilix-tui-utils)"
+          # Exercise the released standalone selectors and the legacy OS updaters.
+          fetch pleb "$(pin PLEB_REF)"
+          for tag in v0.2.2 v0.2.3-rc8 v0.2.3-rc9; do
+            git -C ../pleb fetch -q --depth 1 "$upstream/pleb.git" "refs/tags/$tag:refs/tags/$tag"
+          done
+          git fetch -q --depth 1 "$upstream/plebian-os.git" \
+            refs/tags/v0.2.1:refs/tags/v0.2.1 refs/tags/v0.2.3-rc8:refs/tags/v0.2.3-rc8 \
+            db8392a7a60cada5a0dfd670b7a3cf09a6e60526
           # The model compliance carrier's producing interfaces
           # (tests/test_model_compliance_carrier.py AC-1, AC-3, AC-4).
           git -C ../kilix-content fetch -q --depth 1 \
             https://github.com/itsmygithubacct/kilix-content.git "$(pin PLEBIAN_OS_VOICE_CARRIER_CONTENT_REF)"
-          fetch ../kilix-license https://github.com/itsmygithubacct/kilix-license.git "$(pin KILIX_LICENSE_REF)"
+          fetch kilix-license "$(pin KILIX_LICENSE_REF)"
           # AC-8 reads the command model records Needle serves from its own
           # vendored kilix-content, not KILIX_REF's.
           git -C ../kilix-content fetch -q --depth 1 \
@@ -53,7 +67,7 @@ jobs:
           # AC-8 reads the speech licence gate in the kilix-bonsai KILIX_REF installs.
           bonsai_ref="$(git -C ../kilix show "$kilix_ref:scripts/install-kilix-bonsai.sh" \
             | sed -n 's/^KILIX_BONSAI_REF="\${KILIX_BONSAI_REF:-\([0-9a-f]\{40\}\)}"$/\1/p')"
-          fetch ../kilix-bonsai https://github.com/itsmygithubacct/kilix-bonsai.git "$bonsai_ref"
+          fetch kilix-bonsai "$bonsai_ref"
       - name: Report timeout provider
         run: command -v timeout && timeout --version
       - name: Python tests

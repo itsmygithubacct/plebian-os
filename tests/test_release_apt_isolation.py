@@ -1917,14 +1917,13 @@ printf 'UPDATE_RC=%s\nPLAN_RC=%s\n' "$update_rc" "$plan_rc" >"$OUT/rc"
                     f"mount --bind {shlex.quote(str(source))} {shlex.quote(target)}"
                     " || { echo MOUNT_FILE >&2; exit 97; }"
                 )
-            lines.append(
-                f"{shlex.quote(str(helper))} --verify >{shlex.quote(str(tmp / 'elev.out'))}"
-                f" 2>{shlex.quote(str(tmp / 'elev.err'))}; echo elev_rc=$?"
-            )
+            # The namespace's test uid must reach the executable even when
+            # TMPDIR is inside the developer's private home directory.
+            lines.append(f"mount --bind {shlex.quote(str(tmp))} /tmp || exit 97")
+            lines.append("/tmp/plebian-os-qt-runtime --verify >/tmp/elev.out 2>/tmp/elev.err; echo elev_rc=$?")
             lines.append(
                 "setpriv --reuid=1 --regid=1 --clear-groups --inh-caps=-all "
-                f"{shlex.quote(str(helper))} --verify >{shlex.quote(str(tmp / 'user.out'))}"
-                f" 2>{shlex.quote(str(tmp / 'user.err'))}; echo user_rc=$?"
+                "/tmp/plebian-os-qt-runtime --verify >/tmp/user.out 2>/tmp/user.err; echo user_rc=$?"
             )
             script = tmp / "run.sh"
             script.write_text("\n".join(lines) + "\n")
@@ -2088,15 +2087,25 @@ class ReleaseAptRouteTests(unittest.TestCase):
         for name in self.SCOPE:
             path = ROOT / "provision" / name
             self.assertTrue(path.is_file(), name)
+            packaged_update = False
             for number, line in enumerate(path.read_text().splitlines(), 1):
+                if line == "packaged_os_update() {":
+                    packaged_update = name == "plebian-os-update.sh"
+                elif line == "}":
+                    packaged_update = False
                 if "apt-get" not in line and "aptitude" not in line:
                     continue
-                why = self._reason(name, line.strip())
+                why = self._reason(name, line.strip(), packaged_update=packaged_update)
                 seen.append((name, number, why))
                 if why is None:
                     unclassified.append(f"{name}:{number}: {line.strip()}")
         self.assertFalse(unclassified, "\n".join(unclassified))
         self.assertGreaterEqual(len(seen), 20)
+
+    def test_system_apt_update_is_confined_to_the_packaged_updater(self):
+        command = '"${elevate[@]}" apt-get update || return'
+        self.assertIsNone(self._reason("plebian-os-update.sh", command, packaged_update=False))
+        self.assertIsNone(self._reason("plebian-os-update.sh", "apt-get upgrade", packaged_update=True))
 
     def test_helpers_keep_their_own_private_configuration(self):
         ssh = (ROOT / "provision" / "plebian-os-ssh-server").read_text()
@@ -2221,9 +2230,14 @@ class ReleaseAptRouteTests(unittest.TestCase):
         self.assertNotIn("release_apt_get \"$RELEASE_APT_CONFIG\" update", provision)
 
     @staticmethod
-    def _reason(name: str, text: str) -> str | None:
+    def _reason(name: str, text: str, *, packaged_update: bool) -> str | None:
         if text.startswith("#"):
             return "comment"
+        if packaged_update and text in (
+            '"${elevate[@]}" apt-get update || return',
+            '"${elevate[@]}" apt-get upgrade --only-upgrade "${installed_packages[@]}" || return',
+        ):
+            return "the installed desktop task dispatches to the system package manager"
         if name == "plebian-os-waydroid-setup":
             return "staged during provision and update, not executed on the release path"
         if name == "plebian-os-nvidia-driver":

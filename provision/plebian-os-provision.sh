@@ -13,6 +13,9 @@
 # plan without touching anything.
 set -euo pipefail
 
+# Each consumer carries the full installed-path table.
+# shellcheck disable=SC2034
+{
 # >>> plebian-os-paths
 PLEBIAN_OS_SBINDIR=/usr/sbin
 PLEBIAN_OS_BINDIR=/usr/bin
@@ -23,6 +26,7 @@ PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
 PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
 PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
 # <<< plebian-os-paths
+}
 
 
 # Keep all existing source/rollback operations inside one bounded offline Git
@@ -2093,28 +2097,28 @@ PROVISION_ROOT_TRANSACTION_PATHS=(
     "$LIGHTDM_GREETER_CONFIG_DST"
     "$GPL2_LICENSE_DST"
     "$INSTALLER_ATTRIBUTION_DST"
-    $PLEBIAN_OS_BINDIR/plebian-os-update
-    $PLEBIAN_OS_BINDIR/plebian-os-select-closure
-    $PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter
-    $PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter
-    $PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter
-    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts
-    $PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime
-    $PLEBIAN_OS_SBINDIR/plebian-os-native-runtime
-    $PLEBIAN_OS_SBINDIR/plebian-os-source-carrier
-    $PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime
-    $PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime
-    $PLEBIAN_OS_LIBEXECDIR/native_package.py
-    $PLEBIAN_OS_LIBEXECDIR/native_state.py
-    $PLEBIAN_OS_LIBEXECDIR/native_process.py
-    $PLEBIAN_OS_LIBEXECDIR/native_runtime.py
-    $PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver
+    "$PLEBIAN_OS_BINDIR/plebian-os-update"
+    "$PLEBIAN_OS_BINDIR/plebian-os-select-closure"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-install-ollama-converter"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-install-diarization-converter"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-install-encodec-converter"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-vulkan-tts"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-install-kilix-ollama-runtime"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-native-runtime"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-source-carrier"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-qt-runtime"
+    "$PLEBIAN_OS_SBINDIR/plebian-os-mpv-runtime"
+    "$PLEBIAN_OS_LIBEXECDIR/native_package.py"
+    "$PLEBIAN_OS_LIBEXECDIR/native_state.py"
+    "$PLEBIAN_OS_LIBEXECDIR/native_process.py"
+    "$PLEBIAN_OS_LIBEXECDIR/native_runtime.py"
+    "$PLEBIAN_OS_BINDIR/plebian-os-nvidia-driver"
     /usr/lib/plebian-os/waydroid/plebian-os-waydroid-setup
     /usr/lib/plebian-os/waydroid/waydroid-closure.env
     /usr/lib/plebian-os/waydroid/waydroid-closure.sha256
-    $PLEBIAN_OS_SBINDIR/plebian-os-passwd
+    "$PLEBIAN_OS_SBINDIR/plebian-os-passwd"
     /etc/sudoers.d/plebian-os-passwd
-    $PLEBIAN_OS_SBINDIR/plebian-os-ssh-server
+    "$PLEBIAN_OS_SBINDIR/plebian-os-ssh-server"
     /var/lib/plebian-os/ssh-server-offer
     /usr/local/bin/pleb-session
     /usr/local/bin/pleb-lock
@@ -2219,7 +2223,7 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /etc/wireplumber
     /etc/wireplumber/wireplumber.conf.d
     /etc/systemd/user
-    $PLEBIAN_OS_LIBEXECDIR
+    "$PLEBIAN_OS_LIBEXECDIR"
     /etc/modprobe.d
     /etc/systemd/system.conf.d
     /etc/systemd/logind.conf.d
@@ -2229,12 +2233,12 @@ PROVISION_ROOT_TRANSACTION_MANAGED_DIRS=(
     /etc/xdg
     /etc/pleb
     /usr/share/xsessions
-    $PLEBIAN_OS_DATADIR
-    $PLEBIAN_OS_DATADIR/wallpapers
+    "$PLEBIAN_OS_DATADIR"
+    "$PLEBIAN_OS_DATADIR/wallpapers"
     /usr/local/share/doc
-    $PLEBIAN_OS_NOTICEDIR
-    $PLEBIAN_OS_NOTICEDIR/installer
-    $PLEBIAN_OS_PAYLOADDIR
+    "$PLEBIAN_OS_NOTICEDIR"
+    "$PLEBIAN_OS_NOTICEDIR/installer"
+    "$PLEBIAN_OS_PAYLOADDIR"
     /usr/local/share/doc/pleb
     /usr/local/share/pleb
     /usr/local/share/pleb/openbox
@@ -7466,11 +7470,13 @@ ensure_plebian_os_checkout() {
     fi
 }
 
+package_is_installed() {
+    local status
+    status="$(dpkg-query -W -f '${db:Status-Status}' "$1" 2>/dev/null)" && [ "$status" = installed ]
+}
+
 packages_provide_pleb_and_kilix() {
-    [ "$DRY_RUN" != 1 ] || return 1
-    command -v dpkg-query >/dev/null 2>&1 || return 1
-    dpkg-query -W -f='${db:Status-Abbrev}' pleb 2>/dev/null | grep -q '^ii' \
-        && dpkg-query -W -f='${db:Status-Abbrev}' kilix 2>/dev/null | grep -q '^ii'
+    [ "$DRY_RUN" != 1 ] && package_is_installed pleb && package_is_installed kilix
 }
 
 update_pleb_checkout() {
@@ -9179,15 +9185,19 @@ else
         || die "pleb install failed (see above)"
 fi
 
-if [ "$PACKAGED_PLEB" = 1 ]; then
-    log "using the packaged Needle runtime for Kilix Ask"
-else
-    install_kilix_needle
-fi
-
 KILIX_CHECKOUT_STEPS=1
 if [ "$PACKAGED_PLEB" = 1 ] && { [ ! -f "$KILIX_DIR/kilix" ] || [ ! -x "$KILIX_DIR/kilix" ]; }; then
     KILIX_CHECKOUT_STEPS=0
+fi
+if [ "$PACKAGED_PLEB" = 1 ] && package_is_installed kilix-needle; then
+    log "using the packaged Needle runtime for Kilix Ask"
+elif [ "$KILIX_CHECKOUT_STEPS" = 1 ]; then
+    install_kilix_needle
+else
+    warn "Kilix Ask needs Needle. Install the kilix-needle package to enable Ask."
+fi
+
+if [ "$KILIX_CHECKOUT_STEPS" = 0 ]; then
     log "packaged install has no kilix checkout. Skipping Claudex, kilix-llm, offline default and image models, default model verification, and Neuronte."
 else
     install_kilix_claudex

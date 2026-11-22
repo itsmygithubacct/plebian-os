@@ -39,6 +39,9 @@
 # desktop providers as a clickable stack update action.
 set -euo pipefail
 
+# Each consumer carries the full installed-path table.
+# shellcheck disable=SC2034
+{
 # >>> plebian-os-paths
 PLEBIAN_OS_SBINDIR=/usr/sbin
 PLEBIAN_OS_BINDIR=/usr/bin
@@ -49,6 +52,7 @@ PLEBIAN_OS_NOTICEDIR=/usr/share/plebian-os/notices
 PLEBIAN_OS_PAYLOADDIR=/var/lib/plebian-os/payloads
 PLEBIAN_OS_UNITDIR=/usr/lib/systemd/system
 # <<< plebian-os-paths
+}
 
 # Keep the installed selector/updater self-contained. Only a stable tag or a
 # numbered RC of the same numeric VERSION is a supported release identity.
@@ -68,7 +72,7 @@ valid_release_tag() {
 _update_record() {
     [ -n "${_UPDATE_LOG_FD:-}" ] || return 0
     printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf '%s' now)" "$*" \
-        >&"$_UPDATE_LOG_FD" 2>/dev/null || true
+        1>&"$_UPDATE_LOG_FD" 2>/dev/null || true
 }
 log()  { _update_record "$*"; printf '\033[1;35m[plebian-os]\033[0m %s\n' "$*"; }
 warn() { _update_record "$*"; printf '\033[1;33m[plebian-os]\033[0m %s\n' "$*" >&2; }

@@ -1064,7 +1064,7 @@ else
 fi
 
 hop_command=("$pleb_bin")
-hop_entrypoint_mode=installed-cli
+hop_entrypoint_mode='installed-cli'
 if [ -n "$bootstrap_driver" ]; then
     [ -x "$bootstrap_driver" ] || die "bootstrap driver is not executable"
     hop_command=("$bootstrap_driver" --installed-pleb "$pleb_bin" --driver-ref "$bootstrap_driver_ref" --)

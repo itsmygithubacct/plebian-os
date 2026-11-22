@@ -19,7 +19,9 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 - The installer now carries Kilix 0.2.3+packaging11, TUI Utils
   0.3.1+packaging2, Needle 0.20261116+packaging3 and Content 0.4.0+packaging3.
   The desktop installs Ask and its runtime dependencies from the disc.
-  Ask offers its optional command model on first use.
+  Ask offers its optional command model on first use. On older desktops with
+  a Kilix checkout, first boot can still install Needle from the catalog when
+  the Needle package is missing.
 
 ## [0.2.3] — 2026-11-16
 

@@ -1,3 +1,12 @@
+plebian-os (0.2.3+packaging11) UNRELEASED; urgency=medium
+
+  * Check the installed Needle package before using it for Kilix Ask.
+    Retain the checkout installer on older desktops that still have it.
+  * Quote provisioning rollback paths and write update records to the log
+    descriptor explicitly.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Sun, 22 Nov 2026 11:27:39 +0000
+
 plebian-os (0.2.3+packaging10) UNRELEASED; urgency=medium
 
   * Install the packaged Needle runtime and matching Kilix Ask catalog
