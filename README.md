@@ -128,6 +128,16 @@ ggml Vulkan backend ignores CPU Vulkan devices during default device selection,
 so a machine without a hardware GPU uses Ollama's CPU backend. Combining a
 Vulkan mode with `--qualification` adds `vulkaninfo`.
 
+On 0.2.4, open **Model Setup → Audio / EnCodec** or open a
+`.kenc` track in Media Player to set up its model. The prompt shows the model
+download and the one-time shared converter download. Choose **Later** to
+defer. On amd64 the converter downloads 239,108,136 bytes and serves both the
+24 kHz mono and 48 kHz stereo profiles. Setup asks for the model licence and
+administrator authorization before installing the converter. Prepared models
+play offline. To start setup in a terminal, run
+`kilix models install encodec-24khz-stateful` or
+`kilix models install encodec-48khz-frame`.
+
 Pocket TTS conversion and its persistent Vulkan runtime are separate explicit
 opt-ins. The image ships neither model weights nor generated GGUF files.
 Prepare their exact Debian prerequisites and install the two source closures
