@@ -240,7 +240,8 @@ class DebianPackagingTests(unittest.TestCase):
         self.assertEqual({item.strip() for item in deps[1].split(",")}, {
             "kilix (>= 0.2.3+packaging14)", "kilix-95 (>= 0.2.3+packaging3)",
             "kilix-amp (>= 0.20261029+packaging3)", "kilix-content (>= 0.4.0+packaging3)",
-            "kilix-multiplexer", "kilix-needle (>= 0.20261116+packaging6)", "pleb",
+            "kilix-engine (>= 0.48.2+git20261123.c76d1297-1)", "kilix-multiplexer",
+            "kilix-needle (>= 0.20261116+packaging7)", "pleb",
             "accountsservice", "lightdm", "lightdm-gtk-greeter", "pulseaudio",
             "pulseaudio-utils", "python3-venv", "xserver-xorg",
             "plebian-desktop-base (= ${binary:Version})", "${misc:Depends}",

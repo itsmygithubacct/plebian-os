@@ -1,3 +1,11 @@
+plebian-os (0.2.4~alpha3+ask7) UNRELEASED; urgency=medium
+
+  * Install the engine and Needle that run a command in an existing pane
+    when its Bash prompt is verified fresh and empty, on new installations
+    and desktop task upgrades.
+
+ -- itsmygithubacct <itsmygithubacct@users.noreply.github.com>  Mon, 23 Nov 2026 22:27:17 +0000
+
 plebian-os (0.2.4~alpha3+ask6) UNRELEASED; urgency=medium
 
   * Include Needle's verified shell input requirement on fresh installations

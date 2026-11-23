@@ -315,7 +315,8 @@ class DiscClosureTests(unittest.TestCase):
             "pulseaudio", "pulseaudio-utils", "python3", "python3-venv", "sudo", "systemd", "xserver-xorg",
         }
         direct_project = {
-            "kilix", "kilix-95", "kilix-amp", "kilix-content", "kilix-multiplexer", "kilix-needle", "pleb",
+            "kilix", "kilix-95", "kilix-amp", "kilix-content", "kilix-engine", "kilix-multiplexer",
+            "kilix-needle", "pleb",
         }
         self.assertEqual(outside_dependencies(), direct_debian | direct_project)
         self.assertLessEqual(direct_debian | {"xauth", "xvfb", "libsdl2-image-2.0-0"}, debian)
