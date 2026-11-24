@@ -244,6 +244,9 @@ class DebianPackagingTests(unittest.TestCase):
             "kilix-needle (>= 0.20261116+packaging7)", "pleb",
             "accountsservice", "lightdm", "lightdm-gtk-greeter", "pulseaudio",
             "pulseaudio-utils", "python3-venv", "xserver-xorg",
+            # llama.cpp's first-use build (kilix llama): CPU, Vulkan, OpenBLAS
+            "build-essential", "cmake", "pkg-config", "rsync", "glslc",
+            "libvulkan-dev", "spirv-headers", "libopenblas-dev",
             "plebian-desktop-base (= ${binary:Version})", "${misc:Depends}",
         })
         self.assertIn("Depends: pleb-desktop (= ${binary:Version}), ${misc:Depends}",

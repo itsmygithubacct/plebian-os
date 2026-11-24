@@ -6,6 +6,12 @@ shared version across all four repositories (see [RELEASING.md](RELEASING.md)).
 
 ## [0.2.4] — Unreleased
 
+- The desktop installs what Kilix's local models need to build llama.cpp on
+  first use: build-essential, CMake, pkg-config, rsync, glslc, the Vulkan and
+  SPIR-V headers, and OpenBLAS. The installer disc carries them (56 more
+  Debian packages, 91 MB; about 435 MB installed), and OpenBLAS now provides numpy's
+  BLAS and LAPACK in place of the reference libraries. Checkout installs get
+  the same set in the build toolchain group.
 - First boot and upgrades share one EnCodec runtime between the 24 and 48 kHz
   converter commands. Upgrading the previous two-runtime installation offline
   freed 1.15 GB on amd64 and 809 MB on arm64. On a provisioned 20 GiB amd64

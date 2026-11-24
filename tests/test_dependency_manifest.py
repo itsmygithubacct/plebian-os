@@ -390,9 +390,12 @@ class DependencyManifestTests(unittest.TestCase):
         # These entries carry an exact version, while the base and preseed sets
         # carry bare names. Compare on the name alone: comparing the versioned
         # strings would be disjoint from anything and could never fail.
-        # Zell uses NumPy in the base image. The model-conversion toolchain
-        # and its pinned versions still belong to the optional closure.
-        optional_names = {item.split("=", 1)[0] for item in converter | build} - {"python3-numpy"}
+        # Zell uses NumPy in the base image, and Kilix's local models build
+        # llama.cpp's Vulkan backend with libvulkan-dev and glslc, which the
+        # desktop now installs by default. The model-conversion toolchain and
+        # its pinned versions still belong to the optional closure.
+        optional_names = {item.split("=", 1)[0] for item in converter | build} - {
+            "python3-numpy", "libvulkan-dev", "glslc"}
         for other in (install_deps_packages(), preseed_packages(),
                       qualification_packages()):
             # Strip on both sides. A base set may itself carry a versioned

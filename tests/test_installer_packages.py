@@ -313,6 +313,8 @@ class DiscClosureTests(unittest.TestCase):
         direct_debian = {
             "accountsservice", "ca-certificates", "curl", "git", "lightdm", "lightdm-gtk-greeter",
             "pulseaudio", "pulseaudio-utils", "python3", "python3-venv", "sudo", "systemd", "xserver-xorg",
+            "build-essential", "cmake", "pkg-config", "rsync", "glslc", "libvulkan-dev", "spirv-headers",
+            "libopenblas-dev",
         }
         direct_project = {
             "kilix", "kilix-95", "kilix-amp", "kilix-content", "kilix-engine", "kilix-multiplexer",
@@ -320,8 +322,13 @@ class DiscClosureTests(unittest.TestCase):
         }
         self.assertEqual(outside_dependencies(), direct_debian | direct_project)
         self.assertLessEqual(direct_debian | {"xauth", "xvfb", "libsdl2-image-2.0-0"}, debian)
-        self.assertLessEqual({"python3-numpy", "python3-numpy-dev", "libblas3",
-                              "liblapack3", "libgfortran5"}, debian)
+        # numpy needs libblas.so.3 and liblapack.so.3. Since the desktop
+        # installs OpenBLAS for llama.cpp, OpenBLAS provides both (and would
+        # win the alternatives anyway), so reference BLAS is not on the disc.
+        self.assertLessEqual({"python3-numpy", "python3-numpy-dev", "libopenblas0-pthread",
+                              "libopenblas-dev", "libgfortran5"}, debian)
+        self.assertLessEqual({"build-essential", "g++", "cmake", "glslc", "libvulkan-dev",
+                              "spirv-headers"}, debian)
         self.assertEqual(
             project,
             direct_project | {

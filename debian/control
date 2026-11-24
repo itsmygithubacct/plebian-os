@@ -56,10 +56,17 @@ Depends: kilix (>= 0.2.3+packaging14), kilix-95 (>= 0.2.3+packaging3),
  kilix-engine (>= 0.48.2+git20261123.c76d1297-1), kilix-multiplexer,
  kilix-needle (>= 0.20261116+packaging7), pleb,
  accountsservice, lightdm, lightdm-gtk-greeter, pulseaudio, pulseaudio-utils,
- python3-venv, xserver-xorg, plebian-desktop-base (= ${binary:Version}), ${misc:Depends}
+ python3-venv, xserver-xorg,
+ build-essential, cmake, pkg-config, rsync, glslc, libvulkan-dev, spirv-headers,
+ libopenblas-dev,
+ plebian-desktop-base (= ${binary:Version}), ${misc:Depends}
 Description: Pleb desktop
  This metapackage installs the Pleb and Kilix 95 desktop, the multiplexer,
  the Media Player, and the Needle runtime and content catalog for Kilix Ask.
+ .
+ It also installs what Kilix's local models need to build llama.cpp on first
+ use: a C++ toolchain, CMake, the Vulkan and SPIR-V headers, the shader
+ compiler, and OpenBLAS.
 
 Package: task-pleb-desktop
 Architecture: all
