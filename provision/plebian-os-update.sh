@@ -5265,6 +5265,22 @@ install_model_setup_software() {
 # transaction newly installed are removed when that is safe. The bytes that
 # stay are the ones 0.2.2 and every 0.2.3 candidate pin.
 OLLAMA_RUNTIME_UNAVAILABLE=75
+# A machine whose administrator runs a newer Ollama than the release carrier
+# (for example the upstream installer's server, which current registry
+# manifests need) marks it with this root-owned file. The update then leaves
+# the runtime, its unit drop-ins and its files alone instead of failing on the
+# carrier's closure check and rolling the whole update back.
+OLLAMA_RUNTIME_HOST_MANAGED_MARKER=/etc/plebian-os/ollama-runtime-host-managed
+
+ollama_runtime_is_host_managed() {
+    local marker="$OLLAMA_RUNTIME_HOST_MANAGED_MARKER"
+    if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
+        marker="${PLEBIAN_OS_UPDATE_TEST_OLLAMA_MARKER:-$marker}"
+        [ -f "$marker" ] && [ ! -L "$marker" ]
+        return
+    fi
+    [ -f "$marker" ] && [ ! -L "$marker" ] && [ "$(stat -c %u -- "$marker")" = 0 ]
+}
 
 install_ollama_runtime_update() {
     local provisioner="$AUDIO_HOLDOFF_PROVISIONER" test_mode=0 rc=0
@@ -5272,6 +5288,10 @@ install_ollama_runtime_update() {
     if [ "${PLEBIAN_OS_UPDATE_TEST_LIBRARY_ONLY:-0}" = 1 ]; then
         test_mode=1
         provisioner="${PLEBIAN_OS_UPDATE_TEST_PROVISION_SCRIPT:-$provisioner}"
+    fi
+    if ollama_runtime_is_host_managed; then
+        log "the Ollama runtime is managed by this machine's administrator ($OLLAMA_RUNTIME_HOST_MANAGED_MARKER); leaving it as it is"
+        return 0
     fi
     if [ "${DRY_RUN:-0}" = 1 ]; then
         log "would install the pinned Ollama runtime when this machine has none (no model weights)"

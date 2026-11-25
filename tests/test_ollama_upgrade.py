@@ -229,6 +229,19 @@ class ProvisionerUpdateStepTests(unittest.TestCase):
         self.assertIn("systemctl enable --now plebian-os-ollama.service", calls)
         self.assertFalse(fx.archive.exists())
 
+    def test_host_managed_marker_leaves_the_runtime_alone(self):
+        fx = Fixture(self)
+        fx.served.write_bytes(fx.payload)
+        marker = fx.root / "etc/plebian-os/ollama-runtime-host-managed"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("upstream 0.40\n")
+        result = fx.run_root_step()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("managed by this machine's administrator", result.stdout + result.stderr)
+        self.assertFalse(fx.archive.exists())
+        self.assertFalse(fx.receipt.exists())
+        self.assertFalse([c for c in fx.call_lines() if c.startswith(("curl", "extract", "closure", "systemctl"))])
+
     def test_verified_runtime_without_a_receipt_is_not_trusted(self):
         fx = Fixture(self)
         fx.verify_ok.touch()
@@ -341,6 +354,34 @@ class ProvisionerUpdateStepTests(unittest.TestCase):
 
 
 class UpdaterStepTests(unittest.TestCase):
+    def test_host_managed_runtime_is_left_alone(self):
+        fx = Fixture(self)
+        fx.served.write_bytes(fx.payload)
+        marker = fx.state / "ollama-runtime-host-managed"
+        marker.write_text("upstream 0.40\n")
+        base = fx.env
+        fx.env = lambda: dict(base(), PLEBIAN_OS_UPDATE_TEST_OLLAMA_MARKER=str(marker))
+        result = fx.run_update_step()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("step-returned", result.stdout)
+        self.assertIn("managed by this machine's administrator", result.stdout + result.stderr)
+        self.assertFalse(fx.archive.exists())
+        self.assertFalse(fx.receipt.exists())
+        self.assertFalse([c for c in fx.call_lines() if c.startswith(("curl", "extract", "closure"))])
+
+    def test_a_symlinked_marker_is_not_honoured(self):
+        fx = Fixture(self)
+        fx.served.write_bytes(fx.payload)
+        real = fx.state / "elsewhere"
+        real.write_text("x\n")
+        marker = fx.state / "ollama-runtime-host-managed"
+        marker.symlink_to(real)
+        base = fx.env
+        fx.env = lambda: dict(base(), PLEBIAN_OS_UPDATE_TEST_OLLAMA_MARKER=str(marker))
+        result = fx.run_update_step()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(fx.receipt.exists())
+
     def test_update_installs_a_missing_runtime(self):
         fx = Fixture(self)
         fx.served.write_bytes(fx.payload)

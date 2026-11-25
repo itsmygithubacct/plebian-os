@@ -8193,6 +8193,16 @@ ollama_download_carrier() {
 # fails verification, or any failure of the install itself, dies.
 install_ollama_runtime_for_update() {
     ollama_carrier_required "$PLEBIAN_OS_VERSION" || return 0
+    # A root-owned marker says this machine's administrator runs their own,
+    # newer Ollama (for example the upstream installer's server, which current
+    # registry manifests need). Leave the runtime, its unit drop-ins and its
+    # files alone rather than fail the carrier's closure check.
+    local host_managed=/etc/plebian-os/ollama-runtime-host-managed
+    if [ -f "$host_managed" ] && [ ! -L "$host_managed" ] \
+        && [ -O "$host_managed" ]; then
+        log "the Ollama runtime is managed by this machine's administrator ($host_managed); leaving it as it is"
+        return 0
+    fi
     local manifest=/usr/local/share/plebian-os/ollama-release.env
     local archive=/usr/local/share/plebian-os/ollama-runtime-carrier.tar.xz
     local installer=/usr/local/sbin/plebian-os-install-kilix-ollama-runtime
