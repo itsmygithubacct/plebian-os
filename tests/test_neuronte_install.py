@@ -32,6 +32,14 @@ REMASTER = ROOT / 'build' / 'remaster-iso.sh'
 PRESEED = ROOT / 'preseed' / 'preseed.cfg'
 RELEASE_ENV = ROOT / 'releases' / '0.2.3.env'
 NOTES = ROOT / 'releases' / '0.2.3-notes.md'
+# 0.2.4 moves the image to neuronte-v2 2.5.0: every desktop face with all of
+# Latin-1 (branch work/neuronte-v2-latin1; no tag yet). The 0.2.4 release
+# file is written when the release is integrated; until then the manifest pins
+# that commit, 0.2.3's file keeps its own pin, and the release file's pin
+# is checked once it exists.
+NEXT_RELEASE_ENV = ROOT / 'releases' / '0.2.4.env'
+NEXT_NOTES = ROOT / 'releases' / '0.2.4-notes.md'
+NEURONTE_V2_5_0 = '94224536fe80c8ef2b2a215132047b7370298415'
 VM_BUILDER = ROOT / 'build' / 'build_vm_image.py'
 
 SPEC = importlib.util.spec_from_file_location('install_neuronte', INSTALLER)
@@ -85,12 +93,12 @@ FILES = {
     'src/media.c': MEDIA_C,
     'include/neuronte_media.h': '/* fixture */\n',
     'train/glyphs.py': 'UI_TOP = {12: 3}\n',
-    'weights/neuronte-ui12-v1.nrt': 'NRT small 12\n',
-    'weights/neuronte-ui12-italic-v1.nrt': 'NRT italic 12\n',
-    'weights/neuronte-ui-large-v0.nrt': 'NRT large\n',
+    'weights/neuronte-ui12-v2.nrt': 'NRT small 12\n',
+    'weights/neuronte-ui12-italic-v2.nrt': 'NRT italic 12\n',
+    'weights/neuronte-ui-large-latin1-v2.nrt': 'NRT large\n',
     'weights/neuronte-flame-v1.nrt': 'NRT flame\n',
-    'font/ui-12.txt': '# The baseline is row 9.\n',
-    'font/ui-12-italic.txt': '# The baseline is row 9.\n',
+    'font/ui-12-latin1.txt': '# The baseline is row 9.\n',
+    'font/ui-12-latin1-italic.txt': '# The baseline is row 9.\n',
     # Present in the repository, never opened by the desktop.
     'weights/neuronte-ui40-v0.nrt': 'unused upright 40\n',
     'weights/neuronte-full-v3.nrt': 'unused full\n',
@@ -99,16 +107,24 @@ FILES = {
 }
 # The fixture contains the full runtime inventory, plus known development
 # and redundant files to prove that selection does not copy a whole directory.
-for em in range(1, 33):
+for em in range(1, 17):
     for suffix in ('', '-italic') if em >= 3 else ('',):
-        FILES.setdefault(f'weights/neuronte-ui{em}{suffix}-v1.nrt', 'NRT face\n')
-        FILES.setdefault(f'font/ui-{em}{suffix}.txt', '# The baseline is row 0.\n')
+        FILES.setdefault(f'weights/neuronte-ui{em}{suffix}-v2.nrt', 'NRT face\n')
+        FILES.setdefault(f'font/ui-{em}-latin1{suffix}.txt', '# The baseline is row 0.\n')
 for name in ('emoji-v1.nrt', 'icon-v2.nrt', 'pointer-v1.nrt',
-             'video-masks-v0.nrt', 'split-v8.nrt'):
+             'video-masks-v0.nrt', 'split-v9.nrt', 'ui-scaled-latin1-v1.nrt',
+             'ui-scaled-latin1-italic-advances-v1.nrt', 'kilix-chrome-v1.nrt',
+             'kilix-chrome-v2.nrt', 'term-rest-v1.nrt', 'term-dingbat-v1.nrt',
+             'weather-colour-v1.nrt'):
     FILES['weights/neuronte-' + name] = 'runtime model\n'
 for name in ('font/ui-tops.json', 'font/octants.txt', 'train/strokes.py',
              'weights/neuronte-pointer-v1.manifest.json', 'tools/neuronte-play.py',
-             'tools/neuronte_video.py', 'tools/neuronte-video.md'):
+             'tools/neuronte_video.py', 'tools/neuronte-video.md',
+             'weights/neuronte-kilix-chrome-v1.list.txt',
+             'weights/neuronte-kilix-chrome-v2.symbols.txt',
+             'weights/neuronte-term-rest-v1.list.txt',
+             'weights/neuronte-term-dingbat-v1.list.txt',
+             'weights/neuronte-weather-colour-v1.symbols.txt'):
     FILES[name] = 'runtime support\n'
 EXCLUDED = {'weights/neuronte-ui40-v0.nrt', 'weights/neuronte-full-v3.nrt',
             'font/ui-40.txt', 'tests/check.py',
@@ -123,7 +139,21 @@ EXCLUDED = {'weights/neuronte-ui40-v0.nrt', 'weights/neuronte-full-v3.nrt',
             'weights/neuronte-icon-v1.nrt', 'weights/neuronte-pointer-v0.nrt',
             'weights/neuronte-pointer-v0.manifest.json',
             'weights/neuronte-video-speed-v1.json', 'weights/neuronte-video-quality-v1.json',
-            'weights/report.json'}
+            'weights/report.json',
+            # The 0.2.3 set's files that 2.4.0 replaced, and terminal bundles
+            # nobody on the image opens.
+            'weights/neuronte-split-v8.nrt', 'weights/neuronte-ui-large-v0.nrt',
+            'weights/neuronte-ui17-v1.nrt', 'weights/neuronte-ui32-italic-v1.nrt',
+            'font/ui-17.txt', 'font/ui-32-italic.txt',
+            'weights/neuronte-term-latin-v1.nrt', 'weights/neuronte-term-letters-v1.nrt',
+            'weights/neuronte-term-latin-v1.list.txt',
+            'tools/neuronte-cells.c', 'tools/neuronte-fontfile.c',
+            # The 2.4.0 desktop files that 2.5.0 replaced, and their drawings.
+            'weights/neuronte-ui12-v1.nrt', 'weights/neuronte-ui12-italic-v1.nrt',
+            'font/ui-12.txt', 'font/ui-12-italic.txt',
+            'weights/neuronte-ui-scaled-latin1-v0.nrt',
+            'weights/neuronte-ui-scaled-latin1-italic-advances-v0.nrt',
+            'weights/neuronte-ui-large-latin1-v1.nrt'}
 for name in EXCLUDED:
     FILES.setdefault(name, 'development-only or redundant\n')
 SELECTED = sorted(set(FILES) - EXCLUDED)
@@ -276,17 +306,31 @@ class ReleasePinTests(unittest.TestCase):
 
     def test_manifest_pins_the_release_commit_and_repository(self):
         manifest = json.loads(MANIFEST.read_text())
-        ref = self.env_value('NEURONTE_REF')
-        self.assertRegex(ref, r'^[0-9a-f]{40}$')
+        ref = NEURONTE_V2_5_0
         self.assertEqual(manifest['commit'], ref)
         self.assertEqual(manifest['repository'], self.env_value('NEURONTE_REPO'))
         self.assertEqual(manifest['repository'], 'https://github.com/itsmygithubacct/neuronte-v2.git')
         self.assertNotIn('NEURONTE_BRANCH', RELEASE_ENV.read_text())
-        self.assertIn('| `NEURONTE_REF` | `%s` |' % ref, NOTES.read_text())
+        # 0.2.3's own record is left as it was published.
+        self.assertRegex(self.env_value('NEURONTE_REF'), r'^[0-9a-f]{40}$')
+        self.assertIn('| `NEURONTE_REF` | `%s` |' % self.env_value('NEURONTE_REF'),
+                      NOTES.read_text())
         # load_manifest is the gate every path uses.
         neuronte.load_manifest(MANIFEST, ref)
         with self.assertRaisesRegex(ValueError, 'not NEURONTE_REF'):
             neuronte.load_manifest(MANIFEST, '0' * 40)
+
+    def test_the_next_release_file_pins_the_manifest_commit(self):
+        if not NEXT_RELEASE_ENV.exists():
+            self.skipTest('releases/0.2.4.env is written when 0.2.4 is integrated')
+        text = NEXT_RELEASE_ENV.read_text()
+        refs = re.findall(r'^NEURONTE_REF=(.*)$', text, re.M)
+        self.assertEqual(refs, [json.loads(MANIFEST.read_text())['commit']])
+        self.assertEqual(re.findall(r'^NEURONTE_REPO=(.*)$', text, re.M),
+                         ['https://github.com/itsmygithubacct/neuronte-v2.git'])
+        self.assertNotIn('NEURONTE_BRANCH', text)
+        if NEXT_NOTES.exists():
+            self.assertIn('| `NEURONTE_REF` | `%s` |' % refs[0], NEXT_NOTES.read_text())
 
     def test_manifest_holds_the_approved_runtime_inventory(self):
         files = json.loads(MANIFEST.read_text())['files']
@@ -294,40 +338,59 @@ class ReleasePinTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(neuronte.selected(name))
                 self.assertNotIn(name, ('build/libneuronte.so', neuronte.RECORD))
-        # Kilix 95 af691fe: weight_path() and _face_path() for every small em,
-        # the scalable face, the flame, the UI_TOP table and the build inputs.
-        for em in range(1, 33):
-            self.assertIn('weights/neuronte-ui%d-v1.nrt' % em, files)
-            self.assertIn('font/ui-%d.txt' % em, files)
-        for em in range(3, 33):
-            self.assertIn('weights/neuronte-ui%d-italic-v1.nrt' % em, files)
-            self.assertIn('font/ui-%d-italic.txt' % em, files)
-        for name in ('weights/neuronte-ui-large-v0.nrt', 'weights/neuronte-flame-v1.nrt',
+        # Kilix 95 (with its scaled-face reader): weight_path() and _face_path()
+        # for every em with a face of its own, the scaled face and its italic
+        # advances for 17 to 32, the large face above, the flame, the UI_TOP
+        # table and the build inputs.
+        for em in range(1, 17):
+            self.assertIn('weights/neuronte-ui%d-v2.nrt' % em, files)
+            self.assertIn('font/ui-%d-latin1.txt' % em, files)
+            self.assertNotIn('weights/neuronte-ui%d-v1.nrt' % em, files)
+            self.assertNotIn('font/ui-%d.txt' % em, files)
+        for em in range(3, 17):
+            self.assertIn('weights/neuronte-ui%d-italic-v2.nrt' % em, files)
+            self.assertIn('font/ui-%d-latin1-italic.txt' % em, files)
+        # Kilix's bars: the bundles its default lists name, each with its list.
+        for stem in ('kilix-chrome-v1', 'kilix-chrome-v2', 'term-rest-v1', 'term-dingbat-v1',
+                     'split-v9', 'weather-colour-v1', 'emoji-v1'):
+            self.assertIn('weights/neuronte-%s.nrt' % stem, files)
+        for name in neuronte.BAR_LISTS:
+            self.assertIn(name, files)
+        for name in ('weights/neuronte-ui-scaled-latin1-v1.nrt',
+                     'weights/neuronte-ui-scaled-latin1-italic-advances-v1.nrt',
+                     'weights/neuronte-ui-large-latin1-v2.nrt', 'weights/neuronte-flame-v1.nrt',
+                     'include/neuronte_cells.h', 'src/cells.c',
                      'train/glyphs.py', 'Makefile', 'src/neuronte.c', 'src/utf8.c',
                      'include/neuronte.h', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
                      'src/video.c', 'src/media.c', 'include/neuronte_media.h',
                      'LICENSES/FFmpeg-LGPL-2.1-or-later.txt'):
             self.assertIn(name, files)
-        # Never opened: em 33 and up go to ui-large, which reads no header.
+        # Never opened: 17 to 32 go to the scaled face and 33 and up to the
+        # large face, neither of which reads a header.
         for name in ('weights/neuronte-ui33-v0.nrt', 'weights/neuronte-ui33-v1.nrt',
-                     'font/ui-33.txt', 'font/ui-128.txt'):
+                     'font/ui-33.txt', 'font/ui-128.txt', 'weights/neuronte-ui17-v1.nrt',
+                     'font/ui-17.txt', 'font/ui-32-italic.txt'):
             self.assertNotIn(name, files)
             self.assertFalse(neuronte.selected(name))
         for name in EXCLUDED:
             self.assertNotIn(name, files)
             self.assertFalse(neuronte.selected(name))
         models = {name for name in files if name.startswith('weights/')
-                  and not name.endswith('.manifest.json')}
+                  and name.endswith('.nrt')}
+        self.assertEqual({name for name in files if name.startswith('weights/')} - models,
+                         {'weights/neuronte-pointer-v1.manifest.json'} | neuronte.BAR_LISTS)
         self.assertEqual(models, neuronte.RUNTIME_MODELS)
-        self.assertEqual(len(models), 69)
-        self.assertEqual(len(neuronte.PROBES), 69)
+        self.assertEqual(len(models), 44)
+        self.assertEqual(len(neuronte.PROBES), 44)
         self.assertTrue(neuronte.RUNTIME_SUPPORT <= files.keys())
         total = sum(entry['bytes'] for entry in files.values())
         self.assertLess(total, 60 * 1024 * 1024)
 
     def test_manifest_requires_each_runtime_component(self):
         manifest = json.loads(MANIFEST.read_text())
-        for name in ('weights/neuronte-icon-v2.nrt', 'weights/neuronte-split-v8.nrt',
+        for name in ('weights/neuronte-icon-v2.nrt', 'weights/neuronte-split-v9.nrt',
+                     'weights/neuronte-kilix-chrome-v2.nrt',
+                     'weights/neuronte-weather-colour-v1.symbols.txt',
                      'weights/neuronte-pointer-v1.manifest.json', 'font/ui-tops.json',
                      'train/strokes.py', 'tools/neuronte-play.py', 'src/video.c',
                      'src/media.c', 'include/neuronte_media.h',
@@ -530,13 +593,13 @@ class PayloadTests(unittest.TestCase):
             return self.fx.destination
 
         def edit(tree):
-            (tree / 'weights/neuronte-ui12-v1.nrt').write_text('edited\n')
+            (tree / 'weights/neuronte-ui12-v2.nrt').write_text('edited\n')
 
         def add(tree):
             (tree / 'weights/mine.nrt').write_text('mine\n')
 
         def remove(tree):
-            (tree / 'font/ui-12.txt').unlink()
+            (tree / 'font/ui-12-latin1.txt').unlink()
 
         def rebuild(tree):
             (tree / 'build/libneuronte.so').write_bytes(b'not the recorded library')

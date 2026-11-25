@@ -215,7 +215,7 @@ seed_desktop_wallpaper_state_if_absent "$DESKTOP_DIR" "$WALLPAPER"
         data = ASSET.read_bytes()
         self.assertEqual(
             hashlib.sha256(data).hexdigest(),
-            "60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778",
+            "8291496ec91ba107537a2649458bc167e2a6c8700504a1e019ae4563ae5625da",
         )
         self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
         self.assertEqual(data[12:16], b"IHDR")

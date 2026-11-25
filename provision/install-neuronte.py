@@ -62,26 +62,52 @@ STALL_SECONDS = 300
 DOWNLOAD_CEILING_SECONDS = 6 * 3600
 POLL_SECONDS = 2
 # General-image runtime inventory: the slim Neuronte set, one packed file per
-# job. Training code, reports, earlier generations of a net, native upright
-# faces above 32 and the learned video helpers (bound to an earlier terminal
-# bundle) are not in it.
-SMALL_FACES = {(em, italic) for em in range(1, 33) for italic in (False, True)
+# job. Training code, reports, earlier generations of a net, the terminal
+# bundles no reader here opens and the learned video helpers (bound to an
+# earlier terminal bundle) are not in it.
+#
+# neuronte-v2 2.5.0. Kilix 95 draws 1 to 16 px with a hand-drawn face per em,
+# 17 to 32 px with the one scaled face (its italic is the upright letter
+# sheared and stepped by the italic advances), and above 32 px with the large
+# face; only the per-em faces read a header in font/, the Latin-1 drawing
+# beside each -v2 face. Every desktop face draws ASCII, the ellipsis and all
+# of Latin-1 (192 characters): neuronte-uiN-v2 and -italic-v2,
+# neuronte-ui-scaled-latin1-v1 with its italic advances -v1, and
+# neuronte-ui-large-latin1-v2, in place of 2.4.0's -v1, -v0 and -v1. Kilix draws the symbols
+# on its own bars with the kilix-chrome bundles (one cell and two cells), the
+# moons of term-rest-v1, the sun and cloud of term-dingbat-v1 and the idle dot
+# of split-v9, and the weather widget in colour with weather-colour-v1. The
+# video player's cells mode draws with split-v9.
+SMALL_FACES = {(em, italic) for em in range(1, 17) for italic in (False, True)
                if not italic or em >= 3}
 RUNTIME_MODELS = {
-    'weights/neuronte-ui%d%s-v1.nrt' % (em, '-italic' if italic else '')
+    'weights/neuronte-ui%d%s-v2.nrt' % (em, '-italic' if italic else '')
     for em, italic in SMALL_FACES
 } | {'weights/neuronte-%s' % name for name in (
-    'ui-large-v0.nrt', 'flame-v1.nrt', 'emoji-v1.nrt', 'icon-v2.nrt',
-    'pointer-v1.nrt', 'video-masks-v0.nrt', 'split-v8.nrt')}
-HEADERS = {'font/ui-%d%s.txt' % (em, '-italic' if italic else '')
+    'ui-scaled-latin1-v1.nrt', 'ui-scaled-latin1-italic-advances-v1.nrt',
+    'ui-large-latin1-v2.nrt', 'flame-v1.nrt', 'emoji-v1.nrt', 'icon-v2.nrt',
+    'pointer-v1.nrt', 'video-masks-v0.nrt', 'split-v9.nrt',
+    'kilix-chrome-v1.nrt', 'kilix-chrome-v2.nrt', 'term-rest-v1.nrt',
+    'term-dingbat-v1.nrt', 'weather-colour-v1.nrt')}
+HEADERS = {'font/ui-%d-latin1%s.txt' % (em, '-italic' if italic else '')
            for em, italic in SMALL_FACES}
+# The characters or symbols each bar bundle was trained on, beside it: a
+# program that builds one table reads them, and a file without its list of
+# symbols is not known to be drawn for two cells or in colour.
+BAR_LISTS = {
+    'weights/neuronte-kilix-chrome-v1.list.txt',
+    'weights/neuronte-kilix-chrome-v2.symbols.txt',
+    'weights/neuronte-term-rest-v1.list.txt',
+    'weights/neuronte-term-dingbat-v1.list.txt',
+    'weights/neuronte-weather-colour-v1.symbols.txt',
+}
 RUNTIME_SUPPORT = {
     'font/ui-tops.json', 'font/octants.txt',
     'weights/neuronte-pointer-v1.manifest.json',
     'tools/neuronte-play.py', 'tools/neuronte_video.py', 'tools/neuronte-video.md',
     # Video's portable cells still use geometry from these modules.
     'train/glyphs.py', 'train/strokes.py',
-}
+} | BAR_LISTS
 PROBES = tuple(sorted(name for name in RUNTIME_MODELS if name.endswith('.nrt')))
 SELECTION = (
     re.compile(r'(src|include)/[^/]+\.[ch]'),
@@ -247,7 +273,7 @@ def write_manifest(repo_dir, commit, out, repository):
         'repository': repository,
         'commit': commit,
         'tree': tree,
-        'reader': 'Kilix 95 desktop faces and flame; Neuronte runtime assets and video player',
+        'reader': 'Kilix 95 desktop faces and flame; Kilix bar symbols; Neuronte runtime assets and video player',
         'license': 'MIT renderer and weights; LGPL-2.1-or-later media decoder; see LICENSE, LICENSES and THIRD_PARTY_NOTICES.md',
         'files': dict(sorted(files.items())),
     }

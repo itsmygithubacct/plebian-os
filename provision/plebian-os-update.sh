@@ -171,7 +171,7 @@ fi
 # The deployed provisioner, which reconciles apt sources after a committed update.
 PROVISION_HELPER_DST=/usr/local/sbin/plebian-os-provision
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
-DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
+DESKTOP_WALLPAPER_SHA256=8291496ec91ba107537a2649458bc167e2a6c8700504a1e019ae4563ae5625da
 # shellcheck disable=SC2034
 LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
 # These notice constants are also an exact staged-script contract consumed by
@@ -179,7 +179,7 @@ LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os
 # shellcheck disable=SC2034
 INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
 # shellcheck disable=SC2034
-INSTALLER_ATTRIBUTION_SHA256=5f5996a32c0a92debe2fef972463d28d53495e6e64af78e0e14aa4a109196ce9
+INSTALLER_ATTRIBUTION_SHA256=3503192cf57c91e7f6ebc9fe9e0b3109e84ff5ce850abab4991cdd0c2e39ad35
 # shellcheck disable=SC2034
 GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
 # shellcheck disable=SC2034

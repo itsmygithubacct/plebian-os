@@ -552,13 +552,13 @@ PLEB_BRANCH_EXPLICIT=0                         # 1 = --branch given on the comma
 # tracked asset: firstboot and in-repo bootstrap fail closed rather than seed a
 # desktop state that points at missing or substituted artwork.
 DESKTOP_WALLPAPER_DST=/usr/local/share/plebian-os/wallpapers/plebian-os.png
-DESKTOP_WALLPAPER_SHA256=60f63c37f054f7ffd061b47e09a3c22fbf595eec6f161c13e95344ca1a724778
+DESKTOP_WALLPAPER_SHA256=8291496ec91ba107537a2649458bc167e2a6c8700504a1e019ae4563ae5625da
 DESKTOP_WALLPAPER_MAX_BYTES=$((32 * 1024 * 1024))
 VERSION_MARKER_DST=/usr/local/share/plebian-os/VERSION
 LIGHTDM_GREETER_CONFIG_DST=/etc/lightdm/lightdm-gtk-greeter.conf.d/50-plebian-os.conf
 LIGHTDM_GREETER_CONFIG_SHA256=985fe09dbbb4ee83949967a83960f71746c054da8d79196a4eac98a32cd76560
 INSTALLER_ATTRIBUTION_DST=/usr/local/share/doc/plebian-os/installer/ATTRIBUTION.md
-INSTALLER_ATTRIBUTION_SHA256=5f5996a32c0a92debe2fef972463d28d53495e6e64af78e0e14aa4a109196ce9
+INSTALLER_ATTRIBUTION_SHA256=3503192cf57c91e7f6ebc9fe9e0b3109e84ff5ce850abab4991cdd0c2e39ad35
 GPL2_LICENSE_DST=/usr/local/share/doc/plebian-os/COPYING.GPL-2
 GPL2_LICENSE_SHA256=8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643
 ARTWORK_NOTICE_MAX_BYTES=$((1024 * 1024))
